@@ -1,0 +1,38 @@
+{
+  "name": "pi-cue",
+  "version": "0.1.0",
+  "description": "Pi extension that adds cue-shell as a durable, observable execution backend.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "skills/**/*",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "typebox": "^1.1.38"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  }
+}

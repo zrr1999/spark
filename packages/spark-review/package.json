@@ -1,0 +1,24 @@
+{
+  "name": "spark-review",
+  "version": "0.1.0",
+  "description": "Verification gates and review artifacts for Spark.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "spark-agents": "file:../spark-agents",
+    "spark-artifacts": "file:../spark-artifacts",
+    "spark-ask": "file:../spark-ask",
+    "spark-core": "file:../spark-core"
+  }
+}

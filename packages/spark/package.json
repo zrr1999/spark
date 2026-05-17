@@ -1,0 +1,43 @@
+{
+  "name": "spark",
+  "version": "0.1.0",
+  "description": "High-level /spark facade for Pi.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "skills/**/*",
+    "README.md"
+  ],
+  "type": "module",
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "pi-ask": "file:../pi-ask",
+    "pi-cue": "file:../pi-cue",
+    "spark-agents": "file:../spark-agents",
+    "spark-artifacts": "file:../spark-artifacts",
+    "spark-ask": "file:../spark-ask",
+    "spark-core": "file:../spark-core",
+    "spark-review": "file:../spark-review",
+    "spark-tasks": "file:../spark-tasks",
+    "typebox": "^1.1.38"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  }
+}

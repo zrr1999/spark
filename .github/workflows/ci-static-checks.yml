@@ -1,0 +1,33 @@
+name: "CI - Static Checks"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ci-static-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  prek:
+    name: prek
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: j178/prek-action@v2
+        with:
+          install-only: true
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          cache: true
+
+      - uses: j178/prek-action@v2

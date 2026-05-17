@@ -1,0 +1,14 @@
+/spark 我想做一个用于把 SVG logo 转成装配动画的 Pi 扩展
+
+Expected local outputs:
+
+- SPARK.md
+- .spark/thread.json
+- .spark/review-gate.json
+- .spark/artifacts/*.json
+- .spark/artifacts/blobs/*
+
+Then inspect:
+
+- spark_status
+- spark_run_ready_tasks { dryRun: true }

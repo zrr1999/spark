@@ -1,0 +1,49 @@
+{
+  "name": "pi-spark",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Spark suite for Pi: idea-to-task graph workflow with controlled agents, tasks, artifacts, review, ask, and cue execution primitives.",
+  "keywords": [
+    "agentic-workflow",
+    "pi",
+    "pi-package",
+    "spark"
+  ],
+  "license": "MIT",
+  "author": "zrr1999",
+  "workspaces": [
+    "packages/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "check": "vp check",
+    "check:tsc": "tsc -p tsconfig.json --noEmit",
+    "check:packages": "pnpm -r --filter './packages/*' run check",
+    "format": "vp fmt . --write",
+    "format:check": "vp fmt . --check",
+    "lint": "vp lint . --fix",
+    "lint:check": "vp lint .",
+    "test": "node --experimental-strip-types --test \"test/*.test.ts\"",
+    "verify": "pnpm run check && pnpm test",
+    "prepare": "pnpx @j178/prek install --hook-type commit-msg --hook-type pre-commit"
+  },
+  "dependencies": {
+    "typebox": "^1.1.38"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "oxlint": "1.61.0",
+    "typescript": "^6.0.3",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "packageManager": "pnpm@10.33.4",
+  "pi": {
+    "extensions": [
+      "./packages/spark/src/extension/index.ts"
+    ],
+    "skills": [
+      "./packages/spark/skills"
+    ]
+  }
+}

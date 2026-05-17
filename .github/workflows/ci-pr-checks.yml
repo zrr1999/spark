@@ -1,0 +1,29 @@
+name: "CI - PR Checks"
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  title:
+    name: PR title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check PR title
+        uses: zrr1999/zendev/actions/validate-title@v0.0.6
+        with:
+          text: ${{ github.event.pull_request.title }}

@@ -1,0 +1,21 @@
+{
+  "name": "spark-artifacts",
+  "version": "0.1.0",
+  "description": "Typed durable artifacts for Spark.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "spark-core": "file:../spark-core"
+  }
+}

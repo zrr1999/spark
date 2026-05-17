@@ -1,0 +1,29 @@
+{
+  "name": "pi-ask",
+  "version": "0.1.0",
+  "description": "Minimal structured ask_user primitive for Pi.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "typebox": "^1.1.38"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  }
+}

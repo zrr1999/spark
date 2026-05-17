@@ -1,0 +1,22 @@
+{
+  "name": "spark-ask",
+  "version": "0.1.0",
+  "description": "Rich ask workflows built on top of pi-ask.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "pi-ask": "file:../pi-ask",
+    "spark-core": "file:../spark-core"
+  }
+}

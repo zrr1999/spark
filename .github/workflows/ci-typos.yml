@@ -1,0 +1,44 @@
+name: "CI - Typos"
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/**"
+      - "_typos.toml"
+      - "AGENTS.md"
+      - "README.md"
+      - "docs/**"
+      - "packages/**"
+      - "test/**"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/**"
+      - "_typos.toml"
+      - "AGENTS.md"
+      - "README.md"
+      - "docs/**"
+      - "packages/**"
+      - "test/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  typos:
+    name: typos
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run typos
+        uses: crate-ci/typos@master
+        with:
+          config: ./_typos.toml
+          files: ".github AGENTS.md README.md docs packages test _typos.toml"

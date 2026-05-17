@@ -1,0 +1,25 @@
+{
+  "name": "spark-tasks",
+  "version": "0.1.0",
+  "description": "Thread and task DAG orchestration for Spark.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "spark-agents": "file:../spark-agents",
+    "spark-artifacts": "file:../spark-artifacts",
+    "spark-ask": "file:../spark-ask",
+    "spark-core": "file:../spark-core",
+    "spark-review": "file:../spark-review"
+  }
+}

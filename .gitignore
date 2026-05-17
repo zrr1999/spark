@@ -1,0 +1,19 @@
+node_modules/
+dist/
+coverage/
+.DS_Store
+.env
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# npm lockfile (pnpm is canonical)
+package-lock.json
+
+.spark/
+.pi-lens/
+**/.pi-lens/
+.learnings/
