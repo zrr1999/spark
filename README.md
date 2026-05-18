@@ -13,8 +13,10 @@ primitives.
 
 `/spark` initializes local Spark state without asking the
 user to complete a broad intake form. Spark first records
-the initial intent, creates a current interaction task, and
-uses investigation tasks to gather context. Follow-up asks
+the initial intent and uses investigation tasks to gather
+context. It does not synthesize placeholder current tasks;
+the model claims one or more concrete tasks within the active
+thread. Follow-up asks
 should be targeted to the actual project state. The output
 language defaults from the current request language and is
 confirmed when Spark asks a targeted clarification.
@@ -48,12 +50,12 @@ but skips the root `SPARK.md` file.
   instruction-only runner surface; absorbs subagent
   runner ideas without exposing `subagents` as a product
   concept.
-- `spark-tasks` — thread/task DAG, current interaction task, per-task dynamic TODOs, queue, runs, scheduler helpers, and agent bindings.
+- `spark-tasks` — durable thread/task DAG, model-claimed current task, queue, runs, scheduler helpers, and agent bindings; TODO state is stored outside `.spark/thread.json` and can be session-scoped to avoid concurrent agent conflicts.
 - `spark-artifacts` — typed durable artifacts with hashes,
   blobs, provenance, and lineage links.
 - `spark-review` — verification gates and review artifacts.
-- `pi-ask` — minimal `ask_user` primitive and stable ask protocol with direct custom input handling.
-- `spark-ask` — structured Spark ask workflows built on top of `pi-ask`.
+- `pi-ask` — minimal `ask_user` plus reusable `ask_flow` protocol/state/renderer with direct custom input handling.
+- `spark-ask` — lightweight Spark-specific ask presets and copy built on top of `pi-ask`.
 
 No compatibility packages are planned. `spark-github` is intentionally deferred.
 

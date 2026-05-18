@@ -1,18 +1,19 @@
 # spark-ask
 
-Rich ask workflows built on top of `pi-ask`.
+Lightweight Spark ask presets built on top of `pi-ask`.
 
-`spark-ask` provides structured ask workflows for
-Spark-specific intent shaping, such as thread
-clarification, managed-agent approval, task blocker
-resolution, and review-gate decisions.
+`spark-ask` provides Spark-specific question presets and
+copy for intent shaping, managed-agent approval, task
+blocker resolution, and review-gate decisions. Generic
+ask protocol, state, renderer, replay, settings, and
+payload storage live in `pi-ask`.
 
 ## Positioning
 
-- `pi-ask` — primitive `ask_user` protocol and minimal UI
-  assumptions, including direct custom-input handling for
-  structured questions
-- `spark-ask` — richer flow metadata,
-  replay/elaboration-friendly result shape, confirmed
-  output-language selection for thread clarification, and
-  Spark artifact integration
+- `pi-ask` — reusable ask protocol, flow state machine,
+  renderer, replay helpers, settings, and direct
+  custom-input handling
+- `spark-ask` — Spark preset flows, Spark copy, and type
+  aliases over the generic `pi-ask` flow API
+- `spark` — Pi extension tools that persist Spark ask
+  answers as artifacts

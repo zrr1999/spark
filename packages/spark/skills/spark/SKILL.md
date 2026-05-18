@@ -15,15 +15,22 @@ Spark primitives:
 - `pi-cue`: reusable controlled execution infrastructure.
 - `spark-agents`: builtin/managed agents, instruction-only runs.
 - `spark-review`: verification gates.
-- `spark-tasks`: thread/task DAG.
+- `spark-tasks`: thread/task DAG and task planning helpers.
 
 Rules:
 
 1. A task must belong to a thread.
-2. Executable tasks must bind to a builtin or managed agent.
-3. Running an agent only accepts an instruction; no runtime system-prompt patching.
-4. Task-generated work must be proposed and validated before persistence.
-5. Store durable context as typed artifacts rather than relying on chat history.
-6. Ask users to confirm output language during clarification; default the suggestion from the current request language.
-7. After a decision is confirmed and the next action is clear, continue with that action instead of stopping for another permission prompt.
-8. Show thread / task / TODO text summaries by default; keep `spark_status` as the full diagnostic view.
+2. Do not create placeholder tasks or threads for display; tasks are model-claimed only when concrete work exists, and a session may claim multiple tasks only within the active thread.
+3. Use the dedicated `spark_plan_tasks` tool to梳理/organize multiple tasks before assigning agents; planning tasks must not be represented by claiming many unfinished tasks in the current session.
+4. Executable tasks must bind to a builtin or managed agent.
+5. Running an agent only accepts an instruction; no runtime system-prompt patching.
+6. Task-generated work must be proposed and validated before persistence.
+7. Store durable context as typed artifacts rather than relying on chat history.
+8. Treat SPARK.md as persistent project intent that the extension injects into the active system prompt.
+9. During initialization, do not show a broad upfront intake form. Analyze the request and workspace context first, then ask only targeted clarification questions when that analysis finds a concrete ambiguity. If language is obvious, follow the user's language without a separate language confirmation.
+10.   After a decision is confirmed and the next action is clear, continue with that action instead of stopping for another permission prompt.
+11.   Show the active thread header with task counts plus claimed task / TODO text summaries by default; render independent session TODOs as siblings of the thread display and keep `spark_status` as the full diagnostic view.
+12.   Before launching multiple agents or parallel workstreams, ask for approval with `spark_ask` unless the user explicitly requested immediate dispatch. Treat timeout/no-selection as blocked, not approval.
+13.   Prefer Spark-native delegation: inspect agents with `spark_list_agents` / `spark_get_agent`, bind concrete tasks to builtin or managed `agentRef`s, and execute them with `spark_run_ready_tasks`. Do not spawn nested `pi` CLI sessions as pseudo-agents unless the task is explicitly about testing Pi CLI behavior.
+14.   When using `pi-cue` `run`, prefer direct-exec commands and Pi file tools. Use `/bin/sh -lc` only for real shell features such as redirection, here-docs, variable expansion, or compound conditionals.
+15.   Keep temporary plans, agent reports, and scratch outputs out of the repo root; use `.spark/notes/`, `.spark/agent-reports/`, or typed Spark artifacts unless the user asks for committed docs.

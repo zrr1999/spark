@@ -10,7 +10,7 @@ export const MAX_PREVIEW_LENGTH = 8000;
 
 // ---- Option ----
 
-export const SparkAskOptionSchema = Type.Object({
+export const PiAskFlowOptionSchema = Type.Object({
   value: Type.String({ description: "Machine-readable value returned for this option" }),
   label: Type.String({
     maxLength: MAX_LABEL_LENGTH,
@@ -27,18 +27,18 @@ export const SparkAskOptionSchema = Type.Object({
   ),
 });
 
-export type SparkAskOption = Static<typeof SparkAskOptionSchema>;
+export type PiAskFlowOption = Static<typeof PiAskFlowOptionSchema>;
 
 // ---- Question ----
 
-export const SparkAskQuestionType = Type.Union([
+export const PiAskFlowQuestionType = Type.Union([
   Type.Literal("single"),
   Type.Literal("multi"),
   Type.Literal("preview"),
   Type.Literal("freeform"),
 ]);
 
-export const SparkAskQuestionSchema = Type.Object({
+export const PiAskFlowQuestionSchema = Type.Object({
   id: Type.String({ description: "Stable question identifier used as key in results" }),
   prompt: Type.String({
     description: "Direct question shown to the user; ask one decision at a time",
@@ -46,31 +46,31 @@ export const SparkAskQuestionSchema = Type.Object({
   header: Type.Optional(
     Type.String({ maxLength: MAX_HEADER_LENGTH, description: "Short tab label (max 16-20 chars)" }),
   ),
-  type: Type.Optional(SparkAskQuestionType),
+  type: Type.Optional(PiAskFlowQuestionType),
   required: Type.Optional(
     Type.Boolean({ description: "Advisory only; marks the question as important" }),
   ),
   options: Type.Optional(
-    Type.Array(SparkAskOptionSchema, { minItems: MIN_OPTIONS, maxItems: MAX_OPTIONS }),
+    Type.Array(PiAskFlowOptionSchema, { minItems: MIN_OPTIONS, maxItems: MAX_OPTIONS }),
   ),
 });
 
-export type SparkAskQuestion = Static<typeof SparkAskQuestionSchema>;
+export type PiAskFlowQuestion = Static<typeof PiAskFlowQuestionSchema>;
 
-export type SparkAskQuestionTypeVal = Static<typeof SparkAskQuestionType>;
+export type PiAskFlowQuestionTypeVal = Static<typeof PiAskFlowQuestionType>;
 
 // ---- Request / Result ----
 
-export const SparkAskMode = Type.Union([
+export const PiAskFlowMode = Type.Union([
   Type.Literal("clarification"),
   Type.Literal("decision"),
   Type.Literal("approval"),
   Type.Literal("unblock"),
 ]);
 
-export type SparkAskModeVal = Static<typeof SparkAskMode>;
+export type PiAskFlowModeVal = Static<typeof PiAskFlowMode>;
 
-export const SparkAskBehaviourSchema = Type.Object({
+export const PiAskFlowBehaviourSchema = Type.Object({
   allowElaborate: Type.Optional(Type.Boolean()),
   allowReplay: Type.Optional(Type.Boolean()),
   preservePriorAnswers: Type.Optional(Type.Boolean()),
@@ -79,29 +79,29 @@ export const SparkAskBehaviourSchema = Type.Object({
   showFooterHints: Type.Optional(Type.Boolean()),
 });
 
-export type SparkAskBehaviour = Static<typeof SparkAskBehaviourSchema>;
+export type PiAskFlowBehaviour = Static<typeof PiAskFlowBehaviourSchema>;
 
-export const SparkAskRequestSchema = Type.Object({
+export const PiAskFlowRequestSchema = Type.Object({
   title: Type.Optional(Type.String()),
   context: Type.Optional(Type.String()),
   flow: Type.Optional(Type.String()),
-  mode: Type.Optional(SparkAskMode),
-  questions: Type.Array(SparkAskQuestionSchema, { minItems: 1, maxItems: MAX_QUESTIONS }),
-  behaviour: Type.Optional(SparkAskBehaviourSchema),
+  mode: Type.Optional(PiAskFlowMode),
+  questions: Type.Array(PiAskFlowQuestionSchema, { minItems: 1, maxItems: MAX_QUESTIONS }),
+  behaviour: Type.Optional(PiAskFlowBehaviourSchema),
   timeoutMs: Type.Optional(Type.Number()),
 });
 
-export interface SparkAskRequest extends Static<typeof SparkAskRequestSchema> {
+export interface PiAskFlowRequest extends Static<typeof PiAskFlowRequestSchema> {
   flow?: string;
 }
 
 // ---- Answer types ----
 
-export type SparkAskAnswerKind = "option" | "custom" | "multi" | "freeform" | "skipped";
+export type PiAskFlowAnswerKind = "option" | "custom" | "multi" | "freeform" | "skipped";
 
-export interface SparkAskAnswerEntry {
+export interface PiAskFlowAnswerEntry {
   questionId: string;
-  kind: SparkAskAnswerKind;
+  kind: PiAskFlowAnswerKind;
   values: string[];
   labels?: string[];
   customText?: string;
@@ -109,15 +109,15 @@ export interface SparkAskAnswerEntry {
   preview?: string;
 }
 
-export interface SparkAskResult {
-  answers: Record<string, SparkAskAnswerEntry>;
+export interface PiAskFlowResult {
+  answers: Record<string, PiAskFlowAnswerEntry>;
   flow?: string;
   mode: "submit" | "elaborate" | "cancel" | "chat";
   cancelled: boolean;
   base?: unknown;
   elaboration?: {
     affectedQuestionIds: string[];
-    preservedAnswers: Record<string, SparkAskAnswerEntry>;
+    preservedAnswers: Record<string, PiAskFlowAnswerEntry>;
     notes: Array<{ questionId: string; note: string }>;
   };
   nextAction?: "resume" | "clarify_then_reask" | "block";
@@ -125,7 +125,7 @@ export interface SparkAskResult {
 
 // ---- Validation errors ----
 
-export type SparkAskValidationError =
+export type PiAskFlowValidationError =
   | "no_questions"
   | "empty_options"
   | "too_many_questions"
@@ -148,15 +148,15 @@ export const SENTINEL_LABELS: Record<SentinelKind, string> = {
 
 // ---- Validation ----
 
-export function validateSparkAskRequest(input: unknown): {
+export function validatePiAskFlowRequest(input: unknown): {
   valid: boolean;
-  request?: SparkAskRequest;
-  error?: SparkAskValidationError;
+  request?: PiAskFlowRequest;
+  error?: PiAskFlowValidationError;
   details?: string;
 } {
   if (!input || typeof input !== "object") return { valid: false, error: "missing_question_id" };
 
-  const req = input as Partial<SparkAskRequest>;
+  const req = input as Partial<PiAskFlowRequest>;
   if (!req.questions || req.questions.length === 0) return { valid: false, error: "no_questions" };
   if (req.questions.length > MAX_QUESTIONS) return { valid: false, error: "too_many_questions" };
 
@@ -198,5 +198,5 @@ export function validateSparkAskRequest(input: unknown): {
     }
   }
 
-  return { valid: true, request: req as SparkAskRequest };
+  return { valid: true, request: req as PiAskFlowRequest };
 }

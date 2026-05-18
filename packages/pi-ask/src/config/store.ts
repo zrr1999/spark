@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const CONFIG_DIR = join(homedir(), ".pi", "agent", "extensions");
-const CONFIG_FILE = join(CONFIG_DIR, "spark-ask.json");
+const CONFIG_FILE = join(CONFIG_DIR, "pi-ask.json");
 
 export function createAskConfigStore(): AskConfigStore {
   return {

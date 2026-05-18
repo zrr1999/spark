@@ -1,7 +1,7 @@
 {
   "name": "spark-ask",
   "version": "0.1.0",
-  "description": "Rich ask workflows built on top of pi-ask.",
+  "description": "Lightweight Spark ask presets built on top of pi-ask.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [

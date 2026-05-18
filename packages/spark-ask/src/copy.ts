@@ -1,10 +1,10 @@
-import type { PiAskOption, PiAskQuestion } from "pi-ask";
+import type { PiAskFlowOption, PiAskFlowQuestion } from "pi-ask";
 
 export type SparkCopyLanguage = "en" | "zh";
 
 export interface SparkThreadClarificationCopy {
   title: string;
-  questions: PiAskQuestion[];
+  questions: PiAskFlowQuestion[];
 }
 
 export function detectCopyLanguage(text: string): SparkCopyLanguage {
@@ -33,10 +33,11 @@ export function clarifyThreadCopy(
           required: true,
         },
         {
-          id: "objective",
-          prompt: "这个请求要产出的具体结果是什么？",
-          type: "freeform",
+          id: "spark-focus",
+          prompt: "Spark 这次应该优先处理哪类工作？",
+          type: "single",
           required: true,
+          options: sparkFocusOptions("zh"),
         },
         {
           id: "delivery-mode",
@@ -52,20 +53,11 @@ export function clarifyThreadCopy(
           required: true,
           options: nextActionOptions("zh"),
         },
-        { id: "target-user", prompt: "这个线程主要面向谁？", type: "freeform" },
         {
-          id: "smallest-slice",
-          prompt: "现在最小且值得交付的切片是什么？",
+          id: "boundary",
+          prompt: "这次需要明确避免什么？",
           type: "freeform",
-          required: true,
         },
-        {
-          id: "success-signal",
-          prompt: "什么信号说明这个方向是正确的？",
-          type: "freeform",
-          required: true,
-        },
-        { id: "non-goals", prompt: "这个线程应该明确避免做什么？", type: "freeform" },
       ],
     };
   }
@@ -87,10 +79,11 @@ export function clarifyThreadCopy(
         required: true,
       },
       {
-        id: "objective",
-        prompt: "What concrete outcome should Spark produce for this request?",
-        type: "freeform",
+        id: "spark-focus",
+        prompt: "What kind of Spark work should this thread prioritize?",
+        type: "single",
         required: true,
+        options: sparkFocusOptions("en"),
       },
       {
         id: "delivery-mode",
@@ -106,30 +99,17 @@ export function clarifyThreadCopy(
         required: true,
         options: nextActionOptions("en"),
       },
-      { id: "target-user", prompt: "Who is this thread primarily for?", type: "freeform" },
       {
-        id: "smallest-slice",
-        prompt: "What is the smallest useful slice to deliver now?",
-        type: "freeform",
-        required: true,
-      },
-      {
-        id: "success-signal",
-        prompt: "What signal would confirm that this direction is correct?",
-        type: "freeform",
-        required: true,
-      },
-      {
-        id: "non-goals",
-        prompt: "What should Spark explicitly avoid doing in this thread?",
+        id: "boundary",
+        prompt: "What should Spark avoid for this pass?",
         type: "freeform",
       },
     ],
   };
 }
 
-export function languageOptions(defaultLanguage: SparkCopyLanguage): PiAskOption[] {
-  const options: PiAskOption[] = [
+export function languageOptions(defaultLanguage: SparkCopyLanguage): PiAskFlowOption[] {
+  const options: PiAskFlowOption[] = [
     {
       value: "zh",
       label: "Chinese",
@@ -146,7 +126,56 @@ export function languageOptions(defaultLanguage: SparkCopyLanguage): PiAskOption
   );
 }
 
-export function deliveryModeOptions(language: SparkCopyLanguage): PiAskOption[] {
+export function sparkFocusOptions(language: SparkCopyLanguage): PiAskFlowOption[] {
+  if (language === "zh") {
+    return [
+      {
+        value: "audit",
+        label: "审计差距",
+        description: "对照现状、参考实现和技术债，找出下一步最值得补的点。",
+      },
+      {
+        value: "light_refactor",
+        label: "轻量重构",
+        description: "收束边界、删除重复，优先保持实现简单。",
+      },
+      {
+        value: "docs_alignment",
+        label: "文档对齐",
+        description: "把已确认的设计和行为写清楚，避免状态和说明分叉。",
+      },
+      {
+        value: "execute_change",
+        label: "执行改动",
+        description: "在范围明确时直接完成代码、测试或配置修改。",
+      },
+    ];
+  }
+  return [
+    {
+      value: "audit",
+      label: "Audit gaps",
+      description: "Compare current state, references, and tech debt to pick the next fix.",
+    },
+    {
+      value: "light_refactor",
+      label: "Light refactor",
+      description: "Tighten boundaries and remove duplication while keeping the system small.",
+    },
+    {
+      value: "docs_alignment",
+      label: "Docs alignment",
+      description: "Make confirmed design and behavior explicit in docs.",
+    },
+    {
+      value: "execute_change",
+      label: "Execute change",
+      description: "Make the concrete code, test, or config change when scope is clear.",
+    },
+  ];
+}
+
+export function deliveryModeOptions(language: SparkCopyLanguage): PiAskFlowOption[] {
   if (language === "zh") {
     return [
       {
@@ -191,7 +220,7 @@ export function deliveryModeOptions(language: SparkCopyLanguage): PiAskOption[] 
   ];
 }
 
-export function nextActionOptions(language: SparkCopyLanguage): PiAskOption[] {
+export function nextActionOptions(language: SparkCopyLanguage): PiAskFlowOption[] {
   if (language === "zh") {
     return [
       {

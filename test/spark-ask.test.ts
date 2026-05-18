@@ -16,9 +16,11 @@ void test("clarify-thread flow produces rich clarification questions", () => {
   assert.equal(request.flow, "clarify-thread");
   assert.equal(request.questions[0]?.id, "output-language");
   assert.equal(request.questions[1]?.id, "working-title");
+  assert.ok(request.questions.some((question) => question.id === "spark-focus"));
   assert.ok(request.questions.some((question) => question.id === "delivery-mode"));
   assert.ok(request.questions.some((question) => question.id === "next-action"));
-  assert.ok(request.questions.some((question) => question.id === "smallest-slice"));
+  assert.ok(request.questions.some((question) => question.id === "boundary"));
+  assert.ok(request.questions.length <= 6);
 });
 
 void test("clarify-thread asks users to confirm detected output language", () => {

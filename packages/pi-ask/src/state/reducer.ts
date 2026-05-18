@@ -1,4 +1,4 @@
-import type { SparkAskQuestion, SparkAskResult, SparkAskAnswerEntry } from "../schema.ts";
+import type { PiAskFlowQuestion, PiAskFlowResult, PiAskFlowAnswerEntry } from "../schema.ts";
 import type { AskState, ExtendedOption } from "./state.ts";
 import { isSubmitTab } from "./state.ts";
 
@@ -31,7 +31,7 @@ export type AskAction =
 // ---- Effects ----
 
 export type Effect =
-  | { kind: "done"; result: SparkAskResult }
+  | { kind: "done"; result: PiAskFlowResult }
   | { kind: "notify"; message: string; level?: "info" | "warning" }
   | { kind: "enter_input_mode" }
   | { kind: "enter_notes_mode" }
@@ -45,7 +45,7 @@ export interface ApplyResult {
 // ---- Context ----
 
 export interface ApplyContext {
-  questions: readonly SparkAskQuestion[];
+  questions: readonly PiAskFlowQuestion[];
   optionsByTab: ReadonlyArray<readonly ExtendedOption[]>;
 }
 
@@ -170,7 +170,7 @@ function commitOptionAnswer(
   focused: ExtendedOption,
 ): ApplyResult {
   const question = ctx.questions[state.currentTab];
-  const answer: SparkAskAnswerEntry = {
+  const answer: PiAskFlowAnswerEntry = {
     questionId: question.id,
     kind: "option",
     values: [focused.option!.value],
@@ -213,7 +213,7 @@ function commitMulti(state: AskState, ctx: ApplyContext): ApplyResult {
   const question = ctx.questions[state.currentTab];
   if (state.multiSelectChecked.size === 0) return { state, effects: [] };
 
-  const answer: SparkAskAnswerEntry = {
+  const answer: PiAskFlowAnswerEntry = {
     questionId: question.id,
     kind: "multi",
     values: [...state.multiSelectChecked],
@@ -247,7 +247,7 @@ function commitInput(state: AskState, ctx: ApplyContext): ApplyResult {
   const text = state.inputDraft.trim();
   if (!text) return { state: { ...state, inputMode: false, inputDraft: "" }, effects: [] };
 
-  const answer: SparkAskAnswerEntry = {
+  const answer: PiAskFlowAnswerEntry = {
     questionId: question.id,
     kind: "custom",
     values: [],
@@ -301,7 +301,7 @@ function closeNotes(state: AskState): ApplyResult {
 function enterChat(state: AskState, _ctx: ApplyContext): ApplyResult {
   // Chat: collect partial answers and return them with mode=chat
   const answers = toAnswerRecord(state.answers);
-  const result: SparkAskResult = {
+  const result: PiAskFlowResult = {
     answers,
     mode: "chat",
     cancelled: false,
@@ -312,7 +312,7 @@ function enterChat(state: AskState, _ctx: ApplyContext): ApplyResult {
 
 function submit(state: AskState, _ctx: ApplyContext): ApplyResult {
   const answers = toAnswerRecord(state.answers);
-  const result: SparkAskResult = {
+  const result: PiAskFlowResult = {
     answers,
     mode: "submit",
     cancelled: false,
@@ -329,7 +329,7 @@ function elaborate(state: AskState, _ctx: ApplyContext): ApplyResult {
   }
   const affectedQuestionIds = notes.map((n) => n.questionId);
 
-  const result: SparkAskResult = {
+  const result: PiAskFlowResult = {
     answers,
     mode: "elaborate",
     cancelled: false,
@@ -344,7 +344,7 @@ function elaborate(state: AskState, _ctx: ApplyContext): ApplyResult {
 }
 
 function cancel(state: AskState, _ctx: ApplyContext): ApplyResult {
-  const result: SparkAskResult = {
+  const result: PiAskFlowResult = {
     answers: toAnswerRecord(state.answers),
     mode: "cancel",
     cancelled: true,
@@ -415,9 +415,9 @@ function computeHasPreview(option?: ExtendedOption): boolean {
 }
 
 function toAnswerRecord(
-  answers: ReadonlyMap<string, SparkAskAnswerEntry>,
-): Record<string, SparkAskAnswerEntry> {
-  const record: Record<string, SparkAskAnswerEntry> = {};
+  answers: ReadonlyMap<string, PiAskFlowAnswerEntry>,
+): Record<string, PiAskFlowAnswerEntry> {
+  const record: Record<string, PiAskFlowAnswerEntry> = {};
   for (const [id, entry] of answers) {
     record[id] = entry;
   }

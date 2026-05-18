@@ -3,7 +3,6 @@ import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
 import { Type } from "typebox";
-import { registerSparkAskTool } from "spark-ask";
 import { defaultArtifactStore } from "spark-artifacts";
 import {
   approveManagedAgentAsk,
@@ -26,17 +25,34 @@ import {
 import {
   newRef,
   nowIso,
+  type AgentRef,
   type ArtifactRef,
   type AskRef,
   type JsonValue,
   type ManagedAgentProposal,
+  stableId,
   type SparkRunTrace,
+  type Task,
+  type TaskKind,
   type ThreadRef,
 } from "spark-core";
 import { registerPiCueTools } from "pi-cue";
 import { createReviewGate } from "spark-review";
-import { defaultTaskGraphStore, TaskGraph } from "spark-tasks";
-import { SparkWidget, type SparkWidgetState, type TaskEntry } from "../ui/spark-widget.ts";
+import {
+  defaultTaskGraphStore,
+  defaultTaskTodoStore,
+  isUnfinishedTaskStatus,
+  TaskGraph,
+  type TaskPlanInput,
+  type TaskTodoOp,
+  type TaskTodoSummary,
+} from "spark-tasks";
+import {
+  SparkWidget,
+  type SessionTodoEntry,
+  type SparkWidgetState,
+  type TaskEntry,
+} from "../ui/spark-widget.ts";
 
 interface SparkExtensionAPI {
   registerCommand(
@@ -71,6 +87,10 @@ interface SparkExtensionAPI {
 
 interface SparkToolContext {
   cwd: string;
+  sessionManager?: {
+    getSessionFile?: () => string | undefined;
+    getLeafId?: () => string | undefined;
+  };
   hasUI?: boolean;
   ui?: {
     notify?: (message: string, level?: "info" | "warning" | "error" | "success") => void;
@@ -90,7 +110,6 @@ interface SparkCommandContext extends SparkToolContext {
 export default function sparkExtension(pi: SparkExtensionAPI) {
   if (pi.registerTool) {
     registerPiCueTools(pi as unknown as Parameters<typeof registerPiCueTools>[0]);
-    registerSparkAskTool(pi as unknown as Parameters<typeof registerSparkAskTool>[0]);
   }
 
   pi.on?.("input", async (event: unknown, ctx: SparkToolContext) => handleSparkInput(event, ctx));
@@ -98,72 +117,108 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     injectSparkHints(event, ctx),
   );
   pi.on?.("turn_start", async (_event: unknown, ctx: SparkToolContext) => {
+    await ensureSparkStateForActiveWorkspace(ctx.cwd, ctx);
     await refreshSparkWidget(ctx.cwd, ctx);
+  });
+  pi.on?.("session_start", async (_event: unknown, ctx: SparkToolContext) => {
+    await ensureSparkStateForActiveWorkspace(ctx.cwd, ctx);
+    await refreshSparkWidget(ctx.cwd, ctx);
+  });
+  pi.on?.("session_compact", async (_event: unknown, ctx: SparkToolContext) => {
+    await refreshSparkWidget(ctx.cwd, ctx);
+  });
+  pi.on?.("session_tree", async (_event: unknown, ctx: SparkToolContext) => {
+    await refreshSparkWidget(ctx.cwd, ctx);
+  });
+  pi.on?.("tool_execution_end", async (event: unknown, ctx: SparkToolContext) => {
+    if (
+      isToolExecutionEvent(event, "spark_update_todos") ||
+      isToolExecutionEvent(event, "spark_update_task_todos") ||
+      isToolExecutionEvent(event, "spark_claim_task")
+    ) {
+      await refreshSparkWidget(ctx.cwd, ctx);
+    }
   });
   pi.on?.("session_switch", async (_event: unknown, ctx: SparkToolContext) => {
     // Restore widget after session switch (/new, /resume)
-    const graph = await defaultTaskGraphStore(ctx.cwd).load();
+    await ensureSparkStateForActiveWorkspace(ctx.cwd, ctx);
+    const store = defaultTaskGraphStore(ctx.cwd);
+    const graph = await loadSparkGraph(ctx.cwd, ctx);
     if (graph) {
-      if (ensureSparkGraphInvariants(graph)) await defaultTaskGraphStore(ctx.cwd).save(graph);
+      if (ensureSparkGraphInvariants(graph)) {
+        await store.save(graph);
+        await sparkTodoStore(ctx.cwd, ctx).save(graph);
+      }
       await refreshSparkWidget(ctx.cwd, ctx);
     }
   });
 
+  let widgetState: SparkWidgetState | undefined;
+  let widgetCtx: SparkToolContext | undefined;
+  let widgetUi: SparkToolContext["ui"] | undefined;
   const widget = new SparkWidget(
-    () => undefined,
+    () => widgetState,
     (key, cb) => {
-      // Widget will register lazily via refreshSparkWidget
+      (
+        widgetCtx?.ui as { setWidget?: (...args: unknown[]) => void } | null | undefined
+      )?.setWidget?.(key, cb, { placement: "aboveEditor" });
     },
   );
 
   async function refreshSparkWidget(cwd: string, ctx?: SparkToolContext): Promise<void> {
+    if (ctx?.ui !== widgetUi) {
+      widget.dispose();
+      widgetCtx = ctx;
+      widgetUi = ctx?.ui;
+    } else {
+      widgetCtx = ctx;
+    }
+
     const store = defaultTaskGraphStore(cwd);
-    const graph = await store.load();
+    const graph = await loadSparkGraph(cwd, ctx);
     if (!graph) {
+      widgetState = undefined;
       widget.update();
       return;
     }
-    if (ensureSparkGraphInvariants(graph)) await store.save(graph);
+    if (ensureSparkGraphInvariants(graph)) {
+      await store.save(graph);
+      await sparkTodoStore(cwd, ctx).save(graph);
+    }
     const thread = graph.threads()[0];
     if (!thread) {
+      widgetState = undefined;
       widget.update();
       return;
     }
-    const summary = graph.threadTodoSummary(thread.ref);
-
-    const tasks: TaskEntry[] = graph.tasks(thread.ref).map((task) => {
-      const todo = graph.todoSummary(task.ref);
-      return {
+    const sessionKey = sparkSessionKey(ctx);
+    const allTasks = graph.tasks(thread.ref);
+    const claimedTasks = allTasks.filter((task) => task.claimedBySession);
+    const sessionTasks = claimedTasks.filter((task) => task.claimedBySession === sessionKey);
+    const independentTodos = (await loadIndependentTodos(cwd, ctx)).filter(
+      (todo) => todo.status !== "done" && todo.status !== "cancelled" && todo.status !== "deleted",
+    );
+    widgetState = {
+      threadTitle: isPlaceholderThreadTitle(thread.title) ? undefined : thread.title,
+      tasks: sessionTasks.map((task) => ({
         title: task.title,
+        description: task.description,
         status: mapTaskStatus(task.status),
-        todoActive: todo.active,
-        todosDone: todo.done,
-        todosTotal: todo.total,
-      } satisfies TaskEntry;
-    });
-
-    const state: SparkWidgetState = {
-      threadTitle: thread.title,
-      tasks,
-      todosTotal: summary.total,
-      todosInProgress: summary.inProgress,
-      todosPending: summary.pending,
-      todosDone: summary.done,
+        claimedByCurrentSession: true,
+        todos: graph.taskTodos(task.ref).map((todo) => ({
+          id: todo.id,
+          content: todo.content,
+          status: mapTodoStatus(todo.status),
+        })),
+      })),
+      independentTodos,
+      taskCountTotal: allTasks.length,
+      taskCountClaimed: claimedTasks.length,
+      taskCountClaimedBySession: sessionTasks.length,
       outputLanguage: (thread.outputLanguage as "zh" | "en" | undefined) ?? "en",
     };
 
-    // Re-point widget at the current state, then register with the current UI ctx
-    const widgetWithState = new SparkWidget(
-      () => state,
-      (key, cb) => {
-        (ctx?.ui as { setWidget?: (...args: unknown[]) => void } | null | undefined)?.setWidget?.(
-          key,
-          cb,
-          { placement: "aboveEditor" },
-        );
-      },
-    );
-    widgetWithState.update();
+    widget.update();
   }
 
   function mapTaskStatus(status: string): TaskEntry["status"] {
@@ -180,6 +235,19 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     }
   }
 
+  function mapTodoStatus(status: string): SessionTodoEntry["status"] {
+    switch (status) {
+      case "in_progress":
+      case "done":
+      case "blocked":
+      case "cancelled":
+      case "pending":
+        return status;
+      default:
+        return "pending";
+    }
+  }
+
   pi.registerCommand("spark", {
     description:
       "Turn an idea into SPARK.md, a thread/task DAG, agent plan, artifacts, and review gates.",
@@ -190,62 +258,20 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         return;
       }
 
-      const language = detectCopyLanguage(idea);
-      let outputLanguage: SparkCopyLanguage = language;
-
-      // Targeted clarification with options, not a broad form
-      let workingTitle = titleFromIdea(idea);
-      let deliveryMode: string | undefined;
-      let targetUser: string | undefined;
-
-      if (ctx.ui?.select) {
-        // First: confirm output language
-        const langChoice = await ctx.ui.select(
-          language === "zh"
-            ? "Spark 生成的文档和界面用什么语言？"
-            : "Which language should Spark use for generated documents and UI?",
-          language === "zh" ? ["中文", "English"] : ["中文", "English"],
+      const existing = await loadSparkGraph(ctx.cwd, ctx);
+      if (existing) {
+        ctx.ui?.notify?.(
+          "Spark is already initialized for this workspace; existing thread state was not overwritten.",
+          "info",
         );
-        if (langChoice === undefined) return;
-        outputLanguage = langChoice === "中文" ? "zh" : "en";
-
-        const titleChoice = await ctx.ui.select(
-          outputLanguage === "zh" ? "这个线程叫什么名字？" : "What should this thread be called?",
-          [
-            `"${workingTitle}"`,
-            outputLanguage === "zh" ? "「自定义输入」" : "[Enter custom title]",
-          ],
-        );
-        if (titleChoice === undefined) return;
-        if (titleChoice.startsWith("[")) {
-          const custom = await ctx.ui!.input!(
-            outputLanguage === "zh" ? "输入标题" : "Enter title",
-            workingTitle,
-          );
-          if (!custom) return;
-          workingTitle = custom.trim();
-        } else {
-          workingTitle = titleChoice.replace(/^"|"$/g, "");
-        }
-
-        const modeChoice = await ctx.ui.select(
-          outputLanguage === "zh" ? "这次交付范围是什么？" : "What scope of delivery do you want?",
-          outputLanguage === "zh"
-            ? ["只做规划", "规划 + 文档", "规划 + 文档 + 实现", "直接实现"]
-            : ["Plan only", "Plan + document", "Plan + document + implement", "Implement directly"],
-        );
-        if (modeChoice === undefined) return;
-        deliveryMode = mapDeliveryChoice(modeChoice, outputLanguage);
-
-        const audienceChoice = await ctx.ui.select(
-          outputLanguage === "zh" ? "这是给谁用的？" : "Who is this for?",
-          outputLanguage === "zh"
-            ? ["我自己", "我的团队", "公开项目"]
-            : ["Myself", "My team", "A public project"],
-        );
-        if (audienceChoice === undefined) return;
-        targetUser = audienceChoice;
+        pi.sendUserMessage?.(renderExistingSparkSummary(existing), { deliverAs: "followUp" });
+        await refreshSparkWidget(ctx.cwd, ctx);
+        return;
       }
+
+      const language = detectCopyLanguage(idea);
+      const workingTitle = titleFromIdea(idea);
+      const outputLanguage: SparkCopyLanguage = language;
 
       const result = await initializeSparkIdea(ctx.cwd, idea, {
         threadTitle: workingTitle,
@@ -253,8 +279,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         clarification: {
           workingTitle,
           outputLanguage,
-          deliveryMode,
-          targetUser,
+          objective: idea,
+          nextAction: "analyze_then_targeted_ask",
         },
       });
 
@@ -270,7 +296,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
       // Auto-execute the first ready task (scout — no dependencies)
       const store = defaultTaskGraphStore(ctx.cwd);
-      const graph = await store.load();
+      const graph = await loadSparkGraph(ctx.cwd, ctx);
       if (graph) {
         const ready = graph.enqueueReadyTasks(result.threadRef as ThreadRef);
         if (ready.length > 0) {
@@ -286,6 +312,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
             });
           }
           await store.save(graph);
+          await sparkTodoStore(ctx.cwd, ctx).save(graph);
         }
       }
     },
@@ -301,31 +328,45 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         typeof (ctx as { cwd?: unknown }).cwd === "string"
           ? (ctx as { cwd: string }).cwd
           : process.cwd();
+      await ensureSparkStateForActiveWorkspace(cwd);
       const store = defaultTaskGraphStore(cwd);
-      const graph = await store.load();
+      const graph = await loadSparkGraph(cwd, ctx);
       if (!graph)
         return {
           content: [{ type: "text", text: "No Spark thread found." }],
-          details: { found: false },
+          details: { found: false, active: false },
         };
-      if (ensureSparkGraphInvariants(graph)) await store.save(graph);
+      if (ensureSparkGraphInvariants(graph)) {
+        await store.save(graph);
+        await sparkTodoStore(cwd, ctx).save(graph);
+      }
       const lines = ["Spark tasks:"];
+      const sessionKey = sparkSessionKey(ctx);
+      const independentTodos = await loadIndependentTodos(cwd, ctx);
       for (const thread of graph.threads()) {
-        const current = graph.currentTask(thread.ref);
-        const summary = graph.threadTodoSummary(thread.ref);
+        const tasks = graph.tasks(thread.ref);
+        const claimed = tasks.filter((task) => task.claimedBySession);
+        const sessionClaimed = claimed.filter((task) => task.claimedBySession === sessionKey);
         lines.push(`\nThread ${thread.ref}: ${thread.title}`);
-        lines.push(`  Current task: ${current ? `${current.title} (${current.ref})` : "none"}`);
         lines.push(
-          `  TODOs: ${summary.total} total | ${summary.inProgress} in_progress | ${summary.pending} pending | ${summary.done} done | ${summary.blocked} blocked | ${summary.cancelled} cancelled`,
+          `  Tasks: ${tasks.length} total | ${claimed.length} claimed | ${sessionClaimed.length} claimed_by_session`,
         );
-        for (const task of graph.tasks(thread.ref)) {
-          const todo = graph.todoSummary(task.ref);
-          const activeTodo = todo.active ? ` todo=${todo.active}` : "";
+        lines.push("  Durable tasks:");
+        for (const task of tasks) {
+          const taskSummary = graph.todoSummary(task.ref);
           lines.push(
-            `- [${task.status}] ${task.title} (${task.ref}) kind=${task.kind} agent=${task.agentRef ?? "unbound"} todos=${todo.done}/${todo.total} done${activeTodo}`,
+            `  - [${task.status}] ${task.title} (${task.ref}) kind=${task.kind} claimed=${task.claimedBySession ?? "no"} todos=${taskSummary.total}/${taskSummary.inProgress}/${taskSummary.pending}/${taskSummary.done}`,
           );
+          if (task.claimedBySession === sessionKey) {
+            for (const todo of graph.taskTodos(task.ref)) {
+              lines.push(`    - [${todo.status}] ${todo.id} ${todo.content}`);
+            }
+          }
         }
       }
+      lines.push(`\nIndependent session TODOs: ${independentTodos.length}`);
+      for (const todo of independentTodos)
+        lines.push(`  - [${todo.status}] ${todo.id ?? ""} ${todo.content}`);
       return {
         content: [{ type: "text", text: lines.join("\n") }],
         details: graph.snapshot() as unknown as Record<string, unknown>,
@@ -334,9 +375,330 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   });
 
   pi.registerTool?.({
+    name: "spark_update_todos",
+    label: "Spark Update TODOs",
+    description:
+      "Update independent session TODOs. These TODOs are not tied to a claimed task and survive reload/restart for this session.",
+    parameters: Type.Object({
+      ops: Type.Array(
+        Type.Object({
+          op: Type.String({
+            description:
+              "init | append | start | done | block | cancel | delete | restore | remove | note",
+          }),
+          id: Type.Optional(Type.String()),
+          item: Type.Optional(Type.String()),
+          items: Type.Optional(Type.Array(Type.String())),
+          text: Type.Optional(Type.String()),
+          blockedBy: Type.Optional(Type.Array(Type.String())),
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = ctxCwd(ctx);
+      const p = params as { ops?: TaskTodoOp[] };
+      if (!p.ops?.length)
+        return {
+          content: [{ type: "text", text: "TODO ops are required." }],
+          details: { error: "missing_ops" },
+        };
+      const todos = applyIndependentTodoOps(await loadIndependentTodos(cwd, ctx), p.ops);
+      await saveIndependentTodos(cwd, ctx, todos);
+      await refreshSparkWidget(cwd, ctx);
+      return {
+        content: [{ type: "text", text: `Updated ${todos.length} independent Spark TODO(s).` }],
+        details: { todos: todos as unknown as Record<string, unknown>[] },
+      };
+    },
+  });
+
+  pi.registerTool?.({
+    name: "spark_update_task_todos",
+    label: "Spark Update Task TODOs",
+    description:
+      "Update TODOs attached to this session's one currently claimed unfinished task. Only claimed unfinished tasks can have task TODOs modified; use spark_update_todos for independent session TODOs.",
+    parameters: Type.Object({
+      task: Type.Optional(
+        Type.String({
+          description:
+            "Claimed task ref, title, or title prefix. Defaults to current claimed task.",
+        }),
+      ),
+      ops: Type.Array(
+        Type.Object({
+          op: Type.String({
+            description:
+              "init | append | start | done | block | cancel | delete | restore | remove | note",
+          }),
+          id: Type.Optional(Type.String()),
+          item: Type.Optional(Type.String()),
+          items: Type.Optional(Type.Array(Type.String())),
+          text: Type.Optional(Type.String()),
+          blockedBy: Type.Optional(Type.Array(Type.String())),
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = ctxCwd(ctx);
+      const store = defaultTaskGraphStore(cwd);
+      const graph = await loadSparkGraph(cwd, ctx);
+      if (!graph)
+        return {
+          content: [{ type: "text", text: "No Spark thread found." }],
+          details: { found: false },
+        };
+      const thread = graph.threads()[0];
+      if (!thread)
+        return {
+          content: [{ type: "text", text: "No Spark thread found." }],
+          details: { found: false },
+        };
+      const p = params as { task?: string; ops?: TaskTodoOp[] };
+      if (!p.ops?.length)
+        return {
+          content: [{ type: "text", text: "TODO ops are required." }],
+          details: { found: true, error: "missing_ops" },
+        };
+      const task = resolveSessionClaimedTask(graph, thread.ref, sparkSessionKey(ctx), p.task);
+      if (!task)
+        return {
+          content: [{ type: "text", text: "No matching claimed task for this session." }],
+          details: { found: true, error: "no_matching_claimed_task" },
+        };
+      graph.applyTodoOps(task.ref, p.ops);
+      await store.save(graph);
+      await sparkTodoStore(cwd, ctx).save(graph);
+      await refreshSparkWidget(cwd, ctx);
+      return {
+        content: [{ type: "text", text: `Updated TODOs for ${task.title} (${task.ref}).` }],
+        details: { task: graph.getTask(task.ref) as unknown as Record<string, unknown> },
+      };
+    },
+  });
+
+  pi.registerTool?.({
+    name: "spark_claim_task",
+    label: "Spark Claim Task",
+    description:
+      "Create or update a concrete Spark task for this session. For Spark-native delegated work, bind the task to a builtin or managed agent with agentRef and run it via spark_run_ready_tasks; do not spawn nested pi CLI sessions as pseudo-agents unless explicitly testing Pi CLI behavior.",
+    parameters: Type.Object({
+      title: Type.String({ description: "Concrete task title to show as current task." }),
+      description: Type.String({ description: "What the claimed task will accomplish." }),
+      kind: Type.Optional(
+        Type.String({
+          description: "research | plan | implement | review | ask | cue | interaction | generic",
+        }),
+      ),
+      status: Type.Optional(
+        Type.String({
+          description: "proposed | pending | ready | running | blocked | done | failed | cancelled",
+        }),
+      ),
+      agentRef: Type.Optional(
+        Type.String({
+          description:
+            "Optional builtin/managed Spark agent id or ref from spark_list_agents, e.g. planner or agent:builtin-planner. Agent-bound tasks default to pending and are eligible for spark_run_ready_tasks.",
+        }),
+      ),
+      todos: Type.Optional(Type.Array(Type.String({ description: "Task-local TODO item." }))),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = ctxCwd(ctx);
+      const store = defaultTaskGraphStore(cwd);
+      const graph = await loadSparkGraph(cwd, ctx);
+      if (!graph)
+        return {
+          content: [{ type: "text", text: "No Spark thread found." }],
+          details: { found: false },
+        };
+      const thread = graph.threads()[0];
+      if (!thread)
+        return {
+          content: [{ type: "text", text: "No Spark thread found." }],
+          details: { found: false },
+        };
+      const p = params as {
+        title: string;
+        description: string;
+        kind?: string;
+        status?: string;
+        agentRef?: string;
+        todos?: string[];
+      };
+      const title = p.title.trim();
+      const description = p.description.trim();
+      if (!title || !description)
+        return {
+          content: [{ type: "text", text: "Task title and description are required." }],
+          details: { found: true, error: "missing_title_or_description" },
+        };
+      let agentRef: AgentRef | undefined;
+      if (p.agentRef?.trim()) {
+        const registry = new AgentRegistry();
+        await defaultManagedAgentStore(cwd).hydrate(registry);
+        agentRef = registry.select(p.agentRef.trim()).ref;
+      }
+      const kind = normalizeTaskKind(p.kind) ?? "interaction";
+      const status = normalizeTaskStatus(p.status) ?? (agentRef ? "pending" : "running");
+      const sessionKey = sparkSessionKey(ctx);
+      const existing = graph
+        .tasks(thread.ref)
+        .find((task) => task.claimedBySession === sessionKey && task.title === title);
+      const activeClaim = findActiveSessionClaim(graph, thread.ref, sessionKey, existing?.ref);
+      if (isUnfinishedTaskStatus(status) && activeClaim)
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Cannot claim ${title}: this session already has unfinished claimed task ${activeClaim.title} (${activeClaim.ref}). Finish, fail, or cancel it before claiming another task.`,
+            },
+          ],
+          details: {
+            found: true,
+            error: "active_claim_exists",
+            activeTask: activeClaim as unknown as Record<string, unknown>,
+          },
+        };
+      const task = existing
+        ? graph.updateTask(existing.ref, {
+            title,
+            description,
+            kind,
+            status,
+            agentRef,
+            claimedBySession: sessionKey,
+          })
+        : graph.createTask({
+            threadRef: thread.ref,
+            title,
+            description,
+            kind,
+            status,
+            agentRef,
+            claimedBySession: sessionKey,
+          });
+      const todos = p.todos?.map((todo) => todo.trim()).filter(Boolean) ?? [];
+      if (todos.length > 0) {
+        graph.applyTodoOps(task.ref, [
+          {
+            op: "init",
+            items: todos,
+          },
+        ]);
+      }
+      await store.save(graph);
+      await sparkTodoStore(cwd, ctx).save(graph);
+      return {
+        content: [{ type: "text", text: `Claimed Spark task: ${task.title} (${task.ref})` }],
+        details: { task: task as unknown as Record<string, unknown> },
+      };
+    },
+  });
+
+  pi.registerTool?.({
+    name: "spark_plan_tasks",
+    label: "Spark Plan Tasks",
+    description:
+      "Create or update multiple durable Spark tasks in the active thread from a concrete task plan. Use this dedicated spark-tasks-backed planning tool when asked to梳理/organize work before assigning agents; it does not claim tasks for the current session.",
+    parameters: Type.Object({
+      tasks: Type.Array(
+        Type.Object({
+          title: Type.String({ description: "Stable task title." }),
+          description: Type.String({ description: "Concrete task objective/instruction." }),
+          kind: Type.Optional(
+            Type.String({
+              description:
+                "research | plan | implement | review | ask | cue | interaction | generic",
+            }),
+          ),
+          status: Type.Optional(
+            Type.String({
+              description:
+                "proposed | pending | ready | running | blocked | done | failed | cancelled",
+            }),
+          ),
+          agentRef: Type.Optional(
+            Type.String({
+              description:
+                "Optional builtin/managed Spark agent id or ref, e.g. scout, planner, reviewer, worker.",
+            }),
+          ),
+          dependsOn: Type.Optional(
+            Type.Array(
+              Type.String({
+                description: "Dependency task ref or task title in this plan/thread.",
+              }),
+            ),
+          ),
+          rationale: Type.Optional(
+            Type.String({ description: "Why this task belongs in the plan." }),
+          ),
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = ctxCwd(ctx);
+      const store = defaultTaskGraphStore(cwd);
+      const graph = await loadSparkGraph(cwd, ctx);
+      if (!graph)
+        return {
+          content: [{ type: "text", text: "No Spark thread found." }],
+          details: { found: false },
+        };
+      const thread = graph.threads()[0];
+      if (!thread)
+        return {
+          content: [{ type: "text", text: "No Spark thread found." }],
+          details: { found: false },
+        };
+      const registry = new AgentRegistry();
+      await defaultManagedAgentStore(cwd).hydrate(registry);
+      const p = params as {
+        tasks?: Array<{
+          title: string;
+          description: string;
+          kind?: string;
+          status?: string;
+          agentRef?: string;
+          dependsOn?: string[];
+          rationale?: string;
+        }>;
+      };
+      if (!p.tasks?.length)
+        return {
+          content: [{ type: "text", text: "Task plan is required." }],
+          details: { found: true, error: "missing_tasks" },
+        };
+      const tasks: TaskPlanInput[] = p.tasks.map((task) => ({
+        title: task.title,
+        description: task.description,
+        kind: normalizeTaskKind(task.kind) ?? "generic",
+        status: normalizeTaskStatus(task.status) ?? (task.agentRef ? "pending" : "proposed"),
+        agentRef: task.agentRef?.trim() ? registry.select(task.agentRef.trim()).ref : undefined,
+        dependsOn: task.dependsOn,
+        rationale: task.rationale,
+      }));
+      const result = graph.planTasks(thread.ref, tasks);
+      await store.save(graph);
+      await sparkTodoStore(cwd, ctx).save(graph);
+      await refreshSparkWidget(cwd, ctx);
+      const lines = [
+        `Planned ${result.created.length} new task(s), updated ${result.updated.length}, added ${result.dependencies.length} dependencies.`,
+        ...result.created.map((task) => `- created [${task.status}] ${task.title} (${task.ref})`),
+        ...result.updated.map((task) => `- updated [${task.status}] ${task.title} (${task.ref})`),
+      ];
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: { result: result as unknown as Record<string, unknown> },
+      };
+    },
+  });
+
+  pi.registerTool?.({
     name: "spark_run_ready_tasks",
     label: "Spark Run Ready Tasks",
-    description: "Dry-run all currently ready Spark tasks and persist task run artifacts.",
+    description:
+      "Run all currently ready Spark tasks with their bound builtin/managed Spark agents and persist task-run artifacts. Dry-run by default. Use this for Spark-native agent/task workflow instead of spawning nested pi CLI sessions.",
     parameters: Type.Object({
       dryRun: Type.Optional(Type.Boolean({ default: true })),
     }),
@@ -346,13 +708,16 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           ? (ctx as { cwd: string }).cwd
           : process.cwd();
       const store = defaultTaskGraphStore(cwd);
-      const graph = await store.load();
+      const graph = await loadSparkGraph(cwd, ctx);
       if (!graph)
         return {
           content: [{ type: "text", text: "No Spark thread found." }],
           details: { found: false },
         };
-      if (ensureSparkGraphInvariants(graph)) await store.save(graph);
+      if (ensureSparkGraphInvariants(graph)) {
+        await store.save(graph);
+        await sparkTodoStore(cwd, ctx).save(graph);
+      }
       const artifactStore = defaultArtifactStore(cwd);
       const registry = new AgentRegistry();
       await defaultManagedAgentStore(cwd).hydrate(registry);
@@ -370,6 +735,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         );
       }
       await store.save(graph);
+      await sparkTodoStore(cwd, ctx).save(graph);
       return {
         content: [{ type: "text", text: `Ran ${runs.length} ready Spark task(s).` }],
         details: { runs: runs as unknown as Record<string, unknown>[] },
@@ -744,11 +1110,7 @@ interface SparkContextLike {
   cwd?: string;
 }
 
-async function handleSparkInput(
-  event: unknown,
-  ctx: unknown,
-  pi?: Pick<SparkExtensionAPI, "sendUserMessage">,
-): Promise<unknown> {
+async function handleSparkInput(event: unknown, ctx: unknown): Promise<unknown> {
   if (!isSparkInputEvent(event)) return { action: "continue" };
   if (event.source === "extension") return { action: "continue" };
   const text = event.text.trim();
@@ -765,32 +1127,300 @@ async function injectSparkHints(event: unknown, ctx: unknown): Promise<unknown> 
   const cwd = ctxCwd(ctx);
   const activation = await detectSparkActivation(cwd);
   if (!activation.active) return undefined;
-  const contextSummary = await renderActiveSparkContextSummary(cwd);
+  await ensureSparkStateForActiveWorkspace(cwd);
+  const contextSummary = await renderActiveSparkContextSummary(cwd, ctx);
   const sparkPrompt = renderSparkActiveSystemPrompt(eventSystemPrompt(event), activation.reason);
   return {
     systemPrompt: contextSummary ? `${sparkPrompt}\n\n${contextSummary}` : sparkPrompt,
   };
 }
 
-async function renderActiveSparkContextSummary(cwd: string): Promise<string | undefined> {
+async function renderActiveSparkContextSummary(
+  cwd: string,
+  ctx?: unknown,
+): Promise<string | undefined> {
   const store = defaultTaskGraphStore(cwd);
-  const graph = await store.load();
+  const graph = await loadSparkGraph(cwd, ctx);
   if (!graph) return undefined;
-  if (ensureSparkGraphInvariants(graph)) await store.save(graph);
+  if (ensureSparkGraphInvariants(graph)) {
+    await store.save(graph);
+    await sparkTodoStore(cwd, ctx).save(graph);
+  }
+  const sparkMd = await readActiveSparkMd(cwd);
   const thread = graph.threads()[0];
-  if (!thread) return undefined;
-  const current = graph.currentTask(thread.ref);
-  const summary = graph.threadTodoSummary(thread.ref);
-  if (summary.total === 0 && !current) return undefined;
-  const activeTodo = current ? graph.todoSummary(current.ref).active : undefined;
+  const sessionKey = sparkSessionKey(ctx);
+  const independentTodos = await loadIndependentTodos(cwd, ctx);
+  const stateLines = thread
+    ? (() => {
+        const tasks = graph.tasks(thread.ref);
+        const claimed = tasks.filter((task) => task.claimedBySession);
+        const sessionClaimed = claimed.filter((task) => task.claimedBySession === sessionKey);
+        const taskLines = sessionClaimed.flatMap((task) => {
+          const summary = graph.todoSummary(task.ref);
+          return [
+            `- Claimed task: ${task.title} (${task.ref}) TODOs ${summary.total}/${summary.inProgress}/${summary.pending}/${summary.done}`,
+            ...graph
+              .taskTodos(task.ref)
+              .slice(0, 5)
+              .map((todo) => `  - [${todo.status}] ${todo.id} ${todo.content}`),
+          ];
+        });
+        const independentLines = independentTodos
+          .slice(0, 5)
+          .map((todo) => `  - [${todo.status}] ${todo.id ?? ""} ${todo.content}`);
+        return [
+          "Spark current state:",
+          `- Thread: ${thread.title} (${thread.ref})`,
+          `- Tasks: ${tasks.length} total / ${claimed.length} claimed / ${sessionClaimed.length} claimed_by_session`,
+          ...taskLines,
+          independentTodos.length > 0
+            ? `- Independent TODOs: ${independentTodos.length}`
+            : undefined,
+          ...independentLines,
+        ]
+          .filter((line): line is string => Boolean(line))
+          .join("\n");
+      })()
+    : undefined;
   const lines = [
-    "Spark current state:",
-    `- Thread: ${thread.title} (${thread.ref})`,
-    current ? `- Current task: ${current.title} (${current.ref})` : "- Current task: none",
-    activeTodo ? `- Active TODO: ${activeTodo}` : undefined,
-    `- TODOs: ${summary.total} total / ${summary.inProgress} in_progress / ${summary.pending} pending / ${summary.done} done`,
-  ].filter(Boolean) as string[];
-  return lines.join("\n");
+    sparkMd ? ["SPARK.md (persistent project intent):", sparkMd.trim()].join("\n") : undefined,
+    stateLines,
+  ].filter((line): line is string => Boolean(line));
+  return lines.length ? lines.join("\n\n") : undefined;
+}
+
+async function loadSparkGraph(cwd: string, ctx?: unknown): Promise<TaskGraph | null> {
+  const graph = await defaultTaskGraphStore(cwd).load();
+  if (!graph) return null;
+  await sparkTodoStore(cwd, ctx).hydrate(graph);
+  return graph;
+}
+
+function sparkTodoStore(cwd: string, ctx: unknown): ReturnType<typeof defaultTaskTodoStore> {
+  return defaultTaskTodoStore(cwd, sparkSessionKey(ctx));
+}
+
+function resolveSessionClaimedTask(
+  graph: TaskGraph,
+  threadRef: ThreadRef,
+  sessionKey: string,
+  query?: string,
+): Task | undefined {
+  const claimed = graph
+    .tasks(threadRef)
+    .filter((task) => task.claimedBySession === sessionKey && isUnfinishedTaskStatus(task.status));
+  if (query?.trim()) {
+    const needle = query.trim();
+    return claimed.find(
+      (task) => task.ref === needle || task.title === needle || task.title.startsWith(needle),
+    );
+  }
+  const current = graph.currentTask(threadRef);
+  if (current?.claimedBySession === sessionKey && isUnfinishedTaskStatus(current.status))
+    return current;
+  return claimed.at(-1);
+}
+
+function findActiveSessionClaim(
+  graph: TaskGraph,
+  threadRef: ThreadRef,
+  sessionKey: string,
+  exceptTaskRef?: string,
+): Task | undefined {
+  return graph
+    .tasks(threadRef)
+    .find(
+      (task) =>
+        task.ref !== exceptTaskRef &&
+        task.claimedBySession === sessionKey &&
+        isUnfinishedTaskStatus(task.status),
+    );
+}
+
+function independentTodoStorePath(cwd: string, ctx: unknown): string {
+  return join(cwd, ".spark", "session-todos", `${sanitizeStoreScope(sparkSessionKey(ctx))}.json`);
+}
+
+async function loadIndependentTodos(cwd: string, ctx: unknown): Promise<SessionTodoEntry[]> {
+  try {
+    const raw = JSON.parse(await readFile(independentTodoStorePath(cwd, ctx), "utf8")) as {
+      todos?: SessionTodoEntry[];
+    };
+    return (raw.todos ?? []).filter((todo) => todo.status !== "deleted");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function saveIndependentTodos(
+  cwd: string,
+  ctx: unknown,
+  todos: SessionTodoEntry[],
+): Promise<void> {
+  const filePath = independentTodoStorePath(cwd, ctx);
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(
+    filePath,
+    `${JSON.stringify({ version: 1, todos, updatedAt: nowIso() }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
+function applyIndependentTodoOps(todos: SessionTodoEntry[], ops: TaskTodoOp[]): SessionTodoEntry[] {
+  let next = [...todos];
+  for (const op of ops) next = applyIndependentTodoOp(next, op);
+  return normalizeIndependentTodos(next);
+}
+
+function applyIndependentTodoOp(todos: SessionTodoEntry[], op: TaskTodoOp): SessionTodoEntry[] {
+  const now = nowIso();
+  switch (op.op) {
+    case "init":
+      if (!op.items?.length) throw new Error("todo init items are required");
+      return op.items.map((content, index) => materializeIndependentTodo(content, index, now));
+    case "append": {
+      if (!op.items?.length) throw new Error("todo append items are required");
+      const next = [...todos];
+      for (const item of op.items) {
+        const content = item.trim();
+        if (!content) throw new Error("todo content is required");
+        if (next.some((todo) => todo.content === content))
+          throw new Error(`duplicate todo content: ${content}`);
+        next.push(materializeIndependentTodo(content, next.length, now));
+      }
+      return next;
+    }
+    case "start": {
+      const target = resolveIndependentTodo(todos, op, "todo item is required for start");
+      return todos.map((todo) => {
+        if (todo.id === target.id) return { ...todo, status: "in_progress", updatedAt: now };
+        if (todo.status === "in_progress") return { ...todo, status: "pending", updatedAt: now };
+        return todo;
+      });
+    }
+    case "done":
+      return patchIndependentTodoStatus(todos, op, "done", now, "todo item is required for done");
+    case "block":
+      return patchIndependentTodoStatus(
+        todos,
+        op,
+        "blocked",
+        now,
+        "todo item is required for block",
+      );
+    case "cancel":
+      return patchIndependentTodoStatus(
+        todos,
+        op,
+        "cancelled",
+        now,
+        "todo item is required for cancel",
+      );
+    case "delete":
+    case "remove":
+      return patchIndependentTodoStatus(
+        todos,
+        op,
+        "deleted",
+        now,
+        "todo item is required for delete",
+      );
+    case "restore":
+      return patchIndependentTodoStatus(
+        todos,
+        op,
+        "pending",
+        now,
+        "todo item is required for restore",
+        true,
+      );
+    case "note": {
+      const target = resolveIndependentTodo(todos, op, "todo item is required for note");
+      const text = op.text?.trimEnd();
+      if (!text) throw new Error("todo note text is required");
+      return todos.map((todo) =>
+        todo.id === target.id
+          ? { ...todo, notes: todo.notes ? [...todo.notes, text] : [text], updatedAt: now }
+          : todo,
+      );
+    }
+  }
+}
+
+function materializeIndependentTodo(content: string, index: number, now: string): SessionTodoEntry {
+  const trimmed = content.trim();
+  if (!trimmed) throw new Error("todo content is required");
+  return {
+    id: `todo-${stableId(`${trimmed}:${index}`).slice(0, 8)}`,
+    content: trimmed,
+    status: "pending",
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function patchIndependentTodoStatus(
+  todos: SessionTodoEntry[],
+  op: TaskTodoOp,
+  status: SessionTodoEntry["status"],
+  now: string,
+  missingMessage: string,
+  includeDeleted = false,
+): SessionTodoEntry[] {
+  const target = resolveIndependentTodo(todos, op, missingMessage, includeDeleted);
+  return todos.map((todo) => (todo.id === target.id ? { ...todo, status, updatedAt: now } : todo));
+}
+
+function resolveIndependentTodo(
+  todos: SessionTodoEntry[],
+  op: TaskTodoOp,
+  missingMessage: string,
+  includeDeleted = false,
+): SessionTodoEntry {
+  const id = op.id?.trim();
+  const item = op.item?.trim();
+  if (!id && !item) throw new Error(missingMessage);
+  const candidates = includeDeleted ? todos : todos.filter((todo) => todo.status !== "deleted");
+  const found = id
+    ? candidates.find((todo) => todo.id === id)
+    : candidates.find((todo) => todo.content === item);
+  if (!found) throw new Error(id ? `todo id not found: ${id}` : `todo item not found: ${item}`);
+  return found;
+}
+
+function normalizeIndependentTodos(todos: SessionTodoEntry[]): SessionTodoEntry[] {
+  const next = todos.map((todo) => ({ ...todo }));
+  const live = next.filter((todo) => todo.status !== "deleted" && todo.status !== "cancelled");
+  const active = live.filter((todo) => todo.status === "in_progress");
+  if (active.length > 1) {
+    for (const todo of active.slice(1)) todo.status = "pending";
+  }
+  if (!live.some((todo) => todo.status === "in_progress")) {
+    const first = live.find((todo) => todo.status === "pending");
+    if (first) first.status = "in_progress";
+  }
+  return next;
+}
+
+function sanitizeStoreScope(scope: string): string {
+  return scope.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/-+/g, "-") || "default";
+}
+
+async function ensureSparkStateForActiveWorkspace(
+  cwd: string,
+  ctx?: unknown,
+): Promise<TaskGraph | null> {
+  const existing = await loadSparkGraph(cwd, ctx);
+  if (existing) return existing;
+  const sparkMdPath = await findUpExisting(cwd, "SPARK.md");
+  if (!sparkMdPath) return null;
+  const sparkMd = await readFile(sparkMdPath, "utf8");
+  await initializeSparkIdea(cwd, ideaFromSparkMd(sparkMd), {
+    threadTitle: titleFromSparkMd(sparkMd),
+    sparkMd,
+  });
+  return loadSparkGraph(cwd, ctx);
 }
 
 async function detectSparkActivation(cwd: string): Promise<{ active: boolean; reason: string }> {
@@ -868,6 +1498,26 @@ function ctxCwd(ctx: unknown): string {
   return ctx && typeof ctx === "object" && typeof (ctx as SparkContextLike).cwd === "string"
     ? (ctx as { cwd: string }).cwd
     : process.cwd();
+}
+
+function isToolExecutionEvent(event: unknown, toolName: string): boolean {
+  return Boolean(
+    event &&
+    typeof event === "object" &&
+    (event as { toolName?: unknown }).toolName === toolName &&
+    (event as { isError?: unknown }).isError !== true,
+  );
+}
+
+function sparkSessionKey(ctx: unknown): string {
+  if (ctx && typeof ctx === "object") {
+    const manager = (ctx as SparkToolContext).sessionManager;
+    const sessionFile = manager?.getSessionFile?.();
+    if (sessionFile) return `session:${stableId(sessionFile)}`;
+    const leaf = manager?.getLeafId?.();
+    if (leaf) return `leaf:${leaf}`;
+  }
+  return "session:ephemeral";
 }
 
 function sparkAskUi(ctx: unknown) {
@@ -954,7 +1604,14 @@ export function renderSparkActiveSystemPrompt(basePrompt: string, reason: string
   const sparkPrompt = [
     `Spark is active for the current workspace (${reason}).`,
     "The spark skill is loaded and available — read it with the read tool when Spark workflow guidance is needed.",
-    "Use spark_status for thread state, spark_run_ready_tasks when the user asks to proceed, and pi-cue tools (run/jobs/status/kill/wait/cron/scopes/log) for command execution.",
+    "SPARK.md is persistent project intent supplied in this system prompt; follow it as standing context instead of relying on chat history.",
+    "Use spark_status for thread state, spark_plan_tasks to organize or create a task plan without claiming it, spark_claim_task when this session has concrete task work to claim, spark_update_task_todos for TODOs attached to the currently claimed task, spark_update_todos for independent session TODOs, spark_list_agents/spark_get_agent to choose Spark agents, spark_run_ready_tasks when the user asks to proceed, and pi-cue tools (run/jobs/status/kill/wait/cron/scopes/log) for command execution.",
+    "Each agent/session may claim at most one unfinished task at a time; finish, fail, or cancel the current claim before claiming another. Do not auto-create placeholder tasks or threads for display; only claim tasks inferred from the actual situation. TODOs are session-maintained: task-scoped TODOs can be modified only on a claimed unfinished task, while independent TODOs are siblings of the thread display.",
+    "During Spark initialization, do not ask a broad upfront form. First analyze the request and workspace context, then ask only targeted clarification questions if the analysis finds a concrete ambiguity.",
+    "Before launching multiple agents or parallel workstreams, present the workstream split with goals and expected outputs via spark_ask unless the user explicitly requested immediate dispatch; do not continue on timeout or no-selection for decision/approval gates.",
+    "For Spark workstreams, prefer the built-in/managed Spark agent flow: bind concrete tasks to agentRef values from spark_list_agents or spark_get_agent, then run them with spark_run_ready_tasks. Do not spawn nested pi CLI sessions as pseudo-agents unless the task is explicitly testing Pi CLI behavior.",
+    "When using pi-cue run, prefer direct-exec commands and Pi file tools over /bin/sh; use /bin/sh -lc only for genuine shell semantics such as redirection, here-docs, variable expansion, or compound shell conditionals.",
+    "Keep temporary plans, agent reports, and scratch artifacts out of the repo root; write them under .spark/notes, .spark/agent-reports, or the Spark artifact store unless the user asks for committed documentation.",
     "Do not guess missing intent. If scope, output, or next action is ambiguous, ask the user to clarify before proceeding.",
     "After a clarification or decision answer is confirmed, continue with the selected action in the same turn when the next action is clear; do not stop just to ask for permission to proceed again.",
     "If the user points out a concrete Spark/pi-tool behavior change or defect in the current codebase, treat that as an implementation task unless they explicitly say it is only a preference/memory update.",
@@ -972,6 +1629,7 @@ export interface SparkInitResult {
   outputLanguage: SparkCopyLanguage;
   currentTaskRef?: string;
   currentTaskTitle?: string;
+  /** Initialization TODOs persisted separately from thread.json. */
   todoSummary: {
     total: number;
     inProgress: number;
@@ -990,6 +1648,7 @@ export interface SparkInitResult {
 export interface SparkInitClarificationData {
   workingTitle?: string;
   outputLanguage?: SparkCopyLanguage;
+  sparkFocus?: string;
   objective?: string;
   targetUser?: string;
   smallestSlice?: string;
@@ -1008,53 +1667,6 @@ interface SparkInitOptions {
   askRefs?: AskRef[];
 }
 
-interface SparkInitClarification {
-  threadTitle: string;
-  data: SparkInitClarificationData;
-  askRef: AskRef;
-  askArtifactRef: ArtifactRef;
-}
-
-async function maybeClarifySparkInit(
-  cwd: string,
-  idea: string,
-  ui: ReturnType<typeof sparkAskUi>,
-): Promise<SparkInitClarification | undefined> {
-  if (!ui) return undefined;
-  const defaultLanguage = detectCopyLanguage(idea);
-  const request = clarifyThreadAsk({ idea, defaultLanguage });
-  const result = await runSparkAsk(request, ui);
-  const askRef = newRef("ask");
-  const artifact = await defaultArtifactStore(cwd).put({
-    kind: "ask-answer",
-    title: `Spark ask: ${request.title ?? request.flow}`,
-    format: "json",
-    body: { ref: askRef, request, result } as unknown as JsonValue,
-    provenance: { producer: "ask" },
-  });
-  if (result.cancelled) return undefined;
-  const threadTitle = normalizedFreeformAnswer(result.answers, "working-title");
-  if (!threadTitle) return undefined;
-  return {
-    threadTitle: normalizeThreadTitle(threadTitle),
-    data: {
-      workingTitle: normalizeThreadTitle(threadTitle),
-      outputLanguage:
-        normalizeSparkCopyLanguage(normalizedAnswer(result.answers, "output-language")) ??
-        defaultLanguage,
-      objective: normalizedFreeformAnswer(result.answers, "objective"),
-      targetUser: normalizedFreeformAnswer(result.answers, "target-user"),
-      smallestSlice: normalizedFreeformAnswer(result.answers, "smallest-slice"),
-      successSignal: normalizedFreeformAnswer(result.answers, "success-signal"),
-      nonGoals: normalizedFreeformAnswer(result.answers, "non-goals"),
-      deliveryMode: normalizedAnswer(result.answers, "delivery-mode"),
-      nextAction: normalizedAnswer(result.answers, "next-action"),
-    },
-    askRef,
-    askArtifactRef: artifact.ref,
-  };
-}
-
 export async function initializeSparkIdea(
   cwd: string,
   idea: string,
@@ -1062,6 +1674,9 @@ export async function initializeSparkIdea(
 ): Promise<SparkInitResult> {
   const sparkDir = join(cwd, ".spark");
   await mkdir(sparkDir, { recursive: true });
+
+  const existingGraph = await defaultTaskGraphStore(cwd).load();
+  if (existingGraph) return sparkInitResultFromExisting(cwd, idea, existingGraph, options);
 
   const graph = new TaskGraph();
   const threadTitle =
@@ -1072,25 +1687,19 @@ export async function initializeSparkIdea(
     outputLanguage: options.outputLanguage ?? options.clarification?.outputLanguage,
   });
 
-  graph.ensureContextTask(thread.ref, {
-    title: "Maintain current interaction context",
-    description: `Thread created from: ${truncateForDescription(idea, 200)}`,
-    todos: [{ content: `Confirm scope and next action for: ${truncateForDescription(idea, 120)}` }],
-  });
-
   const scout = graph.createTask({
     threadRef: thread.ref,
-    title: "Capture project intent",
+    title: "Analyze project intent",
     description:
-      "Draft SPARK.md from confirmed intent, explicitly preserving goals, non-goals, success signals, and unresolved questions.",
+      "Inspect the request and workspace context first, then identify only targeted clarification questions; do not start with a broad intake form.",
     kind: "research",
     agentRef: builtinAgentRef("scout"),
   });
   const planner = graph.createTask({
     threadRef: thread.ref,
-    title: "Build initial task graph",
+    title: "Plan targeted clarification",
     description:
-      "Turn the clarified SPARK.md into a small executable task DAG with explicit agent bindings and no guessed scope.",
+      "Turn the analysis into a small task graph and targeted asks with explicit agent bindings and no guessed scope.",
     kind: "plan",
     agentRef: builtinAgentRef("planner"),
   });
@@ -1098,7 +1707,7 @@ export async function initializeSparkIdea(
     threadRef: thread.ref,
     title: "Review initial direction",
     description:
-      "Verify that the task graph follows the confirmed intent and avoids premature implementation or missing clarification.",
+      "Verify that the task graph follows the analyzed intent, asks only targeted questions after analysis, and avoids premature implementation.",
     kind: "review",
     agentRef: builtinAgentRef("reviewer"),
   });
@@ -1164,10 +1773,11 @@ export async function initializeSparkIdea(
     },
   });
   await defaultTaskGraphStore(cwd).save(graph);
+  await sparkTodoStore(cwd, undefined).save(graph);
   await writeFile(join(sparkDir, "review-gate.json"), `${JSON.stringify(gate, null, 2)}\n`, "utf8");
 
   const currentTask = graph.currentTask(thread.ref);
-  const todoSummary = graph.threadTodoSummary(thread.ref);
+  const todoSummary = currentTask ? graph.todoSummary(currentTask.ref) : emptyTodoSummary();
   return {
     cwd,
     idea,
@@ -1193,6 +1803,56 @@ export async function initializeSparkIdea(
   };
 }
 
+async function sparkInitResultFromExisting(
+  cwd: string,
+  idea: string,
+  graph: TaskGraph,
+  options: SparkInitOptions,
+): Promise<SparkInitResult> {
+  const thread = graph.threads()[0];
+  if (!thread) throw new Error("existing Spark graph has no thread");
+  const currentTask = graph.currentTask(thread.ref);
+  const todoSummary = currentTask ? graph.todoSummary(currentTask.ref) : emptyTodoSummary();
+  const latestSparkMd = await readActiveSparkMd(cwd);
+  const sparkMdPath = (await exists(join(cwd, "SPARK.md"))) ? join(cwd, "SPARK.md") : undefined;
+  return {
+    cwd,
+    idea,
+    threadTitle: thread.title,
+    threadRef: thread.ref,
+    taskCount: graph.tasks(thread.ref).length,
+    outputLanguage:
+      options.clarification?.outputLanguage ??
+      (thread.outputLanguage as SparkCopyLanguage | undefined) ??
+      detectCopyLanguage(latestSparkMd ?? idea),
+    currentTaskRef: currentTask?.ref,
+    currentTaskTitle: currentTask?.title,
+    todoSummary: {
+      total: todoSummary.total,
+      inProgress: todoSummary.inProgress,
+      pending: todoSummary.pending,
+      done: todoSummary.done,
+      blocked: todoSummary.blocked,
+      cancelled: todoSummary.cancelled,
+    },
+    sparkMdPath,
+    sparkMdArtifactRef: "artifact:existing" as ArtifactRef,
+    agentPlanArtifactRef: "artifact:existing" as ArtifactRef,
+    traceRef: "spark:existing",
+    askArtifactRefs: options.askArtifactRefs ?? [],
+  };
+}
+
+function renderExistingSparkSummary(graph: TaskGraph): string {
+  const thread = graph.threads()[0];
+  if (!thread) return "Spark is already initialized; no thread was overwritten.";
+  return [
+    "Spark is already initialized; existing state was not overwritten.",
+    `- Thread: ${thread.title} (${thread.ref})`,
+    `- Tasks: ${graph.tasks(thread.ref).length}`,
+  ].join("\n");
+}
+
 function renderSparkInitSummary(result: SparkInitResult): string {
   if (result.outputLanguage === "zh") {
     const lines = [
@@ -1207,7 +1867,7 @@ function renderSparkInitSummary(result: SparkInitResult): string {
       result.currentTaskTitle
         ? `- 当前 task：${result.currentTaskTitle} (${result.currentTaskRef})`
         : "- 当前 task：无",
-      `- TODO：${result.todoSummary.total} total / ${result.todoSummary.inProgress} in_progress / ${result.todoSummary.pending} pending / ${result.todoSummary.done} done`,
+      `- 当前 TODO：${result.todoSummary.total} total / ${result.todoSummary.inProgress} in_progress / ${result.todoSummary.pending} pending / ${result.todoSummary.done} done`,
       `- SPARK artifact：${result.sparkMdArtifactRef}`,
       `- Agent plan artifact：${result.agentPlanArtifactRef}`,
       `- Trace：${result.traceRef}`,
@@ -1228,7 +1888,7 @@ function renderSparkInitSummary(result: SparkInitResult): string {
     result.currentTaskTitle
       ? `- Current task: ${result.currentTaskTitle} (${result.currentTaskRef})`
       : "- Current task: none",
-    `- TODOs: ${result.todoSummary.total} total / ${result.todoSummary.inProgress} in_progress / ${result.todoSummary.pending} pending / ${result.todoSummary.done} done`,
+    `- Current TODOs: ${result.todoSummary.total} total / ${result.todoSummary.inProgress} in_progress / ${result.todoSummary.pending} pending / ${result.todoSummary.done} done`,
     `- SPARK artifact: ${result.sparkMdArtifactRef}`,
     `- Agent plan artifact: ${result.agentPlanArtifactRef}`,
     `- Trace: ${result.traceRef}`,
@@ -1242,31 +1902,47 @@ function titleFromIdea(idea: string): string {
   return normalizeThreadTitle(firstLine);
 }
 
+function titleFromSparkMd(markdown: string): string {
+  const description = /^description:\s*(.+)$/m.exec(markdown)?.[1]?.trim();
+  if (description) return normalizeThreadTitle(description.replace(/^['"]|['"]$/g, ""));
+  const heading = /^#\s+(.+)$/m.exec(markdown)?.[1]?.trim();
+  if (heading) return normalizeThreadTitle(heading);
+  const workingTitle = /##\s+(?:Working title|当前工作标题)\s+\n\s*-\s+(.+)/i
+    .exec(markdown)?.[1]
+    ?.trim();
+  return normalizeThreadTitle(workingTitle ?? "Spark thread");
+}
+
+function ideaFromSparkMd(markdown: string): string {
+  const origin = sectionBody(markdown, "Origin") ?? sectionBody(markdown, "起源");
+  return origin || titleFromSparkMd(markdown);
+}
+
+function sectionBody(markdown: string, heading: string): string | undefined {
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`##\\s+${escaped}\\s+\\n([\\s\\S]*?)(?:\\n##\\s+|$)`, "i").exec(
+    markdown,
+  );
+  const body = match?.[1]?.trim();
+  return body || undefined;
+}
+
 function normalizeThreadTitle(title: string): string {
   const line = title.replace(/\s+/g, " ").trim() || "Spark thread";
   return line.length > 72 ? `${line.slice(0, 69)}...` : line;
 }
 
-function normalizedAnswer(
-  answers: Record<string, { values: string[]; customText?: string }>,
-  questionId: string,
-): string | undefined {
-  const answer = answers[questionId];
-  if (!answer) return undefined;
-  const value = answer.customText ?? answer.values[0];
-  const normalized = value?.replace(/\s+/g, " ").trim();
-  return normalized || undefined;
-}
-
-function normalizedFreeformAnswer(
-  answers: Record<string, { values: string[]; customText?: string }>,
-  questionId: string,
-): string | undefined {
-  return normalizedAnswer(answers, questionId);
-}
-
-function normalizeSparkCopyLanguage(value?: string): SparkCopyLanguage | undefined {
-  return value === "zh" || value === "en" ? value : undefined;
+function emptyTodoSummary(): TaskTodoSummary {
+  return {
+    total: 0,
+    pending: 0,
+    inProgress: 0,
+    done: 0,
+    blocked: 0,
+    cancelled: 0,
+    deleted: 0,
+    noteCount: 0,
+  };
 }
 
 function mapDeliveryChoice(choice: string, language: SparkCopyLanguage): string {
@@ -1283,6 +1959,35 @@ function mapDeliveryChoice(choice: string, language: SparkCopyLanguage): string 
     "Implement directly": "execute",
   };
   return (language === "zh" ? zhMap[choice] : enMap[choice]) ?? "document_and_execute";
+}
+
+function describeSparkFocus(value: string | undefined, language: SparkCopyLanguage): string {
+  if (language === "zh") {
+    switch (value) {
+      case "audit":
+        return "审计差距。";
+      case "light_refactor":
+        return "轻量重构。";
+      case "docs_alignment":
+        return "文档对齐。";
+      case "execute_change":
+        return "执行改动。";
+      default:
+        return "待确认。";
+    }
+  }
+  switch (value) {
+    case "audit":
+      return "Audit gaps.";
+    case "light_refactor":
+      return "Light refactor.";
+    case "docs_alignment":
+      return "Docs alignment.";
+    case "execute_change":
+      return "Execute change.";
+    default:
+      return "To be confirmed.";
+  }
 }
 
 function renderSparkMd(input: {
@@ -1320,6 +2025,12 @@ inspired_by: []
   sections.push("");
   sections.push(`- ${title}`);
 
+  if (input.clarification?.sparkFocus) {
+    sections.push("");
+    sections.push("## Spark focus");
+    sections.push("");
+    sections.push(`- ${describeSparkFocus(input.clarification.sparkFocus, "en")}`);
+  }
   if (input.clarification?.deliveryMode) {
     sections.push("");
     sections.push("## Delivery mode");
@@ -1399,6 +2110,12 @@ inspired_by: []
   sections.push("");
   sections.push(`- ${title}`);
 
+  if (input.clarification?.sparkFocus) {
+    sections.push("");
+    sections.push("## Spark 重点");
+    sections.push("");
+    sections.push(`- ${describeSparkFocus(input.clarification.sparkFocus, "zh")}`);
+  }
   if (input.clarification?.deliveryMode) {
     sections.push("");
     sections.push("## 交付方式");
@@ -1465,7 +2182,6 @@ function renderAgentPlan(input: {
     description: string;
     kind?: string;
     agentRef?: string;
-    todos?: Array<{ content: string; status: string }>;
   }>;
 }): string {
   const lines = ["# Initial Agent Plan", "", `Idea: ${input.idea}`, "", "## Tasks", ""];
@@ -1474,12 +2190,6 @@ function renderAgentPlan(input: {
     lines.push(`  - Kind: ${task.kind ?? "generic"}`);
     lines.push(`  - Agent: ${task.agentRef ?? "unbound"}`);
     lines.push(`  - Instruction: ${task.description}`);
-    if (task.todos && task.todos.length > 0) {
-      lines.push("  - TODOs:");
-      for (const todo of task.todos) {
-        lines.push(`    - [${todo.status}] ${todo.content}`);
-      }
-    }
   }
   return `${lines.join("\n")}\n`;
 }
@@ -1513,44 +2223,102 @@ function describeDeliveryMode(value: string | undefined, language: SparkCopyLang
   }
 }
 
-function describeNextAction(value: string | undefined, language: SparkCopyLanguage): string {
-  if (language === "zh") {
-    switch (value) {
-      case "stop_after_summary":
-        return "输出澄清摘要后停止。";
-      case "update_docs":
-        return "更新 Spark 文档。";
-      case "continue_tasking":
-        return "继续任务规划和执行。";
-      default:
-        return "待确认。";
-    }
-  }
-  switch (value) {
-    case "stop_after_summary":
-      return "Stop after a clarified summary.";
-    case "update_docs":
-      return "Update Spark documentation.";
-    case "continue_tasking":
-      return "Continue with task planning and execution.";
-    default:
-      return "To be confirmed.";
-  }
-}
-
 function ensureSparkGraphInvariants(graph: TaskGraph): boolean {
   let changed = false;
   for (const thread of graph.threads()) {
-    const current = graph.currentTask(thread.ref);
-    if (!current) {
-      graph.ensureContextTask(thread.ref);
-      changed = true;
-    } else if (graph.getThread(thread.ref).currentTaskRef !== current.ref) {
-      graph.setCurrentTask(thread.ref, current.ref);
+    const threadState = graph.getThread(thread.ref);
+    const betterTitle = fallbackThreadTitle(graph, threadState);
+    if (betterTitle && betterTitle !== threadState.title) {
+      graph.updateThread(thread.ref, { title: betterTitle });
       changed = true;
     }
+    if (!threadState.currentTaskRef) continue;
+    try {
+      const current = graph.getTask(threadState.currentTaskRef);
+      if (current.threadRef === thread.ref) continue;
+    } catch {
+      // Clear stale current task refs, but never synthesize a placeholder task.
+    }
+    graph.setCurrentTask(thread.ref, undefined);
+    changed = true;
   }
   return changed;
+}
+
+function fallbackThreadTitle(
+  graph: TaskGraph,
+  thread: { title: string; ref: ThreadRef },
+): string | undefined {
+  if (!isPlaceholderThreadTitle(thread.title)) return undefined;
+  const firstConcrete = graph
+    .tasks(thread.ref)
+    .find(
+      (task) =>
+        isUnfinishedTaskStatus(task.status) &&
+        !isGenericInitialTaskTitle(task.title) &&
+        !isPlaceholderThreadTitle(task.title),
+    );
+  if (firstConcrete) return normalizeThreadTitle(firstConcrete.title);
+  return undefined;
+}
+
+function isPlaceholderThreadTitle(title: string): boolean {
+  const normalized = title.trim();
+  return (
+    normalized === "「自定义输入」" ||
+    normalized === "[Enter custom title]" ||
+    normalized === "Enter custom title" ||
+    normalized === "自定义输入"
+  );
+}
+
+function isGenericInitialTaskTitle(title: string): boolean {
+  return (
+    title === "Capture project intent" ||
+    title === "Build initial task graph" ||
+    title === "Review initial direction"
+  );
+}
+
+async function readActiveSparkMd(cwd: string): Promise<string | undefined> {
+  const sparkMdPath = await findUpExisting(cwd, "SPARK.md");
+  if (sparkMdPath) return readFile(sparkMdPath, "utf8");
+  const store = defaultArtifactStore(cwd);
+  const [latest] = (await store.list({ kind: "spark-md" })).slice(-1);
+  if (!latest) return undefined;
+  return store.getBody(latest.ref);
+}
+
+function normalizeTaskKind(value: string | undefined): TaskKind | undefined {
+  if (!value) return undefined;
+  if (
+    value === "research" ||
+    value === "plan" ||
+    value === "implement" ||
+    value === "review" ||
+    value === "ask" ||
+    value === "cue" ||
+    value === "interaction" ||
+    value === "generic"
+  )
+    return value;
+  return undefined;
+}
+
+function normalizeTaskStatus(value: string | undefined) {
+  if (!value) return undefined;
+  if (
+    value === "proposed" ||
+    value === "pending" ||
+    value === "ready" ||
+    value === "running" ||
+    value === "blocked" ||
+    value === "done" ||
+    value === "failed" ||
+    value === "cancelled"
+  )
+    return value;
+  return undefined;
 }
 
 function truncateForDescription(text: string, max: number): string {

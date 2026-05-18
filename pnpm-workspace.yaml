@@ -1,6 +1,11 @@
 packages:
   - "packages/*"
 
+allowBuilds:
+  "@google/genai": true
+  koffi: true
+  protobufjs: true
+
 catalog:
   vite: "npm:@voidzero-dev/vite-plus-core@0.1.18"
   vite-plus: "0.1.18"

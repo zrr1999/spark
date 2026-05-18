@@ -18,7 +18,6 @@
   "dependencies": {
     "spark-agents": "file:../spark-agents",
     "spark-artifacts": "file:../spark-artifacts",
-    "spark-ask": "file:../spark-ask",
     "spark-core": "file:../spark-core"
   }
 }

@@ -183,14 +183,15 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     label: "Run Command",
     description:
       "Execute a command in cue-shell. " +
-      "cue-shell is direct-exec (execvp) with its own composition operators: " +
-      "|> pipes stdout, -> runs in serial on success, || runs in parallel, ~> runs in serial ignoring failure. " +
+      "cue-shell is direct-exec (execvp), not bash: do not use shell-only syntax such as &&, semicolon command lists, redirection, subshell tests, or bash-style ||. " +
+      "Its composition operators are: |> pipes stdout, -> runs in serial on success, || runs in parallel (not OR), ~> runs in serial ignoring failure. " +
+      "Prefer direct-exec commands and Pi file tools; use separate tool calls or explicit /bin/sh -lc '...' only when shell semantics are genuinely required. " +
       "Set background=true to start without waiting; track with status/wait, stop with kill. " +
       "File-system commands (mv, cp, rm, ls, cat, find, ...) get a short 10s timeout by default.",
     parameters: Type.Object({
       command: Type.String({
         description:
-          "Command to execute. Examples: 'cargo build |> grep error -> cargo test', '(cargo build || cargo audit) -> cargo test'.",
+          "Command to execute in cue-shell, not bash. Use cue operators: '|>' pipe, '->' serial on success, '~>' serial ignoring failure, '||' parallel. Do not use bash-style && or || for logical control; prefer separate tool calls/Pi file tools and use /bin/sh -lc '...' only if shell syntax is required. Examples: 'cargo build |> grep error -> cargo test', '(cargo build || cargo audit) -> cargo test'.",
       }),
       background: Type.Optional(
         Type.Boolean({

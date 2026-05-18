@@ -13,6 +13,30 @@ importers:
 
   .:
     dependencies:
+      pi-ask:
+        specifier: file:packages/pi-ask
+        version: link:packages/pi-ask
+      pi-cue:
+        specifier: file:packages/pi-cue
+        version: link:packages/pi-cue
+      spark-agents:
+        specifier: file:packages/spark-agents
+        version: link:packages/spark-agents
+      spark-artifacts:
+        specifier: file:packages/spark-artifacts
+        version: link:packages/spark-artifacts
+      spark-ask:
+        specifier: file:packages/spark-ask
+        version: link:packages/spark-ask
+      spark-core:
+        specifier: file:packages/spark-core
+        version: link:packages/spark-core
+      spark-review:
+        specifier: file:packages/spark-review
+        version: link:packages/spark-review
+      spark-tasks:
+        specifier: file:packages/spark-tasks
+        version: link:packages/spark-tasks
       typebox:
         specifier: ^1.1.38
         version: 1.1.38
@@ -118,9 +142,6 @@ importers:
       spark-artifacts:
         specifier: file:../spark-artifacts
         version: link:../spark-artifacts
-      spark-ask:
-        specifier: file:../spark-ask
-        version: link:../spark-ask
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core
@@ -133,9 +154,6 @@ importers:
       spark-artifacts:
         specifier: file:../spark-artifacts
         version: link:../spark-artifacts
-      spark-ask:
-        specifier: file:../spark-ask
-        version: link:../spark-ask
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core

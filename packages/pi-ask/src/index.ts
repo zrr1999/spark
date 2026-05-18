@@ -7,12 +7,14 @@ export interface PiAskOption {
   value: string;
   label: string;
   description?: string;
+  preview?: string;
 }
 
 export interface PiAskQuestion {
   id: string;
   prompt: string;
-  type?: PiAskQuestionType;
+  header?: string;
+  type?: PiAskQuestionType | "preview";
   options?: PiAskOption[];
   required?: boolean;
 }
@@ -30,6 +32,8 @@ export interface PiAskAnswerEntry {
   labels: string[];
   customText?: string;
   comment?: string;
+  notes?: string;
+  preview?: string;
 }
 
 export interface PiAskResult {
@@ -319,3 +323,16 @@ function summarizeResult(request: PiAskRequest, result: PiAskResult): string {
   );
   return `${request.title ?? "ask_user"}: ${answered.join("; ") || "no answers"}`;
 }
+
+export * from "./schema.ts";
+export * from "./flow.ts";
+export { PiAskFlowPayloadStore } from "./ask-payload-store.ts";
+export { createAskConfigStore } from "./config/store.ts";
+export { PiAskFlowController } from "./ui/controller.ts";
+export { createInitialState, buildExtendedOptions } from "./state/state.ts";
+export type { AskState } from "./state/state.ts";
+export { reduce } from "./state/reducer.ts";
+export type { AskAction, Effect } from "./state/reducer.ts";
+export { routeKey } from "./state/key-router.ts";
+export { renderAskScreen } from "./ui/render.ts";
+export type { RenderTheme, AskUILanguage } from "./ui/render.ts";

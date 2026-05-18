@@ -11,9 +11,11 @@
   ],
   "license": "MIT",
   "author": "zrr1999",
-  "workspaces": [
-    "packages/*"
-  ],
+  "workspaces": {
+    "packages": [
+      "packages/*"
+    ]
+  },
   "type": "module",
   "scripts": {
     "check": "vp check",
@@ -28,6 +30,14 @@
     "prepare": "pnpx @j178/prek install --hook-type commit-msg --hook-type pre-commit"
   },
   "dependencies": {
+    "pi-ask": "file:packages/pi-ask",
+    "pi-cue": "file:packages/pi-cue",
+    "spark-agents": "file:packages/spark-agents",
+    "spark-artifacts": "file:packages/spark-artifacts",
+    "spark-ask": "file:packages/spark-ask",
+    "spark-core": "file:packages/spark-core",
+    "spark-review": "file:packages/spark-review",
+    "spark-tasks": "file:packages/spark-tasks",
     "typebox": "^1.1.38"
   },
   "devDependencies": {
@@ -37,7 +47,7 @@
     "vite": "catalog:",
     "vite-plus": "catalog:"
   },
-  "packageManager": "pnpm@10.33.4",
+  "packageManager": "pnpm@11.1.2+sha512.415a1cc25974731e75455c1468371be74c5aa5fb7621b50d4056d222451609f11412f23fd602e6169f1e060466641f798597e1be961a10688836a67b16569499",
   "pi": {
     "extensions": [
       "./packages/spark/src/extension/index.ts"

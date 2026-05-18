@@ -1,31 +1,47 @@
 /**
- * spark-widget.ts — Above-editor widget showing Spark thread / task / TODO state.
+ * spark-widget.ts — Above-editor widget showing durable Spark thread/task state plus
+ * the current task's TODO working set.
  *
- * Display model (one line per task + active TODO):
- *   ● Thread title
- *     → Task: current task       [running]
- *       ○ TODO: active todo item
- *     ◼ Task: in-progress task   [in_progress]
- *     ✓ Task: done task          [done]
- *     ◻ Task: pending task       [pending]
- *   N total  M active  P pending  Q done
+ * Display model:
+ *   ◆ Thread title (tasks: total / claimed / session)
+ *   ├─ ◐ @task-name: description
+ *   │  ├─ ✓ #1 task TODO
+ *   │  └─ ○ #2 task TODO
+ *   └─ ◐ #3 independent session TODO
  */
 
 export interface TaskEntry {
   title: string;
+  description?: string;
   status: "running" | "pending" | "done" | "failed";
-  todoActive?: string;
-  todosDone: number;
-  todosTotal: number;
+  claimedByCurrentSession?: boolean;
+  todos: SessionTodoEntry[];
+}
+
+export type SessionTodoStatus =
+  | "pending"
+  | "in_progress"
+  | "done"
+  | "blocked"
+  | "cancelled"
+  | "deleted";
+
+export interface SessionTodoEntry {
+  id?: string;
+  content: string;
+  status: SessionTodoStatus;
+  notes?: string[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface SparkWidgetState {
   threadTitle?: string;
   tasks: TaskEntry[];
-  todosTotal: number;
-  todosInProgress: number;
-  todosPending: number;
-  todosDone: number;
+  independentTodos: SessionTodoEntry[];
+  taskCountTotal: number;
+  taskCountClaimed: number;
+  taskCountClaimedBySession: number;
   outputLanguage: "zh" | "en";
 }
 
@@ -49,8 +65,14 @@ const L = {
     total: "总计",
     active: "进行中",
     doneLabel: "已完成",
-    task: "任务",
-    todo: "TODO",
+    blocked: "受阻",
+    task: "Task",
+    tasks: "Tasks",
+    claimed: "已认领",
+    session: "当前会话",
+    todos: "TODO",
+    none: "无",
+    more: "更多",
   },
   en: {
     running: "running",
@@ -60,83 +82,133 @@ const L = {
     total: "total",
     active: "active",
     doneLabel: "done",
+    blocked: "blocked",
     task: "Task",
-    todo: "TODO",
+    tasks: "Tasks",
+    claimed: "claimed",
+    session: "session",
+    todos: "TODO",
+    none: "none",
+    more: "more",
   },
 } as const;
+
+const MAX_WIDGET_LINES = 12;
 
 export function renderSparkWidgetLines(
   state: SparkWidgetState,
   tui: SparkWidgetTui,
   theme: SparkWidgetTheme,
 ): string[] {
-  if (!state.threadTitle || state.tasks.length === 0) return [];
+  const visibleTodos = state.independentTodos.filter(
+    (todo) => todo.status !== "done" && todo.status !== "cancelled" && todo.status !== "deleted",
+  );
+  if (!state.threadTitle && state.tasks.length === 0 && visibleTodos.length === 0) return [];
 
   const l = L[state.outputLanguage] ?? L.en;
-  const w = tui.terminal.columns;
-  const trunc = (line: string) => (line.length <= w ? line : `${line.slice(0, w - 1)}…`);
-
-  const statusOrder: Record<string, number> = { running: 0, pending: 1, done: 2, failed: 3 };
-
-  // Sort: running first, then pending, then done, then failed
-  const sorted = [...state.tasks].sort(
-    (a, b) => (statusOrder[a.status] ?? 0) - (statusOrder[b.status] ?? 0),
-  );
-
-  const parts: string[] = [];
-  if (state.todosDone > 0) parts.push(`${state.todosDone} ${l.doneLabel}`);
-  if (state.todosInProgress > 0) parts.push(`${state.todosInProgress} ${l.active}`);
-  if (state.todosPending > 0) parts.push(`${state.todosPending} ${l.pending}`);
-  const counts = parts.length > 0 ? ` ${parts.join(", ")}` : "";
+  const width = tui.terminal.columns;
+  const trunc = (line: string) => (line.length <= width ? line : `${line.slice(0, width - 1)}…`);
 
   const lines: string[] = [];
-  lines.push(trunc(`${theme.fg("accent", "●")} ${theme.bold(state.threadTitle)}${counts}`));
-
-  for (const task of sorted) {
-    let icon: string;
-    let style: (text: string) => string;
-
-    switch (task.status) {
-      case "running":
-        icon = theme.fg("accent", "→");
-        style = (text) => theme.bold(text);
-        break;
-      case "pending":
-        icon = "◻";
-        style = (text) => text;
-        break;
-      case "done":
-        icon = theme.fg("success", "✓");
-        style = (text) => theme.fg("dim", theme.strikethrough(text));
-        break;
-      case "failed":
-        icon = theme.fg("error", "✗");
-        style = (text) => theme.fg("dim", text);
-        break;
-    }
-
-    const statusLabel = l[task.status];
-    const todoInfo = task.todosTotal > 0 ? ` [${task.todosDone}/${task.todosTotal}]` : "";
-    const label = `  ${icon} ${style(task.title)}${todoInfo}`;
-
-    // Show active TODO under the current task
-    if (task.status === "running" && task.todoActive) {
-      lines.push(trunc(label));
-      lines.push(trunc(`    ${theme.fg("dim", "○")} ${l.todo}: ${task.todoActive}`));
-    } else {
-      lines.push(trunc(label));
-    }
+  if (state.threadTitle) {
+    lines.push(
+      trunc(
+        `${theme.fg("accent", "◆")} ${theme.bold(state.threadTitle)} ${theme.fg(
+          "dim",
+          `(${l.tasks}: ${state.taskCountTotal}/${state.taskCountClaimed}/${state.taskCountClaimedBySession})`,
+        )}`,
+      ),
+    );
   }
 
-  const stat = [
-    `${state.todosTotal} ${l.total}`,
-    `${state.todosInProgress} ${l.active}`,
-    `${state.todosPending} ${l.pending}`,
-    `${state.todosDone} ${l.doneLabel}`,
-  ].join("  ");
-  lines.push(trunc(`  ${theme.fg("dim", stat)}`));
+  const allRows = flattenWidgetRows(state.tasks, visibleTodos);
+  const budget = Math.max(0, MAX_WIDGET_LINES - lines.length);
+  const visibleRows = allRows.slice(0, budget);
+  for (const row of visibleRows) {
+    lines.push(trunc(formatWidgetRow(row, theme)));
+  }
+  const hidden = allRows.length - visibleRows.length;
+  if (hidden > 0) {
+    lines.push(trunc(`${theme.fg("dim", "└─")} ${theme.fg("dim", `+${hidden} ${l.more}`)}`));
+  } else if (lines.length > 1) {
+    const last = lines.length - 1;
+    lines[last] = lines[last].replace("├─", "└─");
+  }
 
   return lines;
+}
+
+function taskIcon(status: TaskEntry["status"], theme: SparkWidgetTheme): string {
+  switch (status) {
+    case "running":
+      return theme.fg("accent", "→");
+    case "pending":
+      return theme.fg("dim", "◻");
+    case "done":
+      return theme.fg("success", "✓");
+    case "failed":
+      return theme.fg("error", "✗");
+  }
+}
+
+function formatTaskTitle(task: TaskEntry, theme: SparkWidgetTheme): string {
+  const base = task.description ? `@${task.title}: ${task.description}` : `@${task.title}`;
+  if (task.status === "done") return theme.fg("dim", theme.strikethrough(base));
+  if (task.status === "failed") return theme.fg("dim", base);
+  if (task.status === "running") return theme.bold(base);
+  return base;
+}
+
+type WidgetRow =
+  | { kind: "task"; task: TaskEntry }
+  | { kind: "task-todo"; todo: SessionTodoEntry; id: number }
+  | { kind: "independent-todo"; todo: SessionTodoEntry; id: number };
+
+function flattenWidgetRows(tasks: TaskEntry[], independentTodos: SessionTodoEntry[]): WidgetRow[] {
+  const rows: WidgetRow[] = [];
+  let todoIndex = 1;
+  for (const task of tasks) {
+    rows.push({ kind: "task", task });
+    for (const todo of task.todos) rows.push({ kind: "task-todo", todo, id: todoIndex++ });
+  }
+  for (const todo of independentTodos)
+    rows.push({ kind: "independent-todo", todo, id: todoIndex++ });
+  return rows;
+}
+
+function formatWidgetRow(row: WidgetRow, theme: SparkWidgetTheme): string {
+  switch (row.kind) {
+    case "task":
+      return `${theme.fg("dim", "├─")} ${taskIcon(row.task.status, theme)} ${formatTaskTitle(row.task, theme)}`;
+    case "task-todo":
+      return `${theme.fg("dim", "│  ├─")} ${todoIcon(row.todo.status, theme)} #${row.id} ${formatTodoContent(row.todo, theme)}`;
+    case "independent-todo":
+      return `${theme.fg("dim", "├─")} ${todoIcon(row.todo.status, theme)} #${row.id} ${formatTodoContent(row.todo, theme)}`;
+  }
+}
+
+function todoIcon(status: SessionTodoStatus, theme: SparkWidgetTheme): string {
+  switch (status) {
+    case "in_progress":
+      return theme.fg("accent", "◐");
+    case "blocked":
+      return theme.fg("warning", "⛔");
+    case "done":
+      return theme.fg("success", "✓");
+    case "cancelled":
+    case "deleted":
+      return theme.fg("error", "✗");
+    case "pending":
+      return theme.fg("dim", "○");
+  }
+}
+
+function formatTodoContent(todo: SessionTodoEntry, theme: SparkWidgetTheme): string {
+  if (todo.status === "done" || todo.status === "cancelled" || todo.status === "deleted") {
+    return theme.fg("dim", theme.strikethrough(todo.content));
+  }
+  if (todo.status === "pending") return theme.fg("dim", todo.content);
+  return todo.content;
 }
 
 export class SparkWidget {
@@ -171,7 +243,10 @@ export class SparkWidget {
 
   update() {
     const state = this.readState();
-    if (!state || !state.threadTitle || state.tasks.length === 0) {
+    if (
+      !state ||
+      (!state.threadTitle && state.tasks.length === 0 && state.independentTodos.length === 0)
+    ) {
       if (this.registered) {
         this.registerWidget("spark-status", undefined);
         this.registered = false;

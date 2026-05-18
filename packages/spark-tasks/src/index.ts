@@ -30,9 +30,11 @@ export interface CreateThreadInput {
 }
 
 export interface CreateTaskTodoInput {
+  id?: string;
   content: string;
   status?: TaskTodoStatus;
   notes?: string[];
+  blockedBy?: string[];
 }
 
 export interface CreateTaskInput {
@@ -42,7 +44,12 @@ export interface CreateTaskInput {
   kind?: TaskKind;
   status?: Task["status"];
   agentRef?: AgentRef;
+  claimedBySession?: string;
   inputArtifacts?: ArtifactRef[];
+  /**
+   * Seed durable TODOs for this task. TaskGraphStore intentionally keeps TODOs
+   * out of thread.json; persist them through TaskTodoStore.
+   */
   todos?: CreateTaskTodoInput[];
 }
 
@@ -53,6 +60,7 @@ export interface TaskTodoSummary {
   done: number;
   blocked: number;
   cancelled: number;
+  deleted: number;
   noteCount: number;
   active?: string;
 }
@@ -62,16 +70,22 @@ export interface ThreadTodoSummary extends TaskTodoSummary {
 }
 
 export interface TaskTodoOp {
-  op: "init" | "append" | "start" | "done" | "block" | "cancel" | "remove" | "note";
+  op:
+    | "init"
+    | "append"
+    | "start"
+    | "done"
+    | "block"
+    | "cancel"
+    | "delete"
+    | "restore"
+    | "remove"
+    | "note";
+  id?: string;
   item?: string;
   items?: string[];
   text?: string;
-}
-
-export interface EnsureContextTaskInput {
-  title?: string;
-  description?: string;
-  todos?: CreateTaskTodoInput[];
+  blockedBy?: string[];
 }
 
 export interface TaskGraphSnapshot {
@@ -81,11 +95,34 @@ export interface TaskGraphSnapshot {
   runs: TaskRun[];
 }
 
+export interface TaskPlanInput {
+  title: string;
+  description: string;
+  kind?: TaskKind;
+  status?: Task["status"];
+  agentRef?: AgentRef;
+  dependsOn?: Array<TaskRef | string>;
+  rationale?: string;
+}
+
+export interface TaskPlanResult {
+  created: Task[];
+  updated: Task[];
+  skipped: Task[];
+  dependencies: TaskDependency[];
+}
+
+export interface TaskTodoStoreSnapshot {
+  version: 1;
+  todos: TaskTodo[];
+}
+
 export class TaskGraph {
   #threads = new Map<ThreadRef, Thread>();
   #tasks = new Map<TaskRef, Task>();
   #dependencies: TaskDependency[] = [];
   #runs = new Map<string, TaskRun>();
+  #todos = new Map<TaskRef, TaskTodo[]>();
 
   static fromSnapshot(snapshot: TaskGraphSnapshot): TaskGraph {
     const graph = new TaskGraph();
@@ -134,18 +171,14 @@ export class TaskGraph {
         input.status ??
         (input.kind === "interaction" ? "running" : input.agentRef ? "pending" : "proposed"),
       agentRef: input.agentRef,
+      claimedBySession: input.claimedBySession,
       inputArtifacts: input.inputArtifacts ?? [],
       outputArtifacts: [],
-      todos: normalizeTodos(materializeTodos(input.todos ?? [], now)),
       createdAt: now,
       updatedAt: now,
     };
     this.#tasks.set(task.ref, task);
-    const thread = this.getThread(task.threadRef);
-    if (task.kind === "interaction" && !thread.currentTaskRef && isOpenContextTask(task)) {
-      this.setCurrentTask(task.threadRef, task.ref);
-      return this.getTask(task.ref);
-    }
+    this.#todos.set(task.ref, normalizeTodos(materializeTodos(task.ref, input.todos ?? [], now)));
     return task;
   }
 
@@ -159,6 +192,61 @@ export class TaskGraph {
     });
     for (const dep of proposal.dependsOn ?? []) this.addDependency(task.ref, dep);
     return task;
+  }
+
+  planTasks(threadRef: ThreadRef, inputs: TaskPlanInput[]): TaskPlanResult {
+    this.getThread(threadRef);
+    const created: Task[] = [];
+    const updated: Task[] = [];
+    const skipped: Task[] = [];
+    const dependencies: TaskDependency[] = [];
+    const refsByTitle = new Map(this.tasks(threadRef).map((task) => [task.title, task.ref]));
+    for (const input of inputs) {
+      const title = input.title.trim();
+      const description = input.description.trim();
+      if (!title) throw new Error("task title is required");
+      if (!description) throw new Error(`task description is required: ${title}`);
+      const existing = this.tasks(threadRef).find((task) => task.title === title);
+      const task = existing
+        ? this.updateTask(existing.ref, {
+            title,
+            description,
+            kind: input.kind ?? existing.kind,
+            status: input.status ?? existing.status,
+            agentRef: input.agentRef ?? existing.agentRef,
+          })
+        : this.createTask({
+            threadRef,
+            title,
+            description,
+            kind: input.kind,
+            status: input.status,
+            agentRef: input.agentRef,
+          });
+      if (existing) updated.push(task);
+      else created.push(task);
+      refsByTitle.set(title, task.ref);
+    }
+
+    for (const input of inputs) {
+      const taskRef = refsByTitle.get(input.title.trim());
+      if (!taskRef) continue;
+      for (const dep of input.dependsOn ?? []) {
+        const depRef = refsByTitle.get(dep) ?? dep;
+        if (!this.#tasks.has(depRef as TaskRef))
+          throw new NotFoundError(`unknown dependency: ${dep}`);
+        const already = this.#dependencies.some(
+          (existing) => existing.taskRef === taskRef && existing.dependsOn === depRef,
+        );
+        if (already) {
+          skipped.push(this.getTask(taskRef));
+          continue;
+        }
+        dependencies.push(this.addDependency(taskRef, depRef as TaskRef));
+      }
+    }
+
+    return { created, updated, skipped, dependencies };
   }
 
   bindAgent(taskRef: TaskRef, agentRef: AgentRef): Task {
@@ -175,12 +263,43 @@ export class TaskGraph {
 
   setTaskStatus(taskRef: TaskRef, status: Task["status"]): Task {
     const task = this.getTask(taskRef);
-    const updated = { ...task, status, updatedAt: nowIso() };
+    const updated = {
+      ...task,
+      status,
+      claimedBySession: isUnfinishedTaskStatus(status) ? task.claimedBySession : undefined,
+      updatedAt: nowIso(),
+    };
     this.#tasks.set(taskRef, updated);
     if (this.getThread(task.threadRef).currentTaskRef === taskRef && !isOpenContextTask(updated)) {
       const replacement = this.findOpenContextTask(task.threadRef, taskRef);
       this.setCurrentTask(task.threadRef, replacement?.ref);
     }
+    return updated;
+  }
+
+  updateTask(
+    taskRef: TaskRef,
+    patch: Partial<
+      Pick<Task, "title" | "description" | "kind" | "status" | "agentRef" | "claimedBySession">
+    >,
+  ): Task {
+    const task = this.getTask(taskRef);
+    const status = patch.status ?? task.status;
+    const updated: Task = {
+      ...task,
+      title: patch.title ?? task.title,
+      description: patch.description ?? task.description,
+      kind: patch.kind ?? task.kind,
+      status,
+      agentRef: patch.agentRef ?? task.agentRef,
+      claimedBySession: isUnfinishedTaskStatus(status)
+        ? (patch.claimedBySession ?? task.claimedBySession)
+        : undefined,
+      updatedAt: nowIso(),
+    };
+    if (!updated.title.trim()) throw new Error("task title is required");
+    if (!updated.description.trim()) throw new Error("task description is required");
+    this.#tasks.set(taskRef, updated);
     return updated;
   }
 
@@ -212,45 +331,16 @@ export class TaskGraph {
 
   currentTask(threadRef: ThreadRef): Task | undefined {
     const thread = this.getThread(threadRef);
-    if (thread.currentTaskRef) {
-      const current = this.#tasks.get(thread.currentTaskRef);
-      if (current && current.threadRef === threadRef) return current;
-    }
-    return this.findOpenContextTask(threadRef);
-  }
-
-  ensureContextTask(threadRef: ThreadRef, input: EnsureContextTaskInput = {}): Task {
-    this.getThread(threadRef);
-    const existing = this.currentTask(threadRef);
-    if (existing && isOpenContextTask(existing)) {
-      if (!this.getThread(threadRef).currentTaskRef) this.setCurrentTask(threadRef, existing.ref);
-      return existing;
-    }
-    const task = this.createTask({
-      threadRef,
-      title: input.title ?? "Maintain current interaction context",
-      description:
-        input.description ??
-        "Track the active user interaction, unresolved clarification, and immediate next action for this Spark thread.",
-      kind: "interaction",
-      status: "running",
-      todos: input.todos ?? [
-        { content: "Clarify the current user intent" },
-        { content: "Reflect the latest scope in Spark state" },
-        { content: "Decide the next concrete action" },
-      ],
-    });
-    this.setCurrentTask(threadRef, task.ref);
-    return this.getTask(task.ref);
+    if (!thread.currentTaskRef) return undefined;
+    const current = this.#tasks.get(thread.currentTaskRef);
+    if (current && current.threadRef === threadRef) return current;
+    return undefined;
   }
 
   setTaskTodos(taskRef: TaskRef, todos: CreateTaskTodoInput[]): Task {
     const task = this.getTask(taskRef);
-    const updated: Task = {
-      ...task,
-      todos: normalizeTodos(materializeTodos(todos, nowIso())),
-      updatedAt: nowIso(),
-    };
+    this.#todos.set(taskRef, normalizeTodos(materializeTodos(taskRef, todos, nowIso())));
+    const updated: Task = { ...task, updatedAt: nowIso() };
     this.#tasks.set(taskRef, updated);
     return updated;
   }
@@ -258,27 +348,46 @@ export class TaskGraph {
   applyTodoOps(taskRef: TaskRef, ops: TaskTodoOp[]): Task {
     if (ops.length === 0) throw new Error("todo ops are required");
     const task = this.getTask(taskRef);
-    let todos = cloneTodos(task.todos);
-    for (const op of ops) todos = applyTodoOp(todos, op);
-    const updated: Task = {
-      ...task,
-      todos: normalizeTodos(todos),
-      updatedAt: nowIso(),
-    };
+    let todos = this.taskTodos(taskRef);
+    for (const op of ops) todos = applyTodoOp(taskRef, todos, op);
+    this.#todos.set(taskRef, normalizeTodos(todos));
+    const updated: Task = { ...task, updatedAt: nowIso() };
     this.#tasks.set(taskRef, updated);
     return updated;
   }
 
+  taskTodos(taskRef: TaskRef): TaskTodo[] {
+    this.getTask(taskRef);
+    return cloneTodos(this.#todos.get(taskRef) ?? []);
+  }
+
+  hydrateTodos(todos: TaskTodo[]): void {
+    this.#todos.clear();
+    for (const todo of todos) {
+      if (!this.#tasks.has(todo.taskRef)) continue;
+      const list = this.#todos.get(todo.taskRef) ?? [];
+      list.push(normalizeTodo(todo));
+      this.#todos.set(todo.taskRef, list);
+    }
+    for (const [taskRef, todosForTask] of this.#todos) {
+      this.#todos.set(taskRef, normalizeTodos(todosForTask));
+    }
+  }
+
+  todoSnapshot(): TaskTodo[] {
+    return this.tasks().flatMap((task) => this.taskTodos(task.ref));
+  }
+
   todoSummary(taskRef: TaskRef): TaskTodoSummary {
-    return summarizeTodos(this.getTask(taskRef).todos);
+    return summarizeTodos(this.taskTodos(taskRef));
   }
 
   threadTodoSummary(threadRef: ThreadRef): ThreadTodoSummary {
     const tasks = this.tasks(threadRef);
-    const allTodos = tasks.flatMap((task) => task.todos);
+    const allTodos = tasks.flatMap((task) => this.taskTodos(task.ref));
     return {
       ...summarizeTodos(allTodos),
-      tasksWithTodos: tasks.filter((task) => task.todos.length > 0).length,
+      tasksWithTodos: tasks.filter((task) => this.taskTodos(task.ref).length > 0).length,
     };
   }
 
@@ -403,6 +512,26 @@ export class TaskGraph {
     return thread;
   }
 
+  updateThread(
+    threadRef: ThreadRef,
+    patch: Partial<Pick<Thread, "title" | "description" | "outputLanguage">>,
+  ): Thread {
+    const thread = this.getThread(threadRef);
+    const title = patch.title ?? thread.title;
+    const description = patch.description ?? thread.description;
+    if (!title.trim()) throw new Error("thread title is required");
+    if (!description.trim()) throw new Error("thread description is required");
+    const updated: Thread = {
+      ...thread,
+      title,
+      description,
+      outputLanguage: patch.outputLanguage ?? thread.outputLanguage,
+      updatedAt: nowIso(),
+    };
+    this.#threads.set(threadRef, updated);
+    return updated;
+  }
+
   getTask(ref: TaskRef): Task {
     const task = this.#tasks.get(ref);
     if (!task) throw new NotFoundError(`unknown task: ${ref}`);
@@ -467,6 +596,52 @@ export function defaultTaskGraphStore(cwd: string): TaskGraphStore {
   return new TaskGraphStore(join(cwd, ".spark", "thread.json"));
 }
 
+export class TaskTodoStore {
+  readonly filePath: string;
+
+  constructor(filePath: string) {
+    this.filePath = filePath;
+  }
+
+  async save(todos: TaskTodo[] | TaskGraph): Promise<void> {
+    const snapshot: TaskTodoStoreSnapshot = {
+      version: 1,
+      todos: Array.isArray(todos) ? cloneTodos(todos) : todos.todoSnapshot(),
+    };
+    await mkdir(dirname(this.filePath), { recursive: true });
+    await writeFile(this.filePath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+  }
+
+  async load(): Promise<TaskTodo[] | null> {
+    try {
+      const raw = JSON.parse(
+        await readFile(this.filePath, "utf8"),
+      ) as Partial<TaskTodoStoreSnapshot>;
+      return (raw.todos ?? []).map(normalizeTodo);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  async hydrate(graph: TaskGraph): Promise<boolean> {
+    const todos = await this.load();
+    if (!todos) return false;
+    graph.hydrateTodos(todos);
+    return true;
+  }
+}
+
+export function defaultTaskTodoStore(cwd: string, scope?: string): TaskTodoStore {
+  if (!scope) return new TaskTodoStore(join(cwd, ".spark", "todos.json"));
+  return new TaskTodoStore(join(cwd, ".spark", "todos", `${sanitizeTodoStoreScope(scope)}.json`));
+}
+
+function sanitizeTodoStoreScope(scope: string): string {
+  const safe = scope.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/-+/g, "-");
+  return safe || "default";
+}
+
 export function assertAcyclic(dependencies: TaskDependency[]): void {
   const outgoing = new Map<TaskRef, TaskRef[]>();
   for (const dependency of dependencies) {
@@ -499,33 +674,39 @@ function normalizeThread(thread: Thread): Thread {
 
 function normalizeTask(task: Task): Task {
   return {
-    ...task,
-    inputArtifacts: task.inputArtifacts ?? [],
-    outputArtifacts: task.outputArtifacts ?? [],
-    todos: normalizeTodos((task.todos ?? []).map(normalizeTodo)),
+    ref: task.ref,
+    threadRef: task.threadRef,
+    title: task.title,
+    description: task.description,
+    kind: task.kind,
+    status: task.status,
+    agentRef: task.agentRef,
+    claimedBySession: isUnfinishedTaskStatus(task.status) ? task.claimedBySession : undefined,
+    inputArtifacts: task.inputArtifacts,
+    outputArtifacts: task.outputArtifacts,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
   };
 }
 
-function normalizeTodo(todo: TaskTodo): TaskTodo {
-  return {
-    ...todo,
-    notes: todo.notes ? [...todo.notes] : undefined,
-    createdAt: todo.createdAt ?? nowIso(),
-    updatedAt: todo.updatedAt ?? todo.createdAt ?? nowIso(),
-  };
-}
-
-function materializeTodos(inputs: CreateTaskTodoInput[], now: string): TaskTodo[] {
+function materializeTodos(
+  taskRef: TaskRef,
+  inputs: CreateTaskTodoInput[],
+  now: string,
+): TaskTodo[] {
   const seen = new Set<string>();
-  return inputs.map((input) => {
+  return inputs.map((input, index) => {
     const content = input.content.trim();
     if (!content) throw new Error("todo content is required");
     if (seen.has(content)) throw new Error(`duplicate todo content: ${content}`);
     seen.add(content);
     return {
+      id: input.id ?? todoIdFromContent(content, index),
+      taskRef,
       content,
       status: input.status ?? "pending",
       notes: input.notes?.length ? [...input.notes] : undefined,
+      blockedBy: input.blockedBy?.length ? [...input.blockedBy] : undefined,
       createdAt: now,
       updatedAt: now,
     } satisfies TaskTodo;
@@ -536,20 +717,38 @@ function cloneTodos(todos: TaskTodo[]): TaskTodo[] {
   return todos.map((todo) => ({
     ...todo,
     notes: todo.notes ? [...todo.notes] : undefined,
+    blockedBy: todo.blockedBy ? [...todo.blockedBy] : undefined,
   }));
+}
+
+export function isUnfinishedTaskStatus(status: Task["status"]): boolean {
+  return status !== "done" && status !== "failed" && status !== "cancelled";
+}
+
+function normalizeTodo(todo: TaskTodo): TaskTodo {
+  return {
+    ...todo,
+    id: todo.id || todoIdFromContent(todo.content, 0),
+    notes: todo.notes ? [...todo.notes] : undefined,
+    blockedBy: todo.blockedBy ? [...todo.blockedBy] : undefined,
+    createdAt: todo.createdAt ?? nowIso(),
+    updatedAt: todo.updatedAt ?? todo.createdAt ?? nowIso(),
+    deletedAt: todo.deletedAt,
+  };
 }
 
 function normalizeTodos(todos: TaskTodo[]): TaskTodo[] {
   const next = cloneTodos(todos);
-  const inProgress = next.filter((todo) => todo.status === "in_progress");
+  const live = next.filter((todo) => todo.status !== "deleted");
+  const inProgress = live.filter((todo) => todo.status === "in_progress");
   if (inProgress.length > 1) {
     for (const todo of inProgress.slice(1)) {
       todo.status = "pending";
       todo.updatedAt = nowIso();
     }
   }
-  if (next.some((todo) => todo.status === "in_progress")) return next;
-  const firstPending = next.find((todo) => todo.status === "pending");
+  if (live.some((todo) => todo.status === "in_progress")) return next;
+  const firstPending = live.find((todo) => todo.status === "pending");
   if (firstPending) {
     firstPending.status = "in_progress";
     firstPending.updatedAt = nowIso();
@@ -557,12 +756,13 @@ function normalizeTodos(todos: TaskTodo[]): TaskTodo[] {
   return next;
 }
 
-function applyTodoOp(todos: TaskTodo[], op: TaskTodoOp): TaskTodo[] {
+function applyTodoOp(taskRef: TaskRef, todos: TaskTodo[], op: TaskTodoOp): TaskTodo[] {
   const now = nowIso();
   switch (op.op) {
     case "init":
       if (!op.items?.length) throw new Error("todo init items are required");
       return materializeTodos(
+        taskRef,
         op.items.map((content) => ({ content })),
         now,
       );
@@ -575,12 +775,19 @@ function applyTodoOp(todos: TaskTodo[], op: TaskTodoOp): TaskTodo[] {
         if (next.some((todo) => todo.content === trimmed)) {
           throw new Error(`duplicate todo content: ${trimmed}`);
         }
-        next.push({ content: trimmed, status: "pending", createdAt: now, updatedAt: now });
+        next.push({
+          id: todoIdFromContent(trimmed, next.length),
+          taskRef,
+          content: trimmed,
+          status: "pending",
+          createdAt: now,
+          updatedAt: now,
+        });
       }
       return next;
     }
     case "start": {
-      const target = resolveTodo(todos, op.item, "todo item is required for start");
+      const target = resolveTodo(todos, op, "todo item is required for start");
       const next = cloneTodos(todos);
       for (const todo of next) {
         if (todo.status === "in_progress") {
@@ -588,27 +795,34 @@ function applyTodoOp(todos: TaskTodo[], op: TaskTodoOp): TaskTodo[] {
           todo.updatedAt = now;
         }
       }
-      const current = next.find((todo) => todo.content === target.content)!;
+      const current = next.find((todo) => todo.id === target.id)!;
       current.status = "in_progress";
       current.updatedAt = now;
       return next;
     }
     case "done":
-      return patchTodoStatus(todos, op.item, "done", now, "todo item is required for done");
+      return patchTodoStatus(todos, op, "done", now, "todo item is required for done");
     case "block":
-      return patchTodoStatus(todos, op.item, "blocked", now, "todo item is required for block");
+      return patchTodoStatus(todos, op, "blocked", now, "todo item is required for block");
     case "cancel":
-      return patchTodoStatus(todos, op.item, "cancelled", now, "todo item is required for cancel");
-    case "remove": {
-      const target = resolveTodo(todos, op.item, "todo item is required for remove");
-      return cloneTodos(todos).filter((todo) => todo.content !== target.content);
+      return patchTodoStatus(todos, op, "cancelled", now, "todo item is required for cancel");
+    case "delete":
+    case "remove":
+      return patchTodoStatus(todos, op, "deleted", now, "todo item is required for delete");
+    case "restore": {
+      const target = resolveTodo(todos, op, "todo item is required for restore", true);
+      return cloneTodos(todos).map((todo) =>
+        todo.id === target.id
+          ? { ...todo, status: "pending", deletedAt: undefined, updatedAt: now }
+          : todo,
+      );
     }
     case "note": {
-      const target = resolveTodo(todos, op.item, "todo item is required for note");
+      const target = resolveTodo(todos, op, "todo item is required for note");
       const text = op.text?.trimEnd();
       if (!text) throw new Error("todo note text is required");
       const next = cloneTodos(todos);
-      const current = next.find((todo) => todo.content === target.content)!;
+      const current = next.find((todo) => todo.id === target.id)!;
       current.notes = current.notes ? [...current.notes, text] : [text];
       current.updatedAt = now;
       return next;
@@ -618,40 +832,66 @@ function applyTodoOp(todos: TaskTodo[], op: TaskTodoOp): TaskTodo[] {
 
 function patchTodoStatus(
   todos: TaskTodo[],
-  item: string | undefined,
+  op: Pick<TaskTodoOp, "id" | "item" | "blockedBy">,
   status: TaskTodoStatus,
   now: string,
   missingMessage: string,
 ): TaskTodo[] {
-  const target = resolveTodo(todos, item, missingMessage);
-  return cloneTodos(todos).map((todo) =>
-    todo.content === target.content ? { ...todo, status, updatedAt: now } : todo,
-  );
+  const target = resolveTodo(todos, op, missingMessage);
+  return cloneTodos(todos).map((todo) => {
+    if (todo.id !== target.id) return todo;
+    return {
+      ...todo,
+      status,
+      blockedBy: status === "blocked" && op.blockedBy?.length ? [...op.blockedBy] : todo.blockedBy,
+      deletedAt: status === "deleted" ? now : undefined,
+      updatedAt: now,
+    };
+  });
 }
 
 function resolveTodo(
   todos: TaskTodo[],
-  item: string | undefined,
+  op: Pick<TaskTodoOp, "id" | "item">,
   missingMessage: string,
+  includeDeleted = false,
 ): TaskTodo {
-  const content = item?.trim();
-  if (!content) throw new Error(missingMessage);
-  const target = todos.find((todo) => todo.content === content);
-  if (!target) throw new NotFoundError(`unknown todo item: ${content}`);
+  const id = op.id?.trim();
+  const content = op.item?.trim();
+  if (!id && !content) throw new Error(missingMessage);
+  const candidates = includeDeleted ? todos : todos.filter((todo) => todo.status !== "deleted");
+  const target = id
+    ? candidates.find((todo) => todo.id === id)
+    : candidates.find((todo) => todo.content === content);
+  if (!target) throw new NotFoundError(`unknown todo item: ${id ?? content}`);
   return target;
 }
 
 function summarizeTodos(todos: TaskTodo[]): TaskTodoSummary {
   return {
-    total: todos.length,
+    total: todos.filter((todo) => todo.status !== "deleted").length,
     pending: todos.filter((todo) => todo.status === "pending").length,
     inProgress: todos.filter((todo) => todo.status === "in_progress").length,
     done: todos.filter((todo) => todo.status === "done").length,
     blocked: todos.filter((todo) => todo.status === "blocked").length,
     cancelled: todos.filter((todo) => todo.status === "cancelled").length,
+    deleted: todos.filter((todo) => todo.status === "deleted").length,
     noteCount: todos.reduce((sum, todo) => sum + (todo.notes?.length ?? 0), 0),
     active: todos.find((todo) => todo.status === "in_progress")?.content,
   };
+}
+
+function todoIdFromContent(content: string, index: number): string {
+  return `todo-${stableHash(`${index}:${content}`).slice(0, 12)}`;
+}
+
+function stableHash(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 function isOpenContextTask(task: Task): boolean {

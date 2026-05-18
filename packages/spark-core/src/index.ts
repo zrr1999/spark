@@ -253,14 +253,25 @@ export type TaskKind =
   | "cue"
   | "interaction"
   | "generic";
-export type TaskTodoStatus = "pending" | "in_progress" | "done" | "blocked" | "cancelled";
+export type TaskTodoStatus =
+  | "pending"
+  | "in_progress"
+  | "done"
+  | "blocked"
+  | "cancelled"
+  | "deleted";
 
+/** Durable TODO item shape. TODOs are stored separately from Task snapshots. */
 export interface TaskTodo {
+  id: string;
+  taskRef: TaskRef;
   content: string;
   status: TaskTodoStatus;
   notes?: string[];
+  blockedBy?: string[];
   createdAt: string;
   updatedAt: string;
+  deletedAt?: string;
 }
 
 export interface Thread {
@@ -281,9 +292,9 @@ export interface Task {
   kind: TaskKind;
   status: TaskStatus;
   agentRef?: AgentRef;
+  claimedBySession?: string;
   inputArtifacts: ArtifactRef[];
   outputArtifacts: ArtifactRef[];
-  todos: TaskTodo[];
   createdAt: string;
   updatedAt: string;
 }

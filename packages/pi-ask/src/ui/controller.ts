@@ -1,4 +1,4 @@
-import type { AskAction, Effect } from "../state/reducer.ts";
+import type { AskAction } from "../state/reducer.ts";
 import { reduce } from "../state/reducer.ts";
 import type { AskState, ExtendedOption } from "../state/state.ts";
 import {
@@ -7,38 +7,38 @@ import {
   isSubmitTab,
   getCurrentQuestion,
 } from "../state/state.ts";
-import type { SparkAskResult, SparkAskRequest, SparkAskQuestion } from "../schema.ts";
-import { validateSparkAskRequest } from "../schema.ts";
+import type { PiAskFlowResult, PiAskFlowRequest, PiAskFlowQuestion } from "../schema.ts";
+import { validatePiAskFlowRequest } from "../schema.ts";
 import type { RenderTheme } from "./render.ts";
 import { renderAskScreen, type AskUILanguage } from "./render.ts";
 
 /**
- * AskFlowController — orchestrates the interactive ask TUI.
+ * PiAskFlowController orchestrates the interactive ask TUI.
  *
  * Usage:
- *   const controller = new AskFlowController({ ... });
+ *   const controller = new PiAskFlowController({ ... });
  *   controller.run(customCallbackArgs, doneCallback);
  */
 
 export interface AskFlowOptions {
-  request: SparkAskRequest;
+  request: PiAskFlowRequest;
   language?: AskUILanguage;
   /** Run without TUI (returns immediately with empty answers). */
   headless?: boolean;
 }
 
-export class AskFlowController {
+export class PiAskFlowController {
   private state: AskState;
-  private questions: readonly SparkAskQuestion[];
+  private questions: readonly PiAskFlowQuestion[];
   private optionsByTab: ReadonlyArray<readonly ExtendedOption[]>;
   private options: AskFlowOptions;
-  private done: ((result: SparkAskResult) => void) | null = null;
+  private done: ((result: PiAskFlowResult) => void) | null = null;
   private tui: any = null;
 
   constructor(options: AskFlowOptions) {
     this.options = options;
 
-    const validation = validateSparkAskRequest(options.request);
+    const validation = validatePiAskFlowRequest(options.request);
     if (!validation.valid) {
       throw new Error(
         `Invalid ask request: ${validation.error}${validation.details ? ` (${validation.details})` : ""}`,
@@ -53,17 +53,13 @@ export class AskFlowController {
   run(
     tui: any,
     theme: RenderTheme,
-    done: (result: SparkAskResult) => void,
+    done: (result: PiAskFlowResult) => void,
   ): { render(): string[]; invalidate(): void } {
     this.tui = tui;
     this.done = done;
 
-    const controller = this;
-
     return {
-      render() {
-        return controller.renderFrame(tui, theme);
-      },
+      render: () => this.renderFrame(tui, theme),
       invalidate() {},
     };
   }

@@ -17,8 +17,12 @@ void test("workspace-like cwd keeps Spark state under .spark without root SPARK.
     const result = await initializeSparkIdea(dir, "Build a new idea from workspace root");
     assert.equal(result.sparkMdPath, undefined);
     const threadJson = await readFile(join(dir, ".spark", "thread.json"), "utf8");
-    assert.match(threadJson, /Maintain current interaction context/);
-    assert.match(threadJson, /Capture project intent/);
+    assert.doesNotMatch(threadJson, /Maintain current interaction context/);
+    assert.match(threadJson, /Analyze project intent/);
+    assert.match(threadJson, /do not start with a broad intake form/);
+    assert.doesNotMatch(threadJson, /"currentTaskRef"/);
+    assert.doesNotMatch(threadJson, /"todos"/);
+    await assert.rejects(() => readFile(join(dir, ".spark", "todos.json"), "utf8"));
     await assert.rejects(() => readFile(join(dir, "SPARK.md"), "utf8"));
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -41,8 +45,26 @@ void test("repo-like cwd materializes root SPARK.md as well", async () => {
     assert.doesNotMatch(rootSpark, /## 生态关系/);
     const threadJson = await readFile(join(dir, ".spark", "thread.json"), "utf8");
     assert.match(threadJson, /Review initial direction/);
-    assert.match(threadJson, /Maintain current interaction context/);
-    assert.match(threadJson, /"currentTaskRef"/);
+    assert.doesNotMatch(threadJson, /Maintain current interaction context/);
+    assert.doesNotMatch(threadJson, /"currentTaskRef"/);
+    assert.doesNotMatch(threadJson, /"todos"/);
+    await assert.rejects(() => readFile(join(dir, ".spark", "todos.json"), "utf8"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("initializeSparkIdea does not overwrite an existing initialized thread", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-no-overwrite-"));
+  try {
+    await mkdir(join(dir, ".git"));
+    const first = await initializeSparkIdea(dir, "Original project intent");
+    const firstSpark = await readFile(join(dir, "SPARK.md"), "utf8");
+    const second = await initializeSparkIdea(dir, "New accidental request");
+    const secondSpark = await readFile(join(dir, "SPARK.md"), "utf8");
+    assert.equal(second.threadRef, first.threadRef);
+    assert.equal(secondSpark, firstSpark);
+    assert.doesNotMatch(secondSpark, /New accidental request/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -51,6 +73,19 @@ void test("repo-like cwd materializes root SPARK.md as well", async () => {
 void test("active Spark prompt treats concrete tool feedback as repo implementation work", () => {
   const prompt = renderSparkActiveSystemPrompt("Base prompt", "SPARK.md");
   assert.match(prompt, /Do not guess missing intent/);
+  assert.match(prompt, /SPARK\.md is persistent project intent/);
+  assert.match(prompt, /Do not auto-create placeholder tasks or threads/);
+  assert.match(prompt, /do not ask a broad upfront form/);
+  assert.match(prompt, /First analyze the request and workspace context/);
+  assert.match(prompt, /Before launching multiple agents or parallel workstreams/);
+  assert.match(prompt, /do not continue on timeout or no-selection/);
+  assert.match(prompt, /prefer the built-in\/managed Spark agent flow/);
+  assert.match(prompt, /Do not spawn nested pi CLI sessions as pseudo-agents/);
+  assert.match(prompt, /prefer direct-exec commands and Pi file tools over \/bin\/sh/);
+  assert.match(
+    prompt,
+    /Keep temporary plans, agent reports, and scratch artifacts out of the repo root/,
+  );
   assert.match(prompt, /continue with the selected action in the same turn/);
   assert.match(prompt, /concrete Spark\/pi-tool behavior change or defect/);
   assert.match(prompt, /Do not satisfy such feedback by only storing memory or preferences/);
@@ -80,7 +115,7 @@ void test("initializeSparkIdea preserves clarified title and trace ask refs", as
     assert.deepEqual(result.askArtifactRefs, ["artifact:ask-test"]);
     const threadJson = await readFile(join(dir, ".spark", "thread.json"), "utf8");
     assert.match(threadJson, /Hypha v0: VS Code-first IDE experience for Spore/);
-    assert.match(threadJson, /Maintain current interaction context/);
+    assert.doesNotMatch(threadJson, /Maintain current interaction context/);
     const artifactFiles = await readdir(join(dir, ".spark", "artifacts"));
     let traceBody: unknown;
     for (const file of artifactFiles.filter((entry) => entry.endsWith(".json"))) {

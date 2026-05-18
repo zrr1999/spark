@@ -1,4 +1,4 @@
-import type { SparkAskOption, SparkAskQuestion, SparkAskAnswerEntry } from "../schema.ts";
+import type { PiAskFlowOption, PiAskFlowQuestion, PiAskFlowAnswerEntry } from "../schema.ts";
 
 /**
  * Canonical UI state for the ask dialog. Single source of truth —
@@ -16,7 +16,7 @@ export interface AskState {
   /** Whether chat row is focused (redirect to conversation). */
   chatFocused: boolean;
   /** Collected answers, keyed by question id. */
-  answers: ReadonlyMap<string, SparkAskAnswerEntry>;
+  answers: ReadonlyMap<string, PiAskFlowAnswerEntry>;
   /** Multi-select checked option values for the current question. */
   multiSelectChecked: ReadonlySet<string>;
   /** Pre-submit notes for each question, keyed by question id. */
@@ -39,7 +39,7 @@ export interface AskState {
  * Per-frame context needed alongside canonical state for rendering and dispatch.
  */
 export interface AskRuntime {
-  questions: readonly SparkAskQuestion[];
+  questions: readonly PiAskFlowQuestion[];
   isMulti: boolean;
   currentOptions: readonly ExtendedOption[];
 }
@@ -49,17 +49,17 @@ export interface AskRuntime {
  */
 export interface ExtendedOption {
   kind: "option" | "other" | "chat" | "next";
-  option?: SparkAskOption;
+  option?: PiAskFlowOption;
   label: string;
   description?: string;
   preview?: string;
 }
 
 export function createInitialState(request: {
-  questions: SparkAskQuestion[];
-  priorAnswers?: Record<string, SparkAskAnswerEntry>;
+  questions: PiAskFlowQuestion[];
+  priorAnswers?: Record<string, PiAskFlowAnswerEntry>;
 }): AskState {
-  const answers = new Map<string, SparkAskAnswerEntry>();
+  const answers = new Map<string, PiAskFlowAnswerEntry>();
   if (request.priorAnswers) {
     for (const [id, entry] of Object.entries(request.priorAnswers)) {
       answers.set(id, entry);
@@ -86,14 +86,13 @@ export function createInitialState(request: {
 }
 
 export function buildExtendedOptions(
-  question: SparkAskQuestion,
-  answers: ReadonlyMap<string, SparkAskAnswerEntry>,
+  question: PiAskFlowQuestion,
+  _answers: ReadonlyMap<string, PiAskFlowAnswerEntry>,
 ): ExtendedOption[] {
   const opts: ExtendedOption[] = [];
 
   if (question.options) {
     for (const option of question.options) {
-      const isSelected = answers.get(question.id)?.values.includes(option.value);
       opts.push({
         kind: "option",
         option,
@@ -119,13 +118,13 @@ export function buildExtendedOptions(
 
 export function getCurrentQuestion(
   state: AskState,
-  questions: readonly SparkAskQuestion[],
-): SparkAskQuestion | undefined {
+  questions: readonly PiAskFlowQuestion[],
+): PiAskFlowQuestion | undefined {
   if (state.currentTab < 0 || state.currentTab >= questions.length) return undefined;
   return questions[state.currentTab];
 }
 
-export function isSubmitTab(state: AskState, questions: readonly SparkAskQuestion[]): boolean {
+export function isSubmitTab(state: AskState, questions: readonly PiAskFlowQuestion[]): boolean {
   return state.currentTab >= questions.length;
 }
 

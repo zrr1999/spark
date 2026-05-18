@@ -1,6 +1,6 @@
 import type { AskState, ExtendedOption } from "../state/state.ts";
 import { isSubmitTab } from "../state/state.ts";
-import type { SparkAskQuestion, SparkAskAnswerEntry } from "../schema.ts";
+import type { PiAskFlowQuestion, PiAskFlowAnswerEntry } from "../schema.ts";
 
 function truncateToWidth(text: string, maxWidth: number): string {
   if (text.length <= maxWidth) return text;
@@ -111,7 +111,7 @@ const L: Record<
 
 export interface RenderInput {
   state: AskState;
-  questions: readonly SparkAskQuestion[];
+  questions: readonly PiAskFlowQuestion[];
   optionsByTab: ReadonlyArray<readonly ExtendedOption[]>;
   theme: RenderTheme;
   width: number;
@@ -196,7 +196,7 @@ export function renderAskScreen(input: RenderInput): string[] {
 function renderQuestionTab(
   lines: string[],
   state: AskState,
-  question: SparkAskQuestion,
+  question: PiAskFlowQuestion,
   options: readonly ExtendedOption[],
   theme: RenderTheme,
   width: number,
@@ -324,7 +324,7 @@ function renderPreviewPane(
 function renderSubmitTab(
   lines: string[],
   state: AskState,
-  questions: readonly SparkAskQuestion[],
+  questions: readonly PiAskFlowQuestion[],
   theme: RenderTheme,
   width: number,
   labels: (typeof L)["en"],
@@ -409,13 +409,13 @@ function renderSettingsPanel(
   lines.push(truncate(`  ${theme.bold(labels.settings)}`));
   lines.push("");
   lines.push(theme.dim("  Settings panel — configure keymaps and behaviour"));
-  lines.push(theme.dim("  Edit ~/.pi/agent/extensions/spark-ask.json directly"));
+  lines.push(theme.dim("  Edit ~/.pi/agent/extensions/pi-ask.json directly"));
   lines.push(theme.dim("  or use /ask-settings command."));
 }
 
 // ---- Helpers ----
 
-function formatAnswerBrief(answer: SparkAskAnswerEntry, labels: (typeof L)["en"]): string {
+function formatAnswerBrief(answer: PiAskFlowAnswerEntry, labels: (typeof L)["en"]): string {
   switch (answer.kind) {
     case "option":
       return answer.values[0] ?? "?";
@@ -430,7 +430,7 @@ function formatAnswerBrief(answer: SparkAskAnswerEntry, labels: (typeof L)["en"]
   }
 }
 
-function countAnswered(state: AskState, questions: readonly SparkAskQuestion[]): number {
+function countAnswered(state: AskState, questions: readonly PiAskFlowQuestion[]): number {
   let count = 0;
   for (const q of questions) {
     if (state.answers.has(q.id)) count++;
