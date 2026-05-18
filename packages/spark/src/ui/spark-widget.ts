@@ -11,6 +11,7 @@
  */
 
 export interface TaskEntry {
+  name: string;
   title: string;
   description?: string;
   status: "running" | "pending" | "done" | "failed";
@@ -152,7 +153,7 @@ function taskIcon(status: TaskEntry["status"], theme: SparkWidgetTheme): string 
 }
 
 function formatTaskTitle(task: TaskEntry, theme: SparkWidgetTheme): string {
-  const base = task.description ? `@${task.title}: ${task.description}` : `@${task.title}`;
+  const base = `@${task.name}: ${task.title}`;
   if (task.status === "done") return theme.fg("dim", theme.strikethrough(base));
   if (task.status === "failed") return theme.fg("dim", base);
   if (task.status === "running") return theme.bold(base);

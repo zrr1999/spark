@@ -36,8 +36,9 @@ void test("spark widget shows claimed tasks with nested TODOs and independent TO
       threadTitle: "Spark UX redesign",
       tasks: [
         {
-          title: "overlay-ui",
-          description: "Redesign task and TODO display",
+          name: "overlay-ui",
+          title: "Redesign task and TODO display",
+          description: "Implementation details are hidden in the widget",
           status: "running",
           claimedByCurrentSession: true,
           todos: [
@@ -86,8 +87,9 @@ void test("spark widget collapses overflowing rows", () => {
       threadTitle: "Spark UX redesign",
       tasks: [
         {
-          title: "overlay-ui",
-          description: "Redesign task and TODO display",
+          name: "overlay-ui",
+          title: "Redesign task and TODO display",
+          description: "Implementation details are hidden in the widget",
           status: "running",
           claimedByCurrentSession: true,
           todos: Array.from({ length: 12 }, (_, index) => ({

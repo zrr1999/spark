@@ -34,6 +34,9 @@ importers:
       spark-review:
         specifier: file:packages/spark-review
         version: link:packages/spark-review
+      spark-runtime:
+        specifier: file:packages/spark-runtime
+        version: link:packages/spark-runtime
       spark-tasks:
         specifier: file:packages/spark-tasks
         version: link:packages/spark-tasks
@@ -101,6 +104,9 @@ importers:
       spark-review:
         specifier: file:../spark-review
         version: link:../spark-review
+      spark-runtime:
+        specifier: file:../spark-runtime
+        version: link:../spark-runtime
       spark-tasks:
         specifier: file:../spark-tasks
         version: link:../spark-tasks
@@ -110,9 +116,6 @@ importers:
 
   packages/spark-agents:
     dependencies:
-      spark-artifacts:
-        specifier: file:../spark-artifacts
-        version: link:../spark-artifacts
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core
@@ -146,7 +149,7 @@ importers:
         specifier: file:../spark-core
         version: link:../spark-core
 
-  packages/spark-tasks:
+  packages/spark-runtime:
     dependencies:
       spark-agents:
         specifier: file:../spark-agents
@@ -154,6 +157,15 @@ importers:
       spark-artifacts:
         specifier: file:../spark-artifacts
         version: link:../spark-artifacts
+      spark-core:
+        specifier: file:../spark-core
+        version: link:../spark-core
+      spark-tasks:
+        specifier: file:../spark-tasks
+        version: link:../spark-tasks
+
+  packages/spark-tasks:
+    dependencies:
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core

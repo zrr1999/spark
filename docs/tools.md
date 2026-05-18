@@ -9,8 +9,8 @@ Command:
 Tools:
 
 - `spark_status` — show current Spark thread/task DAG status.
-- `spark_plan_tasks` — create or update multiple durable tasks in the active thread from a concrete plan without claiming them for the current session.
-- `spark_claim_task` — claim or update concrete task work for the current session in the active thread; optionally bind it to a builtin or managed `agentRef` for Spark-native execution.
+- `spark_plan_tasks` — create or update multiple durable named tasks (`name` / `title` / `description`) in the active thread from a concrete plan without claiming them for the current session.
+- `spark_claim_task` — claim or update concrete task work for the current session in the active thread; tasks render as `@name: title`, and optional `agentRef` bindings can later be auto-claimed by Spark runtime execution.
 - `spark_update_task_todos` — update TODOs attached to a claimed task.
 - `spark_update_todos` — update independent session TODOs that are siblings of the thread display.
 - `spark_run_ready_tasks` — run currently ready Spark tasks, dry-run by default.
@@ -40,8 +40,7 @@ Automatic behavior:
      fake current task just to populate UI; the model should
      use `spark_claim_task` only after it has concrete work
      from the actual situation
-   - a session can claim multiple tasks, but only from the
-     active Spark thread
+   - each session should have at most one unfinished main-agent claim at a time; subagent assignment is represented as an auto-claim when the run starts
    - initialization does not show a broad upfront form;
      Spark analyzes the request and workspace first, then asks
      only targeted clarification questions for concrete
@@ -65,11 +64,15 @@ Automatic behavior:
      `.spark/thread.json`; active sessions use a session-scoped
      `.spark/todos/<session>.json` path to avoid concurrent
      agent overwrites
+   - expired task claims are swept on active Spark turns and by
+     a lightweight background interval; stale claims become
+     retryable `pending` tasks, while runtime execution timeouts
+     are marked as failed runs
 6. Thread / task / TODO text UI is enabled by default for
    the current session:
    - the above-editor widget shows the generated Spark thread
      title with task counts (`total/claimed/session-claimed`)
-   - claimed tasks render as `@task: description`, task TODOs
+   - tasks render as `@name: title`, task TODOs
      render beneath them as `#n`, and independent session TODOs
      render as siblings of the thread display
    - no placeholder task content is shown when no task is claimed

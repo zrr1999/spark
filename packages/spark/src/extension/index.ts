@@ -38,6 +38,7 @@ import {
 } from "spark-core";
 import { registerPiCueTools } from "pi-cue";
 import { createReviewGate } from "spark-review";
+import { runSparkTask, sweepExpiredTaskClaims } from "spark-runtime";
 import {
   defaultTaskGraphStore,
   defaultTaskTodoStore,
@@ -107,6 +108,20 @@ interface SparkCommandContext extends SparkToolContext {
   sendUserMessage?: (content: string) => Promise<void>;
 }
 
+const CLAIM_SWEEP_INTERVAL_MS = 30_000;
+const claimReaperTimers = new Map<string, ReturnType<typeof setInterval>>();
+
+function ensureClaimReaper(cwd: string): void {
+  if (claimReaperTimers.has(cwd)) return;
+  const timer = setInterval(() => void sweepExpiredSparkClaims(cwd), CLAIM_SWEEP_INTERVAL_MS);
+  (timer as { unref?: () => void }).unref?.();
+  claimReaperTimers.set(cwd, timer);
+}
+
+async function sweepExpiredSparkClaims(cwd: string): Promise<void> {
+  await sweepExpiredTaskClaims(defaultTaskGraphStore(cwd));
+}
+
 export default function sparkExtension(pi: SparkExtensionAPI) {
   if (pi.registerTool) {
     registerPiCueTools(pi as unknown as Parameters<typeof registerPiCueTools>[0]);
@@ -117,10 +132,14 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     injectSparkHints(event, ctx),
   );
   pi.on?.("turn_start", async (_event: unknown, ctx: SparkToolContext) => {
+    ensureClaimReaper(ctx.cwd);
+    await sweepExpiredSparkClaims(ctx.cwd);
     await ensureSparkStateForActiveWorkspace(ctx.cwd, ctx);
     await refreshSparkWidget(ctx.cwd, ctx);
   });
   pi.on?.("session_start", async (_event: unknown, ctx: SparkToolContext) => {
+    ensureClaimReaper(ctx.cwd);
+    await sweepExpiredSparkClaims(ctx.cwd);
     await ensureSparkStateForActiveWorkspace(ctx.cwd, ctx);
     await refreshSparkWidget(ctx.cwd, ctx);
   });
@@ -141,6 +160,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   });
   pi.on?.("session_switch", async (_event: unknown, ctx: SparkToolContext) => {
     // Restore widget after session switch (/new, /resume)
+    ensureClaimReaper(ctx.cwd);
+    await sweepExpiredSparkClaims(ctx.cwd);
     await ensureSparkStateForActiveWorkspace(ctx.cwd, ctx);
     const store = defaultTaskGraphStore(ctx.cwd);
     const graph = await loadSparkGraph(ctx.cwd, ctx);
@@ -193,18 +214,18 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     }
     const sessionKey = sparkSessionKey(ctx);
     const allTasks = graph.tasks(thread.ref);
-    const claimedTasks = allTasks.filter((task) => task.claimedBySession);
+    const claimedTasks = allTasks.filter((task) => taskClaimedBy(task));
     const sessionTasks = claimedTasks.filter((task) => task.claimedBySession === sessionKey);
     const independentTodos = (await loadIndependentTodos(cwd, ctx)).filter(
       (todo) => todo.status !== "done" && todo.status !== "cancelled" && todo.status !== "deleted",
     );
     widgetState = {
       threadTitle: isPlaceholderThreadTitle(thread.title) ? undefined : thread.title,
-      tasks: sessionTasks.map((task) => ({
+      tasks: allTasks.map((task) => ({
+        name: task.name,
         title: task.title,
-        description: task.description,
         status: mapTaskStatus(task.status),
-        claimedByCurrentSession: true,
+        claimedByCurrentSession: task.claimedBySession === sessionKey,
         todos: graph.taskTodos(task.ref).map((todo) => ({
           id: todo.id,
           content: todo.content,
@@ -304,11 +325,15 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           await defaultManagedAgentStore(ctx.cwd).hydrate(registry);
           const artifactStore = defaultArtifactStore(ctx.cwd);
           for (const task of ready) {
-            await graph.runTask({
+            await runSparkTask({
+              graph,
               taskRef: task.ref,
               registry,
               artifactStore,
               cwd: ctx.cwd,
+              onHeartbeat: async () => {
+                await store.save(graph);
+              },
             });
           }
           await store.save(graph);
@@ -345,7 +370,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const independentTodos = await loadIndependentTodos(cwd, ctx);
       for (const thread of graph.threads()) {
         const tasks = graph.tasks(thread.ref);
-        const claimed = tasks.filter((task) => task.claimedBySession);
+        const claimed = tasks.filter((task) => taskClaimedBy(task));
         const sessionClaimed = claimed.filter((task) => task.claimedBySession === sessionKey);
         lines.push(`\nThread ${thread.ref}: ${thread.title}`);
         lines.push(
@@ -355,7 +380,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         for (const task of tasks) {
           const taskSummary = graph.todoSummary(task.ref);
           lines.push(
-            `  - [${task.status}] ${task.title} (${task.ref}) kind=${task.kind} claimed=${task.claimedBySession ?? "no"} todos=${taskSummary.total}/${taskSummary.inProgress}/${taskSummary.pending}/${taskSummary.done}`,
+            `  - [${task.status}] @${task.name}: ${task.title} (${task.ref}) kind=${task.kind} claimed=${taskClaimedBy(task) ?? "no"} todos=${taskSummary.total}/${taskSummary.inProgress}/${taskSummary.pending}/${taskSummary.done}`,
           );
           if (task.claimedBySession === sessionKey) {
             for (const todo of graph.taskTodos(task.ref)) {
@@ -482,7 +507,12 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     description:
       "Create or update a concrete Spark task for this session. For Spark-native delegated work, bind the task to a builtin or managed agent with agentRef and run it via spark_run_ready_tasks; do not spawn nested pi CLI sessions as pseudo-agents unless explicitly testing Pi CLI behavior.",
     parameters: Type.Object({
-      title: Type.String({ description: "Concrete task title to show as current task." }),
+      name: Type.Optional(
+        Type.String({
+          description: "Simple @name handle for this task (lowercase, digits, - or _).",
+        }),
+      ),
+      title: Type.String({ description: "Human-readable task title shown as @name: title." }),
       description: Type.String({ description: "What the claimed task will accomplish." }),
       kind: Type.Optional(
         Type.String({
@@ -518,6 +548,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           details: { found: false },
         };
       const p = params as {
+        name?: string;
         title: string;
         description: string;
         kind?: string;
@@ -525,6 +556,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         agentRef?: string;
         todos?: string[];
       };
+      const name = p.name?.trim();
       const title = p.title.trim();
       const description = p.description.trim();
       if (!title || !description)
@@ -543,7 +575,11 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const sessionKey = sparkSessionKey(ctx);
       const existing = graph
         .tasks(thread.ref)
-        .find((task) => task.claimedBySession === sessionKey && task.title === title);
+        .find(
+          (task) =>
+            task.claimedBySession === sessionKey &&
+            ((name && task.name === name) || task.title === title),
+        );
       const activeClaim = findActiveSessionClaim(graph, thread.ref, sessionKey, existing?.ref);
       if (isUnfinishedTaskStatus(status) && activeClaim)
         return {
@@ -561,6 +597,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         };
       const task = existing
         ? graph.updateTask(existing.ref, {
+            name,
             title,
             description,
             kind,
@@ -570,6 +607,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           })
         : graph.createTask({
             threadRef: thread.ref,
+            name,
             title,
             description,
             kind,
@@ -577,6 +615,14 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
             agentRef,
             claimedBySession: sessionKey,
           });
+      if (isUnfinishedTaskStatus(status)) {
+        graph.claimTask(task.ref, {
+          kind: "main",
+          claimedBy: sessionKey,
+          sessionId: sessionKey,
+          agentRef,
+        });
+      }
       const todos = p.todos?.map((todo) => todo.trim()).filter(Boolean) ?? [];
       if (todos.length > 0) {
         graph.applyTodoOps(task.ref, [
@@ -589,7 +635,9 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       await store.save(graph);
       await sparkTodoStore(cwd, ctx).save(graph);
       return {
-        content: [{ type: "text", text: `Claimed Spark task: ${task.title} (${task.ref})` }],
+        content: [
+          { type: "text", text: `Claimed Spark task: @${task.name}: ${task.title} (${task.ref})` },
+        ],
         details: { task: task as unknown as Record<string, unknown> },
       };
     },
@@ -603,7 +651,10 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     parameters: Type.Object({
       tasks: Type.Array(
         Type.Object({
-          title: Type.String({ description: "Stable task title." }),
+          name: Type.Optional(
+            Type.String({ description: "Stable simple @name handle for the task." }),
+          ),
+          title: Type.String({ description: "Human-readable task title shown as @name: title." }),
           description: Type.String({ description: "Concrete task objective/instruction." }),
           kind: Type.Optional(
             Type.String({
@@ -626,7 +677,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           dependsOn: Type.Optional(
             Type.Array(
               Type.String({
-                description: "Dependency task ref or task title in this plan/thread.",
+                description: "Dependency task ref, @name/name, or task title in this plan/thread.",
               }),
             ),
           ),
@@ -655,6 +706,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       await defaultManagedAgentStore(cwd).hydrate(registry);
       const p = params as {
         tasks?: Array<{
+          name?: string;
           title: string;
           description: string;
           kind?: string;
@@ -670,6 +722,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           details: { found: true, error: "missing_tasks" },
         };
       const tasks: TaskPlanInput[] = p.tasks.map((task) => ({
+        name: task.name,
         title: task.title,
         description: task.description,
         kind: normalizeTaskKind(task.kind) ?? "generic",
@@ -684,8 +737,12 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       await refreshSparkWidget(cwd, ctx);
       const lines = [
         `Planned ${result.created.length} new task(s), updated ${result.updated.length}, added ${result.dependencies.length} dependencies.`,
-        ...result.created.map((task) => `- created [${task.status}] ${task.title} (${task.ref})`),
-        ...result.updated.map((task) => `- updated [${task.status}] ${task.title} (${task.ref})`),
+        ...result.created.map(
+          (task) => `- created [${task.status}] @${task.name}: ${task.title} (${task.ref})`,
+        ),
+        ...result.updated.map(
+          (task) => `- updated [${task.status}] @${task.name}: ${task.title} (${task.ref})`,
+        ),
       ];
       return {
         content: [{ type: "text", text: lines.join("\n") }],
@@ -725,12 +782,16 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const runs: unknown[] = [];
       for (const task of ready) {
         runs.push(
-          await graph.runTask({
+          await runSparkTask({
+            graph,
             taskRef: task.ref,
             registry,
             artifactStore,
             cwd,
             dryRun: params.dryRun !== false,
+            onHeartbeat: async () => {
+              await store.save(graph);
+            },
           }),
         );
       }
@@ -1153,12 +1214,12 @@ async function renderActiveSparkContextSummary(
   const stateLines = thread
     ? (() => {
         const tasks = graph.tasks(thread.ref);
-        const claimed = tasks.filter((task) => task.claimedBySession);
+        const claimed = tasks.filter((task) => taskClaimedBy(task));
         const sessionClaimed = claimed.filter((task) => task.claimedBySession === sessionKey);
         const taskLines = sessionClaimed.flatMap((task) => {
           const summary = graph.todoSummary(task.ref);
           return [
-            `- Claimed task: ${task.title} (${task.ref}) TODOs ${summary.total}/${summary.inProgress}/${summary.pending}/${summary.done}`,
+            `- Claimed task: @${task.name}: ${task.title} (${task.ref}) TODOs ${summary.total}/${summary.inProgress}/${summary.pending}/${summary.done}`,
             ...graph
               .taskTodos(task.ref)
               .slice(0, 5)
@@ -1200,6 +1261,10 @@ function sparkTodoStore(cwd: string, ctx: unknown): ReturnType<typeof defaultTas
   return defaultTaskTodoStore(cwd, sparkSessionKey(ctx));
 }
 
+function taskClaimedBy(task: Task): string | undefined {
+  return task.claim?.claimedBy ?? task.claimedBySession;
+}
+
 function resolveSessionClaimedTask(
   graph: TaskGraph,
   threadRef: ThreadRef,
@@ -1211,8 +1276,13 @@ function resolveSessionClaimedTask(
     .filter((task) => task.claimedBySession === sessionKey && isUnfinishedTaskStatus(task.status));
   if (query?.trim()) {
     const needle = query.trim();
+    const normalizedNeedle = needle.startsWith("@") ? needle.slice(1) : needle;
     return claimed.find(
-      (task) => task.ref === needle || task.title === needle || task.title.startsWith(needle),
+      (task) =>
+        task.ref === needle ||
+        task.name === normalizedNeedle ||
+        task.title === needle ||
+        task.title.startsWith(needle),
     );
   }
   const current = graph.currentTask(threadRef);
@@ -1411,6 +1481,8 @@ async function ensureSparkStateForActiveWorkspace(
   cwd: string,
   ctx?: unknown,
 ): Promise<TaskGraph | null> {
+  await sweepExpiredSparkClaims(cwd);
+  ensureClaimReaper(cwd);
   const existing = await loadSparkGraph(cwd, ctx);
   if (existing) return existing;
   const sparkMdPath = await findUpExisting(cwd, "SPARK.md");
@@ -1945,22 +2017,6 @@ function emptyTodoSummary(): TaskTodoSummary {
   };
 }
 
-function mapDeliveryChoice(choice: string, language: SparkCopyLanguage): string {
-  const zhMap: Record<string, string> = {
-    只做规划: "clarify_only",
-    "规划 + 文档": "document",
-    "规划 + 文档 + 实现": "document_and_execute",
-    直接实现: "execute",
-  };
-  const enMap: Record<string, string> = {
-    "Plan only": "clarify_only",
-    "Plan + document": "document",
-    "Plan + document + implement": "document_and_execute",
-    "Implement directly": "execute",
-  };
-  return (language === "zh" ? zhMap[choice] : enMap[choice]) ?? "document_and_execute";
-}
-
 function describeSparkFocus(value: string | undefined, language: SparkCopyLanguage): string {
   if (language === "zh") {
     switch (value) {
@@ -2319,11 +2375,6 @@ function normalizeTaskStatus(value: string | undefined) {
   )
     return value;
   return undefined;
-}
-
-function truncateForDescription(text: string, max: number): string {
-  const line = text.trim().split(/\r?\n/)[0] ?? text.trim();
-  return line.length > max ? `${line.slice(0, max - 3)}...` : line;
 }
 
 function escapeYamlLine(value: string): string {

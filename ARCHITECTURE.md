@@ -19,23 +19,24 @@ spark-core
   ↑
   ├─ spark-artifacts
   ├─ spark-ask ───────→ pi-ask
-  └─ spark-agents
+  ├─ spark-agents
+  ├─ spark-review
+  └─ spark-tasks
         ↑
-      spark-review
-        ↑
-      spark-tasks
+   spark-runtime ─────→ spark-agents, spark-artifacts
         ↑
        spark  ───────→ pi-cue, pi-ask
 ```
 
 Allowed high-level usage:
 
-- `spark` may orchestrate every Spark primitive and may use `pi-cue`.
-- `spark-tasks` may call agents, artifacts, and review gates.
-- `spark-review` may call agents and artifacts.
-- `spark-agents`, `spark-ask`, and `spark-artifacts` must not depend on tasks.
+- `spark` may orchestrate every Spark primitive and may use `pi-cue` / `pi-ask`.
+- `spark-runtime` may combine `spark-tasks`, `spark-agents`, and `spark-artifacts` to run claimed tasks.
+- `spark-tasks` owns DAGs, TODOs, scheduling state, task names, and claim leases. It must not run agents.
+- `spark-agents` owns only builtin/managed agent specs, registry lookup, and managed-agent creation. It must not schedule tasks or implement multi-agent interaction.
+- `spark-review` may call agents and artifacts, but must not own task scheduling.
 - `spark-ask` may depend on `pi-ask`, but it should only provide Spark presets and copy.
-- Other subrepos may depend on `pi-cue` directly.
+- `pi-*` packages must remain generic and usable outside Spark mode.
 
 Forbidden dependencies:
 
@@ -45,14 +46,18 @@ pi-ask -> spark-core
 pi-cue -> spark-tasks
 spark-artifacts -> spark-tasks
 spark-agents -> spark-tasks
+spark-tasks -> spark-agents
+spark-tasks -> spark-artifacts
 spark-review -> spark-tasks
+pi-* -> spark-*
 ```
 
 ## Public mental model
 
 - Users know `/spark`.
-- Agent runtime is `spark-agents`.
-- Long-lived work is `spark-tasks`.
+- Agent registry/creation is `spark-agents`.
+- Long-lived work and claim scheduling are `spark-tasks`.
+- Agent execution/runtime orchestration is `spark-runtime`.
 - Durable context is `spark-artifacts`.
 - Execution is `pi-cue`.
 - Generic human/supervisor ask mechanics are `pi-ask`.

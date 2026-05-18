@@ -1,7 +1,7 @@
 {
-  "name": "spark-tasks",
+  "name": "spark-runtime",
   "version": "0.1.0",
-  "description": "Thread and task DAG orchestration for Spark.",
+  "description": "Spark runtime orchestration for executing claimed tasks with agents.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [
@@ -16,7 +16,9 @@
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
+    "spark-agents": "file:../spark-agents",
+    "spark-artifacts": "file:../spark-artifacts",
     "spark-core": "file:../spark-core",
-    "spark-review": "file:../spark-review"
+    "spark-tasks": "file:../spark-tasks"
   }
 }

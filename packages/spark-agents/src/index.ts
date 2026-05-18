@@ -1,15 +1,10 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
 
 import {
-  type AgentInstruction,
   type AgentRef,
-  type AgentRunRecord,
-  type AgentRunStatus,
   type AgentSpec,
   type ManagedAgentProposal,
-  type RunRef,
   newRef,
   nowIso,
   refId,
@@ -161,125 +156,5 @@ export function createManagedAgentSpec(proposal: ManagedAgentProposal, now = now
     systemPrompt: proposal.systemPrompt,
     createdAt: now,
     updatedAt: now,
-  };
-}
-
-export interface AgentRunResult {
-  record: AgentRunRecord;
-  stdout: string;
-  stderr: string;
-  jsonEvents: unknown[];
-}
-
-export interface AgentRunnerOptions {
-  cwd: string;
-  piCommand?: string;
-  dryRun?: boolean;
-  timeoutMs?: number;
-  sessionDir?: string;
-}
-
-export async function runAgentInstructionOnly(
-  registry: AgentRegistry,
-  instruction: AgentInstruction,
-  options: Partial<AgentRunnerOptions> = {},
-): Promise<AgentRunResult> {
-  const agent = registry.get(instruction.agentRef);
-  if (!instruction.instruction.trim()) throw new Error("agent instruction is required");
-  const startedAt = nowIso();
-  const baseRecord: AgentRunRecord = {
-    ref: newRef("run"),
-    agentRef: agent.ref,
-    instruction: instruction.instruction,
-    status: (options.dryRun ?? true) ? "not_started" : "running",
-    startedAt,
-  };
-
-  if (options.dryRun ?? true) {
-    return {
-      record: { ...baseRecord, status: "not_started", finishedAt: nowIso() },
-      stdout: "",
-      stderr: "",
-      jsonEvents: [],
-    };
-  }
-
-  return runPiJsonAgent(
-    agent,
-    instruction,
-    {
-      cwd: options.cwd ?? process.cwd(),
-      piCommand: options.piCommand ?? "pi",
-      timeoutMs: options.timeoutMs ?? 600_000,
-      sessionDir: options.sessionDir,
-    },
-    baseRecord.ref,
-  );
-}
-
-export function parseJsonlEvents(text: string): unknown[] {
-  const events: unknown[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    try {
-      events.push(JSON.parse(line));
-    } catch {
-      // Pi may emit non-JSON diagnostics. Keep parser tolerant.
-    }
-  }
-  return events;
-}
-
-async function runPiJsonAgent(
-  agent: AgentSpec,
-  instruction: AgentInstruction,
-  options: Required<Pick<AgentRunnerOptions, "cwd" | "piCommand" | "timeoutMs">> &
-    Pick<AgentRunnerOptions, "sessionDir">,
-  runRef: RunRef,
-): Promise<AgentRunResult> {
-  const prompt = [agent.systemPrompt, "", "Instruction:", instruction.instruction].join("\n");
-  const args = ["--mode", "json", "--prompt", prompt];
-  if (options.sessionDir) args.push("--session-dir", options.sessionDir);
-
-  const startedAt = nowIso();
-  const child = spawn(options.piCommand, args, {
-    cwd: options.cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const stdoutChunks: Buffer[] = [];
-  const stderrChunks: Buffer[] = [];
-  child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
-  child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
-
-  const exitCode = await new Promise<number | null>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error(`agent run timed out after ${options.timeoutMs}ms`));
-    }, options.timeoutMs);
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve(code);
-    });
-  });
-
-  const stdout = Buffer.concat(stdoutChunks).toString("utf8");
-  const stderr = Buffer.concat(stderrChunks).toString("utf8");
-  const status: AgentRunStatus = exitCode === 0 ? "succeeded" : "failed";
-  return {
-    record: {
-      ref: runRef,
-      agentRef: agent.ref,
-      instruction: instruction.instruction,
-      status,
-      startedAt,
-      finishedAt: nowIso(),
-    },
-    stdout,
-    stderr,
-    jsonEvents: parseJsonlEvents(stdout),
   };
 }

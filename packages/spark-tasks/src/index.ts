@@ -1,16 +1,16 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { type AgentRegistry, runAgentInstructionOnly } from "spark-agents";
-import type { ArtifactStore } from "spark-artifacts";
 import {
   DependencyError,
   NotFoundError,
   type AgentRef,
   type ArtifactRef,
-  type JsonValue,
+  type RunRef,
   type Task,
   type TaskDependency,
+  type TaskClaim,
+  type TaskClaimKind,
   type TaskKind,
   type TaskProposal,
   type TaskRef,
@@ -21,6 +21,7 @@ import {
   type ThreadRef,
   newRef,
   nowIso,
+  stableId,
 } from "spark-core";
 
 export interface CreateThreadInput {
@@ -39,18 +40,37 @@ export interface CreateTaskTodoInput {
 
 export interface CreateTaskInput {
   threadRef: ThreadRef;
+  /** Simple handle used as @name in Pi TUI and tool references. */
+  name?: string;
   title: string;
   description: string;
   kind?: TaskKind;
   status?: Task["status"];
   agentRef?: AgentRef;
   claimedBySession?: string;
+  claim?: TaskClaim;
   inputArtifacts?: ArtifactRef[];
   /**
    * Seed durable TODOs for this task. TaskGraphStore intentionally keeps TODOs
    * out of thread.json; persist them through TaskTodoStore.
    */
   todos?: CreateTaskTodoInput[];
+}
+
+export interface ClaimTaskInput {
+  kind: TaskClaimKind;
+  claimedBy: string;
+  agentRef?: AgentRef;
+  sessionId?: string;
+  runRef?: RunRef;
+  leaseMs?: number;
+  now?: string;
+}
+
+export interface HeartbeatTaskClaimInput {
+  claimedBy: string;
+  leaseMs?: number;
+  now?: string;
 }
 
 export interface TaskTodoSummary {
@@ -96,6 +116,8 @@ export interface TaskGraphSnapshot {
 }
 
 export interface TaskPlanInput {
+  /** Stable simple handle for @name references. Defaults from title. */
+  name?: string;
   title: string;
   description: string;
   kind?: TaskKind;
@@ -161,9 +183,14 @@ export class TaskGraph {
     this.getThread(input.threadRef);
     if (!input.title.trim()) throw new Error("task title is required");
     const now = nowIso();
+    const name = uniqueTaskName(
+      input.name?.trim() || taskNameFromTitle(input.title),
+      new Set(this.tasks(input.threadRef).map((task) => task.name)),
+    );
     const task: Task = {
       ref: newRef("task"),
       threadRef: input.threadRef,
+      name,
       title: input.title,
       description: input.description,
       kind: input.kind ?? "generic",
@@ -172,6 +199,7 @@ export class TaskGraph {
         (input.kind === "interaction" ? "running" : input.agentRef ? "pending" : "proposed"),
       agentRef: input.agentRef,
       claimedBySession: input.claimedBySession,
+      claim: input.claim,
       inputArtifacts: input.inputArtifacts ?? [],
       outputArtifacts: [],
       createdAt: now,
@@ -200,15 +228,19 @@ export class TaskGraph {
     const updated: Task[] = [];
     const skipped: Task[] = [];
     const dependencies: TaskDependency[] = [];
-    const refsByTitle = new Map(this.tasks(threadRef).map((task) => [task.title, task.ref]));
+    const refsByKey = taskLookup(this.tasks(threadRef));
     for (const input of inputs) {
       const title = input.title.trim();
       const description = input.description.trim();
+      const name = input.name?.trim();
       if (!title) throw new Error("task title is required");
       if (!description) throw new Error(`task description is required: ${title}`);
-      const existing = this.tasks(threadRef).find((task) => task.title === title);
+      const existing = this.tasks(threadRef).find(
+        (task) => (name && task.name === name) || task.title === title,
+      );
       const task = existing
         ? this.updateTask(existing.ref, {
+            name: name ?? existing.name,
             title,
             description,
             kind: input.kind ?? existing.kind,
@@ -217,6 +249,7 @@ export class TaskGraph {
           })
         : this.createTask({
             threadRef,
+            name,
             title,
             description,
             kind: input.kind,
@@ -225,14 +258,14 @@ export class TaskGraph {
           });
       if (existing) updated.push(task);
       else created.push(task);
-      refsByTitle.set(title, task.ref);
+      addTaskLookup(refsByKey, task);
     }
 
     for (const input of inputs) {
-      const taskRef = refsByTitle.get(input.title.trim());
+      const taskRef = refsByKey.get(input.name?.trim() || input.title.trim());
       if (!taskRef) continue;
       for (const dep of input.dependsOn ?? []) {
-        const depRef = refsByTitle.get(dep) ?? dep;
+        const depRef = refsByKey.get(dep) ?? dep;
         if (!this.#tasks.has(depRef as TaskRef))
           throw new NotFoundError(`unknown dependency: ${dep}`);
         const already = this.#dependencies.some(
@@ -267,6 +300,7 @@ export class TaskGraph {
       ...task,
       status,
       claimedBySession: isUnfinishedTaskStatus(status) ? task.claimedBySession : undefined,
+      claim: isUnfinishedTaskStatus(status) ? task.claim : undefined,
       updatedAt: nowIso(),
     };
     this.#tasks.set(taskRef, updated);
@@ -277,16 +311,129 @@ export class TaskGraph {
     return updated;
   }
 
+  claimTask(taskRef: TaskRef, input: ClaimTaskInput): Task {
+    const task = this.getTask(taskRef);
+    const now = input.now ?? nowIso();
+    if (!isUnfinishedTaskStatus(task.status))
+      throw new DependencyError(`finished task cannot be claimed: ${task.ref}`);
+    if (!input.claimedBy.trim()) throw new Error("task claim claimedBy is required");
+    if (task.claim && !isExpiredClaim(task.claim, now) && task.claim.claimedBy !== input.claimedBy)
+      throw new DependencyError(`task is already claimed: ${task.ref}`);
+    const agentRef = input.agentRef ?? task.agentRef;
+    const claim: TaskClaim = {
+      kind: input.kind,
+      claimedBy: input.claimedBy,
+      agentRef,
+      sessionId: input.sessionId,
+      runRef: input.runRef,
+      claimedAt: task.claim?.claimedBy === input.claimedBy ? task.claim.claimedAt : now,
+      heartbeatAt: now,
+      expiresAt: input.leaseMs
+        ? new Date(Date.parse(now) + input.leaseMs).toISOString()
+        : undefined,
+    };
+    const updated: Task = {
+      ...task,
+      agentRef,
+      status: isUnfinishedTaskStatus(task.status) ? "running" : task.status,
+      claimedBySession: input.sessionId ?? task.claimedBySession,
+      claim,
+      updatedAt: now,
+    };
+    this.#tasks.set(taskRef, updated);
+    return updated;
+  }
+
+  heartbeatTaskClaim(taskRef: TaskRef, input: HeartbeatTaskClaimInput): Task {
+    const task = this.getTask(taskRef);
+    const now = input.now ?? nowIso();
+    if (!task.claim) throw new DependencyError(`task is not claimed: ${task.ref}`);
+    if (task.claim.claimedBy !== input.claimedBy)
+      throw new DependencyError(`task is claimed by ${task.claim.claimedBy}`);
+    if (isExpiredClaim(task.claim, now))
+      throw new DependencyError(`task claim is expired: ${task.ref}`);
+    const claim: TaskClaim = {
+      ...task.claim,
+      heartbeatAt: now,
+      expiresAt: input.leaseMs
+        ? new Date(Date.parse(now) + input.leaseMs).toISOString()
+        : task.claim.expiresAt,
+    };
+    const updated: Task = { ...task, claim, updatedAt: now };
+    this.#tasks.set(taskRef, updated);
+    return updated;
+  }
+
+  releaseTaskClaim(taskRef: TaskRef, claimedBy?: string): Task {
+    const task = this.getTask(taskRef);
+    if (claimedBy && task.claim && task.claim.claimedBy !== claimedBy)
+      throw new DependencyError(`task is claimed by ${task.claim.claimedBy}`);
+    const updated: Task = {
+      ...task,
+      claim: undefined,
+      claimedBySession: undefined,
+      status: task.status === "running" ? "pending" : task.status,
+      updatedAt: nowIso(),
+    };
+    this.#tasks.set(taskRef, updated);
+    return updated;
+  }
+
+  expireTaskClaims(now = nowIso()): Task[] {
+    const expired: Task[] = [];
+    for (const task of this.#tasks.values()) {
+      if (!task.claim || !isExpiredClaim(task.claim, now)) continue;
+      if (task.claim.runRef) {
+        const run = this.#runs.get(task.claim.runRef);
+        if (run?.status === "running" || run?.status === "queued") {
+          this.#runs.set(task.claim.runRef, {
+            ...run,
+            status: "cancelled",
+            failureKind: "claim_stale",
+            errorMessage: `task claim expired at ${task.claim.expiresAt}`,
+            finishedAt: now,
+          });
+        }
+      }
+      const updated: Task = {
+        ...task,
+        claim: undefined,
+        claimedBySession: undefined,
+        status: task.status === "running" ? "pending" : task.status,
+        updatedAt: now,
+      };
+      this.#tasks.set(task.ref, updated);
+      expired.push(updated);
+    }
+    return expired;
+  }
+
+  recordRun(run: TaskRun): TaskRun {
+    this.#runs.set(run.ref, run);
+    return run;
+  }
+
   updateTask(
     taskRef: TaskRef,
     patch: Partial<
-      Pick<Task, "title" | "description" | "kind" | "status" | "agentRef" | "claimedBySession">
+      Pick<
+        Task,
+        | "name"
+        | "title"
+        | "description"
+        | "kind"
+        | "status"
+        | "agentRef"
+        | "claimedBySession"
+        | "claim"
+      >
     >,
   ): Task {
     const task = this.getTask(taskRef);
     const status = patch.status ?? task.status;
     const updated: Task = {
       ...task,
+      name: patch.name ?? task.name,
       title: patch.title ?? task.title,
       description: patch.description ?? task.description,
       kind: patch.kind ?? task.kind,
@@ -295,8 +442,10 @@ export class TaskGraph {
       claimedBySession: isUnfinishedTaskStatus(status)
         ? (patch.claimedBySession ?? task.claimedBySession)
         : undefined,
+      claim: isUnfinishedTaskStatus(status) ? (patch.claim ?? task.claim) : undefined,
       updatedAt: nowIso(),
     };
+    assertTaskName(updated.name);
     if (!updated.title.trim()) throw new Error("task title is required");
     if (!updated.description.trim()) throw new Error("task description is required");
     this.#tasks.set(taskRef, updated);
@@ -420,90 +569,6 @@ export class TaskGraph {
 
   enqueueReadyTasks(threadRef?: ThreadRef): Task[] {
     return this.readyTasks(threadRef).map((task) => this.setTaskStatus(task.ref, "ready"));
-  }
-
-  async runTask(input: {
-    taskRef: TaskRef;
-    registry: AgentRegistry;
-    artifactStore?: ArtifactStore;
-    cwd?: string;
-    dryRun?: boolean;
-  }): Promise<TaskRun> {
-    const task = this.getTask(input.taskRef);
-    if (!task.agentRef) throw new DependencyError(`task has no agent binding: ${task.ref}`);
-    const unmet = this.#dependencies.filter(
-      (dep) => dep.taskRef === task.ref && this.getTask(dep.dependsOn).status !== "done",
-    );
-    if (unmet.length > 0) throw new DependencyError(`task has unmet dependencies: ${task.ref}`);
-
-    this.setTaskStatus(task.ref, "running");
-    const run: TaskRun = {
-      ref: newRef("run"),
-      threadRef: task.threadRef,
-      taskRef: task.ref,
-      agentRef: task.agentRef,
-      status: "running",
-      startedAt: nowIso(),
-      outputArtifacts: [],
-    };
-    this.#runs.set(run.ref, run);
-
-    try {
-      const result = await runAgentInstructionOnly(
-        input.registry,
-        {
-          agentRef: task.agentRef,
-          instruction: task.description,
-          inputs: task.inputArtifacts,
-        },
-        { cwd: input.cwd ?? process.cwd(), dryRun: input.dryRun ?? true },
-      );
-
-      let outputArtifactRef: ArtifactRef | undefined;
-      if (input.artifactStore) {
-        const artifact = await input.artifactStore.put({
-          kind: "agent-run",
-          title: `Agent run for ${task.title}`,
-          format: "json",
-          body: {
-            record: result.record,
-            stdout: result.stdout,
-            stderr: result.stderr,
-            jsonEvents: result.jsonEvents,
-          } as unknown as JsonValue,
-          provenance: {
-            producer: "task",
-            threadRef: task.threadRef,
-            taskRef: task.ref,
-            agentRef: task.agentRef,
-          },
-        });
-        outputArtifactRef = artifact.ref;
-        this.attachOutputArtifact(task.ref, artifact.ref);
-      }
-
-      const succeeded =
-        result.record.status === "succeeded" || result.record.status === "not_started";
-      const finished: TaskRun = {
-        ...run,
-        status: succeeded ? "succeeded" : "failed",
-        finishedAt: nowIso(),
-        outputArtifacts: outputArtifactRef ? [outputArtifactRef] : [],
-      };
-      this.#runs.set(finished.ref, finished);
-      this.setTaskStatus(task.ref, succeeded ? "done" : "failed");
-      return finished;
-    } catch (error) {
-      const failed: TaskRun = {
-        ...run,
-        status: "failed",
-        finishedAt: nowIso(),
-        outputArtifacts: [],
-      };
-      this.#runs.set(failed.ref, failed);
-      this.setTaskStatus(task.ref, "failed");
-      throw error;
-    }
   }
 
   getThread(ref: ThreadRef): Thread {
@@ -665,6 +730,46 @@ export function assertAcyclic(dependencies: TaskDependency[]): void {
   for (const ref of outgoing.keys()) visit(ref);
 }
 
+function isExpiredClaim(claim: TaskClaim, now: string): boolean {
+  return Boolean(claim.expiresAt && Date.parse(claim.expiresAt) <= Date.parse(now));
+}
+
+function taskNameFromTitle(title: string): string {
+  const ascii = title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-");
+  return ascii || `task-${stableId(title)}`;
+}
+
+function assertTaskName(name: string): void {
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(name))
+    throw new Error(`task name must be a simple @name handle: ${name}`);
+}
+
+function uniqueTaskName(preferred: string, existing: Set<string>): string {
+  const base = preferred.trim();
+  assertTaskName(base);
+  if (!existing.has(base)) return base;
+  let index = 2;
+  while (existing.has(`${base}-${index}`)) index += 1;
+  return `${base}-${index}`;
+}
+
+function addTaskLookup(lookup: Map<string, TaskRef>, task: Task): void {
+  lookup.set(task.name, task.ref);
+  lookup.set(task.title, task.ref);
+  lookup.set(task.ref, task.ref);
+}
+
+function taskLookup(tasks: Task[]): Map<string, TaskRef> {
+  const lookup = new Map<string, TaskRef>();
+  for (const task of tasks) addTaskLookup(lookup, task);
+  return lookup;
+}
+
 function normalizeThread(thread: Thread): Thread {
   return {
     ...thread,
@@ -676,12 +781,14 @@ function normalizeTask(task: Task): Task {
   return {
     ref: task.ref,
     threadRef: task.threadRef,
+    name: task.name ?? taskNameFromTitle(task.title),
     title: task.title,
     description: task.description,
     kind: task.kind,
     status: task.status,
     agentRef: task.agentRef,
     claimedBySession: isUnfinishedTaskStatus(task.status) ? task.claimedBySession : undefined,
+    claim: isUnfinishedTaskStatus(task.status) ? task.claim : undefined,
     inputArtifacts: task.inputArtifacts,
     outputArtifacts: task.outputArtifacts,
     createdAt: task.createdAt,

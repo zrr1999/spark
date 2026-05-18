@@ -284,15 +284,32 @@ export interface Thread {
   updatedAt: string;
 }
 
+export type TaskClaimKind = "main" | "subagent";
+
+export interface TaskClaim {
+  kind: TaskClaimKind;
+  claimedBy: string;
+  agentRef?: AgentRef;
+  sessionId?: string;
+  runRef?: RunRef;
+  claimedAt: string;
+  heartbeatAt: string;
+  expiresAt?: string;
+}
+
 export interface Task {
   ref: TaskRef;
   threadRef: ThreadRef;
+  /** Simple handle used in TUI/tool references, rendered as @name. */
+  name: string;
   title: string;
   description: string;
   kind: TaskKind;
   status: TaskStatus;
   agentRef?: AgentRef;
+  /** @deprecated use claim.sessionId / claim.claimedBy. */
   claimedBySession?: string;
+  claim?: TaskClaim;
   inputArtifacts: ArtifactRef[];
   outputArtifacts: ArtifactRef[];
   createdAt: string;
@@ -314,12 +331,16 @@ export interface TaskProposal {
   rationale: string;
 }
 
+export type TaskRunFailureKind = "runtime_timeout" | "runtime_error" | "claim_stale";
+
 export interface TaskRun {
   ref: RunRef;
   threadRef: ThreadRef;
   taskRef: TaskRef;
   agentRef?: AgentRef;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  failureKind?: TaskRunFailureKind;
+  errorMessage?: string;
   startedAt?: string;
   finishedAt?: string;
   outputArtifacts: ArtifactRef[];

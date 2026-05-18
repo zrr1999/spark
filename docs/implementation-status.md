@@ -40,8 +40,7 @@ but end-to-end local vertical slice.
    - builtin agent registry
    - managed agent store
    - managed agent proposal to spec conversion
-   - instruction-only dry-run runner
-   - tolerant JSONL parser and `pi --mode json` runner path
+   - agent creation/lookup only; runtime execution lives in `spark-runtime`
 - `spark-review`
    - review gates
    - gate policies
@@ -55,12 +54,20 @@ but end-to-end local vertical slice.
      are stored outside `.spark/thread.json` snapshots, and
      active sessions can use session-scoped `.spark/todos/<session>.json`
      files to avoid concurrent agent overwrites
+   - `name` / `title` / `description` task identity, rendered as `@name: title` in Pi UI
+   - unified main-agent/subagent claim schema with lease expiration
+   - heartbeat updates via `heartbeatTaskClaim()`
+   - stale claim expiry that marks running runs as `claim_stale` and returns tasks to `pending`
    - model-claimed current-task tracking per thread
+- `spark-runtime`
    - dry-run task execution through registered agents
+   - runtime-created subagent claims and run artifact persistence
+   - heartbeat loop for active runtime claims
+   - persisted expired-claim sweeper and distinct `runtime_timeout` failure marking
 - `spark`
    - `/spark <idea>` command
    - `spark_status` tool
-   - `spark_claim_task` tool for model-claimed current work
+   - `spark_claim_task` tool for named model-claimed current work
    - `spark_update_task_todos` for task-scoped TODOs
    - `spark_update_todos` for independent session TODOs
    - `spark_run_ready_tasks` tool

@@ -37,6 +37,7 @@
     "spark-ask": "file:packages/spark-ask",
     "spark-core": "file:packages/spark-core",
     "spark-review": "file:packages/spark-review",
+    "spark-runtime": "file:packages/spark-runtime",
     "spark-tasks": "file:packages/spark-tasks",
     "typebox": "^1.1.38"
   },
