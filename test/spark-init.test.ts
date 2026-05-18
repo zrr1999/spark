@@ -17,7 +17,7 @@ void test("workspace-like cwd keeps Spark state under .spark without root SPARK.
     const result = await initializeSparkIdea(dir, "Build a new idea from workspace root");
     assert.equal(result.sparkMdPath, undefined);
     const threadJson = await readFile(join(dir, ".spark", "thread.json"), "utf8");
-    assert.match(threadJson, /Track active user interaction/);
+    assert.match(threadJson, /Maintain current interaction context/);
     assert.match(threadJson, /Capture project intent/);
     await assert.rejects(() => readFile(join(dir, "SPARK.md"), "utf8"));
   } finally {
@@ -35,12 +35,13 @@ void test("repo-like cwd materializes root SPARK.md as well", async () => {
     const rootSpark = await readFile(result.sparkMdPath!, "utf8");
     assert.match(rootSpark, /Build a repo-local spark thread/);
     assert.match(rootSpark, /## Working title/);
-    assert.match(rootSpark, /## Delivery expectation/);
-    assert.match(rootSpark, /## Smallest slice/);
+    assert.doesNotMatch(rootSpark, /## Delivery expectation/);
+    assert.doesNotMatch(rootSpark, /待确认/);
+    assert.doesNotMatch(rootSpark, /To be confirmed/);
     assert.doesNotMatch(rootSpark, /## 生态关系/);
     const threadJson = await readFile(join(dir, ".spark", "thread.json"), "utf8");
     assert.match(threadJson, /Review initial direction/);
-    assert.match(threadJson, /Track active user interaction/);
+    assert.match(threadJson, /Maintain current interaction context/);
     assert.match(threadJson, /"currentTaskRef"/);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -79,7 +80,7 @@ void test("initializeSparkIdea preserves clarified title and trace ask refs", as
     assert.deepEqual(result.askArtifactRefs, ["artifact:ask-test"]);
     const threadJson = await readFile(join(dir, ".spark", "thread.json"), "utf8");
     assert.match(threadJson, /Hypha v0: VS Code-first IDE experience for Spore/);
-    assert.match(threadJson, /Track active user interaction/);
+    assert.match(threadJson, /Maintain current interaction context/);
     const artifactFiles = await readdir(join(dir, ".spark", "artifacts"));
     let traceBody: unknown;
     for (const file of artifactFiles.filter((entry) => entry.endsWith(".json"))) {

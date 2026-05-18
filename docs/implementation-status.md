@@ -69,17 +69,15 @@ but end-to-end local vertical slice.
     high-confidence natural-language idea detection second
   - active-project tool hints for `spark_status`,
     `spark_run_ready_tasks`, and `pi-cue` tools
-  - clarification-first Spark init flow that captures
-    working title, confirmed output language, objective,
-    delivery mode, next action, smallest slice, success
-    signal, and non-goals before artifact generation when
-    UI is available
+  - `/spark` initializes state without a broad intake form;
+    targeted clarification is deferred until Spark has
+    context from the current workspace
   - `.spark/` state is always created; root `SPARK.md` is
     only materialized when `.git` exists in cwd
   - SPARK.md artifact, task graph, agent plan artifact,
     review gate, and run trace generation
   - default text UI summary for thread / task / TODO state
-    after Spark initialization
+    after Spark initialization and on active Spark turns
   - invariant repair that keeps an active interaction task
     and per-task TODOs present in loaded Spark graphs
   - ask artifacts linked into the Spark run trace when init clarification runs

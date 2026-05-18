@@ -39,6 +39,12 @@ declare module "@earendil-works/pi-coding-agent" {
       confirm?: (title: string, message: string) => Promise<boolean>;
       input?: (title: string, defaultValue?: string) => Promise<string>;
       select?: (title: string, options: string[]) => Promise<string>;
+      setWidget?: (
+        key: string,
+        callback: unknown,
+        options?: { placement?: "aboveEditor" | "belowEditor" },
+      ) => void;
+      setStatus?: (key: string, text: string | undefined) => void;
     };
   }
 

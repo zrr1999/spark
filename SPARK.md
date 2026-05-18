@@ -1,45 +1,33 @@
 ---
-description: "梳理下一步的改进点"
+description: pi-spark — Spark suite for Pi
 owner: zrr1999
 created: 2026-05-17
 updated: 2026-05-17
 inspired_by: []
 ---
 
-## 起源
+## Origin
 
-梳理下一步的改进点
+pi-spark is the Spark suite for Pi: a controlled agentic development system that turns project intent into structured threads, tasks with dynamic TODO state, durable artifacts, review gates, and Pi-cue shell execution primitives.
 
-## 当前工作标题
+## Working title
 
-- 待确认。
+- pi-spark: Spark suite for Pi
 
-## 产品/设计目标
+## Target
 
-- 把这个想法推进为可审阅、可执行、可延续的项目状态。
-- 先收敛最小可交付切片，再决定实现和扩张顺序。
+This repo itself — the pi-spark monorepo under `zrr1999/loom-dev/pi-spark`. Spark is both the product (a Pi extension that provides `/spark`, task orchestration, and TODO tracking) and the development environment (using its own Spark thread to track its own improvements).
 
-## 目标用户
+## Delivery mode
 
-- 待确认。
+- Active development with incremental refinement. The `/spark` flow, TODO UI, and copy/language strategy are being iterated based on direct usage feedback.
 
-## 最小切片
+## Open questions
 
-- 待确认。
+- Should the Spark widget eventually become a standalone Pi package separate from the spark extension?<!-- deferred -->
+- Should SPARK.md section labels and widget display be user-configurable per thread?<!-- deferred -->
 
-## 成功信号
+## Revision history
 
-- 待确认。
-
-## 什么不是本项目要做的（Non-goals）
-
-- 待确认。
-
-## 开放问题
-
-- 这个 thread 的最小下一步应该是什么？<!-- 待确认 -->
-- 哪些部分现在先不做，以避免过早扩张？<!-- 待确认 -->
-
-## 修订记录
-
-- 2026-05-17：由 /spark 生成初稿。
+- 2026-05-17: Initial draft.
+- 2026-05-17: Updated to reflect confirmed scope (no-init-form, TODO widget, targeted clarification, follow-user language with confirmation).

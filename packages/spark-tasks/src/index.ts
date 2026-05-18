@@ -26,6 +26,7 @@ import {
 export interface CreateThreadInput {
   title: string;
   description: string;
+  outputLanguage?: "zh" | "en";
 }
 
 export interface CreateTaskTodoInput {
@@ -111,6 +112,7 @@ export class TaskGraph {
       ref: newRef("thread"),
       title: input.title,
       description: input.description,
+      outputLanguage: input.outputLanguage,
       createdAt: now,
       updatedAt: now,
     };

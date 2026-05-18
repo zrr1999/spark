@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
 import { Type } from "typebox";
-import { registerPiAskTools } from "pi-ask";
+import { registerSparkAskTool } from "spark-ask";
 import { defaultArtifactStore } from "spark-artifacts";
 import {
   approveManagedAgentAsk,
@@ -31,10 +31,12 @@ import {
   type JsonValue,
   type ManagedAgentProposal,
   type SparkRunTrace,
+  type ThreadRef,
 } from "spark-core";
 import { registerPiCueTools } from "pi-cue";
 import { createReviewGate } from "spark-review";
 import { defaultTaskGraphStore, TaskGraph } from "spark-tasks";
+import { SparkWidget, type SparkWidgetState, type TaskEntry } from "../ui/spark-widget.ts";
 
 interface SparkExtensionAPI {
   registerCommand(
@@ -75,6 +77,8 @@ interface SparkToolContext {
     confirm?: (title: string, message: string) => Promise<boolean>;
     input?: (title: string, defaultValue?: string) => Promise<string | undefined>;
     select?: (title: string, options: string[]) => Promise<string | undefined>;
+    setWidget?: (key: string, cb: unknown, opts?: { placement?: string }) => void;
+    setStatus?: (key: string, text: string | undefined) => void;
   };
 }
 
@@ -86,13 +90,95 @@ interface SparkCommandContext extends SparkToolContext {
 export default function sparkExtension(pi: SparkExtensionAPI) {
   if (pi.registerTool) {
     registerPiCueTools(pi as unknown as Parameters<typeof registerPiCueTools>[0]);
-    registerPiAskTools(pi as unknown as Parameters<typeof registerPiAskTools>[0]);
+    registerSparkAskTool(pi as unknown as Parameters<typeof registerSparkAskTool>[0]);
   }
 
   pi.on?.("input", async (event: unknown, ctx: SparkToolContext) => handleSparkInput(event, ctx));
   pi.on?.("before_agent_start", async (event: unknown, ctx: SparkToolContext) =>
     injectSparkHints(event, ctx),
   );
+  pi.on?.("turn_start", async (_event: unknown, ctx: SparkToolContext) => {
+    await refreshSparkWidget(ctx.cwd, ctx);
+  });
+  pi.on?.("session_switch", async (_event: unknown, ctx: SparkToolContext) => {
+    // Restore widget after session switch (/new, /resume)
+    const graph = await defaultTaskGraphStore(ctx.cwd).load();
+    if (graph) {
+      if (ensureSparkGraphInvariants(graph)) await defaultTaskGraphStore(ctx.cwd).save(graph);
+      await refreshSparkWidget(ctx.cwd, ctx);
+    }
+  });
+
+  const widget = new SparkWidget(
+    () => undefined,
+    (key, cb) => {
+      // Widget will register lazily via refreshSparkWidget
+    },
+  );
+
+  async function refreshSparkWidget(cwd: string, ctx?: SparkToolContext): Promise<void> {
+    const store = defaultTaskGraphStore(cwd);
+    const graph = await store.load();
+    if (!graph) {
+      widget.update();
+      return;
+    }
+    if (ensureSparkGraphInvariants(graph)) await store.save(graph);
+    const thread = graph.threads()[0];
+    if (!thread) {
+      widget.update();
+      return;
+    }
+    const summary = graph.threadTodoSummary(thread.ref);
+
+    const tasks: TaskEntry[] = graph.tasks(thread.ref).map((task) => {
+      const todo = graph.todoSummary(task.ref);
+      return {
+        title: task.title,
+        status: mapTaskStatus(task.status),
+        todoActive: todo.active,
+        todosDone: todo.done,
+        todosTotal: todo.total,
+      } satisfies TaskEntry;
+    });
+
+    const state: SparkWidgetState = {
+      threadTitle: thread.title,
+      tasks,
+      todosTotal: summary.total,
+      todosInProgress: summary.inProgress,
+      todosPending: summary.pending,
+      todosDone: summary.done,
+      outputLanguage: (thread.outputLanguage as "zh" | "en" | undefined) ?? "en",
+    };
+
+    // Re-point widget at the current state, then register with the current UI ctx
+    const widgetWithState = new SparkWidget(
+      () => state,
+      (key, cb) => {
+        (ctx?.ui as { setWidget?: (...args: unknown[]) => void } | null | undefined)?.setWidget?.(
+          key,
+          cb,
+          { placement: "aboveEditor" },
+        );
+      },
+    );
+    widgetWithState.update();
+  }
+
+  function mapTaskStatus(status: string): TaskEntry["status"] {
+    switch (status) {
+      case "running":
+        return "running";
+      case "done":
+        return "done";
+      case "failed":
+      case "cancelled":
+        return "failed";
+      default:
+        return "pending";
+    }
+  }
 
   pi.registerCommand("spark", {
     description:
@@ -104,22 +190,104 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         return;
       }
 
-      const clarification = await maybeClarifySparkInit(ctx.cwd, idea, sparkAskUi(ctx));
+      const language = detectCopyLanguage(idea);
+      let outputLanguage: SparkCopyLanguage = language;
+
+      // Targeted clarification with options, not a broad form
+      let workingTitle = titleFromIdea(idea);
+      let deliveryMode: string | undefined;
+      let targetUser: string | undefined;
+
+      if (ctx.ui?.select) {
+        // First: confirm output language
+        const langChoice = await ctx.ui.select(
+          language === "zh"
+            ? "Spark 生成的文档和界面用什么语言？"
+            : "Which language should Spark use for generated documents and UI?",
+          language === "zh" ? ["中文", "English"] : ["中文", "English"],
+        );
+        if (langChoice === undefined) return;
+        outputLanguage = langChoice === "中文" ? "zh" : "en";
+
+        const titleChoice = await ctx.ui.select(
+          outputLanguage === "zh" ? "这个线程叫什么名字？" : "What should this thread be called?",
+          [
+            `"${workingTitle}"`,
+            outputLanguage === "zh" ? "「自定义输入」" : "[Enter custom title]",
+          ],
+        );
+        if (titleChoice === undefined) return;
+        if (titleChoice.startsWith("[")) {
+          const custom = await ctx.ui!.input!(
+            outputLanguage === "zh" ? "输入标题" : "Enter title",
+            workingTitle,
+          );
+          if (!custom) return;
+          workingTitle = custom.trim();
+        } else {
+          workingTitle = titleChoice.replace(/^"|"$/g, "");
+        }
+
+        const modeChoice = await ctx.ui.select(
+          outputLanguage === "zh" ? "这次交付范围是什么？" : "What scope of delivery do you want?",
+          outputLanguage === "zh"
+            ? ["只做规划", "规划 + 文档", "规划 + 文档 + 实现", "直接实现"]
+            : ["Plan only", "Plan + document", "Plan + document + implement", "Implement directly"],
+        );
+        if (modeChoice === undefined) return;
+        deliveryMode = mapDeliveryChoice(modeChoice, outputLanguage);
+
+        const audienceChoice = await ctx.ui.select(
+          outputLanguage === "zh" ? "这是给谁用的？" : "Who is this for?",
+          outputLanguage === "zh"
+            ? ["我自己", "我的团队", "公开项目"]
+            : ["Myself", "My team", "A public project"],
+        );
+        if (audienceChoice === undefined) return;
+        targetUser = audienceChoice;
+      }
+
       const result = await initializeSparkIdea(ctx.cwd, idea, {
-        threadTitle: clarification?.threadTitle,
-        clarification: clarification?.data,
-        sparkMd: renderSparkMd({
-          idea,
-          clarification: clarification?.data,
-          workingTitle: clarification?.threadTitle,
-        }),
-        askArtifactRefs: clarification ? [clarification.askArtifactRef] : undefined,
-        askRefs: clarification ? [clarification.askRef] : undefined,
+        threadTitle: workingTitle,
+        outputLanguage,
+        clarification: {
+          workingTitle,
+          outputLanguage,
+          deliveryMode,
+          targetUser,
+        },
       });
-      ctx.ui?.notify?.("Spark thread initialized", "success");
+
+      ctx.ui?.notify?.(
+        language === "zh" ? "Spark 线程已初始化" : "Spark thread initialized",
+        "success",
+      );
       pi.sendUserMessage?.(renderSparkInitSummary(result), {
         deliverAs: "followUp",
       });
+
+      await refreshSparkWidget(ctx.cwd, ctx);
+
+      // Auto-execute the first ready task (scout — no dependencies)
+      const store = defaultTaskGraphStore(ctx.cwd);
+      const graph = await store.load();
+      if (graph) {
+        const ready = graph.enqueueReadyTasks(result.threadRef as ThreadRef);
+        if (ready.length > 0) {
+          const registry = new AgentRegistry();
+          await defaultManagedAgentStore(ctx.cwd).hydrate(registry);
+          const artifactStore = defaultArtifactStore(ctx.cwd);
+          for (const task of ready) {
+            await graph.runTask({
+              taskRef: task.ref,
+              registry,
+              artifactStore,
+              cwd: ctx.cwd,
+            });
+          }
+          await store.save(graph);
+        }
+      }
     },
   });
 
@@ -576,7 +744,11 @@ interface SparkContextLike {
   cwd?: string;
 }
 
-async function handleSparkInput(event: unknown, ctx: unknown): Promise<unknown> {
+async function handleSparkInput(
+  event: unknown,
+  ctx: unknown,
+  pi?: Pick<SparkExtensionAPI, "sendUserMessage">,
+): Promise<unknown> {
   if (!isSparkInputEvent(event)) return { action: "continue" };
   if (event.source === "extension") return { action: "continue" };
   const text = event.text.trim();
@@ -593,9 +765,32 @@ async function injectSparkHints(event: unknown, ctx: unknown): Promise<unknown> 
   const cwd = ctxCwd(ctx);
   const activation = await detectSparkActivation(cwd);
   if (!activation.active) return undefined;
+  const contextSummary = await renderActiveSparkContextSummary(cwd);
+  const sparkPrompt = renderSparkActiveSystemPrompt(eventSystemPrompt(event), activation.reason);
   return {
-    systemPrompt: renderSparkActiveSystemPrompt(eventSystemPrompt(event), activation.reason),
+    systemPrompt: contextSummary ? `${sparkPrompt}\n\n${contextSummary}` : sparkPrompt,
   };
+}
+
+async function renderActiveSparkContextSummary(cwd: string): Promise<string | undefined> {
+  const store = defaultTaskGraphStore(cwd);
+  const graph = await store.load();
+  if (!graph) return undefined;
+  if (ensureSparkGraphInvariants(graph)) await store.save(graph);
+  const thread = graph.threads()[0];
+  if (!thread) return undefined;
+  const current = graph.currentTask(thread.ref);
+  const summary = graph.threadTodoSummary(thread.ref);
+  if (summary.total === 0 && !current) return undefined;
+  const activeTodo = current ? graph.todoSummary(current.ref).active : undefined;
+  const lines = [
+    "Spark current state:",
+    `- Thread: ${thread.title} (${thread.ref})`,
+    current ? `- Current task: ${current.title} (${current.ref})` : "- Current task: none",
+    activeTodo ? `- Active TODO: ${activeTodo}` : undefined,
+    `- TODOs: ${summary.total} total / ${summary.inProgress} in_progress / ${summary.pending} pending / ${summary.done} done`,
+  ].filter(Boolean) as string[];
+  return lines.join("\n");
 }
 
 async function detectSparkActivation(cwd: string): Promise<{ active: boolean; reason: string }> {
@@ -758,6 +953,7 @@ function eventSystemPrompt(event: unknown): string {
 export function renderSparkActiveSystemPrompt(basePrompt: string, reason: string): string {
   const sparkPrompt = [
     `Spark is active for the current workspace (${reason}).`,
+    "The spark skill is loaded and available — read it with the read tool when Spark workflow guidance is needed.",
     "Use spark_status for thread state, spark_run_ready_tasks when the user asks to proceed, and pi-cue tools (run/jobs/status/kill/wait/cron/scopes/log) for command execution.",
     "Do not guess missing intent. If scope, output, or next action is ambiguous, ask the user to clarify before proceeding.",
     "After a clarification or decision answer is confirmed, continue with the selected action in the same turn when the next action is clear; do not stop just to ask for permission to proceed again.",
@@ -805,6 +1001,7 @@ export interface SparkInitClarificationData {
 
 interface SparkInitOptions {
   threadTitle?: string;
+  outputLanguage?: SparkCopyLanguage;
   clarification?: SparkInitClarificationData;
   sparkMd?: string;
   askArtifactRefs?: ArtifactRef[];
@@ -872,17 +1069,13 @@ export async function initializeSparkIdea(
   const thread = graph.createThread({
     title: threadTitle,
     description: options.clarification?.objective ?? idea,
+    outputLanguage: options.outputLanguage ?? options.clarification?.outputLanguage,
   });
 
   graph.ensureContextTask(thread.ref, {
-    title: "Track active user interaction",
-    description:
-      "Hold the active user-facing context for this Spark thread, including confirmed scope and the immediate next action.",
-    todos: [
-      { content: "Capture the confirmed user intent" },
-      { content: "Reflect the latest scope in Spark state" },
-      { content: "Choose the next concrete action" },
-    ],
+    title: "Maintain current interaction context",
+    description: `Thread created from: ${truncateForDescription(idea, 200)}`,
+    todos: [{ content: `Confirm scope and next action for: ${truncateForDescription(idea, 120)}` }],
   });
 
   const scout = graph.createTask({
@@ -892,11 +1085,6 @@ export async function initializeSparkIdea(
       "Draft SPARK.md from confirmed intent, explicitly preserving goals, non-goals, success signals, and unresolved questions.",
     kind: "research",
     agentRef: builtinAgentRef("scout"),
-    todos: [
-      { content: "Read the initial idea and clarification answers" },
-      { content: "Record confirmed goals and non-goals" },
-      { content: "Update SPARK.md with open questions" },
-    ],
   });
   const planner = graph.createTask({
     threadRef: thread.ref,
@@ -905,11 +1093,6 @@ export async function initializeSparkIdea(
       "Turn the clarified SPARK.md into a small executable task DAG with explicit agent bindings and no guessed scope.",
     kind: "plan",
     agentRef: builtinAgentRef("planner"),
-    todos: [
-      { content: "Translate clarified scope into executable tasks" },
-      { content: "Record dependencies and ordering" },
-      { content: "Keep the active interaction task aligned" },
-    ],
   });
   const reviewer = graph.createTask({
     threadRef: thread.ref,
@@ -918,11 +1101,6 @@ export async function initializeSparkIdea(
       "Verify that the task graph follows the confirmed intent and avoids premature implementation or missing clarification.",
     kind: "review",
     agentRef: builtinAgentRef("reviewer"),
-    todos: [
-      { content: "Check the plan against confirmed intent" },
-      { content: "Flag missing or premature work" },
-      { content: "Recommend the safest next move" },
-    ],
   });
   graph.addDependency(planner.ref, scout.ref);
   graph.addDependency(reviewer.ref, planner.ref);
@@ -1091,6 +1269,22 @@ function normalizeSparkCopyLanguage(value?: string): SparkCopyLanguage | undefin
   return value === "zh" || value === "en" ? value : undefined;
 }
 
+function mapDeliveryChoice(choice: string, language: SparkCopyLanguage): string {
+  const zhMap: Record<string, string> = {
+    只做规划: "clarify_only",
+    "规划 + 文档": "document",
+    "规划 + 文档 + 实现": "document_and_execute",
+    直接实现: "execute",
+  };
+  const enMap: Record<string, string> = {
+    "Plan only": "clarify_only",
+    "Plan + document": "document",
+    "Plan + document + implement": "document_and_execute",
+    "Implement directly": "execute",
+  };
+  return (language === "zh" ? zhMap[choice] : enMap[choice]) ?? "document_and_execute";
+}
+
 function renderSparkMd(input: {
   idea: string;
   workingTitle?: string;
@@ -1106,58 +1300,77 @@ function renderSparkMdEn(input: {
   clarification?: SparkInitClarificationData;
 }): string {
   const date = new Date().toISOString().slice(0, 10);
-  const deliveryMode = describeDeliveryMode(input.clarification?.deliveryMode, "en");
-  const nextAction = describeNextAction(input.clarification?.nextAction, "en");
-  return `---
-description: ${escapeYamlLine(input.workingTitle ?? input.idea)}
+  const title =
+    input.workingTitle ?? input.clarification?.workingTitle ?? shortSummaryEn(input.idea);
+  const sections: string[] = [];
+
+  sections.push(`---
+description: ${escapeYamlLine(title)}
 owner: zrr1999
 created: ${date}
 updated: ${date}
 inspired_by: []
----
+---`);
+  sections.push("");
+  sections.push("## Origin");
+  sections.push("");
+  sections.push(shortSummaryEn(input.idea));
+  sections.push("");
+  sections.push("## Working title");
+  sections.push("");
+  sections.push(`- ${title}`);
 
-## Origin
+  if (input.clarification?.deliveryMode) {
+    sections.push("");
+    sections.push("## Delivery mode");
+    sections.push("");
+    sections.push(`- ${describeDeliveryMode(input.clarification.deliveryMode, "en")}`);
+  }
+  if (input.clarification?.targetUser) {
+    sections.push("");
+    sections.push("## Target users");
+    sections.push("");
+    sections.push(`- ${input.clarification.targetUser}`);
+  }
+  if (input.clarification?.objective) {
+    sections.push("");
+    sections.push("## Objective");
+    sections.push("");
+    sections.push(`- ${input.clarification.objective}`);
+  }
+  if (input.clarification?.smallestSlice) {
+    sections.push("");
+    sections.push("## Smallest slice");
+    sections.push("");
+    sections.push(`- ${input.clarification.smallestSlice}`);
+  }
+  if (input.clarification?.successSignal) {
+    sections.push("");
+    sections.push("## Success signal");
+    sections.push("");
+    sections.push(`- ${input.clarification.successSignal}`);
+  }
+  if (input.clarification?.nonGoals) {
+    sections.push("");
+    sections.push("## Non-goals");
+    sections.push("");
+    sections.push(`- ${input.clarification.nonGoals}`);
+  }
 
-${input.idea}
-
-## Working title
-
-- ${input.workingTitle ?? input.clarification?.workingTitle ?? "To be confirmed."}
-
-## Delivery expectation
-
-- Delivery mode: ${deliveryMode}
-- Action after clarification: ${nextAction}
-
-## Product / design goal
-
-- ${input.clarification?.objective ?? "Move this idea into a reviewable, executable, and maintainable project state."}
-
-## Target users
-
-- ${input.clarification?.targetUser ?? "To be confirmed."}
-
-## Smallest slice
-
-- ${input.clarification?.smallestSlice ?? "To be confirmed."}
-
-## Success signal
-
-- ${input.clarification?.successSignal ?? "To be confirmed."}
-
-## Non-goals
-
-- ${input.clarification?.nonGoals ?? "To be confirmed."}
-
-## Open questions
-
-- Does the current interaction task reflect the latest confirmed intent?<!-- dynamically maintained -->
-- Is the next concrete action specific enough to execute?<!-- dynamically maintained -->
-
-## Revision history
-
-- ${date}: Initial draft generated by /spark.
-`;
+  sections.push("");
+  sections.push("## Open questions");
+  sections.push("");
+  sections.push(
+    "- Does the current interaction task reflect the latest confirmed intent?<!-- dynamically maintained -->",
+  );
+  sections.push(
+    "- Is the next concrete action specific enough to execute?<!-- dynamically maintained -->",
+  );
+  sections.push("");
+  sections.push("## Revision history");
+  sections.push("");
+  sections.push(`- ${date}: Generated by /spark.`);
+  return `${sections.join("\n")}\n`;
 }
 
 function renderSparkMdZh(input: {
@@ -1166,58 +1379,83 @@ function renderSparkMdZh(input: {
   clarification?: SparkInitClarificationData;
 }): string {
   const date = new Date().toISOString().slice(0, 10);
-  const deliveryMode = describeDeliveryMode(input.clarification?.deliveryMode, "zh");
-  const nextAction = describeNextAction(input.clarification?.nextAction, "zh");
-  return `---
-description: ${escapeYamlLine(input.workingTitle ?? input.idea)}
+  const title =
+    input.workingTitle ?? input.clarification?.workingTitle ?? shortSummaryZh(input.idea);
+  const sections: string[] = [];
+
+  sections.push(`---
+description: ${escapeYamlLine(title)}
 owner: zrr1999
 created: ${date}
 updated: ${date}
 inspired_by: []
----
+---`);
+  sections.push("");
+  sections.push("## 起源");
+  sections.push("");
+  sections.push(shortSummaryZh(input.idea));
+  sections.push("");
+  sections.push("## 当前工作标题");
+  sections.push("");
+  sections.push(`- ${title}`);
 
-## 起源
+  if (input.clarification?.deliveryMode) {
+    sections.push("");
+    sections.push("## 交付方式");
+    sections.push("");
+    sections.push(`- ${describeDeliveryMode(input.clarification.deliveryMode, "zh")}`);
+  }
+  if (input.clarification?.targetUser) {
+    sections.push("");
+    sections.push("## 目标用户");
+    sections.push("");
+    sections.push(`- ${input.clarification.targetUser}`);
+  }
+  if (input.clarification?.objective) {
+    sections.push("");
+    sections.push("## 目标");
+    sections.push("");
+    sections.push(`- ${input.clarification.objective}`);
+  }
+  if (input.clarification?.smallestSlice) {
+    sections.push("");
+    sections.push("## 最小切片");
+    sections.push("");
+    sections.push(`- ${input.clarification.smallestSlice}`);
+  }
+  if (input.clarification?.successSignal) {
+    sections.push("");
+    sections.push("## 成功信号");
+    sections.push("");
+    sections.push(`- ${input.clarification.successSignal}`);
+  }
+  if (input.clarification?.nonGoals) {
+    sections.push("");
+    sections.push("## 非目标");
+    sections.push("");
+    sections.push(`- ${input.clarification.nonGoals}`);
+  }
 
-${input.idea}
+  sections.push("");
+  sections.push("## 开放问题");
+  sections.push("");
+  sections.push("- 当前交互 task 是否准确反映了最新确认的意图？<!-- 动态维护 -->");
+  sections.push("- 下一个具体动作是否已经明确到可执行？<!-- 动态维护 -->");
+  sections.push("");
+  sections.push("## 修订记录");
+  sections.push("");
+  sections.push(`- ${date}：由 /spark 生成。`);
+  return `${sections.join("\n")}\n`;
+}
 
-## 当前工作标题
+function shortSummaryEn(text: string): string {
+  const firstLine = text.trim().split(/\r?\n/)[0] ?? text.trim();
+  return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
+}
 
-- ${input.workingTitle ?? input.clarification?.workingTitle ?? "待确认。"}
-
-## 本次交付预期
-
-- 交付方式：${deliveryMode}
-- 澄清后动作：${nextAction}
-
-## 产品/设计目标
-
-- ${input.clarification?.objective ?? "把这个想法推进为可审阅、可执行、可延续的项目状态。"}
-
-## 目标用户
-
-- ${input.clarification?.targetUser ?? "待确认。"}
-
-## 最小切片
-
-- ${input.clarification?.smallestSlice ?? "待确认。"}
-
-## 成功信号
-
-- ${input.clarification?.successSignal ?? "待确认。"}
-
-## 什么不是本项目要做的（Non-goals）
-
-- ${input.clarification?.nonGoals ?? "待确认。"}
-
-## 开放问题
-
-- 当前交互 task 是否准确反映了最新确认的意图？<!-- 动态维护 -->
-- 下一个具体动作是否已经明确到可执行？<!-- 动态维护 -->
-
-## 修订记录
-
-- ${date}：由 /spark 生成初稿。
-`;
+function shortSummaryZh(text: string): string {
+  const firstLine = text.trim().split(/\r?\n/)[0] ?? text.trim();
+  return firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine;
 }
 
 function renderAgentPlan(input: {
@@ -1311,49 +1549,13 @@ function ensureSparkGraphInvariants(graph: TaskGraph): boolean {
       graph.setCurrentTask(thread.ref, current.ref);
       changed = true;
     }
-    for (const task of graph.tasks(thread.ref)) {
-      if (task.todos.length === 0) {
-        graph.setTaskTodos(task.ref, defaultTodosForTask(task));
-        changed = true;
-      }
-    }
   }
   return changed;
 }
 
-function defaultTodosForTask(task: { kind?: string; title: string }): Array<{ content: string }> {
-  switch (task.kind) {
-    case "interaction":
-      return [
-        { content: "Capture the confirmed user intent" },
-        { content: "Reflect the latest scope in Spark state" },
-        { content: "Choose the next concrete action" },
-      ];
-    case "research":
-      return [
-        { content: `Review scope for ${task.title}` },
-        { content: "Capture confirmed facts and open questions" },
-        { content: "Update the durable Spark state" },
-      ];
-    case "plan":
-      return [
-        { content: `Turn ${task.title} into executable steps` },
-        { content: "Record dependencies and order" },
-        { content: "Keep the active context task aligned" },
-      ];
-    case "review":
-      return [
-        { content: `Verify ${task.title} against intent` },
-        { content: "Flag missing or premature work" },
-        { content: "Recommend the next safe move" },
-      ];
-    default:
-      return [
-        { content: `Start ${task.title}` },
-        { content: "Track progress with dynamic TODOs" },
-        { content: "Capture the next follow-up" },
-      ];
-  }
+function truncateForDescription(text: string, max: number): string {
+  const line = text.trim().split(/\r?\n/)[0] ?? text.trim();
+  return line.length > max ? `${line.slice(0, max - 3)}...` : line;
 }
 
 function escapeYamlLine(value: string): string {

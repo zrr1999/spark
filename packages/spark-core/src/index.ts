@@ -267,6 +267,7 @@ export interface Thread {
   ref: ThreadRef;
   title: string;
   description: string;
+  outputLanguage?: "zh" | "en";
   currentTaskRef?: TaskRef;
   createdAt: string;
   updatedAt: string;

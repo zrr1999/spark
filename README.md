@@ -11,13 +11,13 @@ primitives.
 /spark <idea>
 ```
 
-Before `/spark` initializes a thread, it can ask for
-clarification so Spark captures the concrete outcome,
-delivery mode, confirmed output language, next action,
-and smallest useful slice instead of guessing from an
-ambiguous request. The output language defaults from the
-current request language, but the user confirms that
-choice during clarification.
+`/spark` initializes local Spark state without asking the
+user to complete a broad intake form. Spark first records
+the initial intent, creates a current interaction task, and
+uses investigation tasks to gather context. Follow-up asks
+should be targeted to the actual project state. The output
+language defaults from the current request language and is
+confirmed when Spark asks a targeted clarification.
 
 The first vertical slice then creates local Spark state under `.spark/`:
 

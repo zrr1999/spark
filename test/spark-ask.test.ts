@@ -57,6 +57,8 @@ void test("replayable spark ask preserves prior selections in option description
         cancelled: false,
         answers: {
           "delivery-mode": {
+            questionId: "delivery-mode",
+            kind: "option" as const,
             values: ["document_and_execute"],
             labels: ["Clarification, documentation, and continued execution"],
           },
@@ -64,6 +66,8 @@ void test("replayable spark ask preserves prior selections in option description
       },
       answers: {
         "delivery-mode": {
+          questionId: "delivery-mode",
+          kind: "option" as const,
           values: ["document_and_execute"],
           labels: ["Clarification, documentation, and continued execution"],
         },

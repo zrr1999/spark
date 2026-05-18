@@ -29,14 +29,15 @@ Automatic behavior:
    - a `.spark/thread.json` exists in cwd or an ancestor
    - cwd is under an allowlisted directory in
      `~/.config/spark/config.toml`
-2. Init clarification comes before artifact generation when UI is available:
-   - Spark asks for the concrete outcome, delivery mode,
-     confirmed output language, next action, smallest
-     slice, and other key intent fields
+2. `/spark` does not start with a broad intake form:
+   - Spark records the initial intent, creates a current
+     interaction task, and builds investigation/planning
+     tasks first
+   - follow-up asks should be targeted to facts discovered
+     in the current workspace
    - the output language defaults from the current request
-     language, but the user confirms the selection
-   - that clarification is persisted as an ask artifact
-     and linked into the Spark trace
+     language and is confirmed during targeted
+     clarification
 3. Root-file materialization is separate from activation:
    - `.spark/` is always created
    - root `SPARK.md` is only written when `.git` exists in the current cwd
@@ -50,6 +51,8 @@ Automatic behavior:
 6. Thread / task / TODO text UI is enabled by default:
    - `/spark` initialization follow-up includes the current
      task and TODO summary
+   - active Spark turns emit a concise thread / current task
+     / active TODO summary through the text channel
    - `spark_status` remains the full diagnostic view
 7. When Spark is active, a turn hint reminds the model to
    use `spark_status`, `spark_run_ready_tasks`, and
