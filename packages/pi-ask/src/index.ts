@@ -36,9 +36,13 @@ export interface PiAskAnswerEntry {
   preview?: string;
 }
 
+export type PiAskResultStatus = "answered" | "timeout" | "cancelled" | "no_selection";
+
 export interface PiAskResult {
+  status: PiAskResultStatus;
   cancelled: boolean;
   answers: Record<string, PiAskAnswerEntry>;
+  nextAction: "resume" | "block";
 }
 
 export interface PiAskUi {
@@ -91,14 +95,22 @@ export async function askUser(request: PiAskRequest, ui?: PiAskUi): Promise<PiAs
 
   const answers: Record<string, PiAskAnswerEntry> = {};
   for (const question of normalized.questions) {
-    const answer = await resolveQuestion(question, normalized, ui);
-    if (!answer) {
-      if (question.required) return { cancelled: true, answers };
+    const resolved = await resolveQuestion(question, normalized, ui);
+    if (resolved.timedOut) {
+      return createAskUserResult({
+        cancelled: false,
+        answers,
+        status: Object.keys(answers).length > 0 ? "answered" : "timeout",
+      });
+    }
+    if (!resolved.answer) {
+      if (question.required)
+        return createAskUserResult({ cancelled: false, answers, status: "no_selection" });
       continue;
     }
-    answers[question.id] = answer;
+    answers[question.id] = resolved.answer;
   }
-  return { cancelled: false, answers };
+  return createAskUserResult({ cancelled: false, answers });
 }
 
 export function defaultAskUserResult(request: PiAskRequest): PiAskResult {
@@ -111,7 +123,19 @@ export function defaultAskUserResult(request: PiAskRequest): PiAskResult {
       customText: first ? undefined : "",
     };
   }
-  return { cancelled: false, answers };
+  return createAskUserResult({ cancelled: false, answers });
+}
+
+export function createAskUserResult(
+  input: Omit<PiAskResult, "status" | "nextAction"> &
+    Partial<Pick<PiAskResult, "status" | "nextAction">>,
+): PiAskResult {
+  const status = input.status ?? inferAskUserResultStatus(input);
+  return {
+    ...input,
+    status,
+    nextAction: input.nextAction ?? (status === "answered" ? "resume" : "block"),
+  };
 }
 
 export function registerPiAskTools(pi: PiAskExtensionApi): void {
@@ -217,16 +241,21 @@ function ctxUi(ctx: unknown): PiAskUi | undefined {
   };
 }
 
+type ResolvedQuestion =
+  | { timedOut: true; answer?: undefined }
+  | { timedOut: false; answer?: PiAskAnswerEntry };
+
 async function resolveQuestion(
   question: PiAskQuestion,
   request: PiAskRequest,
   ui: PiAskUi,
-): Promise<PiAskAnswerEntry | undefined> {
+): Promise<ResolvedQuestion> {
   const title = request.title ? `${request.title} — ${question.prompt}` : question.prompt;
   if ((question.type ?? "single") === "freeform") {
     const text = await withTimeout(ui.input?.(title, ""), request.timeoutMs);
-    if (text === undefined) return undefined;
-    return { values: [], labels: [], customText: text };
+    if (text.timedOut) return { timedOut: true };
+    if (text.value === undefined) return { timedOut: false };
+    return { timedOut: false, answer: { values: [], labels: [], customText: text.value } };
   }
 
   const questionType = (question.type ?? "single") as Exclude<PiAskQuestionType, "freeform">;
@@ -239,8 +268,12 @@ async function resolveQuestion(
       ),
       request.timeoutMs,
     );
-    if (!selected) return undefined;
-    return parseOptionText(question.options, selected, questionType);
+    if (selected.timedOut) return { timedOut: true };
+    if (!selected.value) return { timedOut: false };
+    return {
+      timedOut: false,
+      answer: parseOptionText(question.options, selected.value, questionType),
+    };
   }
 
   if (
@@ -251,9 +284,10 @@ async function resolveQuestion(
     ui.confirm
   ) {
     const ok = await withTimeout(ui.confirm(title, request.context ?? ""), request.timeoutMs);
-    if (ok === undefined) return undefined;
-    const chosen = ok ? question.options[0] : question.options[1];
-    return { values: [chosen.value], labels: [chosen.label] };
+    if (ok.timedOut) return { timedOut: true };
+    if (ok.value === undefined) return { timedOut: false };
+    const chosen = ok.value ? question.options[0] : question.options[1];
+    return { timedOut: false, answer: { values: [chosen.value], labels: [chosen.label] } };
   }
 
   if (ui.input) {
@@ -264,11 +298,15 @@ async function resolveQuestion(
       ui.input(prompt, question.options?.[0]?.label ?? ""),
       request.timeoutMs,
     );
-    if (!text) return undefined;
-    return parseOptionText(question.options ?? [], text, questionType);
+    if (text.timedOut) return { timedOut: true };
+    if (!text.value) return { timedOut: false };
+    return {
+      timedOut: false,
+      answer: parseOptionText(question.options ?? [], text.value, questionType),
+    };
   }
 
-  return undefined;
+  return { timedOut: false };
 }
 
 function parseOptionText(
@@ -304,20 +342,36 @@ function findOption(options: PiAskOption[], value: string): PiAskOption | undefi
   return options.find((option) => option.label === value || option.value === value);
 }
 
+type TimedInteraction<T> =
+  | { timedOut: true; value?: undefined }
+  | { timedOut: false; value: T | undefined };
+
 async function withTimeout<T>(
   promise: Promise<T> | undefined,
   timeoutMs?: number,
-): Promise<T | undefined> {
-  if (!promise) return undefined;
-  if (!timeoutMs) return promise;
-  return Promise.race([
+): Promise<TimedInteraction<T>> {
+  if (!promise) return { timedOut: false, value: undefined };
+  if (!timeoutMs || timeoutMs <= 0) return { timedOut: false, value: await promise };
+  const timeoutToken = Symbol("timeout");
+  const value = await Promise.race([
     promise,
-    new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), timeoutMs)),
+    new Promise<typeof timeoutToken>((resolve) =>
+      setTimeout(() => resolve(timeoutToken), timeoutMs),
+    ),
   ]);
+  if (value === timeoutToken) return { timedOut: true };
+  return { timedOut: false, value };
+}
+
+function inferAskUserResultStatus(
+  result: Pick<PiAskResult, "answers" | "cancelled">,
+): PiAskResultStatus {
+  if (result.cancelled) return "cancelled";
+  return Object.keys(result.answers).length > 0 ? "answered" : "no_selection";
 }
 
 function summarizeResult(request: PiAskRequest, result: PiAskResult): string {
-  if (result.cancelled) return `${request.title ?? "ask_user"}: cancelled`;
+  if (result.status !== "answered") return `${request.title ?? "ask_user"}: ${result.status}`;
   const answered = Object.entries(result.answers).map(
     ([id, answer]) => `${id}=${answer.values.join(",") || answer.customText || ""}`,
   );

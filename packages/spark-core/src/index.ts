@@ -228,6 +228,8 @@ export type AgentRunStatus =
 export interface AgentRunRecord {
   ref: RunRef;
   agentRef: AgentRef;
+  /** Human-readable name for this concrete agent run; agentRef remains the spec/type. */
+  agentName?: string;
   instruction: string;
   status: AgentRunStatus;
   outputArtifactRef?: ArtifactRef;
@@ -290,6 +292,8 @@ export interface TaskClaim {
   kind: TaskClaimKind;
   claimedBy: string;
   agentRef?: AgentRef;
+  /** Human-readable name for the concrete running agent instance. */
+  agentName?: string;
   sessionId?: string;
   runRef?: RunRef;
   claimedAt: string;
@@ -309,6 +313,9 @@ export interface Task {
   agentRef?: AgentRef;
   /** @deprecated use claim.sessionId / claim.claimedBy. */
   claimedBySession?: string;
+  /** Last session/claim owner that completed or cancelled this task, used after active claims are cleared. */
+  completedBySession?: string;
+  completedByAgentName?: string;
   claim?: TaskClaim;
   inputArtifacts: ArtifactRef[];
   outputArtifacts: ArtifactRef[];
@@ -338,6 +345,10 @@ export interface TaskRun {
   threadRef: ThreadRef;
   taskRef: TaskRef;
   agentRef?: AgentRef;
+  /** Human-readable name for this concrete agent run; agentRef remains the spec/type. */
+  agentName?: string;
+  /** Session that owns this concrete agent run, used for post-completion attribution. */
+  ownerSessionId?: string;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   failureKind?: TaskRunFailureKind;
   errorMessage?: string;

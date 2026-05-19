@@ -3,7 +3,10 @@ import {
   createElaborationResult,
   createPiAskFlowArtifactBody,
   createPiAskFlowRequest,
+  createPiAskFlowResult,
   isPiAskFlowArtifactBody,
+  isPiAskFlowGateBlocked,
+  normalizePiAskFlowResult,
   replayPiAskFlow,
   replayablePiAskFlow,
   runPiAskFlow,
@@ -164,6 +167,9 @@ export const createSparkAskRequest = createPiAskFlowRequest;
 export const runSparkAsk = runPiAskFlow;
 export const replaySparkAsk = replayPiAskFlow;
 export const replayableSparkAsk = replayablePiAskFlow;
+export const createSparkAskResult = createPiAskFlowResult;
+export const normalizeSparkAskResult = normalizePiAskFlowResult;
+export const isSparkAskGateBlocked = isPiAskFlowGateBlocked;
 export const createSparkAskArtifactBody = createPiAskFlowArtifactBody;
 export const isSparkAskArtifactBody = isPiAskFlowArtifactBody;
 

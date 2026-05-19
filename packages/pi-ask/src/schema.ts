@@ -109,7 +109,14 @@ export interface PiAskFlowAnswerEntry {
   preview?: string;
 }
 
+export type PiAskFlowResultStatus = "answered" | "timeout" | "cancelled" | "no_selection";
+
 export interface PiAskFlowResult {
+  /**
+   * Explicit result envelope status. Use this instead of inferring from
+   * `cancelled`, empty answers, or mode-specific text.
+   */
+  status: PiAskFlowResultStatus;
   answers: Record<string, PiAskFlowAnswerEntry>;
   flow?: string;
   mode: "submit" | "elaborate" | "cancel" | "chat";

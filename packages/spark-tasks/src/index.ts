@@ -1,5 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 
 import {
   DependencyError,
@@ -48,6 +49,8 @@ export interface CreateTaskInput {
   status?: Task["status"];
   agentRef?: AgentRef;
   claimedBySession?: string;
+  completedBySession?: string;
+  completedByAgentName?: string;
   claim?: TaskClaim;
   inputArtifacts?: ArtifactRef[];
   /**
@@ -61,6 +64,7 @@ export interface ClaimTaskInput {
   kind: TaskClaimKind;
   claimedBy: string;
   agentRef?: AgentRef;
+  agentName?: string;
   sessionId?: string;
   runRef?: RunRef;
   leaseMs?: number;
@@ -139,6 +143,38 @@ export interface TaskTodoStoreSnapshot {
   todos: TaskTodo[];
 }
 
+export interface TaskGraphStoreLockOptions {
+  /** Maximum time to wait for another process to release the lock. Default: 10s. */
+  timeoutMs?: number;
+  /** Poll interval while waiting for the lock. Default: 25ms. */
+  retryIntervalMs?: number;
+  /** Treat a lock directory older than this as stale and remove it. Default: 60s. */
+  staleMs?: number;
+}
+
+export interface TaskGraphStoreUpdateOptions extends TaskGraphStoreLockOptions {
+  /** Create an empty graph when the store file does not exist. Default: true. */
+  createIfMissing?: boolean;
+}
+
+export interface TaskGraphStoreUpdateResult<T> {
+  graph: TaskGraph | null;
+  result: T;
+}
+
+export class TaskGraphStoreConflictError extends Error {
+  readonly filePath: string;
+
+  constructor(filePath: string) {
+    super(`Spark task graph changed since it was loaded: ${filePath}`);
+    this.name = "TaskGraphStoreConflictError";
+    this.filePath = filePath;
+  }
+}
+
+const taskGraphSourceHashes = new WeakMap<TaskGraph, string>();
+const taskGraphStoreLockDepth = new AsyncLocalStorage<number>();
+
 export class TaskGraph {
   #threads = new Map<ThreadRef, Thread>();
   #tasks = new Map<TaskRef, Task>();
@@ -199,6 +235,8 @@ export class TaskGraph {
         (input.kind === "interaction" ? "running" : input.agentRef ? "pending" : "proposed"),
       agentRef: input.agentRef,
       claimedBySession: input.claimedBySession,
+      completedBySession: input.completedBySession,
+      completedByAgentName: input.completedByAgentName,
       claim: input.claim,
       inputArtifacts: input.inputArtifacts ?? [],
       outputArtifacts: [],
@@ -296,10 +334,17 @@ export class TaskGraph {
 
   setTaskStatus(taskRef: TaskRef, status: Task["status"]): Task {
     const task = this.getTask(taskRef);
+    const completingClaim = !isUnfinishedTaskStatus(status) ? task.claim : undefined;
     const updated = {
       ...task,
       status,
       claimedBySession: isUnfinishedTaskStatus(status) ? task.claimedBySession : undefined,
+      completedBySession: isUnfinishedTaskStatus(status)
+        ? task.completedBySession
+        : (task.completedBySession ?? completingClaim?.sessionId ?? task.claimedBySession),
+      completedByAgentName: isUnfinishedTaskStatus(status)
+        ? task.completedByAgentName
+        : (task.completedByAgentName ?? completingClaim?.agentName),
       claim: isUnfinishedTaskStatus(status) ? task.claim : undefined,
       updatedAt: nowIso(),
     };
@@ -319,11 +364,24 @@ export class TaskGraph {
     if (!input.claimedBy.trim()) throw new Error("task claim claimedBy is required");
     if (task.claim && !isExpiredClaim(task.claim, now) && task.claim.claimedBy !== input.claimedBy)
       throw new DependencyError(`task is already claimed: ${task.ref}`);
+    const conflictingClaim = [...this.#tasks.values()].find(
+      (candidate) =>
+        candidate.ref !== task.ref &&
+        isUnfinishedTaskStatus(candidate.status) &&
+        candidate.claim?.claimedBy === input.claimedBy &&
+        !isExpiredClaim(candidate.claim, now),
+    );
+    if (conflictingClaim)
+      throw new DependencyError(
+        `claimant already has an unfinished claimed task: ${conflictingClaim.ref}`,
+      );
     const agentRef = input.agentRef ?? task.agentRef;
+    const agentName = input.agentName ?? task.claim?.agentName;
     const claim: TaskClaim = {
       kind: input.kind,
       claimedBy: input.claimedBy,
       agentRef,
+      agentName,
       sessionId: input.sessionId,
       runRef: input.runRef,
       claimedAt: task.claim?.claimedBy === input.claimedBy ? task.claim.claimedAt : now,
@@ -425,6 +483,8 @@ export class TaskGraph {
         | "status"
         | "agentRef"
         | "claimedBySession"
+        | "completedBySession"
+        | "completedByAgentName"
         | "claim"
       >
     >,
@@ -442,6 +502,18 @@ export class TaskGraph {
       claimedBySession: isUnfinishedTaskStatus(status)
         ? (patch.claimedBySession ?? task.claimedBySession)
         : undefined,
+      completedBySession: isUnfinishedTaskStatus(status)
+        ? (patch.completedBySession ?? task.completedBySession)
+        : (patch.completedBySession ??
+          task.completedBySession ??
+          (patch.claim ?? task.claim)?.sessionId ??
+          patch.claimedBySession ??
+          task.claimedBySession),
+      completedByAgentName: isUnfinishedTaskStatus(status)
+        ? (patch.completedByAgentName ?? task.completedByAgentName)
+        : (patch.completedByAgentName ??
+          task.completedByAgentName ??
+          (patch.claim ?? task.claim)?.agentName),
       claim: isUnfinishedTaskStatus(status) ? (patch.claim ?? task.claim) : undefined,
       updatedAt: nowIso(),
     };
@@ -635,23 +707,84 @@ export class TaskGraph {
 
 export class TaskGraphStore {
   readonly filePath: string;
+  readonly lockPath: string;
 
   constructor(filePath: string) {
     this.filePath = filePath;
+    this.lockPath = `${filePath}.lock`;
   }
 
   async save(graph: TaskGraph): Promise<void> {
+    if (taskGraphStoreLockDepth.getStore()) {
+      await this.saveUnlocked(graph);
+      return;
+    }
+    await this.withLock(async () => {
+      await this.assertGraphNotStale(graph);
+      await this.saveUnlocked(graph);
+    });
+  }
+
+  private async saveUnlocked(graph: TaskGraph): Promise<void> {
     await mkdir(dirname(this.filePath), { recursive: true });
-    await writeFile(this.filePath, `${JSON.stringify(graph.snapshot(), null, 2)}\n`, "utf8");
+    const data = serializeTaskGraph(graph);
+    await atomicWriteFile(this.filePath, data);
+    taskGraphSourceHashes.set(graph, stableId(data));
   }
 
   async load(): Promise<TaskGraph | null> {
     try {
-      return TaskGraph.fromSnapshot(
-        JSON.parse(await readFile(this.filePath, "utf8")) as TaskGraphSnapshot,
-      );
+      const data = await readFile(this.filePath, "utf8");
+      const graph = TaskGraph.fromSnapshot(JSON.parse(data) as TaskGraphSnapshot);
+      taskGraphSourceHashes.set(graph, stableId(data));
+      return graph;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  async withLock<T>(fn: () => T | Promise<T>, options: TaskGraphStoreLockOptions = {}): Promise<T> {
+    if (taskGraphStoreLockDepth.getStore()) return fn();
+    const release = await acquireTaskGraphStoreLock(this.lockPath, options);
+    return taskGraphStoreLockDepth.run(1, async () => {
+      try {
+        return await fn();
+      } finally {
+        await release();
+      }
+    });
+  }
+
+  async update<T>(
+    fn: (graph: TaskGraph) => T | Promise<T>,
+    options: TaskGraphStoreUpdateOptions = {},
+  ): Promise<TaskGraphStoreUpdateResult<T>> {
+    const createIfMissing = options.createIfMissing ?? true;
+    return this.withLock(async () => {
+      const graph = await this.load();
+      if (!graph) {
+        if (!createIfMissing) return { graph: null, result: undefined as T };
+        const created = new TaskGraph();
+        const result = await fn(created);
+        await this.saveUnlocked(created);
+        return { graph: created, result };
+      }
+      const result = await fn(graph);
+      await this.saveUnlocked(graph);
+      return { graph, result };
+    }, options);
+  }
+
+  private async assertGraphNotStale(graph: TaskGraph): Promise<void> {
+    const sourceHash = taskGraphSourceHashes.get(graph);
+    if (!sourceHash) return;
+    try {
+      const current = await readFile(this.filePath, "utf8");
+      if (stableId(current) !== sourceHash) throw new TaskGraphStoreConflictError(this.filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        throw new TaskGraphStoreConflictError(this.filePath);
       throw error;
     }
   }
@@ -659,6 +792,91 @@ export class TaskGraphStore {
 
 export function defaultTaskGraphStore(cwd: string): TaskGraphStore {
   return new TaskGraphStore(join(cwd, ".spark", "thread.json"));
+}
+
+function serializeTaskGraph(graph: TaskGraph): string {
+  return `${JSON.stringify(graph.snapshot(), null, 2)}\n`;
+}
+
+async function atomicWriteFile(filePath: string, data: string): Promise<void> {
+  const dir = dirname(filePath);
+  await mkdir(dir, { recursive: true });
+  const tmpPath = join(
+    dir,
+    `.${basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
+  );
+  try {
+    await writeFile(tmpPath, data, "utf8");
+    await rename(tmpPath, filePath);
+  } catch (error) {
+    await rm(tmpPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function acquireTaskGraphStoreLock(
+  lockPath: string,
+  options: TaskGraphStoreLockOptions,
+): Promise<() => Promise<void>> {
+  const timeoutMs = options.timeoutMs ?? 10_000;
+  const retryIntervalMs = Math.max(1, options.retryIntervalMs ?? 25);
+  const staleMs = options.staleMs ?? 60_000;
+  const started = Date.now();
+  const ownerPath = join(lockPath, "owner.json");
+  const ownerJson = () =>
+    `${JSON.stringify(
+      {
+        pid: process.pid,
+        startedAt: new Date(started).toISOString(),
+        heartbeatAt: nowIso(),
+      },
+      null,
+      2,
+    )}\n`;
+
+  while (true) {
+    try {
+      await mkdir(lockPath, { recursive: false });
+      await writeFile(ownerPath, ownerJson(), "utf8").catch(() => undefined);
+      const refreshMs =
+        staleMs > 0 ? Math.max(1_000, Math.min(30_000, Math.floor(staleMs / 3))) : undefined;
+      const refreshTimer = refreshMs
+        ? setInterval(() => {
+            void writeFile(ownerPath, ownerJson(), "utf8").catch(() => undefined);
+          }, refreshMs)
+        : undefined;
+      refreshTimer?.unref?.();
+      return async () => {
+        if (refreshTimer) clearInterval(refreshTimer);
+        await rm(lockPath, { recursive: true, force: true });
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      await removeStaleTaskGraphStoreLock(lockPath, staleMs);
+      if (Date.now() - started >= timeoutMs)
+        throw new Error(`timed out waiting for Spark task graph lock: ${lockPath}`);
+      await sleep(retryIntervalMs);
+    }
+  }
+}
+
+async function removeStaleTaskGraphStoreLock(lockPath: string, staleMs: number): Promise<void> {
+  if (staleMs < 0) return;
+  try {
+    const lockStat = await stat(lockPath);
+    if (Date.now() - lockStat.mtimeMs >= staleMs)
+      await rm(lockPath, { recursive: true, force: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
 }
 
 export class TaskTodoStore {
@@ -788,11 +1006,19 @@ function normalizeTask(task: Task): Task {
     status: task.status,
     agentRef: task.agentRef,
     claimedBySession: isUnfinishedTaskStatus(task.status) ? task.claimedBySession : undefined,
-    claim: isUnfinishedTaskStatus(task.status) ? task.claim : undefined,
+    claim: isUnfinishedTaskStatus(task.status) ? normalizeTaskClaim(task.claim) : undefined,
     inputArtifacts: task.inputArtifacts,
     outputArtifacts: task.outputArtifacts,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
+  };
+}
+
+function normalizeTaskClaim(claim: TaskClaim | undefined): TaskClaim | undefined {
+  if (!claim) return undefined;
+  return {
+    ...claim,
+    agentName: claim.agentName?.trim() || undefined,
   };
 }
 

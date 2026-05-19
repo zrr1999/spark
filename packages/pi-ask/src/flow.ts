@@ -71,25 +71,30 @@ export async function runPiAskFlow(
   const answers: Record<string, PiAskFlowAnswerEntry> = {};
   for (const question of request.questions ?? []) {
     if (question.type === "freeform") {
-      const text = await ui.input?.(question.prompt);
-      if (text !== undefined) {
+      const text = await withTimeout<string>(ui.input?.(question.prompt), request.timeoutMs);
+      if (text.timedOut) return createTimedOutPiAskFlowResult(request, answers);
+      if (text.value !== undefined) {
         answers[question.id] = {
           questionId: question.id,
           kind: "freeform",
           values: [],
-          customText: text,
+          customText: text.value,
         };
       }
       continue;
     }
 
     if (question.options && question.options.length > 0) {
-      const choice = await ui.select(
-        question.prompt,
-        question.options.map((option) => option.label),
+      const choice = await withTimeout<string>(
+        ui.select(
+          question.prompt,
+          question.options.map((option) => option.label),
+        ),
+        request.timeoutMs,
       );
-      if (!choice) continue;
-      const option = question.options.find((entry) => entry.label === choice);
+      if (choice.timedOut) return createTimedOutPiAskFlowResult(request, answers);
+      if (!choice.value) continue;
+      const option = question.options.find((entry) => entry.label === choice.value);
       if (option) {
         answers[question.id] = {
           questionId: question.id,
@@ -103,19 +108,18 @@ export async function runPiAskFlow(
           questionId: question.id,
           kind: "custom",
           values: [],
-          customText: choice,
+          customText: choice.value,
         };
       }
     }
   }
 
-  return {
+  return createPiAskFlowResult({
     answers,
     flow: request.flow,
     mode: "submit",
     cancelled: false,
-    nextAction: "resume",
-  };
+  });
 }
 
 export function defaultPiAskFlowResult(request: PiAskFlowRequest): PiAskFlowResult {
@@ -140,13 +144,12 @@ export function defaultPiAskFlowResult(request: PiAskFlowRequest): PiAskFlowResu
       preview: first.preview,
     };
   }
-  return {
+  return createPiAskFlowResult({
     answers,
     flow: request.flow,
     mode: "submit",
     cancelled: false,
-    nextAction: "resume",
-  };
+  });
 }
 
 export async function replayPiAskFlow(
@@ -180,7 +183,7 @@ export function createPiAskFlowArtifactBody(
   request: PiAskFlowRequest,
   result: PiAskFlowResult,
 ): PiAskFlowArtifactBody {
-  return { request, result };
+  return { request, result: normalizePiAskFlowResult(result, request) };
 }
 
 export function isPiAskFlowArtifactBody(value: unknown): value is PiAskFlowArtifactBody {
@@ -196,16 +199,18 @@ export function createElaborationResult(
   prior: PiAskFlowResult,
   notes: PiAskFlowElaborationNote[],
 ): PiAskFlowResult {
-  return {
+  return createPiAskFlowResult({
     ...prior,
+    status: "answered",
     mode: "elaborate",
+    cancelled: false,
     elaboration: {
       affectedQuestionIds: notes.map((note) => note.questionId),
       preservedAnswers: prior.answers,
       notes,
     },
     nextAction: "clarify_then_reask",
-  };
+  });
 }
 
 export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
@@ -258,9 +263,16 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
         | undefined;
 
       if (!ui?.custom) {
+        const result = createPiAskFlowResult({
+          answers: {},
+          flow: request.flow,
+          mode: "cancel",
+          cancelled: true,
+          status: "cancelled",
+        });
         return {
-          content: [{ type: "text" as const, text: "Ask flow cancelled: no UI available." }],
-          details: { cancelled: true, mode: "cancel" },
+          content: [{ type: "text" as const, text: summarizeFlowResult(result) }],
+          details: { result, status: result.status, cancelled: true, mode: "cancel" },
         };
       }
 
@@ -285,18 +297,17 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
         (ui.custom as Function)("pi-ask-flow", cb, { placement: "fullScreen" });
       });
 
-      await payloadStore.save(cwd, { request, result, timestamp: Date.now() });
-
-      if (result.cancelled) {
-        return {
-          content: [{ type: "text" as const, text: "Ask flow cancelled." }],
-          details: { cancelled: true, mode: result.mode },
-        };
-      }
+      const normalizedResult = normalizePiAskFlowResult(result, request);
+      await payloadStore.save(cwd, { request, result: normalizedResult, timestamp: Date.now() });
 
       return {
-        content: [{ type: "text" as const, text: summarizeFlowResult(result) }],
-        details: { result: result as unknown as Record<string, unknown>, mode: result.mode },
+        content: [{ type: "text" as const, text: summarizeFlowResult(normalizedResult) }],
+        details: {
+          result: normalizedResult as unknown as Record<string, unknown>,
+          status: normalizedResult.status,
+          cancelled: normalizedResult.cancelled,
+          mode: normalizedResult.mode,
+        },
       };
     },
   });
@@ -353,9 +364,94 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
   });
 }
 
+export function createPiAskFlowResult(
+  input: Omit<PiAskFlowResult, "status" | "nextAction"> &
+    Partial<Pick<PiAskFlowResult, "status" | "nextAction">> & { timeoutMs?: number },
+): PiAskFlowResult {
+  const { timeoutMs: _timeoutMs, ...result } = input;
+  const status = result.status ?? inferPiAskFlowResultStatus(input);
+  return {
+    ...result,
+    status,
+    nextAction: result.nextAction ?? nextActionForPiAskFlowStatus(status, result.mode),
+  };
+}
+
+export function normalizePiAskFlowResult(
+  result: PiAskFlowResult,
+  request?: PiAskFlowRequest,
+): PiAskFlowResult {
+  return createPiAskFlowResult({ ...result, timeoutMs: request?.timeoutMs });
+}
+
+export function isPiAskFlowGateBlocked(
+  result: PiAskFlowResult,
+  request: PiAskFlowRequest,
+): boolean {
+  return (
+    (request.mode === "decision" || request.mode === "approval") &&
+    (result.status === "timeout" ||
+      result.status === "no_selection" ||
+      result.status === "cancelled")
+  );
+}
+
+type TimedInteraction<T> =
+  | { timedOut: true; value?: undefined }
+  | { timedOut: false; value: T | undefined };
+
+async function withTimeout<T>(
+  promise: Promise<T> | undefined,
+  timeoutMs?: number,
+): Promise<TimedInteraction<T>> {
+  if (!promise) return { timedOut: false, value: undefined };
+  if (!timeoutMs || timeoutMs <= 0) return { timedOut: false, value: await promise };
+  const timeoutToken = Symbol("timeout");
+  const value = await Promise.race([
+    promise,
+    new Promise<typeof timeoutToken>((resolve) =>
+      setTimeout(() => resolve(timeoutToken), timeoutMs),
+    ),
+  ]);
+  if (value === timeoutToken) return { timedOut: true };
+  return { timedOut: false, value };
+}
+
+function createTimedOutPiAskFlowResult(
+  request: PiAskFlowRequest,
+  answers: Record<string, PiAskFlowAnswerEntry>,
+): PiAskFlowResult {
+  return createPiAskFlowResult({
+    answers,
+    flow: request.flow,
+    mode: "submit",
+    cancelled: false,
+    status: Object.keys(answers).length > 0 ? "answered" : "timeout",
+  });
+}
+
+function inferPiAskFlowResultStatus(
+  result: Pick<PiAskFlowResult, "answers" | "cancelled" | "mode"> & { timeoutMs?: number },
+): PiAskFlowResult["status"] {
+  if (result.cancelled || result.mode === "cancel") return "cancelled";
+  if (Object.keys(result.answers).length > 0) return "answered";
+  return result.timeoutMs && result.timeoutMs > 0 ? "timeout" : "no_selection";
+}
+
+function nextActionForPiAskFlowStatus(
+  status: PiAskFlowResult["status"],
+  mode: PiAskFlowResult["mode"],
+): PiAskFlowResult["nextAction"] {
+  if (mode === "elaborate") return "clarify_then_reask";
+  return status === "answered" ? "resume" : "block";
+}
+
 function summarizeFlowResult(result: PiAskFlowResult): string {
   const answered = Object.entries(result.answers).map(
     ([id, answer]) => `${id}=${answer.values.join(",") || answer.customText || ""}`,
   );
+  if (result.status !== "answered") {
+    return `Ask flow ${result.status}: ${answered.join("; ") || "no answers"}`;
+  }
   return `Ask flow ${result.mode}: ${answered.join("; ") || "no answers"}`;
 }

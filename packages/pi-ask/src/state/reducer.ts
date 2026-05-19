@@ -299,9 +299,10 @@ function closeNotes(state: AskState): ApplyResult {
 }
 
 function enterChat(state: AskState, _ctx: ApplyContext): ApplyResult {
-  // Chat: collect partial answers and return them with mode=chat
+  // Chat: collect partial answers and return them with mode=chat.
   const answers = toAnswerRecord(state.answers);
   const result: PiAskFlowResult = {
+    status: "answered",
     answers,
     mode: "chat",
     cancelled: false,
@@ -312,11 +313,13 @@ function enterChat(state: AskState, _ctx: ApplyContext): ApplyResult {
 
 function submit(state: AskState, _ctx: ApplyContext): ApplyResult {
   const answers = toAnswerRecord(state.answers);
+  const hasAnswers = Object.keys(answers).length > 0;
   const result: PiAskFlowResult = {
+    status: hasAnswers ? "answered" : "no_selection",
     answers,
     mode: "submit",
     cancelled: false,
-    nextAction: "resume",
+    nextAction: hasAnswers ? "resume" : "block",
   };
   return { state, effects: [{ kind: "done", result }] };
 }
@@ -330,6 +333,7 @@ function elaborate(state: AskState, _ctx: ApplyContext): ApplyResult {
   const affectedQuestionIds = notes.map((n) => n.questionId);
 
   const result: PiAskFlowResult = {
+    status: "answered",
     answers,
     mode: "elaborate",
     cancelled: false,
@@ -345,6 +349,7 @@ function elaborate(state: AskState, _ctx: ApplyContext): ApplyResult {
 
 function cancel(state: AskState, _ctx: ApplyContext): ApplyResult {
   const result: PiAskFlowResult = {
+    status: "cancelled",
     answers: toAnswerRecord(state.answers),
     mode: "cancel",
     cancelled: true,

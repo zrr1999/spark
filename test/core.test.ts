@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { newRef, refId, isRef } from "spark-core";
-import { builtinAgentRef } from "spark-agents";
+import { builtinAgentRef, createBuiltinAgents } from "spark-agents";
 import { TaskGraph } from "spark-tasks";
 import { renderSparkActiveSystemPrompt } from "../packages/spark/src/extension/index.ts";
 
@@ -93,12 +93,21 @@ void test("ready tasks require agent and completed dependencies", () => {
 
 void test("active Spark prompt encodes delegation and cue-shell guardrails", () => {
   const prompt = renderSparkActiveSystemPrompt("", "SPARK.md");
+  assert.match(prompt, /spark_use_thread/);
   assert.match(prompt, /spark_plan_tasks/);
   assert.match(prompt, /spark_list_agents\/spark_get_agent/);
   assert.match(prompt, /spark_run_ready_tasks/);
+  assert.match(prompt, /agentName/);
   assert.match(prompt, /Do not spawn nested pi CLI sessions as pseudo-agents/);
   assert.match(prompt, /prefer direct-exec commands and Pi file tools over \/bin\/sh/);
   assert.match(prompt, /timeout or no-selection/);
+});
+
+void test("builtin Spark agents are instructed to use ask tools for blockers", () => {
+  for (const agent of createBuiltinAgents()) {
+    assert.match(agent.systemPrompt, /use Spark ask tools/i);
+    assert.match(agent.systemPrompt, /block|ambigu/i);
+  }
 });
 
 void test("task graph maintains todos alongside a claimed current task", () => {

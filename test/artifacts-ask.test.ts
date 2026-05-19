@@ -62,6 +62,7 @@ void test("ask_user defaults to the first available option", () => {
     ],
   });
   const answer = defaultAskUserResult(request);
+  assert.equal(answer.status, "answered");
   assert.deepEqual(answer.answers.decision.values, ["yes"]);
 });
 
@@ -85,9 +86,44 @@ void test("ask_user accepts direct custom input without an explicit other option
     select: async () => "Language tooling engineers",
   });
   assert.equal(result.cancelled, false);
+  assert.equal(result.status, "answered");
   assert.deepEqual(result.answers["target-user"], {
     values: [],
     labels: [],
     customText: "Language tooling engineers",
   });
+});
+
+void test("ask_user exposes timeout and no-selection result envelopes", async () => {
+  const request = createAskUserRequest({
+    title: "Ship it?",
+    mode: "approval",
+    timeoutMs: 1,
+    questions: [
+      {
+        id: "decision",
+        prompt: "Ship it?",
+        type: "single",
+        options: [
+          { value: "yes", label: "Approve" },
+          { value: "no", label: "Do not approve" },
+        ],
+        required: true,
+      },
+    ],
+  });
+
+  const timedOut = await askUser(request, {
+    select: () => new Promise((resolve) => setTimeout(() => resolve("Approve"), 20)),
+  });
+  assert.equal(timedOut.status, "timeout");
+  assert.equal(timedOut.nextAction, "block");
+
+  const noSelection = await askUser(
+    { ...request, timeoutMs: undefined },
+    { select: async () => undefined },
+  );
+  assert.equal(noSelection.status, "no_selection");
+  assert.equal(noSelection.cancelled, false);
+  assert.equal(noSelection.nextAction, "block");
 });

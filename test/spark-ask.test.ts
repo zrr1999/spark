@@ -5,6 +5,8 @@ import {
   approveManagedAgentAsk,
   clarifyThreadAsk,
   createElaborationResult,
+  createSparkAskRequest,
+  isSparkAskGateBlocked,
   replayableSparkAsk,
   runSparkAsk,
 } from "spark-ask";
@@ -43,7 +45,60 @@ void test("approve-managed-agent flow uses approval semantics", async () => {
   const result = await runSparkAsk(request);
   assert.equal(result.flow, "approve-managed-agent");
   assert.equal(result.mode, "submit");
+  assert.equal(result.status, "answered");
   assert.equal(result.answers.approval?.values[0], "approve");
+});
+
+void test("decision/approval asks expose no-selection as a blocking result envelope", async () => {
+  const request = createSparkAskRequest({
+    flow: "custom",
+    mode: "decision",
+    title: "Dispatch agents?",
+    questions: [
+      {
+        id: "answer",
+        prompt: "Dispatch agents?",
+        type: "single",
+        required: true,
+        options: [
+          { value: "yes", label: "Yes" },
+          { value: "no", label: "No" },
+        ],
+      },
+    ],
+  });
+  const result = await runSparkAsk(request, { select: async () => undefined });
+  assert.equal(result.status, "no_selection");
+  assert.equal(result.cancelled, false);
+  assert.equal(result.nextAction, "block");
+  assert.equal(isSparkAskGateBlocked(result, request), true);
+});
+
+void test("timed-out decision asks use timeout status and block continuation", async () => {
+  const request = createSparkAskRequest({
+    flow: "custom",
+    mode: "approval",
+    title: "Approve?",
+    timeoutMs: 1,
+    questions: [
+      {
+        id: "approval",
+        prompt: "Approve?",
+        type: "single",
+        required: true,
+        options: [
+          { value: "approve", label: "Approve" },
+          { value: "reject", label: "Reject" },
+        ],
+      },
+    ],
+  });
+  const result = await runSparkAsk(request, {
+    select: () => new Promise((resolve) => setTimeout(() => resolve("Approve"), 20)),
+  });
+  assert.equal(result.status, "timeout");
+  assert.equal(result.nextAction, "block");
+  assert.equal(isSparkAskGateBlocked(result, request), true);
 });
 
 void test("replayable spark ask preserves prior selections in option descriptions", () => {
@@ -52,10 +107,12 @@ void test("replayable spark ask preserves prior selections in option description
   });
   const elaborated = createElaborationResult(
     {
+      status: "answered",
       cancelled: false,
       mode: "submit",
       flow: request.flow,
       base: {
+        status: "answered",
         cancelled: false,
         answers: {
           "delivery-mode": {
