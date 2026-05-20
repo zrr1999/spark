@@ -6,9 +6,9 @@ import test from "node:test";
 
 import {
   AgentRegistry,
-  ManagedAgentStore,
+  ProjectAgentSpecStore,
+  createAgentSpec,
   createBuiltinAgents,
-  createManagedAgentSpec,
 } from "spark-agents";
 
 void test("builtin Spark agents are instructed to implement concrete repo behavior feedback", () => {
@@ -22,26 +22,26 @@ void test("builtin Spark agents are instructed to implement concrete repo behavi
   );
 });
 
-void test("managed agent store persists and hydrates registry", async () => {
+void test("project agent spec store persists and hydrates registry", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agents-"));
   try {
-    const store = new ManagedAgentStore(dir);
-    const managed = createManagedAgentSpec({
+    const store = new ProjectAgentSpecStore(dir);
+    const spec = createAgentSpec({
       id: "svg-assembler",
       description: "Creates SVG assembly animation plans.",
       systemPrompt: "You are a specialist in SVG animation planning.",
       rationale: "We need a narrow reusable planner for SVG animation tasks.",
       expectedUses: ["svg assembly planning", "animation decomposition"],
     });
-    await store.save(managed);
+    await store.save(spec);
 
     const registry = new AgentRegistry();
     await store.hydrate(registry);
     const loaded = registry.select("svg-assembler");
 
-    assert.equal(loaded.scope, "managed");
+    assert.equal(loaded.source, "project");
     assert.equal(loaded.id, "svg-assembler");
-    assert.match(loaded.ref, /^agent:managed-/);
+    assert.match(loaded.ref, /^agent:project-/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

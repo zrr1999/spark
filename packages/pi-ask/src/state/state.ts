@@ -1,4 +1,9 @@
-import type { PiAskFlowOption, PiAskFlowQuestion, PiAskFlowAnswerEntry } from "../schema.ts";
+import {
+  SENTINEL_LABELS,
+  type PiAskFlowOption,
+  type PiAskFlowQuestion,
+  type PiAskFlowAnswerEntry,
+} from "../schema.ts";
 
 /**
  * Canonical UI state for the ask dialog. Single source of truth —
@@ -103,14 +108,11 @@ export function buildExtendedOptions(
     }
   }
 
-  // Always add "Type your own" sentinel
-  opts.push({ kind: "other", label: "Type your own" });
-  // Add chat sentinel
-  opts.push({ kind: "chat", label: "Chat about this" });
+  opts.push({ kind: "other", label: SENTINEL_LABELS.other });
+  opts.push({ kind: "chat", label: SENTINEL_LABELS.chat });
 
-  // For multi-select, add "Next" sentinel
   if (question.type === "multi") {
-    opts.push({ kind: "next", label: "Confirm selection →" });
+    opts.push({ kind: "next", label: SENTINEL_LABELS.next });
   }
 
   return opts;

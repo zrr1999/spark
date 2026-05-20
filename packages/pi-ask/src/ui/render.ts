@@ -1,10 +1,12 @@
+import { truncateToWidth } from "@earendil-works/pi-tui";
+
 import type { AskState, ExtendedOption } from "../state/state.ts";
 import { isSubmitTab } from "../state/state.ts";
-import type { PiAskFlowQuestion, PiAskFlowAnswerEntry } from "../schema.ts";
+import { SENTINEL_LABELS, type PiAskFlowQuestion, type PiAskFlowAnswerEntry } from "../schema.ts";
 
-function truncateToWidth(text: string, maxWidth: number): string {
-  if (text.length <= maxWidth) return text;
-  return text.slice(0, maxWidth - 1) + "…";
+function enforceLineWidths(lines: string[], width: number): string[] {
+  const maxWidth = Math.max(1, width);
+  return lines.map((line) => truncateToWidth(line, maxWidth, "…"));
 }
 
 // ---- Theme interface (matches pi-tui's Theme) ----
@@ -88,9 +90,9 @@ const L: Record<
     submit: "Submit",
     elaborate: "Elaborate first",
     cancel: "Cancel",
-    other: "Type your own",
-    chat: "Chat about this",
-    next: "Confirm selection →",
+    other: SENTINEL_LABELS.other,
+    chat: SENTINEL_LABELS.chat,
+    next: SENTINEL_LABELS.next,
     settings: "Settings",
     review: "Review",
     tab: "Tab",
@@ -188,7 +190,7 @@ export function renderAskScreen(input: RenderInput): string[] {
     lines.push(theme.dim(labels.footer));
   }
 
-  return lines;
+  return enforceLineWidths(lines, width);
 }
 
 // ---- Question tab rendering ----
@@ -423,8 +425,6 @@ function formatAnswerBrief(answer: PiAskFlowAnswerEntry, labels: (typeof L)["en"
       return answer.values.join(", ");
     case "custom":
       return `"${answer.customText?.slice(0, 40) ?? ""}"`;
-    case "freeform":
-      return answer.customText?.slice(0, 40) ?? "";
     case "skipped":
       return labels.noAnswer;
   }

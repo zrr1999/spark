@@ -258,6 +258,11 @@ export function buildPiAgentArgs(input: PiAgentCommandInput): string[] {
     "- Do not ask for routine implementation choices you can safely infer from the assigned task and repository context; proceed and document the decision.",
     "- If an ask times out or returns no selection for a decision/approval gate, stop and report the blocked state rather than continuing.",
     "",
+    "Spark naming quality policy:",
+    "- Judge whether the active thread title and your task @name/title are placeholder, generic, stale, too broad, or inconsistent with the current instruction.",
+    "- When the improvement is obvious, update Spark display names without asking: use spark_rename_thread for the thread, and spark_claim_task with the existing task ref/name intent to improve your claimed task @name/title/description. Stable refs must remain unchanged.",
+    "- Preserve user-specific intentional names and distinctive project/code names; ask only if multiple plausible names require a real user decision.",
+    "",
     "Instruction:",
     input.instruction,
   ].join("\n");
@@ -293,11 +298,19 @@ export interface SparkReadyTaskRunnerOptions {
   sessionDir?: string;
   heartbeatIntervalMs?: number;
   onHeartbeat?: (graph: TaskGraph) => void | Promise<void>;
+  onSchedule?: (result: SparkReadyTaskRunnerSchedule) => void | Promise<void>;
   onProgress?: (result: SparkReadyTaskRunnerProgress) => void | Promise<void>;
   claim?: {
     sessionId?: string;
     leaseMs?: number;
   };
+}
+
+export interface SparkReadyTaskRunnerSchedule {
+  taskRef: TaskRef;
+  runRef?: RunRef;
+  running: number;
+  scheduled: number;
 }
 
 export interface SparkReadyTaskRunnerProgress {
@@ -387,7 +400,6 @@ export async function runReadySparkTasks(
   const running = new Set<Promise<TaskRun>>();
   const scheduled = new Set<TaskRef>();
   const promiseRunRefs = new Map<Promise<TaskRun>, RunRef>();
-  const cancelledRunRefs = new Set<RunRef>();
   let timedOut = false;
 
   const schedule = (task: Task): void => {
@@ -414,15 +426,13 @@ export async function runReadySparkTasks(
     })
       .catch((error: unknown) => taskRunFromError(input.graph.getTask(task.ref), error))
       .then(async (run) => {
-        if (!cancelledRunRefs.has(run.ref)) {
-          runs.push(run);
-          await input.onProgress?.({
-            taskRef: task.ref,
-            run,
-            running: Math.max(0, running.size - 1),
-            completed: runs.length,
-          });
-        }
+        runs.push(run);
+        await input.onProgress?.({
+          taskRef: task.ref,
+          run,
+          running: Math.max(0, running.size - 1),
+          completed: runs.length,
+        });
         return run;
       })
       .finally(() => {
@@ -435,6 +445,12 @@ export async function runReadySparkTasks(
       .find((run) => !preexistingRunRefs.has(run.ref) && run.taskRef === task.ref)?.ref;
     const runRef = claimedRunRef ?? recordedRunRef;
     if (runRef) promiseRunRefs.set(runPromise, runRef);
+    void input.onSchedule?.({
+      taskRef: task.ref,
+      runRef,
+      running: running.size,
+      scheduled: scheduled.size,
+    });
   };
 
   while (true) {
@@ -467,25 +483,7 @@ export async function runReadySparkTasks(
   }
 
   if (timedOut && running.size > 0) {
-    const timedOutRunRefs = new Set(
-      [...running]
-        .map((runPromise) => promiseRunRefs.get(runPromise))
-        .filter((runRef): runRef is RunRef => Boolean(runRef)),
-    );
-    for (const runRef of timedOutRunRefs) cancelledRunRefs.add(runRef);
-    const runningTasks = input.graph
-      .tasks(input.threadRef)
-      .filter((task) => task.claim?.runRef && timedOutRunRefs.has(task.claim.runRef));
-    const cancellations = cancelTimedOutTasks(input.graph, runningTasks, timeoutMs, runs);
-    await killActiveSparkSubagentProcesses({
-      reason: "spark ready-task DAG timeout",
-      runRefs: [...timedOutRunRefs],
-    });
-    await Promise.allSettled(running);
-    for (const cancellation of cancellations) {
-      input.graph.setTaskStatus(cancellation.taskRef, "pending");
-      input.graph.recordRun(cancellation.run);
-    }
+    detachTimedOutTasks(input.graph, [...running], promiseRunRefs, timeoutMs, runs);
   } else {
     await Promise.allSettled(running);
   }
@@ -499,32 +497,33 @@ export async function runReadySparkTasks(
   };
 }
 
-function cancelTimedOutTasks(
+function detachTimedOutTasks(
   graph: TaskGraph,
-  tasks: Task[],
+  running: Array<Promise<TaskRun>>,
+  promiseRunRefs: Map<Promise<TaskRun>, RunRef>,
   timeoutMs: number,
   runs: TaskRun[],
-): Array<{ taskRef: TaskRef; run: TaskRun }> {
-  const cancellations: Array<{ taskRef: TaskRef; run: TaskRun }> = [];
-  for (const task of tasks) {
+): void {
+  const timedOutRunRefs = new Set(
+    running
+      .map((runPromise) => promiseRunRefs.get(runPromise))
+      .filter((runRef): runRef is RunRef => Boolean(runRef)),
+  );
+  for (const task of graph.tasks()) {
     const runRef = task.claim?.runRef;
-    if (!runRef) continue;
+    if (!runRef || !timedOutRunRefs.has(runRef)) continue;
     const run = graph.runs(task.threadRef).find((candidate) => candidate.ref === runRef);
-    if (run?.status === "running" || run?.status === "queued") {
-      const cancelled: TaskRun = {
-        ...run,
-        status: "cancelled",
-        failureKind: "runtime_timeout",
-        errorMessage: `Spark ready-task DAG timed out after ${timeoutMs}ms`,
-        finishedAt: nowIso(),
-      };
-      graph.recordRun(cancelled);
-      runs.push(cancelled);
-      cancellations.push({ taskRef: task.ref, run: cancelled });
-    }
-    if (task.claim) graph.releaseTaskClaim(task.ref, task.claim.claimedBy);
+    if (run?.status !== "running" && run?.status !== "queued") continue;
+    const background: TaskRun = {
+      ...run,
+      status: "running",
+      failureKind: "runtime_timeout",
+      errorMessage: `Spark ready-task DAG timed out after ${timeoutMs}ms; keeping subagent claim in background`,
+    };
+    graph.recordRun(background);
+    graph.setTaskStatus(task.ref, "running");
+    runs.push(background);
   }
-  return cancellations;
 }
 
 function normalizeMaxConcurrency(value: number | undefined): number {
@@ -737,6 +736,8 @@ export function startTaskClaimHeartbeat(options: TaskClaimHeartbeatOptions): () 
         leaseMs: options.leaseMs,
       });
       await options.onHeartbeat?.(options.graph);
+    } catch {
+      stopped = true;
     } finally {
       inFlight = false;
     }

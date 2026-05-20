@@ -30,6 +30,7 @@
     "prepare": "pnpx @j178/prek install --hook-type commit-msg --hook-type pre-commit"
   },
   "dependencies": {
+    "pi-agent-run": "file:packages/pi-agent-run",
     "pi-ask": "file:packages/pi-ask",
     "pi-cue": "file:packages/pi-cue",
     "spark-agents": "file:packages/spark-agents",
@@ -42,6 +43,7 @@
     "typebox": "^1.1.38"
   },
   "devDependencies": {
+    "@earendil-works/pi-tui": "^0.74.1",
     "@types/node": "^25.6.0",
     "oxlint": "1.61.0",
     "typescript": "^6.0.3",

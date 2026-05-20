@@ -11,6 +11,11 @@ declare module "@earendil-works/pi-coding-agent" {
     label?: string;
     description: string;
     parameters: unknown;
+    renderCall?: (
+      args: Record<string, unknown>,
+      theme: ToolRenderTheme,
+      context: unknown,
+    ) => ToolRenderComponent;
     execute(
       toolCallId: string,
       params: Record<string, unknown>,
@@ -21,6 +26,15 @@ declare module "@earendil-works/pi-coding-agent" {
       content: Array<{ type: "text"; text: string }>;
       details?: Record<string, unknown>;
     }>;
+  }
+
+  export interface ToolRenderTheme {
+    fg?: (color: string, text: string) => string;
+    bold?: (text: string) => string;
+  }
+
+  export interface ToolRenderComponent {
+    render(width: number): string[];
   }
 
   export interface ExtensionContext {

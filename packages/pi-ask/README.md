@@ -11,15 +11,18 @@ for collecting human input.
 - `ask_user`
 - `ask_flow`
 
-`ask_user` supports single-select, multi-select, and
-freeform questions, with optional timeout and headless
-fallback. `ask_flow` adds the reusable multi-question
-flow state machine, renderer, replay helpers, payload
-store, and settings used by domain packages.
+`ask_user` and `ask_flow` are peer tools over shared ask semantics.
+`ask_user` is optimized for one focused question; `ask_flow` is optimized for
+multi-question forms. Both use the same answer envelope and option/custom
+semantics. Asks do not support automatic timeouts; they wait for an answer,
+cancellation, or an explicit no-selection result from the UI adapter.
 
-For non-freeform questions, users can still provide
-custom input directly; they are not forced through a
-separate `Other / custom input…` option first.
+Custom text uses the same `customText` answer shape whether it comes from a
+freeform question or the shared `SENTINEL_LABELS.other` custom-input sentinel.
+Every select-style ask exposes a default first-class custom input affordance.
+When a host provides `selectWithCustom`, business options stay separate from
+the custom metadata; plain `select` adapters receive the custom row as a UI
+sentinel for compatibility, never as a business option value.
 
 ## Behavior comparison and adopted affordances
 
@@ -28,8 +31,8 @@ keeps the useful protocol traits observed in related Pi packages:
 
 - `@eko24ive/pi-ask`: review tab, elaborate/re-ask flow, replay of the
   previous form, preview-aware options, and explicit continuation payloads.
-- `pi-ask-user`: timeout-aware dialog fallback, split-pane previews,
-  freeform input, comments, and a clear cancelled result path.
+- `pi-ask-user`: split-pane previews, freeform input, comments, and a clear
+  cancelled result path.
 - `@juicesharp/rpiv-ask-user-question`: LLM-facing response envelopes,
   typed answer kinds, chat/custom sentinels, preview echoing, and a
   submit/review tab that can return partial answers.
@@ -42,10 +45,8 @@ keeps the useful protocol traits observed in related Pi packages:
 
 - `answered` — at least one answer/custom/chat/elaboration result was
   submitted.
-- `timeout` — a timeout elapsed before any selection was collected.
 - `cancelled` — the user cancelled the form.
-- `no_selection` — the form returned without a selection and without a
-  timeout signal.
+- `no_selection` — the form returned without a selection.
 
-Decision and approval gates must treat `timeout`, `cancelled`, and
-`no_selection` as blocked, not as implicit approval.
+Decision and approval gates must treat `cancelled` and `no_selection` as
+blocked, not as implicit approval.

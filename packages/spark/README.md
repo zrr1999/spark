@@ -4,7 +4,7 @@ High-level `/spark` facade for Pi.
 
 It wires together Spark primitives and generic `pi-*` tools, but package-specific ownership stays below:
 
-- `spark-agents` owns registry/managed-agent creation
+- `spark-agents` owns builtin/project agent spec registry and creation
 - `spark-tasks` owns task DAGs, TODOs, scheduling state, and claims
 - `spark-runtime` executes claimed tasks through agents
 - `pi-ask` / `pi-cue` remain reusable outside Spark mode

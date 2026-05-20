@@ -88,7 +88,6 @@ export const PiAskFlowRequestSchema = Type.Object({
   mode: Type.Optional(PiAskFlowMode),
   questions: Type.Array(PiAskFlowQuestionSchema, { minItems: 1, maxItems: MAX_QUESTIONS }),
   behaviour: Type.Optional(PiAskFlowBehaviourSchema),
-  timeoutMs: Type.Optional(Type.Number()),
 });
 
 export interface PiAskFlowRequest extends Static<typeof PiAskFlowRequestSchema> {
@@ -97,7 +96,7 @@ export interface PiAskFlowRequest extends Static<typeof PiAskFlowRequestSchema> 
 
 // ---- Answer types ----
 
-export type PiAskFlowAnswerKind = "option" | "custom" | "multi" | "freeform" | "skipped";
+export type PiAskFlowAnswerKind = "option" | "custom" | "multi" | "skipped";
 
 export interface PiAskFlowAnswerEntry {
   questionId: string;
@@ -109,7 +108,7 @@ export interface PiAskFlowAnswerEntry {
   preview?: string;
 }
 
-export type PiAskFlowResultStatus = "answered" | "timeout" | "cancelled" | "no_selection";
+export type PiAskFlowResultStatus = "answered" | "cancelled" | "no_selection";
 
 export interface PiAskFlowResult {
   /**
@@ -150,7 +149,7 @@ export type SentinelKind = "other" | "chat" | "next";
 export const SENTINEL_LABELS: Record<SentinelKind, string> = {
   other: "Type your own",
   chat: "Chat about this",
-  next: "Next",
+  next: "Confirm selection →",
 };
 
 // ---- Validation ----

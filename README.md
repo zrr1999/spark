@@ -46,7 +46,7 @@ but skips the root `SPARK.md` file.
 - `pi-cue` — reusable Pi/cue-shell execution substrate;
   absorbs `pi-cue-shell` code without a compatibility
   package and does not depend on `spark-core`.
-- `spark-agents` — builtin/managed agent registry and managed-agent store. It creates/looks up agents from registered specs only; it does not schedule tasks or run multi-agent interactions.
+- `spark-agents` — builtin/project agent spec registry and project spec store. It creates/looks up agents from registered specs only; it does not schedule tasks or run multi-agent interactions.
 - `spark-tasks` — durable thread/task DAG, task names/titles/descriptions, TODOs, dependencies, readiness, runs, and unified claim/lease state. Assigning a task to an agent is represented as a claim.
 - `spark-runtime` — orchestration/runtime layer that executes claimed tasks through registered agents, writes artifacts, and owns run/timeout behavior.
 - `spark-artifacts` — typed durable artifacts with hashes,

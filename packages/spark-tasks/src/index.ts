@@ -10,6 +10,7 @@ import {
   type RunRef,
   type Task,
   type TaskDependency,
+  type TaskAttribution,
   type TaskClaim,
   type TaskClaimKind,
   type TaskKind,
@@ -49,8 +50,7 @@ export interface CreateTaskInput {
   status?: Task["status"];
   agentRef?: AgentRef;
   claimedBySession?: string;
-  completedBySession?: string;
-  completedByAgentName?: string;
+  finishedBy?: TaskAttribution;
   claim?: TaskClaim;
   inputArtifacts?: ArtifactRef[];
   /**
@@ -67,13 +67,13 @@ export interface ClaimTaskInput {
   agentName?: string;
   sessionId?: string;
   runRef?: RunRef;
-  leaseMs?: number;
+  leaseMs: number;
   now?: string;
 }
 
 export interface HeartbeatTaskClaimInput {
   claimedBy: string;
-  leaseMs?: number;
+  leaseMs: number;
   now?: string;
 }
 
@@ -235,8 +235,7 @@ export class TaskGraph {
         (input.kind === "interaction" ? "running" : input.agentRef ? "pending" : "proposed"),
       agentRef: input.agentRef,
       claimedBySession: input.claimedBySession,
-      completedBySession: input.completedBySession,
-      completedByAgentName: input.completedByAgentName,
+      finishedBy: input.finishedBy,
       claim: input.claim,
       inputArtifacts: input.inputArtifacts ?? [],
       outputArtifacts: [],
@@ -322,6 +321,7 @@ export class TaskGraph {
 
   bindAgent(taskRef: TaskRef, agentRef: AgentRef): Task {
     const task = this.getTask(taskRef);
+    this.assertDependenciesDone(task);
     const updated: Task = {
       ...task,
       agentRef,
@@ -334,17 +334,13 @@ export class TaskGraph {
 
   setTaskStatus(taskRef: TaskRef, status: Task["status"]): Task {
     const task = this.getTask(taskRef);
-    const completingClaim = !isUnfinishedTaskStatus(status) ? task.claim : undefined;
     const updated = {
       ...task,
       status,
       claimedBySession: isUnfinishedTaskStatus(status) ? task.claimedBySession : undefined,
-      completedBySession: isUnfinishedTaskStatus(status)
-        ? task.completedBySession
-        : (task.completedBySession ?? completingClaim?.sessionId ?? task.claimedBySession),
-      completedByAgentName: isUnfinishedTaskStatus(status)
-        ? task.completedByAgentName
-        : (task.completedByAgentName ?? completingClaim?.agentName),
+      finishedBy: isUnfinishedTaskStatus(status)
+        ? task.finishedBy
+        : (task.finishedBy ?? attributionFromTask(task)),
       claim: isUnfinishedTaskStatus(status) ? task.claim : undefined,
       updatedAt: nowIso(),
     };
@@ -361,40 +357,51 @@ export class TaskGraph {
     const now = input.now ?? nowIso();
     if (!isUnfinishedTaskStatus(task.status))
       throw new DependencyError(`finished task cannot be claimed: ${task.ref}`);
-    if (!input.claimedBy.trim()) throw new Error("task claim claimedBy is required");
-    if (task.claim && !isExpiredClaim(task.claim, now) && task.claim.claimedBy !== input.claimedBy)
+    const claimedBy = input.claimedBy.trim();
+    if (!claimedBy) throw new Error("task claim claimedBy is required");
+    this.assertDependenciesDone(task);
+    const agentRef = input.agentRef ?? task.agentRef;
+    const agentName = (input.agentName ?? task.claim?.agentName)?.trim() || undefined;
+    const sessionId = input.sessionId?.trim() || undefined;
+    const requestedClaimScope = claimScopeForInput({
+      kind: input.kind,
+      sessionId,
+      agentName,
+    });
+    const activeClaimScope = task.claim
+      ? isExpiredClaim(task.claim, now)
+        ? undefined
+        : claimScopeForStoredClaim(task.claim)
+      : undefined;
+    if (activeClaimScope && activeClaimScope.key !== requestedClaimScope.key)
       throw new DependencyError(`task is already claimed: ${task.ref}`);
-    const conflictingClaim = [...this.#tasks.values()].find(
-      (candidate) =>
-        candidate.ref !== task.ref &&
-        isUnfinishedTaskStatus(candidate.status) &&
-        candidate.claim?.claimedBy === input.claimedBy &&
-        !isExpiredClaim(candidate.claim, now),
-    );
+    const conflictingClaim = [...this.#tasks.values()].find((candidate) => {
+      if (candidate.ref === task.ref) return false;
+      if (!isUnfinishedTaskStatus(candidate.status)) return false;
+      if (!candidate.claim || isExpiredClaim(candidate.claim, now)) return false;
+      return claimScopeForStoredClaim(candidate.claim).key === requestedClaimScope.key;
+    });
     if (conflictingClaim)
       throw new DependencyError(
-        `claimant already has an unfinished claimed task: ${conflictingClaim.ref}`,
+        `${requestedClaimScope.label} already has an unfinished claimed task: ${conflictingClaim.ref}`,
       );
-    const agentRef = input.agentRef ?? task.agentRef;
-    const agentName = input.agentName ?? task.claim?.agentName;
     const claim: TaskClaim = {
       kind: input.kind,
-      claimedBy: input.claimedBy,
+      claimedBy,
       agentRef,
       agentName,
-      sessionId: input.sessionId,
+      sessionId,
       runRef: input.runRef,
-      claimedAt: task.claim?.claimedBy === input.claimedBy ? task.claim.claimedAt : now,
+      claimedAt:
+        activeClaimScope?.key === requestedClaimScope.key ? (task.claim?.claimedAt ?? now) : now,
       heartbeatAt: now,
-      expiresAt: input.leaseMs
-        ? new Date(Date.parse(now) + input.leaseMs).toISOString()
-        : undefined,
+      expiresAt: claimExpiresAt(now, input.leaseMs),
     };
     const updated: Task = {
       ...task,
       agentRef,
       status: isUnfinishedTaskStatus(task.status) ? "running" : task.status,
-      claimedBySession: input.sessionId ?? task.claimedBySession,
+      claimedBySession: sessionId ?? task.claimedBySession,
       claim,
       updatedAt: now,
     };
@@ -413,9 +420,7 @@ export class TaskGraph {
     const claim: TaskClaim = {
       ...task.claim,
       heartbeatAt: now,
-      expiresAt: input.leaseMs
-        ? new Date(Date.parse(now) + input.leaseMs).toISOString()
-        : task.claim.expiresAt,
+      expiresAt: claimExpiresAt(now, input.leaseMs),
     };
     const updated: Task = { ...task, claim, updatedAt: now };
     this.#tasks.set(taskRef, updated);
@@ -471,6 +476,17 @@ export class TaskGraph {
     return run;
   }
 
+  mergeTaskProgressFrom(source: TaskGraph, taskRefs: Iterable<TaskRef>): void {
+    const refs = new Set(taskRefs);
+    for (const ref of refs) {
+      const task = source.#tasks.get(ref);
+      if (task) this.#tasks.set(ref, cloneTask(task));
+    }
+    for (const run of source.#runs.values()) {
+      if (refs.has(run.taskRef)) this.#runs.set(run.ref, cloneTaskRun(run));
+    }
+  }
+
   updateTask(
     taskRef: TaskRef,
     patch: Partial<
@@ -483,17 +499,17 @@ export class TaskGraph {
         | "status"
         | "agentRef"
         | "claimedBySession"
-        | "completedBySession"
-        | "completedByAgentName"
+        | "finishedBy"
         | "claim"
       >
     >,
   ): Task {
     const task = this.getTask(taskRef);
     const status = patch.status ?? task.status;
+    const name = patch.name === undefined ? task.name : patch.name.trim();
     const updated: Task = {
       ...task,
-      name: patch.name ?? task.name,
+      name,
       title: patch.title ?? task.title,
       description: patch.description ?? task.description,
       kind: patch.kind ?? task.kind,
@@ -502,22 +518,14 @@ export class TaskGraph {
       claimedBySession: isUnfinishedTaskStatus(status)
         ? (patch.claimedBySession ?? task.claimedBySession)
         : undefined,
-      completedBySession: isUnfinishedTaskStatus(status)
-        ? (patch.completedBySession ?? task.completedBySession)
-        : (patch.completedBySession ??
-          task.completedBySession ??
-          (patch.claim ?? task.claim)?.sessionId ??
-          patch.claimedBySession ??
-          task.claimedBySession),
-      completedByAgentName: isUnfinishedTaskStatus(status)
-        ? (patch.completedByAgentName ?? task.completedByAgentName)
-        : (patch.completedByAgentName ??
-          task.completedByAgentName ??
-          (patch.claim ?? task.claim)?.agentName),
+      finishedBy: isUnfinishedTaskStatus(status)
+        ? (patch.finishedBy ?? task.finishedBy)
+        : (patch.finishedBy ?? task.finishedBy ?? attributionFromTask({ ...task, ...patch })),
       claim: isUnfinishedTaskStatus(status) ? (patch.claim ?? task.claim) : undefined,
       updatedAt: nowIso(),
     };
     assertTaskName(updated.name);
+    assertUniqueTaskName(this.tasks(task.threadRef), updated.name, taskRef);
     if (!updated.title.trim()) throw new Error("task title is required");
     if (!updated.description.trim()) throw new Error("task description is required");
     this.#tasks.set(taskRef, updated);
@@ -641,6 +649,24 @@ export class TaskGraph {
 
   enqueueReadyTasks(threadRef?: ThreadRef): Task[] {
     return this.readyTasks(threadRef).map((task) => this.setTaskStatus(task.ref, "ready"));
+  }
+
+  unmetDependencies(taskRef: TaskRef): Task[] {
+    const task = this.getTask(taskRef);
+    return this.#dependencies
+      .filter((dep) => dep.taskRef === task.ref)
+      .map((dep) => this.getTask(dep.dependsOn))
+      .filter((dependency) => dependency.status !== "done");
+  }
+
+  private assertDependenciesDone(task: Task): void {
+    const unmet = this.unmetDependencies(task.ref);
+    if (unmet.length === 0) return;
+    throw new DependencyError(
+      `task has unmet dependencies: ${task.ref} depends on ${unmet
+        .map((dependency) => dependency.ref)
+        .join(", ")}`,
+    );
   }
 
   getThread(ref: ThreadRef): Thread {
@@ -949,7 +975,52 @@ export function assertAcyclic(dependencies: TaskDependency[]): void {
 }
 
 function isExpiredClaim(claim: TaskClaim, now: string): boolean {
-  return Boolean(claim.expiresAt && Date.parse(claim.expiresAt) <= Date.parse(now));
+  const expiresAt = claim.expiresAt?.trim();
+  if (!expiresAt) return true;
+  return Date.parse(expiresAt) <= Date.parse(now);
+}
+
+function claimExpiresAt(now: string, leaseMs: number): string {
+  if (!Number.isFinite(leaseMs) || leaseMs <= 0)
+    throw new Error("task claim leaseMs must be positive");
+  return new Date(Date.parse(now) + leaseMs).toISOString();
+}
+
+interface ClaimScope {
+  key: string;
+  label: string;
+}
+
+function claimScopeForInput(input: {
+  kind: TaskClaimKind;
+  sessionId?: string;
+  agentName?: string;
+}): ClaimScope {
+  return claimScopeForValues(input.kind, input.sessionId, input.agentName);
+}
+
+function claimScopeForStoredClaim(claim: TaskClaim): ClaimScope {
+  return claimScopeForValues(claim.kind, claim.sessionId, claim.agentName);
+}
+
+function claimScopeForValues(
+  kind: TaskClaimKind,
+  sessionId: string | undefined,
+  agentName: string | undefined,
+): ClaimScope {
+  const normalizedSessionId = sessionId?.trim();
+  if (!normalizedSessionId) throw new Error(`${kind} task claim sessionId is required`);
+  if (kind === "main")
+    return {
+      key: `main:${normalizedSessionId}`,
+      label: `session ${normalizedSessionId}`,
+    };
+  const normalizedAgentName = agentName?.trim();
+  if (!normalizedAgentName) throw new Error("subagent task claim agentName is required");
+  return {
+    key: `subagent:${normalizedSessionId}:${normalizedAgentName}`,
+    label: `subagent ${normalizedSessionId}/${normalizedAgentName}`,
+  };
 }
 
 function taskNameFromTitle(title: string): string {
@@ -974,6 +1045,11 @@ function uniqueTaskName(preferred: string, existing: Set<string>): string {
   let index = 2;
   while (existing.has(`${base}-${index}`)) index += 1;
   return `${base}-${index}`;
+}
+
+function assertUniqueTaskName(tasks: Task[], name: string, exceptTaskRef?: TaskRef): void {
+  const conflict = tasks.find((task) => task.ref !== exceptTaskRef && task.name === name);
+  if (conflict) throw new Error(`task name already exists in thread: ${name}`);
 }
 
 function addTaskLookup(lookup: Map<string, TaskRef>, task: Task): void {
@@ -1006,6 +1082,7 @@ function normalizeTask(task: Task): Task {
     status: task.status,
     agentRef: task.agentRef,
     claimedBySession: isUnfinishedTaskStatus(task.status) ? task.claimedBySession : undefined,
+    finishedBy: normalizeTaskAttribution(task.finishedBy),
     claim: isUnfinishedTaskStatus(task.status) ? normalizeTaskClaim(task.claim) : undefined,
     inputArtifacts: task.inputArtifacts,
     outputArtifacts: task.outputArtifacts,
@@ -1014,11 +1091,29 @@ function normalizeTask(task: Task): Task {
   };
 }
 
+function attributionFromTask(
+  task: Pick<Task, "claim" | "claimedBySession">,
+): TaskAttribution | undefined {
+  const sessionId = task.claim?.sessionId ?? task.claimedBySession;
+  const agentName = task.claim?.kind === "subagent" ? task.claim.agentName?.trim() : undefined;
+  return normalizeTaskAttribution({ sessionId, agentName });
+}
+
+function normalizeTaskAttribution(
+  attribution: TaskAttribution | undefined,
+): TaskAttribution | undefined {
+  const sessionId = attribution?.sessionId?.trim();
+  const agentName = attribution?.agentName?.trim();
+  if (!sessionId && !agentName) return undefined;
+  return { sessionId: sessionId || undefined, agentName: agentName || undefined };
+}
+
 function normalizeTaskClaim(claim: TaskClaim | undefined): TaskClaim | undefined {
-  if (!claim) return undefined;
+  if (!claim?.expiresAt?.trim()) return undefined;
   return {
     ...claim,
     agentName: claim.agentName?.trim() || undefined,
+    expiresAt: claim.expiresAt,
   };
 }
 
@@ -1044,6 +1139,23 @@ function materializeTodos(
       updatedAt: now,
     } satisfies TaskTodo;
   });
+}
+
+function cloneTask(task: Task): Task {
+  return {
+    ...task,
+    claim: task.claim ? { ...task.claim } : undefined,
+    finishedBy: task.finishedBy ? { ...task.finishedBy } : undefined,
+    inputArtifacts: [...task.inputArtifacts],
+    outputArtifacts: [...task.outputArtifacts],
+  };
+}
+
+function cloneTaskRun(run: TaskRun): TaskRun {
+  return {
+    ...run,
+    outputArtifacts: [...run.outputArtifacts],
+  };
 }
 
 function cloneTodos(todos: TaskTodo[]): TaskTodo[] {

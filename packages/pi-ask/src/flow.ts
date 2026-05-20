@@ -12,7 +12,7 @@ import type {
   PiAskFlowRequest,
   PiAskFlowResult,
 } from "./schema.ts";
-import { validatePiAskFlowRequest } from "./schema.ts";
+import { SENTINEL_LABELS, validatePiAskFlowRequest } from "./schema.ts";
 
 interface PiExtensionAPI {
   registerTool?(config: {
@@ -63,53 +63,44 @@ export function createPiAskFlowRequest(input: PiAskFlowRequest): PiAskFlowReques
 
 export async function runPiAskFlow(
   input: PiAskFlowRequest,
-  ui?: { select?: Function; confirm?: Function; input?: Function },
+  ui?: { select?: Function; selectWithCustom?: Function; confirm?: Function; input?: Function },
 ): Promise<PiAskFlowResult> {
   const request = createPiAskFlowRequest(input);
-  if (!ui?.select) return defaultPiAskFlowResult(request);
+  if (!ui?.select && !ui?.selectWithCustom) return defaultPiAskFlowResult(request);
 
   const answers: Record<string, PiAskFlowAnswerEntry> = {};
   for (const question of request.questions ?? []) {
     if (question.type === "freeform") {
-      const text = await withTimeout<string>(ui.input?.(question.prompt), request.timeoutMs);
-      if (text.timedOut) return createTimedOutPiAskFlowResult(request, answers);
-      if (text.value !== undefined) {
+      const text = await ui.input?.(question.prompt);
+      if (text !== undefined) {
         answers[question.id] = {
           questionId: question.id,
-          kind: "freeform",
+          kind: "custom",
           values: [],
-          customText: text.value,
+          customText: text,
         };
+      } else if (requiresExplicitSelection(request, question)) {
+        return createNoSelectionPiAskFlowResult(request, answers);
       }
       continue;
     }
 
     if (question.options && question.options.length > 0) {
-      const choice = await withTimeout<string>(
-        ui.select(
-          question.prompt,
-          question.options.map((option) => option.label),
-        ),
-        request.timeoutMs,
+      const choice = await selectFlowQuestionOptionWithCustom(
+        ui,
+        question.prompt,
+        question.options,
       );
-      if (choice.timedOut) return createTimedOutPiAskFlowResult(request, answers);
-      if (!choice.value) continue;
-      const option = question.options.find((entry) => entry.label === choice.value);
-      if (option) {
-        answers[question.id] = {
-          questionId: question.id,
-          kind: question.type === "multi" ? "multi" : "option",
-          values: [option.value],
-          labels: [option.label],
-          preview: option.preview,
-        };
-      } else {
-        answers[question.id] = {
-          questionId: question.id,
-          kind: "custom",
-          values: [],
-          customText: choice.value,
-        };
+      if (!choice) {
+        if (requiresExplicitSelection(request, question)) {
+          return createNoSelectionPiAskFlowResult(request, answers);
+        }
+        continue;
+      }
+      const answer = parseFlowChoice(question, choice.customText ?? choice.value ?? "");
+      answers[question.id] = answer;
+      if (requiresExplicitSelection(request, question) && answer.values.length === 0) {
+        return createNoSelectionPiAskFlowResult(request, answers);
       }
     }
   }
@@ -123,12 +114,16 @@ export async function runPiAskFlow(
 }
 
 export function defaultPiAskFlowResult(request: PiAskFlowRequest): PiAskFlowResult {
+  if (requestRequiresExplicitSelection(request)) {
+    return createNoSelectionPiAskFlowResult(request, {});
+  }
+
   const answers: Record<string, PiAskFlowAnswerEntry> = {};
   for (const question of request.questions ?? []) {
     if (question.type === "freeform") {
       answers[question.id] = {
         questionId: question.id,
-        kind: "freeform",
+        kind: "custom",
         values: [],
         customText: "",
       };
@@ -155,7 +150,7 @@ export function defaultPiAskFlowResult(request: PiAskFlowRequest): PiAskFlowResu
 export async function replayPiAskFlow(
   input: PiAskFlowRequest,
   prior: PiAskFlowResult | undefined,
-  ui?: { select?: Function },
+  ui?: { select?: Function; selectWithCustom?: Function; input?: Function },
 ): Promise<PiAskFlowResult> {
   return runPiAskFlow(replayablePiAskFlow(input, prior), ui);
 }
@@ -253,7 +248,6 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
           ),
         }),
       ),
-      timeoutMs: Type.Optional(Type.Number()),
     }),
 
     async execute(_toolCallId, rawParams, _signal, _onUpdate, ctx) {
@@ -366,9 +360,9 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
 
 export function createPiAskFlowResult(
   input: Omit<PiAskFlowResult, "status" | "nextAction"> &
-    Partial<Pick<PiAskFlowResult, "status" | "nextAction">> & { timeoutMs?: number },
+    Partial<Pick<PiAskFlowResult, "status" | "nextAction">>,
 ): PiAskFlowResult {
-  const { timeoutMs: _timeoutMs, ...result } = input;
+  const result = input;
   const status = result.status ?? inferPiAskFlowResultStatus(input);
   return {
     ...result,
@@ -381,7 +375,20 @@ export function normalizePiAskFlowResult(
   result: PiAskFlowResult,
   request?: PiAskFlowRequest,
 ): PiAskFlowResult {
-  return createPiAskFlowResult({ ...result, timeoutMs: request?.timeoutMs });
+  const normalized = createPiAskFlowResult(result);
+  if (!request || !isGateRequest(request)) return normalized;
+
+  const status =
+    normalized.status === "no_selection" &&
+    hasSubmittedRequiredGateAnswers(request, normalized.answers)
+      ? "answered"
+      : normalized.status;
+  const blocked = isPiAskFlowGateBlocked({ ...normalized, status }, request);
+  return {
+    ...normalized,
+    status,
+    nextAction: blocked ? "block" : nextActionForPiAskFlowStatus(status, normalized.mode),
+  };
 }
 
 export function isPiAskFlowGateBlocked(
@@ -389,53 +396,156 @@ export function isPiAskFlowGateBlocked(
   request: PiAskFlowRequest,
 ): boolean {
   return (
-    (request.mode === "decision" || request.mode === "approval") &&
-    (result.status === "timeout" ||
-      result.status === "no_selection" ||
-      result.status === "cancelled")
+    isGateRequest(request) &&
+    (result.status === "no_selection" ||
+      result.status === "cancelled" ||
+      !hasRequiredGateSelections(request, result.answers))
   );
 }
 
-type TimedInteraction<T> =
-  | { timedOut: true; value?: undefined }
-  | { timedOut: false; value: T | undefined };
-
-async function withTimeout<T>(
-  promise: Promise<T> | undefined,
-  timeoutMs?: number,
-): Promise<TimedInteraction<T>> {
-  if (!promise) return { timedOut: false, value: undefined };
-  if (!timeoutMs || timeoutMs <= 0) return { timedOut: false, value: await promise };
-  const timeoutToken = Symbol("timeout");
-  const value = await Promise.race([
-    promise,
-    new Promise<typeof timeoutToken>((resolve) =>
-      setTimeout(() => resolve(timeoutToken), timeoutMs),
-    ),
-  ]);
-  if (value === timeoutToken) return { timedOut: true };
-  return { timedOut: false, value };
-}
-
-function createTimedOutPiAskFlowResult(
+function createNoSelectionPiAskFlowResult(
   request: PiAskFlowRequest,
   answers: Record<string, PiAskFlowAnswerEntry>,
 ): PiAskFlowResult {
+  const status = hasSubmittedRequiredGateAnswers(request, answers) ? "answered" : "no_selection";
   return createPiAskFlowResult({
     answers,
     flow: request.flow,
     mode: "submit",
     cancelled: false,
-    status: Object.keys(answers).length > 0 ? "answered" : "timeout",
+    status,
+    nextAction: hasRequiredGateSelections(request, answers) ? undefined : "block",
   });
 }
 
+interface FlowSelectWithCustomResult {
+  value?: string;
+  customText?: string;
+}
+
+async function selectFlowQuestionOptionWithCustom(
+  ui: { select?: Function; selectWithCustom?: Function; input?: Function },
+  prompt: string,
+  options: NonNullable<PiAskFlowQuestion["options"]>,
+): Promise<FlowSelectWithCustomResult | undefined> {
+  const labels = options.map((option) => option.label);
+  if (ui.selectWithCustom) {
+    const selected = await ui.selectWithCustom(prompt, {
+      options: labels,
+      customLabel: SENTINEL_LABELS.other,
+    });
+    if (!selected) return undefined;
+    if (typeof selected === "string") return { value: selected };
+    return selected;
+  }
+  const selected = await ui.select?.(prompt, [...labels, SENTINEL_LABELS.other]);
+  if (!selected) return undefined;
+  if (selected === SENTINEL_LABELS.other) {
+    const customText = await ui.input?.(prompt, "");
+    return customText ? { customText } : undefined;
+  }
+  return { value: selected };
+}
+
+function parseFlowChoice(question: PiAskFlowQuestion, choice: string): PiAskFlowAnswerEntry {
+  const questionType = question.type ?? "single";
+  const parts =
+    questionType === "multi" ? splitChoiceParts(choice) : [choice.trim()].filter(Boolean);
+  const matched = parts
+    .map((part) => question.options?.find((entry) => entry.label === part || entry.value === part))
+    .filter((option): option is NonNullable<PiAskFlowQuestion["options"]>[number] =>
+      Boolean(option),
+    );
+  const unmatched = parts.filter(
+    (part) => !question.options?.some((entry) => entry.label === part || entry.value === part),
+  );
+
+  if (questionType === "multi") {
+    return {
+      questionId: question.id,
+      kind: "multi",
+      values: matched.map((option) => option.value),
+      labels: matched.map((option) => option.label),
+      customText: unmatched.length > 0 ? unmatched.join(", ") : undefined,
+      preview: matched.length === 1 ? matched[0]?.preview : undefined,
+    };
+  }
+
+  const option = matched[0];
+  if (option) {
+    return {
+      questionId: question.id,
+      kind: "option",
+      values: [option.value],
+      labels: [option.label],
+      preview: option.preview,
+    };
+  }
+
+  return {
+    questionId: question.id,
+    kind: "custom",
+    values: [],
+    customText: choice.trim(),
+  };
+}
+
+function splitChoiceParts(choice: string): string[] {
+  return choice
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function requiresExplicitSelection(
+  request: PiAskFlowRequest,
+  question: PiAskFlowQuestion,
+): boolean {
+  return (
+    (request.mode === "decision" || request.mode === "approval") &&
+    question.required === true &&
+    question.type !== "freeform"
+  );
+}
+
+function requestRequiresExplicitSelection(request: PiAskFlowRequest): boolean {
+  return (request.questions ?? []).some((question) => requiresExplicitSelection(request, question));
+}
+
+function isGateRequest(request: PiAskFlowRequest): boolean {
+  return request.mode === "decision" || request.mode === "approval";
+}
+
+function requiredGateQuestions(request: PiAskFlowRequest): PiAskFlowQuestion[] {
+  return (request.questions ?? []).filter((question) =>
+    requiresExplicitSelection(request, question),
+  );
+}
+
+function hasSubmittedRequiredGateAnswers(
+  request: PiAskFlowRequest,
+  answers: Record<string, PiAskFlowAnswerEntry>,
+): boolean {
+  const questions = requiredGateQuestions(request);
+  if (questions.length === 0) return Object.keys(answers).length > 0;
+  return questions.every((question) => Boolean(answers[question.id]));
+}
+
+function hasRequiredGateSelections(
+  request: PiAskFlowRequest,
+  answers: Record<string, PiAskFlowAnswerEntry>,
+): boolean {
+  const questions = requiredGateQuestions(request);
+  if (questions.length === 0) return Object.keys(answers).length > 0;
+  return questions.every((question) => (answers[question.id]?.values.length ?? 0) > 0);
+}
+
 function inferPiAskFlowResultStatus(
-  result: Pick<PiAskFlowResult, "answers" | "cancelled" | "mode"> & { timeoutMs?: number },
+  result: Pick<PiAskFlowResult, "answers" | "cancelled" | "mode">,
 ): PiAskFlowResult["status"] {
   if (result.cancelled || result.mode === "cancel") return "cancelled";
   if (Object.keys(result.answers).length > 0) return "answered";
-  return result.timeoutMs && result.timeoutMs > 0 ? "timeout" : "no_selection";
+  return "no_selection";
 }
 
 function nextActionForPiAskFlowStatus(

@@ -29,7 +29,7 @@ but end-to-end local vertical slice.
      approval / blocker resolution / review decisions
    - type aliases over the generic `pi-ask` flow API
    - dedicated flow helpers: clarify-thread /
-     approve-managed-agent / resolve-task-blocker /
+     approve-agent-spec / resolve-task-blocker /
      review-gate
 - `pi-cue`
    - migrated cue-shell IPC client and full short-name tool surface from `pi-cue-shell`
@@ -37,10 +37,10 @@ but end-to-end local vertical slice.
    - `run/jobs/status/kill/wait/cron/scopes/log` tool registration
    - daemon auto-start and bash disable policy
 - `spark-agents`
-   - builtin agent registry
-   - managed agent store
-   - managed agent proposal to spec conversion
-   - agent creation/lookup only; runtime execution lives in `spark-runtime`
+   - builtin/project agent spec registry
+   - project agent spec store
+   - agent spec proposal to spec conversion
+   - agent spec creation/lookup only; runtime execution lives in `spark-runtime`
 - `spark-review`
    - review gates
    - gate policies
@@ -49,7 +49,19 @@ but end-to-end local vertical slice.
    - thread/task DAG
    - cycle detection
    - dependency readiness
-   - persisted graph store
+   - persisted graph store backed by `TaskGraphStore` at
+     `.spark/thread.json`
+   - filesystem locking for graph mutations via
+     `.spark/thread.json.lock`; lock acquisition uses an atomic
+     `mkdir`, writes owner/heartbeat metadata, retries for up to
+     10s every 25ms, and removes lock directories older than 60s
+   - atomic graph saves: `TaskGraphStore` writes a temporary file
+     in `.spark/` and renames it over `.spark/thread.json`
+   - stale direct-save protection: saving a graph that was loaded
+     before `.spark/thread.json` changed, or after the file was
+     removed, throws `TaskGraphStoreConflictError` instead of
+     clobbering newer state; locked `update()` is the preferred
+     read/modify/write path
    - per-task TODO state with summaries and update ops; TODOs
      are stored outside `.spark/thread.json` snapshots, and
      active sessions can use session-scoped `.spark/todos/<session>.json`
@@ -72,10 +84,10 @@ but end-to-end local vertical slice.
    - `spark_update_todos` for independent session TODOs
    - `spark_run_ready_tasks` tool
    - `spark_ask`, `spark_ask_clarify_thread`,
-     `spark_ask_approve_agent`,
+     `spark_ask_approve_agent_spec`,
      `spark_ask_unblock_task`,
      `spark_ask_review_gate`, and `spark_ask_replay` tools
-   - `spark_list_agents`, `spark_get_agent`, and `spark_create_managed_agent` tools
+   - `spark_list_agent_specs`, `spark_get_agent_spec`, and `spark_create_agent_spec` tools
    - two-layer activation detection: `SPARK.md` /
      `.spark/thread.json` /
      `~/.config/spark/config.toml` allowlist first,
@@ -96,10 +108,21 @@ but end-to-end local vertical slice.
    - default text UI summary for active thread task counts,
      session-claimed tasks, task TODOs, and independent session
      TODO siblings after Spark initialization and on active Spark turns
+   - active-session task TODO files live under
+     `.spark/todos/<session>.json`; independent TODOs managed by
+     `spark_update_todos` live under
+     `.spark/session-todos/<session>.json`, with stable display
+     numbers in `.spark/todo-display-numbers/<session>.json`
    - invariant repair that clears stale current-task refs
      without creating placeholder tasks
    - ask artifacts linked into the Spark run trace when init clarification runs
-   - managed agent store hydration before ready-task execution
+   - project agent spec store hydration before ready-task execution
+
+## Planned boundary cleanup
+
+- Extract generic agent spec definitions, registry, and non-builtin spec store from `spark-core` / `spark-agents` toward a Spark-independent `pi-agent-spec` package.
+- Extract generic Pi subprocess agent execution from `spark-runtime` toward `pi-agent-run` with explicit `fresh | forked` launch modes.
+- Keep Spark-specific task DAGs, task claims, TODOs, artifacts, asks, and review gates in Spark packages. See [agent-boundaries.md](./agent-boundaries.md) and [agent-run-modes.md](./agent-run-modes.md).
 
 ## Deferred by design
 

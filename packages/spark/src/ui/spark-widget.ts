@@ -1,11 +1,13 @@
+import { truncateToWidth } from "@earendil-works/pi-tui";
+
 /**
  * spark-widget.ts — Above-editor widget showing durable Spark thread/task state plus
  * the current task's TODO working set.
  *
  * Display model:
- *   ◆ Overview: background subagents: @agent-a, @agent-b
- *   ◆ Thread title (tasks: total / claimed / session)
- *   ├─ ◐ @agent task title
+ *   ◆ Tasks(running=2 pending=1 failed=1): @agent-a, @agent-b
+ *   ◆ Thread title
+ *   ├─ ◐ @subagent/agent task title
  *   │  ├─ ✓ #7 task TODO
  *   │  └─ ○ #12 task TODO
  *   └─ ◐ #3 independent session TODO
@@ -15,8 +17,11 @@ export interface TaskEntry {
   title: string;
   status: "running" | "pending" | "blocked" | "done" | "failed" | "cancelled";
   claim?: "mine" | "subagent" | "other";
+  animationFrame?: number;
   agentLabel?: string;
   backgroundOwner?: "session";
+  /** True when a running agent is parked on user/input rather than actively working. */
+  waitingForInput?: boolean;
   todos: SessionTodoEntry[];
 }
 
@@ -47,6 +52,8 @@ export interface SparkWidgetState {
   taskCountClaimed: number;
   taskCountClaimedBySession: number;
   outputLanguage: "zh" | "en";
+  /** Animation frame for running task spinners. Omit for the first/static frame. */
+  animationFrame?: number;
 }
 
 export type SparkWidgetTheme = {
@@ -98,39 +105,76 @@ const L = {
 } as const;
 
 const MAX_WIDGET_LINES = 12;
+const RUNNING_TASK_SPINNER_FRAMES = ["⠧", "⠇", "⠏", "⠋", "⠙", "⠹", "⠸", "⠼"] as const;
+const RUNNING_TASK_WAITING_ICON = "◼";
+const RUNNING_TASK_SPINNER_INTERVAL_MS = 140;
+
+const EMPTY_WIDGET_STATE: SparkWidgetState = {
+  tasks: [],
+  independentTodos: [],
+  taskCountTotal: 0,
+  taskCountClaimed: 0,
+  taskCountClaimedBySession: 0,
+  outputLanguage: "en",
+  animationFrame: 0,
+};
+
+function isVisibleIndependentTodo(todo: SessionTodoEntry): boolean {
+  return todo.status !== "done" && todo.status !== "cancelled" && todo.status !== "deleted";
+}
+
+function isVisibleTaskTodo(todo: SessionTodoEntry): boolean {
+  return todo.status !== "deleted";
+}
+
+function hasWidgetContent(state: SparkWidgetState | undefined): state is SparkWidgetState {
+  return Boolean(
+    state &&
+    (state.threadTitle ||
+      state.tasks.length > 0 ||
+      state.independentTodos.some(isVisibleIndependentTodo)),
+  );
+}
+
+function hasAnimatedRunningTask(state: SparkWidgetState | undefined): boolean {
+  return Boolean(
+    state?.tasks.some(
+      (task) =>
+        task.status === "running" &&
+        task.claim === "subagent" &&
+        task.waitingForInput !== true &&
+        task.backgroundOwner === "session",
+    ),
+  );
+}
 
 export function renderSparkWidgetLines(
   state: SparkWidgetState,
   tui: SparkWidgetTui,
   theme: SparkWidgetTheme,
 ): string[] {
-  const visibleTodos = state.independentTodos.filter(
-    (todo) => todo.status !== "done" && todo.status !== "cancelled" && todo.status !== "deleted",
-  );
+  const visibleTodos = state.independentTodos.filter(isVisibleIndependentTodo);
   if (!state.threadTitle && state.tasks.length === 0 && visibleTodos.length === 0) return [];
 
   const l = L[state.outputLanguage] ?? L.en;
   const width = tui.terminal.columns;
-  const trunc = (line: string) => (line.length <= width ? line : `${line.slice(0, width - 1)}…`);
+  const trunc = (line: string) => truncateToWidth(line, Math.max(1, width), "…");
 
   const lines: string[] = [];
-  const background = currentSessionBackgroundSubagents(state.tasks);
-  if (background.length > 0) {
-    lines.push(trunc(formatOverviewLine(background, theme)));
-  }
+  const visibleTasks = state.tasks.filter(isVisibleTaskEntry);
+
+  const summaryLine = formatTaskSummaryLine(state, visibleTasks, l.tasks, theme);
+  if (summaryLine) lines.push(trunc(summaryLine));
 
   if (state.threadTitle) {
-    lines.push(
-      trunc(
-        `${theme.fg("accent", "◆")} ${theme.bold(state.threadTitle)} ${theme.fg(
-          "dim",
-          `(${l.tasks}: ${state.taskCountTotal}/${state.taskCountClaimed}/${state.taskCountClaimedBySession})`,
-        )}`,
-      ),
-    );
+    lines.push(trunc(`${theme.fg("accent", "◆")} ${theme.bold(state.threadTitle)}`));
   }
 
-  const allRows = flattenWidgetRows(state.tasks, visibleTodos);
+  const tasks = visibleTasks.map((task) => ({
+    ...task,
+    animationFrame: task.animationFrame ?? state.animationFrame ?? 0,
+  }));
+  const allRows = flattenWidgetRows(tasks, visibleTodos);
   const budget = Math.max(0, MAX_WIDGET_LINES - lines.length);
   const visibleRows = allRows.slice(0, budget);
   for (const row of visibleRows) {
@@ -147,39 +191,92 @@ export function renderSparkWidgetLines(
   return lines;
 }
 
-function formatOverviewLine(tasks: TaskEntry[], theme: SparkWidgetTheme): string {
-  const labels = tasks.map((task) => `@${taskAgentLabel(task)}`);
-  const shown = labels.slice(0, 4).join(", ");
-  const hidden = labels.length > 4 ? ` +${labels.length - 4}` : "";
-  return `${theme.fg("accent", "◆")} ${theme.bold("Overview:")} ${theme.fg(
-    "accent",
-    `background subagents (${tasks.length}): ${shown}${hidden}`,
-  )}`;
+function formatTaskSummaryLine(
+  state: SparkWidgetState,
+  visibleTasks: TaskEntry[],
+  tasksLabel: string,
+  theme: SparkWidgetTheme,
+): string | undefined {
+  if (state.taskCountTotal === 0 && visibleTasks.length === 0) return undefined;
+  if (visibleTasks.length === 0 && state.tasks.length > 0) return undefined;
+  const taskSummary = formatTaskSummary(state, visibleTasks);
+  const agentSummary = formatRunningAgentSummary(visibleTasks);
+  const suffix = agentSummary ? `${taskSummary}: ${agentSummary}` : taskSummary;
+  return `${theme.fg("accent", "◆")} ${theme.fg("dim", `${tasksLabel}(${suffix})`)}`;
 }
 
-function currentSessionBackgroundSubagents(tasks: TaskEntry[]): TaskEntry[] {
+function formatTaskSummary(state: SparkWidgetState, visibleTasks: TaskEntry[]): string {
+  const activeTasks = visibleTasks.filter((task) =>
+    ["running", "pending", "blocked", "failed"].includes(task.status),
+  );
+  if (activeTasks.length === 0) {
+    return `total=${state.taskCountTotal} claimed=${state.taskCountClaimed}/${state.taskCountClaimedBySession}`;
+  }
+  const counts = new Map<TaskEntry["status"], number>();
+  for (const task of activeTasks) counts.set(task.status, (counts.get(task.status) ?? 0) + 1);
+  return (["running", "pending", "blocked", "failed"] as const)
+    .map((status) => {
+      const count = counts.get(status) ?? 0;
+      return count > 0 ? `${status}=${count}` : undefined;
+    })
+    .filter((part): part is string => Boolean(part))
+    .join(" ");
+}
+
+function formatRunningAgentSummary(tasks: TaskEntry[]): string | undefined {
+  const runningLabels = dedupeTaskAgentLabels(
+    tasks
+      .filter(
+        (task) =>
+          task.status === "running" &&
+          task.claim === "subagent" &&
+          task.backgroundOwner === "session",
+      )
+      .map(taskAgentLabel),
+  );
+  if (runningLabels.length === 0) return undefined;
+  const shown = runningLabels
+    .slice(0, 4)
+    .map((label) => `@${label}`)
+    .join(", ");
+  const hidden = runningLabels.length > 4 ? ` +${runningLabels.length - 4}` : "";
+  return `${shown}${hidden}`;
+}
+
+function isVisibleTaskEntry(task: TaskEntry): boolean {
+  if (isFinishedTaskStatus(task.status) && isOtherSessionAgentLabel(task.agentLabel)) return false;
+  return true;
+}
+
+function isFinishedTaskStatus(status: TaskEntry["status"]): boolean {
+  return status === "done" || status === "cancelled";
+}
+
+function isOtherSessionAgentLabel(label: string | undefined): boolean {
+  const normalized = label?.trim();
+  return Boolean(
+    normalized &&
+    normalized !== "unassigned" &&
+    normalized !== "me" &&
+    !normalized.startsWith("me/"),
+  );
+}
+
+function dedupeTaskAgentLabels(labels: string[]): string[] {
   const seen = new Set<string>();
-  const result: TaskEntry[] = [];
-  for (const task of tasks) {
-    if (
-      task.status !== "running" ||
-      task.claim !== "subagent" ||
-      task.backgroundOwner !== "session"
-    )
-      continue;
-    const label = taskAgentLabel(task);
-    const key = `${label}\u0000${task.title}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(task);
+  const result: string[] = [];
+  for (const label of labels) {
+    if (seen.has(label)) continue;
+    seen.add(label);
+    result.push(label);
   }
   return result;
 }
 
-function taskIcon(status: TaskEntry["status"], theme: SparkWidgetTheme): string {
-  switch (status) {
+function taskIcon(task: TaskEntry, theme: SparkWidgetTheme): string {
+  switch (task.status) {
     case "running":
-      return theme.fg("accent", "→");
+      return theme.fg("accent", runningTaskIcon(task));
     case "pending":
       return theme.fg("dim", "◻");
     case "blocked":
@@ -191,6 +288,19 @@ function taskIcon(status: TaskEntry["status"], theme: SparkWidgetTheme): string 
     case "failed":
       return theme.fg("error", "✗");
   }
+}
+
+function runningTaskIcon(task: TaskEntry): string {
+  if (task.waitingForInput) return RUNNING_TASK_WAITING_ICON;
+  if (task.claim === "other") return RUNNING_TASK_WAITING_ICON;
+  if (task.claim !== "subagent") return "→";
+  if (task.backgroundOwner !== "session") return RUNNING_TASK_WAITING_ICON;
+  const frame = taskAnimationFrame(task);
+  return RUNNING_TASK_SPINNER_FRAMES[frame % RUNNING_TASK_SPINNER_FRAMES.length];
+}
+
+function taskAnimationFrame(task: TaskEntry): number {
+  return Number.isInteger(task.animationFrame) ? Math.max(0, task.animationFrame ?? 0) : 0;
 }
 
 function taskAgentLabel(task: TaskEntry): string {
@@ -207,9 +317,11 @@ function taskAgentLabel(task: TaskEntry): string {
 }
 
 function formatTaskTitle(task: TaskEntry, theme: SparkWidgetTheme): string {
-  const agentLabel = taskAgentLabel(task);
+  const actorLabel = taskActorLabel(task);
   const title = task.title.trim() || "Untitled task";
-  const base = `${theme.fg(task.claim === "other" ? "dim" : "accent", `@${agentLabel}`)} ${title}`;
+  const base = actorLabel
+    ? `${theme.fg(task.claim === "other" ? "dim" : "accent", actorLabel)} ${title}`
+    : title;
   if (task.status === "done" || task.status === "cancelled")
     return theme.fg("dim", theme.strikethrough(base));
   if (task.status === "failed") return theme.fg("error", base);
@@ -229,7 +341,7 @@ function flattenWidgetRows(tasks: TaskEntry[], independentTodos: SessionTodoEntr
   for (const task of visibleTasks) {
     rows.push({ kind: "task", task });
     if (task.status === "done" || task.status === "cancelled") continue;
-    for (const todo of sortTodosForVisibility(task.todos))
+    for (const todo of sortTodosForVisibility(task.todos.filter(isVisibleTaskTodo)))
       rows.push({ kind: "task-todo", todo, fallbackNumber: todoIndex++ });
   }
   for (const todo of sortTodosForVisibility(independentTodos))
@@ -242,12 +354,13 @@ function sortTasksForVisibility(tasks: TaskEntry[]): TaskEntry[] {
 }
 
 function taskVisibilityRank(task: TaskEntry): number {
-  if (task.status === "running") return 0;
+  if (task.status === "running" && task.backgroundOwner === "session") return 0;
   if (task.status === "blocked") return 1;
-  if (task.status === "pending") return 2;
-  if (task.status === "failed") return 3;
-  if (task.status === "done") return 4;
-  return 5; // cancelled
+  if (task.status === "running") return 2;
+  if (task.status === "pending") return 3;
+  if (task.status === "failed") return 4;
+  if (task.status === "done") return 5;
+  return 6; // cancelled
 }
 
 function sortTodosForVisibility(todos: SessionTodoEntry[]): SessionTodoEntry[] {
@@ -262,10 +375,21 @@ function todoVisibilityRank(todo: SessionTodoEntry): number {
   return 4; // cancelled/deleted
 }
 
+function taskActorLabel(task: TaskEntry): string | undefined {
+  const agentLabel = taskAgentLabel(task);
+  if (task.claim === "subagent") {
+    if (agentLabel.includes("/")) return `@${agentLabel}`;
+    return task.backgroundOwner === "session" ? `@me/${agentLabel}` : `@${agentLabel}`;
+  }
+  if (task.claim === "mine" && task.agentLabel?.trim()) return `@${agentLabel}`;
+  if (task.claim === "other") return `@${agentLabel}`;
+  return undefined;
+}
+
 function formatWidgetRow(row: WidgetRow, theme: SparkWidgetTheme): string {
   switch (row.kind) {
     case "task":
-      return `${theme.fg("dim", "├─")} ${taskIcon(row.task.status, theme)} ${formatTaskTitle(row.task, theme)}`;
+      return `${theme.fg("dim", "├─")} ${taskIcon(row.task, theme)} ${formatTaskTitle(row.task, theme)}`;
     case "task-todo":
       return `${theme.fg("dim", "│  ├─")} ${todoIcon(row.todo.status, theme)} #${todoDisplayNumber(row.todo, row.fallbackNumber)} ${formatTodoContent(row.todo, theme)}`;
     case "independent-todo":
@@ -284,7 +408,7 @@ function todoIcon(status: SessionTodoStatus, theme: SparkWidgetTheme): string {
     case "in_progress":
       return theme.fg("accent", "◐");
     case "blocked":
-      return theme.fg("warning", "⛔");
+      return theme.fg("warning", "⏸");
     case "done":
       return theme.fg("success", "✓");
     case "cancelled":
@@ -306,6 +430,8 @@ function formatTodoContent(todo: SessionTodoEntry, theme: SparkWidgetTheme): str
 export class SparkWidget {
   private registered = false;
   private tui: SparkWidgetTui | undefined;
+  private spinnerTimer: ReturnType<typeof setInterval> | undefined;
+  private animationFrame = 0;
   private readState: () => SparkWidgetState | undefined;
   private registerWidget: (
     key: string,
@@ -335,15 +461,13 @@ export class SparkWidget {
 
   update() {
     const state = this.readState();
-    if (
-      !state ||
-      (!state.threadTitle && state.tasks.length === 0 && state.independentTodos.length === 0)
-    ) {
+    if (!hasWidgetContent(state)) {
       if (this.registered) {
         this.registerWidget("spark-status", undefined);
         this.registered = false;
         this.tui = undefined;
       }
+      this.clearSpinnerTimer();
       return;
     }
 
@@ -352,7 +476,14 @@ export class SparkWidget {
         this.tui = tui;
         return {
           render: () =>
-            renderSparkWidgetLines(this.readState() ?? ({} as SparkWidgetState), tui, theme),
+            renderSparkWidgetLines(
+              {
+                ...(this.readState() ?? EMPTY_WIDGET_STATE),
+                animationFrame: this.animationFrame,
+              },
+              tui,
+              theme,
+            ),
           invalidate: () => {},
         };
       });
@@ -360,11 +491,34 @@ export class SparkWidget {
     } else if (this.tui) {
       this.tui.requestRender();
     }
+
+    this.updateSpinnerTimer(state);
+  }
+
+  private updateSpinnerTimer(state: SparkWidgetState | undefined): void {
+    if (hasAnimatedRunningTask(state)) {
+      if (this.spinnerTimer) return;
+      this.spinnerTimer = setInterval(() => {
+        this.animationFrame = (this.animationFrame + 1) % RUNNING_TASK_SPINNER_FRAMES.length;
+        this.tui?.requestRender();
+      }, RUNNING_TASK_SPINNER_INTERVAL_MS);
+      this.spinnerTimer.unref?.();
+      return;
+    }
+    this.clearSpinnerTimer();
+  }
+
+  private clearSpinnerTimer(): void {
+    if (!this.spinnerTimer) return;
+    clearInterval(this.spinnerTimer);
+    this.spinnerTimer = undefined;
+    this.animationFrame = 0;
   }
 
   dispose() {
     if (this.registered) this.registerWidget("spark-status", undefined);
     this.registered = false;
     this.tui = undefined;
+    this.clearSpinnerTimer();
   }
 }

@@ -21,28 +21,57 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 export interface PiCueExtensionApi {
-  registerTool(config: {
-    name: string;
-    label?: string;
-    description: string;
-    parameters: unknown;
-    execute(
-      toolCallId: string,
-      params: Record<string, unknown>,
-      signal: AbortSignal,
-      onUpdate: (update: { content: Array<{ type: "text"; text: string }> }) => void,
-      ctx: { ui?: { notify?: (msg: string, level: string) => void } },
-    ): Promise<{
-      content: Array<{ type: "text"; text: string }>;
-      details?: Record<string, unknown>;
-    }>;
-  }): void;
+  registerTool(config: PiCueToolConfig): void;
   on(event: string, handler: (event?: unknown, ctx?: unknown) => unknown): void;
   getAllTools(): Array<{ name: string }>;
   setActiveTools(names: string[]): void;
+}
+
+interface PiCueToolConfig {
+  name: string;
+  label?: string;
+  description: string;
+  parameters: unknown;
+  renderCall?: (
+    args: Record<string, unknown>,
+    theme: ToolCallRenderTheme,
+    context: unknown,
+  ) => ToolCallComponent;
+  execute(
+    toolCallId: string,
+    params: Record<string, unknown>,
+    signal: AbortSignal,
+    onUpdate: (update: { content: Array<{ type: "text"; text: string }> }) => void,
+    ctx: { ui?: { notify?: (msg: string, level: string) => void } },
+  ): Promise<{
+    content: Array<{ type: "text"; text: string }>;
+    details?: Record<string, unknown>;
+  }>;
+}
+
+interface ToolCallRenderTheme {
+  fg?: (color: string, text: string) => string;
+  bold?: (text: string) => string;
+}
+
+interface ToolCallComponent {
+  render(width: number): string[];
+}
+
+class ToolCallText implements ToolCallComponent {
+  private readonly text: string;
+
+  constructor(text: string) {
+    this.text = text;
+  }
+
+  render(width: number): string[] {
+    return [truncateToWidth(this.text, Math.max(1, width), "…")];
+  }
 }
 
 export { CueClient, CueError, defaultSocketPath } from "./cue-client.ts";
@@ -171,6 +200,46 @@ function tailStr(s: string, maxBytes: number): { text: string; truncated: boolea
   return { text: s.slice(s.length - maxBytes), truncated: true };
 }
 
+function renderToolCall(
+  toolName: string,
+  parts: Array<string | undefined>,
+  theme: ToolCallRenderTheme,
+): ToolCallComponent {
+  const title =
+    theme.fg?.("toolTitle", theme.bold?.(`${toolName} `) ?? `${toolName} `) ?? `${toolName} `;
+  const renderedParts = parts.filter((part): part is string => Boolean(part));
+  const args = theme.fg?.("muted", renderedParts.join(" ")) ?? renderedParts.join(" ");
+  return new ToolCallText(`${title}${args}`.trimEnd());
+}
+
+function formatStringArg(
+  value: unknown,
+  options: { prefix?: string; fallback?: string; maxLength?: number } = {},
+): string | undefined {
+  const text = typeof value === "string" && value.trim() ? value.trim() : options.fallback;
+  if (!text) return undefined;
+  const rendered = needsQuoting(text) ? JSON.stringify(text) : text;
+  return `${options.prefix ?? ""}${truncateInline(rendered, options.maxLength ?? 80)}`;
+}
+
+function formatNumberArg(
+  value: unknown,
+  options: { prefix?: string; suffix?: string } = {},
+): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return `${options.prefix ?? ""}${value}${options.suffix ?? ""}`;
+}
+
+function needsQuoting(value: string): boolean {
+  return /\s|["'`]/.test(value);
+}
+
+function truncateInline(value: string, maxLength: number): string {
+  const normalized = value.replaceAll(/\s+/g, " ");
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
 // ── Extension ──────────────────────────────────────────────────────────────
 
 export function registerPiCueTools(pi: PiCueExtensionApi) {
@@ -219,6 +288,19 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         }),
       ),
     }),
+    renderCall(args, theme) {
+      return renderToolCall(
+        "run",
+        [
+          formatStringArg(args.command, { maxLength: 120 }),
+          args.background === true ? "background" : undefined,
+          formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
+          formatStringArg(args.cwd, { prefix: "cwd=" }),
+          args.tail === false ? "tail=false" : undefined,
+        ],
+        theme,
+      );
+    },
     async execute(
       _toolCallId: string,
       params: {
@@ -229,18 +311,17 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         tail?: boolean;
       },
       _signal: AbortSignal,
-      onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
+      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: { ui?: { notify?: (msg: string, level: string) => void } },
     ) {
       const cued = await getClient(ctx);
       const { command, cwd } = params;
       const doTail = params.tail !== false; // default true: tail output
       const TAIL_BYTES = 64 * 1024; // 64 KiB
-      const invocation = `run(command="${command}", background=${!!params.background}, timeout=${params.timeout ?? 300}${cwd ? `, cwd="${cwd}"` : ""})`;
 
       if (params.background) {
         const result = await cued.startJob(command, { cwd });
-        const lines = [invocation, ""];
+        const lines: string[] = [];
         if (result.kind === "chain" && result.chain) {
           const chain = result.chain;
           lines.push(`Chain: ${chain.id}  |  ${chain.total_jobs} job(s)`);
@@ -250,7 +331,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           lines.push(`Job:   ${result.jobId}  [running]`);
           lines.push(`Cmd:   ${result.pipeline ?? command}`);
         }
-        lines.push("", `Track: status(id="${result.jobId}")  or  wait(id="${result.jobId}")`);
+        lines.push("", `Track with status/wait using id ${result.jobId}.`);
         return {
           content: [{ type: "text" as const, text: lines.join("\n") }],
           details: {
@@ -261,7 +342,6 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         };
       }
 
-      onUpdate({ content: [{ type: "text", text: invocation }] });
       const effectiveTimeout = params.timeout ?? (isFileOp(command) ? SHORT_TIMEOUT_S : 300);
 
       const result = await cued.runJob(command, {
@@ -271,10 +351,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
 
       if (result.timedOut) {
         const lines = [
-          invocation,
-          "",
           `Job ${result.jobId}: Timed out after ${effectiveTimeout}s — switched to background.`,
-          `Track: status(id="${result.jobId}")  or  wait(id="${result.jobId}")`,
+          `Track with status/wait using id ${result.jobId}.`,
         ];
         if (result.stdout.trim()) {
           const t = doTail
@@ -282,7 +360,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             : { text: result.stdout, truncated: false };
           lines.push("", "[stdout so far]", t.text.trimEnd());
           if (t.truncated)
-            lines.push(`[stdout truncated — use status(id="${result.jobId}") for full output]`);
+            lines.push(`[stdout truncated — use status with id ${result.jobId} for full output]`);
         }
         if (result.stderr.trim()) {
           const t = doTail
@@ -315,13 +393,13 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             : { text: result.stdout, truncated: false };
           parts.push("\n" + t.text.trimEnd());
           if (t.truncated)
-            parts.push(`[stdout truncated — use status(id="${result.jobId}") for full output]`);
+            parts.push(`[stdout truncated — use status with id ${result.jobId} for full output]`);
         }
         if (stderrTail) parts.push("\n[stderr tail]\n" + stderrTail);
         throw new Error(parts.join(""));
       }
 
-      const out = [`${invocation}\n\nJob ${result.jobId}: ${result.status}`];
+      const out = [`Job ${result.jobId}: ${result.status}`];
       if (result.exitCode !== null && result.exitCode !== 0) out.push(` (exit ${result.exitCode})`);
       if (result.stdout.trim()) {
         const t = doTail
@@ -329,7 +407,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           : { text: result.stdout, truncated: false };
         out.push("\n" + t.text.trimEnd());
         if (t.truncated)
-          out.push(`\n[stdout truncated — use status(id="${result.jobId}") for full output]`);
+          out.push(`\n[stdout truncated — use status with id ${result.jobId} for full output]`);
       }
       if (result.stderr.trim()) {
         const t = doTail
@@ -337,7 +415,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           : { text: result.stderr, truncated: false };
         out.push("\n[stderr]\n" + t.text.trimEnd());
         if (t.truncated)
-          out.push(`\n[stderr truncated — use status(id="${result.jobId}") for full output]`);
+          out.push(`\n[stderr truncated — use status with id ${result.jobId} for full output]`);
       }
 
       return {
@@ -366,6 +444,9 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         }),
       ),
     }),
+    renderCall(args, theme) {
+      return renderToolCall("jobs", [formatStringArg(args.status, { fallback: "all" })], theme);
+    },
     async execute(
       _toolCallId: string,
       params: { status?: string },
@@ -392,7 +473,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         content: [
           {
             type: "text" as const,
-            text: `jobs(status="${filter}")\n\n${lines.join("\n")}`,
+            text: lines.join("\n"),
           },
         ],
         details: { jobs },
@@ -417,6 +498,13 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         }),
       ),
     }),
+    renderCall(args, theme) {
+      return renderToolCall(
+        "status",
+        [formatStringArg(args.id), formatNumberArg(args.tail_bytes, { prefix: "tail=" })],
+        theme,
+      );
+    },
     async execute(
       _toolCallId: string,
       params: { id: string; tail_bytes?: number },
@@ -483,7 +571,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         content: [
           {
             type: "text" as const,
-            text: `status(id="${params.id}")\n\n${parts.join("\n")}`,
+            text: parts.join("\n"),
           },
         ],
         details: {
@@ -507,6 +595,9 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     parameters: Type.Object({
       id: Type.String({ description: "Job ID (J<n>) or cron ID (C<n>)." }),
     }),
+    renderCall(args, theme) {
+      return renderToolCall("kill", [formatStringArg(args.id)], theme);
+    },
     async execute(
       _toolCallId: string,
       params: { id: string },
@@ -517,7 +608,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       const cued = await getClient(ctx);
       await cued.stopJob(params.id);
       return {
-        content: [{ type: "text" as const, text: `kill(id="${params.id}")\n\nDone.` }],
+        content: [{ type: "text" as const, text: `Stopped ${params.id}.` }],
         details: { targetId: params.id },
       };
     },
@@ -543,23 +634,24 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         }),
       ),
     }),
+    renderCall(args, theme) {
+      return renderToolCall(
+        "wait",
+        [
+          formatStringArg(args.id),
+          formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
+        ],
+        theme,
+      );
+    },
     async execute(
       _toolCallId: string,
       params: { id: string; timeout?: number },
       _signal: AbortSignal,
-      onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
+      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: { ui?: { notify?: (msg: string, level: string) => void } },
     ) {
       const cued = await getClient(ctx);
-      onUpdate({
-        content: [
-          {
-            type: "text",
-            text: `wait(id="${params.id}", timeout=${params.timeout ?? 300})`,
-          },
-        ],
-      });
-
       const deadline = Date.now() + (params.timeout ?? 300) * 1000;
 
       while (Date.now() < deadline) {
@@ -569,7 +661,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             content: [
               {
                 type: "text" as const,
-                text: `wait(id="${params.id}") — job not found.`,
+                text: `Job ${params.id} not found.`,
               },
             ],
             details: { found: false },
@@ -586,11 +678,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           if (job.exit_code != null) lines.push(`Exit code: ${job.exit_code}`);
           if (out.stdout.trim()) lines.push("", out.stdout.trimEnd());
           if (out.stderr.trim()) lines.push("", "[stderr]", out.stderr.trimEnd());
-          const text = `wait(id="${params.id}") — completed\n\n${lines.join("\n")}`;
+          const text = `Job ${params.id} completed\n\n${lines.join("\n")}`;
           if (job.status === "Failed") throw new Error(text);
-          if (job.status === "Killed") throw new Error(`wait(id="${params.id}") — job was killed`);
-          if (job.status === "Cancelled")
-            throw new Error(`wait(id="${params.id}") — job was cancelled`);
+          if (job.status === "Killed") throw new Error(`Job ${params.id} was killed`);
+          if (job.status === "Cancelled") throw new Error(`Job ${params.id} was cancelled`);
           return {
             content: [{ type: "text" as const, text }],
             details: {
@@ -607,7 +698,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         content: [
           {
             type: "text" as const,
-            text: `wait(id="${params.id}") — timed out after ${params.timeout ?? 300}s.`,
+            text: `Timed out after ${params.timeout ?? 300}s waiting for ${params.id}.`,
           },
         ],
         details: { timedOut: true },
@@ -655,6 +746,19 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         }),
       ),
     }),
+    renderCall(args, theme) {
+      return renderToolCall(
+        "cron",
+        [
+          formatStringArg(args.action, { fallback: "list" }),
+          formatStringArg(args.id, { prefix: "id=" }),
+          formatStringArg(args.schedule, { prefix: "schedule=", maxLength: 40 }),
+          formatStringArg(args.command, { prefix: "command=", maxLength: 80 }),
+          formatStringArg(args.status, { prefix: "status=" }),
+        ],
+        theme,
+      );
+    },
     async execute(
       _toolCallId: string,
       params: {
@@ -689,7 +793,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           content: [
             {
               type: "text" as const,
-              text: `cron(action="add", schedule="${params.schedule}", command="${params.command}")\n\nCron: ${cronId}\nRemove: kill(id="${cronId}")`,
+              text: `Cron: ${cronId}\nRemove with kill using id ${cronId}.`,
             },
           ],
           details: {
@@ -715,7 +819,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           content: [
             {
               type: "text" as const,
-              text: `cron(action="list")\n\n${lines.join("\n")}`,
+              text: lines.join("\n"),
             },
           ],
           details: { crons },
@@ -741,7 +845,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           content: [
             {
               type: "text" as const,
-              text: `cron(action="pause", id="${params.id}")\n\nPaused. Resume: cron(action="resume", id="${params.id}")`,
+              text: `Paused ${params.id}. Resume with cron action=resume id=${params.id}.`,
             },
           ],
           details: { id: params.id, paused: true },
@@ -753,7 +857,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           content: [
             {
               type: "text" as const,
-              text: `cron(action="resume", id="${params.id}")\n\nResumed.`,
+              text: `Resumed ${params.id}.`,
             },
           ],
           details: { id: params.id, resumed: true },
@@ -765,7 +869,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           content: [
             {
               type: "text" as const,
-              text: `cron(action="remove", id="${params.id}")\n\nRemoved.`,
+              text: `Removed ${params.id}.`,
             },
           ],
           details: { id: params.id, removed: true },
@@ -794,6 +898,9 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     description:
       "List cue-shell environment scopes. Each scope is an immutable, content-addressed env snapshot.",
     parameters: Type.Object({}),
+    renderCall(_args, theme) {
+      return renderToolCall("scopes", [], theme);
+    },
     async execute(
       _toolCallId: string,
       _params: Record<string, never>,
@@ -817,7 +924,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         envText.trimEnd(),
       ];
       return {
-        content: [{ type: "text" as const, text: `scopes()\n\n${lines.join("\n")}` }],
+        content: [{ type: "text" as const, text: lines.join("\n") }],
         details: { scopes: all },
       };
     },
@@ -839,6 +946,9 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         }),
       ),
     }),
+    renderCall(args, theme) {
+      return renderToolCall("log", [formatStringArg(args.id)], theme);
+    },
     async execute(
       _toolCallId: string,
       params: { id?: string },
@@ -848,9 +958,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     ) {
       const cued = await getClient(ctx);
       const text = await cued.showLog(params.id);
-      const label = params.id ? `log(id="${params.id}")` : "log()";
       return {
-        content: [{ type: "text" as const, text: `${label}\n\n${text}` }],
+        content: [{ type: "text" as const, text }],
         details: { id: params.id ?? null },
       };
     },

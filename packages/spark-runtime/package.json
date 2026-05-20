@@ -16,6 +16,7 @@
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
+    "pi-agent-run": "file:../pi-agent-run",
     "spark-agents": "file:../spark-agents",
     "spark-artifacts": "file:../spark-artifacts",
     "spark-core": "file:../spark-core",

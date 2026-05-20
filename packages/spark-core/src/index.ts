@@ -188,12 +188,12 @@ export interface ArtifactLink {
   relation: "parent" | "input" | "output" | "review-of" | "answer-to" | "trace-of" | "derived-from";
 }
 
-export type AgentScope = "builtin" | "managed";
+export type AgentSpecSource = "predefined" | "project";
 
 export interface AgentSpec {
   ref: AgentRef;
   id: string;
-  scope: AgentScope;
+  source: AgentSpecSource;
   description: string;
   systemPrompt: string;
   allowedTools?: string[];
@@ -202,13 +202,16 @@ export interface AgentSpec {
   updatedAt: string;
 }
 
-export interface ManagedAgentProposal {
+export interface AgentSpecProposal {
   artifactRef?: ArtifactRef;
   id: string;
+  source?: Exclude<AgentSpecSource, "predefined">;
   description: string;
   systemPrompt: string;
   rationale: string;
   expectedUses: string[];
+  allowedTools?: string[];
+  defaultModel?: string;
 }
 
 export interface AgentInstruction {
@@ -298,7 +301,14 @@ export interface TaskClaim {
   runRef?: RunRef;
   claimedAt: string;
   heartbeatAt: string;
-  expiresAt?: string;
+  expiresAt: string;
+}
+
+export interface TaskAttribution {
+  /** Session/main-agent identity. Subagents are rendered as sessionId/agentName. */
+  sessionId?: string;
+  /** Concrete subagent name. Main-agent completions should leave this unset. */
+  agentName?: string;
 }
 
 export interface Task {
@@ -313,9 +323,8 @@ export interface Task {
   agentRef?: AgentRef;
   /** @deprecated use claim.sessionId / claim.claimedBy. */
   claimedBySession?: string;
-  /** Last session/claim owner that completed or cancelled this task, used after active claims are cleared. */
-  completedBySession?: string;
-  completedByAgentName?: string;
+  /** Last actor that finished this task after active claims are cleared. */
+  finishedBy?: TaskAttribution;
   claim?: TaskClaim;
   inputArtifacts: ArtifactRef[];
   outputArtifacts: ArtifactRef[];
@@ -373,7 +382,6 @@ export interface AskRequest {
   options: AskOption[];
   multiSelect?: boolean;
   defaultOptionId?: string;
-  timeoutMs?: number;
 }
 
 export interface AskAnswer {
@@ -389,7 +397,7 @@ export type GatePolicy = "required" | "advisory" | "blocking";
 export interface ReviewGate {
   ref: ReviewRef;
   subject: TaskRef | ArtifactRef | AgentRef;
-  lens: "task-completion" | "artifact" | "managed-agent" | "readiness";
+  lens: "task-completion" | "artifact" | "agent-spec" | "readiness";
   policy: GatePolicy;
   outcome: ReviewOutcome;
   summary: string;
@@ -414,8 +422,8 @@ export function validateAgentSpec(agent: AgentSpec): void {
   assertNonEmpty(agent.id, "agent id");
   assertNonEmpty(agent.description, `agent ${agent.id} description`);
   assertNonEmpty(agent.systemPrompt, `agent ${agent.id} system prompt`);
-  if (agent.scope !== "builtin" && agent.scope !== "managed") {
-    throw new ValidationError(`invalid agent scope: ${String(agent.scope)}`);
+  if (agent.source !== "predefined" && agent.source !== "project") {
+    throw new ValidationError(`invalid agent spec source: ${String(agent.source)}`);
   }
 }
 

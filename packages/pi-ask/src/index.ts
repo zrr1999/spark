@@ -1,4 +1,7 @@
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+
+import { SENTINEL_LABELS } from "./schema.ts";
 
 export type PiAskMode = "clarification" | "decision" | "approval" | "unblock";
 export type PiAskQuestionType = "single" | "multi" | "freeform";
@@ -24,7 +27,6 @@ export interface PiAskRequest {
   mode?: PiAskMode;
   context?: string;
   questions: PiAskQuestion[];
-  timeoutMs?: number;
 }
 
 export interface PiAskAnswerEntry {
@@ -36,7 +38,7 @@ export interface PiAskAnswerEntry {
   preview?: string;
 }
 
-export type PiAskResultStatus = "answered" | "timeout" | "cancelled" | "no_selection";
+export type PiAskResultStatus = "answered" | "cancelled" | "no_selection";
 
 export interface PiAskResult {
   status: PiAskResultStatus;
@@ -47,28 +49,60 @@ export interface PiAskResult {
 
 export interface PiAskUi {
   select?: (title: string, options: string[]) => Promise<string | undefined>;
+  selectWithCustom?: (
+    title: string,
+    input: { options: string[]; customLabel: string },
+  ) => Promise<{ value?: string; customText?: string } | string | undefined>;
   confirm?: (title: string, message: string) => Promise<boolean>;
   input?: (title: string, defaultValue?: string) => Promise<string | undefined>;
   notify?: (message: string, level?: "info" | "warning" | "error" | "success") => void;
 }
 
 export interface PiAskExtensionApi {
-  registerTool(config: {
-    name: string;
-    label?: string;
-    description: string;
-    parameters: unknown;
-    execute(
-      toolCallId: string,
-      params: Record<string, unknown>,
-      signal: AbortSignal,
-      onUpdate: (update: { content: Array<{ type: "text"; text: string }> }) => void,
-      ctx: unknown,
-    ): Promise<{
-      content: Array<{ type: "text"; text: string }>;
-      details?: Record<string, unknown>;
-    }>;
-  }): void;
+  registerTool(config: PiAskToolConfig): void;
+}
+
+interface PiAskToolConfig {
+  name: string;
+  label?: string;
+  description: string;
+  parameters: unknown;
+  renderCall?: (
+    args: Record<string, unknown>,
+    theme: ToolCallRenderTheme,
+    context: unknown,
+  ) => ToolCallComponent;
+  execute(
+    toolCallId: string,
+    params: Record<string, unknown>,
+    signal: AbortSignal,
+    onUpdate: (update: { content: Array<{ type: "text"; text: string }> }) => void,
+    ctx: unknown,
+  ): Promise<{
+    content: Array<{ type: "text"; text: string }>;
+    details?: Record<string, unknown>;
+  }>;
+}
+
+interface ToolCallRenderTheme {
+  fg?: (color: string, text: string) => string;
+  bold?: (text: string) => string;
+}
+
+interface ToolCallComponent {
+  render(width: number): string[];
+}
+
+class ToolCallText implements ToolCallComponent {
+  private readonly text: string;
+
+  constructor(text: string) {
+    this.text = text;
+  }
+
+  render(width: number): string[] {
+    return [truncateToWidth(this.text, Math.max(1, width), "…")];
+  }
 }
 
 export function createAskUserRequest(input: PiAskRequest): PiAskRequest {
@@ -96,24 +130,32 @@ export async function askUser(request: PiAskRequest, ui?: PiAskUi): Promise<PiAs
   const answers: Record<string, PiAskAnswerEntry> = {};
   for (const question of normalized.questions) {
     const resolved = await resolveQuestion(question, normalized, ui);
-    if (resolved.timedOut) {
-      return createAskUserResult({
-        cancelled: false,
-        answers,
-        status: Object.keys(answers).length > 0 ? "answered" : "timeout",
-      });
-    }
     if (!resolved.answer) {
-      if (question.required)
+      if (requiresExplicitAskUserSelection(normalized, question))
         return createAskUserResult({ cancelled: false, answers, status: "no_selection" });
       continue;
     }
     answers[question.id] = resolved.answer;
+    if (
+      requiresExplicitAskUserSelection(normalized, question) &&
+      resolved.answer.values.length === 0
+    ) {
+      return createAskUserResult({
+        cancelled: false,
+        answers,
+        status: "answered",
+        nextAction: "block",
+      });
+    }
   }
   return createAskUserResult({ cancelled: false, answers });
 }
 
 export function defaultAskUserResult(request: PiAskRequest): PiAskResult {
+  if (requestRequiresExplicitAskUserSelection(request)) {
+    return createAskUserResult({ cancelled: false, answers: {}, status: "no_selection" });
+  }
+
   const answers: Record<string, PiAskAnswerEntry> = {};
   for (const question of request.questions) {
     const first = question.options?.[0];
@@ -169,8 +211,19 @@ export function registerPiAskTools(pi: PiAskExtensionApi): void {
           required: Type.Optional(Type.Boolean()),
         }),
       ),
-      timeoutMs: Type.Optional(Type.Number()),
     }),
+    renderCall(args, theme) {
+      const questionCount = Array.isArray(args.questions) ? args.questions.length : undefined;
+      return renderToolCall(
+        "ask_user",
+        [
+          formatStringArg(args.title, { prefix: "title=" }),
+          formatStringArg(args.mode, { fallback: "clarification" }),
+          questionCount === undefined ? undefined : `${questionCount}q`,
+        ],
+        theme,
+      );
+    },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const request = decodeAskRequest(params);
       const result = await askUser(request, ctxUi(ctx));
@@ -213,7 +266,6 @@ function decodeAskRequest(params: Record<string, unknown>): PiAskRequest {
     mode: params.mode as PiAskMode | undefined,
     context: params.context as string | undefined,
     questions,
-    timeoutMs: params.timeoutMs as number | undefined,
   });
 }
 
@@ -225,6 +277,10 @@ function ctxUi(ctx: unknown): PiAskUi | undefined {
     select:
       typeof (ui as { select?: unknown }).select === "function"
         ? (ui as { select: PiAskUi["select"] }).select
+        : undefined,
+    selectWithCustom:
+      typeof (ui as { selectWithCustom?: unknown }).selectWithCustom === "function"
+        ? (ui as { selectWithCustom: PiAskUi["selectWithCustom"] }).selectWithCustom
         : undefined,
     confirm:
       typeof (ui as { confirm?: unknown }).confirm === "function"
@@ -241,9 +297,9 @@ function ctxUi(ctx: unknown): PiAskUi | undefined {
   };
 }
 
-type ResolvedQuestion =
-  | { timedOut: true; answer?: undefined }
-  | { timedOut: false; answer?: PiAskAnswerEntry };
+interface ResolvedQuestion {
+  answer?: PiAskAnswerEntry;
+}
 
 async function resolveQuestion(
   question: PiAskQuestion,
@@ -252,27 +308,23 @@ async function resolveQuestion(
 ): Promise<ResolvedQuestion> {
   const title = request.title ? `${request.title} — ${question.prompt}` : question.prompt;
   if ((question.type ?? "single") === "freeform") {
-    const text = await withTimeout(ui.input?.(title, ""), request.timeoutMs);
-    if (text.timedOut) return { timedOut: true };
-    if (text.value === undefined) return { timedOut: false };
-    return { timedOut: false, answer: { values: [], labels: [], customText: text.value } };
+    const text = await ui.input?.(title, "");
+    if (text === undefined) return {};
+    return { answer: { values: [], labels: [], customText: text } };
   }
 
   const questionType = (question.type ?? "single") as Exclude<PiAskQuestionType, "freeform">;
 
-  if (ui.select && question.options) {
-    const selected = await withTimeout(
-      ui.select(
-        title,
-        question.options.map((option) => option.label),
-      ),
-      request.timeoutMs,
-    );
-    if (selected.timedOut) return { timedOut: true };
-    if (!selected.value) return { timedOut: false };
+  if (question.options && (ui.selectWithCustom || ui.select)) {
+    const selected = await selectQuestionOptionWithCustom(ui, title, question.options);
+    if (!selected) return {};
+    if (selected.customText !== undefined) {
+      return {
+        answer: parseOptionText(question.options, selected.customText, questionType),
+      };
+    }
     return {
-      timedOut: false,
-      answer: parseOptionText(question.options, selected.value, questionType),
+      answer: parseOptionText(question.options, selected.value ?? "", questionType),
     };
   }
 
@@ -283,30 +335,54 @@ async function resolveQuestion(
     question.options.length >= 2 &&
     ui.confirm
   ) {
-    const ok = await withTimeout(ui.confirm(title, request.context ?? ""), request.timeoutMs);
-    if (ok.timedOut) return { timedOut: true };
-    if (ok.value === undefined) return { timedOut: false };
-    const chosen = ok.value ? question.options[0] : question.options[1];
-    return { timedOut: false, answer: { values: [chosen.value], labels: [chosen.label] } };
+    const ok = await ui.confirm(title, request.context ?? "");
+    if (ok === undefined) return {};
+    const chosen = ok ? question.options[0] : question.options[1];
+    return { answer: { values: [chosen.value], labels: [chosen.label] } };
   }
 
   if (ui.input) {
     const prompt = question.options
       ? `${title} — choose one of [${question.options.map((option) => option.label).join(", ")}] or enter custom text`
       : title;
-    const text = await withTimeout(
-      ui.input(prompt, question.options?.[0]?.label ?? ""),
-      request.timeoutMs,
-    );
-    if (text.timedOut) return { timedOut: true };
-    if (!text.value) return { timedOut: false };
+    const text = await ui.input(prompt, question.options?.[0]?.label ?? "");
+    if (!text) return {};
     return {
-      timedOut: false,
-      answer: parseOptionText(question.options ?? [], text.value, questionType),
+      answer: parseOptionText(question.options ?? [], text, questionType),
     };
   }
 
-  return { timedOut: false };
+  return {};
+}
+
+interface SelectWithCustomResult {
+  value?: string;
+  customText?: string;
+}
+
+async function selectQuestionOptionWithCustom(
+  ui: PiAskUi,
+  title: string,
+  options: PiAskOption[],
+): Promise<SelectWithCustomResult | undefined> {
+  const labels = options.map((option) => option.label);
+  if (ui.selectWithCustom) {
+    const selected = await ui.selectWithCustom(title, {
+      options: labels,
+      customLabel: SENTINEL_LABELS.other,
+    });
+    if (!selected) return undefined;
+    if (typeof selected === "string") return { value: selected };
+    return selected;
+  }
+
+  const selected = await ui.select?.(title, [...labels, SENTINEL_LABELS.other]);
+  if (!selected) return undefined;
+  if (selected === SENTINEL_LABELS.other) {
+    const customText = await ui.input?.(title, "");
+    return customText ? { customText } : undefined;
+  }
+  return { value: selected };
 }
 
 function parseOptionText(
@@ -342,25 +418,16 @@ function findOption(options: PiAskOption[], value: string): PiAskOption | undefi
   return options.find((option) => option.label === value || option.value === value);
 }
 
-type TimedInteraction<T> =
-  | { timedOut: true; value?: undefined }
-  | { timedOut: false; value: T | undefined };
+function requiresExplicitAskUserSelection(request: PiAskRequest, question: PiAskQuestion): boolean {
+  return (
+    (request.mode === "decision" || request.mode === "approval") &&
+    question.required === true &&
+    (question.type ?? "single") !== "freeform"
+  );
+}
 
-async function withTimeout<T>(
-  promise: Promise<T> | undefined,
-  timeoutMs?: number,
-): Promise<TimedInteraction<T>> {
-  if (!promise) return { timedOut: false, value: undefined };
-  if (!timeoutMs || timeoutMs <= 0) return { timedOut: false, value: await promise };
-  const timeoutToken = Symbol("timeout");
-  const value = await Promise.race([
-    promise,
-    new Promise<typeof timeoutToken>((resolve) =>
-      setTimeout(() => resolve(timeoutToken), timeoutMs),
-    ),
-  ]);
-  if (value === timeoutToken) return { timedOut: true };
-  return { timedOut: false, value };
+function requestRequiresExplicitAskUserSelection(request: PiAskRequest): boolean {
+  return request.questions.some((question) => requiresExplicitAskUserSelection(request, question));
 }
 
 function inferAskUserResultStatus(
@@ -376,6 +443,38 @@ function summarizeResult(request: PiAskRequest, result: PiAskResult): string {
     ([id, answer]) => `${id}=${answer.values.join(",") || answer.customText || ""}`,
   );
   return `${request.title ?? "ask_user"}: ${answered.join("; ") || "no answers"}`;
+}
+
+function renderToolCall(
+  toolName: string,
+  parts: Array<string | undefined>,
+  theme: ToolCallRenderTheme,
+): ToolCallComponent {
+  const title =
+    theme.fg?.("toolTitle", theme.bold?.(`${toolName} `) ?? `${toolName} `) ?? `${toolName} `;
+  const renderedParts = parts.filter((part): part is string => Boolean(part));
+  const args = theme.fg?.("muted", renderedParts.join(" ")) ?? renderedParts.join(" ");
+  return new ToolCallText(`${title}${args}`.trimEnd());
+}
+
+function formatStringArg(
+  value: unknown,
+  options: { prefix?: string; fallback?: string; maxLength?: number } = {},
+): string | undefined {
+  const text = typeof value === "string" && value.trim() ? value.trim() : options.fallback;
+  if (!text) return undefined;
+  const rendered = needsQuoting(text) ? JSON.stringify(text) : text;
+  return `${options.prefix ?? ""}${truncateInline(rendered, options.maxLength ?? 80)}`;
+}
+
+function needsQuoting(value: string): boolean {
+  return /\s|["'`]/.test(value);
+}
+
+function truncateInline(value: string, maxLength: number): string {
+  const normalized = value.replaceAll(/\s+/g, " ");
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
 export * from "./schema.ts";

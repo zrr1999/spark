@@ -14,6 +14,7 @@ pnpm-debug.log*
 package-lock.json
 
 .spark/
+.pi/
 .pi-lens/
 **/.pi-lens/
 .learnings/

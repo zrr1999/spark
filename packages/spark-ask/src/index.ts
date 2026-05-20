@@ -1,4 +1,4 @@
-import type { ManagedAgentProposal } from "spark-core";
+import type { AgentSpecProposal } from "spark-core";
 import {
   createElaborationResult,
   createPiAskFlowArtifactBody,
@@ -36,7 +36,7 @@ export type { SparkCopyLanguage, SparkThreadClarificationCopy } from "./copy.ts"
 
 export type SparkAskFlow =
   | "clarify-thread"
-  | "approve-managed-agent"
+  | "approve-agent-spec"
   | "resolve-task-blocker"
   | "review-gate"
   | "custom";
@@ -44,7 +44,6 @@ export type SparkAskFlow =
 export function clarifyThreadAsk(input: {
   idea: string;
   title?: string;
-  timeoutMs?: number;
   defaultLanguage?: SparkCopyLanguage;
 }): PiAskFlowRequest {
   const copy = clarifyThreadCopy({
@@ -55,30 +54,25 @@ export function clarifyThreadAsk(input: {
     mode: "clarification",
     title: input.title ?? copy.title,
     context: input.idea,
-    timeoutMs: input.timeoutMs,
     questions: copy.questions as PiAskFlowQuestion[],
     behaviour: { allowElaborate: true, allowReplay: true, preservePriorAnswers: true },
   };
 }
 
-export function approveManagedAgentAsk(input: {
-  proposal: ManagedAgentProposal;
-  timeoutMs?: number;
-}): PiAskFlowRequest {
+export function approveAgentSpecAsk(input: { proposal: AgentSpecProposal }): PiAskFlowRequest {
   return {
-    flow: "approve-managed-agent",
+    flow: "approve-agent-spec",
     mode: "approval",
-    title: `Approve managed agent: ${input.proposal.id}`,
+    title: `Approve agent spec: ${input.proposal.id}`,
     context: [
       input.proposal.description,
       input.proposal.rationale,
       `Expected uses: ${input.proposal.expectedUses.join(", ")}`,
     ].join("\n"),
-    timeoutMs: input.timeoutMs,
     questions: [
       {
         id: "approval",
-        prompt: `Create managed agent ${input.proposal.id}?`,
+        prompt: `Create agent spec ${input.proposal.id}?`,
         type: "single",
         required: true,
         options: [
@@ -88,7 +82,7 @@ export function approveManagedAgentAsk(input: {
       },
       {
         id: "note",
-        prompt: "Any note for the agent proposal?",
+        prompt: "Any note for the agent spec proposal?",
         type: "freeform",
       },
     ],
@@ -96,17 +90,17 @@ export function approveManagedAgentAsk(input: {
   };
 }
 
+export const approveManagedAgentAsk = approveAgentSpecAsk;
+
 export function resolveTaskBlockerAsk(input: {
   taskTitle: string;
   blocker: string;
-  timeoutMs?: number;
 }): PiAskFlowRequest {
   return {
     flow: "resolve-task-blocker",
     mode: "unblock",
     title: `Resolve blocker: ${input.taskTitle}`,
     context: input.blocker,
-    timeoutMs: input.timeoutMs,
     questions: [
       {
         id: "decision",
@@ -129,17 +123,12 @@ export function resolveTaskBlockerAsk(input: {
   };
 }
 
-export function reviewGateAsk(input: {
-  subject: string;
-  summary: string;
-  timeoutMs?: number;
-}): PiAskFlowRequest {
+export function reviewGateAsk(input: { subject: string; summary: string }): PiAskFlowRequest {
   return {
     flow: "review-gate",
     mode: "decision",
     title: `Review gate: ${input.subject}`,
     context: input.summary,
-    timeoutMs: input.timeoutMs,
     questions: [
       {
         id: "gate",
