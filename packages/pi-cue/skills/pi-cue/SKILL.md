@@ -23,13 +23,15 @@ each command via `:run(cwd=...)` mode param.
 
 | Category     | Tool           | Purpose                                     | Key parameters                                                                          |
 | ------------ | -------------- | ------------------------------------------- | --------------------------------------------------------------------------------------- |
-| **Exec**     | `cue_exec`     | Execute a command and create a job          | `command`, `background?`, `timeout?`, `cwd?`, `tail_bytes?`                             |
+| **Exec**     | `cue_exec`     | Execute a command and create a job          | `command`, `background?`, `timeout?`, `cwd?`, `pty?`, `tail_bytes?`                     |
 | **Jobs**     | `cue_jobs`     | List/status/wait/stop jobs                  | `action` (list/status/wait/stop), `id?`, `status?`, `limit?`, `timeout?`, `tail_bytes?` |
 | **Schedule** | `cue_schedule` | Add/list/pause/resume/remove scheduled jobs | `action` (add/list/pause/resume/remove), `schedule?`, `command?`, `id?`, `limit?`       |
 | **Scope**    | `cue_scope`    | Inspect scopes, env, or config              | `action` (list/env/config), `limit?`, `includeEnv?`, `tail_bytes?`                      |
 | **History**  | `cue_history`  | Show recent history for a job/cron or all   | `id?`, `limit?`, `tail_bytes?`                                                          |
 
 Tool names are resource-oriented: one high-frequency execution tool plus compact managers for jobs, schedules, scopes, and history.
+
+`cue_exec` runs without a PTY by default (`pty=false`) so non-interactive commands get separate stdout/stderr and do not trigger terminal capability probes. Use `pty=true` only when a command genuinely needs terminal semantics; for sustained interactive work, use the cue TUI and `:fg` instead.
 
 ## How cue-shell works
 
@@ -276,7 +278,7 @@ cued status
 - Max buffered output per stream: 4 MiB
 - Default timeout: 300 seconds (5 min)
 - File-system commands (mv, cp, rm, ls, cat, find, ...): 10 seconds
-- **`cue_exec`**: stdout/stderr tailed to 16 KiB per stream by default. Pass `tail_bytes=0` for full output.
+- **`cue_exec`**: runs with `pty=false` by default; stdout/stderr are tailed to 16 KiB per stream by default. Pass `tail_bytes=0` for full output.
 - **`cue_jobs(action="status")` / `cue_jobs(action="wait")`**: default to 16 KiB per stream. Pass `tail_bytes=0` for full output.
 
 ---

@@ -281,6 +281,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       "Its composition operators are: |> pipes stdout, -> runs in serial on success, || runs in parallel (not OR), ~> runs in serial ignoring failure. " +
       "Prefer direct-exec commands and Pi file tools; use separate tool calls or explicit /bin/sh -lc '...' only when shell semantics are genuinely required. " +
       "Set background=true to start without waiting; track with cue_jobs action=status/wait, stop with cue_jobs action=stop. " +
+      "Runs without a PTY by default; set pty=true only for commands that genuinely need terminal semantics. " +
       "File-system commands (mv, cp, rm, ls, cat, find, ...) get a short 10s timeout by default.",
     parameters: Type.Object({
       command: Type.String({
@@ -305,6 +306,13 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           description: "Working directory. Default: current directory.",
         }),
       ),
+      pty: Type.Optional(
+        Type.Boolean({
+          description:
+            "Whether to allocate a PTY. Default: false for non-interactive tool runs; use true only when a command genuinely needs terminal semantics.",
+          default: false,
+        }),
+      ),
       tail: Type.Optional(
         Type.Boolean({
           description:
@@ -327,6 +335,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           args.background === true ? "background" : undefined,
           formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
           formatStringArg(args.cwd, { prefix: "cwd=" }),
+          args.pty === true ? "pty=true" : undefined,
           formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
           args.tail === false ? "tail=false" : undefined,
         ],
@@ -340,6 +349,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         background?: boolean;
         timeout?: number;
         cwd?: string;
+        pty?: boolean;
         tail?: boolean;
         tail_bytes?: number;
       },
@@ -352,7 +362,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       const tailBytes = params.tail === false ? 0 : normalizeTailBytes(params.tail_bytes);
 
       if (params.background) {
-        const result = await cued.startJob(command, { cwd });
+        const result = await cued.startJob(command, { cwd, pty: params.pty ?? false });
         const lines: string[] = [];
         if (result.kind === "chain" && result.chain) {
           const chain = result.chain;
@@ -379,6 +389,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       const result = await cued.runJob(command, {
         timeout: effectiveTimeout,
         cwd,
+        pty: params.pty ?? false,
       });
 
       if (result.timedOut) {

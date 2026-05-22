@@ -271,9 +271,12 @@ export class CueClient {
    *     `||`   parallel, all
    *     `||?`  parallel, any-success
    */
-  async eval(input: string, mode: Mode = "Job", cwd?: string): Promise<number> {
-    const cwdParam = cwd ? `(cwd=${cwd})` : "";
-    return this.#send({ Eval: { input: `:run${cwdParam} ${input}`, mode } });
+  async eval(input: string, mode: Mode = "Job", opts: RunEvalOptions = {}): Promise<number> {
+    const modeParams: string[] = [];
+    if (opts.pty !== undefined) modeParams.push(`pty=${opts.pty ? "true" : "false"}`);
+    if (opts.cwd) modeParams.push(`cwd=${opts.cwd}`);
+    const modeParamText = modeParams.length > 0 ? `(${modeParams.join(",")})` : "";
+    return this.#send({ Eval: { input: `:run${modeParamText} ${input}`, mode } });
   }
 
   /** Subscribe to one or more event channels. */
@@ -295,13 +298,14 @@ export class CueClient {
   async runJob(command: string, opts?: RunJobOptions): Promise<JobResult> {
     const timeoutMs = (opts?.timeout ?? 300) * 1000;
     const cwd = opts?.cwd;
+    const pty = opts?.pty ?? false;
 
     // Subscribe to global jobs channel before issuing the command.
     await this.#ensureSubscribed("jobs");
 
     // Issue the eval.  The daemon sends job/chain events before the
     // response for successful runs.
-    const requestId = await this.eval(command, "Job", cwd);
+    const requestId = await this.eval(command, "Job", { cwd, pty });
     const response = await this.#waitForResponse(requestId);
 
     if ("Err" in response) {
@@ -343,7 +347,7 @@ export class CueClient {
   async startJob(command: string, opts?: StartJobOptions): Promise<StartJobResult> {
     await this.#ensureSubscribed("jobs");
 
-    const requestId = await this.eval(command, "Job", opts?.cwd);
+    const requestId = await this.eval(command, "Job", { cwd: opts?.cwd, pty: opts?.pty ?? false });
     const response = await this.#waitForResponse(requestId);
 
     if ("Err" in response) {
@@ -925,17 +929,19 @@ export class CueClient {
 
 // ── Public types ───────────────────────────────────────────────────────────
 
-export interface RunJobOptions {
-  /** Timeout in seconds (default: 300 = 5 min). */
-  timeout?: number;
+export interface RunEvalOptions {
   /** Working directory override. */
   cwd?: string;
+  /** Whether to allocate a PTY. Defaults to false for API/tool runs. */
+  pty?: boolean;
 }
 
-export interface StartJobOptions {
-  /** Working directory override. */
-  cwd?: string;
+export interface RunJobOptions extends RunEvalOptions {
+  /** Timeout in seconds (default: 300 = 5 min). */
+  timeout?: number;
 }
+
+export interface StartJobOptions extends RunEvalOptions {}
 
 export interface JobResult {
   jobId: string;
