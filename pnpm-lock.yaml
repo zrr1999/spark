@@ -13,18 +13,15 @@ importers:
 
   .:
     dependencies:
-      pi-agent-run:
-        specifier: file:packages/pi-agent-run
-        version: link:packages/pi-agent-run
       pi-ask:
         specifier: file:packages/pi-ask
         version: link:packages/pi-ask
       pi-cue:
         specifier: file:packages/pi-cue
         version: link:packages/pi-cue
-      spark-agents:
-        specifier: file:packages/spark-agents
-        version: link:packages/spark-agents
+      pi-roles:
+        specifier: file:packages/pi-roles
+        version: link:packages/pi-roles
       spark-artifacts:
         specifier: file:packages/spark-artifacts
         version: link:packages/spark-artifacts
@@ -66,8 +63,6 @@ importers:
         specifier: 0.1.18
         version: 0.1.18(@types/node@25.8.0)(@voidzero-dev/vite-plus-core@0.1.18(@types/node@25.8.0)(jiti@2.7.0)(typescript@6.0.3)(yaml@2.9.0))(jiti@2.7.0)(typescript@6.0.3)(yaml@2.9.0)
 
-  packages/pi-agent-run: {}
-
   packages/pi-ask:
     dependencies:
       '@earendil-works/pi-coding-agent':
@@ -81,6 +76,18 @@ importers:
         version: 1.1.38
 
   packages/pi-cue:
+    dependencies:
+      '@earendil-works/pi-coding-agent':
+        specifier: '*'
+        version: 0.74.1(ws@8.20.1)(zod@4.4.3)
+      '@earendil-works/pi-tui':
+        specifier: ^0.74.1
+        version: 0.74.1
+      typebox:
+        specifier: ^1.1.38
+        version: 1.1.38
+
+  packages/pi-roles:
     dependencies:
       '@earendil-works/pi-coding-agent':
         specifier: '*'
@@ -106,9 +113,9 @@ importers:
       pi-cue:
         specifier: file:../pi-cue
         version: link:../pi-cue
-      spark-agents:
-        specifier: file:../spark-agents
-        version: link:../spark-agents
+      pi-roles:
+        specifier: file:../pi-roles
+        version: link:../pi-roles
       spark-artifacts:
         specifier: file:../spark-artifacts
         version: link:../spark-artifacts
@@ -131,12 +138,6 @@ importers:
         specifier: ^1.1.38
         version: 1.1.38
 
-  packages/spark-agents:
-    dependencies:
-      spark-core:
-        specifier: file:../spark-core
-        version: link:../spark-core
-
   packages/spark-artifacts:
     dependencies:
       spark-core:
@@ -148,6 +149,9 @@ importers:
       pi-ask:
         specifier: file:../pi-ask
         version: link:../pi-ask
+      spark-artifacts:
+        specifier: file:../spark-artifacts
+        version: link:../spark-artifacts
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core
@@ -156,9 +160,6 @@ importers:
 
   packages/spark-review:
     dependencies:
-      spark-agents:
-        specifier: file:../spark-agents
-        version: link:../spark-agents
       spark-artifacts:
         specifier: file:../spark-artifacts
         version: link:../spark-artifacts
@@ -168,12 +169,9 @@ importers:
 
   packages/spark-runtime:
     dependencies:
-      pi-agent-run:
-        specifier: file:../pi-agent-run
-        version: link:../pi-agent-run
-      spark-agents:
-        specifier: file:../spark-agents
-        version: link:../spark-agents
+      pi-roles:
+        specifier: file:../pi-roles
+        version: link:../pi-roles
       spark-artifacts:
         specifier: file:../spark-artifacts
         version: link:../spark-artifacts

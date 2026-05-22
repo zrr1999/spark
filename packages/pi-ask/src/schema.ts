@@ -1,7 +1,7 @@
 import { Type, type Static } from "typebox";
 
 // ---- Limits ----
-export const MAX_QUESTIONS = 6;
+export const MAX_QUESTIONS = 20;
 export const MIN_OPTIONS = 2;
 export const MAX_OPTIONS = 6;
 export const MAX_HEADER_LENGTH = 20;
@@ -74,9 +74,6 @@ export const PiAskFlowBehaviourSchema = Type.Object({
   allowElaborate: Type.Optional(Type.Boolean()),
   allowReplay: Type.Optional(Type.Boolean()),
   preservePriorAnswers: Type.Optional(Type.Boolean()),
-  autoSubmitWhenAnsweredWithoutNotes: Type.Optional(Type.Boolean()),
-  confirmDismissWhenDirty: Type.Optional(Type.Boolean()),
-  showFooterHints: Type.Optional(Type.Boolean()),
 });
 
 export type PiAskFlowBehaviour = Static<typeof PiAskFlowBehaviourSchema>;
@@ -118,7 +115,7 @@ export interface PiAskFlowResult {
   status: PiAskFlowResultStatus;
   answers: Record<string, PiAskFlowAnswerEntry>;
   flow?: string;
-  mode: "submit" | "elaborate" | "cancel" | "chat";
+  mode: "submit" | "elaborate" | "cancel";
   cancelled: boolean;
   base?: unknown;
   elaboration?: {
@@ -145,12 +142,10 @@ export type PiAskFlowValidationError =
 export const RESERVED_OPTION_LABELS = ["Other", "Skip", "Type your own", "Chat about this"];
 
 // ---- Sentinels used in the options list ----
-export type SentinelKind = "other" | "chat" | "next";
-export const SENTINEL_LABELS: Record<SentinelKind, string> = {
+export const SENTINEL_LABELS = {
   other: "Type your own",
-  chat: "Chat about this",
-  next: "Confirm selection →",
-};
+} as const;
+export type SentinelKind = keyof typeof SENTINEL_LABELS;
 
 // ---- Validation ----
 

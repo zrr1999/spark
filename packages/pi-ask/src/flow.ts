@@ -1,10 +1,6 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
-
 import { Type } from "typebox";
 
 import { PiAskFlowController } from "./ui/controller.ts";
-import { createAskConfigStore } from "./config/store.ts";
 import { PiAskFlowPayloadStore } from "./ask-payload-store.ts";
 import type {
   PiAskFlowAnswerEntry,
@@ -12,7 +8,24 @@ import type {
   PiAskFlowRequest,
   PiAskFlowResult,
 } from "./schema.ts";
-import { SENTINEL_LABELS, validatePiAskFlowRequest } from "./schema.ts";
+import { validatePiAskFlowRequest } from "./schema.ts";
+import {
+  createPiAskFlowArtifactBody as createSharedPiAskFlowArtifactBody,
+  summarizeAskResult,
+} from "./summary.ts";
+import {
+  defaultAskChoice,
+  hasRequiredAskSelections,
+  hasSubmittedRequiredAskAnswers,
+  inferAskSubmitStatus,
+  isGateMode,
+  nextActionForAskSubmit,
+  parseAskChoice,
+  requiresExplicitSelectionForGate,
+  selectOptionWithCustom,
+  type ParsedAskChoice,
+  type SelectWithCustomUi,
+} from "./shared-semantics.ts";
 
 interface PiExtensionAPI {
   registerTool?(config: {
@@ -63,10 +76,10 @@ export function createPiAskFlowRequest(input: PiAskFlowRequest): PiAskFlowReques
 
 export async function runPiAskFlow(
   input: PiAskFlowRequest,
-  ui?: { select?: Function; selectWithCustom?: Function; confirm?: Function; input?: Function },
+  ui?: SelectWithCustomUi,
 ): Promise<PiAskFlowResult> {
   const request = createPiAskFlowRequest(input);
-  if (!ui?.select && !ui?.selectWithCustom) return defaultPiAskFlowResult(request);
+  if (!ui?.select && !ui?.selectWithCustom && !ui?.input) return defaultPiAskFlowResult(request);
 
   const answers: Record<string, PiAskFlowAnswerEntry> = {};
   for (const question of request.questions ?? []) {
@@ -86,18 +99,17 @@ export async function runPiAskFlow(
     }
 
     if (question.options && question.options.length > 0) {
-      const choice = await selectFlowQuestionOptionWithCustom(
-        ui,
-        question.prompt,
-        question.options,
-      );
+      const choice = await selectOptionWithCustom(ui, question.prompt, question.options);
       if (!choice) {
         if (requiresExplicitSelection(request, question)) {
           return createNoSelectionPiAskFlowResult(request, answers);
         }
         continue;
       }
-      const answer = parseFlowChoice(question, choice.customText ?? choice.value ?? "");
+      const answer = toFlowAnswer(
+        question.id,
+        parseAskChoice(question.options, choice.customText ?? choice.value ?? "", question.type),
+      );
       answers[question.id] = answer;
       if (requiresExplicitSelection(request, question) && answer.values.length === 0) {
         return createNoSelectionPiAskFlowResult(request, answers);
@@ -129,15 +141,9 @@ export function defaultPiAskFlowResult(request: PiAskFlowRequest): PiAskFlowResu
       };
       continue;
     }
-    const first = question.options?.[0];
-    if (!first) continue;
-    answers[question.id] = {
-      questionId: question.id,
-      kind: question.type === "multi" ? "multi" : "option",
-      values: [first.value],
-      labels: [first.label],
-      preview: first.preview,
-    };
+    const answer = defaultAskChoice(question.options, question.type);
+    if (!answer) continue;
+    answers[question.id] = toFlowAnswer(question.id, answer);
   }
   return createPiAskFlowResult({
     answers,
@@ -150,7 +156,7 @@ export function defaultPiAskFlowResult(request: PiAskFlowRequest): PiAskFlowResu
 export async function replayPiAskFlow(
   input: PiAskFlowRequest,
   prior: PiAskFlowResult | undefined,
-  ui?: { select?: Function; selectWithCustom?: Function; input?: Function },
+  ui?: SelectWithCustomUi,
 ): Promise<PiAskFlowResult> {
   return runPiAskFlow(replayablePiAskFlow(input, prior), ui);
 }
@@ -177,11 +183,13 @@ export function replayablePiAskFlow(
 export function createPiAskFlowArtifactBody(
   request: PiAskFlowRequest,
   result: PiAskFlowResult,
-): PiAskFlowArtifactBody {
-  return { request, result: normalizePiAskFlowResult(result, request) };
+): PiAskFlowArtifactBody & { summary: string } {
+  return createSharedPiAskFlowArtifactBody(request, normalizePiAskFlowResult(result, request));
 }
 
-export function isPiAskFlowArtifactBody(value: unknown): value is PiAskFlowArtifactBody {
+export function isPiAskFlowArtifactBody(value: unknown): value is PiAskFlowArtifactBody & {
+  summary?: string;
+} {
   return Boolean(
     value &&
     typeof value === "object" &&
@@ -209,8 +217,6 @@ export function createElaborationResult(
 }
 
 export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
-  const configStore = createAskConfigStore();
-  const config = configStore.load();
   const payloadStore = new PiAskFlowPayloadStore();
 
   pi.registerTool?.({
@@ -265,7 +271,7 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
           status: "cancelled",
         });
         return {
-          content: [{ type: "text" as const, text: summarizeFlowResult(result) }],
+          content: [{ type: "text" as const, text: summarizeFlowResult(result, request) }],
           details: { result, status: result.status, cancelled: true, mode: "cancel" },
         };
       }
@@ -295,7 +301,7 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
       await payloadStore.save(cwd, { request, result: normalizedResult, timestamp: Date.now() });
 
       return {
-        content: [{ type: "text" as const, text: summarizeFlowResult(normalizedResult) }],
+        content: [{ type: "text" as const, text: summarizeFlowResult(normalizedResult, request) }],
         details: {
           result: normalizedResult as unknown as Record<string, unknown>,
           status: normalizedResult.status,
@@ -303,57 +309,6 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
           mode: normalizedResult.mode,
         },
       };
-    },
-  });
-
-  pi.registerCommand?.("ask-settings", {
-    description: "Open Pi ask settings",
-    async handler(_args: string, ctx: unknown) {
-      const raw = ctx as Record<string, unknown>;
-      const ui = raw.ui as { select?: Function; notify?: Function; confirm?: Function } | undefined;
-      if (!ui?.select) return;
-
-      const choice = await ui.select("Pi Ask Settings", [
-        "View config path",
-        "Toggle auto-submit",
-        "Toggle confirm-dismiss",
-        "Reset to defaults",
-        "<- Back",
-      ]);
-      if (!choice || choice === "<- Back") return;
-
-      if (choice === "View config path") {
-        ui.notify?.(
-          `Config: ${join(homedir(), ".pi", "agent", "extensions", "pi-ask.json")}`,
-          "info",
-        );
-      } else if (choice === "Toggle auto-submit") {
-        config.behaviour.autoSubmitWhenAnsweredWithoutNotes =
-          !config.behaviour.autoSubmitWhenAnsweredWithoutNotes;
-        configStore.save(config);
-        ui.notify?.(
-          `Auto-submit ${config.behaviour.autoSubmitWhenAnsweredWithoutNotes ? "enabled" : "disabled"}`,
-          "success",
-        );
-      } else if (choice === "Toggle confirm-dismiss") {
-        config.behaviour.confirmDismissWhenDirty = !config.behaviour.confirmDismissWhenDirty;
-        configStore.save(config);
-        ui.notify?.(
-          `Confirm-dismiss ${config.behaviour.confirmDismissWhenDirty ? "enabled" : "disabled"}`,
-          "success",
-        );
-      } else if (choice === "Reset to defaults") {
-        const confirmed = await ui.confirm?.(
-          "Reset all pi-ask settings?",
-          "This cannot be undone.",
-        );
-        if (confirmed) {
-          const defaults = createAskConfigStore().load();
-          Object.assign(config, defaults);
-          configStore.save(config);
-          ui.notify?.("Settings reset to defaults", "success");
-        }
-      }
     },
   });
 }
@@ -376,7 +331,7 @@ export function normalizePiAskFlowResult(
   request?: PiAskFlowRequest,
 ): PiAskFlowResult {
   const normalized = createPiAskFlowResult(result);
-  if (!request || !isGateRequest(request)) return normalized;
+  if (!request || !isGateMode(request.mode)) return normalized;
 
   const status =
     normalized.status === "no_selection" &&
@@ -396,7 +351,7 @@ export function isPiAskFlowGateBlocked(
   request: PiAskFlowRequest,
 ): boolean {
   return (
-    isGateRequest(request) &&
+    isGateMode(request.mode) &&
     (result.status === "no_selection" ||
       result.status === "cancelled" ||
       !hasRequiredGateSelections(request, result.answers))
@@ -407,137 +362,52 @@ function createNoSelectionPiAskFlowResult(
   request: PiAskFlowRequest,
   answers: Record<string, PiAskFlowAnswerEntry>,
 ): PiAskFlowResult {
-  const status = hasSubmittedRequiredGateAnswers(request, answers) ? "answered" : "no_selection";
+  const status = inferAskSubmitStatus(request, answers);
   return createPiAskFlowResult({
     answers,
     flow: request.flow,
     mode: "submit",
     cancelled: false,
     status,
-    nextAction: hasRequiredGateSelections(request, answers) ? undefined : "block",
+    nextAction: nextActionForAskSubmit(request, answers, status),
   });
 }
 
-interface FlowSelectWithCustomResult {
-  value?: string;
-  customText?: string;
-}
-
-async function selectFlowQuestionOptionWithCustom(
-  ui: { select?: Function; selectWithCustom?: Function; input?: Function },
-  prompt: string,
-  options: NonNullable<PiAskFlowQuestion["options"]>,
-): Promise<FlowSelectWithCustomResult | undefined> {
-  const labels = options.map((option) => option.label);
-  if (ui.selectWithCustom) {
-    const selected = await ui.selectWithCustom(prompt, {
-      options: labels,
-      customLabel: SENTINEL_LABELS.other,
-    });
-    if (!selected) return undefined;
-    if (typeof selected === "string") return { value: selected };
-    return selected;
-  }
-  const selected = await ui.select?.(prompt, [...labels, SENTINEL_LABELS.other]);
-  if (!selected) return undefined;
-  if (selected === SENTINEL_LABELS.other) {
-    const customText = await ui.input?.(prompt, "");
-    return customText ? { customText } : undefined;
-  }
-  return { value: selected };
-}
-
-function parseFlowChoice(question: PiAskFlowQuestion, choice: string): PiAskFlowAnswerEntry {
-  const questionType = question.type ?? "single";
-  const parts =
-    questionType === "multi" ? splitChoiceParts(choice) : [choice.trim()].filter(Boolean);
-  const matched = parts
-    .map((part) => question.options?.find((entry) => entry.label === part || entry.value === part))
-    .filter((option): option is NonNullable<PiAskFlowQuestion["options"]>[number] =>
-      Boolean(option),
-    );
-  const unmatched = parts.filter(
-    (part) => !question.options?.some((entry) => entry.label === part || entry.value === part),
-  );
-
-  if (questionType === "multi") {
-    return {
-      questionId: question.id,
-      kind: "multi",
-      values: matched.map((option) => option.value),
-      labels: matched.map((option) => option.label),
-      customText: unmatched.length > 0 ? unmatched.join(", ") : undefined,
-      preview: matched.length === 1 ? matched[0]?.preview : undefined,
-    };
-  }
-
-  const option = matched[0];
-  if (option) {
-    return {
-      questionId: question.id,
-      kind: "option",
-      values: [option.value],
-      labels: [option.label],
-      preview: option.preview,
-    };
-  }
-
-  return {
-    questionId: question.id,
-    kind: "custom",
-    values: [],
-    customText: choice.trim(),
+function toFlowAnswer(questionId: string, choice: ParsedAskChoice): PiAskFlowAnswerEntry {
+  const answer: PiAskFlowAnswerEntry = {
+    questionId,
+    kind: choice.kind,
+    values: choice.values,
   };
-}
-
-function splitChoiceParts(choice: string): string[] {
-  return choice
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
+  if (choice.labels.length > 0) answer.labels = choice.labels;
+  if (choice.customText !== undefined) answer.customText = choice.customText;
+  if (choice.preview !== undefined) answer.preview = choice.preview;
+  return answer;
 }
 
 function requiresExplicitSelection(
   request: PiAskFlowRequest,
   question: PiAskFlowQuestion,
 ): boolean {
-  return (
-    (request.mode === "decision" || request.mode === "approval") &&
-    question.required === true &&
-    question.type !== "freeform"
-  );
+  return requiresExplicitSelectionForGate(request.mode, question);
 }
 
 function requestRequiresExplicitSelection(request: PiAskFlowRequest): boolean {
   return (request.questions ?? []).some((question) => requiresExplicitSelection(request, question));
 }
 
-function isGateRequest(request: PiAskFlowRequest): boolean {
-  return request.mode === "decision" || request.mode === "approval";
-}
-
-function requiredGateQuestions(request: PiAskFlowRequest): PiAskFlowQuestion[] {
-  return (request.questions ?? []).filter((question) =>
-    requiresExplicitSelection(request, question),
-  );
-}
-
 function hasSubmittedRequiredGateAnswers(
   request: PiAskFlowRequest,
   answers: Record<string, PiAskFlowAnswerEntry>,
 ): boolean {
-  const questions = requiredGateQuestions(request);
-  if (questions.length === 0) return Object.keys(answers).length > 0;
-  return questions.every((question) => Boolean(answers[question.id]));
+  return hasSubmittedRequiredAskAnswers(request, answers);
 }
 
 function hasRequiredGateSelections(
   request: PiAskFlowRequest,
   answers: Record<string, PiAskFlowAnswerEntry>,
 ): boolean {
-  const questions = requiredGateQuestions(request);
-  if (questions.length === 0) return Object.keys(answers).length > 0;
-  return questions.every((question) => (answers[question.id]?.values.length ?? 0) > 0);
+  return hasRequiredAskSelections(request, answers);
 }
 
 function inferPiAskFlowResultStatus(
@@ -556,12 +426,6 @@ function nextActionForPiAskFlowStatus(
   return status === "answered" ? "resume" : "block";
 }
 
-function summarizeFlowResult(result: PiAskFlowResult): string {
-  const answered = Object.entries(result.answers).map(
-    ([id, answer]) => `${id}=${answer.values.join(",") || answer.customText || ""}`,
-  );
-  if (result.status !== "answered") {
-    return `Ask flow ${result.status}: ${answered.join("; ") || "no answers"}`;
-  }
-  return `Ask flow ${result.mode}: ${answered.join("; ") || "no answers"}`;
+function summarizeFlowResult(result: PiAskFlowResult, request?: PiAskFlowRequest): string {
+  return summarizeAskResult(request ?? { title: "Ask flow" }, result);
 }

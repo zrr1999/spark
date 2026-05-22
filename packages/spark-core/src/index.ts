@@ -4,7 +4,7 @@ export type RefKind =
   | "spark"
   | "thread"
   | "task"
-  | "agent"
+  | "role"
   | "artifact"
   | "run"
   | "review"
@@ -16,7 +16,7 @@ export type Ref<K extends RefKind> = `${K}:${string}` & { readonly __kind?: K };
 export type SparkRef = Ref<"spark">;
 export type ThreadRef = Ref<"thread">;
 export type TaskRef = Ref<"task">;
-export type AgentRef = Ref<"agent">;
+export type RoleRef = Ref<"role">;
 export type ArtifactRef = Ref<"artifact">;
 export type RunRef = Ref<"run">;
 export type ReviewRef = Ref<"review">;
@@ -27,7 +27,7 @@ export type AnyRef =
   | SparkRef
   | ThreadRef
   | TaskRef
-  | AgentRef
+  | RoleRef
   | ArtifactRef
   | RunRef
   | ReviewRef
@@ -98,6 +98,7 @@ export function isRefKind(value: string): value is RefKind {
     "spark",
     "thread",
     "task",
+    "role",
     "agent",
     "artifact",
     "run",
@@ -137,17 +138,17 @@ export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue
 export interface PackageCapability {
   packageName: string;
   version?: string;
-  provides: Array<"spark" | "core" | "artifacts" | "ask" | "cue" | "agents" | "review" | "tasks">;
+  provides: Array<"spark" | "core" | "artifacts" | "ask" | "cue" | "roles" | "review" | "tasks">;
   tools?: string[];
   commands?: string[];
 }
 
 export interface Provenance {
-  producer: "spark" | "agent" | "task" | "review" | "ask" | "cue" | "user";
+  producer: "spark" | "role" | "task" | "review" | "ask" | "cue" | "user";
   runRef?: RunRef;
   threadRef?: ThreadRef;
   taskRef?: TaskRef;
-  agentRef?: AgentRef;
+  roleRef?: RoleRef;
   parentArtifactRefs?: ArtifactRef[];
   note?: string;
 }
@@ -157,12 +158,12 @@ export type ArtifactKind =
   | "research"
   | "plan"
   | "task-breakdown"
-  | "agent-plan"
+  | "role-plan"
   | "handoff"
   | "review"
   | "cue-output"
-  | "agent-run"
-  | "agent-spec-proposal"
+  | "role-run"
+  | "role-spec-proposal"
   | "ask-answer"
   | "run-trace";
 
@@ -184,60 +185,8 @@ export interface Artifact<T extends JsonValue | string = JsonValue | string> {
 
 export interface ArtifactLink {
   from: ArtifactRef;
-  to: ArtifactRef | ThreadRef | TaskRef | AgentRef | RunRef | ReviewRef | AskRef | CueJobRef;
+  to: ArtifactRef | ThreadRef | TaskRef | RoleRef | RunRef | ReviewRef | AskRef | CueJobRef;
   relation: "parent" | "input" | "output" | "review-of" | "answer-to" | "trace-of" | "derived-from";
-}
-
-export type AgentSpecSource = "predefined" | "project";
-
-export interface AgentSpec {
-  ref: AgentRef;
-  id: string;
-  source: AgentSpecSource;
-  description: string;
-  systemPrompt: string;
-  allowedTools?: string[];
-  defaultModel?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface AgentSpecProposal {
-  artifactRef?: ArtifactRef;
-  id: string;
-  source?: Exclude<AgentSpecSource, "predefined">;
-  description: string;
-  systemPrompt: string;
-  rationale: string;
-  expectedUses: string[];
-  allowedTools?: string[];
-  defaultModel?: string;
-}
-
-export interface AgentInstruction {
-  agentRef: AgentRef;
-  instruction: string;
-  inputs?: ArtifactRef[];
-}
-
-export type AgentRunStatus =
-  | "queued"
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "cancelled"
-  | "not_started";
-
-export interface AgentRunRecord {
-  ref: RunRef;
-  agentRef: AgentRef;
-  /** Human-readable name for this concrete agent run; agentRef remains the spec/type. */
-  agentName?: string;
-  instruction: string;
-  status: AgentRunStatus;
-  outputArtifactRef?: ArtifactRef;
-  startedAt?: string;
-  finishedAt?: string;
 }
 
 export type TaskStatus =
@@ -279,24 +228,27 @@ export interface TaskTodo {
   deletedAt?: string;
 }
 
+export type ThreadStatus = "active" | "done";
+
 export interface Thread {
   ref: ThreadRef;
   title: string;
   description: string;
+  status: ThreadStatus;
   outputLanguage?: "zh" | "en";
   currentTaskRef?: TaskRef;
   createdAt: string;
   updatedAt: string;
 }
 
-export type TaskClaimKind = "main" | "subagent";
+export type TaskClaimKind = "main" | "role-run";
 
 export interface TaskClaim {
   kind: TaskClaimKind;
   claimedBy: string;
-  agentRef?: AgentRef;
-  /** Human-readable name for the concrete running agent instance. */
-  agentName?: string;
+  roleRef?: RoleRef;
+  /** Human-readable name for the concrete running role instance. */
+  runName?: string;
   sessionId?: string;
   runRef?: RunRef;
   claimedAt: string;
@@ -305,10 +257,24 @@ export interface TaskClaim {
 }
 
 export interface TaskAttribution {
-  /** Session/main-agent identity. Subagents are rendered as sessionId/agentName. */
+  /** Session/main actor identity. Role runs are rendered as sessionId/runName. */
   sessionId?: string;
-  /** Concrete subagent name. Main-agent completions should leave this unset. */
-  agentName?: string;
+  /** Concrete role-run name. Main-session completions should leave this unset. */
+  runName?: string;
+}
+
+export interface TaskPlan {
+  objective: string;
+  contextRefs: string[];
+  constraints: string[];
+  nonGoals: string[];
+  successCriteria: string[];
+  evidenceRequired: string[];
+  steps: string[];
+  decompositionRationale?: string;
+  riskLevel?: "trivial" | "normal" | "high";
+  openQuestions: string[];
+  askRefs: AskRef[];
 }
 
 export interface Task {
@@ -320,7 +286,7 @@ export interface Task {
   description: string;
   kind: TaskKind;
   status: TaskStatus;
-  agentRef?: AgentRef;
+  roleRef?: RoleRef;
   /** @deprecated use claim.sessionId / claim.claimedBy. */
   claimedBySession?: string;
   /** Last actor that finished this task after active claims are cleared. */
@@ -328,6 +294,7 @@ export interface Task {
   claim?: TaskClaim;
   inputArtifacts: ArtifactRef[];
   outputArtifacts: ArtifactRef[];
+  plan?: TaskPlan;
   createdAt: string;
   updatedAt: string;
 }
@@ -342,7 +309,7 @@ export interface TaskProposal {
   title: string;
   description: string;
   kind: TaskKind;
-  proposedAgentRef?: AgentRef;
+  proposedRoleRef?: RoleRef;
   dependsOn?: TaskRef[];
   rationale: string;
 }
@@ -353,10 +320,10 @@ export interface TaskRun {
   ref: RunRef;
   threadRef: ThreadRef;
   taskRef: TaskRef;
-  agentRef?: AgentRef;
-  /** Human-readable name for this concrete agent run; agentRef remains the spec/type. */
-  agentName?: string;
-  /** Session that owns this concrete agent run, used for post-completion attribution. */
+  roleRef?: RoleRef;
+  /** Human-readable name for this concrete role run; roleRef remains the reusable definition. */
+  runName?: string;
+  /** Session that owns this concrete role run, used for post-completion attribution. */
   ownerSessionId?: string;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   failureKind?: TaskRunFailureKind;
@@ -396,8 +363,8 @@ export type GatePolicy = "required" | "advisory" | "blocking";
 
 export interface ReviewGate {
   ref: ReviewRef;
-  subject: TaskRef | ArtifactRef | AgentRef;
-  lens: "task-completion" | "artifact" | "agent-spec" | "readiness";
+  subject: TaskRef | ArtifactRef | RoleRef;
+  lens: "task-completion" | "artifact" | "role-spec" | "readiness";
   policy: GatePolicy;
   outcome: ReviewOutcome;
   summary: string;
@@ -417,16 +384,6 @@ export interface SparkRunTrace {
   updatedAt: string;
 }
 
-export function validateAgentSpec(agent: AgentSpec): void {
-  assertRef(agent.ref, "agent");
-  assertNonEmpty(agent.id, "agent id");
-  assertNonEmpty(agent.description, `agent ${agent.id} description`);
-  assertNonEmpty(agent.systemPrompt, `agent ${agent.id} system prompt`);
-  if (agent.source !== "predefined" && agent.source !== "project") {
-    throw new ValidationError(`invalid agent spec source: ${String(agent.source)}`);
-  }
-}
-
 export function validateArtifact(artifact: Artifact): void {
   assertRef(artifact.ref, "artifact");
   assertNonEmpty(artifact.title, "artifact title");
@@ -440,7 +397,7 @@ export function validateTask(task: Task): void {
   assertRef(task.threadRef, "thread");
   assertNonEmpty(task.title, "task title");
   assertNonEmpty(task.description, "task description");
-  if (task.agentRef) assertRef(task.agentRef, "agent");
+  if (task.roleRef) assertRef(task.roleRef, "role");
 }
 
 export function assertNonEmpty(value: string, label: string): void {

@@ -1,48 +1,143 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
-import type { AgentRegistry } from "spark-agents";
+import {
+  buildRoleRunArgs as buildGenericRoleRunArgs,
+  parsePiJsonlEvents,
+  RoleRunCancelledError,
+  RoleRunTimeoutError as PiRoleRunTimeoutError,
+  runRole,
+  type RoleRegistry,
+  type RoleRunMode,
+} from "pi-roles";
 import type { ArtifactStore } from "spark-artifacts";
 import {
   DependencyError,
-  type AgentInstruction,
-  type AgentRef,
-  type AgentRunRecord,
-  type AgentRunStatus,
   type ArtifactRef,
   type JsonValue,
+  newRef,
+  nowIso,
+  refId,
+  type RoleRef,
   type RunRef,
   type Task,
   type TaskRef,
   type TaskRun,
   type ThreadRef,
-  newRef,
-  nowIso,
-  refId,
 } from "spark-core";
+import type { RoleInstruction, RoleRunRecord, RoleRunStatus } from "pi-roles";
 import type { TaskGraph, TaskGraphStore } from "spark-tasks";
 
-export interface AgentRunResult {
-  record: AgentRunRecord;
+export type SparkDagManagerStatus = "idle" | "running" | "failed";
+export type SparkDagRunStatus = "running" | "succeeded" | "failed" | "timed_out" | "stale";
+const EMPTY_ROLE_RUN_FAILURE_KIND = "runtime_error";
+
+export interface SparkDagManagerState {
+  status: SparkDagManagerStatus;
+  activeRunRef?: RunRef;
+  lastRunRef?: RunRef;
+  updatedAt: string;
+}
+
+export interface SparkDagCompletionFollowUp {
+  createdAt: string;
+  summary: string;
+  nextActions: string[];
+}
+
+export interface SparkDagRunRecord {
+  ref: RunRef;
+  threadRef?: ThreadRef;
+  ownerSessionId?: string;
+  dryRun: boolean;
+  maxConcurrency: number;
+  timeoutMs: number;
+  status: SparkDagRunStatus;
+  startedAt: string;
+  updatedAt: string;
+  finishedAt?: string;
+  scheduled: number;
+  completed: number;
+  timedOut: boolean;
+  scheduledTaskRefs: TaskRef[];
+  completedTaskRefs: TaskRef[];
+  taskRunRefs: RunRef[];
+  errorMessage?: string;
+  completionFollowUp?: SparkDagCompletionFollowUp;
+}
+
+export interface SparkDagRunStoreSnapshot {
+  version: 1;
+  manager: SparkDagManagerState;
+  runs: SparkDagRunRecord[];
+}
+
+export interface SparkDagStatusSummary {
+  manager: SparkDagManagerState;
+  activeRun?: SparkDagRunRecord;
+  lastRun?: SparkDagRunRecord;
+  recentRuns: SparkDagRunRecord[];
+  running: number;
+  succeeded: number;
+  failed: number;
+  timedOut: number;
+}
+
+export interface SparkDagStatusQueryOptions {
+  limit?: number;
+}
+
+export interface SparkDagRunReconcileInput {
+  graph?: TaskGraph;
+  activeRunRefs?: Iterable<RunRef>;
+  now?: string;
+}
+
+export interface SparkDagRunStartInput {
+  threadRef?: ThreadRef;
+  ownerSessionId?: string;
+  dryRun: boolean;
+  maxConcurrency: number;
+  timeoutMs: number;
+}
+
+export interface SparkDagRunScheduleInput {
+  taskRef: TaskRef;
+  runRef?: RunRef;
+  scheduled: number;
+}
+
+export interface SparkDagRunProgressInput {
+  taskRef: TaskRef;
+  run: TaskRun;
+  completed: number;
+}
+
+export interface SparkRoleRunResult {
+  record: RoleRunRecord;
   stdout: string;
   stderr: string;
   jsonEvents: unknown[];
 }
 
-export interface ActiveSparkSubagentProcess {
+export { type RoleRunMode } from "pi-roles";
+
+export interface ActiveSparkRoleRunProcess {
   runRef: RunRef;
-  agentRef: AgentRef;
-  agentName?: string;
+  roleRef: RoleRef;
+  runName?: string;
   pid?: number;
   cwd: string;
   startedAt: string;
   timedOutAt?: string;
 }
 
-export interface KillSparkSubagentProcessOptions {
+export interface KillSparkRoleRunProcessOptions {
   runRef?: RunRef;
   runRefs?: RunRef[];
-  agentName?: string;
-  agentNames?: string[];
+  runName?: string;
+  runNames?: string[];
   reason?: string;
   signal?: NodeJS.Signals;
   forceSignal?: NodeJS.Signals;
@@ -50,7 +145,7 @@ export interface KillSparkSubagentProcessOptions {
   waitMs?: number;
 }
 
-export interface KillSparkSubagentProcessResult extends ActiveSparkSubagentProcess {
+export interface KillSparkRoleRunProcessResult extends ActiveSparkRoleRunProcess {
   signal: NodeJS.Signals;
   forceSignal: NodeJS.Signals;
   signalSent: boolean;
@@ -59,54 +154,364 @@ export interface KillSparkSubagentProcessResult extends ActiveSparkSubagentProce
   errorMessage?: string;
 }
 
-interface TrackedSparkSubagentProcess extends ActiveSparkSubagentProcess {
+interface TrackedSparkRoleRunProcess extends ActiveSparkRoleRunProcess {
   child: ChildProcess;
   closed: boolean;
   forceKillTimer?: ReturnType<typeof setTimeout>;
   terminationReason?: string;
 }
 
-const DEFAULT_SUBAGENT_FORCE_KILL_AFTER_MS = 1_000;
-const DEFAULT_SUBAGENT_SHUTDOWN_WAIT_MS = 3_000;
-const activeSparkSubagentProcesses = new Map<RunRef, TrackedSparkSubagentProcess>();
+export class SparkDagRunStore {
+  readonly filePath: string;
 
-export function listActiveSparkSubagentProcesses(): ActiveSparkSubagentProcess[] {
-  return [...activeSparkSubagentProcesses.values()].map(snapshotSparkSubagentProcess);
+  constructor(filePath: string) {
+    this.filePath = filePath;
+  }
+
+  async status(options: SparkDagStatusQueryOptions = {}): Promise<SparkDagStatusSummary> {
+    return summarizeSparkDagRuns(await this.load(), options);
+  }
+
+  async clearInactiveRuns(): Promise<SparkDagRunStoreSnapshot> {
+    let cleared: SparkDagRunStoreSnapshot | undefined;
+    await this.updateSnapshot((snapshot) => {
+      snapshot.runs = snapshot.runs.filter((run) => run.status === "running");
+      snapshot.manager.lastRunRef = snapshot.runs.at(-1)?.ref;
+      if (
+        snapshot.manager.activeRunRef &&
+        !snapshot.runs.some((run) => run.ref === snapshot.manager.activeRunRef)
+      ) {
+        snapshot.manager.activeRunRef = undefined;
+      }
+      snapshot.manager.status = snapshot.manager.activeRunRef ? "running" : "idle";
+      snapshot.manager.updatedAt = nowIso();
+      cleared = snapshot;
+    });
+    return cleared ?? (await this.load());
+  }
+
+  async reconcile(input: SparkDagRunReconcileInput = {}): Promise<SparkDagRunStoreSnapshot> {
+    const activeRunRefs = new Set(input.activeRunRefs ?? []);
+    const now = input.now ?? nowIso();
+    let reconciled: SparkDagRunStoreSnapshot | undefined;
+    await this.updateSnapshot((snapshot) => {
+      for (const record of snapshot.runs) {
+        if (record.status !== "running") continue;
+        if (record.taskRunRefs.some((runRef) => activeRunRefs.has(runRef))) continue;
+        reconcileStaleDagRun(record, input.graph, now);
+      }
+      if (
+        snapshot.manager.activeRunRef &&
+        !snapshot.runs.some(
+          (run) => run.ref === snapshot.manager.activeRunRef && run.status === "running",
+        )
+      ) {
+        snapshot.manager.activeRunRef = undefined;
+      }
+      snapshot.manager.status = snapshot.manager.activeRunRef ? "running" : "idle";
+      snapshot.manager.updatedAt = now;
+      reconciled = snapshot;
+    });
+    return reconciled ?? (await this.load());
+  }
+
+  async load(): Promise<SparkDagRunStoreSnapshot> {
+    try {
+      const raw = JSON.parse(
+        await readFile(this.filePath, "utf8"),
+      ) as Partial<SparkDagRunStoreSnapshot>;
+      return normalizeSparkDagRunSnapshot(raw);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptySparkDagRunSnapshot();
+      throw error;
+    }
+  }
+
+  async save(snapshot: SparkDagRunStoreSnapshot): Promise<void> {
+    await mkdir(dirname(this.filePath), { recursive: true });
+    const tempPath = join(
+      dirname(this.filePath),
+      `.${Date.now()}-${Math.random().toString(16).slice(2)}-${this.filePath.split("/").at(-1)}.tmp`,
+    );
+    await writeFile(tempPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+    await rename(tempPath, this.filePath);
+  }
+
+  async startRun(input: SparkDagRunStartInput): Promise<SparkDagRunRecord> {
+    const snapshot = await this.load();
+    const now = nowIso();
+    const record: SparkDagRunRecord = {
+      ref: newRef("run"),
+      threadRef: input.threadRef,
+      ownerSessionId: input.ownerSessionId,
+      dryRun: input.dryRun,
+      maxConcurrency: input.maxConcurrency,
+      timeoutMs: input.timeoutMs,
+      status: "running",
+      startedAt: now,
+      updatedAt: now,
+      scheduled: 0,
+      completed: 0,
+      timedOut: false,
+      scheduledTaskRefs: [],
+      completedTaskRefs: [],
+      taskRunRefs: [],
+    };
+    snapshot.manager = {
+      status: "running",
+      activeRunRef: record.ref,
+      lastRunRef: record.ref,
+      updatedAt: now,
+    };
+    snapshot.runs = [...snapshot.runs, record];
+    await this.save(snapshot);
+    return record;
+  }
+
+  async recordSchedule(runRef: RunRef, input: SparkDagRunScheduleInput): Promise<void> {
+    await this.updateRun(runRef, (record) => {
+      record.scheduled = input.scheduled;
+      if (!record.scheduledTaskRefs.includes(input.taskRef))
+        record.scheduledTaskRefs.push(input.taskRef);
+      if (input.runRef && !record.taskRunRefs.includes(input.runRef))
+        record.taskRunRefs.push(input.runRef);
+    });
+  }
+
+  async recordProgress(runRef: RunRef, input: SparkDagRunProgressInput): Promise<void> {
+    await this.updateRun(runRef, (record) => {
+      record.completed = input.completed;
+      if (!record.completedTaskRefs.includes(input.taskRef))
+        record.completedTaskRefs.push(input.taskRef);
+      if (!record.taskRunRefs.includes(input.run.ref)) record.taskRunRefs.push(input.run.ref);
+    });
+  }
+
+  async finishRun(
+    runRef: RunRef,
+    result: Pick<SparkReadyTaskRunnerResult, "scheduled" | "completed" | "timedOut">,
+    error?: unknown,
+  ): Promise<SparkDagCompletionFollowUp | undefined> {
+    let followUp: SparkDagCompletionFollowUp | undefined;
+    await this.updateSnapshot((snapshot) => {
+      const now = nowIso();
+      const record = snapshot.runs.find((candidate) => candidate.ref === runRef);
+      if (!record) return;
+      record.scheduled = result.scheduled;
+      record.completed = result.completed;
+      record.timedOut = result.timedOut;
+      record.status = error ? "failed" : result.timedOut ? "timed_out" : "succeeded";
+      record.errorMessage =
+        error instanceof Error ? error.message : error ? JSON.stringify(error) : undefined;
+      record.finishedAt = now;
+      record.updatedAt = now;
+      followUp = createSparkDagCompletionFollowUp(record);
+      record.completionFollowUp = followUp;
+      snapshot.manager = {
+        status: error ? "failed" : "idle",
+        activeRunRef:
+          snapshot.manager.activeRunRef === runRef ? undefined : snapshot.manager.activeRunRef,
+        lastRunRef: runRef,
+        updatedAt: now,
+      };
+    });
+    return followUp;
+  }
+
+  private async updateRun(
+    runRef: RunRef,
+    update: (record: SparkDagRunRecord) => void,
+  ): Promise<void> {
+    await this.updateSnapshot((snapshot) => {
+      const record = snapshot.runs.find((candidate) => candidate.ref === runRef);
+      if (!record) return;
+      update(record);
+      record.updatedAt = nowIso();
+    });
+  }
+
+  private async updateSnapshot(
+    update: (snapshot: SparkDagRunStoreSnapshot) => void,
+  ): Promise<void> {
+    const snapshot = await this.load();
+    update(snapshot);
+    await this.save(snapshot);
+  }
 }
 
-export async function killActiveSparkSubagentProcesses(
-  options: KillSparkSubagentProcessOptions = {},
-): Promise<KillSparkSubagentProcessResult[]> {
+export function defaultSparkDagRunStore(cwd: string): SparkDagRunStore {
+  return new SparkDagRunStore(join(cwd, ".spark", "dag-runs.json"));
+}
+
+export function summarizeSparkDagRuns(
+  snapshot: SparkDagRunStoreSnapshot,
+  options: SparkDagStatusQueryOptions = {},
+): SparkDagStatusSummary {
+  const sorted = [...snapshot.runs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const limit = Number.isFinite(options.limit ?? 5)
+    ? Math.max(1, Math.floor(options.limit ?? 5))
+    : 5;
+  return {
+    manager: snapshot.manager,
+    activeRun: snapshot.manager.activeRunRef
+      ? snapshot.runs.find((run) => run.ref === snapshot.manager.activeRunRef)
+      : undefined,
+    lastRun: snapshot.manager.lastRunRef
+      ? snapshot.runs.find((run) => run.ref === snapshot.manager.lastRunRef)
+      : sorted[0],
+    recentRuns: sorted.slice(0, limit),
+    running: snapshot.runs.filter((run) => run.status === "running").length,
+    succeeded: snapshot.runs.filter((run) => run.status === "succeeded").length,
+    failed: snapshot.runs.filter((run) => run.status === "failed" || run.status === "stale").length,
+    timedOut: snapshot.runs.filter((run) => run.status === "timed_out").length,
+  };
+}
+
+function emptySparkDagRunSnapshot(): SparkDagRunStoreSnapshot {
+  const now = nowIso();
+  return { version: 1, manager: { status: "idle", updatedAt: now }, runs: [] };
+}
+
+function normalizeSparkDagRunSnapshot(
+  raw: Partial<SparkDagRunStoreSnapshot>,
+): SparkDagRunStoreSnapshot {
+  const fallback = emptySparkDagRunSnapshot();
+  return {
+    version: 1,
+    manager: {
+      status:
+        raw.manager?.status === "running" || raw.manager?.status === "failed"
+          ? raw.manager.status
+          : "idle",
+      activeRunRef: raw.manager?.activeRunRef,
+      lastRunRef: raw.manager?.lastRunRef,
+      updatedAt: raw.manager?.updatedAt ?? fallback.manager.updatedAt,
+    },
+    runs: (raw.runs ?? []).map(normalizeSparkDagRunRecord),
+  };
+}
+
+function normalizeSparkDagRunRecord(raw: Partial<SparkDagRunRecord>): SparkDagRunRecord {
+  const now = nowIso();
+  return {
+    ref: raw.ref ?? newRef("run"),
+    threadRef: raw.threadRef,
+    ownerSessionId: raw.ownerSessionId,
+    dryRun: raw.dryRun ?? false,
+    maxConcurrency: raw.maxConcurrency ?? DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
+    timeoutMs: raw.timeoutMs ?? DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
+    status:
+      raw.status === "succeeded" ||
+      raw.status === "failed" ||
+      raw.status === "timed_out" ||
+      raw.status === "stale"
+        ? raw.status
+        : "running",
+    startedAt: raw.startedAt ?? now,
+    updatedAt: raw.updatedAt ?? now,
+    finishedAt: raw.finishedAt,
+    scheduled: raw.scheduled ?? raw.scheduledTaskRefs?.length ?? 0,
+    completed: raw.completed ?? raw.completedTaskRefs?.length ?? 0,
+    timedOut: raw.timedOut ?? raw.status === "timed_out",
+    scheduledTaskRefs: [...(raw.scheduledTaskRefs ?? [])],
+    completedTaskRefs: [...(raw.completedTaskRefs ?? [])],
+    taskRunRefs: [...(raw.taskRunRefs ?? [])],
+    errorMessage: raw.errorMessage,
+    completionFollowUp: raw.completionFollowUp
+      ? {
+          createdAt: raw.completionFollowUp.createdAt ?? raw.finishedAt ?? now,
+          summary: raw.completionFollowUp.summary ?? "Spark DAG manager run finished.",
+          nextActions: [...(raw.completionFollowUp.nextActions ?? [])],
+        }
+      : undefined,
+  };
+}
+
+function reconcileStaleDagRun(
+  record: SparkDagRunRecord,
+  graph: TaskGraph | undefined,
+  now: string,
+): void {
+  const taskRuns = graph
+    ? record.taskRunRefs.flatMap((runRef) => graph.runs().filter((run) => run.ref === runRef))
+    : [];
+  const runningRuns = taskRuns.filter((run) => run.status === "queued" || run.status === "running");
+  if (runningRuns.length > 0) return;
+  record.completed = Math.max(
+    record.completed,
+    taskRuns.filter((run) => run.status !== "queued" && run.status !== "running").length,
+  );
+  if (taskRuns.some((run) => run.status === "failed")) record.status = "failed";
+  else if (taskRuns.length > 0 && taskRuns.every((run) => run.status === "succeeded"))
+    record.status = "succeeded";
+  else if (taskRuns.some((run) => run.status === "cancelled")) record.status = "failed";
+  else record.status = "stale";
+  record.errorMessage ??= `Spark DAG manager run was reconciled as ${record.status} after no active child process was found.`;
+  record.finishedAt ??= now;
+  record.updatedAt = now;
+  record.completionFollowUp ??= createSparkDagCompletionFollowUp(record);
+}
+
+function createSparkDagCompletionFollowUp(run: SparkDagRunRecord): SparkDagCompletionFollowUp {
+  const nextActions: string[] = [];
+  if (run.status === "timed_out")
+    nextActions.push("Inspect or kill background role runs that remain claimed as running.");
+  if (run.status === "failed" || run.status === "stale")
+    nextActions.push("Inspect the DAG manager error and retry ready tasks.");
+  if (run.scheduled === 0)
+    nextActions.push("Check for pending tasks blocked by dependencies or missing role specs.");
+  if (run.completed < run.scheduled)
+    nextActions.push("Review incomplete scheduled task runs before launching another DAG wave.");
+  if (nextActions.length === 0)
+    nextActions.push("Review task outputs and continue with newly unblocked ready tasks if any.");
+  return {
+    createdAt: nowIso(),
+    summary: `Spark DAG ${run.ref} ${run.status}: scheduled ${run.scheduled}, completed ${run.completed}.`,
+    nextActions,
+  };
+}
+
+const DEFAULT_ROLE_RUN_FORCE_KILL_AFTER_MS = 1_000;
+const DEFAULT_ROLE_RUN_SHUTDOWN_WAIT_MS = 3_000;
+const activeSparkRoleRunProcesses = new Map<RunRef, TrackedSparkRoleRunProcess>();
+
+export function listActiveSparkRoleRunProcesses(): ActiveSparkRoleRunProcess[] {
+  return [...activeSparkRoleRunProcesses.values()].map(snapshotSparkRoleRunProcess);
+}
+
+export async function killActiveSparkRoleRunProcesses(
+  options: KillSparkRoleRunProcessOptions = {},
+): Promise<KillSparkRoleRunProcessResult[]> {
   const hasRunFilter = options.runRef !== undefined || options.runRefs !== undefined;
-  const hasAgentFilter = options.agentName !== undefined || options.agentNames !== undefined;
+  const hasNameFilter = options.runName !== undefined || options.runNames !== undefined;
   const runRefs = new Set([
     ...(options.runRefs ?? []),
     ...(options.runRef ? [options.runRef] : []),
   ]);
-  const agentNames = new Set([
-    ...(options.agentNames ?? []),
-    ...(options.agentName ? [options.agentName] : []),
+  const runNames = new Set([
+    ...(options.runNames ?? []),
+    ...(options.runName ? [options.runName] : []),
   ]);
-  const targets = [...activeSparkSubagentProcesses.values()].filter((record) => {
+  const targets = [...activeSparkRoleRunProcesses.values()].filter((record) => {
     if (hasRunFilter && !runRefs.has(record.runRef)) return false;
-    if (hasAgentFilter && !agentNames.has(record.agentName ?? "")) return false;
+    if (hasNameFilter && !runNames.has(record.runName ?? "")) return false;
     return true;
   });
-  return Promise.all(targets.map((record) => killTrackedSparkSubagentProcess(record, options)));
+  return Promise.all(targets.map((record) => killTrackedSparkRoleRunProcess(record, options)));
 }
 
-function trackSparkSubagentProcess(input: {
+function trackSparkRoleRunProcess(input: {
   child: ChildProcess;
   runRef: RunRef;
-  agentRef: AgentRef;
-  agentName?: string;
+  roleRef: RoleRef;
+  runName?: string;
   cwd: string;
   startedAt: string;
-}): TrackedSparkSubagentProcess {
-  const tracked: TrackedSparkSubagentProcess = {
+}): TrackedSparkRoleRunProcess {
+  const tracked: TrackedSparkRoleRunProcess = {
     runRef: input.runRef,
-    agentRef: input.agentRef,
-    agentName: input.agentName,
+    roleRef: input.roleRef,
+    runName: input.runName,
     pid: input.child.pid,
     cwd: input.cwd,
     startedAt: input.startedAt,
@@ -114,33 +519,33 @@ function trackSparkSubagentProcess(input: {
     closed: input.child.exitCode !== null || input.child.signalCode !== null,
   };
   if (tracked.closed) return tracked;
-  activeSparkSubagentProcesses.set(input.runRef, tracked);
+  activeSparkRoleRunProcesses.set(input.runRef, tracked);
   input.child.once("close", () => {
     tracked.closed = true;
     if (tracked.forceKillTimer) clearTimeout(tracked.forceKillTimer);
-    activeSparkSubagentProcesses.delete(input.runRef);
+    activeSparkRoleRunProcesses.delete(input.runRef);
   });
   input.child.once("error", () => {
     tracked.closed = true;
     if (tracked.forceKillTimer) clearTimeout(tracked.forceKillTimer);
-    activeSparkSubagentProcesses.delete(input.runRef);
+    activeSparkRoleRunProcesses.delete(input.runRef);
   });
   return tracked;
 }
 
-function untrackSparkSubagentProcess(runRef: RunRef): void {
-  const tracked = activeSparkSubagentProcesses.get(runRef);
+function untrackSparkRoleRunProcess(runRef: RunRef): void {
+  const tracked = activeSparkRoleRunProcesses.get(runRef);
   if (tracked?.forceKillTimer) clearTimeout(tracked.forceKillTimer);
-  activeSparkSubagentProcesses.delete(runRef);
+  activeSparkRoleRunProcesses.delete(runRef);
 }
 
-function snapshotSparkSubagentProcess(
-  record: TrackedSparkSubagentProcess,
-): ActiveSparkSubagentProcess {
+function snapshotSparkRoleRunProcess(
+  record: TrackedSparkRoleRunProcess,
+): ActiveSparkRoleRunProcess {
   return {
     runRef: record.runRef,
-    agentRef: record.agentRef,
-    agentName: record.agentName,
+    roleRef: record.roleRef,
+    runName: record.runName,
     pid: record.pid,
     cwd: record.cwd,
     startedAt: record.startedAt,
@@ -148,14 +553,14 @@ function snapshotSparkSubagentProcess(
   };
 }
 
-async function killTrackedSparkSubagentProcess(
-  record: TrackedSparkSubagentProcess,
-  options: KillSparkSubagentProcessOptions,
-): Promise<KillSparkSubagentProcessResult> {
+async function killTrackedSparkRoleRunProcess(
+  record: TrackedSparkRoleRunProcess,
+  options: KillSparkRoleRunProcessOptions,
+): Promise<KillSparkRoleRunProcessResult> {
   const signal = options.signal ?? "SIGTERM";
   const forceSignal = options.forceSignal ?? "SIGKILL";
-  const forceAfterMs = options.forceAfterMs ?? DEFAULT_SUBAGENT_FORCE_KILL_AFTER_MS;
-  const waitMs = options.waitMs ?? DEFAULT_SUBAGENT_SHUTDOWN_WAIT_MS;
+  const forceAfterMs = options.forceAfterMs ?? DEFAULT_ROLE_RUN_FORCE_KILL_AFTER_MS;
+  const waitMs = options.waitMs ?? DEFAULT_ROLE_RUN_SHUTDOWN_WAIT_MS;
   record.terminationReason = options.reason;
   let signalSent = false;
   let errorMessage: string | undefined;
@@ -177,9 +582,9 @@ async function killTrackedSparkSubagentProcess(
     record.forceKillTimer.unref?.();
   }
 
-  const closed = await waitForTrackedSparkSubagentClose(record, waitMs);
+  const closed = await waitForTrackedSparkRoleRunClose(record, waitMs);
   return {
-    ...snapshotSparkSubagentProcess(record),
+    ...snapshotSparkRoleRunProcess(record),
     signal,
     forceSignal,
     signalSent,
@@ -189,8 +594,8 @@ async function killTrackedSparkSubagentProcess(
   };
 }
 
-async function waitForTrackedSparkSubagentClose(
-  record: TrackedSparkSubagentProcess,
+async function waitForTrackedSparkRoleRunClose(
+  record: TrackedSparkRoleRunProcess,
   waitMs: number,
 ): Promise<boolean> {
   if (record.closed) return true;
@@ -214,88 +619,86 @@ async function waitForTrackedSparkSubagentClose(
   });
 }
 
-export function createAgentRunName(agentRef: AgentRef, runRef: RunRef, agentId?: string): string {
-  const base = sanitizeAgentRunName(
-    agentId?.trim() || refId(agentRef).replace(/^(builtin-|managed-)/, ""),
+export function createRoleRunName(roleRef: RoleRef, runRef: RunRef, roleId?: string): string {
+  const base = sanitizeRoleRunName(
+    roleId?.trim() || refId(roleRef).replace(/^(builtin-|project-|user-)/, ""),
   );
-  const suffix = sanitizeAgentRunName(refId(runRef)).slice(0, 8) || "run";
+  const suffix = sanitizeRoleRunName(refId(runRef)).slice(0, 8) || "run";
   return `${base}-${suffix}`;
 }
 
-function sanitizeAgentRunName(value: string): string {
+function sanitizeRoleRunName(value: string): string {
   return (
     value
       .trim()
       .toLowerCase()
       .replace(/[^a-z0-9_-]+/g, "-")
       .replace(/^-+|-+$/g, "")
-      .replace(/-{2,}/g, "-") || "agent"
+      .replace(/-{2,}/g, "-") || "role"
   );
 }
 
-export function createSubagentClaimId(sessionId: string | undefined, agentName: string): string {
+export function createRoleRunClaimId(sessionId: string | undefined, runName: string): string {
   const sessionPart = sanitizeClaimPart(sessionId?.trim() || "session:unknown");
-  const agentPart = sanitizeClaimPart(agentName.trim() || "agent");
-  return `${sessionPart}+${agentPart}`;
+  const runPart = sanitizeClaimPart(runName.trim() || "role");
+  return `${sessionPart}+${runPart}`;
 }
 
 function sanitizeClaimPart(value: string): string {
   return value.replace(/\+/g, "-").replace(/\s+/g, "-") || "unknown";
 }
 
-export interface PiAgentCommandInput {
+export interface PiRoleCommandInput {
+  roleRef?: RoleRef;
+  /** @deprecated use roleRef. */
+  specRef?: RoleRef;
   systemPrompt: string;
   instruction: string;
   sessionDir?: string;
+  mode?: RoleRunMode;
+  forkFromSession?: string;
 }
 
-export function buildPiAgentArgs(input: PiAgentCommandInput): string[] {
-  const prompt = [
-    input.systemPrompt,
-    "",
-    "Spark subagent ask policy:",
-    "- If you hit a real ambiguity, missing decision, approval need, or blocker that prevents correct execution, use the available Spark ask tools (for example spark_ask or spark_ask_unblock_task) instead of only mentioning the question in your final response.",
-    "- Do not ask for routine implementation choices you can safely infer from the assigned task and repository context; proceed and document the decision.",
-    "- If an ask times out or returns no selection for a decision/approval gate, stop and report the blocked state rather than continuing.",
-    "",
-    "Spark naming quality policy:",
-    "- Judge whether the active thread title and your task @name/title are placeholder, generic, stale, too broad, or inconsistent with the current instruction.",
-    "- When the improvement is obvious, update Spark display names without asking: use spark_rename_thread for the thread, and spark_claim_task with the existing task ref/name intent to improve your claimed task @name/title/description. Stable refs must remain unchanged.",
-    "- Preserve user-specific intentional names and distinctive project/code names; ask only if multiple plausible names require a real user decision.",
-    "",
-    "Instruction:",
-    input.instruction,
-  ].join("\n");
-  const args = ["--print", "--mode", "json"];
-  if (input.sessionDir) args.push("--session-dir", input.sessionDir);
-  args.push("--append-system-prompt", input.systemPrompt, prompt);
-  return args;
+export function buildRoleRunArgs(input: PiRoleCommandInput): string[] {
+  return buildGenericRoleRunArgs({
+    roleRef: (input.roleRef ?? input.specRef) as `role:${string}`,
+    mode: input.mode,
+    systemPrompt: input.systemPrompt,
+    instruction: input.instruction,
+    runGuidance: sparkRoleRunGuidance(),
+    sessionDir: input.sessionDir,
+    forkFromSession: input.forkFromSession,
+  });
 }
 
-export interface AgentRunnerOptions {
+export interface RoleRunnerOptions {
   cwd: string;
   piCommand?: string;
   dryRun?: boolean;
   timeoutMs?: number;
   sessionDir?: string;
-  agentName?: string;
+  runName?: string;
+  mode?: RoleRunMode;
+  forkFromSession?: string;
 }
 
 export interface SparkReadyTaskRunnerOptions {
   graph: TaskGraph;
-  registry: AgentRegistry;
+  registry: RoleRegistry;
   artifactStore?: ArtifactStore;
   threadRef?: ThreadRef;
   cwd?: string;
   piCommand?: string;
   dryRun?: boolean;
-  /** Maximum number of subagents running at the same time. Default: 4. */
+  /** Maximum number of role runs running at the same time. Default: 4. */
   maxConcurrency?: number;
-  /** Overall scheduler timeout for the DAG run. Individual subagents do not get this timeout. */
+  /** Overall scheduler timeout for the DAG run. Individual role runs do not get this timeout. */
   timeoutMs?: number;
-  /** Per-subagent timeout. Defaults to no per-task timeout; use only when deliberately bounding each child. */
+  /** Per-role-run timeout. Defaults to no per-task timeout; use only when deliberately bounding each child. */
   taskTimeoutMs?: number;
   sessionDir?: string;
+  mode?: RoleRunMode;
+  forkFromSession?: string;
   heartbeatIntervalMs?: number;
   onHeartbeat?: (graph: TaskGraph) => void | Promise<void>;
   onSchedule?: (result: SparkReadyTaskRunnerSchedule) => void | Promise<void>;
@@ -334,21 +737,23 @@ export const DEFAULT_SPARK_READY_TASK_TIMEOUT_MS = 3_600_000;
 export interface SparkTaskRunOptions {
   graph: TaskGraph;
   taskRef: TaskRef;
-  registry: AgentRegistry;
+  registry: RoleRegistry;
   artifactStore?: ArtifactStore;
   cwd?: string;
   piCommand?: string;
   dryRun?: boolean;
   timeoutMs?: number;
   sessionDir?: string;
+  mode?: RoleRunMode;
+  forkFromSession?: string;
   heartbeatIntervalMs?: number;
   onHeartbeat?: (graph: TaskGraph) => void | Promise<void>;
   claim?: {
-    kind?: "main" | "subagent";
-    /** Concrete claimant identity. Defaults to `${sessionId}+${agentName}` for subagents. */
+    kind?: "main" | "role-run";
+    /** Concrete claimant identity. Defaults to `${sessionId}+${runName}` for role runs. */
     claimedBy?: string;
-    /** Human-readable name for this concrete agent run; agentRef remains the spec/type. */
-    agentName?: string;
+    /** Human-readable name for this concrete role run; roleRef remains the spec/type. */
+    runName?: string;
     sessionId?: string;
     leaseMs?: number;
   };
@@ -360,7 +765,7 @@ export interface ExpiredTaskClaimSweepResult {
   saved: boolean;
 }
 
-export function findResumableBackgroundSubagentTasks(
+export function findResumableBackgroundRoleRunTasks(
   graph: TaskGraph,
   ownerSessionId: string,
 ): Task[] {
@@ -368,9 +773,9 @@ export function findResumableBackgroundSubagentTasks(
     .tasks()
     .filter(
       (task) =>
-        task.claim?.kind === "subagent" &&
+        task.claim?.kind === "role-run" &&
         task.claim.sessionId === ownerSessionId &&
-        Boolean(task.agentRef) &&
+        Boolean(task.roleRef) &&
         (task.status === "running" || task.status === "pending" || task.status === "ready"),
     );
 }
@@ -415,6 +820,8 @@ export async function runReadySparkTasks(
       dryRun,
       timeoutMs: taskTimeoutMs ?? 0,
       sessionDir: input.sessionDir,
+      mode: input.mode,
+      forkFromSession: input.forkFromSession,
       heartbeatIntervalMs: input.heartbeatIntervalMs,
       onHeartbeat: input.onHeartbeat,
       claim: dryRun
@@ -512,13 +919,14 @@ function detachTimedOutTasks(
   for (const task of graph.tasks()) {
     const runRef = task.claim?.runRef;
     if (!runRef || !timedOutRunRefs.has(runRef)) continue;
+
     const run = graph.runs(task.threadRef).find((candidate) => candidate.ref === runRef);
     if (run?.status !== "running" && run?.status !== "queued") continue;
     const background: TaskRun = {
       ...run,
       status: "running",
       failureKind: "runtime_timeout",
-      errorMessage: `Spark ready-task DAG timed out after ${timeoutMs}ms; keeping subagent claim in background`,
+      errorMessage: `Spark ready-task DAG timed out after ${timeoutMs}ms; keeping role-run claim in background`,
     };
     graph.recordRun(background);
     graph.setTaskStatus(task.ref, "running");
@@ -550,11 +958,11 @@ function taskRunFromError(task: Task, error: unknown): TaskRun {
     ref: latest as RunRef,
     threadRef: task.threadRef,
     taskRef: task.ref,
-    agentRef: task.agentRef,
-    agentName: task.claim?.agentName,
+    roleRef: task.roleRef,
+    runName: task.claim?.runName,
     ownerSessionId: task.claim?.sessionId,
     status: "failed",
-    failureKind: error instanceof AgentRunTimeoutError ? "runtime_timeout" : "runtime_error",
+    failureKind: error instanceof RoleRunTimeoutError ? "runtime_timeout" : "runtime_error",
     errorMessage: error instanceof Error ? error.message : String(error),
     startedAt: nowIso(),
     finishedAt: nowIso(),
@@ -569,9 +977,17 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+function normalizeRoleRefCompat(
+  value: RoleRef | `agent:${string}` | undefined,
+): RoleRef | undefined {
+  if (!value) return undefined;
+  return (value.startsWith("agent:") ? `role:${value.slice("agent:".length)}` : value) as RoleRef;
+}
+
 export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun> {
   const task = input.graph.getTask(input.taskRef);
-  if (!task.agentRef) throw new DependencyError(`task has no agent binding: ${task.ref}`);
+  const taskRoleRef = normalizeRoleRefCompat(task.roleRef);
+  if (!taskRoleRef) throw new DependencyError(`task has no role binding: ${task.ref}`);
   const unmet = input.graph
     .dependencies(task.threadRef)
     .filter(
@@ -582,23 +998,21 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
   const runRef = newRef("run");
   const dryRun = input.dryRun ?? true;
   const originalStatus = task.status;
-  const agentSpec = input.registry.get(task.agentRef);
-  const agentName =
-    input.claim?.agentName?.trim() || createAgentRunName(task.agentRef, runRef, agentSpec.id);
-  const claimKind = input.claim?.kind ?? "subagent";
+  const roleSpec = input.registry.get(taskRoleRef);
+  const runName =
+    input.claim?.runName?.trim() || createRoleRunName(taskRoleRef, runRef, roleSpec.id);
+  const claimKind = input.claim?.kind ?? "role-run";
   const claimedBy =
     input.claim?.claimedBy?.trim() ||
-    (claimKind === "subagent"
-      ? createSubagentClaimId(input.claim?.sessionId, agentName)
-      : agentName);
+    (claimKind === "role-run" ? createRoleRunClaimId(input.claim?.sessionId, runName) : runName);
   const ownerSessionId = input.claim?.sessionId;
   const leaseMs = input.claim?.leaseMs ?? input.timeoutMs ?? 600_000;
   if (!dryRun) {
     input.graph.claimTask(task.ref, {
       kind: claimKind,
       claimedBy,
-      agentRef: task.agentRef,
-      agentName,
+      roleRef: taskRoleRef,
+      runName,
       sessionId: input.claim?.sessionId,
       runRef,
       leaseMs,
@@ -609,8 +1023,8 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
     ref: runRef,
     threadRef: task.threadRef,
     taskRef: task.ref,
-    agentRef: task.agentRef,
-    agentName,
+    roleRef: taskRoleRef,
+    runName,
     ownerSessionId,
     status: "running",
     startedAt: nowIso(),
@@ -629,10 +1043,10 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
       });
 
   try {
-    const result = await runAgentInstructionOnly(
+    const result = await runRoleInstructionOnly(
       input.registry,
       {
-        agentRef: task.agentRef,
+        roleRef: taskRoleRef,
         instruction: task.description,
         inputs: task.inputArtifacts,
       },
@@ -642,7 +1056,9 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
         dryRun,
         timeoutMs: input.timeoutMs,
         sessionDir: input.sessionDir,
-        agentName,
+        runName,
+        mode: input.mode,
+        forkFromSession: input.forkFromSession,
       },
       runRef,
     );
@@ -650,8 +1066,8 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
     let outputArtifactRef: ArtifactRef | undefined;
     if (input.artifactStore) {
       const artifact = await input.artifactStore.put({
-        kind: "agent-run",
-        title: `Agent run ${agentName} for ${task.title}`,
+        kind: "role-run",
+        title: `Role run ${runName} for ${task.title}`,
         format: "json",
         body: {
           record: result.record,
@@ -663,19 +1079,21 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
           producer: "task",
           threadRef: task.threadRef,
           taskRef: task.ref,
-          agentRef: task.agentRef,
-          note: `agentName=${agentName}`,
+          roleRef: taskRoleRef,
+          note: `runName=${runName}`,
         },
       });
       outputArtifactRef = artifact.ref;
       input.graph.attachOutputArtifact(task.ref, artifact.ref);
     }
 
-    const succeeded =
-      result.record.status === "succeeded" || result.record.status === "not_started";
+    const completionFailure = roleRunCompletionFailure(result, dryRun);
+    const succeeded = !completionFailure;
     const finished: TaskRun = {
       ...run,
       status: succeeded ? "succeeded" : "failed",
+      failureKind: completionFailure ? EMPTY_ROLE_RUN_FAILURE_KIND : undefined,
+      errorMessage: completionFailure,
       finishedAt: nowIso(),
       outputArtifacts: outputArtifactRef ? [outputArtifactRef] : [],
     };
@@ -684,12 +1102,12 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
     else input.graph.setTaskStatus(task.ref, succeeded ? "done" : "failed");
     return finished;
   } catch (error) {
-    if (error instanceof AgentRunTimeoutError && !dryRun) {
+    if (error instanceof RoleRunTimeoutError && !dryRun) {
       const background: TaskRun = {
         ...run,
         status: "running",
         failureKind: "runtime_timeout",
-        errorMessage: `${error.message}; keeping subagent claim in background`,
+        errorMessage: `${error.message}; keeping role-run claim in background`,
         outputArtifacts: [],
       };
       input.graph.recordRun(background);
@@ -699,7 +1117,7 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
     const failed: TaskRun = {
       ...run,
       status: "failed",
-      failureKind: error instanceof AgentRunTimeoutError ? "runtime_timeout" : "runtime_error",
+      failureKind: error instanceof RoleRunTimeoutError ? "runtime_timeout" : "runtime_error",
       errorMessage: error instanceof Error ? error.message : String(error),
       finishedAt: nowIso(),
       outputArtifacts: [],
@@ -710,6 +1128,26 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
   } finally {
     stopHeartbeat?.();
   }
+}
+
+function roleRunCompletionFailure(result: SparkRoleRunResult, dryRun: boolean): string | undefined {
+  if (result.record.status === "succeeded") {
+    if (dryRun) return undefined;
+    const emptyOutput =
+      result.stdout.trim().length === 0 &&
+      result.stderr.trim().length === 0 &&
+      result.jsonEvents.length === 0;
+    return emptyOutput ? "role run succeeded without producing output" : undefined;
+  }
+  if (result.record.status === "not_started") {
+    if (dryRun) return undefined;
+    const emptyOutput =
+      result.stdout.trim().length === 0 &&
+      result.stderr.trim().length === 0 &&
+      result.jsonEvents.length === 0;
+    return emptyOutput ? "role run did not start and produced no output" : "role run did not start";
+  }
+  return `role run finished with status ${result.record.status}`;
 }
 
 export interface TaskClaimHeartbeatOptions {
@@ -751,29 +1189,27 @@ export function startTaskClaimHeartbeat(options: TaskClaimHeartbeatOptions): () 
   };
 }
 
-export class AgentRunTimeoutError extends Error {
-  readonly timeoutMs: number;
-
+export class RoleRunTimeoutError extends PiRoleRunTimeoutError {
   constructor(timeoutMs: number) {
-    super(`agent run timed out after ${timeoutMs}ms`);
-    this.name = "AgentRunTimeoutError";
-    this.timeoutMs = timeoutMs;
+    super(timeoutMs);
+    this.name = "RoleRunTimeoutError";
   }
 }
 
-export async function runAgentInstructionOnly(
-  registry: AgentRegistry,
-  instruction: AgentInstruction,
-  options: Partial<AgentRunnerOptions> = {},
+export async function runRoleInstructionOnly(
+  registry: RoleRegistry,
+  instruction: RoleInstruction,
+  options: Partial<RoleRunnerOptions> = {},
   runRef: RunRef = newRef("run"),
-): Promise<AgentRunResult> {
-  const agent = registry.get(instruction.agentRef);
-  if (!instruction.instruction.trim()) throw new Error("agent instruction is required");
+): Promise<SparkRoleRunResult> {
+  const role = registry.get(instruction.roleRef);
+  if (!instruction.instruction.trim()) throw new Error("role instruction is required");
   const startedAt = nowIso();
-  const baseRecord: AgentRunRecord = {
+  const baseRecord: RoleRunRecord = {
     ref: runRef,
-    agentRef: agent.ref,
-    agentName: options.agentName?.trim() || createAgentRunName(agent.ref, runRef),
+    roleRef: role.ref,
+    runName: options.runName?.trim() || createRoleRunName(role.ref, runRef),
+
     instruction: instruction.instruction,
     status: (options.dryRun ?? true) ? "not_started" : "running",
     startedAt,
@@ -788,107 +1224,95 @@ export async function runAgentInstructionOnly(
     };
   }
 
-  return runPiJsonAgent(
-    agent,
+  return runPiJsonRole(
+    role,
     instruction,
     {
       cwd: options.cwd ?? process.cwd(),
       piCommand: options.piCommand ?? "pi",
       timeoutMs: options.timeoutMs ?? 600_000,
       sessionDir: options.sessionDir,
-      agentName: baseRecord.agentName,
+      runName: baseRecord.runName,
+      mode: options.mode,
+      forkFromSession: options.forkFromSession,
     },
     baseRecord.ref,
   );
 }
 
 export function parseJsonlEvents(text: string): unknown[] {
-  const events: unknown[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    try {
-      events.push(JSON.parse(line));
-    } catch {
-      // Pi may emit non-JSON diagnostics. Keep parser tolerant.
-    }
-  }
-  return events;
+  return parsePiJsonlEvents(text);
 }
 
-async function runPiJsonAgent(
-  agent: { ref: AgentRef; systemPrompt: string },
-  instruction: AgentInstruction,
-  options: Required<Pick<AgentRunnerOptions, "cwd" | "piCommand" | "timeoutMs">> &
-    Pick<AgentRunnerOptions, "sessionDir" | "agentName">,
+async function runPiJsonRole(
+  role: { ref: RoleRef; systemPrompt: string },
+  instruction: RoleInstruction,
+  options: Required<Pick<RoleRunnerOptions, "cwd" | "piCommand" | "timeoutMs">> &
+    Pick<RoleRunnerOptions, "sessionDir" | "runName" | "mode" | "forkFromSession">,
   runRef: RunRef,
-): Promise<AgentRunResult> {
-  const args = buildPiAgentArgs({
-    systemPrompt: agent.systemPrompt,
-    instruction: instruction.instruction,
-    sessionDir: options.sessionDir,
-  });
-
-  const startedAt = nowIso();
-  const child = spawn(options.piCommand, args, {
-    cwd: options.cwd,
-    env: process.env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const tracked = trackSparkSubagentProcess({
-    child,
-    runRef,
-    agentRef: agent.ref,
-    agentName: options.agentName,
-    cwd: options.cwd,
-    startedAt,
-  });
-  const stdoutChunks: Buffer[] = [];
-  const stderrChunks: Buffer[] = [];
-  child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
-  child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
-
-  const exitCode = await new Promise<number | null>((resolve, reject) => {
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const settle = (cb: () => void) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      cb();
-    };
-    if (options.timeoutMs > 0) {
-      timer = setTimeout(() => {
-        tracked.timedOutAt = nowIso();
-        child.kill("SIGTERM");
-        settle(() => reject(new AgentRunTimeoutError(options.timeoutMs)));
-      }, options.timeoutMs);
-      timer.unref?.();
-    }
-    child.once("error", (error) => {
-      untrackSparkSubagentProcess(runRef);
-      settle(() => reject(error));
-    });
-    child.once("close", (code) => {
-      if (!tracked.timedOutAt) untrackSparkSubagentProcess(runRef);
-      settle(() => resolve(code));
-    });
-  });
-
-  const stdout = Buffer.concat(stdoutChunks).toString("utf8");
-  const stderr = Buffer.concat(stderrChunks).toString("utf8");
-  const status: AgentRunStatus = exitCode === 0 ? "succeeded" : "failed";
-  return {
-    record: {
-      ref: runRef,
-      agentRef: agent.ref,
-      agentName: options.agentName,
+): Promise<SparkRoleRunResult> {
+  let tracked: TrackedSparkRoleRunProcess | undefined;
+  try {
+    const result = await runRole({
+      runRef: runRef as `run:${string}`,
+      roleRef: role.ref as `role:${string}`,
+      systemPrompt: role.systemPrompt,
       instruction: instruction.instruction,
-      status,
-      startedAt,
-      finishedAt: nowIso(),
-    },
-    stdout,
-    stderr,
-    jsonEvents: parseJsonlEvents(stdout),
-  };
+      runGuidance: sparkRoleRunGuidance(),
+      sessionDir: options.sessionDir,
+      mode: options.mode,
+      forkFromSession: options.forkFromSession,
+      piCommand: options.piCommand,
+      cwd: options.cwd,
+      timeoutMs: options.timeoutMs,
+      onChildProcess(child, startedAt) {
+        tracked = trackSparkRoleRunProcess({
+          child,
+          runRef,
+          roleRef: role.ref,
+          runName: options.runName,
+
+          cwd: options.cwd,
+          startedAt,
+        });
+      },
+      onTimeout() {
+        if (tracked) tracked.timedOutAt = nowIso();
+      },
+    });
+    untrackSparkRoleRunProcess(runRef);
+    return {
+      record: {
+        ref: runRef,
+        roleRef: role.ref,
+        runName: options.runName,
+        instruction: instruction.instruction,
+        status: result.record.status as RoleRunStatus,
+        startedAt: result.record.startedAt,
+        finishedAt: result.record.finishedAt,
+      },
+      stdout: result.stdout,
+      stderr: result.stderr,
+      jsonEvents: result.jsonEvents,
+    };
+  } catch (error) {
+    if (error instanceof PiRoleRunTimeoutError) throw new RoleRunTimeoutError(error.timeoutMs);
+    if (error instanceof RoleRunCancelledError) throw error;
+    untrackSparkRoleRunProcess(runRef);
+    throw error;
+  }
+}
+
+function sparkRoleRunGuidance(): string {
+  return [
+    "Spark role-run ask policy:",
+    "- You have access to Spark ask tools in this run. If the task is blocked by missing user intent, an approval gate, or a real ambiguity that cannot be resolved from repository context, use the available Spark ask tools rather than only writing questions in your final response.",
+    "- Do not ask for routine implementation choices you can safely infer from the assigned task and repository context; proceed and document the decision.",
+    "- If an ask times out or returns no selection for a decision/approval gate, stop and report the blocked state rather than continuing.",
+    "",
+    "Spark naming quality policy:",
+    "- Judge whether the active thread title and your task @name/title are placeholder, generic, stale, too broad, or inconsistent with the current instruction.",
+    "- When the improvement is obvious, update Spark display names without asking: use spark_rename_thread for the thread, and spark_claim_task with the existing task ref/name intent to improve your claimed task @name/title/description. Stable refs must remain unchanged.",
+    "- Preserve user-specific intentional names and distinctive project/code names; ask only if multiple plausible names require a real user decision.",
+  ].join("\n");
 }

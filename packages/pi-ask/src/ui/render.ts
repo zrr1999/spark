@@ -1,4 +1,4 @@
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 import type { AskState, ExtendedOption } from "../state/state.ts";
 import { isSubmitTab } from "../state/state.ts";
@@ -18,6 +18,13 @@ export interface RenderTheme {
   dim(text: string): string;
 }
 
+export interface PartialRenderTheme {
+  fg?: (color: string, text: string) => string;
+  bold?: (text: string) => string;
+  strikethrough?: (text: string) => string;
+  dim?: (text: string) => string;
+}
+
 // ---- Status icons ----
 
 const ICONS = {
@@ -32,9 +39,8 @@ const ICONS = {
   unanswered: "?",
   note: "📝",
   preview: "▸",
-  chat: "💬",
-  other: "…",
-  settings: "⚙",
+
+  other: "○",
 };
 
 // ---- Labels (zh/en) ----
@@ -48,16 +54,12 @@ const L: Record<
     elaborate: string;
     cancel: string;
     other: string;
-    chat: string;
-    next: string;
-    settings: string;
     review: string;
     tab: string;
     question: string;
     notes: string;
     pressN: string;
     pressShiftN: string;
-    pressQ: string;
     typeAnswer: string;
     noAnswer: string;
     allAnswered: string;
@@ -70,16 +72,13 @@ const L: Record<
     elaborate: "请先澄清",
     cancel: "取消",
     other: "输入自定义",
-    chat: "聊聊这个",
-    next: "确认选择 →",
-    settings: "设置",
     review: "审核",
     tab: "Tab",
     question: "问题",
     notes: "备注",
     pressN: "n 添加备注",
     pressShiftN: "Shift+N 问题备注",
-    pressQ: "? 设置",
+
     typeAnswer: "输入你的回答…",
     noAnswer: "未回答",
     allAnswered: "全部已回答",
@@ -91,21 +90,18 @@ const L: Record<
     elaborate: "Elaborate first",
     cancel: "Cancel",
     other: SENTINEL_LABELS.other,
-    chat: SENTINEL_LABELS.chat,
-    next: SENTINEL_LABELS.next,
-    settings: "Settings",
     review: "Review",
     tab: "Tab",
     question: "Question",
     notes: "Notes",
     pressN: "n to add note",
     pressShiftN: "Shift+N question note",
-    pressQ: "? settings",
+
     typeAnswer: "Type your answer…",
     noAnswer: "unanswered",
     allAnswered: "All answered",
     someUnanswered: "unanswered",
-    footer: "Enter confirm · Esc cancel · Tab switch · ↑↓ navigate",
+    footer: "Enter confirm/next · Esc cancel · ←→ switch questions · ↑↓ navigate",
   },
 };
 
@@ -115,7 +111,7 @@ export interface RenderInput {
   state: AskState;
   questions: readonly PiAskFlowQuestion[];
   optionsByTab: ReadonlyArray<readonly ExtendedOption[]>;
-  theme: RenderTheme;
+  theme: RenderTheme | PartialRenderTheme;
   width: number;
   language: AskUILanguage;
   title?: string;
@@ -125,7 +121,8 @@ export interface RenderInput {
 }
 
 export function renderAskScreen(input: RenderInput): string[] {
-  const { state, questions, optionsByTab, theme, width, language, title } = input;
+  const { state, questions, optionsByTab, theme: rawTheme, width, language, title } = input;
+  const theme = normalizeRenderTheme(rawTheme);
   const labels = L[language];
   const lines: string[] = [];
   const truncate = (text: string, max?: number) => truncateToWidth(text, max ?? width);
@@ -166,9 +163,7 @@ export function renderAskScreen(input: RenderInput): string[] {
   lines.push("");
 
   // --- Content ---
-  if (state.settingsOpen) {
-    renderSettingsPanel(lines, theme, width, labels);
-  } else if (isSubmit) {
+  if (isSubmit) {
     renderSubmitTab(lines, state, questions, theme, width, labels);
   } else {
     const question = questions[state.currentTab];
@@ -184,8 +179,6 @@ export function renderAskScreen(input: RenderInput): string[] {
 
   if (state.footerHint) {
     lines.push(theme.dim(state.footerHint));
-  } else if (state.settingsOpen) {
-    lines.push(theme.dim("Esc close · ↑↓ navigate · Enter toggle"));
   } else {
     lines.push(theme.dim(labels.footer));
   }
@@ -217,11 +210,23 @@ function renderQuestionTab(
   const isMulti = question.type === "multi";
   const answer = state.answers.get(question.id);
   const selectedValues = new Set(answer?.values ?? []);
+  const focusedOption = options[state.optionIndex];
+  const previewWidth =
+    focusedOption?.preview && focusedOption.kind === "option" && width >= 84
+      ? Math.min(44, Math.max(28, Math.floor(width * 0.34)))
+      : 0;
+  const preferredListWidth = Math.max(
+    36,
+    Math.min(width - previewWidth - 3, Math.floor(width * 0.48)),
+  );
+  const listWidth = previewWidth > 0 ? preferredListWidth : width;
+  const optionLines: string[] = [];
 
   for (let i = 0; i < options.length; i++) {
     const opt = options[i];
     const isFocused = i === state.optionIndex;
     const isSelected = opt.kind === "option" && selectedValues.has(opt.option!.value);
+    const isCustomSelected = opt.kind === "other" && answer?.kind === "custom";
     const isMultiChecked =
       isMulti && opt.kind === "option" && state.multiSelectChecked.has(opt.option!.value);
 
@@ -238,26 +243,23 @@ function renderQuestionTab(
         text = opt.option!.label;
         break;
       }
-      case "other":
-        icon = ICONS.other;
-        text = labels.other;
+      case "other": {
+        icon = isCustomSelected ? ICONS.selected : ICONS.other;
+        const draft = (state.inputDraft || answer?.customText || "").trim();
+        text =
+          state.inputMode || isFocused || draft ? `${labels.other}: ${draft || "_"}` : labels.other;
         break;
-      case "chat":
-        icon = ICONS.chat;
-        text = labels.chat;
-        break;
-      case "next":
-        icon = "→";
-        text = labels.next;
-        break;
+      }
     }
 
     let line: string;
     if (isFocused) {
-      line = ` ${theme.fg("accent", `▶ ${icon} ${text}`)}`;
-    } else if (isSelected && opt.kind === "option") {
+      const focusedText =
+        opt.kind === "other" && state.inputMode ? `▶ ${icon} ${text}` : `▶ ${icon} ${text}`;
+      line = ` ${theme.fg("accent", focusedText)}`;
+    } else if ((isSelected && opt.kind === "option") || isCustomSelected) {
       line = `   ${theme.fg("success", `${icon} ${text}`)}`;
-    } else if (opt.kind === "other" || opt.kind === "chat" || opt.kind === "next") {
+    } else if (opt.kind === "other") {
       line = `   ${theme.dim(`${icon} ${text}`)}`;
     } else {
       line = `   ${icon} ${text}`;
@@ -268,12 +270,20 @@ function renderQuestionTab(
       line += theme.dim(`  — ${opt.description}`);
     }
 
-    lines.push(truncate(line));
+    optionLines.push(truncateToWidth(line, listWidth));
+  }
 
-    // Preview for focused preview-enabled option
-    if (isFocused && opt.preview && opt.kind === "option") {
-      renderPreviewPane(lines, opt.preview, theme, width);
-    }
+  if (previewWidth > 0 && focusedOption?.preview) {
+    appendSideBySidePreview(
+      lines,
+      optionLines,
+      focusedOption.preview,
+      theme,
+      listWidth,
+      previewWidth,
+    );
+  } else {
+    lines.push(...optionLines);
   }
 
   lines.push("");
@@ -291,34 +301,53 @@ function renderQuestionTab(
 
   // Hints for available actions
   if (question.type === "multi") {
-    lines.push(theme.dim(`  Space: toggle · Enter: confirm multi · ${labels.pressN}`));
+    lines.push(theme.dim(`  Space: toggle · Enter: next · ←→ switch questions · ${labels.pressN}`));
+  } else if (focusedOption?.kind === "other") {
+    lines.push(theme.dim("  Type directly · Enter: save/next · ←→ switch questions"));
   } else {
-    lines.push(theme.dim(`  ${labels.pressN} · ${labels.pressShiftN} · ${labels.pressQ}`));
+    lines.push(theme.dim(`  Enter: answer/next · ←→ switch questions · ${labels.pressN}`));
   }
 }
 
 // ---- Preview pane ----
 
-function renderPreviewPane(
+function appendSideBySidePreview(
   lines: string[],
+  optionLines: string[],
   preview: string,
   theme: RenderTheme,
-  width: number,
+  listWidth: number,
+  previewWidth: number,
 ): void {
-  const previewLines = preview.split("\n");
-  const maxPreviewLines = 10;
-  const indent = "    ";
+  const pane = renderPreviewPane(preview, theme, previewWidth);
+  const rows = Math.max(optionLines.length, pane.length);
+  for (let i = 0; i < rows; i++) {
+    const left = padVisible(optionLines[i] ?? "", listWidth);
+    const right = pane[i] ?? "";
+    lines.push(`${left}  ${right}`.trimEnd());
+  }
+}
 
-  lines.push(theme.dim(`${indent}┌─ preview ─`));
+function renderPreviewPane(preview: string, theme: RenderTheme, width: number): string[] {
+  const innerWidth = Math.max(12, width - 4);
+  const previewLines = preview.split(/\r?\n/).flatMap((line) => wrapTextWithAnsi(line, innerWidth));
+  const maxPreviewLines = 10;
+  const lines = [theme.dim(`┌─ Preview ${"─".repeat(Math.max(0, innerWidth - 10))}`)];
   for (let i = 0; i < Math.min(previewLines.length, maxPreviewLines); i++) {
-    const line = previewLines[i];
-    const truncated = truncateToWidth(line, width - 8);
-    lines.push(theme.dim(`${indent}│ ${truncated}`));
+    const line = previewLines[i] ?? "";
+    const truncated = truncateToWidth(line, innerWidth);
+    lines.push(theme.dim(`│ ${truncated}`));
   }
   if (previewLines.length > maxPreviewLines) {
-    lines.push(theme.dim(`${indent}│ … ${previewLines.length - maxPreviewLines} more lines`));
+    lines.push(theme.dim(`│ … ${previewLines.length - maxPreviewLines} more lines`));
   }
-  lines.push(theme.dim(`${indent}└${"─".repeat(Math.min(width - 6, 12))}`));
+  lines.push(theme.dim(`└${"─".repeat(Math.max(0, innerWidth + 2))}`));
+  return lines;
+}
+
+function padVisible(text: string, width: number): string {
+  const visibleLength = visibleWidth(text);
+  return `${text}${" ".repeat(Math.max(0, width - visibleLength))}`;
 }
 
 // ---- Submit / Review tab ----
@@ -399,35 +428,29 @@ function renderSubmitTab(
   lines.push(theme.dim("  1=Submit · 2=Elaborate · 3=Cancel · ↑↓ navigate"));
 }
 
-// ---- Settings panel ----
-
-function renderSettingsPanel(
-  lines: string[],
-  theme: RenderTheme,
-  width: number,
-  labels: (typeof L)["en"],
-): void {
-  const truncate = (text: string) => truncateToWidth(text, width);
-  lines.push(truncate(`  ${theme.bold(labels.settings)}`));
-  lines.push("");
-  lines.push(theme.dim("  Settings panel — configure keymaps and behaviour"));
-  lines.push(theme.dim("  Edit ~/.pi/agent/extensions/pi-ask.json directly"));
-  lines.push(theme.dim("  or use /ask-settings command."));
-}
-
 // ---- Helpers ----
 
 function formatAnswerBrief(answer: PiAskFlowAnswerEntry, labels: (typeof L)["en"]): string {
   switch (answer.kind) {
     case "option":
-      return answer.values[0] ?? "?";
+      return answer.labels?.[0] ?? answer.values[0] ?? "?";
     case "multi":
-      return answer.values.join(", ");
+      return answer.labels?.length ? answer.labels.join(", ") : answer.values.join(", ");
     case "custom":
       return `"${answer.customText?.slice(0, 40) ?? ""}"`;
     case "skipped":
       return labels.noAnswer;
   }
+}
+
+export function normalizeRenderTheme(theme: PartialRenderTheme | undefined): RenderTheme {
+  return {
+    fg: typeof theme?.fg === "function" ? theme.fg.bind(theme) : (_color, text) => text,
+    bold: typeof theme?.bold === "function" ? theme.bold.bind(theme) : (text) => text,
+    strikethrough:
+      typeof theme?.strikethrough === "function" ? theme.strikethrough.bind(theme) : (text) => text,
+    dim: typeof theme?.dim === "function" ? theme.dim.bind(theme) : (text) => text,
+  };
 }
 
 function countAnswered(state: AskState, questions: readonly PiAskFlowQuestion[]): number {

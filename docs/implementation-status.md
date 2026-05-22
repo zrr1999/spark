@@ -9,38 +9,55 @@ but end-to-end local vertical slice.
    - shared refs
    - runtime validation helpers
    - Spark error classes
-   - core contracts for agents, tasks, artifacts, ask, review, cue, and traces
+   - core contracts for roles, tasks, artifacts, ask, review, cue, and traces
 - `spark-artifacts`
    - typed JSON artifact metadata
    - content hashes and blob files
    - provenance and lineage links
    - list/query/diff helpers
 - `pi-ask`
-   - minimal `ask_user` primitive
+   - minimal `ask_user` primitive for focused single-question asks
    - reusable `ask_flow` state machine, renderer, replay
-     helpers, settings, payload store, and result shape
-   - single/multi/freeform questions with timeout-aware
-     UI resolution
-   - direct custom input is accepted without forcing an
-     explicit `Other` option choice
+     helpers, payload store, and result shape for
+     multi-question/fullscreen forms
+   - shared ask contract across `ask_user` and `ask_flow`:
+     explicit result envelopes, no automatic timeout decisions,
+     stable option ids in structured values, user-facing
+     labels/descriptions in UI summaries, and consistent
+     decision/approval blocking semantics
+   - direct custom input is accepted as first-class `customText`
+     without forcing callers to add their own `Other` business option
+   - fullscreen custom input preserves drafts while navigating,
+     commits on Enter, renders committed custom answers as selected,
+     and allows optional blank freeform answers to advance as
+     `skipped`
 - `spark-ask`
    - lightweight Spark ask presets built on top of `pi-ask`
-   - Spark-specific copy for thread clarification / agent
+   - Spark-specific copy for thread clarification / role
      approval / blocker resolution / review decisions
    - type aliases over the generic `pi-ask` flow API
    - dedicated flow helpers: clarify-thread /
-     approve-agent-spec / resolve-task-blocker /
+     approve-role-spec / resolve-task-blocker /
      review-gate
+   - no Pi extension registration, artifact persistence, or
+     fullscreen host wiring; those stay in `spark`
 - `pi-cue`
    - migrated cue-shell IPC client and full short-name tool surface from `pi-cue-shell`
    - raw TypeScript imports compatible with Pi / Node strip-types loading
    - `run/jobs/status/kill/wait/cron/scopes/log` tool registration
    - daemon auto-start and bash disable policy
-- `spark-agents`
-   - builtin/project agent spec registry
-   - project agent spec store
-   - agent spec proposal to spec conversion
-   - agent spec creation/lookup only; runtime execution lives in `spark-runtime`
+- `pi-roles`
+   - reusable `RoleSpec` definitions with `builtin | project | user` sources
+   - builtin roles (`scout`, `planner`, `worker`, `reviewer`, `oracle`)
+   - project/user Markdown role stores under `.agents/roles` and `~/.agents/roles`
+   - compatibility readers for old role/agent paths and `.spark/agents/*.json` migration input
+   - generic `fresh | forked` role run mode types
+   - Pi JSON-mode CLI argument construction
+   - subprocess launch with stdout/stderr capture and tolerant JSONL parsing
+   - active-run listing/cancellation and timeout signalling
+   - explicit `forkFromSession` requirement for forked runs
+   - role-ref requirement for every run request
+   - minimal `run_role` tool with dry-run, fresh, and explicit forked modes
 - `spark-review`
    - review gates
    - gate policies
@@ -65,16 +82,18 @@ but end-to-end local vertical slice.
    - per-task TODO state with summaries and update ops; TODOs
      are stored outside `.spark/thread.json` snapshots, and
      active sessions can use session-scoped `.spark/todos/<session>.json`
-     files to avoid concurrent agent overwrites
+     files to avoid concurrent role-run overwrites
    - `name` / `title` / `description` task identity, rendered as `@name: title` in Pi UI
-   - unified main-agent/subagent claim schema with lease expiration
+   - unified main-session/role-run claim schema with lease expiration
    - heartbeat updates via `heartbeatTaskClaim()`
    - stale claim expiry that marks running runs as `claim_stale` and returns tasks to `pending`
    - model-claimed current-task tracking per thread
 - `spark-runtime`
-   - dry-run task execution through registered agents
-   - runtime-created subagent claims and run artifact persistence
+   - dry-run task execution through registered roles
+   - Spark task execution via `pi-roles` `runRole()` subprocess launch/control, CLI argument, and JSONL helpers
+   - runtime-created role-run claims and run artifact persistence
    - heartbeat loop for active runtime claims
+   - Spark-specific active role-run tracking for timeout/reconciliation and kill controls
    - persisted expired-claim sweeper and distinct `runtime_timeout` failure marking
 - `spark`
    - `/spark <idea>` command
@@ -83,11 +102,9 @@ but end-to-end local vertical slice.
    - `spark_update_task_todos` for task-scoped TODOs
    - `spark_update_todos` for independent session TODOs
    - `spark_run_ready_tasks` tool
-   - `spark_ask`, `spark_ask_clarify_thread`,
-     `spark_ask_approve_agent_spec`,
-     `spark_ask_unblock_task`,
-     `spark_ask_review_gate`, and `spark_ask_replay` tools
-   - `spark_list_agent_specs`, `spark_get_agent_spec`, and `spark_create_agent_spec` tools
+   - flow-native multi-question `spark_ask` and
+     `spark_ask_replay` tools
+   - `spark_list_roles`, `spark_get_role`, and `spark_create_role` tools
    - two-layer activation detection: `SPARK.md` /
      `.spark/thread.json` /
      `~/.config/spark/config.toml` allowlist first,
@@ -101,7 +118,7 @@ but end-to-end local vertical slice.
      context from the current workspace
    - `.spark/` state is always created; root `SPARK.md` is
      only materialized when `.git` exists in cwd
-   - SPARK.md artifact, task graph, agent plan artifact,
+   - SPARK.md artifact, task graph, role plan artifact,
      review gate, and run trace generation
    - SPARK.md injection into the active turn system prompt as
      persistent project intent
@@ -116,18 +133,18 @@ but end-to-end local vertical slice.
    - invariant repair that clears stale current-task refs
      without creating placeholder tasks
    - ask artifacts linked into the Spark run trace when init clarification runs
-   - project agent spec store hydration before ready-task execution
+   - project role store hydration before ready-task execution
 
-## Planned boundary cleanup
+## Boundary cleanup status
 
-- Extract generic agent spec definitions, registry, and non-builtin spec store from `spark-core` / `spark-agents` toward a Spark-independent `pi-agent-spec` package.
-- Extract generic Pi subprocess agent execution from `spark-runtime` toward `pi-agent-run` with explicit `fresh | forked` launch modes.
-- Keep Spark-specific task DAGs, task claims, TODOs, artifacts, asks, and review gates in Spark packages. See [agent-boundaries.md](./agent-boundaries.md) and [agent-run-modes.md](./agent-run-modes.md).
+- `pi-roles` is now the generic role package. It owns reusable role specs and simple single child Pi role runs.
+- Spark packages keep task DAGs, task claims, TODOs, artifacts, asks, review gates, and DAG manager orchestration.
+- Deprecated role-shaped fields and aliases may still be accepted in code as rolling compatibility for persisted state, but new tools/docs should use role terminology. See [agent-boundaries.md](./agent-boundaries.md) and [agent-run-modes.md](./agent-run-modes.md).
 
 ## Deferred by design
 
 - `spark-github`
-- compatibility packages for `pi-subagents` or `pi-cue-shell`
+- compatibility packages for `pi-cue-shell`
 - full autonomous scheduler daemon
 - production-grade `pi --mode json` runner hardening
 - worktree/merge/release gates

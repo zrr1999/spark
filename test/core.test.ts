@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { newRef, refId, isRef } from "spark-core";
-import { builtinAgentRef, createBuiltinAgents } from "spark-agents";
+import { builtinRoleRef, createBuiltinRoles } from "pi-roles";
 import { TaskGraph } from "spark-tasks";
 import {
-  deriveTaskAgentLabel,
+  deriveTaskRoleLabel,
   isGenericTaskNameForTitle,
   isPlaceholderThreadTitle,
   renderSparkActiveSystemPrompt,
@@ -16,7 +16,7 @@ void test("refs carry kind and id", () => {
   assert.equal(ref, "task:abc");
   assert.equal(refId(ref), "abc");
   assert.equal(isRef(ref, "task"), true);
-  assert.equal(isRef(ref, "agent"), false);
+  assert.equal(isRef(ref, "role"), false);
 });
 
 void test("task graph rejects cycles and cross-thread dependencies", () => {
@@ -27,19 +27,19 @@ void test("task graph rejects cycles and cross-thread dependencies", () => {
     threadRef: thread.ref,
     title: "A",
     description: "a",
-    agentRef: builtinAgentRef("planner"),
+    roleRef: builtinRoleRef("planner"),
   });
   const b = graph.createTask({
     threadRef: thread.ref,
     title: "B",
     description: "b",
-    agentRef: builtinAgentRef("worker"),
+    roleRef: builtinRoleRef("worker"),
   });
   const other = graph.createTask({
     threadRef: otherThread.ref,
     title: "Other task",
     description: "other task",
-    agentRef: builtinAgentRef("worker"),
+    roleRef: builtinRoleRef("worker"),
   });
   graph.addDependency(b.ref, a.ref);
   assert.throws(() => graph.addDependency(a.ref, b.ref), /cyclic task dependency/);
@@ -49,13 +49,19 @@ void test("task graph rejects cycles and cross-thread dependencies", () => {
   );
 });
 
-void test("task graph can update placeholder thread titles", () => {
+void test("task graph can update placeholder thread titles and status", () => {
   const graph = new TaskGraph();
   const thread = graph.createThread({ title: "「自定义输入」", description: "demo" });
-  const updated = graph.updateThread(thread.ref, { title: "Concrete Spark workflow" });
+  assert.equal(thread.status, "active");
+  const updated = graph.updateThread(thread.ref, {
+    title: "Concrete Spark workflow",
+    status: "done",
+  });
   assert.equal(updated.ref, thread.ref);
   assert.equal(updated.title, "Concrete Spark workflow");
+  assert.equal(updated.status, "done");
   assert.equal(graph.getThread(thread.ref).title, "Concrete Spark workflow");
+  assert.equal(graph.getThread(thread.ref).status, "done");
   assert.equal(isPlaceholderThreadTitle("Spark thread"), true);
   assert.equal(isPlaceholderThreadTitle("Hypha v0"), false);
 });
@@ -74,13 +80,13 @@ void test("task graph plans multiple tasks without claiming them", () => {
       title: "Inspect ask flow",
       description: "Compare current ask flow with references.",
       kind: "research",
-      agentRef: builtinAgentRef("scout"),
+      roleRef: builtinRoleRef("scout"),
     },
     {
       title: "Design claim registry",
       description: "Plan one-active-task claim semantics.",
       kind: "plan",
-      agentRef: builtinAgentRef("planner"),
+      roleRef: builtinRoleRef("planner"),
       dependsOn: ["Inspect ask flow"],
     },
   ]);
@@ -94,20 +100,20 @@ void test("task graph plans multiple tasks without claiming them", () => {
   );
 });
 
-void test("ready tasks require agent and completed dependencies", () => {
+void test("ready tasks require role and completed dependencies", () => {
   const graph = new TaskGraph();
   const thread = graph.createThread({ title: "Demo", description: "demo" });
   const a = graph.createTask({
     threadRef: thread.ref,
     title: "A",
     description: "a",
-    agentRef: builtinAgentRef("planner"),
+    roleRef: builtinRoleRef("planner"),
   });
   const b = graph.createTask({
     threadRef: thread.ref,
     title: "B",
     description: "b",
-    agentRef: builtinAgentRef("worker"),
+    roleRef: builtinRoleRef("worker"),
   });
   graph.addDependency(b.ref, a.ref);
   assert.deepEqual(
@@ -116,12 +122,12 @@ void test("ready tasks require agent and completed dependencies", () => {
   );
 });
 
-void test("task agent labels prefer active claim, finished attribution, then latest run", () => {
+void test("task role labels prefer active claim, finished attribution, then latest run", () => {
   const graph = new TaskGraph();
   const thread = graph.createThread({ title: "Demo", description: "demo" });
   const current = "session:current";
   const main = graph.createTask({ threadRef: thread.ref, title: "Main", description: "main" });
-  const subagent = graph.createTask({ threadRef: thread.ref, title: "Sub", description: "sub" });
+  const roleRun = graph.createTask({ threadRef: thread.ref, title: "Sub", description: "sub" });
   const legacy = graph.createTask({
     threadRef: thread.ref,
     title: "Legacy",
@@ -134,34 +140,34 @@ void test("task agent labels prefer active claim, finished attribution, then lat
     sessionId: current,
     leaseMs: 60_000,
   });
-  graph.claimTask(subagent.ref, {
-    kind: "subagent",
+  graph.claimTask(roleRun.ref, {
+    kind: "role-run",
     claimedBy: `${current}+worker-1234`,
     sessionId: current,
-    agentName: "worker-1234",
+    runName: "worker-1234",
     leaseMs: 60_000,
   });
   graph.setTaskStatus(main.ref, "done");
-  graph.setTaskStatus(subagent.ref, "done");
+  graph.setTaskStatus(roleRun.ref, "done");
   graph.setTaskStatus(legacy.ref, "done");
 
   assert.equal(
-    deriveTaskAgentLabel({ task: graph.getTask(main.ref), currentSessionKey: current }),
+    deriveTaskRoleLabel({ task: graph.getTask(main.ref), currentSessionKey: current }),
     "me",
   );
   assert.equal(
-    deriveTaskAgentLabel({ task: graph.getTask(subagent.ref), currentSessionKey: current }),
+    deriveTaskRoleLabel({ task: graph.getTask(roleRun.ref), currentSessionKey: current }),
     "me/worker-1234",
   );
   assert.equal(
-    deriveTaskAgentLabel({
+    deriveTaskRoleLabel({
       task: graph.getTask(legacy.ref),
       currentSessionKey: current,
       latestRun: {
         ref: newRef("run"),
         threadRef: thread.ref,
         taskRef: legacy.ref,
-        agentName: "reviewer-9999",
+        runName: "reviewer-9999",
         status: "succeeded",
         outputArtifacts: [],
       },
@@ -169,7 +175,7 @@ void test("task agent labels prefer active claim, finished attribution, then lat
     "me/reviewer-9999",
   );
   assert.equal(
-    deriveTaskAgentLabel({
+    deriveTaskRoleLabel({
       task: graph.getTask(legacy.ref),
       currentSessionKey: current,
     }),
@@ -185,15 +191,15 @@ void test("active Spark prompt keeps only the active workflow contract", () => {
   assert.match(prompt, /Spark ask tools/);
   assert.match(prompt, /fix concrete repo behavior feedback/);
   assert.doesNotMatch(prompt, /spark_use_thread/);
-  assert.doesNotMatch(prompt, /spark_list_agents\/spark_get_agent/);
+  assert.doesNotMatch(prompt, /spark_list_roles\/spark_get_role/);
   assert.doesNotMatch(prompt, /Do not spawn nested pi CLI sessions/);
   assert.ok(prompt.length < 700);
 });
 
-void test("builtin Spark agents are instructed to use ask tools for blockers", () => {
-  for (const agent of createBuiltinAgents()) {
-    assert.match(agent.systemPrompt, /use Spark ask tools/i);
-    assert.match(agent.systemPrompt, /block|ambigu/i);
+void test("builtin Spark roles are instructed to use ask tools for blockers", () => {
+  for (const role of createBuiltinRoles()) {
+    assert.match(role.systemPrompt, /use Spark ask tools/i);
+    assert.match(role.systemPrompt, /block|ambigu/i);
   }
 });
 
@@ -207,7 +213,7 @@ void test("task graph maintains todos alongside a claimed current task", () => {
     title: "Plan",
     description: "plan",
     kind: "plan",
-    agentRef: builtinAgentRef("planner"),
+    roleRef: builtinRoleRef("planner"),
     todos: [{ content: "Read inputs" }, { content: "Draft graph" }],
   });
   graph.setCurrentTask(thread.ref, task.ref);

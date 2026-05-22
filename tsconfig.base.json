@@ -17,11 +17,11 @@
     "paths": {
       "spark-core": ["./packages/spark-core/src/index.ts"],
       "spark-artifacts": ["./packages/spark-artifacts/src/index.ts"],
-      "pi-agent-run": ["./packages/pi-agent-run/src/index.ts"],
+      "pi-roles": ["./packages/pi-roles/src/index.ts"],
+      "pi-roles/extension": ["./packages/pi-roles/src/extension.ts"],
       "pi-ask": ["./packages/pi-ask/src/index.ts"],
       "spark-ask": ["./packages/spark-ask/src/index.ts"],
       "pi-cue": ["./packages/pi-cue/src/index.ts"],
-      "spark-agents": ["./packages/spark-agents/src/index.ts"],
       "spark-review": ["./packages/spark-review/src/index.ts"],
       "spark-tasks": ["./packages/spark-tasks/src/index.ts"]
     }

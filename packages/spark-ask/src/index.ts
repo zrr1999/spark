@@ -1,7 +1,9 @@
-import type { AgentSpecProposal } from "spark-core";
+import type { RoleSpecProposal } from "pi-roles";
 import {
   createElaborationResult,
   createPiAskFlowArtifactBody,
+  createAskArtifactBody,
+  summarizeAskResult,
   createPiAskFlowRequest,
   createPiAskFlowResult,
   isPiAskFlowArtifactBody,
@@ -32,11 +34,23 @@ export {
   nextActionOptions,
   sparkFocusOptions,
 } from "./copy.ts";
+export {
+  createSparkAskToolRequest,
+  MIN_SPARK_ASK_OPTION_DESCRIPTION_LENGTH,
+  replaySparkAskTool,
+  runSparkAskTool,
+} from "./tool.ts";
 export type { SparkCopyLanguage, SparkThreadClarificationCopy } from "./copy.ts";
+export type {
+  SparkAskToolOptionParams,
+  SparkAskToolParams,
+  SparkAskToolQuestionParams,
+  SparkAskToolUi,
+} from "./tool.ts";
 
 export type SparkAskFlow =
   | "clarify-thread"
-  | "approve-agent-spec"
+  | "approve-role-spec"
   | "resolve-task-blocker"
   | "review-gate"
   | "custom";
@@ -59,11 +73,11 @@ export function clarifyThreadAsk(input: {
   };
 }
 
-export function approveAgentSpecAsk(input: { proposal: AgentSpecProposal }): PiAskFlowRequest {
+export function approveRoleSpecAsk(input: { proposal: RoleSpecProposal }): PiAskFlowRequest {
   return {
-    flow: "approve-agent-spec",
+    flow: "approve-role-spec",
     mode: "approval",
-    title: `Approve agent spec: ${input.proposal.id}`,
+    title: `Approve role spec: ${input.proposal.id}`,
     context: [
       input.proposal.description,
       input.proposal.rationale,
@@ -72,7 +86,7 @@ export function approveAgentSpecAsk(input: { proposal: AgentSpecProposal }): PiA
     questions: [
       {
         id: "approval",
-        prompt: `Create agent spec ${input.proposal.id}?`,
+        prompt: `Create role spec ${input.proposal.id}?`,
         type: "single",
         required: true,
         options: [
@@ -82,15 +96,13 @@ export function approveAgentSpecAsk(input: { proposal: AgentSpecProposal }): PiA
       },
       {
         id: "note",
-        prompt: "Any note for the agent spec proposal?",
+        prompt: "Any note for the role spec proposal?",
         type: "freeform",
       },
     ],
     behaviour: { allowElaborate: true, allowReplay: true, preservePriorAnswers: true },
   };
 }
-
-export const approveManagedAgentAsk = approveAgentSpecAsk;
 
 export function resolveTaskBlockerAsk(input: {
   taskTitle: string;
@@ -160,6 +172,8 @@ export const createSparkAskResult = createPiAskFlowResult;
 export const normalizeSparkAskResult = normalizePiAskFlowResult;
 export const isSparkAskGateBlocked = isPiAskFlowGateBlocked;
 export const createSparkAskArtifactBody = createPiAskFlowArtifactBody;
+export const createSparkAskToolArtifactBody = createAskArtifactBody;
+export const summarizeSparkAskResult = summarizeAskResult;
 export const isSparkAskArtifactBody = isPiAskFlowArtifactBody;
 
 export { createElaborationResult };

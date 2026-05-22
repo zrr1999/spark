@@ -96,7 +96,7 @@ void test("active Spark prompt preserves base prompt and avoids repeated Spark d
   assert.match(prompt, /Spark tools for thread\/task\/TODO\/DAG\/ask state/);
   assert.match(prompt, /fix concrete repo behavior feedback in code\/docs\/tests/);
   assert.doesNotMatch(prompt, /Do not auto-create placeholder tasks or threads/);
-  assert.doesNotMatch(prompt, /Before launching multiple agents or parallel workstreams/);
+  assert.doesNotMatch(prompt, /Before launching multiple roles or parallel workstreams/);
   assert.doesNotMatch(prompt, /prefer direct-exec commands and Pi file tools over \/bin\/sh/);
   assert.doesNotMatch(prompt, /Do not satisfy such feedback by only storing memory or preferences/);
 });
@@ -119,6 +119,66 @@ void test("active Spark context does not select a current thread before session 
 
     assert.equal(summary, undefined);
     await assert.rejects(() => stat(join(dir, ".spark", "current-thread")));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("active Spark context keeps strict limits for intent, claimed tasks, and TODOs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-active-context-limits-"));
+  try {
+    await mkdir(join(dir, ".spark"), { recursive: true });
+    await writeFile(
+      join(dir, "SPARK.md"),
+      [
+        "# Spark intent",
+        "",
+        ...Array.from({ length: 40 }, (_, index) => `Intent line ${index}`),
+      ].join("\n"),
+      "utf8",
+    );
+    const graph = new TaskGraph();
+    const thread = graph.createThread({ title: "Compact limits", description: "Compact limits" });
+    const task = graph.createTask({
+      threadRef: thread.ref,
+      name: "claimed-0",
+      title: "Claimed task 0",
+      description: "Trim active prompt context.",
+      status: "running",
+      todos: Array.from({ length: 5 }, (_, todoIndex) => ({
+        content: `Visible bounded TODO 0-${todoIndex}`,
+        status: "pending" as const,
+      })),
+    });
+    graph.claimTask(task.ref, {
+      kind: "main",
+      claimedBy: "leaf:test-leaf",
+      sessionId: "leaf:test-leaf",
+      leaseMs: 60_000,
+    });
+    graph.createTask({
+      threadRef: thread.ref,
+      name: "other-claimed",
+      title: "Other claimed task",
+      description: "Belongs to another session.",
+      status: "running",
+      claimedBySession: "leaf:other-leaf",
+    });
+    await defaultTaskGraphStore(dir).save(graph);
+    await defaultTaskTodoStore(dir, "leaf:test-leaf").save(graph);
+    const ctx = { cwd: dir, sessionManager: { getLeafId: () => "test-leaf" } };
+    await executeSparkToolInTest("spark_status", ctx, {});
+
+    const summary = await renderActiveSparkContextSummary(dir, ctx);
+    assert.ok(summary);
+    assert.match(summary, /Intent line 17/);
+    assert.doesNotMatch(summary, /Intent line 18/);
+    assert.match(summary, /read SPARK\.md for full intent/);
+    assert.match(summary, /Claimed task 0/);
+    assert.doesNotMatch(summary, /Other claimed task/);
+    assert.match(summary, /Visible bounded TODO 0-2/);
+    assert.doesNotMatch(summary, /Visible bounded TODO 0-3/);
+    assert.match(summary, /2 more active TODOs/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -209,6 +269,7 @@ void test("active Spark context omits finished history and finished TODOs", asyn
     assert.doesNotMatch(summary, /Finished child TODO/);
     assert.doesNotMatch(summary, /Finished history TODO/);
     assert.doesNotMatch(summary, /Independent finished TODO/);
+    assert.ok(summary.length < 2_000, `active summary too large: ${summary.length}`);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

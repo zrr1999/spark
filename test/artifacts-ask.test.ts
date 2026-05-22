@@ -5,7 +5,17 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ArtifactStore } from "spark-artifacts";
-import { askUser, createAskUserRequest, createAskUserResult, defaultAskUserResult } from "pi-ask";
+import {
+  askUser,
+  createAskUserRequest,
+  createAskUserResult,
+  createPiAskFlowArtifactBody,
+  defaultAskUserResult,
+  registerPiAskTools,
+  runPiAskFlow,
+  summarizeAskResult,
+  type PiAskUi,
+} from "pi-ask";
 import { newRef } from "spark-core";
 
 void test("artifact store writes hashes, blobs, and lineage links", async () => {
@@ -177,6 +187,227 @@ void test("ask_user supports explicit selectWithCustom custom input metadata", a
     values: [],
     labels: [],
     customText: "Language tooling engineers",
+  });
+});
+
+void test("ask_user and ask_flow share result summary and artifact body semantics", () => {
+  const request = {
+    title: "Choose mode",
+    mode: "decision" as const,
+    questions: [
+      {
+        id: "mode",
+        prompt: "Which mode?",
+        type: "single" as const,
+        options: [
+          { value: "fast", label: "Fast" },
+          { value: "safe", label: "Safe" },
+        ],
+      },
+    ],
+  };
+  const askUserResult = createAskUserResult({
+    cancelled: false,
+    answers: { mode: { values: ["safe"], labels: ["Safe"] } },
+  });
+  const flowResult = {
+    status: "answered" as const,
+    answers: {
+      mode: { questionId: "mode", kind: "option" as const, values: ["safe"], labels: ["Safe"] },
+    },
+    flow: "test",
+    mode: "submit" as const,
+    cancelled: false,
+    nextAction: "resume" as const,
+  };
+
+  assert.equal(summarizeAskResult(request, askUserResult), "Choose mode: answered; mode=Safe");
+  assert.equal(summarizeAskResult(request, flowResult), "Choose mode: answered; mode=Safe");
+  assert.deepEqual(
+    createPiAskFlowArtifactBody(request, flowResult).summary,
+    "Choose mode: answered; mode=Safe",
+  );
+});
+
+void test("ask_user tool summary uses option labels rather than raw ids", async () => {
+  const tools = new Map<string, { execute: Function }>();
+  registerPiAskTools({ registerTool: (config) => tools.set(config.name, config) });
+  const tool = tools.get("ask_user");
+  assert.ok(tool);
+
+  const result = await tool.execute(
+    "ask-user-test",
+    {
+      title: "Choose mode",
+      mode: "clarification",
+      questions: [
+        {
+          id: "mode",
+          prompt: "Which mode?",
+          type: "single",
+          options: [
+            { value: "fast_mode", label: "Fast path" },
+            { value: "safe_mode", label: "Safe path" },
+          ],
+        },
+      ],
+    },
+    new AbortController().signal,
+    () => undefined,
+    { ui: { select: async () => "Safe path" } },
+  );
+
+  const text = result.content.map((part: { text: string }) => part.text).join("\n");
+  assert.match(text, /mode=Safe path/);
+  assert.doesNotMatch(text, /safe_mode/);
+});
+
+void test("ask_user and ask_flow share UX result matrix semantics", async () => {
+  type MatrixUi = Pick<PiAskUi, "select" | "input">;
+  const cases: Array<{
+    name: string;
+    mode: "clarification" | "decision";
+    type: "single" | "multi" | "freeform";
+    required?: boolean;
+    ui: MatrixUi;
+    expected: { status: string; nextAction: string; values?: string[]; customText?: string };
+  }> = [
+    {
+      name: "clarification single option resumes",
+      mode: "clarification",
+      type: "single",
+      ui: { select: async () => "Safe" },
+      expected: { status: "answered", nextAction: "resume", values: ["safe"] },
+    },
+    {
+      name: "decision missing required selection blocks",
+      mode: "decision",
+      type: "single",
+      required: true,
+      ui: { select: async () => undefined },
+      expected: { status: "no_selection", nextAction: "block" },
+    },
+    {
+      name: "decision custom text is answered but blocked",
+      mode: "decision",
+      type: "single",
+      required: true,
+      ui: { select: async () => "Needs docs first" },
+      expected: {
+        status: "answered",
+        nextAction: "block",
+        values: [],
+        customText: "Needs docs first",
+      },
+    },
+    {
+      name: "multi options preserve selected ids",
+      mode: "clarification",
+      type: "multi",
+      ui: { select: async () => "Fast, Safe" },
+      expected: { status: "answered", nextAction: "resume", values: ["fast", "safe"] },
+    },
+    {
+      name: "freeform custom text resumes",
+      mode: "clarification",
+      type: "freeform",
+      ui: { input: async () => "Write docs" },
+      expected: { status: "answered", nextAction: "resume", values: [], customText: "Write docs" },
+    },
+  ];
+
+  for (const matrixCase of cases) {
+    const options =
+      matrixCase.type === "freeform"
+        ? undefined
+        : [
+            { value: "fast", label: "Fast" },
+            { value: "safe", label: "Safe" },
+          ];
+    const askUserRequest = createAskUserRequest({
+      title: matrixCase.name,
+      mode: matrixCase.mode,
+      questions: [
+        {
+          id: "answer",
+          prompt: matrixCase.name,
+          type: matrixCase.type,
+          options,
+          required: matrixCase.required,
+        },
+      ],
+    });
+    const flowRequest = {
+      flow: matrixCase.name,
+      title: matrixCase.name,
+      mode: matrixCase.mode,
+      questions: [
+        {
+          id: "answer",
+          prompt: matrixCase.name,
+          type: matrixCase.type,
+          options,
+          required: matrixCase.required,
+        },
+      ],
+    };
+
+    const askUserResult = await askUser(askUserRequest, matrixCase.ui);
+    const flowResult = await runPiAskFlow(flowRequest, matrixCase.ui);
+    assert.equal(askUserResult.status, matrixCase.expected.status, matrixCase.name);
+    assert.equal(flowResult.status, matrixCase.expected.status, matrixCase.name);
+    assert.equal(askUserResult.nextAction, matrixCase.expected.nextAction, matrixCase.name);
+    assert.equal(flowResult.nextAction, matrixCase.expected.nextAction, matrixCase.name);
+    assert.deepEqual(askUserResult.answers.answer?.values ?? [], matrixCase.expected.values ?? []);
+    assert.deepEqual(flowResult.answers.answer?.values ?? [], matrixCase.expected.values ?? []);
+    assert.equal(askUserResult.answers.answer?.customText, matrixCase.expected.customText);
+    assert.equal(flowResult.answers.answer?.customText, matrixCase.expected.customText);
+  }
+});
+
+void test("ask_user and ask_flow share option/custom parsing semantics", async () => {
+  const options = [
+    { value: "docs", label: "Docs" },
+    { value: "tests", label: "Tests" },
+  ];
+  const askUserResult = await askUser(
+    createAskUserRequest({
+      title: "Choose workstreams",
+      mode: "clarification",
+      questions: [
+        {
+          id: "streams",
+          prompt: "Which workstreams?",
+          type: "multi",
+          options,
+        },
+      ],
+    }),
+    { select: async () => "Docs, Research" },
+  );
+  const flowResult = await runPiAskFlow(
+    {
+      flow: "comparison",
+      mode: "clarification",
+      questions: [
+        {
+          id: "streams",
+          prompt: "Which workstreams?",
+          type: "multi",
+          options,
+        },
+      ],
+    },
+    { select: async () => "Docs, Research" },
+  );
+
+  assert.deepEqual(askUserResult.answers.streams, {
+    values: flowResult.answers.streams!.values,
+    labels: flowResult.answers.streams!.labels ?? [],
+    customText: flowResult.answers.streams!.customText,
+    ...(flowResult.answers.streams!.preview !== undefined
+      ? { preview: flowResult.answers.streams!.preview }
+      : {}),
   });
 });
 

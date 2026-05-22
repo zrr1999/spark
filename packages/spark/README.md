@@ -4,9 +4,9 @@ High-level `/spark` facade for Pi.
 
 It wires together Spark primitives and generic `pi-*` tools, but package-specific ownership stays below:
 
-- `spark-agents` owns builtin/project agent spec registry and creation
-- `spark-tasks` owns task DAGs, TODOs, scheduling state, and claims
-- `spark-runtime` executes claimed tasks through agents
-- `pi-ask` / `pi-cue` remain reusable outside Spark mode
+- `pi-roles` owns reusable `RoleSpec`s and simple single `RoleRun` execution helpers.
+- `spark-tasks` owns task DAGs, TODOs, scheduling state, role bindings, and claims.
+- `spark-runtime` adapts ready Spark tasks to concrete role runs and artifacts.
+- `pi-ask` / `pi-cue` remain reusable outside Spark mode.
 
 The Pi widget renders tasks as `@name: title` and keeps longer task instructions in `description`.

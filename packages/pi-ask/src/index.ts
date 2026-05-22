@@ -1,7 +1,16 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-import { SENTINEL_LABELS } from "./schema.ts";
+import { summarizeAskResult } from "./summary.ts";
+import {
+  defaultAskChoice,
+  inferAskSubmitStatus,
+  nextActionForAskSubmit,
+  parseAskChoice,
+  requiresExplicitSelectionForGate,
+  selectOptionWithCustom,
+  type ParsedAskChoice,
+} from "./shared-semantics.ts";
 
 export type PiAskMode = "clarification" | "decision" | "approval" | "unblock";
 export type PiAskQuestionType = "single" | "multi" | "freeform";
@@ -132,7 +141,7 @@ export async function askUser(request: PiAskRequest, ui?: PiAskUi): Promise<PiAs
     const resolved = await resolveQuestion(question, normalized, ui);
     if (!resolved.answer) {
       if (requiresExplicitAskUserSelection(normalized, question))
-        return createAskUserResult({ cancelled: false, answers, status: "no_selection" });
+        return createNoSelectionAskUserResult(normalized, answers);
       continue;
     }
     answers[question.id] = resolved.answer;
@@ -140,12 +149,7 @@ export async function askUser(request: PiAskRequest, ui?: PiAskUi): Promise<PiAs
       requiresExplicitAskUserSelection(normalized, question) &&
       resolved.answer.values.length === 0
     ) {
-      return createAskUserResult({
-        cancelled: false,
-        answers,
-        status: "answered",
-        nextAction: "block",
-      });
+      return createNoSelectionAskUserResult(normalized, answers);
     }
   }
   return createAskUserResult({ cancelled: false, answers });
@@ -158,12 +162,8 @@ export function defaultAskUserResult(request: PiAskRequest): PiAskResult {
 
   const answers: Record<string, PiAskAnswerEntry> = {};
   for (const question of request.questions) {
-    const first = question.options?.[0];
-    answers[question.id] = {
-      values: first ? [first.value] : [],
-      labels: first ? [first.label] : [],
-      customText: first ? undefined : "",
-    };
+    const answer = defaultAskChoice(question.options, question.type ?? "single");
+    if (answer) answers[question.id] = toAskUserAnswer(answer);
   }
   return createAskUserResult({ cancelled: false, answers });
 }
@@ -316,15 +316,17 @@ async function resolveQuestion(
   const questionType = (question.type ?? "single") as Exclude<PiAskQuestionType, "freeform">;
 
   if (question.options && (ui.selectWithCustom || ui.select)) {
-    const selected = await selectQuestionOptionWithCustom(ui, title, question.options);
+    const selected = await selectOptionWithCustom(ui, title, question.options);
     if (!selected) return {};
     if (selected.customText !== undefined) {
       return {
-        answer: parseOptionText(question.options, selected.customText, questionType),
+        answer: toAskUserAnswer(
+          parseAskChoice(question.options, selected.customText, questionType),
+        ),
       };
     }
     return {
-      answer: parseOptionText(question.options, selected.value ?? "", questionType),
+      answer: toAskUserAnswer(parseAskChoice(question.options, selected.value ?? "", questionType)),
     };
   }
 
@@ -348,82 +350,37 @@ async function resolveQuestion(
     const text = await ui.input(prompt, question.options?.[0]?.label ?? "");
     if (!text) return {};
     return {
-      answer: parseOptionText(question.options ?? [], text, questionType),
+      answer: toAskUserAnswer(parseAskChoice(question.options ?? [], text, questionType)),
     };
   }
 
   return {};
 }
 
-interface SelectWithCustomResult {
-  value?: string;
-  customText?: string;
-}
-
-async function selectQuestionOptionWithCustom(
-  ui: PiAskUi,
-  title: string,
-  options: PiAskOption[],
-): Promise<SelectWithCustomResult | undefined> {
-  const labels = options.map((option) => option.label);
-  if (ui.selectWithCustom) {
-    const selected = await ui.selectWithCustom(title, {
-      options: labels,
-      customLabel: SENTINEL_LABELS.other,
-    });
-    if (!selected) return undefined;
-    if (typeof selected === "string") return { value: selected };
-    return selected;
-  }
-
-  const selected = await ui.select?.(title, [...labels, SENTINEL_LABELS.other]);
-  if (!selected) return undefined;
-  if (selected === SENTINEL_LABELS.other) {
-    const customText = await ui.input?.(title, "");
-    return customText ? { customText } : undefined;
-  }
-  return { value: selected };
-}
-
-function parseOptionText(
-  options: PiAskOption[],
-  text: string,
-  type: Exclude<PiAskQuestionType, "freeform">,
-): PiAskAnswerEntry {
-  const parts = type === "multi" ? splitAnswerParts(text) : [text.trim()].filter(Boolean);
-  const matched = parts
-    .map((part) => findOption(options, part))
-    .filter((option): option is PiAskOption => Boolean(option));
-  const unmatched = parts.filter((part) => !findOption(options, part));
-  if (type === "single") {
-    const option = matched[0];
-    if (option) return { values: [option.value], labels: [option.label] };
-    return { values: [], labels: [], customText: text.trim() };
-  }
+function toAskUserAnswer(choice: ParsedAskChoice): PiAskAnswerEntry {
   return {
-    values: matched.map((option) => option.value),
-    labels: matched.map((option) => option.label),
-    customText: unmatched.length > 0 ? unmatched.join(", ") : undefined,
+    values: choice.values,
+    labels: choice.labels,
+    ...(choice.customText !== undefined ? { customText: choice.customText } : {}),
+    ...(choice.preview !== undefined ? { preview: choice.preview } : {}),
   };
 }
 
-function splitAnswerParts(text: string): string[] {
-  return text
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-}
-
-function findOption(options: PiAskOption[], value: string): PiAskOption | undefined {
-  return options.find((option) => option.label === value || option.value === value);
+function createNoSelectionAskUserResult(
+  request: PiAskRequest,
+  answers: Record<string, PiAskAnswerEntry>,
+): PiAskResult {
+  const status = inferAskSubmitStatus(request, answers);
+  return createAskUserResult({
+    cancelled: false,
+    answers,
+    status,
+    nextAction: nextActionForAskSubmit(request, answers, status),
+  });
 }
 
 function requiresExplicitAskUserSelection(request: PiAskRequest, question: PiAskQuestion): boolean {
-  return (
-    (request.mode === "decision" || request.mode === "approval") &&
-    question.required === true &&
-    (question.type ?? "single") !== "freeform"
-  );
+  return requiresExplicitSelectionForGate(request.mode, question);
 }
 
 function requestRequiresExplicitAskUserSelection(request: PiAskRequest): boolean {
@@ -438,11 +395,7 @@ function inferAskUserResultStatus(
 }
 
 function summarizeResult(request: PiAskRequest, result: PiAskResult): string {
-  if (result.status !== "answered") return `${request.title ?? "ask_user"}: ${result.status}`;
-  const answered = Object.entries(result.answers).map(
-    ([id, answer]) => `${id}=${answer.values.join(",") || answer.customText || ""}`,
-  );
-  return `${request.title ?? "ask_user"}: ${answered.join("; ") || "no answers"}`;
+  return summarizeAskResult(request, result);
 }
 
 function renderToolCall(
@@ -479,13 +432,25 @@ function truncateInline(value: string, maxLength: number): string {
 
 export * from "./schema.ts";
 export * from "./flow.ts";
+export {
+  createAskArtifactBody,
+  isAskArtifactBody,
+  summarizeAskAnswers,
+  summarizeAskResult,
+} from "./summary.ts";
+export type {
+  AskArtifactBody,
+  AskSummaryAnswer,
+  AskSummaryRequest,
+  AskSummaryResult,
+} from "./summary.ts";
 export { PiAskFlowPayloadStore } from "./ask-payload-store.ts";
 export { createAskConfigStore } from "./config/store.ts";
-export { PiAskFlowController } from "./ui/controller.ts";
+export type { AskConfig, AskConfigStore } from "./config/schema.ts";
+export { PiAskFlowController, normalizeAskKey, printableAskText } from "./ui/controller.ts";
 export { createInitialState, buildExtendedOptions } from "./state/state.ts";
 export type { AskState } from "./state/state.ts";
 export { reduce } from "./state/reducer.ts";
 export type { AskAction, Effect } from "./state/reducer.ts";
-export { routeKey } from "./state/key-router.ts";
 export { renderAskScreen } from "./ui/render.ts";
 export type { RenderTheme, AskUILanguage } from "./ui/render.ts";

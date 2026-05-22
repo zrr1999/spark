@@ -33,7 +33,7 @@ export interface ArtifactQuery {
   kind?: ArtifactKind;
   threadRef?: string;
   taskRef?: string;
-  agentRef?: string;
+  roleRef?: string;
   producer?: Provenance["producer"];
   linkedTo?: string;
 }
@@ -172,7 +172,7 @@ function matchesQuery(artifact: Artifact, query: ArtifactQuery): boolean {
   if (query.producer && artifact.provenance.producer !== query.producer) return false;
   if (query.threadRef && artifact.provenance.threadRef !== query.threadRef) return false;
   if (query.taskRef && artifact.provenance.taskRef !== query.taskRef) return false;
-  if (query.agentRef && artifact.provenance.agentRef !== query.agentRef) return false;
+  if (query.roleRef && artifact.provenance.roleRef !== query.roleRef) return false;
   if (query.linkedTo && !artifact.links.some((link) => link.to === query.linkedTo)) return false;
   return true;
 }

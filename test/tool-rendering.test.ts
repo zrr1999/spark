@@ -5,6 +5,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { registerPiAskTools } from "../packages/pi-ask/src/index.ts";
 import { registerPiCueTools } from "../packages/pi-cue/src/index.ts";
+import { registerPiRolesTools } from "../packages/pi-roles/src/extension.ts";
 import sparkExtension from "../packages/spark/src/extension/index.ts";
 
 interface RenderTheme {
@@ -38,15 +39,21 @@ void test("Spark extension tools render parameter-aware tool calls", () => {
   );
   assert.equal(
     renderCall(tools, "spark_ask", {
-      kind: "decision",
-      question: "Proceed with implementation?",
-      options: [
-        { id: "yes", label: "Yes", description: "Proceed" },
-        { id: "no", label: "No", description: "Stop" },
+      mode: "decision",
+      title: "Proceed with implementation?",
+      questions: [
+        {
+          id: "decision",
+          prompt: "Proceed with implementation?",
+          options: [
+            { id: "yes", label: "Yes", description: "Proceed" },
+            { id: "no", label: "No", description: "Stop" },
+          ],
+        },
+        { id: "note", prompt: "Any note?", type: "freeform" },
       ],
-      multiSelect: true,
     }),
-    'spark_ask decision "Proceed with implementation?" 2 options multi',
+    'spark_ask decision "Proceed with implementation?" 2 questions',
   );
   assert.equal(
     renderCall(tools, "spark_plan_tasks", {
@@ -84,19 +91,30 @@ void test("Spark extension tools render parameter-aware tool calls", () => {
   );
   assertVisibleWidthAtMost(longAsk, 80);
 
-  const longClarify = renderCall(
+  const longFlowAsk = renderCall(
     tools,
-    "spark_ask_clarify_thread",
+    "spark_ask",
     {
-      idea: "测试 Spark ask_flow 模式：用户明确要求使用 flow 模式，而不是单题 ask。请用 flow 交互收集/确认用途。",
+      mode: "clarification",
       title: "测试 ask_flow 模式",
+      questions: [
+        {
+          id: "scope",
+          prompt:
+            "测试 Spark ask_flow 模式：用户明确要求使用 flow 模式，而不是单题 ask。请用 flow 交互收集/确认用途。",
+          options: [
+            { id: "a", label: "A", description: "选择 A 的详细含义。" },
+            { id: "b", label: "B", description: "选择 B 的详细含义。" },
+          ],
+        },
+      ],
     },
     80,
   );
-  assertVisibleWidthAtMost(longClarify, 80);
+  assertVisibleWidthAtMost(longFlowAsk, 80);
 });
 
-void test("standalone Pi ask and cue tools render parameter-aware tool calls", () => {
+void test("standalone Pi ask, cue, and role tools render parameter-aware tool calls", () => {
   const askTools = new Map<string, RenderableToolConfig>();
   registerPiAskTools({
     registerTool: (config) => askTools.set(config.name, config),
@@ -133,6 +151,22 @@ void test("standalone Pi ask and cue tools render parameter-aware tool calls", (
     80,
   );
   assertVisibleWidthAtMost(longRun, 80);
+
+  const roleTools = new Map<string, RenderableToolConfig>();
+  registerPiRolesTools({
+    registerTool: (config) => roleTools.set(config.name, config),
+  });
+  assertAllToolsHaveCallRenderers(roleTools);
+  assert.equal(
+    renderCall(roleTools, "run_role", {
+      role: "worker",
+      instruction: "Inspect the implementation.",
+      mode: "fresh",
+      dryRun: true,
+      timeoutMs: 1000,
+    }),
+    "run_role worker fresh dry-run timeout=1000",
+  );
 
   const longAskUser = renderCall(
     askTools,

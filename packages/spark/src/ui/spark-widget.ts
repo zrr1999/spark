@@ -7,7 +7,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
  * Display model:
  *   ◆ Tasks(running=2 pending=1 failed=1): @agent-a, @agent-b
  *   ◆ Thread title
- *   ├─ ◐ @subagent/agent task title
+ *   ├─ ◐ @me/worker role-run task title
  *   │  ├─ ✓ #7 task TODO
  *   │  └─ ○ #12 task TODO
  *   └─ ◐ #3 independent session TODO
@@ -16,9 +16,11 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 export interface TaskEntry {
   title: string;
   status: "running" | "pending" | "blocked" | "done" | "failed" | "cancelled";
-  claim?: "mine" | "subagent" | "other";
+  claim?: "mine" | "role-run" | "other";
   animationFrame?: number;
   agentLabel?: string;
+  /** @deprecated use agentLabel until UI naming fully migrates. */
+  roleLabel?: string;
   backgroundOwner?: "session";
   /** True when a running agent is parked on user/input rather than actively working. */
   waitingForInput?: boolean;
@@ -141,7 +143,7 @@ function hasAnimatedRunningTask(state: SparkWidgetState | undefined): boolean {
     state?.tasks.some(
       (task) =>
         task.status === "running" &&
-        task.claim === "subagent" &&
+        task.claim === "role-run" &&
         task.waitingForInput !== true &&
         task.backgroundOwner === "session",
     ),
@@ -229,7 +231,7 @@ function formatRunningAgentSummary(tasks: TaskEntry[]): string | undefined {
       .filter(
         (task) =>
           task.status === "running" &&
-          task.claim === "subagent" &&
+          task.claim === "role-run" &&
           task.backgroundOwner === "session",
       )
       .map(taskAgentLabel),
@@ -293,7 +295,7 @@ function taskIcon(task: TaskEntry, theme: SparkWidgetTheme): string {
 function runningTaskIcon(task: TaskEntry): string {
   if (task.waitingForInput) return RUNNING_TASK_WAITING_ICON;
   if (task.claim === "other") return RUNNING_TASK_WAITING_ICON;
-  if (task.claim !== "subagent") return "→";
+  if (task.claim !== "role-run") return "→";
   if (task.backgroundOwner !== "session") return RUNNING_TASK_WAITING_ICON;
   const frame = taskAnimationFrame(task);
   return RUNNING_TASK_SPINNER_FRAMES[frame % RUNNING_TASK_SPINNER_FRAMES.length];
@@ -304,13 +306,14 @@ function taskAnimationFrame(task: TaskEntry): number {
 }
 
 function taskAgentLabel(task: TaskEntry): string {
-  if (task.agentLabel?.trim()) return task.agentLabel.trim();
+  if ((task.agentLabel ?? task.roleLabel)?.trim())
+    return (task.agentLabel ?? task.roleLabel)?.trim() ?? "";
   switch (task.claim) {
     case "mine":
       return "me";
     case "other":
       return "other";
-    case "subagent":
+    case "role-run":
     default:
       return "unassigned";
   }
@@ -377,11 +380,11 @@ function todoVisibilityRank(todo: SessionTodoEntry): number {
 
 function taskActorLabel(task: TaskEntry): string | undefined {
   const agentLabel = taskAgentLabel(task);
-  if (task.claim === "subagent") {
+  if (task.claim === "role-run") {
     if (agentLabel.includes("/")) return `@${agentLabel}`;
     return task.backgroundOwner === "session" ? `@me/${agentLabel}` : `@${agentLabel}`;
   }
-  if (task.claim === "mine" && task.agentLabel?.trim()) return `@${agentLabel}`;
+  if (task.claim === "mine" && (task.agentLabel ?? task.roleLabel)?.trim()) return `@${agentLabel}`;
   if (task.claim === "other") return `@${agentLabel}`;
   return undefined;
 }

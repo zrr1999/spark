@@ -11,25 +11,18 @@ Tools:
 - `spark_status` — show Spark thread/task status. Defaults to `view: "active"` for unfinished/current-session work, supports `view: "summary"` for counts only, `view: "full"` for done/cancelled history, and optional `limit` for task rows per thread.
 - `spark_use_thread` — set or create this session's current Spark thread.
 - `spark_rename_thread` — rename or update metadata for an existing Spark thread without changing task refs.
-- `spark_plan_tasks` — create or update multiple durable named tasks (`name` / `title` / `description`) in the active thread from a concrete plan without claiming them for the current session. Task dependencies are scoped to the active thread only; cross-thread dependencies are intentionally out of scope.
-- `spark_claim_task` — claim or update concrete task work for the current session in the active thread; tasks render as `@name: title`, and optional `agentRef` bindings can later be auto-claimed by Spark runtime execution.
+- `spark_plan_tasks` — create or update multiple durable named tasks (`name` / `title` / `description`) in the active thread from a concrete plan without claiming them for the current session. Each task is plan-bound: callers may provide a structured `plan`, and Spark derives a minimal plan from the task description when omitted. Task dependencies are scoped to the active thread only; cross-thread dependencies are intentionally out of scope.
+- `spark_claim_task` — claim or update concrete task work for the current session in the active thread; tasks render as `@name: title`, and optional `roleRef` bindings can later be auto-claimed by Spark runtime execution. Claiming is an execution commitment: agents should read the task's bound plan before creating TODOs or executing.
 - `spark_update_task_todos` — update TODOs attached to a claimed task.
 - `spark_update_todos` — update independent session TODOs that are siblings of the thread display.
-- `spark_run_ready_tasks` — start the Spark DAG manager for ready tasks; dry-run remains synchronous and read-only by default. Ready-task execution uses reusable agent specs via task `agentRef`s and creates fresh/spec-based subagent runs by default.
-- `spark_ask` — run a generic Spark ask workflow and
-  persist the result as an ask artifact.
-- `spark_ask_clarify_thread` — run the thread-clarification ask flow.
-- `spark_ask_approve_agent_spec` — run the agent-spec approval ask flow.
-   - Legacy alias: `spark_ask_approve_agent`.
-- `spark_ask_unblock_task` — run the task-blocker resolution ask flow.
-- `spark_ask_review_gate` — run the review-gate decision ask flow.
+- `spark_run_ready_tasks` — start the Spark DAG manager for ready tasks; dry-run remains synchronous and read-only by default. Ready-task execution uses reusable role specs via task `roleRef`s and creates fresh `role-run`s by default.
+- `spark_dag_manager` — inspect and control persisted DAG manager state with `status`, `reconcile`, `clear_inactive`, and `kill_active` actions. It reads `.spark/dag-runs.json`, reconciles stale running records against the task graph and active role-run process tracker, can clear inactive manager history, and can terminate active background role-run processes.
+- `spark_ask` — run a unified flow-native Spark ask workflow with
+  one or more questions and persist the result as an ask artifact.
 - `spark_ask_replay` — replay the latest or a specified Spark ask artifact.
-- `spark_list_agent_specs` — list predefined and project reusable agent specs.
-   - Legacy alias: `spark_list_agents`.
-- `spark_get_agent_spec` — inspect one reusable agent spec.
-   - Legacy alias: `spark_get_agent`.
-- `spark_create_agent_spec` — create and persist a project reusable agent spec from a proposal shape.
-   - Legacy alias: `spark_create_managed_agent`.
+- `spark_list_roles` — list builtin, project, and user reusable role specs.
+- `spark_get_role` — inspect one reusable role spec.
+- `spark_create_role` — create and persist a project reusable role spec from a proposal shape.
 
 Automatic behavior:
 
@@ -45,7 +38,7 @@ Automatic behavior:
      fake current task just to populate UI; the model should
      use `spark_claim_task` only after it has concrete work
      from the actual situation
-   - each session should have at most one unfinished main-agent claim at a time; subagent assignment is represented as an auto-claim when the run starts
+   - each session should have at most one unfinished main-session claim at a time; role-run execution is represented as an auto-claim when the run starts
    - initialization does not show a broad upfront form;
      Spark analyzes the request and workspace first, then asks
      only targeted clarification questions for concrete
@@ -82,7 +75,7 @@ Automatic behavior:
    - task-scoped TODO state is loaded from and saved outside
      `.spark/thread.json`; active sessions use a session-scoped
      `.spark/todos/<session>.json` path to avoid concurrent
-     agent overwrites
+     role-run overwrites
    - independent session TODOs from `spark_update_todos` are
      stored separately in `.spark/session-todos/<session>.json`;
      TODO display numbers are stored in
@@ -91,6 +84,17 @@ Automatic behavior:
      a lightweight background interval; stale claims become
      retryable `pending` tasks, while runtime execution timeouts
      are marked as failed runs
+   - DAG manager invocations are persisted outside the task graph
+     in `.spark/dag-runs.json`; `spark_status` includes the
+     manager summary, last/active DAG run, completion counts, and
+     timeout/stale signals
+   - before reporting status or starting another background wave,
+     Spark reconciles stale `running` manager records from the
+     current task graph and active role-run process tracker; runs
+     may be marked `succeeded`, `failed`, `timed_out`, or `stale`
+   - completed DAG manager runs persist a concise completion
+     follow-up with summary and next actions; background manager
+     completion emits that follow-up to the session
 6. Thread / task / TODO text UI is enabled by default for
    the current session:
    - the above-editor widget shows the generated Spark thread
@@ -108,11 +112,11 @@ Automatic behavior:
    `spark_rename_thread`, `spark_plan_tasks`,
    `spark_claim_task`, `spark_update_task_todos`,
    `spark_update_todos`,
-   `spark_list_agent_specs` / `spark_get_agent_spec`,
+   `spark_list_roles` / `spark_get_role`,
    `spark_run_ready_tasks`, and `pi-cue` tools.
 8. Spark display-name quality is model-maintained when the
    improvement is obvious:
-   - agents may update the active thread title and the current
+   - models may update the active thread title and the current
      task `@name`/title when the existing display name is clearly
      placeholder, generic, stale, too broad, or inconsistent with
      the confirmed active intent
@@ -143,26 +147,26 @@ Automatic behavior:
      external reporting
 9. Process guardrails are part of the active prompt and skill:
    - use `spark_plan_tasks` to梳理/organize multiple tasks before
-     assigning agents instead of claiming many unfinished tasks in
+     assigning roles instead of claiming many unfinished tasks in
      one session
-   - ask with `spark_ask` before launching multiple agents or
+   - ask with `spark_ask` before launching multiple role-runs or
      parallel workstreams unless the user explicitly requests
      immediate dispatch; no-selection is not approval
    - prefer Spark-native delegation by binding concrete tasks to
-     builtin/managed `agentRef`s and handing execution to the
+     builtin/project/user reusable role `roleRef`s and handing execution to the
      `spark_run_ready_tasks` DAG manager; this creates concrete
-     fresh/spec-based subagent runs with task claims and run artifacts
-     attributed to the task/run, while the `agentRef` remains the
-     reusable spec identity; do not spawn nested `pi` CLI sessions as
-     pseudo-agents unless explicitly testing Pi CLI behavior
+     fresh role-runs with task claims and run artifacts
+     attributed to the task/run, while the `roleRef` remains the
+     reusable role identity; do not spawn nested `pi` CLI sessions as
+     pseudo-roles unless explicitly testing Pi CLI behavior
    - prefer cue-shell direct-exec and Pi file tools; use
      `/bin/sh -lc` only for genuine shell semantics
-   - forked-context subagent runs require an explicit parent session or
+   - forked role-runs require an explicit parent session or
      context source and should be used only when explicit artifacts are
      insufficient and sharing the parent transcript is intentional
-   - keep temporary plans, agent reports, and scratch artifacts
+   - keep temporary plans, role-run reports, and scratch artifacts
      out of repo root by using `.spark/notes/`,
-     `.spark/agent-reports/`, or typed artifacts
+     `.spark/role-reports/`, or typed artifacts
 
 Example allowlist:
 
@@ -175,19 +179,65 @@ allow_dirs = [
 ]
 ```
 
+## `pi-roles`
+
+- `run_role` — resolve a builtin/project/user role and run one explicit instruction.
+
+`run_role` is intentionally minimal and task-agnostic:
+
+- defaults to `dryRun: true`, returning the exact Pi CLI args that would be launched;
+- `dryRun: false` launches one child Pi run;
+- `mode: "fresh"` starts a new child session;
+- `mode: "forked"` requires explicit `forkFromSession` and shares that parent context;
+- it does not claim Spark tasks, write Spark artifacts, or schedule DAG work.
+
+Use `spark_run_ready_tasks` instead when a Spark task should be claimed, attributed, persisted, and tracked by the DAG manager.
+
 ## `pi-ask`
 
-- `ask_user` — minimal structured human-input primitive
+- `ask_user` — focused single-question human-input primitive
   with stable result details.
+- `ask_flow` — reusable multi-question/fullscreen form protocol,
+  state machine, renderer, replay mechanics, and result shape.
 
-`ask_user` accepts direct custom input for non-freeform
-questions; users are not forced through a separate
-`Other / custom input…` option before typing their own
-answer.
+`ask_user` and `ask_flow` are peers over the same ask contract, not
+primary/fallback implementations. Use `ask_user` for one focused question and
+`ask_flow` for multi-question forms or review/replay-heavy interactions.
 
-`pi-ask` is the protocol/tool layer. `ask_flow` owns the
-generic multi-question flow UI and replay mechanics;
-`spark_ask` builds Spark workflow semantics on top of it.
+Shared ask contract:
+
+- Asks do not make automatic timeout decisions; they wait for an answer,
+  explicit cancellation, or explicit no-selection from the UI adapter.
+- Option `value` is the stable machine id stored in structured results;
+  `label` and `description` are user-facing. UI and human summaries should show
+  labels/descriptions instead of raw ids.
+- Direct custom input is first-class. Custom text is returned as `customText`
+  whether it comes from a freeform question or the shared custom-input
+  affordance. Fullscreen `Type your own` drafts are preserved during navigation
+  but only committed on Enter; committed custom answers render as selected.
+- Custom input affordances are UI metadata, not business options. Do not add
+  business options named `Other` / `Type your own`.
+- Optional blank freeform answers may be submitted as `kind: "skipped"` so
+  forms can advance without fabricating user text.
+- Decision and approval gates treat `cancelled` and `no_selection` as blocked.
+  Submitted custom text is preserved as `answered` + `customText`, but the gate
+  still blocks when no required option id was selected.
+- `ask_user`, `ask_flow`, and Spark ask wrappers use shared label-first
+  summary helpers. Persisted ask artifacts should store both the structured
+  `request`/`result` and a human `summary`; automation must use the structured
+  ids in `answers[*].values`.
+- `ask_flow` may run a freeform-only request with only `input` UI available;
+  absence of `select` does not imply default answers for that case.
+
+`spark_ask` builds Spark workflow semantics on top of this contract and must
+provide clear option descriptions explaining what each choice means. It is the
+canonical Spark flow-native ask surface: prefer `questions[]`, persist
+`ask-answer` artifacts as `{ request, result, summary }`, replay from those
+artifacts, and treat no-selection/cancelled gate results as blocked. Keep the
+package boundary clear: generic ask protocol/TUI/summary behavior belongs in
+`pi-ask`; Spark copy and preset request builders belong in `spark-ask`; Pi tool
+registration, Spark option-description validation, artifacts, and replay tool
+behavior belong in `packages/spark`.
 
 ## `pi-cue`
 

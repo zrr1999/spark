@@ -1,4 +1,5 @@
 import type { PiAskFlowQuestion, PiAskFlowResult, PiAskFlowAnswerEntry } from "../schema.ts";
+import { inferAskSubmitStatus, nextActionForAskSubmit } from "../shared-semantics.ts";
 import type { AskState, ExtendedOption } from "./state.ts";
 import { isSubmitTab } from "./state.ts";
 
@@ -12,21 +13,15 @@ export type AskAction =
   | { kind: "toggle_multi_option" }
   | { kind: "commit_multi" }
   | { kind: "enter_input" }
-  | { kind: "update_input_draft"; text: string }
   | { kind: "commit_input" }
   | { kind: "enter_notes"; questionId: string }
-  | { kind: "update_notes_draft"; text: string }
   | { kind: "commit_notes"; questionId: string }
   | { kind: "close_notes" }
-  | { kind: "enter_chat" }
   | { kind: "submit" }
   | { kind: "elaborate" }
   | { kind: "cancel" }
   | { kind: "move_submit_choice"; direction: -1 | 1 }
-  | { kind: "open_settings" }
-  | { kind: "close_settings" }
-  | { kind: "apply_number_shortcut"; index: number }
-  | { kind: "toggle_question_type" };
+  | { kind: "apply_number_shortcut"; index: number };
 
 // ---- Effects ----
 
@@ -47,6 +42,7 @@ export interface ApplyResult {
 export interface ApplyContext {
   questions: readonly PiAskFlowQuestion[];
   optionsByTab: ReadonlyArray<readonly ExtendedOption[]>;
+  mode?: "clarification" | "decision" | "approval" | "unblock";
 }
 
 // ---- Reducer ----
@@ -66,21 +62,15 @@ export function reduce(state: AskState, action: AskAction, ctx: ApplyContext): A
     case "commit_multi":
       return commitMulti(state, ctx);
     case "enter_input":
-      return enterInput(state);
-    case "update_input_draft":
-      return updateInputDraft(state, action.text);
+      return enterInput(state, ctx);
     case "commit_input":
       return commitInput(state, ctx);
     case "enter_notes":
       return enterNotes(state, action.questionId);
-    case "update_notes_draft":
-      return updateNotesDraft(state, action.text);
     case "commit_notes":
       return commitNotes(state, action.questionId);
     case "close_notes":
       return closeNotes(state);
-    case "enter_chat":
-      return enterChat(state, ctx);
     case "submit":
       return submit(state, ctx);
     case "elaborate":
@@ -89,28 +79,24 @@ export function reduce(state: AskState, action: AskAction, ctx: ApplyContext): A
       return cancel(state, ctx);
     case "move_submit_choice":
       return moveSubmitChoice(state, action.direction, ctx);
-    case "open_settings":
-      return { state: { ...state, settingsOpen: true }, effects: [] };
-    case "close_settings":
-      return { state: { ...state, settingsOpen: false }, effects: [] };
     case "apply_number_shortcut":
       return applyNumberShortcut(state, action.index, ctx);
-    case "toggle_question_type":
-      return toggleQuestionType(state, ctx);
   }
 }
 
 // ---- Implementations ----
 
 function moveOption(state: AskState, direction: -1 | 1, ctx: ApplyContext): ApplyResult {
-  if (isSubmitTab(state, ctx.questions) || state.inputMode || state.notesVisible)
-    return { state, effects: [] };
+  if (isSubmitTab(state, ctx.questions) || state.notesVisible) return { state, effects: [] };
   const options = ctx.optionsByTab[state.currentTab];
   if (!options || options.length === 0) return { state, effects: [] };
   const max = options.length - 1;
   const next = Math.max(0, Math.min(max, state.optionIndex + direction));
   const focusedOptionHasPreview = computeHasPreview(options[next]);
-  return { state: { ...state, optionIndex: next, focusedOptionHasPreview }, effects: [] };
+  return {
+    state: { ...state, optionIndex: next, inputMode: false, focusedOptionHasPreview },
+    effects: [{ kind: "request_rerender" }],
+  };
 }
 
 function moveTab(state: AskState, direction: -1 | 1 | "submit", ctx: ApplyContext): ApplyResult {
@@ -135,10 +121,9 @@ function jumpTab(state: AskState, index: number, ctx: ApplyContext): ApplyResult
       inputMode: false,
       notesVisible: false,
       multiSelectChecked: new Set(),
-      inputDraft: "",
+      inputDraft: preservedCustomDraft(state, ctx.questions[clamped]),
       notesDraft: "",
       submitChoiceIndex: 0,
-      chatFocused: false,
       focusedOptionHasPreview: newOptions ? computeHasPreview(newOptions[0]) : false,
     },
     effects: [{ kind: "request_rerender" }],
@@ -156,11 +141,7 @@ function selectOption(state: AskState, ctx: ApplyContext): ApplyResult {
     case "option":
       return commitOptionAnswer(state, ctx, focused);
     case "other":
-      return enterInput(state);
-    case "chat":
-      return enterChat(state, ctx);
-    case "next":
-      return commitMulti(state, ctx);
+      return enterInput(state, ctx);
   }
 }
 
@@ -174,6 +155,7 @@ function commitOptionAnswer(
     questionId: question.id,
     kind: "option",
     values: [focused.option!.value],
+    labels: [focused.option!.label],
     preview: focused.preview,
   };
 
@@ -184,10 +166,7 @@ function commitOptionAnswer(
   const answers = new Map(state.answers);
   answers.set(question.id, answer);
 
-  return {
-    state: { ...state, answers, inputMode: false, inputDraft: "" },
-    effects: [{ kind: "request_rerender" }],
-  };
+  return moveToNextTab({ ...state, answers, inputMode: false }, ctx);
 }
 
 function toggleMultiOption(state: AskState, ctx: ApplyContext): ApplyResult {
@@ -213,10 +192,14 @@ function commitMulti(state: AskState, ctx: ApplyContext): ApplyResult {
   const question = ctx.questions[state.currentTab];
   if (state.multiSelectChecked.size === 0) return { state, effects: [] };
 
+  const selectedOptions = (question.options ?? []).filter((option) =>
+    state.multiSelectChecked.has(option.value),
+  );
   const answer: PiAskFlowAnswerEntry = {
     questionId: question.id,
     kind: "multi",
-    values: [...state.multiSelectChecked],
+    values: selectedOptions.map((option) => option.value),
+    labels: selectedOptions.map((option) => option.label),
   };
 
   const pendingNote = state.notesByQuestion.get(question.id);
@@ -225,27 +208,30 @@ function commitMulti(state: AskState, ctx: ApplyContext): ApplyResult {
   const answers = new Map(state.answers);
   answers.set(question.id, answer);
 
-  return {
-    state: { ...state, answers, multiSelectChecked: new Set() },
-    effects: [{ kind: "request_rerender" }],
-  };
+  return moveToNextTab({ ...state, answers, multiSelectChecked: new Set() }, ctx);
 }
 
-function enterInput(state: AskState): ApplyResult {
+function enterInput(state: AskState, ctx?: ApplyContext): ApplyResult {
+  const question = ctx?.questions[state.currentTab];
   return {
-    state: { ...state, inputMode: true, inputDraft: "" },
+    state: { ...state, inputMode: true, inputDraft: preservedCustomDraft(state, question) },
     effects: [{ kind: "enter_input_mode" }],
   };
 }
 
-function updateInputDraft(state: AskState, text: string): ApplyResult {
-  return { state: { ...state, inputDraft: text }, effects: [] };
-}
-
 function commitInput(state: AskState, ctx: ApplyContext): ApplyResult {
   const question = ctx.questions[state.currentTab];
-  const text = state.inputDraft.trim();
-  if (!text) return { state: { ...state, inputMode: false, inputDraft: "" }, effects: [] };
+  const text = (state.inputDraft || preservedCustomDraft(state, question)).trim();
+  const customDraftsByQuestion = rememberCustomDraft(state, question, text);
+  if (!text) {
+    const nextState = { ...state, inputMode: false, inputDraft: "", customDraftsByQuestion };
+    if (question.type === "freeform" && question.required !== true) {
+      const answers = new Map(state.answers);
+      answers.set(question.id, { questionId: question.id, kind: "skipped", values: [] });
+      return moveToNextTab({ ...nextState, answers }, ctx);
+    }
+    return { state: nextState, effects: [{ kind: "request_rerender" }] };
+  }
 
   const answer: PiAskFlowAnswerEntry = {
     questionId: question.id,
@@ -257,10 +243,7 @@ function commitInput(state: AskState, ctx: ApplyContext): ApplyResult {
   const answers = new Map(state.answers);
   answers.set(question.id, answer);
 
-  return {
-    state: { ...state, answers, inputMode: false, inputDraft: "" },
-    effects: [{ kind: "request_rerender" }],
-  };
+  return moveToNextTab({ ...state, answers, inputMode: false, customDraftsByQuestion }, ctx);
 }
 
 function enterNotes(state: AskState, questionId: string): ApplyResult {
@@ -272,10 +255,6 @@ function enterNotes(state: AskState, questionId: string): ApplyResult {
     },
     effects: [{ kind: "enter_notes_mode" }],
   };
-}
-
-function updateNotesDraft(state: AskState, text: string): ApplyResult {
-  return { state: { ...state, notesDraft: text }, effects: [] };
 }
 
 function commitNotes(state: AskState, questionId: string): ApplyResult {
@@ -298,28 +277,16 @@ function closeNotes(state: AskState): ApplyResult {
   };
 }
 
-function enterChat(state: AskState, _ctx: ApplyContext): ApplyResult {
-  // Chat: collect partial answers and return them with mode=chat.
+function submit(state: AskState, ctx: ApplyContext): ApplyResult {
   const answers = toAnswerRecord(state.answers);
+  const request = { mode: ctx.mode, questions: ctx.questions };
+  const status = inferAskSubmitStatus(request, answers);
   const result: PiAskFlowResult = {
-    status: "answered",
-    answers,
-    mode: "chat",
-    cancelled: false,
-    nextAction: "resume",
-  };
-  return { state, effects: [{ kind: "done", result }] };
-}
-
-function submit(state: AskState, _ctx: ApplyContext): ApplyResult {
-  const answers = toAnswerRecord(state.answers);
-  const hasAnswers = Object.keys(answers).length > 0;
-  const result: PiAskFlowResult = {
-    status: hasAnswers ? "answered" : "no_selection",
+    status,
     answers,
     mode: "submit",
     cancelled: false,
-    nextAction: hasAnswers ? "resume" : "block",
+    nextAction: nextActionForAskSubmit(request, answers, status),
   };
   return { state, effects: [{ kind: "done", result }] };
 }
@@ -406,11 +373,28 @@ function applyNumberShortcut(state: AskState, index: number, ctx: ApplyContext):
   );
 }
 
-function toggleQuestionType(state: AskState, _ctx: ApplyContext): ApplyResult {
-  // Toggle between single and multi for current question
-  // This is a view-level concern - the question type doesn't change in schema
-  // But we can track it as a runtime override
-  return { state, effects: [] };
+function moveToNextTab(state: AskState, ctx: ApplyContext): ApplyResult {
+  return jumpTab(state, state.currentTab + 1, ctx);
+}
+
+function preservedCustomDraft(state: AskState, question: PiAskFlowQuestion | undefined): string {
+  if (!question) return "";
+  const draft = state.customDraftsByQuestion.get(question.id);
+  if (draft !== undefined) return draft;
+  const answer = state.answers.get(question.id);
+  return answer?.kind === "custom" ? (answer.customText ?? "") : "";
+}
+
+function rememberCustomDraft(
+  state: AskState,
+  question: PiAskFlowQuestion | undefined,
+  draft: string,
+): ReadonlyMap<string, string> {
+  if (!question) return state.customDraftsByQuestion;
+  const drafts = new Map(state.customDraftsByQuestion);
+  if (draft) drafts.set(question.id, draft);
+  else drafts.delete(question.id);
+  return drafts;
 }
 
 // ---- Helpers ----

@@ -17,7 +17,7 @@
     "@earendil-works/pi-tui": "^0.74.1",
     "pi-ask": "file:../pi-ask",
     "pi-cue": "file:../pi-cue",
-    "spark-agents": "file:../spark-agents",
+    "pi-roles": "file:../pi-roles",
     "spark-artifacts": "file:../spark-artifacts",
     "spark-ask": "file:../spark-ask",
     "spark-core": "file:../spark-core",

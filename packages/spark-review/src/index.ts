@@ -1,5 +1,5 @@
 import {
-  type AgentRef,
+  type RoleRef,
   type Artifact,
   type ArtifactRef,
   type GatePolicy,
@@ -12,7 +12,7 @@ import {
 } from "spark-core";
 
 export interface CreateReviewGateInput {
-  subject: TaskRef | ArtifactRef | AgentRef;
+  subject: TaskRef | ArtifactRef | RoleRef;
   lens: ReviewGate["lens"];
   outcome: ReviewOutcome;
   summary: string;
@@ -44,7 +44,7 @@ export function createReviewGate(input: CreateReviewGateInput): ReviewGate {
 }
 
 export function createReviewArtifactBody(input: {
-  subject: TaskRef | ArtifactRef | AgentRef;
+  subject: TaskRef | ArtifactRef | RoleRef;
   lens: ReviewGate["lens"];
   outcome: ReviewOutcome;
   summary: string;

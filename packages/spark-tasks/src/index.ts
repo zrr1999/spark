@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import {
   DependencyError,
   NotFoundError,
-  type AgentRef,
+  type RoleRef,
   type ArtifactRef,
   type RunRef,
   type Task,
@@ -14,6 +14,7 @@ import {
   type TaskClaim,
   type TaskClaimKind,
   type TaskKind,
+  type TaskPlan,
   type TaskProposal,
   type TaskRef,
   type TaskRun,
@@ -21,6 +22,7 @@ import {
   type TaskTodoStatus,
   type Thread,
   type ThreadRef,
+  type ThreadStatus,
   newRef,
   nowIso,
   stableId,
@@ -29,6 +31,7 @@ import {
 export interface CreateThreadInput {
   title: string;
   description: string;
+  status?: ThreadStatus;
   outputLanguage?: "zh" | "en";
 }
 
@@ -48,11 +51,14 @@ export interface CreateTaskInput {
   description: string;
   kind?: TaskKind;
   status?: Task["status"];
-  agentRef?: AgentRef;
+  roleRef?: RoleRef;
+  /** @deprecated use roleRef. */
+  agentRef?: RoleRef | `agent:${string}`;
   claimedBySession?: string;
   finishedBy?: TaskAttribution;
   claim?: TaskClaim;
   inputArtifacts?: ArtifactRef[];
+  plan?: TaskPlan;
   /**
    * Seed durable TODOs for this task. TaskGraphStore intentionally keeps TODOs
    * out of thread.json; persist them through TaskTodoStore.
@@ -63,7 +69,11 @@ export interface CreateTaskInput {
 export interface ClaimTaskInput {
   kind: TaskClaimKind;
   claimedBy: string;
-  agentRef?: AgentRef;
+  roleRef?: RoleRef;
+  /** @deprecated use roleRef. */
+  agentRef?: RoleRef | `agent:${string}`;
+  runName?: string;
+  /** @deprecated use runName. */
   agentName?: string;
   sessionId?: string;
   runRef?: RunRef;
@@ -126,9 +136,12 @@ export interface TaskPlanInput {
   description: string;
   kind?: TaskKind;
   status?: Task["status"];
-  agentRef?: AgentRef;
+  roleRef?: RoleRef;
+  /** @deprecated use roleRef. */
+  agentRef?: RoleRef | `agent:${string}`;
   dependsOn?: Array<TaskRef | string>;
   rationale?: string;
+  plan?: TaskPlan;
 }
 
 export interface TaskPlanResult {
@@ -207,6 +220,7 @@ export class TaskGraph {
       ref: newRef("thread"),
       title: input.title,
       description: input.description,
+      status: normalizeThreadStatus(input.status),
       outputLanguage: input.outputLanguage,
       createdAt: now,
       updatedAt: now,
@@ -232,13 +246,18 @@ export class TaskGraph {
       kind: input.kind ?? "generic",
       status:
         input.status ??
-        (input.kind === "interaction" ? "running" : input.agentRef ? "pending" : "proposed"),
-      agentRef: input.agentRef,
+        (input.kind === "interaction"
+          ? "running"
+          : normalizeRoleRefCompat(input.roleRef ?? input.agentRef)
+            ? "pending"
+            : "proposed"),
+      roleRef: normalizeRoleRefCompat(input.roleRef ?? input.agentRef),
       claimedBySession: input.claimedBySession,
       finishedBy: input.finishedBy,
       claim: input.claim,
       inputArtifacts: input.inputArtifacts ?? [],
       outputArtifacts: [],
+      plan: normalizeTaskPlan(input.plan, input.description, input.title),
       createdAt: now,
       updatedAt: now,
     };
@@ -253,7 +272,7 @@ export class TaskGraph {
       title: proposal.title,
       description: proposal.description,
       kind: proposal.kind,
-      agentRef: proposal.proposedAgentRef,
+      roleRef: proposal.proposedRoleRef,
     });
     for (const dep of proposal.dependsOn ?? []) this.addDependency(task.ref, dep);
     return task;
@@ -282,7 +301,8 @@ export class TaskGraph {
             description,
             kind: input.kind ?? existing.kind,
             status: input.status ?? existing.status,
-            agentRef: input.agentRef ?? existing.agentRef,
+            roleRef: normalizeRoleRefCompat(input.roleRef ?? input.agentRef ?? existing.roleRef),
+            plan: normalizeTaskPlan(input.plan, description, title),
           })
         : this.createTask({
             threadRef,
@@ -291,7 +311,8 @@ export class TaskGraph {
             description,
             kind: input.kind,
             status: input.status,
-            agentRef: input.agentRef,
+            roleRef: normalizeRoleRefCompat(input.roleRef ?? input.agentRef),
+            plan: normalizeTaskPlan(input.plan, description, title),
           });
       if (existing) updated.push(task);
       else created.push(task);
@@ -319,12 +340,16 @@ export class TaskGraph {
     return { created, updated, skipped, dependencies };
   }
 
-  bindAgent(taskRef: TaskRef, agentRef: AgentRef): Task {
+  bindAgent(taskRef: TaskRef, roleRef: RoleRef): Task {
+    return this.bindRole(taskRef, roleRef);
+  }
+
+  bindRole(taskRef: TaskRef, roleRef: RoleRef): Task {
     const task = this.getTask(taskRef);
     this.assertDependenciesDone(task);
     const updated: Task = {
       ...task,
-      agentRef,
+      roleRef,
       status: task.status === "proposed" ? "pending" : task.status,
       updatedAt: nowIso(),
     };
@@ -360,13 +385,13 @@ export class TaskGraph {
     const claimedBy = input.claimedBy.trim();
     if (!claimedBy) throw new Error("task claim claimedBy is required");
     this.assertDependenciesDone(task);
-    const agentRef = input.agentRef ?? task.agentRef;
-    const agentName = (input.agentName ?? task.claim?.agentName)?.trim() || undefined;
+    const roleRef = normalizeRoleRefCompat(input.roleRef ?? input.agentRef) ?? task.roleRef;
+    const runName = (input.runName ?? input.agentName ?? task.claim?.runName)?.trim() || undefined;
     const sessionId = input.sessionId?.trim() || undefined;
     const requestedClaimScope = claimScopeForInput({
       kind: input.kind,
       sessionId,
-      agentName,
+      runName,
     });
     const activeClaimScope = task.claim
       ? isExpiredClaim(task.claim, now)
@@ -388,8 +413,8 @@ export class TaskGraph {
     const claim: TaskClaim = {
       kind: input.kind,
       claimedBy,
-      agentRef,
-      agentName,
+      roleRef,
+      runName,
       sessionId,
       runRef: input.runRef,
       claimedAt:
@@ -399,7 +424,7 @@ export class TaskGraph {
     };
     const updated: Task = {
       ...task,
-      agentRef,
+      roleRef,
       status: isUnfinishedTaskStatus(task.status) ? "running" : task.status,
       claimedBySession: sessionId ?? task.claimedBySession,
       claim,
@@ -497,10 +522,11 @@ export class TaskGraph {
         | "description"
         | "kind"
         | "status"
-        | "agentRef"
+        | "roleRef"
         | "claimedBySession"
         | "finishedBy"
         | "claim"
+        | "plan"
       >
     >,
   ): Task {
@@ -514,7 +540,7 @@ export class TaskGraph {
       description: patch.description ?? task.description,
       kind: patch.kind ?? task.kind,
       status,
-      agentRef: patch.agentRef ?? task.agentRef,
+      roleRef: normalizeRoleRefCompat(patch.roleRef ?? task.roleRef),
       claimedBySession: isUnfinishedTaskStatus(status)
         ? (patch.claimedBySession ?? task.claimedBySession)
         : undefined,
@@ -522,6 +548,11 @@ export class TaskGraph {
         ? (patch.finishedBy ?? task.finishedBy)
         : (patch.finishedBy ?? task.finishedBy ?? attributionFromTask({ ...task, ...patch })),
       claim: isUnfinishedTaskStatus(status) ? (patch.claim ?? task.claim) : undefined,
+      plan: normalizeTaskPlan(
+        patch.plan ?? task.plan,
+        patch.description ?? task.description,
+        patch.title ?? task.title,
+      ),
       updatedAt: nowIso(),
     };
     assertTaskName(updated.name);
@@ -640,7 +671,7 @@ export class TaskGraph {
     const done = new Set(tasks.filter((task) => task.status === "done").map((task) => task.ref));
     return tasks.filter((task) => {
       if (task.status !== "pending" && task.status !== "ready") return false;
-      if (!task.agentRef) return false;
+      if (!task.roleRef) return false;
       return this.#dependencies
         .filter((dep) => dep.taskRef === task.ref)
         .every((dep) => done.has(dep.dependsOn));
@@ -677,7 +708,7 @@ export class TaskGraph {
 
   updateThread(
     threadRef: ThreadRef,
-    patch: Partial<Pick<Thread, "title" | "description" | "outputLanguage">>,
+    patch: Partial<Pick<Thread, "title" | "description" | "status" | "outputLanguage">>,
   ): Thread {
     const thread = this.getThread(threadRef);
     const title = patch.title ?? thread.title;
@@ -688,6 +719,7 @@ export class TaskGraph {
       ...thread,
       title,
       description,
+      status: normalizeThreadStatus(patch.status ?? thread.status),
       outputLanguage: patch.outputLanguage ?? thread.outputLanguage,
       updatedAt: nowIso(),
     };
@@ -994,19 +1026,20 @@ interface ClaimScope {
 function claimScopeForInput(input: {
   kind: TaskClaimKind;
   sessionId?: string;
+  runName?: string;
   agentName?: string;
 }): ClaimScope {
-  return claimScopeForValues(input.kind, input.sessionId, input.agentName);
+  return claimScopeForValues(input.kind, input.sessionId, input.runName ?? input.agentName);
 }
 
 function claimScopeForStoredClaim(claim: TaskClaim): ClaimScope {
-  return claimScopeForValues(claim.kind, claim.sessionId, claim.agentName);
+  return claimScopeForValues(claim.kind, claim.sessionId, claim.runName);
 }
 
 function claimScopeForValues(
   kind: TaskClaimKind,
   sessionId: string | undefined,
-  agentName: string | undefined,
+  runName: string | undefined,
 ): ClaimScope {
   const normalizedSessionId = sessionId?.trim();
   if (!normalizedSessionId) throw new Error(`${kind} task claim sessionId is required`);
@@ -1015,12 +1048,19 @@ function claimScopeForValues(
       key: `main:${normalizedSessionId}`,
       label: `session ${normalizedSessionId}`,
     };
-  const normalizedAgentName = agentName?.trim();
-  if (!normalizedAgentName) throw new Error("subagent task claim agentName is required");
+  const normalizedRoleName = runName?.trim();
+  if (!normalizedRoleName) throw new Error("role-run task claim runName is required");
   return {
-    key: `subagent:${normalizedSessionId}:${normalizedAgentName}`,
-    label: `subagent ${normalizedSessionId}/${normalizedAgentName}`,
+    key: `role-run:${normalizedSessionId}:${normalizedRoleName}`,
+    label: `role-run ${normalizedSessionId}/${normalizedRoleName}`,
   };
+}
+
+function normalizeRoleRefCompat(
+  value: RoleRef | `agent:${string}` | undefined,
+): RoleRef | undefined {
+  if (!value) return undefined;
+  return (value.startsWith("agent:") ? `role:${value.slice("agent:".length)}` : value) as RoleRef;
 }
 
 function taskNameFromTitle(title: string): string {
@@ -1067,11 +1107,17 @@ function taskLookup(tasks: Task[]): Map<string, TaskRef> {
 function normalizeThread(thread: Thread): Thread {
   return {
     ...thread,
+    status: normalizeThreadStatus(thread.status),
     currentTaskRef: thread.currentTaskRef,
   };
 }
 
+function normalizeThreadStatus(status: unknown): ThreadStatus {
+  return status === "done" ? "done" : "active";
+}
+
 function normalizeTask(task: Task): Task {
+  const claim = isUnfinishedTaskStatus(task.status) ? normalizeTaskClaim(task.claim) : undefined;
   return {
     ref: task.ref,
     threadRef: task.threadRef,
@@ -1080,39 +1126,97 @@ function normalizeTask(task: Task): Task {
     description: task.description,
     kind: task.kind,
     status: task.status,
-    agentRef: task.agentRef,
-    claimedBySession: isUnfinishedTaskStatus(task.status) ? task.claimedBySession : undefined,
+    roleRef: normalizeRoleRefCompat(task.roleRef),
+    claimedBySession: claim?.sessionId,
     finishedBy: normalizeTaskAttribution(task.finishedBy),
-    claim: isUnfinishedTaskStatus(task.status) ? normalizeTaskClaim(task.claim) : undefined,
+    claim,
     inputArtifacts: task.inputArtifacts,
     outputArtifacts: task.outputArtifacts,
+    plan: normalizeTaskPlan(task.plan, task.description, task.title),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
   };
+}
+
+function normalizeTaskPlan(
+  plan: TaskPlan | undefined,
+  description: string,
+  title: string,
+): TaskPlan {
+  const objective = plan?.objective?.trim() || description.trim() || title.trim();
+  return {
+    objective,
+    contextRefs: normalizeStringList(plan?.contextRefs),
+    constraints: normalizeStringList(plan?.constraints),
+    nonGoals: normalizeStringList(plan?.nonGoals),
+    successCriteria: normalizeStringList(plan?.successCriteria),
+    evidenceRequired: normalizeStringList(plan?.evidenceRequired),
+    steps: normalizeStringList(plan?.steps).length
+      ? normalizeStringList(plan?.steps)
+      : [description.trim() || title.trim()],
+    decompositionRationale: plan?.decompositionRationale?.trim() || undefined,
+    riskLevel: normalizeTaskPlanRiskLevel(plan?.riskLevel),
+    openQuestions: normalizeStringList(plan?.openQuestions),
+    askRefs: normalizeStringList(plan?.askRefs) as TaskPlan["askRefs"],
+  };
+}
+
+function cloneTaskPlan(plan: TaskPlan): TaskPlan {
+  return {
+    ...plan,
+    contextRefs: [...plan.contextRefs],
+    constraints: [...plan.constraints],
+    nonGoals: [...plan.nonGoals],
+    successCriteria: [...plan.successCriteria],
+    evidenceRequired: [...plan.evidenceRequired],
+    steps: [...plan.steps],
+    openQuestions: [...plan.openQuestions],
+    askRefs: [...plan.askRefs],
+  };
+}
+
+function normalizeStringList(values: readonly string[] | undefined): string[] {
+  return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))];
+}
+
+function normalizeTaskPlanRiskLevel(value: unknown): TaskPlan["riskLevel"] {
+  return value === "trivial" || value === "high" ? value : "normal";
 }
 
 function attributionFromTask(
   task: Pick<Task, "claim" | "claimedBySession">,
 ): TaskAttribution | undefined {
   const sessionId = task.claim?.sessionId ?? task.claimedBySession;
-  const agentName = task.claim?.kind === "subagent" ? task.claim.agentName?.trim() : undefined;
-  return normalizeTaskAttribution({ sessionId, agentName });
+  const runName = task.claim?.kind === "role-run" ? task.claim.runName?.trim() : undefined;
+  return normalizeTaskAttribution({ sessionId, runName });
 }
 
 function normalizeTaskAttribution(
   attribution: TaskAttribution | undefined,
 ): TaskAttribution | undefined {
   const sessionId = attribution?.sessionId?.trim();
-  const agentName = attribution?.agentName?.trim();
-  if (!sessionId && !agentName) return undefined;
-  return { sessionId: sessionId || undefined, agentName: agentName || undefined };
+  const runName = attribution?.runName?.trim();
+  if (!sessionId && !runName) return undefined;
+  return {
+    sessionId: sessionId || undefined,
+    runName: runName || undefined,
+  };
 }
 
 function normalizeTaskClaim(claim: TaskClaim | undefined): TaskClaim | undefined {
   if (!claim?.expiresAt?.trim()) return undefined;
+  const legacy = claim as TaskClaim & {
+    agentRef?: `agent:${string}` | RoleRef;
+    agentName?: string;
+    kind?: TaskClaimKind | "subagent";
+  };
+  const roleRef = normalizeRoleRefCompat(claim.roleRef ?? legacy.agentRef);
+  const runName = (claim.runName ?? legacy.agentName)?.trim() || undefined;
   return {
     ...claim,
-    agentName: claim.agentName?.trim() || undefined,
+    kind: (legacy.kind as string) === "subagent" ? "role-run" : claim.kind,
+    roleRef,
+    runName,
     expiresAt: claim.expiresAt,
   };
 }
@@ -1148,6 +1252,7 @@ function cloneTask(task: Task): Task {
     finishedBy: task.finishedBy ? { ...task.finishedBy } : undefined,
     inputArtifacts: [...task.inputArtifacts],
     outputArtifacts: [...task.outputArtifacts],
+    plan: task.plan ? cloneTaskPlan(task.plan) : undefined,
   };
 }
 
@@ -1342,3 +1447,6 @@ function stableHash(input: string): string {
 function isOpenContextTask(task: Task): boolean {
   return !["done", "failed", "cancelled"].includes(task.status);
 }
+
+// Compatibility aliases for current tests/callers during role terminology migration.
+declare module "./index.ts" {}

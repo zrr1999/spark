@@ -30,10 +30,9 @@
     "prepare": "pnpx @j178/prek install --hook-type commit-msg --hook-type pre-commit"
   },
   "dependencies": {
-    "pi-agent-run": "file:packages/pi-agent-run",
     "pi-ask": "file:packages/pi-ask",
     "pi-cue": "file:packages/pi-cue",
-    "spark-agents": "file:packages/spark-agents",
+    "pi-roles": "file:packages/pi-roles",
     "spark-artifacts": "file:packages/spark-artifacts",
     "spark-ask": "file:packages/spark-ask",
     "spark-core": "file:packages/spark-core",
@@ -53,7 +52,8 @@
   "packageManager": "pnpm@11.1.2+sha512.415a1cc25974731e75455c1468371be74c5aa5fb7621b50d4056d222451609f11412f23fd602e6169f1e060466641f798597e1be961a10688836a67b16569499",
   "pi": {
     "extensions": [
-      "./packages/spark/src/extension/index.ts"
+      "./packages/spark/src/extension/index.ts",
+      "./packages/pi-roles/src/extension-entry.ts"
     ],
     "skills": [
       "./packages/spark/skills"
