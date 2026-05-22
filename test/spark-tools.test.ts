@@ -668,18 +668,22 @@ void test("spark_run_ready_tasks emits DAG completion follow-up when manager fin
       description: "Run a quick fake role-run.",
       kind: "implement",
       status: "pending",
-      roleRef: "role:builtin-worker",
       plan: executionReadyPlan("Ready role task"),
     });
     await store.save(graph);
     const fakePi = join(dir, "pi");
-    await writeFile(fakePi, "#!/usr/bin/env node\nprocess.exit(0);\n", "utf8");
+    await writeFile(
+      fakePi,
+      "#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({ type: 'done' }) + '\\n');\nprocess.exit(0);\n",
+      "utf8",
+    );
     await chmod(fakePi, 0o755);
     process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
 
     const { tools, messages } = registerSparkToolsForTest();
     await executeSparkTool(tools, "spark_run_ready_tasks", ctx, { dryRun: false });
-    await waitFor(() => messages.some((message) => message.includes("Spark DAG run:")));
+    await waitFor(() => messages.some((message) => message.includes("Spark DAG run:")), 3_000);
+    await waitFor(() => !ctx.notifications.at(-1)?.message.includes("running"), 3_000);
 
     const dagStatus = await defaultSparkDagRunStore(dir).status();
     assert.equal(dagStatus.succeeded, 1);

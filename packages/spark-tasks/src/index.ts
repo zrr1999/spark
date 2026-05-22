@@ -397,7 +397,7 @@ export class TaskGraph {
     const claimedBy = input.claimedBy.trim();
     if (!claimedBy) throw new Error("task claim claimedBy is required");
     this.assertDependenciesDone(task);
-    const roleRef = normalizeRoleRefCompat(input.roleRef ?? input.agentRef) ?? task.roleRef;
+    const roleRef = normalizeRoleRefCompat(input.roleRef ?? input.agentRef ?? task.roleRef);
     const runName = (input.runName ?? input.agentName ?? task.claim?.runName)?.trim() || undefined;
     const sessionId = input.sessionId?.trim() || undefined;
     const requestedClaimScope = claimScopeForInput({
@@ -437,7 +437,7 @@ export class TaskGraph {
     };
     const updated: Task = {
       ...task,
-      roleRef,
+      roleRef: task.roleRef,
       status: isUnfinishedTaskStatus(task.status) ? "running" : task.status,
       claimedBySession: sessionId ?? task.claimedBySession,
       claim,
@@ -684,7 +684,6 @@ export class TaskGraph {
     const done = new Set(tasks.filter((task) => task.status === "done").map((task) => task.ref));
     return tasks.filter((task) => {
       if (task.status !== "pending" && task.status !== "ready") return false;
-      if (!task.roleRef) return false;
       if (!taskPlanReadiness(task).ready) return false;
       return this.#dependencies
         .filter((dep) => dep.taskRef === task.ref)
@@ -1295,19 +1294,22 @@ function attributionFromTask(
   task: Pick<Task, "claim" | "claimedBySession">,
 ): TaskAttribution | undefined {
   const sessionId = task.claim?.sessionId ?? task.claimedBySession;
+  const roleRef = task.claim?.kind === "role-run" ? task.claim.roleRef : undefined;
   const runName = task.claim?.kind === "role-run" ? task.claim.runName?.trim() : undefined;
-  return normalizeTaskAttribution({ sessionId, runName });
+  return normalizeTaskAttribution({ sessionId, roleRef, runName });
 }
 
 function normalizeTaskAttribution(
   attribution: TaskAttribution | undefined,
 ): TaskAttribution | undefined {
   const sessionId = attribution?.sessionId?.trim();
+  const roleRef = normalizeRoleRefCompat(attribution?.roleRef);
   const runName = attribution?.runName?.trim();
-  if (!sessionId && !runName) return undefined;
+  if (!sessionId && !roleRef && !runName) return undefined;
   return {
-    sessionId: sessionId || undefined,
-    runName: runName || undefined,
+    ...(sessionId ? { sessionId } : {}),
+    ...(roleRef ? { roleRef } : {}),
+    ...(runName ? { runName } : {}),
   };
 }
 

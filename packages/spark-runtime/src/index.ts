@@ -459,7 +459,7 @@ function createSparkDagCompletionFollowUp(run: SparkDagRunRecord): SparkDagCompl
   if (run.status === "failed" || run.status === "stale")
     nextActions.push("Inspect the DAG manager error and retry ready tasks.");
   if (run.scheduled === 0)
-    nextActions.push("Check for pending tasks blocked by dependencies or missing role specs.");
+    nextActions.push("Check for pending tasks blocked by dependencies or plan readiness.");
   if (run.completed < run.scheduled)
     nextActions.push("Review incomplete scheduled task runs before launching another DAG wave.");
   if (nextActions.length === 0)
@@ -685,6 +685,8 @@ export interface RoleRunnerOptions {
 export interface SparkReadyTaskRunnerOptions {
   graph: TaskGraph;
   registry: RoleRegistry;
+  /** Role assigned when a ready task has no task-level role hint. Defaults by task kind, then worker. */
+  defaultRoleRef?: RoleRef;
   artifactStore?: ArtifactStore;
   threadRef?: ThreadRef;
   cwd?: string;
@@ -738,6 +740,8 @@ export interface SparkTaskRunOptions {
   graph: TaskGraph;
   taskRef: TaskRef;
   registry: RoleRegistry;
+  /** Concrete executor role assigned for this run. Falls back to task.roleRef, then kind defaults. */
+  assignedRoleRef?: RoleRef;
   artifactStore?: ArtifactStore;
   cwd?: string;
   piCommand?: string;
@@ -775,7 +779,7 @@ export function findResumableBackgroundRoleRunTasks(
       (task) =>
         task.claim?.kind === "role-run" &&
         task.claim.sessionId === ownerSessionId &&
-        Boolean(task.roleRef) &&
+        Boolean(task.claim.roleRef ?? task.roleRef) &&
         (task.status === "running" || task.status === "pending" || task.status === "ready"),
     );
 }
@@ -810,12 +814,14 @@ export async function runReadySparkTasks(
   let timedOut = false;
 
   const schedule = (task: Task): void => {
+    const assignedRoleRef = assignedRoleRefForTask(task, input.defaultRoleRef);
     scheduled.add(task.ref);
     const preexistingRunRefs = new Set(input.graph.runs(task.threadRef).map((run) => run.ref));
     const runPromise = runSparkTask({
       graph: input.graph,
       taskRef: task.ref,
       registry: input.registry,
+      assignedRoleRef,
       artifactStore: input.artifactStore,
       cwd: input.cwd,
       piCommand: input.piCommand,
@@ -954,13 +960,26 @@ function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
   return Math.floor(value);
 }
 
+function assignedRoleRefForTask(task: Task, defaultRoleRef?: RoleRef): RoleRef {
+  return (
+    normalizeRoleRefCompat(task.roleRef) ?? defaultRoleRef ?? defaultRoleRefForTaskKind(task.kind)
+  );
+}
+
+function defaultRoleRefForTaskKind(kind: Task["kind"]): RoleRef {
+  if (kind === "research") return "role:builtin-scout" as RoleRef;
+  if (kind === "plan") return "role:builtin-planner" as RoleRef;
+  if (kind === "review") return "role:builtin-reviewer" as RoleRef;
+  return "role:builtin-worker" as RoleRef;
+}
+
 function taskRunFromError(task: Task, error: unknown): TaskRun {
   const latest = task.claim?.runRef ? task.claim.runRef : task.ref.replace(/^task:/, "run:error-");
   return {
     ref: latest as RunRef,
     threadRef: task.threadRef,
     taskRef: task.ref,
-    roleRef: task.roleRef,
+    roleRef: task.claim?.roleRef ?? task.roleRef,
     runName: task.claim?.runName,
     ownerSessionId: task.claim?.sessionId,
     status: "failed",
@@ -988,8 +1007,7 @@ function normalizeRoleRefCompat(
 
 export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun> {
   const task = input.graph.getTask(input.taskRef);
-  const taskRoleRef = normalizeRoleRefCompat(task.roleRef);
-  if (!taskRoleRef) throw new DependencyError(`task has no role binding: ${task.ref}`);
+  const taskRoleRef = normalizeRoleRefCompat(input.assignedRoleRef) ?? assignedRoleRefForTask(task);
   const unmet = input.graph
     .dependencies(task.threadRef)
     .filter(

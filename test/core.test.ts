@@ -117,14 +117,14 @@ void test("task graph plans multiple tasks without claiming them", () => {
   );
 });
 
-void test("ready tasks require role and completed dependencies", () => {
+void test("ready tasks require completed dependencies and execution-ready plans", () => {
   const graph = new TaskGraph();
   const thread = graph.createThread({ title: "Demo", description: "demo" });
   const a = graph.createTask({
     threadRef: thread.ref,
     title: "A",
     description: "a",
-    roleRef: builtinRoleRef("planner"),
+    status: "pending",
     plan: executionReadyPlan("A"),
   });
   const b = graph.createTask({
@@ -167,6 +167,7 @@ void test("task role labels prefer active claim, finished attribution, then late
   graph.claimTask(roleRun.ref, {
     kind: "role-run",
     claimedBy: `${current}+worker-1234`,
+    roleRef: builtinRoleRef("worker"),
     sessionId: current,
     runName: "worker-1234",
     leaseMs: 60_000,
@@ -181,7 +182,7 @@ void test("task role labels prefer active claim, finished attribution, then late
   );
   assert.equal(
     deriveTaskRoleLabel({ task: graph.getTask(roleRun.ref), currentSessionKey: current }),
-    "me/worker-1234",
+    "me/worker-1234(spec:worker)",
   );
   assert.equal(
     deriveTaskRoleLabel({

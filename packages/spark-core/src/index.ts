@@ -259,6 +259,8 @@ export interface TaskClaim {
 export interface TaskAttribution {
   /** Session/main actor identity. Role runs are rendered as sessionId/runName. */
   sessionId?: string;
+  /** Concrete role spec used for this completion, when completed by a role run. */
+  roleRef?: RoleRef;
   /** Concrete role-run name. Main-session completions should leave this unset. */
   runName?: string;
 }

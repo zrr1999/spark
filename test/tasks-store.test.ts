@@ -213,14 +213,14 @@ void test("task plan readiness distinguishes minimal and execution-ready plans",
   assert.deepEqual(graph.taskPlanReadiness(ready.ref), { ready: true, issues: [] });
 });
 
-void test("ready tasks require role, completed dependencies, and execution-ready plan", () => {
+void test("ready tasks require completed dependencies and execution-ready plan, not stored role", () => {
   const graph = new TaskGraph();
   const thread = graph.createThread({ title: "Demo", description: "demo" });
   const prerequisite = graph.createTask({
     threadRef: thread.ref,
     title: "Prerequisite",
     description: "prerequisite",
-    roleRef: builtinRoleRef("worker"),
+    status: "pending",
     plan: {
       objective: "Complete prerequisite",
       contextRefs: [],
@@ -256,7 +256,6 @@ void test("ready tasks require role, completed dependencies, and execution-ready
     threadRef: thread.ref,
     title: "Minimal",
     description: "minimal",
-    roleRef: builtinRoleRef("worker"),
   });
   graph.addDependency(dependent.ref, prerequisite.ref);
 
@@ -569,7 +568,6 @@ void test("task graph blocks role-run claims until task plan is execution-ready"
     threadRef: thread.ref,
     title: "Needs plan",
     description: "needs plan",
-    roleRef: builtinRoleRef("worker"),
   });
 
   assert.throws(
@@ -577,6 +575,7 @@ void test("task graph blocks role-run claims until task plan is execution-ready"
       graph.claimTask(task.ref, {
         kind: "role-run",
         claimedBy: "run:worker",
+        roleRef: builtinRoleRef("worker"),
         sessionId: "session:a",
         runName: "worker",
         leaseMs: 60_000,
@@ -818,7 +817,7 @@ void test("finished tasks retain unified attribution after claims clear", () => 
   const mainDone = graph.setTaskStatus(mainTask.ref, "done");
   assert.equal(mainDone.claim, undefined);
   assert.equal(mainDone.claimedBySession, undefined);
-  assert.deepEqual(mainDone.finishedBy, { sessionId: "session:a", runName: undefined });
+  assert.deepEqual(mainDone.finishedBy, { sessionId: "session:a" });
 
   graph.claimTask(roleRunTask.ref, {
     kind: "role-run",
@@ -836,7 +835,6 @@ void test("finished tasks retain unified attribution after claims clear", () => 
   const restored = TaskGraph.fromSnapshot(graph.snapshot());
   assert.deepEqual(restored.getTask(mainTask.ref).finishedBy, {
     sessionId: "session:a",
-    runName: undefined,
   });
   assert.deepEqual(restored.getTask(roleRunTask.ref).finishedBy, {
     sessionId: "session:a",
@@ -1320,7 +1318,7 @@ void test("Spark DAG run store reconciles stale running manager records", async 
   }
 });
 
-void test("runReadySparkTasks schedules DAG waves with maxConcurrency 4", async () => {
+void test("runReadySparkTasks assigns default roles and schedules DAG waves with maxConcurrency 4", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-parallel-"));
   try {
     const graph = new TaskGraph();
@@ -1330,7 +1328,7 @@ void test("runReadySparkTasks schedules DAG waves with maxConcurrency 4", async 
         threadRef: thread.ref,
         title: `Wave 1-${index}`,
         description: "ok",
-        roleRef: builtinRoleRef("worker"),
+        status: "pending",
         plan: executionReadyPlan(`Wave 1-${index}`),
       }),
     );
@@ -1367,6 +1365,13 @@ void test("runReadySparkTasks schedules DAG waves with maxConcurrency 4", async 
     assert.equal(result.scheduled, 5);
     assert.equal(result.runs.length, 5);
     assert.equal(result.timedOut, false);
+    assert.ok(firstWave.every((task) => graph.getTask(task.ref).roleRef === undefined));
+    assert.ok(
+      firstWave.every(
+        (task) => graph.getTask(task.ref).finishedBy?.roleRef === builtinRoleRef("worker"),
+      ),
+    );
+    assert.equal(graph.getTask(secondWave.ref).finishedBy?.roleRef, builtinRoleRef("reviewer"));
     assert.equal(graph.getTask(secondWave.ref).status, "done");
     const firstWaveFinishedAt = firstWave.map((task) => graph.getTask(task.ref).updatedAt).sort();
     const spanMs =
@@ -1500,7 +1505,7 @@ void test("runSparkTask dry-run records validation without completing the task",
       threadRef: thread.ref,
       title: "Plan",
       description: "plan",
-      roleRef: builtinRoleRef("planner"),
+      kind: "plan",
     });
     const artifactStore = new ArtifactStore({
       rootDir: join(dir, "artifacts"),
@@ -1515,7 +1520,8 @@ void test("runSparkTask dry-run records validation without completing the task",
     });
     assert.equal(run.status, "succeeded");
     assert.match(run.runName ?? "", /^planner-/);
-    assert.equal(graph.getTask(task.ref).status, "pending");
+    assert.equal(graph.getTask(task.ref).status, "proposed");
+    assert.equal(graph.getTask(task.ref).roleRef, undefined);
     assert.equal(graph.getTask(task.ref).claim, undefined);
     assert.equal(graph.getTask(task.ref).outputArtifacts.length, 1);
     assert.deepEqual(run.outputArtifacts, graph.getTask(task.ref).outputArtifacts);
@@ -1526,6 +1532,7 @@ void test("runSparkTask dry-run records validation without completing the task",
     assert.equal(artifact.provenance.producer, "task");
     assert.equal(artifact.provenance.threadRef, thread.ref);
     assert.equal(artifact.provenance.taskRef, task.ref);
+    assert.equal(graph.getTask(task.ref).roleRef, undefined);
     assert.equal(artifact.provenance.roleRef, builtinRoleRef("planner"));
     assert.match(artifact.provenance.note ?? "", /^runName=planner-/);
     const body = artifact.body as {
@@ -1654,6 +1661,7 @@ void test("runSparkTask attributes real project role spec run claims and complet
     assert.equal(finishedTask.claimedBySession, undefined);
     assert.deepEqual(finishedTask.finishedBy, {
       sessionId: "session:parent",
+      roleRef,
       runName: run.runName,
     });
     assert.equal(graph.runs(thread.ref).at(-1)?.ref, run.ref);

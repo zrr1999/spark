@@ -434,7 +434,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           ref: newRef("run"),
           threadRef: task.threadRef,
           taskRef: task.ref,
-          roleRef: task.roleRef,
+          roleRef: task.claim?.roleRef ?? task.roleRef,
           runName,
           ownerSessionId,
           status: "failed",
@@ -1282,7 +1282,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     name: "spark_claim_task",
     label: "Spark Claim Task",
     description:
-      "Create or update a concrete Spark task for this session. For Spark-native delegated work, bind the task to a builtin, project, or user role spec with roleRef and run it via spark_run_ready_tasks; do not spawn nested pi CLI sessions as pseudo-roles unless explicitly testing Pi CLI behavior.",
+      "Create or update a concrete Spark task for this session. For Spark-native delegated work, tasks may include an optional roleRef hint, but spark_run_ready_tasks assigns the concrete executor role at dispatch; do not spawn nested pi CLI sessions as pseudo-roles unless explicitly testing Pi CLI behavior.",
     parameters: Type.Object({
       name: Type.Optional(
         Type.String({
@@ -1304,7 +1304,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       roleRef: Type.Optional(
         Type.String({
           description:
-            "Optional builtin/project/user role spec id or ref from list_roles, e.g. planner or role:builtin-planner. Role-bound tasks default to pending and are eligible for spark_run_ready_tasks.",
+            "Optional builtin/project/user role spec id or ref from list_roles, e.g. planner or role:builtin-planner. This is a preferred executor hint; spark_run_ready_tasks can also assign a role at dispatch.",
         }),
       ),
       plan: Type.Optional(taskPlanSchema()),
@@ -1660,7 +1660,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           roleRef: Type.Optional(
             Type.String({
               description:
-                "Optional builtin/project/user Spark role spec id or ref, e.g. scout, planner, reviewer, worker.",
+                "Optional builtin/project/user Spark role spec id or ref, e.g. scout, planner, reviewer, worker. This is a preferred executor hint, not a readiness requirement.",
             }),
           ),
           plan: Type.Optional(taskPlanSchema()),
@@ -2366,7 +2366,8 @@ export function deriveTaskRoleLabel(input: {
         const owner = finishedSessionId
           ? sessionDisplayLabel(finishedSessionId, currentSessionKey)
           : "unknown-session";
-        return `${owner}/${finishedRoleName}`;
+        const spec = task.finishedBy?.roleRef ? shortRoleLabel(task.finishedBy.roleRef) : undefined;
+        return spec ? `${owner}/${finishedRoleName}(spec:${spec})` : `${owner}/${finishedRoleName}`;
       }
       if (finishedSessionId) return sessionDisplayLabel(finishedSessionId, currentSessionKey);
       if (latestRun?.runName) {
@@ -2382,6 +2383,10 @@ export function deriveTaskRoleLabel(input: {
   if (isClaimOwnedBySession(task, currentSessionKey)) return "me";
   if (claimedBy.startsWith("session:")) return sessionDisplayLabel(claimedBy, currentSessionKey);
   return claimedBy;
+}
+
+function shortRoleLabel(roleRef: string): string {
+  return roleRef.replace(/^role:(builtin-|project-|user-)?/, "");
 }
 
 function sessionDisplayLabel(sessionId: string, currentSessionKey: string): string {
