@@ -2,7 +2,6 @@ import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
-import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { defaultArtifactStore } from "spark-artifacts";
 import {
@@ -29,7 +28,6 @@ import {
   stableId,
   type SparkRunTrace,
   type Task,
-  type TaskKind,
   type TaskPlan,
   type TaskRun,
   type TaskStatus,
@@ -70,6 +68,19 @@ import {
   type SparkWidgetState,
   type TaskEntry,
 } from "../ui/spark-widget.ts";
+import {
+  escapeYamlLine,
+  normalizeTaskKind,
+  normalizeTaskStatus,
+  normalizeToolTaskPlan,
+  taskPlanSchema,
+} from "./task-plan-tool.ts";
+import {
+  renderSparkToolCall,
+  truncateInline,
+  type ToolCallComponent,
+  type ToolCallRenderTheme,
+} from "./tool-rendering.ts";
 
 interface SparkExtensionAPI {
   registerCommand(
@@ -108,27 +119,6 @@ interface SparkRegisteredToolConfig {
     content: Array<{ type: "text"; text: string }>;
     details?: Record<string, unknown>;
   }>;
-}
-
-interface ToolCallRenderTheme {
-  fg?: (color: string, text: string) => string;
-  bold?: (text: string) => string;
-}
-
-interface ToolCallComponent {
-  render(width: number): string[];
-}
-
-class ToolCallText implements ToolCallComponent {
-  private readonly text: string;
-
-  constructor(text: string) {
-    this.text = text;
-  }
-
-  render(width: number): string[] {
-    return [truncateToWidth(this.text, Math.max(1, width), "…")];
-  }
 }
 
 interface SparkToolContext {
@@ -1925,222 +1915,6 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   registerSparkTool(createRoleSpecToolConfig);
 }
 
-function renderSparkToolCall(
-  toolName: string,
-  args: Record<string, unknown>,
-  theme: ToolCallRenderTheme,
-  _context: unknown,
-): ToolCallComponent {
-  switch (toolName) {
-    case "spark_status":
-      return renderToolCall(
-        toolName,
-        [
-          formatStringArg(args.showFinished === true ? "full" : args.view, { fallback: "active" }),
-          formatNumberArg(args.limit, { prefix: "limit=" }),
-        ],
-        theme,
-      );
-    case "spark_update_todos":
-      return renderToolCall(toolName, [formatOpsSummary(args.ops)], theme);
-    case "spark_update_task_todos":
-      return renderToolCall(
-        toolName,
-        [formatStringArg(args.task, { prefix: "task=" }), formatOpsSummary(args.ops)],
-        theme,
-      );
-    case "spark_claim_task":
-      return renderToolCall(
-        toolName,
-        [
-          formatTaskNameArg(args.name),
-          formatStringArg(args.title, { maxLength: 80 }),
-          formatStringArg(args.status, { prefix: "status=" }),
-          formatStringArg(args.kind, { prefix: "kind=" }),
-          formatStringArg(args.roleRef, { prefix: "role=" }),
-          formatArrayCount(args.todos, "todos"),
-        ],
-        theme,
-      );
-    case "spark_rename_thread":
-      return renderToolCall(
-        toolName,
-        [
-          formatStringArg(args.thread, { prefix: "thread=" }),
-          formatStringArg(args.title, { prefix: "title=", maxLength: 80 }),
-          formatStringArg(args.outputLanguage, { prefix: "lang=" }),
-        ],
-        theme,
-      );
-    case "spark_use_thread":
-      return renderToolCall(
-        toolName,
-        [
-          formatStringArg(args.thread, { prefix: "thread=" }),
-          formatStringArg(args.title, { prefix: "title=", maxLength: 80 }),
-          formatStringArg(args.outputLanguage, { prefix: "lang=" }),
-        ],
-        theme,
-      );
-    case "spark_plan_tasks":
-      return renderToolCall(toolName, [formatTaskPlanSummary(args.tasks)], theme);
-    case "spark_run_ready_tasks":
-      return renderToolCall(
-        toolName,
-        [
-          args.dryRun === false ? "run" : "dry-run",
-          formatNumberArg(args.maxConcurrency, { prefix: "max=" }),
-          formatNumberArg(args.timeoutMs, { prefix: "timeout=", suffix: "ms" }),
-        ],
-        theme,
-      );
-    case "spark_dag_manager":
-      return renderToolCall(
-        toolName,
-        [
-          formatStringArg(args.action, { fallback: "status" }),
-          formatStringArg(args.runRef, { prefix: "run=" }),
-        ],
-        theme,
-      );
-    case "spark_ask":
-      return renderToolCall(
-        toolName,
-        [
-          formatStringArg(args.mode ?? args.kind, { fallback: "clarification" }),
-          formatStringArg(args.title ?? args.question, { maxLength: 100 }),
-          formatArrayCount(args.questions, "questions") ??
-            formatArrayCount(args.options, "options"),
-          args.multiSelect === true ? "multi" : undefined,
-          formatStringArg(args.defaultOptionId, { prefix: "default=" }),
-        ],
-        theme,
-      );
-    case "spark_ask_replay":
-      return renderToolCall(
-        toolName,
-        [formatStringArg(args.artifactRef, { prefix: "artifact=" })],
-        theme,
-      );
-    case "spark_list_roles":
-      return renderToolCall(
-        toolName,
-        [formatStringArg(args.source ?? args.scope, { fallback: "all" })],
-        theme,
-      );
-    case "spark_get_role":
-      return renderToolCall(toolName, [formatStringArg(args.role)], theme);
-    case "spark_create_role":
-      return renderToolCall(
-        toolName,
-        [
-          formatStringArg(args.id, { prefix: "id=" }),
-          formatStringArg(args.description, { maxLength: 80 }),
-          formatArrayCount(args.expectedUses, "uses"),
-        ],
-        theme,
-      );
-    default:
-      return renderToolCall(toolName, formatGenericArgs(args), theme);
-  }
-}
-
-function renderToolCall(
-  toolName: string,
-  parts: Array<string | undefined>,
-  theme: ToolCallRenderTheme,
-): ToolCallComponent {
-  const title =
-    theme.fg?.("toolTitle", theme.bold?.(`${toolName} `) ?? `${toolName} `) ?? `${toolName} `;
-  const renderedParts = parts.filter((part): part is string => Boolean(part));
-  const renderedArgs = theme.fg?.("muted", renderedParts.join(" ")) ?? renderedParts.join(" ");
-  return new ToolCallText(`${title}${renderedArgs}`.trimEnd());
-}
-
-function formatTaskNameArg(value: unknown): string | undefined {
-  const name = formatStringArg(value);
-  if (!name) return undefined;
-  return name.startsWith("@") ? name : `@${name}`;
-}
-
-function formatOpsSummary(value: unknown): string | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const ops = value
-    .map((entry) => (isRecord(entry) && typeof entry.op === "string" ? entry.op : undefined))
-    .filter((op): op is string => Boolean(op));
-  const opSuffix = ops.length ? ` ${ops.slice(0, 4).join(",")}${ops.length > 4 ? ",…" : ""}` : "";
-  return `${value.length} ops${opSuffix}`;
-}
-
-function formatTaskPlanSummary(value: unknown): string | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const labels = value
-    .map((entry) => {
-      if (!isRecord(entry)) return undefined;
-      if (typeof entry.name === "string" && entry.name.trim()) return `@${entry.name.trim()}`;
-      if (typeof entry.title === "string" && entry.title.trim())
-        return truncateInline(entry.title, 30);
-      return undefined;
-    })
-    .filter((label): label is string => Boolean(label));
-  const suffix = labels.length
-    ? ` ${labels.slice(0, 3).join(",")}${labels.length > 3 ? ",…" : ""}`
-    : "";
-  return `${value.length} tasks${suffix}`;
-}
-
-function formatArrayCount(value: unknown, noun: string): string | undefined {
-  return Array.isArray(value) ? `${value.length} ${noun}` : undefined;
-}
-
-function formatGenericArgs(args: Record<string, unknown>): string[] {
-  return Object.entries(args)
-    .slice(0, 4)
-    .map(([key, value]) => formatGenericArg(key, value))
-    .filter((part): part is string => Boolean(part));
-}
-
-function formatGenericArg(key: string, value: unknown): string | undefined {
-  if (typeof value === "string") return formatStringArg(value, { prefix: `${key}=` });
-  if (typeof value === "number") return formatNumberArg(value, { prefix: `${key}=` });
-  if (typeof value === "boolean") return `${key}=${value}`;
-  if (Array.isArray(value)) return `${key}=[${value.length}]`;
-  if (isRecord(value)) return `${key}={…}`;
-  return undefined;
-}
-
-function formatStringArg(
-  value: unknown,
-  options: { prefix?: string; fallback?: string; maxLength?: number } = {},
-): string | undefined {
-  const text = typeof value === "string" && value.trim() ? value.trim() : options.fallback;
-  if (!text) return undefined;
-  const rendered = needsQuoting(text) ? JSON.stringify(text) : text;
-  return `${options.prefix ?? ""}${truncateInline(rendered, options.maxLength ?? 80)}`;
-}
-
-function formatNumberArg(
-  value: unknown,
-  options: { prefix?: string; suffix?: string } = {},
-): string | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
-  return `${options.prefix ?? ""}${value}${options.suffix ?? ""}`;
-}
-
-function needsQuoting(value: string): boolean {
-  return /\s|["'`]/.test(value);
-}
-
-function truncateInline(value: string, maxLength: number): string {
-  const normalized = value.replaceAll(/\s+/g, " ");
-  if (normalized.length <= maxLength) return normalized;
-  return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 interface SparkInputEvent {
   text: string;
   source?: string;
@@ -3631,96 +3405,6 @@ async function readActiveSparkMd(cwd: string): Promise<string | undefined> {
   const [latest] = (await store.list({ kind: "spark-md" })).slice(-1);
   if (!latest) return undefined;
   return store.getBody(latest.ref);
-}
-
-function taskPlanSchema() {
-  return Type.Object({
-    objective: Type.Optional(Type.String({ description: "Plan objective for this task." })),
-    contextRefs: Type.Optional(
-      Type.Array(Type.String({ description: "Relevant context refs/paths." })),
-    ),
-    constraints: Type.Optional(Type.Array(Type.String({ description: "Task constraints." }))),
-    nonGoals: Type.Optional(Type.Array(Type.String({ description: "Explicit non-goals." }))),
-    successCriteria: Type.Optional(
-      Type.Array(Type.String({ description: "Observable success criteria." })),
-    ),
-    evidenceRequired: Type.Optional(
-      Type.Array(Type.String({ description: "Evidence required before completion." })),
-    ),
-    steps: Type.Optional(Type.Array(Type.String({ description: "Concrete plan steps." }))),
-    decompositionRationale: Type.Optional(
-      Type.String({ description: "Why this is the right smallest task boundary." }),
-    ),
-    riskLevel: Type.Optional(Type.String({ description: "trivial | normal | high" })),
-    openQuestions: Type.Optional(
-      Type.Array(Type.String({ description: "Material unresolved questions." })),
-    ),
-    askRefs: Type.Optional(Type.Array(Type.String({ description: "Ask artifact refs." }))),
-  });
-}
-
-function normalizeToolTaskPlan(
-  plan: Partial<TaskPlan> | undefined,
-  description: string,
-  title: string,
-): TaskPlan {
-  const objective = plan?.objective?.trim() || description.trim() || title.trim();
-  const steps = normalizeStringList(plan?.steps);
-  return {
-    objective,
-    contextRefs: normalizeStringList(plan?.contextRefs),
-    constraints: normalizeStringList(plan?.constraints),
-    nonGoals: normalizeStringList(plan?.nonGoals),
-    successCriteria: normalizeStringList(plan?.successCriteria),
-    evidenceRequired: normalizeStringList(plan?.evidenceRequired),
-    steps: steps.length ? steps : [description.trim() || title.trim()],
-    decompositionRationale: plan?.decompositionRationale?.trim() || undefined,
-    riskLevel:
-      plan?.riskLevel === "trivial" || plan?.riskLevel === "high" ? plan.riskLevel : "normal",
-    openQuestions: normalizeStringList(plan?.openQuestions),
-    askRefs: normalizeStringList(plan?.askRefs) as TaskPlan["askRefs"],
-  };
-}
-
-function normalizeStringList(values: readonly string[] | undefined): string[] {
-  return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))];
-}
-
-function normalizeTaskKind(value: string | undefined): TaskKind | undefined {
-  if (!value) return undefined;
-  if (
-    value === "research" ||
-    value === "plan" ||
-    value === "implement" ||
-    value === "review" ||
-    value === "ask" ||
-    value === "cue" ||
-    value === "interaction" ||
-    value === "generic"
-  )
-    return value;
-  return undefined;
-}
-
-function normalizeTaskStatus(value: string | undefined) {
-  if (!value) return undefined;
-  if (
-    value === "proposed" ||
-    value === "pending" ||
-    value === "ready" ||
-    value === "running" ||
-    value === "blocked" ||
-    value === "done" ||
-    value === "failed" ||
-    value === "cancelled"
-  )
-    return value;
-  return undefined;
-}
-
-function escapeYamlLine(value: string): string {
-  const line = value.replace(/\s+/g, " ").trim();
-  return JSON.stringify(line.length > 160 ? `${line.slice(0, 157)}...` : line);
 }
 
 /** @deprecated use deriveTaskRoleLabel. */
