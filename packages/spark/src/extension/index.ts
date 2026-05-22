@@ -1,5 +1,5 @@
 import { access, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 
 import { Type } from "typebox";
@@ -165,6 +165,12 @@ const DEFAULT_SPARK_STATUS_ACTIVE_LIMIT = 20;
 const DEFAULT_SPARK_STATUS_TODO_LIMIT = 3;
 const DEFAULT_SPARK_PLAN_TASK_OUTPUT_LIMIT = 5;
 type SparkStatusView = "active" | "summary" | "full";
+type SparkCommandProjectStateKind = "empty_project" | "existing_project" | "initialized";
+interface SparkCommandProjectState {
+  kind: SparkCommandProjectStateKind;
+  hasCurrentThread: boolean;
+  unfinishedTaskCount: number;
+}
 const dagManagerTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const claimReaperTimers = new Map<string, ReturnType<typeof setInterval>>();
 
@@ -1277,35 +1283,82 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     args: string,
     ctx: SparkCommandContext,
   ): Promise<void> {
-    const idea = args.trim();
+    const prompt = args.trim();
     const graph = await loadSparkGraph(ctx.cwd, ctx);
-    if (idea) {
-      if (!graph) await startSparkNewProject(piApi, ctx, idea);
-      else await enterSparkPlanningMode(piApi, ctx, graph, idea);
+    const projectState = await detectSparkProjectState(ctx.cwd, graph, ctx);
+
+    if (!graph) {
+      if (projectState.kind === "empty_project") {
+        const idea = prompt || (await promptSparkNewProjectIdea(ctx));
+        if (idea) await startSparkNewProject(piApi, ctx, idea, { enterPlanning: false });
+        return;
+      }
+
+      const idea = prompt || (await inferExistingProjectSparkIdea(ctx));
+      if (!idea) return;
+      await startSparkNewProject(piApi, ctx, idea, { enterPlanning: true });
       return;
     }
 
-    const mode = graph ? await chooseSparkCommandMode(ctx, graph) : "new_project";
+    const mode = prompt
+      ? predictSparkModeFromPrompt(prompt, projectState)
+      : await chooseInitializedSparkMode(ctx, graph, projectState);
     if (!mode) return;
     if (mode === "new_project") {
-      const newIdea = await promptSparkNewProjectIdea(ctx);
+      const newIdea = prompt || (await promptSparkNewProjectIdea(ctx));
       if (!newIdea) return;
-      await startSparkNewProject(piApi, ctx, newIdea);
+      await startSparkNewProject(piApi, ctx, newIdea, { enterPlanning: true });
       return;
     }
-    if (!graph) {
-      const newIdea = await promptSparkNewProjectIdea(ctx);
-      if (newIdea) await startSparkNewProject(piApi, ctx, newIdea);
-      return;
-    }
-    if (mode === "planning") await enterSparkPlanningMode(piApi, ctx, graph);
+    if (mode === "planning") await enterSparkPlanningMode(piApi, ctx, graph, prompt || undefined);
     else await enterSparkExecutionMode(piApi, ctx, graph);
+  }
+
+  async function detectSparkProjectState(
+    cwd: string,
+    graph: TaskGraph | null,
+    ctx: SparkCommandContext,
+  ): Promise<SparkCommandProjectState> {
+    if (graph) {
+      const thread = await currentSparkThread(cwd, ctx, graph);
+      return {
+        kind: "initialized",
+        hasCurrentThread: Boolean(thread),
+        unfinishedTaskCount: graph
+          .tasks(thread?.ref)
+          .filter((task) => isUnfinishedTaskStatus(task.status)).length,
+      };
+    }
+    return {
+      kind: (await hasNonSparkProjectFiles(cwd)) ? "existing_project" : "empty_project",
+      hasCurrentThread: false,
+      unfinishedTaskCount: 0,
+    };
+  }
+
+  function predictSparkModeFromPrompt(
+    prompt: string,
+    projectState: SparkCommandProjectState,
+  ): "new_project" | "planning" | "execution" {
+    if (
+      /(执行|运行|完成|继续做|claim|execute|run ready|dispatch|work through|finish)/i.test(prompt)
+    )
+      return "execution";
+    if (
+      /(计划|规划|调研|拆分|增加.*task|新增.*task|thread|plan|research|clarify|break down|task)/i.test(
+        prompt,
+      )
+    )
+      return "planning";
+    if (projectState.kind === "initialized") return "planning";
+    return "new_project";
   }
 
   async function startSparkNewProject(
     piApi: SparkExtensionAPI,
     ctx: SparkCommandContext,
     idea: string,
+    options: { enterPlanning?: boolean } = {},
   ): Promise<void> {
     const existing = await loadSparkGraph(ctx.cwd, ctx);
     if (existing) {
@@ -1358,15 +1411,49 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     await saveCurrentThreadRef(ctx.cwd, ctx, result.threadRef as ThreadRef);
     await refreshSparkWidget(ctx.cwd, ctx);
     ensureSparkDagManager(ctx.cwd, ctx);
+
+    if (options.enterPlanning) {
+      const graph = await loadSparkGraph(ctx.cwd, ctx);
+      if (graph) await enterSparkPlanningMode(piApi, ctx, graph, idea);
+    }
   }
 
-  async function chooseSparkCommandMode(
+  async function chooseInitializedSparkMode(
     ctx: SparkCommandContext,
     graph: TaskGraph,
-  ): Promise<"planning" | "execution"> {
+    projectState: SparkCommandProjectState,
+  ): Promise<"new_project" | "planning" | "execution" | undefined> {
+    if (!projectState.hasCurrentThread || projectState.unfinishedTaskCount === 0) return "planning";
     const thread = await currentSparkThread(ctx.cwd, ctx, graph);
-    const readyInThread = thread ? graph.readyTasks(thread.ref).length : graph.readyTasks().length;
-    return readyInThread > 0 ? "execution" : "planning";
+    const title = thread?.title ?? graph.threads()[0]?.title ?? "current Spark workspace";
+    if (ctx.ui?.select) {
+      const choice = await ctx.ui.select(`Spark mode for “${title}”`, [
+        "Plan: research and add threads/tasks",
+        "Execute: work through ready tasks",
+        "New project: start a different Spark idea",
+      ]);
+      if (choice?.startsWith("Plan:")) return "planning";
+      if (choice?.startsWith("Execute:")) return "execution";
+      if (choice?.startsWith("New project:")) return "new_project";
+      return undefined;
+    }
+
+    const response = await runSparkAskTool(sparkModeAsk(graph, title), {
+      cwd: ctx.cwd,
+      ui: sparkAskUi(ctx),
+    });
+    return sparkModeFromAskDetails(response.details);
+  }
+
+  async function inferExistingProjectSparkIdea(
+    ctx: SparkCommandContext,
+  ): Promise<string | undefined> {
+    const fallback = `Plan existing project in ${basename(ctx.cwd)}`;
+    const idea = await ctx.ui?.input?.(
+      "What should Spark plan for this existing project?",
+      fallback,
+    );
+    return idea?.trim() || fallback;
   }
 
   async function promptSparkNewProjectIdea(ctx: SparkCommandContext): Promise<string | undefined> {
@@ -1404,7 +1491,6 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   ): Promise<void> {
     const thread = await currentSparkThread(ctx.cwd, ctx, graph);
     await refreshSparkWidget(ctx.cwd, ctx);
-    ensureSparkDagManager(ctx.cwd, ctx);
     ctx.ui?.notify?.("Spark execution mode: claim or dispatch ready tasks.", "info");
     piApi.sendUserMessage?.(renderSparkExecutionModePrompt(graph, thread?.ref), {
       deliverAs: "followUp",
@@ -3705,6 +3791,26 @@ async function hasLocalSparkDirectory(cwd: string): Promise<boolean> {
   return exists(join(cwd, ".spark"));
 }
 
+async function hasNonSparkProjectFiles(cwd: string): Promise<boolean> {
+  try {
+    const entries = await readdir(cwd, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name === ".spark" || entry.name === ".git") continue;
+      if (entry.name === "node_modules" || entry.name === ".pi") continue;
+      if (entry.name.startsWith(".DS_Store")) continue;
+      const entryPath = join(cwd, entry.name);
+      if (entry.isFile()) return true;
+      if (entry.isDirectory()) {
+        const info = await stat(entryPath).catch(() => undefined);
+        if (info?.isDirectory()) return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export async function detectSparkActivation(
   cwd: string,
 ): Promise<{ active: boolean; reason: string }> {
@@ -4205,6 +4311,60 @@ async function sparkInitResultFromExisting(
     traceRef: "spark:existing",
     askArtifactRefs: options.askArtifactRefs ?? [],
   };
+}
+
+function sparkModeAsk(graph: TaskGraph, title: string): SparkAskToolParams {
+  const pendingCount = graph
+    .tasks()
+    .filter((task) => task.status === "pending" || task.status === "ready").length;
+  const threadCount = graph.threads().length;
+  return {
+    mode: "decision",
+    flow: "spark-command-mode",
+    title: `Choose Spark mode for “${truncateInline(title, 80)}”`,
+    context: [
+      `Current Spark workspace has ${threadCount} thread(s) and ${pendingCount} pending/ready task(s).`,
+      "Choose whether this turn should shape the project, plan more work, or execute existing tasks.",
+    ].join("\n"),
+    questions: [
+      {
+        id: "mode",
+        prompt: `For the current Spark workspace “${truncateInline(title, 80)}”, what should /spark do now?`,
+        type: "single",
+        required: true,
+        options: [
+          {
+            id: "planning",
+            label: `Plan “${truncateInline(title, 32)}”`,
+            description:
+              "Enter planning mode for this Spark workspace: research context, clarify intent, and add or refine threads and tasks before execution.",
+          },
+          {
+            id: "execution",
+            label: `Execute “${truncateInline(title, 32)}”`,
+            description:
+              "Enter execution mode for this Spark workspace: inspect ready tasks, claim concrete work, or dispatch ready tasks through the Spark orchestrator.",
+          },
+          {
+            id: "new_project",
+            label: "Start a new Spark project",
+            description:
+              "Start a new Spark idea instead of continuing the current workspace; this asks for the new project idea before initializing state.",
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function sparkModeFromAskDetails(
+  details: Record<string, unknown>,
+): "new_project" | "planning" | "execution" | undefined {
+  const modeAnswer = (details.answers as { mode?: { values?: unknown[] } } | undefined)?.mode;
+  const value = modeAnswer?.values?.[0];
+  return value === "new_project" || value === "planning" || value === "execution"
+    ? value
+    : undefined;
 }
 
 function renderSparkPlanningModePrompt(

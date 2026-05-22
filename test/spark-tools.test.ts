@@ -74,22 +74,66 @@ interface IndependentTodoStoreFile {
   }>;
 }
 
-void test("/spark command auto-initializes new workspaces and infers mode for existing state", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-command-modes-"));
+void test("/spark command detects empty, existing, and initialized project modes", async () => {
+  const emptyDir = await mkdtemp(join(tmpdir(), "spark-command-empty-"));
+  const existingDir = await mkdtemp(join(tmpdir(), "spark-command-existing-"));
+  const initializedDir = await mkdtemp(join(tmpdir(), "spark-command-initialized-"));
   try {
-    const ctx = testSparkContext(dir, "main");
-    const { commands, messages } = registerSparkToolsForTest();
-    const command = commands.get("spark");
-    assert.ok(command, "missing /spark command");
+    const emptyCtx = testSparkContext(emptyDir, "main");
+    const emptyRun = registerSparkToolsForTest();
+    const emptyCommand = emptyRun.commands.get("spark");
+    assert.ok(emptyCommand, "missing /spark command");
+    await emptyCommand.handler("Build a contextual Spark cockpit", emptyCtx);
+    assert.ok(existsSync(join(emptyDir, ".spark", "thread.json")));
+    assert.match(emptyRun.messages.at(-1) ?? "", /Spark initialized|Spark 已初始化/);
 
-    await command.handler("Build a contextual Spark cockpit", ctx);
-    assert.ok(existsSync(join(dir, ".spark", "thread.json")));
-    assert.match(messages.at(-1) ?? "", /Spark initialized|Spark 已初始化/);
+    await writeFile(join(existingDir, "README.md"), "# Existing project\n", "utf8");
+    const existingCtx = testSparkContext(existingDir, "main");
+    const existingRun = registerSparkToolsForTest();
+    const existingCommand = existingRun.commands.get("spark");
+    assert.ok(existingCommand, "missing /spark command");
+    await existingCommand.handler("", existingCtx);
+    assert.ok(existsSync(join(existingDir, ".spark", "thread.json")));
+    assert.match(existingRun.messages.at(-1) ?? "", /Enter Spark planning mode/);
 
-    await command.handler("", ctx);
-    assert.match(messages.at(-1) ?? "", /Enter Spark planning mode/);
+    await writeEmptySparkThread(initializedDir);
+    const initializedCtx = testSparkContext(initializedDir, "main");
+    await defaultTaskGraphStore(initializedDir).update(async (graph) => {
+      const thread = graph.threads()[0];
+      assert.ok(thread);
+      await mkdir(join(initializedDir, ".spark", "current-thread"), { recursive: true });
+      await writeFile(
+        join(
+          initializedDir,
+          ".spark",
+          "current-thread",
+          `${ctxSessionStoreScope(initializedCtx)}.json`,
+        ),
+        JSON.stringify({ threadRef: thread.ref }, null, 2),
+        "utf8",
+      );
+      graph.createTask({
+        threadRef: thread.ref,
+        title: "Ready implementation task",
+        description: "Ready implementation task",
+        plan: executionReadyPlan("Ready implementation task"),
+        status: "pending",
+      });
+    });
+    const initializedRun = registerSparkToolsForTest();
+    const initializedCommand = initializedRun.commands.get("spark");
+    assert.ok(initializedCommand, "missing /spark command");
+    initializedCtx.selected = "Plan: research and add threads/tasks";
+    await initializedCommand.handler("", initializedCtx);
+    assert.match(initializedRun.messages.at(-1) ?? "", /Enter Spark planning mode/);
+
+    initializedCtx.selected = "Execute: work through ready tasks";
+    await initializedCommand.handler("", initializedCtx);
+    assert.match(initializedRun.messages.at(-1) ?? "", /Enter Spark execution mode/);
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await rm(emptyDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+    await rm(existingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+    await rm(initializedDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
 
@@ -919,7 +963,7 @@ void test("spark_run_ready_tasks emits DAG completion follow-up when manager fin
     assert.equal(ctx.notifications.at(-1)?.level, "info");
     assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark DAG run:/);
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
 
@@ -961,7 +1005,7 @@ void test("spark_run_ready_tasks marks DAG manager failed when child role-run fa
     assert.match(messages.join("\n"), /Inspect the DAG manager error/);
     await waitFor(() => existsSync(join(dir, ".spark", "todos")), 3_000);
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
 
