@@ -143,7 +143,7 @@ but end-to-end local vertical slice.
 
 - `pi-roles` is now the generic role package. It owns reusable role specs and simple single child Pi role runs.
 - Spark packages keep task DAGs, task claims, TODOs, artifacts, asks, review gates, and DAG manager orchestration.
-- Deprecated role-shaped fields and aliases may still be accepted in code as rolling compatibility for persisted state, but new tools/docs should use role terminology. See [agent-boundaries.md](./agent-boundaries.md) and [agent-run-modes.md](./agent-run-modes.md).
+- Deprecated role-shaped fields and aliases may still be accepted in code as rolling compatibility for persisted state, but new tools/docs should use role terminology. See [role-boundaries.md](./role-boundaries.md) and [role-run-modes.md](./role-run-modes.md).
 
 ## Deferred by design
 

@@ -877,6 +877,74 @@ void test("claims without expiresAt are dropped while loading legacy snapshots",
   assert.equal(restoredTask.claimedBySession, undefined);
 });
 
+void test("legacy role-shaped snapshot fields normalize to role terminology", () => {
+  const graph = new TaskGraph();
+  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const task = graph.createTask({
+    threadRef: thread.ref,
+    name: "legacy-role-fields",
+    title: "Legacy role fields",
+    description: "Legacy fields from an old thread snapshot.",
+    status: "running",
+  });
+  const runRef = newRef("run", "legacy-run");
+  graph.recordRun({
+    ref: runRef,
+    threadRef: thread.ref,
+    taskRef: task.ref,
+    status: "running",
+    outputArtifacts: [],
+  });
+
+  const snapshot = graph.snapshot();
+  const [snapshotTask] = snapshot.tasks;
+  const [snapshotRun] = snapshot.runs;
+  assert.ok(snapshotTask);
+  assert.ok(snapshotRun);
+  const legacyTask = snapshotTask as typeof snapshotTask & {
+    agentRef?: `agent:${string}`;
+    finishedBy?: NonNullable<(typeof snapshotTask)["finishedBy"]> & {
+      agentRef?: `agent:${string}`;
+      agentName?: string;
+    };
+  };
+  legacyTask.agentRef = "agent:builtin-worker";
+  legacyTask.finishedBy = {
+    sessionId: "session:legacy",
+    agentRef: "agent:builtin-reviewer",
+    agentName: "reviewer-legacy",
+  };
+  snapshotTask.claim = {
+    kind: "subagent",
+    claimedBy: "session:legacy+worker-legacy",
+    agentRef: "agent:builtin-worker",
+    agentName: "worker-legacy",
+    sessionId: "session:legacy",
+    runRef,
+    claimedAt: "2026-05-18T00:00:00.000Z",
+    heartbeatAt: "2026-05-18T00:00:00.000Z",
+    expiresAt: "2026-05-18T00:01:00.000Z",
+  } as unknown as (typeof snapshotTask)["claim"];
+  const legacyRun = snapshotRun as typeof snapshotRun & {
+    agentRef?: `agent:${string}`;
+    agentName?: string;
+  };
+  legacyRun.agentRef = "agent:builtin-worker";
+  legacyRun.agentName = "worker-legacy";
+
+  const restored = TaskGraph.fromSnapshot(snapshot);
+  const restoredTask = restored.getTask(task.ref);
+  assert.equal(restoredTask.roleRef, "role:builtin-worker");
+  assert.equal(restoredTask.claim?.kind, "role-run");
+  assert.equal(restoredTask.claim?.roleRef, "role:builtin-worker");
+  assert.equal(restoredTask.claim?.runName, "worker-legacy");
+  assert.equal(restoredTask.finishedBy?.roleRef, "role:builtin-reviewer");
+  assert.equal(restoredTask.finishedBy?.runName, "reviewer-legacy");
+  const [restoredRun] = restored.runs(thread.ref);
+  assert.equal(restoredRun?.roleRef, "role:builtin-worker");
+  assert.equal(restoredRun?.runName, "worker-legacy");
+});
+
 void test("task claims use a lease that can expire", () => {
   const graph = new TaskGraph();
   const thread = graph.createThread({ title: "Demo", description: "demo" });

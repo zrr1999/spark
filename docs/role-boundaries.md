@@ -27,7 +27,7 @@ Reusable, Spark-independent pieces live in `pi-roles`; Spark keeps task/DAG/work
 - Generated roles are represented by metadata/origin, for example `origin.kind: "generated"`; generated is not a primary `RoleSource`.
 - Legacy `managed`, `predefined`, `agent:*`, `agentRef`, `agentName`, `subagent`, and agent artifact names are compatibility inputs only during migration.
 
-See [agent-run-modes.md](./agent-run-modes.md) for operational guidance.
+See [role-run-modes.md](./role-run-modes.md) for operational guidance.
 
 ## Legacy compatibility lifecycle
 

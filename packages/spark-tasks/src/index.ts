@@ -212,7 +212,7 @@ export class TaskGraph {
     for (const thread of snapshot.threads) graph.#threads.set(thread.ref, normalizeThread(thread));
     for (const task of snapshot.tasks) graph.#tasks.set(task.ref, normalizeTask(task));
     graph.#dependencies = snapshot.dependencies ?? [];
-    for (const run of snapshot.runs ?? []) graph.#runs.set(run.ref, run);
+    for (const run of snapshot.runs ?? []) graph.#runs.set(run.ref, normalizeTaskRun(run));
     return graph;
   }
 
@@ -1175,6 +1175,7 @@ function normalizeThreadStatus(status: unknown): ThreadStatus {
 }
 
 function normalizeTask(task: Task): Task {
+  const legacy = task as Task & { agentRef?: RoleRef | `agent:${string}` };
   const claim = isUnfinishedTaskStatus(task.status) ? normalizeTaskClaim(task.claim) : undefined;
   return {
     ref: task.ref,
@@ -1184,7 +1185,7 @@ function normalizeTask(task: Task): Task {
     description: task.description,
     kind: task.kind,
     status: task.status,
-    roleRef: normalizeRoleRefCompat(task.roleRef),
+    roleRef: normalizeRoleRefCompat(task.roleRef ?? legacy.agentRef),
     claimedBySession: claim?.sessionId,
     finishedBy: normalizeTaskAttribution(task.finishedBy),
     claim,
@@ -1303,9 +1304,12 @@ function attributionFromTask(
 function normalizeTaskAttribution(
   attribution: TaskAttribution | undefined,
 ): TaskAttribution | undefined {
+  const legacy = attribution as
+    | (TaskAttribution & { agentRef?: RoleRef | `agent:${string}`; agentName?: string })
+    | undefined;
   const sessionId = attribution?.sessionId?.trim();
-  const roleRef = normalizeRoleRefCompat(attribution?.roleRef);
-  const runName = attribution?.runName?.trim();
+  const roleRef = normalizeRoleRefCompat(attribution?.roleRef ?? legacy?.agentRef);
+  const runName = (attribution?.runName ?? legacy?.agentName)?.trim();
   if (!sessionId && !roleRef && !runName) return undefined;
   return {
     ...(sessionId ? { sessionId } : {}),
@@ -1367,11 +1371,21 @@ function cloneTask(task: Task): Task {
   };
 }
 
-function cloneTaskRun(run: TaskRun): TaskRun {
+function normalizeTaskRun(run: TaskRun): TaskRun {
+  const legacy = run as TaskRun & {
+    agentRef?: RoleRef | `agent:${string}`;
+    agentName?: string;
+  };
   return {
     ...run,
+    roleRef: normalizeRoleRefCompat(run.roleRef ?? legacy.agentRef),
+    runName: (run.runName ?? legacy.agentName)?.trim() || undefined,
     outputArtifacts: [...run.outputArtifacts],
   };
+}
+
+function cloneTaskRun(run: TaskRun): TaskRun {
+  return normalizeTaskRun(run);
 }
 
 function cloneTodos(todos: TaskTodo[]): TaskTodo[] {

@@ -1,6 +1,6 @@
 # `pi-roles` API design
 
-`pi-roles` is the Spark-independent package for reusable coding roles and simple child Pi executions. It replaced the earlier split proposal for separate agent-spec and agent-run packages.
+`pi-roles` is the Spark-independent package for reusable coding roles and simple child Pi executions. It replaces the earlier split-package direction with one generic role-spec and role-run package.
 
 ## Goals
 
@@ -150,7 +150,7 @@ export function listActiveRoleRuns(): ActiveRoleRun[];
 export function parsePiJsonlEvents(stdout: string): unknown[];
 ```
 
-Every run references an existing role. A run can be fresh or forked regardless of whether the role source is builtin, project, or user. For usage guidance, safety constraints, and Spark attribution rules, see [agent-run-modes.md](./agent-run-modes.md).
+Every run references an existing role. A run can be fresh or forked regardless of whether the role source is builtin, project, or user. For usage guidance, safety constraints, and Spark attribution rules, see [role-run-modes.md](./role-run-modes.md).
 
 ## Tool / Spark mapping
 

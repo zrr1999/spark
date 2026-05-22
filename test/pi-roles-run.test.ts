@@ -7,7 +7,9 @@ import test from "node:test";
 import {
   cancelRoleRun,
   listActiveRoleRuns,
+  normalizeRoleRef,
   normalizeRoleRunMode,
+  normalizeRoleSource,
   parsePiJsonlEvents,
   RoleRunCancelledError,
   RoleRunTimeoutError,
@@ -186,11 +188,18 @@ void test("pi-roles enforces timeout control", async () => {
 
 void test("pi-roles normalizes unknown modes to fresh and parses JSONL tolerantly", () => {
   assert.equal(normalizeRoleRunMode("forked"), "forked");
-  assert.equal(normalizeRoleRunMode("managed"), "fresh");
+  assert.equal(normalizeRoleRunMode("legacy-mode"), "fresh");
   assert.deepEqual(parsePiJsonlEvents('{"type":"start"}\nnot-json\n{"type":"stop"}\n'), [
     { type: "start" },
     { type: "stop" },
   ]);
+});
+
+void test("pi-roles keeps narrow role source and ref compatibility", () => {
+  assert.equal(normalizeRoleRef("agent:builtin-worker"), "role:builtin-worker");
+  assert.equal(normalizeRoleSource("predefined"), "builtin");
+  assert.equal(normalizeRoleSource("managed"), "project");
+  assert.equal(normalizeRoleSource("workspace"), "project");
 });
 
 async function eventually(predicate: () => boolean | Promise<boolean>): Promise<void> {
