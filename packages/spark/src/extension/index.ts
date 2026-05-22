@@ -61,7 +61,7 @@ import {
   type TaskTodoOp,
   type TaskTodoSummary,
 } from "spark-tasks";
-import { clarifyTaskPlanIfNeeded } from "../flows/task-plan-flow.ts";
+import { decideTaskPlanBeforeCreate } from "../flows/task-plan-flow.ts";
 import { clarifyThreadIntentIfNeeded } from "../flows/thread-intent-flow.ts";
 import {
   SparkWidget,
@@ -1351,7 +1351,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const status = requestedStatus ?? (roleRef ? "pending" : "running");
       const sessionKey = sparkSessionKey(ctx);
       const store = defaultTaskGraphStore(cwd);
-      const prepared = await store.update(
+      const claimed = await store.update(
         async (graph) => {
           await sparkTodoStore(cwd, ctx).hydrate(graph);
           const thread = await currentSparkThread(cwd, ctx, graph, { activate: true });
@@ -1380,7 +1380,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
                 status,
                 roleRef,
                 claimedBySession: sessionKey,
-                plan: normalizeToolTaskPlan(p.plan, description, title),
+                plan: normalizeToolTaskPlan(p.plan ?? existing.plan, description, title),
               })
             : graph.createTask({
                 threadRef: thread.ref,
@@ -1393,55 +1393,6 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
                 claimedBySession: sessionKey,
                 plan: normalizeToolTaskPlan(p.plan, description, title),
               });
-          return { task: graph.getTask(task.ref) };
-        },
-        { createIfMissing: false },
-      );
-      if (!prepared.graph || prepared.result.error === "no_thread")
-        return {
-          content: [{ type: "text", text: "No Spark thread found." }],
-          details: { found: false },
-        };
-      if (
-        prepared.result.error === "active_claim_exists" ||
-        prepared.result.error === "claimed_by_other"
-      )
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                prepared.result.error === "active_claim_exists"
-                  ? `Cannot claim ${title}: this session already has unfinished claimed task ${prepared.result.activeTask.title} (${prepared.result.activeTask.ref}). Finish, fail, or cancel it before claiming another task.`
-                  : `Cannot update ${title}: matching task is currently claimed by another session (${taskClaimSummary(prepared.result.activeTask)}).`,
-            },
-          ],
-          details: {
-            found: true,
-            error: prepared.result.error,
-            activeTask: prepared.result.activeTask as unknown as Record<string, unknown>,
-          },
-        };
-
-      if (!("task" in prepared.result)) throw new Error("spark_claim_task prepare failed");
-      const preparedTask = prepared.result.task;
-      const planClarification = await clarifyTaskPlanIfNeeded({
-        cwd,
-        task: preparedTask,
-        ui: sparkAskUi(ctx),
-      });
-      const claimed = await store.update(
-        async (graph) => {
-          await sparkTodoStore(cwd, ctx).hydrate(graph);
-          let task = graph.getTask(preparedTask.ref);
-          if (taskClaimedBy(task) && !isClaimOwnedBySession(task, sessionKey))
-            return { error: "claimed_by_other" as const, activeTask: task };
-          const activeClaim = findActiveSessionClaim(graph, task.threadRef, sessionKey, task.ref);
-          if (isUnfinishedTaskStatus(status) && activeClaim)
-            return { error: "active_claim_exists" as const, activeTask: activeClaim };
-          if (planClarification.asked) {
-            task = graph.updateTask(task.ref, { plan: planClarification.plan });
-          }
           if (isUnfinishedTaskStatus(status)) {
             graph.claimTask(task.ref, {
               kind: "main",
@@ -1461,11 +1412,11 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
             ]);
             await sparkTodoStore(cwd, ctx).save(graph);
           }
-          return { task: graph.getTask(task.ref), planClarification };
+          return { task: graph.getTask(task.ref) };
         },
         { createIfMissing: false },
       );
-      if (!claimed.graph)
+      if (!claimed.graph || claimed.result.error === "no_thread")
         return {
           content: [{ type: "text", text: "No Spark thread found." }],
           details: { found: false },
@@ -1491,20 +1442,15 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           },
         };
       await refreshSparkWidget(cwd, ctx);
-      const clarification = claimed.result.planClarification;
-      const clarificationSuffix = clarification?.asked
-        ? `; plan clarification saved to ${clarification.artifactRef}`
-        : "";
       return {
         content: [
           {
             type: "text",
-            text: `Claimed Spark task: @${claimed.result.task.name}: ${claimed.result.task.title} (${claimed.result.task.ref})${clarificationSuffix}`,
+            text: `Claimed Spark task: @${claimed.result.task.name}: ${claimed.result.task.title} (${claimed.result.task.ref})`,
           },
         ],
         details: {
           task: claimed.result.task as unknown as Record<string, unknown>,
-          planClarification: clarification as unknown as Record<string, unknown> | undefined,
         },
       };
     },
@@ -1778,6 +1724,29 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         rationale: task.rationale,
       }));
       const result = graph.planTasks(thread.ref, tasks);
+      const changedForDecision = [...result.created, ...result.updated];
+      const planDecisions = [] as Array<Awaited<ReturnType<typeof decideTaskPlanBeforeCreate>>>;
+      for (const task of changedForDecision) {
+        const decision = await decideTaskPlanBeforeCreate({ cwd, task, ui: sparkAskUi(ctx) });
+        planDecisions.push(decision);
+        if (decision.asked && !decision.accepted) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Task plan not created: @${task.name}: ${task.title}; revise plan before creating task.`,
+              },
+            ],
+            details: {
+              found: true,
+              error: "task_plan_not_accepted",
+              task: compactTaskDetail(task),
+              planDecision: decision as unknown as Record<string, unknown>,
+            },
+          };
+        }
+        if (decision.asked) graph.updateTask(task.ref, { plan: decision.plan });
+      }
       await store.save(graph);
       await sparkTodoStore(cwd, ctx).save(graph);
       await refreshSparkWidget(cwd, ctx);
@@ -1796,7 +1765,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       if (hiddenChanged > 0) lines.push(`- … ${hiddenChanged} more changed task(s)`);
       return {
         content: [{ type: "text", text: lines.join("\n") }],
-        details: { result: compactTaskPlanResult(result) },
+        details: { result: compactTaskPlanResult(result), planDecisions },
       };
     },
   });

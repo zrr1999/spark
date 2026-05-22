@@ -76,41 +76,74 @@ interface IndependentTodoStoreFile {
   }>;
 }
 
-void test("spark_claim_task attaches task-plan clarification ask refs", async () => {
+void test("spark_plan_tasks asks for task-plan decision before creating underspecified tasks", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-task-plan-ask-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const ctx = testSparkContext(dir, "main");
+    ctx.ui.select = async () => "Create with plan";
+    const { tools } = registerSparkToolsForTest();
+
+    const planned = await executeSparkTool(tools, "spark_plan_tasks", ctx, {
+      tasks: [
+        {
+          name: "clarify-plan",
+          title: "Clarify underspecified plan",
+          description: "Exercise task plan clarification attachment.",
+          kind: "implement",
+        },
+      ],
+    });
+
+    const details = planned.details as
+      | {
+          result?: { created?: Array<{ plan?: { askRefs?: string[] } }> };
+          planDecisions?: Array<{ asked?: boolean; accepted?: boolean; artifactRef?: string }>;
+        }
+      | undefined;
+    const decision = details?.planDecisions?.[0];
+    assert.equal(decision?.asked, true);
+    assert.equal(decision?.accepted, true);
+    assert.ok(decision?.artifactRef);
+    const task = (await defaultTaskGraphStore(dir).load())?.tasks()[0];
+    assert.deepEqual(task?.plan?.askRefs, [decision.artifactRef]);
+    const artifact = await defaultArtifactStore(dir).get(decision.artifactRef as ArtifactRef);
+    const body = artifact.body as {
+      request?: { questions?: Array<{ id: string; type?: string; options?: unknown[] }> };
+    };
+    const decisionQuestion = body.request?.questions?.find(
+      (question) => question.id === "decision",
+    );
+    const successQuestion = body.request?.questions?.find(
+      (question) => question.id === "successCriteria",
+    );
+    assert.equal(decisionQuestion?.type, "single");
+    assert.equal(successQuestion?.type, "multi");
+    assert.ok((successQuestion?.options?.length ?? 0) >= 2);
+    assert.match(toolText(planned), /Planned tasks: created=1 updated=0/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark_claim_task does not ask for task-plan refinement at claim time", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-claim-no-plan-ask-"));
   try {
     await writeEmptySparkThread(dir);
     const ctx = testSparkContext(dir, "main");
     const { tools } = registerSparkToolsForTest();
 
     const claim = await executeSparkTool(tools, "spark_claim_task", ctx, {
-      name: "clarify-plan",
-      title: "Clarify underspecified plan",
-      description: "Exercise task plan clarification attachment.",
+      name: "claim-plan",
+      title: "Claim underspecified plan",
+      description: "Claiming should not ask for task plan refinement.",
       kind: "implement",
     });
 
-    const details = claim.details as
-      | {
-          task?: { ref?: TaskRef; plan?: { askRefs?: string[] } };
-          planClarification?: { asked?: boolean; artifactRef?: string };
-        }
-      | undefined;
-    assert.equal(details?.planClarification?.asked, true);
-    assert.ok(details?.planClarification?.artifactRef);
-    assert.deepEqual(details?.task?.plan?.askRefs, [details?.planClarification?.artifactRef]);
-    const artifact = await defaultArtifactStore(dir).get(
-      details.planClarification.artifactRef as ArtifactRef,
-    );
-    const body = artifact.body as {
-      request?: { questions?: Array<{ id: string; type?: string; options?: unknown[] }> };
-    };
-    const successQuestion = body.request?.questions?.find(
-      (question) => question.id === "successCriteria",
-    );
-    assert.equal(successQuestion?.type, "multi");
-    assert.ok((successQuestion?.options?.length ?? 0) >= 2);
-    assert.match(toolText(claim), /plan clarification saved to artifact:/);
+    assert.match(toolText(claim), /Claimed Spark task/);
+    assert.equal((await defaultArtifactStore(dir).list({ kind: "ask-answer" })).length, 0);
+    const details = claim.details as { planClarification?: unknown } | undefined;
+    assert.equal(details?.planClarification, undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -759,6 +792,7 @@ void test("spark_plan_tasks keeps large plan output bounded", async () => {
         name: `task-${index + 1}`,
         title: `Task ${index + 1}`,
         description: `Bounded output task ${index + 1}.`,
+        plan: executionReadyPlan(`Bounded output task ${index + 1}.`),
       })),
     });
     const text = toolText(planned);

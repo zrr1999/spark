@@ -16,22 +16,28 @@ export interface TaskPlanClarificationResult {
   issues: TaskPlanIssue[];
 }
 
-export async function clarifyTaskPlanIfNeeded(input: {
+export interface TaskPlanDecisionResult {
+  asked: boolean;
+  accepted: boolean;
+  blocked: boolean;
+  artifactRef?: ArtifactRef;
+  summary?: string;
+  plan: TaskPlan;
+  issues: TaskPlanIssue[];
+}
+
+export async function decideTaskPlanBeforeCreate(input: {
   cwd: string;
   task: Task;
   ui?: SparkAskToolUi;
-}): Promise<TaskPlanClarificationResult> {
+}): Promise<TaskPlanDecisionResult> {
   const readiness = taskPlanReadiness(input.task);
+  const plan = input.task.plan as TaskPlan;
   if (readiness.ready) {
-    return {
-      asked: false,
-      blocked: false,
-      plan: input.task.plan as TaskPlan,
-      issues: [],
-    };
+    return { asked: false, accepted: true, blocked: false, plan, issues: [] };
   }
 
-  const response = await runSparkAskTool(taskPlanClarificationAsk(input.task, readiness.issues), {
+  const response = await runSparkAskTool(taskPlanDecisionAsk(input.task, readiness.issues), {
     cwd: input.cwd,
     ui: input.ui,
   });
@@ -39,46 +45,68 @@ export async function clarifyTaskPlanIfNeeded(input: {
     artifactRef?: ArtifactRef;
     blocked?: boolean;
     summary?: string;
+    answers?: Record<string, { values?: string[]; customText?: string }>;
   };
+  const accepted = selected(details.answers, "decision", "create-with-this-plan");
   return {
     asked: true,
-    blocked: details.blocked === true,
+    accepted,
+    blocked: details.blocked === true || !accepted,
     artifactRef: details.artifactRef,
     summary: details.summary,
-    plan: appendTaskPlanAskRef(input.task.plan as TaskPlan, details.artifactRef),
+    plan: appendTaskPlanAskRef(plan, details.artifactRef),
     issues: readiness.issues,
   };
 }
 
-function taskPlanClarificationAsk(task: Task, issues: TaskPlanIssue[]): SparkAskToolParams {
+function taskPlanDecisionAsk(task: Task, issues: TaskPlanIssue[]): SparkAskToolParams {
   return {
-    mode: "clarification",
-    flow: "task-plan-refinement",
-    title: `Refine task plan: ${task.title}`,
+    mode: "decision",
+    flow: "task-plan-decision",
+    title: `Create task plan: ${task.title}`,
     context: [
       `Task: @${task.name} ${task.title}`,
       `Description: ${task.description}`,
-      `Current objective: ${task.plan?.objective ?? ""}`,
-      `Plan issues: ${issues.map((issue) => issue.message).join("; ")}`,
+      `Proposed objective: ${task.plan?.objective ?? ""}`,
+      `Proposed steps: ${(task.plan?.steps ?? []).join("; ")}`,
+      `Plan issues to resolve before creation: ${issues.map((issue) => issue.message).join("; ")}`,
     ].join("\n"),
     questions: [
       {
+        id: "decision",
+        prompt: "Create this task with the proposed plan, or revise before creating it?",
+        type: "single",
+        required: true,
+        options: [
+          option(
+            "create-with-this-plan",
+            "Create with plan",
+            "Accept the proposed task plan and create/update the task with the selected plan context attached.",
+          ),
+          option(
+            "revise-before-create",
+            "Revise first",
+            "Do not create the task yet; revise the plan details or scope before creating this task.",
+          ),
+        ],
+      },
+      {
         id: "successCriteria",
-        prompt: "What observable success criteria should this task satisfy?",
+        prompt: "Suggested observable success criteria for this task plan:",
         type: "multi",
         required: false,
         options: taskPlanSuggestionOptions(task, "successCriteria"),
       },
       {
         id: "evidenceRequired",
-        prompt: "What evidence should be produced before this task is considered complete?",
+        prompt: "Suggested evidence to require before this task is considered complete:",
         type: "multi",
         required: false,
         options: taskPlanSuggestionOptions(task, "evidenceRequired"),
       },
       {
         id: "openQuestions",
-        prompt: "Which open questions remain, if any? Choose resolved if none remain.",
+        prompt: "Do any open questions remain before task creation?",
         type: "single",
         required: false,
         options: taskPlanSuggestionOptions(task, "openQuestions"),
@@ -208,6 +236,14 @@ function compactOptions(
   options: Array<SparkAskToolOptionParams | undefined>,
 ): SparkAskToolOptionParams[] {
   return options.filter((entry): entry is SparkAskToolOptionParams => Boolean(entry)).slice(0, 6);
+}
+
+function selected(
+  answers: Record<string, { values?: string[]; customText?: string }> | undefined,
+  questionId: string,
+  value: string,
+): boolean {
+  return answers?.[questionId]?.values?.includes(value) === true;
 }
 
 function appendTaskPlanAskRef(plan: TaskPlan, artifactRef: ArtifactRef | undefined): TaskPlan {
