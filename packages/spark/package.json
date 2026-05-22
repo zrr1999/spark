@@ -21,6 +21,7 @@
     "spark-artifacts": "file:../spark-artifacts",
     "spark-ask": "file:../spark-ask",
     "spark-core": "file:../spark-core",
+    "spark-learnings": "file:../spark-learnings",
     "spark-orchestrator": "file:../spark-orchestrator",
     "spark-review": "file:../spark-review",
     "spark-runtime": "file:../spark-runtime",

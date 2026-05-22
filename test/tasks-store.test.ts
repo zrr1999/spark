@@ -210,6 +210,14 @@ void test("task plan readiness distinguishes minimal and execution-ready plans",
     },
   });
   assert.deepEqual(graph.taskPlanReadiness(ready.ref), { ready: true, issues: [] });
+
+  const cancelled = graph.createTask({
+    threadRef: thread.ref,
+    title: "Cancelled cleanup",
+    description: "cancelled task should not need execution evidence",
+    status: "cancelled",
+  });
+  assert.deepEqual(graph.taskPlanReadiness(cancelled.ref), { ready: true, issues: [] });
 });
 
 void test("ready tasks require completed dependencies and execution-ready plan, not stored role", () => {

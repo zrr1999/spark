@@ -165,7 +165,10 @@ export type ArtifactKind =
   | "role-run"
   | "role-spec-proposal"
   | "ask-answer"
-  | "run-trace";
+  | "run-trace"
+  | "learning"
+  | "learning-candidate"
+  | "learning-export";
 
 export type ArtifactFormat = "markdown" | "json" | "text";
 

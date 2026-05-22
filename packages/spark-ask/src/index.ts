@@ -1,4 +1,3 @@
-import type { RoleSpecProposal } from "pi-roles";
 import {
   createElaborationResult,
   createPiAskFlowArtifactBody,
@@ -25,22 +24,14 @@ import {
   type PiAskFlowValidationError,
 } from "pi-ask";
 
-import { clarifyThreadCopy, detectCopyLanguage, type SparkCopyLanguage } from "./copy.ts";
-
-export { clarifyThreadCopy, detectCopyLanguage } from "./copy.ts";
-export {
-  deliveryModeOptions,
-  languageOptions,
-  nextActionOptions,
-  sparkFocusOptions,
-} from "./copy.ts";
+export { detectCopyLanguage } from "./copy.ts";
 export {
   createSparkAskToolRequest,
   MIN_SPARK_ASK_OPTION_DESCRIPTION_LENGTH,
   replaySparkAskTool,
   runSparkAskTool,
 } from "./tool.ts";
-export type { SparkCopyLanguage, SparkThreadClarificationCopy } from "./copy.ts";
+export type { SparkCopyLanguage } from "./copy.ts";
 export type {
   SparkAskToolOptionParams,
   SparkAskToolParams,
@@ -48,121 +39,7 @@ export type {
   SparkAskToolUi,
 } from "./tool.ts";
 
-export type SparkAskFlow =
-  | "clarify-thread"
-  | "approve-role-spec"
-  | "resolve-task-blocker"
-  | "review-gate"
-  | "custom";
-
-export function clarifyThreadAsk(input: {
-  idea: string;
-  title?: string;
-  defaultLanguage?: SparkCopyLanguage;
-}): PiAskFlowRequest {
-  const copy = clarifyThreadCopy({
-    language: input.defaultLanguage ?? detectCopyLanguage(input.idea),
-  });
-  return {
-    flow: "clarify-thread",
-    mode: "clarification",
-    title: input.title ?? copy.title,
-    context: input.idea,
-    questions: copy.questions as PiAskFlowQuestion[],
-    behaviour: { allowElaborate: true, allowReplay: true, preservePriorAnswers: true },
-  };
-}
-
-export function approveRoleSpecAsk(input: { proposal: RoleSpecProposal }): PiAskFlowRequest {
-  return {
-    flow: "approve-role-spec",
-    mode: "approval",
-    title: `Approve role spec: ${input.proposal.id}`,
-    context: [
-      input.proposal.description,
-      input.proposal.rationale,
-      `Expected uses: ${input.proposal.expectedUses.join(", ")}`,
-    ].join("\n"),
-    questions: [
-      {
-        id: "approval",
-        prompt: `Create role spec ${input.proposal.id}?`,
-        type: "single",
-        required: true,
-        options: [
-          { value: "approve", label: "Approve" },
-          { value: "reject", label: "Reject" },
-        ],
-      },
-      {
-        id: "note",
-        prompt: "Any note for the role spec proposal?",
-        type: "freeform",
-      },
-    ],
-    behaviour: { allowElaborate: true, allowReplay: true, preservePriorAnswers: true },
-  };
-}
-
-export function resolveTaskBlockerAsk(input: {
-  taskTitle: string;
-  blocker: string;
-}): PiAskFlowRequest {
-  return {
-    flow: "resolve-task-blocker",
-    mode: "unblock",
-    title: `Resolve blocker: ${input.taskTitle}`,
-    context: input.blocker,
-    questions: [
-      {
-        id: "decision",
-        prompt: `How should Spark proceed for ${input.taskTitle}?`,
-        type: "single",
-        required: true,
-        options: [
-          { value: "resume", label: "Resume with chosen direction" },
-          { value: "block", label: "Keep blocked" },
-          { value: "replan", label: "Replan this task" },
-        ],
-      },
-      {
-        id: "explanation",
-        prompt: "Any extra context for the unblock decision?",
-        type: "freeform",
-      },
-    ],
-    behaviour: { allowElaborate: true, allowReplay: true, preservePriorAnswers: true },
-  };
-}
-
-export function reviewGateAsk(input: { subject: string; summary: string }): PiAskFlowRequest {
-  return {
-    flow: "review-gate",
-    mode: "decision",
-    title: `Review gate: ${input.subject}`,
-    context: input.summary,
-    questions: [
-      {
-        id: "gate",
-        prompt: `What should happen for ${input.subject}?`,
-        type: "single",
-        required: true,
-        options: [
-          { value: "approve", label: "Approve" },
-          { value: "needs_changes", label: "Needs changes" },
-          { value: "block", label: "Block" },
-        ],
-      },
-      {
-        id: "reason",
-        prompt: "Why?",
-        type: "freeform",
-        required: true,
-      },
-    ],
-    behaviour: { allowElaborate: true, allowReplay: true, preservePriorAnswers: true },
-  };
-}
+export type SparkAskFlow = string;
 
 export const createSparkAskRequest = createPiAskFlowRequest;
 export const runSparkAsk = runPiAskFlow;

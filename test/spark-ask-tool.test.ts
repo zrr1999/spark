@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { type ArtifactRef } from "spark-core";
+import type { ArtifactRef } from "spark-core";
 import { defaultArtifactStore } from "spark-artifacts";
 import {
-  clarifyThreadAsk,
   createElaborationResult,
+  createSparkAskRequest,
   createSparkAskToolRequest,
   replayableSparkAsk,
   runSparkAskTool,
@@ -370,8 +370,32 @@ void test("spark_ask tool multi-select decision persists explicit selections", a
 });
 
 void test("replayable spark ask preserves prior selections in option descriptions", () => {
-  const request = clarifyThreadAsk({
-    idea: "Build a local SVG animation extension",
+  const request = createSparkAskRequest({
+    flow: "svg-animation-delivery",
+    mode: "decision",
+    title: "Choose SVG animation delivery mode",
+    context: "Build a local SVG animation extension.",
+    questions: [
+      {
+        id: "delivery-mode",
+        prompt: "Which delivery mode should this SVG animation extension use?",
+        type: "single",
+        required: true,
+        options: [
+          {
+            value: "document_and_execute",
+            label: "Clarification, documentation, and continued execution",
+            description: "Confirm scope, record decisions, and continue with implementation.",
+          },
+          {
+            value: "clarify_only",
+            label: "Clarification only",
+            description: "Confirm the SVG animation extension scope and stop there.",
+          },
+        ],
+      },
+    ],
+    behaviour: { preservePriorAnswers: true },
   });
   const elaborated = createElaborationResult(
     {

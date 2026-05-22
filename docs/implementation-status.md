@@ -15,6 +15,10 @@ but end-to-end local vertical slice.
    - content hashes and blob files
    - provenance and lineage links
    - list/query/diff helpers
+- `spark-learnings`
+   - typed evidence-backed `learning` / `learning-candidate` / `learning-export` records
+   - active/candidate/stale/superseded/rejected lifecycle helpers
+   - keyword search, explicit Markdown export/import, and legacy `compound-learnings` migration
 - `pi-ask`
    - minimal `ask_user` primitive for focused single-question asks
    - reusable `ask_flow` state machine, renderer, replay
@@ -32,15 +36,10 @@ but end-to-end local vertical slice.
      and allows optional blank freeform answers to advance as
      `skipped`
 - `spark-ask`
-   - lightweight Spark ask presets built on top of `pi-ask`
-   - Spark-specific copy for thread clarification / role
-     approval / blocker resolution / review decisions
+   - lightweight Spark ask artifact persistence/replay helpers built on top of `pi-ask`
+   - no canned question presets; callers must generate ask questions from concrete task, blocker, review, or decision context
    - type aliases over the generic `pi-ask` flow API
-   - dedicated flow helpers: clarify-thread /
-     approve-role-spec / resolve-task-blocker /
-     review-gate
-   - no Pi extension registration, artifact persistence, or
-     fullscreen host wiring; those stay in `spark`
+   - no Pi extension registration or workflow ownership; those stay in `spark`
 - `pi-cue`
    - migrated cue-shell IPC client and full short-name tool surface from `pi-cue-shell`
    - raw TypeScript imports compatible with Pi / Node strip-types loading
@@ -106,6 +105,10 @@ but end-to-end local vertical slice.
    - flow-native multi-question `spark_ask` and
      `spark_ask_replay` tools
    - `spark_finish_task`, `spark_list_artifacts`, and `spark_get_artifact` tools
+   - `spark_learning_record` / `spark_learning_search` / `spark_learning_list` /
+     `spark_learning_read` / lifecycle tools plus explicit Markdown export/import
+     for local Spark learnings; legacy `.learnings/{patterns,gotchas,decisions}`
+     compound-learnings imports are supported with dry-run by default
    - two-layer activation detection: `SPARK.md` /
      `.spark/thread.json` /
      `~/.config/spark/config.toml` allowlist first,
@@ -117,8 +120,8 @@ but end-to-end local vertical slice.
    - `/spark` initializes state without a broad intake form;
      targeted clarification is deferred until Spark has
      context from the current workspace
-   - `.spark/` state is always created; root `SPARK.md` is
-     only materialized when `.git` exists in cwd
+   - `.spark/` state is always created and should stay Git-ignored;
+     root `SPARK.md` is only materialized when `.git` exists in cwd
    - SPARK.md artifact, task graph, role plan artifact,
      review gate, and run trace generation
    - SPARK.md injection into the active turn system prompt as

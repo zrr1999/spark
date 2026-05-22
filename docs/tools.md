@@ -23,6 +23,15 @@ Tools:
 - `spark_ask_replay` — replay the latest or a specified Spark ask artifact.
 - `spark_list_artifacts` — list Spark artifacts with compact bounded output.
 - `spark_get_artifact` — read a Spark artifact, truncated by default with `full=true` opt-in.
+- `spark_learning_record` — record one evidence-backed reusable learning as a local Spark artifact. Learning records are local runtime state under `.spark/`; use export tools for sharing.
+- `spark_learning_search` — search active Spark learnings by default. Candidate or inactive learnings are only returned with explicit `includeCandidates`, `includeInactive`, or `status` filters.
+- `spark_learning_list` — list local Spark learnings with compact status/category/scope metadata.
+- `spark_learning_read` — read one learning by artifact ref or stable id, truncated by default with `full=true` opt-in.
+- `spark_learning_mark_stale` — mark a learning stale with a reason while preserving the record for audit.
+- `spark_learning_supersede` — mark a learning superseded by one or more replacement learning refs.
+- `spark_learning_reject` — reject a learning candidate while preserving the rejected record and reason.
+- `spark_learning_export_markdown` — explicitly export selected local learnings to a Markdown artifact and optional file for review or sharing.
+- `spark_learning_import_markdown` — import Markdown produced by `spark_learning_export_markdown` or legacy `compound-learnings` `.learnings/{patterns,gotchas,decisions}` Markdown; dry-run by default, `apply=true` persists records, and `deleteLegacyAfterVerifiedExport=true` can remove the legacy source only after an explicit verification export is written.
 
 Automatic behavior:
 
@@ -113,7 +122,8 @@ Automatic behavior:
    `spark_claim_task`, `spark_update_task_todos`,
    `spark_update_todos`,
    `list_roles` / `get_role`,
-   `spark_run_ready_tasks`, `spark_list_artifacts` / `spark_get_artifact`, and `pi-cue` tools.
+   `spark_run_ready_tasks`, `spark_list_artifacts` / `spark_get_artifact`,
+   `spark_learning_search` / `spark_learning_record`, and `pi-cue` tools.
 8. Spark display-name quality is model-maintained when the
    improvement is obvious:
    - models may update the active thread title and the current
@@ -238,9 +248,11 @@ canonical Spark flow-native ask surface: prefer `questions[]`, persist
 `ask-answer` artifacts as `{ request, result, summary }`, replay from those
 artifacts, and treat no-selection/cancelled gate results as blocked. Keep the
 package boundary clear: generic ask protocol/TUI/summary behavior belongs in
-`pi-ask`; Spark copy and preset request builders belong in `spark-ask`; Pi tool
-registration, Spark option-description validation, artifacts, and replay tool
-behavior belong in `packages/spark`.
+`pi-ask`; Spark ask artifact persistence/replay helpers belong in `spark-ask`;
+concrete ask questions belong at the call site where the actual task, blocker,
+review, or decision context is known; Pi tool registration, Spark
+option-description validation, artifacts, and replay tool behavior belong in
+`packages/spark`.
 
 ## `pi-cue`
 

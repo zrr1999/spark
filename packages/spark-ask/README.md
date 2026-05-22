@@ -2,11 +2,11 @@
 
 Spark artifact-aware ask adapter built on top of `pi-ask`.
 
-`spark-ask` provides Spark-specific question presets and copy for intent shaping,
-agent-spec approval, task blocker resolution, and review-gate decisions. It also
-runs Spark asks through the generic `pi-ask` engine and persists/replays
-`ask-answer` artifacts via `spark-artifacts`. Generic ask protocol, state,
-renderer, replay semantics, and summaries live in `pi-ask`.
+`spark-ask` runs Spark asks through the generic `pi-ask` engine and
+persists/replays `ask-answer` artifacts via `spark-artifacts`. It intentionally
+**does not provide canned question presets**. Workflow code must construct ask
+questions from the concrete task, blocker, review, or decision context it just
+observed.
 
 ## Positioning
 
@@ -14,14 +14,14 @@ renderer, replay semantics, and summaries live in `pi-ask`.
   summary helpers, flow state machine, fullscreen renderer/controller, replay
   helpers, and direct custom-input handling. It must not depend on Spark
   packages.
-- `spark-ask` — Spark preset flows, Spark copy, type aliases over the generic
-  `pi-ask` flow API, Spark-specific option quality policy, host-UI ask running,
-  and `ask-answer` artifact persistence/replay via `spark-artifacts`. It may
-  depend on Spark data contracts, but it must not own roadmap/thread/task/review
-  workflow decisions.
+- `spark-ask` — Spark artifact persistence/replay helpers, type aliases over
+  the generic `pi-ask` flow API, Spark-specific option quality policy, and
+  host-UI ask running. It may depend on Spark data contracts, but it must not
+  own roadmap/thread/task/review workflow decisions or canned forms.
 - `spark` — Pi extension facade that registers tools, defines host-facing
   schemas/rendering, adapts Pi context (`cwd`, UI, session), and calls
-  `spark-ask` or Spark workflow modules.
+  `spark-ask` or Spark workflow modules. Workflow modules own when to ask and
+  the exact context-specific questions.
 
 ## Flow-native `spark_ask` contract
 
@@ -36,6 +36,9 @@ thin single-question wrapper:
   description explaining what choosing it means. Do not add business options
   named `Other`, `Type your own`, or `Chat about this`; custom input is a UI
   affordance supplied by `pi-ask`.
+- Ask questions must be generated from actual context: task title/objective,
+  observed blocker, review subject, concrete diff, or named decision. Do not
+  ask broad intake or generic preset forms.
 - `spark_ask` normalizes through the shared `pi-ask` flow result envelope:
   `answered`, `cancelled`, or `no_selection`, plus `nextAction`.
 - Decision/approval/unblock gates treat `cancelled` and `no_selection` as
@@ -51,10 +54,9 @@ thin single-question wrapper:
   request behaviour enables it.
 
 Use `ask_user` for a focused generic one-question ask outside Spark workflow
-state, `ask_flow` for generic multi-question/fullscreen forms, and `spark_ask`
+state, `ask_flow` for generic multi-question/fullscreen asks, and `spark_ask`
 when the result should be part of Spark workflow/artifact semantics. If a new
 ask feature does not mention Spark concepts, artifacts, or Spark tool policy, it
-belongs in `pi-ask`; if it is Spark copy/preset construction or Spark artifact
-ask persistence/replay, it belongs here; if it is Pi tool registration or
-host-specific schema/rendering, it belongs in `packages/spark`. Workflow modules
-own when to ask and where to attach resulting ask refs.
+belongs in `pi-ask`; if it is Spark artifact ask persistence/replay, it belongs
+here; if it is Pi tool registration or host-specific schema/rendering, it
+belongs in `packages/spark`.

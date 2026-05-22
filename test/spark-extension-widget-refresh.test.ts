@@ -101,6 +101,15 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     sparkExtension(pi);
 
     await executeTool(
+      requireTool(tools, "spark_use_thread"),
+      { thread: "Widget refresh thread" },
+      ctx,
+    );
+    assert.equal(widgetCalls.length, 1);
+    assert.ok(widgetComponent);
+    assert.match(widgetComponent.render().join("\n"), /Widget refresh thread/);
+
+    await executeTool(
       requireTool(tools, "spark_claim_task"),
       {
         title: "Widget refresh task",
@@ -113,12 +122,12 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     assert.equal(widgetCalls.length, 1);
     assert.equal(widgetCalls[0]?.key, "spark-status");
     assert.deepEqual(widgetCalls[0]?.opts, { placement: "aboveEditor" });
-    assert.ok(widgetComponent);
+    assert.equal(renderRequests, 1);
     assert.match(widgetComponent.render().join("\n"), /→ @me Widget refresh task/);
     assert.match(widgetComponent.render().join("\n"), /First child TODO/);
 
     await handlers.get("tool_execution_end")?.({ toolName: "spark_claim_task" }, ctx);
-    assert.equal(renderRequests, 1);
+    assert.equal(renderRequests, 2);
 
     await executeTool(
       requireTool(tools, "spark_update_task_todos"),
@@ -131,12 +140,12 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
       ctx,
     );
     assert.equal(widgetCalls.length, 1);
-    assert.equal(renderRequests, 2);
+    assert.equal(renderRequests, 3);
     assert.match(widgetComponent.render().join("\n"), /First child TODO/);
     assert.match(widgetComponent.render().join("\n"), /Second child TODO/);
 
     await handlers.get("tool_execution_end")?.({ toolName: "spark_update_task_todos" }, ctx);
-    assert.equal(renderRequests, 3);
+    assert.equal(renderRequests, 4);
 
     await executeTool(
       requireTool(tools, "spark_update_todos"),
@@ -146,11 +155,11 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
       ctx,
     );
     assert.equal(widgetCalls.length, 1);
-    assert.equal(renderRequests, 4);
+    assert.equal(renderRequests, 5);
     assert.match(widgetComponent.render().join("\n"), /Independent session TODO/);
 
     await handlers.get("tool_execution_end")?.({ toolName: "spark_update_todos" }, ctx);
-    assert.equal(renderRequests, 5);
+    assert.equal(renderRequests, 6);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

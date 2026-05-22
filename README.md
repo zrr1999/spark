@@ -22,6 +22,8 @@ The first vertical slice then creates local Spark state under `.spark/`:
 
 A root `SPARK.md` is only materialized when the current `cwd` looks like a concrete repo (currently: `.git` exists in `cwd`). In workspace-like directories, Spark still creates `.spark/` state and a `spark-md` artifact, but skips the root `SPARK.md` file.
 
+`.spark/` is local runtime state and should be ignored by Git. Stable shared knowledge, including Spark learnings, should be shared only through explicit exports, reports, or committed Markdown artifacts.
+
 `GitHub` repo/issue creation is intentionally deferred.
 
 ## Packages
@@ -35,8 +37,9 @@ A root `SPARK.md` is only materialized when the current `cwd` looks like a concr
 - `spark-runtime` — Spark single-task runtime adapter that executes one task through `pi-roles`, writes artifacts, and owns task/run/timeout mapping above `RoleRun`.
 - `spark-orchestrator` — Spark task-graph control plane that schedules ready frontiers, assigns executor roles at dispatch, and owns DAG manager state.
 - `spark-artifacts` — typed durable artifacts with hashes, blobs, provenance, and lineage links.
+- `spark-learnings` — evidence-backed reusable learning records, lifecycle state, search, explicit export/import, and legacy `compound-learnings` migration helpers.
 - `spark-review` — verification gates and review artifacts.
-- `spark-ask` — lightweight Spark-specific ask presets and copy built on top of `pi-ask`.
+- `spark-ask` — Spark-specific ask artifact persistence/replay and tool helpers built on top of `pi-ask`; callers provide context-specific questions instead of canned presets.
 
 No compatibility packages are planned. `spark-github` is intentionally deferred.
 

@@ -1219,7 +1219,8 @@ function normalizeTaskPlan(
   };
 }
 
-export function taskPlanReadiness(task: Pick<Task, "plan">): TaskPlanReadiness {
+export function taskPlanReadiness(task: Pick<Task, "plan" | "status">): TaskPlanReadiness {
+  if (task.status === "cancelled") return { ready: true, issues: [] };
   const issues: TaskPlanIssue[] = [];
   const plan = task.plan;
   if (!plan) {

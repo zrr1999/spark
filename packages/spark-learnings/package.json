@@ -1,7 +1,7 @@
 {
-  "name": "spark-ask",
+  "name": "spark-learnings",
   "version": "0.1.0",
-  "description": "Spark ask artifact helpers built on top of pi-ask.",
+  "description": "Evidence-backed learning records for Spark.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [
@@ -16,7 +16,6 @@
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
-    "pi-ask": "file:../pi-ask",
     "spark-artifacts": "file:../spark-artifacts",
     "spark-core": "file:../spark-core"
   }

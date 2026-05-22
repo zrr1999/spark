@@ -2,47 +2,63 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  approveRoleSpecAsk,
-  clarifyThreadAsk,
   createSparkAskRequest,
   createSparkAskResult,
+  detectCopyLanguage,
   isSparkAskGateBlocked,
   runSparkAsk,
 } from "spark-ask";
 
-void test("clarify-thread flow produces rich clarification questions", () => {
-  const request = clarifyThreadAsk({
-    idea: "Build a local SVG animation extension",
+void test("Spark asks are built from caller-provided context-specific questions", () => {
+  const request = createSparkAskRequest({
+    flow: "svg-role-approval",
+    mode: "approval",
+    title: "Approve SVG role for animation planning",
+    context:
+      "Proposal svg-role: handles SVG animation plans; rationale: reuse a specialist for vector motion work.",
+    questions: [
+      {
+        id: "approval",
+        prompt: "Create the svg-role spec for this SVG animation planning need?",
+        type: "single",
+        required: true,
+        options: [
+          { value: "approve", label: "Approve", description: "Create this SVG planning role." },
+          { value: "reject", label: "Reject", description: "Do not create this role." },
+        ],
+      },
+    ],
   });
-  assert.equal(request.flow, "clarify-thread");
-  assert.equal(request.questions[0]?.id, "output-language");
-  assert.equal(request.questions[1]?.id, "working-title");
-  assert.ok(request.questions.some((question) => question.id === "spark-focus"));
-  assert.ok(request.questions.some((question) => question.id === "delivery-mode"));
-  assert.ok(request.questions.some((question) => question.id === "next-action"));
-  assert.ok(request.questions.some((question) => question.id === "boundary"));
-  assert.ok(request.questions.length <= 6);
+  assert.equal(request.flow, "svg-role-approval");
+  assert.equal(request.questions[0]?.id, "approval");
+  assert.match(request.context ?? "", /svg-role/);
 });
 
-void test("clarify-thread asks users to confirm detected output language", () => {
-  const request = clarifyThreadAsk({ idea: "梳理下一步改进点" });
-  const languageQuestion = request.questions.find((question) => question.id === "output-language");
-  assert.equal(languageQuestion?.required, true);
-  assert.equal(languageQuestion?.options?.[0]?.value, "zh");
+void test("copy helpers only detect language; they do not create canned ask forms", () => {
+  assert.equal(detectCopyLanguage("梳理下一步改进点"), "zh");
+  assert.equal(detectCopyLanguage("Plan next work"), "en");
 });
 
 void test("approval flow without UI blocks instead of implicitly approving", async () => {
-  const request = approveRoleSpecAsk({
-    proposal: {
-      id: "svg-role",
-      description: "Handles SVG animation plans",
-      systemPrompt: "You are a SVG planner.",
-      rationale: "Need a reusable specialist",
-      expectedUses: ["svg planning"],
-    },
+  const request = createSparkAskRequest({
+    flow: "svg-role-approval",
+    mode: "approval",
+    title: "Approve SVG role for animation planning",
+    questions: [
+      {
+        id: "approval",
+        prompt: "Create the svg-role spec for this SVG animation planning need?",
+        type: "single",
+        required: true,
+        options: [
+          { value: "approve", label: "Approve", description: "Create this SVG planning role." },
+          { value: "reject", label: "Reject", description: "Do not create this role." },
+        ],
+      },
+    ],
   });
   const result = await runSparkAsk(request);
-  assert.equal(result.flow, "approve-role-spec");
+  assert.equal(result.flow, "svg-role-approval");
   assert.equal(result.mode, "submit");
   assert.equal(result.status, "no_selection");
   assert.equal(result.nextAction, "block");
@@ -50,18 +66,26 @@ void test("approval flow without UI blocks instead of implicitly approving", asy
   assert.equal(isSparkAskGateBlocked(result, request), true);
 });
 
-void test("approve-role-spec flow records explicit approval selections", async () => {
-  const request = approveRoleSpecAsk({
-    proposal: {
-      id: "svg-role",
-      description: "Handles SVG animation plans",
-      systemPrompt: "You are a SVG planner.",
-      rationale: "Need a reusable specialist",
-      expectedUses: ["svg planning"],
-    },
+void test("context-specific approval asks record explicit selections", async () => {
+  const request = createSparkAskRequest({
+    flow: "svg-role-approval",
+    mode: "approval",
+    title: "Approve SVG role for animation planning",
+    questions: [
+      {
+        id: "approval",
+        prompt: "Create the svg-role spec for this SVG animation planning need?",
+        type: "single",
+        required: true,
+        options: [
+          { value: "approve", label: "Approve", description: "Create this SVG planning role." },
+          { value: "reject", label: "Reject", description: "Do not create this role." },
+        ],
+      },
+    ],
   });
   const result = await runSparkAsk(request, { select: async () => "Approve" });
-  assert.equal(result.flow, "approve-role-spec");
+  assert.equal(result.flow, "svg-role-approval");
   assert.equal(result.mode, "submit");
   assert.equal(result.status, "answered");
   assert.equal(result.nextAction, "resume");

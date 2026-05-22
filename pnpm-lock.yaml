@@ -31,6 +31,9 @@ importers:
       spark-core:
         specifier: file:packages/spark-core
         version: link:packages/spark-core
+      spark-learnings:
+        specifier: file:packages/spark-learnings
+        version: link:packages/spark-learnings
       spark-orchestrator:
         specifier: file:packages/spark-orchestrator
         version: link:packages/spark-orchestrator
@@ -128,6 +131,9 @@ importers:
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core
+      spark-learnings:
+        specifier: file:../spark-learnings
+        version: link:../spark-learnings
       spark-orchestrator:
         specifier: file:../spark-orchestrator
         version: link:../spark-orchestrator
@@ -163,6 +169,15 @@ importers:
         version: link:../spark-core
 
   packages/spark-core: {}
+
+  packages/spark-learnings:
+    dependencies:
+      spark-artifacts:
+        specifier: file:../spark-artifacts
+        version: link:../spark-artifacts
+      spark-core:
+        specifier: file:../spark-core
+        version: link:../spark-core
 
   packages/spark-orchestrator:
     dependencies:

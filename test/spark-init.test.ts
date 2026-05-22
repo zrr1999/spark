@@ -10,6 +10,7 @@ import sparkExtension, {
   initializeSparkIdea,
   renderActiveSparkContextSummary,
   renderSparkActiveSystemPrompt,
+  shouldClarifyBeforeInit,
   shouldMaterializeSparkMd,
 } from "../packages/spark/src/extension/index.ts";
 
@@ -101,7 +102,7 @@ void test("active Spark prompt preserves base prompt and avoids repeated Spark d
   assert.doesNotMatch(prompt, /Do not satisfy such feedback by only storing memory or preferences/);
 });
 
-void test("active Spark context can summarize a sole thread without persisting current selection", async () => {
+void test("active Spark context reports no selected thread without persisting current selection", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-no-current-before-activation-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -117,7 +118,9 @@ void test("active Spark context can summarize a sole thread without persisting c
       },
     });
 
-    assert.match(summary ?? "", /Dormant thread/);
+    assert.match(summary ?? "", /Spark available: no thread selected/);
+    assert.match(summary ?? "", /Threads: 1 total \/ 1 active/);
+    assert.doesNotMatch(summary ?? "", /Current thread: Dormant thread/);
     await assert.rejects(() => stat(join(dir, ".spark", "current-thread")));
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -167,6 +170,7 @@ void test("active Spark context keeps strict limits for intent, claimed tasks, a
     await defaultTaskGraphStore(dir).save(graph);
     await defaultTaskTodoStore(dir, "leaf:test-leaf").save(graph);
     const ctx = { cwd: dir, sessionManager: { getLeafId: () => "test-leaf" } };
+    await executeSparkToolInTest("spark_use_thread", ctx, { thread: thread.ref });
     await executeSparkToolInTest("spark_status", ctx, {});
 
     const summary = await renderActiveSparkContextSummary(dir, ctx);
@@ -252,6 +256,7 @@ void test("active Spark context omits finished history and finished TODOs", asyn
       cwd: dir,
       sessionManager: { getLeafId: () => "test-leaf" },
     };
+    await executeSparkToolInTest("spark_use_thread", ctx, { thread: thread.ref });
     await executeSparkToolInTest("spark_status", ctx, {});
     const summary = await renderActiveSparkContextSummary(dir, ctx);
 
@@ -273,6 +278,15 @@ void test("active Spark context omits finished history and finished TODOs", asyn
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+void test("shouldClarifyBeforeInit disables broad upfront clarification forms", () => {
+  assert.equal(shouldClarifyBeforeInit("Fix typo"), false);
+  assert.equal(shouldClarifyBeforeInit("Build v0 LSP plugin workflow"), false);
+  assert.equal(
+    shouldClarifyBeforeInit("Build this:\n- repo skeleton\n- plugin\n- smoke test"),
+    false,
+  );
 });
 
 void test("initializeSparkIdea preserves clarified title and trace ask refs", async () => {
@@ -299,6 +313,9 @@ void test("initializeSparkIdea preserves clarified title and trace ask refs", as
     assert.deepEqual(result.askArtifactRefs, ["artifact:ask-test"]);
     const threadJson = await readFile(join(dir, ".spark", "thread.json"), "utf8");
     assert.match(threadJson, /Hypha v0: VS Code-first IDE experience for Spore/);
+    assert.match(threadJson, /Execute smallest confirmed slice/);
+    assert.match(threadJson, /A documented next-step plan for diagnostics and editor UX/);
+    assert.doesNotMatch(threadJson, /Plan targeted clarification/);
     assert.doesNotMatch(threadJson, /Maintain current interaction context/);
     const artifactFiles = await readdir(join(dir, ".spark", "artifacts"));
     let traceBody: unknown;

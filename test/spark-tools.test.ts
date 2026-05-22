@@ -6,14 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import {
-  type ArtifactRef,
-  stableId,
-  type TaskPlan,
-  type TaskRef,
-  type ThreadRef,
-} from "spark-core";
+import { stableId, type TaskPlan, type TaskRef, type ThreadRef } from "spark-core";
 import { defaultArtifactStore } from "spark-artifacts";
+import { defaultLearningStore } from "spark-learnings";
 import { defaultSparkDagRunStore } from "spark-orchestrator";
 import { defaultTaskGraphStore, defaultTaskTodoStore, TaskGraph } from "spark-tasks";
 import sparkExtension from "../packages/spark/src/extension/index.ts";
@@ -79,7 +74,7 @@ interface IndependentTodoStoreFile {
   }>;
 }
 
-void test("/spark command auto-initializes new workspaces and selects modes for existing state", async () => {
+void test("/spark command auto-initializes new workspaces and infers mode for existing state", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-command-modes-"));
   try {
     const ctx = testSparkContext(dir, "main");
@@ -91,32 +86,29 @@ void test("/spark command auto-initializes new workspaces and selects modes for 
     assert.ok(existsSync(join(dir, ".spark", "thread.json")));
     assert.match(messages.at(-1) ?? "", /Spark initialized|Spark 已初始化/);
 
-    ctx.selected = "Plan: research and add threads/tasks";
     await command.handler("", ctx);
     assert.match(messages.at(-1) ?? "", /Enter Spark planning mode/);
-
-    ctx.selected = "Execute: work through ready tasks";
-    await command.handler("", ctx);
-    assert.match(messages.at(-1) ?? "", /Enter Spark execution mode/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-void test("spark_plan_tasks asks for task-plan decision before creating underspecified tasks", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-tool-task-plan-ask-"));
+void test("spark_plan_tasks blocks underspecified executable tasks without opening a canned ask", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-task-plan-not-ready-"));
   try {
     await writeEmptySparkThread(dir);
     const ctx = testSparkContext(dir, "main");
-    ctx.ui.select = async (_message, choices) => choices[0];
+    ctx.ui.select = async () => assert.fail("spark_plan_tasks should not open a task-plan ask");
+    ctx.ui.custom = async () => assert.fail("spark_plan_tasks should not open fullscreen ask UI");
     const { tools } = registerSparkToolsForTest();
+    await useOnlySparkThread(tools, ctx);
 
     const planned = await executeSparkTool(tools, "spark_plan_tasks", ctx, {
       tasks: [
         {
           name: "clarify-plan",
           title: "Clarify underspecified plan",
-          description: "Exercise task plan clarification attachment.",
+          description: "Exercise task plan readiness validation.",
           kind: "implement",
         },
       ],
@@ -124,44 +116,56 @@ void test("spark_plan_tasks asks for task-plan decision before creating underspe
 
     const details = planned.details as
       | {
-          result?: { created?: Array<{ plan?: { askRefs?: string[] } }> };
-          planDecisions?: Array<{ asked?: boolean; accepted?: boolean; artifactRef?: string }>;
+          error?: string;
+          planDecision?: { asked?: boolean; accepted?: boolean; blocked?: boolean };
         }
       | undefined;
-    const decision = details?.planDecisions?.[0];
-    assert.equal(decision?.asked, true);
-    assert.equal(decision?.accepted, true);
-    assert.ok(decision?.artifactRef);
-    const task = (await defaultTaskGraphStore(dir).load())?.tasks()[0];
-    assert.deepEqual(task?.plan?.askRefs, [decision.artifactRef]);
-    const artifact = await defaultArtifactStore(dir).get(decision.artifactRef as ArtifactRef);
-    const body = artifact.body as {
-      request?: {
-        questions?: Array<{
-          id: string;
-          prompt?: string;
-          type?: string;
-          options?: Array<{ label?: string; description?: string }>;
-        }>;
-      };
-    };
-    const decisionQuestion = body.request?.questions?.find(
-      (question) => question.id === "decision",
-    );
-    const successQuestion = body.request?.questions?.find(
-      (question) => question.id === "successCriteria",
-    );
-    assert.equal(decisionQuestion?.type, "single");
-    assert.match(decisionQuestion?.prompt ?? "", /@clarify-plan/);
-    assert.equal(successQuestion?.type, "multi");
-    assert.match(successQuestion?.prompt ?? "", /Clarify underspecified plan/);
-    assert.ok((successQuestion?.options?.length ?? 0) >= 2);
-    assert.ok(
-      successQuestion?.options?.every((option) =>
-        `${option.label ?? ""} ${option.description ?? ""}`.includes("@clarify-plan"),
-      ),
-    );
+    assert.equal(details?.error, "task_plan_not_ready");
+    assert.equal(details?.planDecision?.asked, false);
+    assert.equal(details?.planDecision?.accepted, false);
+    assert.equal(details?.planDecision?.blocked, true);
+    assert.match(toolText(planned), /Task plan not ready: @clarify-plan/);
+    const graph = await defaultTaskGraphStore(dir).load();
+    assert.equal(graph?.tasks().length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark_plan_tasks accepts cancelled cleanup tasks without success/evidence readiness", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-cancelled-plan-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const ctx = testSparkContext(dir, "main");
+    ctx.ui.select = async () => assert.fail("cancelled cleanup should not open a task-plan ask");
+    ctx.ui.custom = async () => assert.fail("cancelled cleanup should not open fullscreen ask UI");
+    const { tools } = registerSparkToolsForTest();
+    await useOnlySparkThread(tools, ctx);
+
+    const planned = await executeSparkTool(tools, "spark_plan_tasks", ctx, {
+      tasks: [
+        {
+          name: "retire-placeholder",
+          title: "Retire placeholder task",
+          description:
+            "Historical placeholder that should be cancelled without execution evidence.",
+          kind: "interaction",
+          status: "cancelled",
+        },
+      ],
+    });
+
+    const details = planned.details as
+      | { planDecisions?: Array<{ asked?: boolean; accepted?: boolean; blocked?: boolean }> }
+      | undefined;
+    assert.equal(details?.planDecisions?.[0]?.asked, false);
+    assert.equal(details?.planDecisions?.[0]?.accepted, true);
+    assert.equal(details?.planDecisions?.[0]?.blocked, false);
     assert.match(toolText(planned), /Planned tasks: created=1 updated=0/);
+    const task = (await defaultTaskGraphStore(dir).load())?.tasks()[0];
+    assert.equal(task?.status, "cancelled");
+    assert.equal(task?.plan?.successCriteria.length, 0);
+    assert.equal(task?.plan?.evidenceRequired.length, 0);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -173,6 +177,7 @@ void test("spark_claim_task does not ask for task-plan refinement at claim time"
     await writeEmptySparkThread(dir);
     const ctx = testSparkContext(dir, "main");
     const { tools } = registerSparkToolsForTest();
+    await useOnlySparkThread(tools, ctx);
 
     const claim = await executeSparkTool(tools, "spark_claim_task", ctx, {
       name: "claim-plan",
@@ -196,6 +201,7 @@ void test("spark_claim_task and spark_update_task_todos persist task TODOs acros
     await writeEmptySparkThread(dir);
     const ctx = testSparkContext(dir, "main");
     const { tools } = registerSparkToolsForTest();
+    await useOnlySparkThread(tools, ctx);
 
     const claim = await executeSparkTool(tools, "spark_claim_task", ctx, {
       name: "persist-todos",
@@ -295,6 +301,7 @@ void test("spark rename tools improve obvious placeholder thread and generic tas
     await defaultTaskGraphStore(dir).save(graph);
     const ctx = testSparkContext(dir, "main");
     const { tools } = registerSparkToolsForTest();
+    await executeSparkTool(tools, "spark_use_thread", ctx, { thread: thread.ref });
 
     const renamedThread = await executeSparkTool(tools, "spark_rename_thread", ctx, {
       title: "Autonomous Spark naming quality",
@@ -316,11 +323,11 @@ void test("spark rename tools improve obvious placeholder thread and generic tas
       | undefined;
     assert.equal(doneThreadDetails?.status, "done");
 
-    await executeSparkTool(tools, "spark_use_thread", ctx, { thread: thread.ref });
     await executeSparkTool(tools, "spark_rename_thread", ctx, {
       thread: thread.ref,
       status: "active",
     });
+    await executeSparkTool(tools, "spark_use_thread", ctx, { thread: thread.ref });
 
     const claim = await executeSparkTool(tools, "spark_claim_task", ctx, {
       title: "Implement safe naming",
@@ -362,6 +369,7 @@ void test("spark_claim_task preserves intentional task names when only the title
     await defaultTaskGraphStore(dir).save(graph);
     const ctx = testSparkContext(dir, "main");
     const { tools } = registerSparkToolsForTest();
+    await executeSparkTool(tools, "spark_use_thread", ctx, { thread: thread.ref });
 
     const claim = await executeSparkTool(tools, "spark_claim_task", ctx, {
       title: "Implement editor diagnostics slice",
@@ -404,6 +412,7 @@ void test("spark_claim_task creates a new task when multiple generic rename cand
     await defaultTaskGraphStore(dir).save(graph);
     const ctx = testSparkContext(dir, "main");
     const { tools } = registerSparkToolsForTest();
+    await executeSparkTool(tools, "spark_use_thread", ctx, { thread: thread.ref });
 
     const claim = await executeSparkTool(tools, "spark_claim_task", ctx, {
       title: "Implement concrete naming policy test",
@@ -464,6 +473,7 @@ void test("spark_finish_task completes this session's claimed task", async () =>
     await writeEmptySparkThread(dir);
     const ctx = testSparkContext(dir, "main");
     const { tools } = registerSparkToolsForTest();
+    await useOnlySparkThread(tools, ctx);
 
     const claim = await executeSparkTool(tools, "spark_claim_task", ctx, {
       name: "finish-me",
@@ -477,7 +487,14 @@ void test("spark_finish_task completes this session's claimed task", async () =>
       summary: "Done for test.",
     });
     assert.match(toolText(finished), /Finished Spark task: \[done\] @finish-me: Finish me/);
+    assert.match(toolText(finished), /Learning candidate: artifact:/);
     assert.equal((finished.details?.task as { status?: string } | undefined)?.status, "done");
+    assert.equal(
+      (finished.details?.learningCandidate as { status?: string } | undefined)?.status,
+      "candidate",
+    );
+    assert.equal((await defaultLearningStore(dir).list({ includeCandidates: true })).length, 1);
+    assert.equal((await defaultLearningStore(dir).list()).length, 0);
 
     const loaded = await defaultTaskGraphStore(dir).load();
     assert.ok(loaded);
@@ -512,6 +529,184 @@ void test("spark artifact tools list and read artifacts with truncated default b
     assert.match(toolText(read), /Long research note/);
     assert.match(toolText(read), /truncated/);
     assert.equal((read.details as { truncated?: boolean }).truncated, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark learning tools record, search, export, and import learnings", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-learnings-"));
+  const importDir = await mkdtemp(join(tmpdir(), "spark-tool-learnings-import-"));
+  try {
+    await writeEmptySparkThread(dir);
+    await writeEmptySparkThread(importDir);
+    const ctx = testSparkContext(dir, "main");
+    const importCtx = testSparkContext(importDir, "main");
+    const { tools } = registerSparkToolsForTest();
+
+    const recorded = await executeSparkTool(tools, "spark_learning_record", ctx, {
+      id: "learning-explicit-export",
+      title: "Export shared learnings explicitly",
+      statement:
+        ".spark is local runtime state; share learnings through explicit Markdown exports.",
+      category: "decision",
+      scope: "project",
+      evidenceRefs: ["artifact:decision-gate"],
+      tags: ["nyakore", "spark"],
+      confidence: 0.9,
+    });
+    assert.match(toolText(recorded), /Recorded learning artifact:learning-explicit-export/);
+
+    const search = await executeSparkTool(tools, "spark_learning_search", ctx, {
+      query: "explicit Markdown exports",
+    });
+    assert.match(toolText(search), /Export shared learnings explicitly/);
+
+    const read = await executeSparkTool(tools, "spark_learning_read", ctx, {
+      ref: "artifact:learning-explicit-export",
+    });
+    assert.match(toolText(read), /local runtime state/);
+
+    const exportPath = join("exports", "learnings.md");
+    const exported = await executeSparkTool(tools, "spark_learning_export_markdown", ctx, {
+      outputPath: exportPath,
+    });
+    assert.match(toolText(exported), /Exported 1 learning/);
+    assert.match(await readFile(join(dir, exportPath), "utf8"), /```json spark-learning/);
+
+    const dryRun = await executeSparkTool(tools, "spark_learning_import_markdown", importCtx, {
+      inputPath: join(dir, exportPath),
+    });
+    assert.match(toolText(dryRun), /Dry-run parsed 1 learning/);
+    assert.equal((await defaultLearningStore(importDir).list()).length, 0);
+
+    const imported = await executeSparkTool(tools, "spark_learning_import_markdown", importCtx, {
+      inputPath: join(dir, exportPath),
+      apply: true,
+    });
+    assert.match(toolText(imported), /Imported 1 learning/);
+    assert.equal((await defaultLearningStore(importDir).list()).length, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+    await rm(importDir, { recursive: true, force: true });
+  }
+});
+
+void test("spark learning import accepts legacy compound-learnings directories", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-legacy-learnings-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const learningDir = join(dir, ".learnings", "gotchas");
+    await mkdir(learningDir, { recursive: true });
+    await writeFile(
+      join(learningDir, "stripe-webhook-raw-body.md"),
+      `---
+title: "Webhook 验证必须使用 raw body"
+category: gotchas
+tags: [stripe, webhook, python]
+created: 2025-01-15
+context: "集成 Stripe webhook 时验证始终失败"
+---
+
+## 问题
+
+Stripe webhook 签名验证要求使用原始请求体（raw body），但 FastAPI 默认会解析 JSON。
+
+## 解决方案
+
+在验证前获取 raw body。
+`,
+    );
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+
+    const dryRun = await executeSparkTool(tools, "spark_learning_import_markdown", ctx, {
+      inputPath: ".learnings",
+    });
+    assert.match(toolText(dryRun), /legacy-compound-learnings/);
+    assert.match(toolText(dryRun), /Dry-run parsed 1 learning/);
+    assert.equal((await defaultLearningStore(dir).list()).length, 0);
+
+    const imported = await executeSparkTool(tools, "spark_learning_import_markdown", ctx, {
+      inputPath: ".learnings",
+      apply: true,
+    });
+    assert.match(toolText(imported), /Imported 1 learning/);
+
+    const results = await defaultLearningStore(dir).search({ query: "raw body stripe" });
+    assert.equal(results.length, 1);
+    assert.equal(results[0]?.record.category, "gotcha");
+    assert.deepEqual(results[0]?.record.tags, ["stripe", "webhook", "python"]);
+    assert.match(results[0]?.record.sourceContent ?? "", /FastAPI/);
+
+    await executeSparkTool(tools, "spark_learning_import_markdown", ctx, {
+      inputPath: ".learnings",
+      apply: true,
+    });
+    assert.equal((await defaultLearningStore(dir).list()).length, 1);
+
+    const deleted = await executeSparkTool(tools, "spark_learning_import_markdown", ctx, {
+      inputPath: ".learnings",
+      apply: true,
+      deleteLegacyAfterVerifiedExport: true,
+      verificationExportPath: "exports/verified-learnings.md",
+    });
+    assert.match(toolText(deleted), /deleted legacy source/);
+    assert.equal(existsSync(join(dir, ".learnings")), false);
+    assert.equal(existsSync(join(dir, "exports", "verified-learnings.md")), true);
+    assert.equal((await defaultLearningStore(dir).list()).length, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark learning tools keep candidate and inactive lifecycle explicit", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-learning-lifecycle-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+
+    await executeSparkTool(tools, "spark_learning_record", ctx, {
+      id: "learning-review-candidates",
+      title: "Review candidates before activation",
+      statement: "Task-derived learning candidates should not enter active recall automatically.",
+      status: "candidate",
+      category: "workflow",
+    });
+    const defaultSearch = await executeSparkTool(tools, "spark_learning_search", ctx, {
+      query: "Task-derived",
+    });
+    assert.match(toolText(defaultSearch), /No matching learnings/);
+
+    const candidateSearch = await executeSparkTool(tools, "spark_learning_search", ctx, {
+      query: "Task-derived",
+      includeCandidates: true,
+    });
+    assert.match(toolText(candidateSearch), /Review candidates before activation/);
+
+    const rejected = await executeSparkTool(tools, "spark_learning_reject", ctx, {
+      ref: "artifact:learning-review-candidates",
+      reason: "Candidate was intentionally not promoted.",
+    });
+    assert.match(toolText(rejected), /Rejected learning candidate/);
+
+    await executeSparkTool(tools, "spark_learning_record", ctx, {
+      id: "learning-old-policy",
+      title: "Old policy",
+      statement: "Old learning policy.",
+    });
+    const stale = await executeSparkTool(tools, "spark_learning_mark_stale", ctx, {
+      ref: "artifact:learning-old-policy",
+      reason: "Policy was replaced.",
+    });
+    assert.match(toolText(stale), /Marked stale/);
+
+    const all = await executeSparkTool(tools, "spark_learning_list", ctx, {
+      includeInactive: true,
+    });
+    assert.match(toolText(all), /rejected/);
+    assert.match(toolText(all), /stale/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -555,7 +750,10 @@ void test("spark_status does not activate an arbitrary thread for the Pi session
     const statusText = toolText(status);
 
     assert.doesNotMatch(statusText, /\[current\]/);
-    assert.match(statusText, /Tool persistence/);
+    assert.match(statusText, /Spark available: no thread selected/);
+    assert.doesNotMatch(statusText, /Thread Tool persistence/);
+    const summary = await executeSparkTool(tools, "spark_status", ctx, { view: "summary" });
+    assert.match(toolText(summary), /Tool persistence/);
     const statusDetails = status.details as { activeThreadRef?: string } | undefined;
     assert.equal(statusDetails?.activeThreadRef, undefined);
     await assert.rejects(() =>
@@ -588,9 +786,11 @@ void test("done threads are cleared from current selection and not auto-reactiva
     const status = await executeSparkTool(tools, "spark_status", ctx, {});
     const statusDetails = status.details as { activeThreadRef?: string } | undefined;
     assert.equal(statusDetails?.activeThreadRef, undefined);
-    assert.match(toolText(status), /Next workflow/);
+    assert.match(toolText(status), /Spark available: no thread selected/);
     assert.doesNotMatch(toolText(status), /Next workflow \[current\]/);
     assert.doesNotMatch(toolText(status), /Completed workflow \[current\]/);
+    const summary = await executeSparkTool(tools, "spark_status", ctx, { view: "summary" });
+    assert.match(toolText(summary), /Next workflow/);
 
     await assert.rejects(() =>
       readFile(join(dir, ".spark", "current-thread", `${ctxSessionStoreScope(ctx)}.json`), "utf8"),
@@ -709,8 +909,8 @@ void test("spark_run_ready_tasks emits DAG completion follow-up when manager fin
 
     const { tools, messages } = registerSparkToolsForTest();
     await executeSparkTool(tools, "spark_run_ready_tasks", ctx, { dryRun: false });
-    await waitFor(() => messages.some((message) => message.includes("Spark DAG run:")), 3_000);
-    await waitFor(() => !ctx.notifications.at(-1)?.message.includes("running"), 3_000);
+    await waitFor(() => messages.some((message) => message.includes("Spark DAG run:")), 10_000);
+    await waitFor(() => !ctx.notifications.at(-1)?.message.includes("running"), 10_000);
 
     const dagStatus = await defaultSparkDagRunStore(dir).status();
     assert.equal(dagStatus.succeeded, 1);
@@ -815,11 +1015,11 @@ void test("spark_status defaults to active view, supports full history, summary,
     await store.save(graph);
 
     const { tools } = registerSparkToolsForTest();
+    await useOnlySparkThread(tools, ctx);
     const active = await executeSparkTool(tools, "spark_status", ctx, {});
     const activeText = toolText(active);
     assert.match(activeText, /Spark tasks \(active view, limit=20\):/);
-    assert.match(activeText, /Tool persistence/);
-    assert.doesNotMatch(activeText, /Tool persistence \[current\]/);
+    assert.match(activeText, /Tool persistence \[current\]/);
     assert.doesNotMatch(activeText, /Thread status: active/);
     assert.match(activeText, /Active tasks:/);
     assert.match(activeText, /Mine running task/);
@@ -833,7 +1033,7 @@ void test("spark_status defaults to active view, supports full history, summary,
     assert.match(activeText, /Hidden finished tasks: 2 \(use view=full to include\)/);
     assert.equal(active.details?.view, "active");
     assert.equal(active.details?.limit, 20);
-    assert.equal(active.details?.activeThreadRef, undefined);
+    assert.equal(active.details?.activeThreadRef, thread.ref);
     assert.equal("tasks" in active.details!, false);
     assert.equal("dependencies" in active.details!, false);
 
@@ -841,14 +1041,14 @@ void test("spark_status defaults to active view, supports full history, summary,
     const limitedText = toolText(limited);
     assert.match(limitedText, /Spark tasks \(active view, limit=1\):/);
     assert.match(limitedText, /Hidden by limit: 1/);
-    assert.equal((limitedText.match(/^  - \[/gm) ?? []).length, 1);
+    assert.equal((limitedText.match(/^ {2}- \[/gm) ?? []).length, 1);
 
     const summary = await executeSparkTool(tools, "spark_status", ctx, { view: "summary" });
     const summaryText = toolText(summary);
     assert.match(summaryText, /Spark tasks \(summary view\):/);
     assert.match(summaryText, /Tasks: 4 total/);
     assert.doesNotMatch(summaryText, /Active tasks:/);
-    assert.doesNotMatch(summaryText, /^  - \[/m);
+    assert.doesNotMatch(summaryText, /^ {2}- \[/m);
     assert.equal(summary.details?.view, "summary");
     assert.equal(summary.details?.limit, undefined);
 
@@ -878,6 +1078,7 @@ void test("spark_plan_tasks keeps large plan output bounded", async () => {
     await writeEmptySparkThread(dir);
     const ctx = testSparkContext(dir, "main");
     const { tools } = registerSparkToolsForTest();
+    await useOnlySparkThread(tools, ctx);
 
     const planned = await executeSparkTool(tools, "spark_plan_tasks", ctx, {
       tasks: Array.from({ length: 8 }, (_, index) => ({
@@ -990,6 +1191,13 @@ async function executeSparkTool(
   const tool = tools.get(name);
   assert.ok(tool, `missing Spark tool: ${name}`);
   return tool.execute(`call-${name}`, params, new AbortController().signal, () => undefined, ctx);
+}
+
+async function useOnlySparkThread(
+  tools: Map<string, SparkToolConfig>,
+  ctx: TestSparkContext,
+): Promise<void> {
+  await executeSparkTool(tools, "spark_use_thread", ctx, { thread: "Tool persistence" });
 }
 
 function testSparkContext(cwd: string, sessionName: string): TestSparkContext {

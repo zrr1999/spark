@@ -1,6 +1,6 @@
 import { PiAskFlowController, createAskArtifactBody, summarizeAskResult } from "pi-ask";
 import { defaultArtifactStore } from "spark-artifacts";
-import { type ArtifactRef, type JsonValue } from "spark-core";
+import type { ArtifactRef, JsonValue } from "spark-core";
 
 import {
   createSparkAskRequest,
@@ -56,10 +56,12 @@ export type SparkAskToolUi = NonNullable<Parameters<typeof runSparkAsk>[1]> & {
 
 export function createSparkAskToolRequest(params: SparkAskToolParams): SparkAskRequest {
   const questions = normalizeSparkAskToolQuestions(params);
+  const title = params.title?.trim() || params.question?.trim();
+  if (!title) throw new Error("spark_ask requires a context-specific title or question");
   return createSparkAskRequest({
     flow: params.flow ?? "custom",
     mode: normalizeSparkAskMode(params.mode ?? params.kind),
-    title: params.title ?? params.question ?? "Spark ask",
+    title,
     context: params.context,
     questions,
     behaviour: {

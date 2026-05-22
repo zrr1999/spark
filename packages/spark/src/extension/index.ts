@@ -1,9 +1,18 @@
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { access, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 
 import { Type } from "typebox";
 import { defaultArtifactStore } from "spark-artifacts";
+import {
+  defaultLearningStore,
+  type LearningCategory,
+  type LearningRecord,
+  type LearningRecordInput,
+  type LearningScope,
+  type LearningSearchResult,
+  type LearningStatus,
+} from "spark-learnings";
 import {
   detectCopyLanguage,
   replaySparkAskTool,
@@ -13,6 +22,7 @@ import {
 } from "spark-ask";
 import { RoleRegistry, builtinRoleRef, defaultProjectRoleStore } from "pi-roles";
 import {
+  contentHash,
   newRef,
   nowIso,
   type RoleRef,
@@ -274,17 +284,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       await store.save(graph);
       await sparkTodoStore(cwd, ctx).save(graph);
     }
-    const thread = (await currentSparkThread(cwd, ctx, graph)) ?? singleActiveSparkThread(graph);
-    if (!thread) {
-      widgetState = undefined;
-      widget.update();
-      return;
-    }
     const sessionKey = sparkSessionKey(ctx);
     const ownerSessionKey = sparkSessionOwnerKey(ctx);
-    const allTasks = graph.tasks(thread.ref);
-    const claimedTasks = allTasks.filter((task) => taskClaimedBy(task));
-    const sessionTasks = claimedTasks.filter((task) => isClaimOwnedBySession(task, sessionKey));
     const independentTodos = (await loadIndependentTodos(cwd, ctx)).filter(
       (todo) => todo.status !== "done" && todo.status !== "cancelled" && todo.status !== "deleted",
     );
@@ -293,6 +294,24 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       ...todo,
       displayNumber: assignTodoDisplayNumber(todoDisplayNumbers, independentTodoDisplayKey(todo)),
     }));
+    const thread = await currentSparkThread(cwd, ctx, graph);
+    if (!thread) {
+      widgetState = {
+        tasks: [],
+        independentTodos: numberedIndependentTodos,
+        taskCountTotal: 0,
+        taskCountClaimed: 0,
+        taskCountClaimedBySession: 0,
+        outputLanguage: "en",
+      };
+      if (todoDisplayNumbers.changed)
+        await saveTodoDisplayNumberState(cwd, ctx, todoDisplayNumbers);
+      widget.update();
+      return;
+    }
+    const allTasks = graph.tasks(thread.ref);
+    const claimedTasks = allTasks.filter((task) => taskClaimedBy(task));
+    const sessionTasks = claimedTasks.filter((task) => isClaimOwnedBySession(task, sessionKey));
     const taskTodosByRef = new Map(allTasks.map((task) => [task.ref, graph.taskTodos(task.ref)]));
     const lastRunsByTaskRef = latestRunsByTaskRef(graph.runs(thread.ref));
     const activeRunRefs = new Set(
@@ -494,10 +513,16 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     const artifactStore = defaultArtifactStore(cwd);
     const touched = new Set<TaskRef>();
     const dagRunStore = defaultSparkDagRunStore(cwd);
+    const readyBeforeReconcile = graph.readyTasks();
+    if (readyBeforeReconcile.length === 0) {
+      const dagStatus = await dagRunStore.status();
+      if (!dagStatus.activeRun) return 0;
+    }
     await dagRunStore.reconcile({
       graph,
       activeRunRefs: listActiveSparkRoleRunProcesses().map((process) => process.runRef),
     });
+    if (graph.readyTasks().length === 0) return 0;
     const ownerSessionId = sparkSessionOwnerKey(ctx);
     const dagRun = await dagRunStore.startRun({
       dryRun: false,
@@ -700,7 +725,10 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       value === "role-run" ||
       value === "role-spec-proposal" ||
       value === "ask-answer" ||
-      value === "run-trace"
+      value === "run-trace" ||
+      value === "learning" ||
+      value === "learning-candidate" ||
+      value === "learning-export"
     )
       return value;
     return undefined;
@@ -867,6 +895,363 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     };
   }
 
+  function normalizeLearningStatus(value: unknown): LearningStatus | undefined {
+    if (
+      value === "candidate" ||
+      value === "active" ||
+      value === "stale" ||
+      value === "superseded" ||
+      value === "rejected"
+    )
+      return value;
+    return undefined;
+  }
+
+  function normalizeLearningStatusFilter(
+    value: unknown,
+  ): LearningStatus | LearningStatus[] | undefined {
+    if (Array.isArray(value)) {
+      const statuses = value.flatMap((item) => {
+        const status = normalizeLearningStatus(item);
+        return status ? [status] : [];
+      });
+      return statuses.length ? statuses : undefined;
+    }
+    return normalizeLearningStatus(value);
+  }
+
+  function normalizeLearningScope(value: unknown): LearningScope | undefined {
+    if (value === "global" || value === "project" || value === "thread" || value === "task")
+      return value;
+    return undefined;
+  }
+
+  function normalizeLearningCategory(value: unknown): LearningCategory | undefined {
+    if (
+      value === "pattern" ||
+      value === "gotcha" ||
+      value === "decision" ||
+      value === "workflow" ||
+      value === "tool" ||
+      value === "project"
+    )
+      return value;
+    return undefined;
+  }
+
+  function normalizeStringArray(value: unknown): string[] | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const values = value.filter((item): item is string => typeof item === "string");
+    return values.length ? values : undefined;
+  }
+
+  function normalizeLearningInput(params: Record<string, unknown>): LearningRecordInput {
+    return {
+      title: typeof params.title === "string" ? params.title : "",
+      statement: typeof params.statement === "string" ? params.statement : "",
+      id: typeof params.id === "string" ? params.id : undefined,
+      category: normalizeLearningCategory(params.category),
+      scope: normalizeLearningScope(params.scope),
+      status: normalizeLearningStatus(params.status),
+      applicability: typeof params.applicability === "string" ? params.applicability : undefined,
+      nonApplicability:
+        typeof params.nonApplicability === "string" ? params.nonApplicability : undefined,
+      rationale: typeof params.rationale === "string" ? params.rationale : undefined,
+      evidenceRefs: normalizeStringArray(params.evidenceRefs),
+      sourcePaths: normalizeStringArray(params.sourcePaths),
+      sourceHash: typeof params.sourceHash === "string" ? params.sourceHash : undefined,
+      sourceContent: typeof params.sourceContent === "string" ? params.sourceContent : undefined,
+      dependsOn: normalizeStringArray(params.dependsOn),
+      supersedes: normalizeStringArray(params.supersedes),
+      supersededBy: normalizeStringArray(params.supersededBy),
+      contradictedBy: normalizeStringArray(params.contradictedBy),
+      tags: normalizeStringArray(params.tags),
+      confidence: typeof params.confidence === "number" ? params.confidence : undefined,
+    };
+  }
+
+  async function recordTaskLearningCandidate(
+    cwd: string,
+    task: Task,
+    summary: string,
+  ): Promise<Artifact<LearningRecord>> {
+    return defaultLearningStore(cwd).record({
+      title: `Candidate from @${task.name}: ${task.title}`,
+      statement: summary,
+      category: "workflow",
+      scope: "project",
+      status: "candidate",
+      applicability: "Review this task-derived candidate before applying it to future Spark work.",
+      evidenceRefs: [task.ref],
+      tags: ["task-finish", task.kind],
+      confidence: 0.4,
+      sourceContent: [
+        `Task: @${task.name}: ${task.title} (${task.ref})`,
+        `Kind: ${task.kind}`,
+        "",
+        task.description,
+        "",
+        `Completion summary: ${summary}`,
+      ].join("\n"),
+    });
+  }
+
+  function compactLearningDetail(artifact: Artifact<LearningRecord>) {
+    return {
+      ref: artifact.ref,
+      kind: artifact.kind,
+      title: artifact.body.title,
+      status: artifact.body.status,
+      category: artifact.body.category,
+      scope: artifact.body.scope,
+      tags: artifact.body.tags,
+      evidenceRefs: artifact.body.evidenceRefs,
+      dependsOn: artifact.body.dependsOn,
+      supersedes: artifact.body.supersedes,
+      supersededBy: artifact.body.supersededBy,
+      createdAt: artifact.createdAt,
+      updatedAt: artifact.updatedAt,
+    };
+  }
+
+  function compactLearningSearchResult(result: LearningSearchResult) {
+    return {
+      ref: result.ref,
+      title: result.record.title,
+      status: result.record.status,
+      category: result.record.category,
+      scope: result.record.scope,
+      score: result.score,
+      snippet: result.snippet,
+      evidenceSummary: result.evidenceSummary,
+    };
+  }
+
+  function formatLearningLine(artifact: Artifact<LearningRecord>): string {
+    const tags = artifact.body.tags.length ? ` tags=${artifact.body.tags.join(",")}` : "";
+    return `- [${artifact.body.status}/${artifact.body.category}/${artifact.body.scope}] ${artifact.ref}: ${artifact.body.title}${tags}`;
+  }
+
+  function formatLearningSearchLine(result: LearningSearchResult): string {
+    const tags = result.record.tags.length ? ` tags=${result.record.tags.join(",")}` : "";
+    return `- [${result.record.status}/${result.record.category}/${result.record.scope}] ${result.ref}: ${result.record.title} — ${result.snippet}${tags}`;
+  }
+
+  function renderLearningExportMarkdown(records: LearningRecord[]): string {
+    const lines = [
+      "---",
+      "spark_learning_export_version: 1",
+      `exported_at: ${nowIso()}`,
+      `count: ${records.length}`,
+      "---",
+      "",
+      "# Spark Learnings Export",
+      "",
+      "This file was generated by spark_learning_export_markdown. Import with spark_learning_import_markdown.",
+      "",
+    ];
+    for (const record of records) {
+      lines.push(
+        `## ${record.title}`,
+        "",
+        "```json spark-learning",
+        JSON.stringify(record, null, 2),
+        "```",
+        "",
+      );
+    }
+    return lines.join("\n");
+  }
+
+  function parseLearningExportMarkdown(markdown: string): LearningRecord[] {
+    const records: LearningRecord[] = [];
+    const blockPattern = /```json spark-learning\n([\s\S]*?)```/g;
+    for (const match of markdown.matchAll(blockPattern)) {
+      const raw = match[1]?.trim();
+      if (!raw) continue;
+      records.push(JSON.parse(raw) as LearningRecord);
+    }
+    return records;
+  }
+
+  interface ParsedLearningImport {
+    source: "spark-export" | "legacy-compound-learnings";
+    records: LearningRecord[];
+    inputs: LearningRecordInput[];
+  }
+
+  async function parseLearningImportPath(
+    cwd: string,
+    inputPath: string,
+  ): Promise<ParsedLearningImport> {
+    const inputStat = await stat(inputPath);
+    if (inputStat.isDirectory()) {
+      const files = await collectLegacyLearningMarkdownFiles(inputPath);
+      const inputs = [];
+      for (const file of files)
+        inputs.push(
+          parseLegacyCompoundLearning(cwd, inputPath, file, await readFile(file, "utf8")),
+        );
+      return { source: "legacy-compound-learnings", records: [], inputs };
+    }
+
+    const markdown = await readFile(inputPath, "utf8");
+    const records = parseLearningExportMarkdown(markdown);
+    if (records.length > 0) return { source: "spark-export", records, inputs: [] };
+    return {
+      source: "legacy-compound-learnings",
+      records: [],
+      inputs: [parseLegacyCompoundLearning(cwd, dirname(inputPath), inputPath, markdown)],
+    };
+  }
+
+  async function collectLegacyLearningMarkdownFiles(rootPath: string): Promise<string[]> {
+    const categoryDirs = ["patterns", "gotchas", "decisions"];
+    const files: string[] = [];
+    for (const categoryDir of categoryDirs) {
+      const dir = join(rootPath, categoryDir);
+      try {
+        await collectMarkdownFiles(dir, files);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    return files.sort();
+  }
+
+  async function collectMarkdownFiles(dir: string, files: string[]): Promise<void> {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const entryPath = join(dir, entry.name);
+      if (entry.isDirectory()) await collectMarkdownFiles(entryPath, files);
+      else if (entry.isFile() && entry.name.endsWith(".md") && entry.name !== "README.md")
+        files.push(entryPath);
+    }
+  }
+
+  function parseLegacyCompoundLearning(
+    cwd: string,
+    rootPath: string,
+    filePath: string,
+    markdown: string,
+  ): LearningRecordInput {
+    const { frontmatter, body } = splitMarkdownFrontmatter(markdown);
+    const sourcePath = displaySourcePath(cwd, filePath);
+    const title = frontmatter.title ?? firstMarkdownHeading(body) ?? filenameTitle(filePath);
+    const context = frontmatter.context;
+    return {
+      title,
+      statement: context ?? firstMeaningfulMarkdownParagraph(body) ?? title,
+      category: legacyLearningCategory(frontmatter.category, rootPath, filePath),
+      scope: "project",
+      status: "active",
+      applicability: context ?? `Imported from legacy compound-learnings file ${sourcePath}.`,
+      evidenceRefs: [sourcePath],
+      sourcePaths: [sourcePath],
+      sourceHash: contentHash(markdown),
+      sourceContent: markdown,
+      tags: parseLegacyTags(frontmatter.tags),
+      confidence: 0.8,
+    };
+  }
+
+  function splitMarkdownFrontmatter(markdown: string): {
+    frontmatter: Record<string, string>;
+    body: string;
+  } {
+    const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(markdown);
+    if (!match) return { frontmatter: {}, body: markdown };
+    return {
+      frontmatter: parseSimpleFrontmatter(match[1] ?? ""),
+      body: markdown.slice(match[0].length),
+    };
+  }
+
+  function parseSimpleFrontmatter(raw: string): Record<string, string> {
+    const result: Record<string, string> = {};
+    for (const line of raw.split(/\r?\n/)) {
+      const index = line.indexOf(":");
+      if (index < 0) continue;
+      const key = line.slice(0, index).trim();
+      if (!key) continue;
+      result[key] = stripFrontmatterQuotes(line.slice(index + 1).trim());
+    }
+    return result;
+  }
+
+  function stripFrontmatterQuotes(value: string): string {
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    )
+      return value.slice(1, -1);
+    return value;
+  }
+
+  function parseLegacyTags(value: string | undefined): string[] {
+    if (!value) return [];
+    const trimmed = value.trim();
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      return trimmed
+        .slice(1, -1)
+        .split(",")
+        .map(stripFrontmatterQuotes)
+        .map((tag) => tag.trim())
+        .filter(Boolean);
+    }
+    return trimmed
+      .split(/[,\s]+/)
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+  }
+
+  function legacyLearningCategory(
+    frontmatterCategory: string | undefined,
+    rootPath: string,
+    filePath: string,
+  ): LearningCategory {
+    const normalized = frontmatterCategory?.toLowerCase().trim();
+    if (normalized === "pattern" || normalized === "patterns") return "pattern";
+    if (normalized === "gotcha" || normalized === "gotchas") return "gotcha";
+    if (normalized === "decision" || normalized === "decisions") return "decision";
+
+    const segments = relative(rootPath, filePath).split(/[\\/]/);
+    if (segments.includes("patterns")) return "pattern";
+    if (segments.includes("gotchas")) return "gotcha";
+    if (segments.includes("decisions")) return "decision";
+    return "pattern";
+  }
+
+  function displaySourcePath(cwd: string, filePath: string): string {
+    const relativePath = relative(cwd, filePath);
+    return relativePath.startsWith("..") ? filePath : relativePath;
+  }
+
+  function firstMarkdownHeading(markdown: string): string | undefined {
+    const heading = markdown
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("# ") && line.slice(2).trim());
+    return heading?.slice(2).trim();
+  }
+
+  function firstMeaningfulMarkdownParagraph(markdown: string): string | undefined {
+    const paragraphs = markdown.split(/\r?\n\s*\r?\n/);
+    for (const paragraph of paragraphs) {
+      const normalized = paragraph
+        .split(/\r?\n/)
+        .filter((line) => !line.trim().startsWith("#") && !line.trim().startsWith("```"))
+        .join(" ")
+        .replace(/[`*_]/g, "")
+        .trim();
+      if (normalized) return normalized;
+    }
+    return undefined;
+  }
+
+  function filenameTitle(filePath: string): string {
+    const filename = filePath.split(/[\\/]/).pop() ?? "learning.md";
+    return filename.replace(/\.md$/i, "").replace(/[-_]+/g, " ");
+  }
+
   function truncateBlock(value: string, maxChars: number): string {
     if (value.length <= maxChars) return value;
     return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
@@ -880,7 +1265,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   };
 
   pi.registerCommand("spark", {
-    description: "Open Spark mode selection, or initialize a new Spark idea with /spark <idea>.",
+    description:
+      "Enter the inferred Spark mode, or initialize a new Spark idea with /spark <idea>.",
     async handler(args, ctx) {
       await handleSparkCommand(pi, args, ctx);
     },
@@ -934,16 +1320,31 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     const language = detectCopyLanguage(idea);
     const workingTitle = titleFromIdea(idea);
     const outputLanguage: SparkCopyLanguage = language;
-
-    const result = await initializeSparkIdea(ctx.cwd, idea, {
-      threadTitle: workingTitle,
-      outputLanguage,
-      clarification: {
+    const initAsk = maybeClarifySparkInit(ctx.cwd, idea, sparkAskUi(ctx));
+    if (initAsk?.blocked) {
+      ctx.ui?.notify?.(
+        language === "zh"
+          ? "Spark 初始化已暂停：clarification ask 未完成"
+          : "Spark initialization paused: clarification ask was not completed",
+        "warning",
+      );
+      return;
+    }
+    const clarification =
+      initAsk?.clarification ??
+      ({
         workingTitle,
         outputLanguage,
         objective: idea,
         nextAction: "analyze_then_targeted_ask",
-      },
+      } satisfies SparkInitClarificationData);
+
+    const result = await initializeSparkIdea(ctx.cwd, idea, {
+      threadTitle: clarification.workingTitle ?? workingTitle,
+      outputLanguage: clarification.outputLanguage ?? outputLanguage,
+      clarification,
+      askArtifactRefs: initAsk ? [initAsk.askArtifactRef] : undefined,
+      askRefs: initAsk ? [initAsk.askRef] : undefined,
     });
 
     ctx.ui?.notify?.(
@@ -962,26 +1363,10 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   async function chooseSparkCommandMode(
     ctx: SparkCommandContext,
     graph: TaskGraph,
-  ): Promise<"new_project" | "planning" | "execution" | undefined> {
-    const thread = await currentSparkThread(ctx.cwd, ctx, graph, { activate: true });
-    const title = thread?.title ?? graph.threads()[0]?.title ?? "current Spark workspace";
-    if (ctx.ui?.select) {
-      const choice = await ctx.ui.select(`Spark mode for “${title}”`, [
-        "Plan: research and add threads/tasks",
-        "Execute: work through ready tasks",
-        "New project: start a different Spark idea",
-      ]);
-      if (choice?.startsWith("Plan:")) return "planning";
-      if (choice?.startsWith("Execute:")) return "execution";
-      if (choice?.startsWith("New project:")) return "new_project";
-      return undefined;
-    }
-
-    const response = await runSparkAskTool(sparkModeAsk(graph, title), {
-      cwd: ctx.cwd,
-      ui: sparkAskUi(ctx),
-    });
-    return sparkModeFromAskDetails(response.details);
+  ): Promise<"planning" | "execution"> {
+    const thread = await currentSparkThread(ctx.cwd, ctx, graph);
+    const readyInThread = thread ? graph.readyTasks(thread.ref).length : graph.readyTasks().length;
+    return readyInThread > 0 ? "execution" : "planning";
   }
 
   async function promptSparkNewProjectIdea(ctx: SparkCommandContext): Promise<string | undefined> {
@@ -1004,7 +1389,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     graph: TaskGraph,
     focus?: string,
   ): Promise<void> {
-    const thread = await currentSparkThread(ctx.cwd, ctx, graph, { activate: true });
+    const thread = await currentSparkThread(ctx.cwd, ctx, graph);
     await refreshSparkWidget(ctx.cwd, ctx);
     ctx.ui?.notify?.("Spark planning mode: research, clarify, and add threads/tasks.", "info");
     piApi.sendUserMessage?.(renderSparkPlanningModePrompt(graph, thread?.ref, focus), {
@@ -1017,7 +1402,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     ctx: SparkCommandContext,
     graph: TaskGraph,
   ): Promise<void> {
-    const thread = await currentSparkThread(ctx.cwd, ctx, graph, { activate: true });
+    const thread = await currentSparkThread(ctx.cwd, ctx, graph);
     await refreshSparkWidget(ctx.cwd, ctx);
     ensureSparkDagManager(ctx.cwd, ctx);
     ctx.ui?.notify?.("Spark execution mode: claim or dispatch ready tasks.", "info");
@@ -1094,7 +1479,11 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const sessionKey = sparkSessionKey(ctx);
       const independentTodos = await loadIndependentTodos(cwd, ctx);
       const currentThread = await currentSparkThread(cwd, ctx, graph);
-      const selectedThread = currentThread ?? singleActiveSparkThread(graph);
+      const selectedThread = currentThread;
+      if (view === "active" && !currentThread)
+        lines.push(
+          "\nSpark available: no thread selected for this session. Use spark_use_thread to select a thread, or use view=summary/full to inspect all threads.",
+        );
       let renderedThreads = 0;
       for (const thread of graph.threads()) {
         const tasks = graph.tasks(thread.ref);
@@ -1276,7 +1665,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const updated = await store.update(
         async (graph) => {
           await sparkTodoStore(cwd, ctx).hydrate(graph);
-          const thread = await currentSparkThread(cwd, ctx, graph, { activate: true });
+          const thread = await currentSparkThread(cwd, ctx, graph);
           if (!thread) return { error: "no_thread" as const };
           const task = resolveSessionClaimedTask(graph, thread.ref, sparkSessionKey(ctx), p.task);
           if (!task) return { error: "no_matching_claimed_task" as const };
@@ -1339,7 +1728,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const updated = await store.update(
         async (graph) => {
           await sparkTodoStore(cwd, ctx).hydrate(graph);
-          const thread = await currentSparkThread(cwd, ctx, graph, { activate: true });
+          const thread = await currentSparkThread(cwd, ctx, graph);
           if (!thread) return { error: "no_thread" as const };
           const task = resolveSessionClaimedTask(graph, thread.ref, sparkSessionKey(ctx), p.task);
           if (!task) return { error: "no_matching_claimed_task" as const };
@@ -1360,15 +1749,28 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           details: { found: true, error: "no_matching_claimed_task" },
         };
       await refreshSparkWidget(cwd, ctx);
-      const summarySuffix = p.summary?.trim() ? ` — ${truncateInline(p.summary.trim(), 160)}` : "";
+      const trimmedSummary = p.summary?.trim();
+      const learningCandidate =
+        status === "done" && trimmedSummary
+          ? await recordTaskLearningCandidate(cwd, updated.result.task, trimmedSummary)
+          : undefined;
+      const summarySuffix = trimmedSummary ? ` — ${truncateInline(trimmedSummary, 160)}` : "";
+      const candidateSuffix = learningCandidate
+        ? `\nLearning candidate: ${learningCandidate.ref}`
+        : "";
       return {
         content: [
           {
             type: "text",
-            text: `Finished Spark task: [${updated.result.task.status}] @${updated.result.task.name}: ${updated.result.task.title}${summarySuffix}`,
+            text: `Finished Spark task: [${updated.result.task.status}] @${updated.result.task.name}: ${updated.result.task.title}${summarySuffix}${candidateSuffix}`,
           },
         ],
-        details: { task: compactTaskDetail(updated.result.task) },
+        details: {
+          task: compactTaskDetail(updated.result.task),
+          learningCandidate: learningCandidate
+            ? compactLearningDetail(learningCandidate)
+            : undefined,
+        },
       };
     },
   });
@@ -1449,7 +1851,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const claimed = await store.update(
         async (graph) => {
           await sparkTodoStore(cwd, ctx).hydrate(graph);
-          const thread = await currentSparkThread(cwd, ctx, graph, { activate: true });
+          const thread = await currentSparkThread(cwd, ctx, graph);
           if (!thread) return { error: "no_thread" as const };
           const tasks = graph.tasks(thread.ref);
           const existing =
@@ -1597,7 +1999,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         async (graph) => {
           const thread = p.thread?.trim()
             ? resolveSparkThread(graph, p.thread)
-            : await currentSparkThread(cwd, ctx, graph, { activate: true });
+            : await currentSparkThread(cwd, ctx, graph);
           if (!thread) return { error: "no_thread" as const };
           const renamed = graph.updateThread(thread.ref, {
             title,
@@ -1614,8 +2016,9 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           content: [{ type: "text", text: "No matching Spark thread found." }],
           details: { found: false, error: "no_thread" },
         };
-      if (updated.result.thread.status === "done") await clearCurrentThreadRef(cwd, ctx);
-      else await saveCurrentThreadRef(cwd, ctx, updated.result.thread.ref);
+      const currentThreadRef = await loadCurrentThreadRef(cwd, ctx);
+      if (updated.result.thread.status === "done" && currentThreadRef === updated.result.thread.ref)
+        await clearCurrentThreadRef(cwd, ctx);
       await refreshSparkWidget(cwd, ctx);
       return {
         content: [
@@ -1781,7 +2184,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           content: [{ type: "text", text: "No Spark thread found." }],
           details: { found: false },
         };
-      const thread = await currentSparkThread(cwd, ctx, graph, { activate: true });
+      const thread = await currentSparkThread(cwd, ctx, graph);
       if (!thread)
         return {
           content: [{ type: "text", text: "No Spark thread found." }],
@@ -1822,25 +2225,24 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const changedForDecision = [...result.created, ...result.updated];
       const planDecisions = [] as Array<Awaited<ReturnType<typeof decideTaskPlanBeforeCreate>>>;
       for (const task of changedForDecision) {
-        const decision = await decideTaskPlanBeforeCreate({ cwd, task, ui: sparkAskUi(ctx) });
+        const decision = decideTaskPlanBeforeCreate({ cwd, task, ui: sparkAskUi(ctx) });
         planDecisions.push(decision);
-        if (decision.asked && !decision.accepted) {
+        if (!decision.accepted) {
           return {
             content: [
               {
                 type: "text",
-                text: `Task plan not created: @${task.name}: ${task.title}; revise plan before creating task.`,
+                text: `Task plan not ready: @${task.name}: ${task.title}; revise the task plan with context-specific success criteria and evidence requirements before creating or updating it.`,
               },
             ],
             details: {
               found: true,
-              error: "task_plan_not_accepted",
+              error: "task_plan_not_ready",
               task: compactTaskDetail(task),
               planDecision: decision as unknown as Record<string, unknown>,
             },
           };
         }
-        if (decision.asked) graph.updateTask(task.ref, { plan: decision.plan });
       }
       await store.save(graph);
       await sparkTodoStore(cwd, ctx).save(graph);
@@ -2018,7 +2420,9 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       context: Type.Optional(
         Type.String({ description: "Additional context shown with the form." }),
       ),
-      flow: Type.Optional(Type.String({ description: "Stable flow/preset identifier." })),
+      flow: Type.Optional(
+        Type.String({ description: "Stable flow identifier for this context-specific ask." }),
+      ),
       questions: Type.Optional(
         Type.Array(
           Type.Object({
@@ -2094,6 +2498,450 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           typeof params.artifactRef === "string" ? (params.artifactRef as ArtifactRef) : undefined,
         ui: sparkAskUi(ctx),
       });
+    },
+  });
+
+  registerSparkTool({
+    name: "spark_learning_record",
+    label: "Spark Learning Record",
+    description:
+      "Record one evidence-backed reusable learning as a local Spark artifact. Use export tools for sharing.",
+    parameters: Type.Object({
+      id: Type.Optional(
+        Type.String({ description: "Stable learning id. Defaults to a content hash." }),
+      ),
+      title: Type.String({ description: "Short learning title." }),
+      statement: Type.String({ description: "Reusable judgment or rule learned from evidence." }),
+      category: Type.Optional(
+        Type.String({ description: "pattern | gotcha | decision | workflow | tool | project" }),
+      ),
+      scope: Type.Optional(Type.String({ description: "global | project | thread | task" })),
+      status: Type.Optional(
+        Type.String({ description: "candidate | active | stale | superseded | rejected" }),
+      ),
+      applicability: Type.Optional(Type.String({ description: "When this learning applies." })),
+      nonApplicability: Type.Optional(
+        Type.String({ description: "When this learning should not apply." }),
+      ),
+      rationale: Type.Optional(Type.String({ description: "Why this learning is useful." })),
+      evidenceRefs: Type.Optional(
+        Type.Array(Type.String({ description: "Evidence refs or paths." })),
+      ),
+      sourcePaths: Type.Optional(Type.Array(Type.String({ description: "Source file paths." }))),
+      sourceHash: Type.Optional(Type.String({ description: "Hash of imported source content." })),
+      sourceContent: Type.Optional(
+        Type.String({ description: "Original source Markdown content." }),
+      ),
+      dependsOn: Type.Optional(
+        Type.Array(Type.String({ description: "Learning or fact refs this depends on." })),
+      ),
+      supersedes: Type.Optional(
+        Type.Array(Type.String({ description: "Learning refs this replaces." })),
+      ),
+      contradictedBy: Type.Optional(
+        Type.Array(Type.String({ description: "Refs that contradict this learning." })),
+      ),
+      tags: Type.Optional(Type.Array(Type.String({ description: "Search tags." }))),
+      confidence: Type.Optional(Type.Number({ description: "Evidence confidence from 0 to 1." })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const store = defaultLearningStore(ctxCwd(ctx));
+      const artifact = await store.record(normalizeLearningInput(params));
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Recorded learning ${artifact.ref} [${artifact.body.status}] ${artifact.body.title}`,
+          },
+        ],
+        details: { learning: compactLearningDetail(artifact) },
+      };
+    },
+  });
+
+  registerSparkTool({
+    name: "spark_learning_search",
+    label: "Spark Learning Search",
+    description:
+      "Search local Spark learnings. Defaults to active learnings only; candidates are opt-in.",
+    parameters: Type.Object({
+      query: Type.String({ description: "Search query." }),
+      status: Type.Optional(
+        Type.Union([
+          Type.String({ description: "Single learning status." }),
+          Type.Array(Type.String({ description: "Learning status." })),
+        ]),
+      ),
+      scope: Type.Optional(Type.String({ description: "global | project | thread | task" })),
+      category: Type.Optional(
+        Type.String({ description: "pattern | gotcha | decision | workflow | tool | project" }),
+      ),
+      tag: Type.Optional(Type.String({ description: "Filter by tag." })),
+      includeCandidates: Type.Optional(Type.Boolean({ default: false })),
+      includeInactive: Type.Optional(Type.Boolean({ default: false })),
+      limit: Type.Optional(Type.Number({ description: "Maximum results. Default: 10." })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const store = defaultLearningStore(ctxCwd(ctx));
+      const limit = normalizeArtifactLimit(params.limit, 10);
+      const results = await store.search({
+        query: typeof params.query === "string" ? params.query : "",
+        status: normalizeLearningStatusFilter(params.status),
+        scope: normalizeLearningScope(params.scope),
+        category: normalizeLearningCategory(params.category),
+        tag: typeof params.tag === "string" ? params.tag : undefined,
+        includeCandidates: params.includeCandidates === true,
+        includeInactive: params.includeInactive === true,
+        limit,
+      });
+      const lines = [
+        `Spark learnings: ${results.length} result(s)`,
+        ...results.map(formatLearningSearchLine),
+      ];
+      if (results.length === 0) lines.push("- No matching learnings.");
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: { count: results.length, results: results.map(compactLearningSearchResult) },
+      };
+    },
+  });
+
+  registerSparkTool({
+    name: "spark_learning_list",
+    label: "Spark Learning List",
+    description: "List local Spark learnings with compact metadata.",
+    parameters: Type.Object({
+      status: Type.Optional(
+        Type.Union([
+          Type.String({ description: "Single learning status." }),
+          Type.Array(Type.String({ description: "Learning status." })),
+        ]),
+      ),
+      scope: Type.Optional(Type.String({ description: "global | project | thread | task" })),
+      category: Type.Optional(
+        Type.String({ description: "pattern | gotcha | decision | workflow | tool | project" }),
+      ),
+      tag: Type.Optional(Type.String({ description: "Filter by tag." })),
+      includeCandidates: Type.Optional(Type.Boolean({ default: false })),
+      includeInactive: Type.Optional(Type.Boolean({ default: false })),
+      limit: Type.Optional(Type.Number({ description: "Maximum rows. Default: 20." })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const store = defaultLearningStore(ctxCwd(ctx));
+      const limit = normalizeArtifactLimit(params.limit, 20);
+      const artifacts = await store.list({
+        status: normalizeLearningStatusFilter(params.status),
+        scope: normalizeLearningScope(params.scope),
+        category: normalizeLearningCategory(params.category),
+        tag: typeof params.tag === "string" ? params.tag : undefined,
+        includeCandidates: params.includeCandidates === true,
+        includeInactive: params.includeInactive === true,
+      });
+      const visible = artifacts.slice(0, limit);
+      const lines = [
+        `Spark learnings: ${artifacts.length}${visible.length < artifacts.length ? ` (showing ${visible.length})` : ""}`,
+        ...visible.map(formatLearningLine),
+      ];
+      if (visible.length === 0) lines.push("- No learnings.");
+      if (visible.length < artifacts.length)
+        lines.push(`- … ${artifacts.length - visible.length} more learning(s)`);
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: {
+          count: artifacts.length,
+          shown: visible.length,
+          learnings: visible.map(compactLearningDetail),
+        },
+      };
+    },
+  });
+
+  registerSparkTool({
+    name: "spark_learning_read",
+    label: "Spark Learning Read",
+    description: "Read one Spark learning by artifact ref or stable id.",
+    parameters: Type.Object({
+      ref: Type.String({ description: "Learning artifact ref or stable id." }),
+      full: Type.Optional(Type.Boolean({ default: false })),
+      maxChars: Type.Optional(
+        Type.Number({ description: "Maximum JSON chars when full=false. Default: 4000." }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const store = defaultLearningStore(ctxCwd(ctx));
+      const artifact = await store.get(typeof params.ref === "string" ? params.ref : "");
+      const body = JSON.stringify(artifact.body, null, 2);
+      const full = params.full === true;
+      const maxChars = normalizeArtifactLimit(params.maxChars, 4_000);
+      const renderedBody = full ? body : truncateBlock(body, maxChars);
+      const truncated = !full && renderedBody.length < body.length;
+      const lines = [
+        `${artifact.ref} [${artifact.body.status}/${artifact.body.category}/${artifact.body.scope}] ${artifact.body.title}`,
+        `updated=${artifact.updatedAt} evidence=${artifact.body.evidenceRefs.length}`,
+        "",
+        renderedBody,
+      ];
+      if (truncated)
+        lines.push(
+          "",
+          `… truncated ${body.length - renderedBody.length} char(s); call full=true for the complete learning`,
+        );
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: {
+          learning: compactLearningDetail(artifact),
+          bodyChars: body.length,
+          shownChars: renderedBody.length,
+          truncated,
+        },
+      };
+    },
+  });
+
+  registerSparkTool({
+    name: "spark_learning_mark_stale",
+    label: "Spark Learning Mark Stale",
+    description: "Mark one learning stale with an explicit reason.",
+    parameters: Type.Object({
+      ref: Type.String({ description: "Learning artifact ref or stable id." }),
+      reason: Type.String({ description: "Why this learning is stale." }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const store = defaultLearningStore(ctxCwd(ctx));
+      const artifact = await store.markStale(
+        typeof params.ref === "string" ? params.ref : "",
+        typeof params.reason === "string" ? params.reason : "",
+      );
+      return {
+        content: [{ type: "text", text: `Marked stale ${artifact.ref}: ${artifact.body.title}` }],
+        details: { learning: compactLearningDetail(artifact) },
+      };
+    },
+  });
+
+  registerSparkTool({
+    name: "spark_learning_supersede",
+    label: "Spark Learning Supersede",
+    description: "Mark a learning superseded by one or more replacement learning refs.",
+    parameters: Type.Object({
+      ref: Type.String({ description: "Learning artifact ref or stable id to supersede." }),
+      supersededBy: Type.Array(Type.String({ description: "Replacement learning ref." })),
+      reason: Type.Optional(Type.String({ description: "Why it was superseded." })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const store = defaultLearningStore(ctxCwd(ctx));
+      const artifact = await store.markSuperseded(
+        typeof params.ref === "string" ? params.ref : "",
+        normalizeStringArray(params.supersededBy) ?? [],
+        typeof params.reason === "string" ? params.reason : undefined,
+      );
+      return {
+        content: [
+          { type: "text", text: `Marked superseded ${artifact.ref}: ${artifact.body.title}` },
+        ],
+        details: { learning: compactLearningDetail(artifact) },
+      };
+    },
+  });
+
+  registerSparkTool({
+    name: "spark_learning_reject",
+    label: "Spark Learning Reject",
+    description: "Reject one learning candidate while keeping a traceable rejected record.",
+    parameters: Type.Object({
+      ref: Type.String({ description: "Learning candidate artifact ref or stable id." }),
+      reason: Type.String({ description: "Why this candidate is rejected." }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const store = defaultLearningStore(ctxCwd(ctx));
+      const artifact = await store.rejectCandidate(
+        typeof params.ref === "string" ? params.ref : "",
+        typeof params.reason === "string" ? params.reason : "",
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Rejected learning candidate ${artifact.ref}: ${artifact.body.title}`,
+          },
+        ],
+        details: { learning: compactLearningDetail(artifact) },
+      };
+    },
+  });
+
+  registerSparkTool({
+    name: "spark_learning_export_markdown",
+    label: "Spark Learning Export Markdown",
+    description:
+      "Export selected local Spark learnings to an explicit Markdown artifact/file for sharing or review.",
+    parameters: Type.Object({
+      outputPath: Type.Optional(
+        Type.String({ description: "Optional path to write the Markdown export." }),
+      ),
+      status: Type.Optional(
+        Type.Union([
+          Type.String({ description: "Single learning status." }),
+          Type.Array(Type.String({ description: "Learning status." })),
+        ]),
+      ),
+      includeCandidates: Type.Optional(Type.Boolean({ default: false })),
+      includeInactive: Type.Optional(Type.Boolean({ default: false })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = ctxCwd(ctx);
+      const store = defaultLearningStore(cwd);
+      const artifacts = await store.list({
+        status: normalizeLearningStatusFilter(params.status),
+        includeCandidates: params.includeCandidates === true,
+        includeInactive: params.includeInactive === true,
+      });
+      const markdown = renderLearningExportMarkdown(artifacts.map((artifact) => artifact.body));
+      const exportArtifact = await defaultArtifactStore(cwd).put({
+        kind: "learning-export",
+        title: "Spark learnings export",
+        format: "markdown",
+        body: markdown,
+        provenance: { producer: "spark", note: "spark-learning explicit export" },
+        links: artifacts.map((artifact) => ({
+          to: artifact.ref,
+          relation: "derived-from" as const,
+        })),
+      });
+      const outputPath =
+        typeof params.outputPath === "string" && params.outputPath.trim()
+          ? resolve(cwd, params.outputPath)
+          : undefined;
+      if (outputPath) {
+        await mkdir(dirname(outputPath), { recursive: true });
+        await writeFile(outputPath, markdown, "utf8");
+      }
+      const suffix = outputPath ? ` and wrote ${outputPath}` : "";
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Exported ${artifacts.length} learning(s) to ${exportArtifact.ref}${suffix}`,
+          },
+        ],
+        details: {
+          artifact: compactArtifactDetail(exportArtifact),
+          outputPath,
+          count: artifacts.length,
+        },
+      };
+    },
+  });
+
+  registerSparkTool({
+    name: "spark_learning_import_markdown",
+    label: "Spark Learning Import Markdown",
+    description:
+      "Import Markdown produced by spark_learning_export_markdown, or legacy compound-learnings Markdown/.learnings directories. Dry-run by default; set apply=true to persist.",
+    parameters: Type.Object({
+      inputPath: Type.String({
+        description:
+          "Path to a Spark learnings export, legacy learning Markdown file, or .learnings directory.",
+      }),
+      apply: Type.Optional(Type.Boolean({ default: false })),
+      deleteLegacyAfterVerifiedExport: Type.Optional(
+        Type.Boolean({
+          default: false,
+          description:
+            "When importing legacy compound-learnings with apply=true, write a verification export then delete the legacy source path.",
+        }),
+      ),
+      verificationExportPath: Type.Optional(
+        Type.String({ description: "Optional path for the verification export before deletion." }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = ctxCwd(ctx);
+      const inputPath = resolve(cwd, typeof params.inputPath === "string" ? params.inputPath : "");
+      const parsed = await parseLearningImportPath(cwd, inputPath);
+      const count = parsed.records.length + parsed.inputs.length;
+      const apply = params.apply === true;
+      const store = defaultLearningStore(cwd);
+      const imported = [];
+      if (apply) {
+        for (const record of parsed.records) imported.push(await store.restore(record));
+        for (const input of parsed.inputs) imported.push(await store.record(input));
+      }
+      const deleteLegacyAfterVerifiedExport = params.deleteLegacyAfterVerifiedExport === true;
+      if (deleteLegacyAfterVerifiedExport && !apply)
+        throw new Error("deleteLegacyAfterVerifiedExport requires apply=true");
+      if (deleteLegacyAfterVerifiedExport && parsed.source !== "legacy-compound-learnings")
+        throw new Error(
+          "deleteLegacyAfterVerifiedExport only applies to legacy compound-learnings imports",
+        );
+      if (deleteLegacyAfterVerifiedExport && imported.length !== count)
+        throw new Error(
+          "refusing to delete legacy learnings because import count did not match parsed count",
+        );
+      let verificationExportArtifact: Artifact | undefined;
+      let verificationExportPath: string | undefined;
+      if (deleteLegacyAfterVerifiedExport) {
+        const markdown = renderLearningExportMarkdown(imported.map((artifact) => artifact.body));
+        verificationExportArtifact = await defaultArtifactStore(cwd).put({
+          kind: "learning-export",
+          title: "Legacy compound-learnings import verification export",
+          format: "markdown",
+          body: markdown,
+          provenance: {
+            producer: "spark",
+            note: "spark-learning legacy import verification export",
+          },
+          links: imported.map((artifact) => ({
+            to: artifact.ref,
+            relation: "derived-from" as const,
+          })),
+        });
+        verificationExportPath =
+          typeof params.verificationExportPath === "string" && params.verificationExportPath.trim()
+            ? resolve(cwd, params.verificationExportPath)
+            : undefined;
+        if (verificationExportPath) {
+          await mkdir(dirname(verificationExportPath), { recursive: true });
+          await writeFile(verificationExportPath, markdown, "utf8");
+        }
+        await rm(inputPath, { recursive: true, force: false });
+      }
+      const action = apply ? "Imported" : "Dry-run parsed";
+      const deletionSuffix = deleteLegacyAfterVerifiedExport
+        ? `; verification export ${verificationExportArtifact?.ref}; deleted legacy source`
+        : "";
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${action} ${count} learning(s) from ${inputPath} (${parsed.source})${deletionSuffix}`,
+          },
+        ],
+        details: {
+          inputPath,
+          source: parsed.source,
+          apply,
+          count,
+          imported: imported.map(compactLearningDetail),
+          deletedLegacySource: deleteLegacyAfterVerifiedExport,
+          verificationExportArtifact: verificationExportArtifact
+            ? compactArtifactDetail(verificationExportArtifact)
+            : undefined,
+          verificationExportPath,
+          records: [
+            ...parsed.records.map((record) => ({
+              id: record.id,
+              title: record.title,
+              status: record.status,
+            })),
+            ...parsed.inputs.map((input) => ({
+              id: input.id,
+              title: input.title,
+              status: input.status ?? "active",
+            })),
+          ],
+        },
+      };
     },
   });
 
@@ -2235,12 +3083,12 @@ export async function renderActiveSparkContextSummary(
     await sparkTodoStore(cwd, ctx).save(graph);
   }
   const sparkMd = await readActiveSparkMd(cwd);
-  const thread = (await currentSparkThread(cwd, ctx, graph)) ?? singleActiveSparkThread(graph);
+  const thread = await currentSparkThread(cwd, ctx, graph);
   const sessionKey = sparkSessionKey(ctx);
   const independentTodos = await loadIndependentTodos(cwd, ctx);
   const stateLines = thread
     ? renderActiveSparkThreadSummary(graph, thread, sessionKey, independentTodos)
-    : undefined;
+    : renderNoCurrentSparkThreadSummary(graph);
   const sparkMdExcerpt = sparkMd ? renderSparkMdActiveExcerpt(sparkMd) : undefined;
   const lines = [
     sparkMdExcerpt ? ["SPARK.md (active intent excerpt):", sparkMdExcerpt].join("\n") : undefined,
@@ -2300,6 +3148,16 @@ function renderActiveSparkThreadSummary(
   }
 
   return lines.join("\n");
+}
+
+function renderNoCurrentSparkThreadSummary(graph: TaskGraph): string {
+  const threads = graph.threads();
+  const activeThreads = threads.filter((thread) => thread.status !== "done");
+  return [
+    "Spark available: no thread selected for this session.",
+    `- Threads: ${threads.length} total / ${activeThreads.length} active`,
+    "- Use spark_use_thread to select or create a current thread before planning, claiming, or updating thread-bound tasks.",
+  ].join("\n");
 }
 
 function isActiveSparkTodoStatus(status: string): boolean {
@@ -2396,26 +3254,15 @@ async function currentSparkThread(
   cwd: string,
   ctx: unknown,
   graph: TaskGraph,
-  options: { activate?: boolean } = {},
 ): Promise<ReturnType<TaskGraph["threads"]>[number] | undefined> {
   const threads = graph.threads();
   if (threads.length === 0) return undefined;
-  const activeThreads = threads.filter((thread) => thread.status !== "done");
   const stored = await loadCurrentThreadRef(cwd, ctx);
-  const selected = stored ? threads.find((thread) => thread.ref === stored) : undefined;
+  if (!stored) return undefined;
+  const selected = threads.find((thread) => thread.ref === stored);
   if (selected && selected.status !== "done") return selected;
-  if (selected?.status === "done") await clearCurrentThreadRef(cwd, ctx);
-  if (!options.activate) return undefined;
-  const fallback = activeThreads[0];
-  if (fallback) await saveCurrentThreadRef(cwd, ctx, fallback.ref);
-  return fallback;
-}
-
-function singleActiveSparkThread(
-  graph: TaskGraph,
-): ReturnType<TaskGraph["threads"]>[number] | undefined {
-  const activeThreads = graph.threads().filter((thread) => thread.status !== "done");
-  return activeThreads.length === 1 ? activeThreads[0] : undefined;
+  await clearCurrentThreadRef(cwd, ctx);
+  return undefined;
 }
 
 function resolveSparkThread(
@@ -3075,6 +3922,13 @@ export interface SparkInitClarificationData {
   nextAction?: string;
 }
 
+interface SparkInitClarificationAskResult {
+  askRef: AskRef;
+  askArtifactRef: ArtifactRef;
+  clarification: SparkInitClarificationData;
+  blocked: boolean;
+}
+
 interface SparkInitOptions {
   threadTitle?: string;
   outputLanguage?: SparkCopyLanguage;
@@ -3082,6 +3936,22 @@ interface SparkInitOptions {
   sparkMd?: string;
   askArtifactRefs?: ArtifactRef[];
   askRefs?: AskRef[];
+}
+
+function maybeClarifySparkInit(
+  cwd: string,
+  idea: string,
+  ui: ReturnType<typeof sparkAskUi>,
+): SparkInitClarificationAskResult | undefined {
+  void cwd;
+  void idea;
+  void ui;
+  return undefined;
+}
+
+export function shouldClarifyBeforeInit(idea: string): boolean {
+  void idea;
+  return false;
 }
 
 export async function initializeSparkIdea(
@@ -3104,32 +3974,7 @@ export async function initializeSparkIdea(
     outputLanguage: options.outputLanguage ?? options.clarification?.outputLanguage,
   });
 
-  const scout = graph.createTask({
-    threadRef: thread.ref,
-    title: "Analyze project intent",
-    description:
-      "Inspect the request and workspace context first, then identify only targeted clarification questions; do not start with a broad intake form.",
-    kind: "research",
-    roleRef: builtinRoleRef("scout"),
-  });
-  const planner = graph.createTask({
-    threadRef: thread.ref,
-    title: "Plan targeted clarification",
-    description:
-      "Turn the analysis into a small task graph and targeted asks with explicit role bindings and no guessed scope.",
-    kind: "plan",
-    roleRef: builtinRoleRef("planner"),
-  });
-  const reviewer = graph.createTask({
-    threadRef: thread.ref,
-    title: "Review initial direction",
-    description:
-      "Verify that the task graph follows the analyzed intent, asks only targeted questions after analysis, and avoids premature implementation.",
-    kind: "review",
-    roleRef: builtinRoleRef("reviewer"),
-  });
-  graph.addDependency(planner.ref, scout.ref);
-  graph.addDependency(reviewer.ref, planner.ref);
+  createInitialSparkTasks(graph, thread.ref, idea, options.clarification);
 
   const store = defaultArtifactStore(cwd);
   const sparkMd =
@@ -3220,6 +4065,108 @@ export async function initializeSparkIdea(
   };
 }
 
+function createInitialSparkTasks(
+  graph: TaskGraph,
+  threadRef: ThreadRef,
+  idea: string,
+  clarification?: SparkInitClarificationData,
+): void {
+  if (hasScopedClarification(clarification)) {
+    const scopedClarification = clarification;
+    const scope = graph.createTask({
+      threadRef,
+      name: "validate-scoped-intent",
+      title: "Validate scoped intent",
+      description: compactInstruction([
+        scopedClarification.objective
+          ? `Objective: ${scopedClarification.objective}`
+          : `Idea: ${idea}`,
+        scopedClarification.targetUser
+          ? `Target user: ${scopedClarification.targetUser}`
+          : undefined,
+        scopedClarification.nonGoals ? `Non-goals: ${scopedClarification.nonGoals}` : undefined,
+        "Check the workspace context and surface only blockers that change this confirmed scope.",
+      ]),
+      kind: "research",
+      roleRef: builtinRoleRef("scout"),
+    });
+    const slice = graph.createTask({
+      threadRef,
+      name: "execute-smallest-slice",
+      title: "Execute smallest confirmed slice",
+      description: compactInstruction([
+        scopedClarification.smallestSlice
+          ? `Smallest slice: ${scopedClarification.smallestSlice}`
+          : "Implement the smallest confirmed slice from the clarified scope.",
+        scopedClarification.deliveryMode
+          ? `Delivery mode: ${describeDeliveryMode(scopedClarification.deliveryMode, scopedClarification.outputLanguage ?? "en")}`
+          : undefined,
+        "Keep changes inside the confirmed non-goals boundary.",
+      ]),
+      kind: "implement",
+      roleRef: builtinRoleRef("worker"),
+    });
+    const verify = graph.createTask({
+      threadRef,
+      name: "verify-success-signal",
+      title: "Verify success signal",
+      description: compactInstruction([
+        scopedClarification.successSignal
+          ? `Success signal: ${scopedClarification.successSignal}`
+          : "Verify the implemented slice against the clarified objective.",
+        "Report whether another ask, review gate, or follow-up task is needed.",
+      ]),
+      kind: "review",
+      roleRef: builtinRoleRef("reviewer"),
+    });
+    graph.addDependency(slice.ref, scope.ref);
+    graph.addDependency(verify.ref, slice.ref);
+    return;
+  }
+
+  const scout = graph.createTask({
+    threadRef,
+    title: "Analyze project intent",
+    description:
+      "Inspect the request and workspace context first, then identify only targeted clarification questions; do not start with a broad intake form.",
+    kind: "research",
+    roleRef: builtinRoleRef("scout"),
+  });
+  const planner = graph.createTask({
+    threadRef,
+    title: "Plan targeted clarification",
+    description:
+      "Turn the analysis into a small task graph and targeted asks with explicit role bindings and no guessed scope.",
+    kind: "plan",
+    roleRef: builtinRoleRef("planner"),
+  });
+  const reviewer = graph.createTask({
+    threadRef,
+    title: "Review initial direction",
+    description:
+      "Verify that the task graph follows the analyzed intent, asks only targeted questions after analysis, and avoids premature implementation.",
+    kind: "review",
+    roleRef: builtinRoleRef("reviewer"),
+  });
+  graph.addDependency(planner.ref, scout.ref);
+  graph.addDependency(reviewer.ref, planner.ref);
+}
+
+function hasScopedClarification(
+  clarification: SparkInitClarificationData | undefined,
+): clarification is SparkInitClarificationData {
+  return Boolean(
+    clarification?.smallestSlice?.trim() ||
+    clarification?.successSignal?.trim() ||
+    clarification?.nonGoals?.trim() ||
+    clarification?.targetUser?.trim(),
+  );
+}
+
+function compactInstruction(parts: Array<string | undefined>): string {
+  return parts.filter((part): part is string => Boolean(part?.trim())).join(" ");
+}
+
 async function sparkInitResultFromExisting(
   cwd: string,
   idea: string,
@@ -3260,60 +4207,6 @@ async function sparkInitResultFromExisting(
   };
 }
 
-function sparkModeAsk(graph: TaskGraph, title: string): SparkAskToolParams {
-  const pendingCount = graph
-    .tasks()
-    .filter((task) => task.status === "pending" || task.status === "ready").length;
-  const threadCount = graph.threads().length;
-  return {
-    mode: "decision",
-    flow: "spark-command-mode",
-    title: `Choose Spark mode for “${truncateInline(title, 80)}”`,
-    context: [
-      `Current Spark workspace has ${threadCount} thread(s) and ${pendingCount} pending/ready task(s).`,
-      "Choose whether this turn should shape the project, plan more work, or execute existing tasks.",
-    ].join("\n"),
-    questions: [
-      {
-        id: "mode",
-        prompt: `For the current Spark workspace “${truncateInline(title, 80)}”, what should /spark do now?`,
-        type: "single",
-        required: true,
-        options: [
-          {
-            id: "planning",
-            label: `Plan “${truncateInline(title, 32)}”`,
-            description:
-              "Enter planning mode for this Spark workspace: research context, clarify intent, and add or refine threads and tasks before execution.",
-          },
-          {
-            id: "execution",
-            label: `Execute “${truncateInline(title, 32)}”`,
-            description:
-              "Enter execution mode for this Spark workspace: inspect ready tasks, claim concrete work, or dispatch ready tasks through the Spark orchestrator.",
-          },
-          {
-            id: "new_project",
-            label: "Start a new Spark project",
-            description:
-              "Start a new Spark idea instead of continuing the current workspace; this asks for the new project idea before initializing state.",
-          },
-        ],
-      },
-    ],
-  };
-}
-
-function sparkModeFromAskDetails(
-  details: Record<string, unknown>,
-): "new_project" | "planning" | "execution" | undefined {
-  const modeAnswer = (details.answers as { mode?: { values?: unknown[] } } | undefined)?.mode;
-  const value = modeAnswer?.values?.[0];
-  return value === "new_project" || value === "planning" || value === "execution"
-    ? value
-    : undefined;
-}
-
 function renderSparkPlanningModePrompt(
   graph: TaskGraph,
   selectedThreadRef: ThreadRef | undefined,
@@ -3329,16 +4222,26 @@ function renderSparkExecutionModePrompt(
   selectedThreadRef: ThreadRef | undefined,
 ): string {
   const summary = renderExistingSparkSummary(graph, selectedThreadRef);
-  return `${summary}\n\nEnter Spark execution mode. Read the current thread/task plan, inspect ready tasks with spark_status, then either claim one concrete task with spark_claim_task or dispatch execution-ready tasks with spark_run_ready_tasks. Do not create broad new planning work unless execution is blocked by missing task plans.`;
+  const action = selectedThreadRef
+    ? "Read the current thread/task plan, inspect ready tasks with spark_status, then either claim one concrete task with spark_claim_task or dispatch execution-ready tasks with spark_run_ready_tasks."
+    : "Select a current thread with spark_use_thread before claiming thread-bound work; use spark_status view=summary/full to inspect available threads first if needed.";
+  return `${summary}\n\nEnter Spark execution mode. ${action} Do not create broad new planning work unless execution is blocked by missing task plans.`;
 }
 
 function renderExistingSparkSummary(graph: TaskGraph, selectedThreadRef?: ThreadRef): string {
   const threads = graph.threads();
-  const thread =
-    (selectedThreadRef
-      ? threads.find((candidate) => candidate.ref === selectedThreadRef)
-      : undefined) ?? threads[0];
-  if (!thread) return "Spark is already initialized; no thread was overwritten.";
+  const thread = selectedThreadRef
+    ? threads.find((candidate) => candidate.ref === selectedThreadRef)
+    : undefined;
+  if (!thread) {
+    const activeCount = threads.filter((candidate) => candidate.status !== "done").length;
+    return [
+      "Spark is already initialized; existing state was not overwritten.",
+      "- Spark available: no thread selected for this session.",
+      `- Threads: ${threads.length} total / ${activeCount} active`,
+      "- Use spark_use_thread to select or create a current thread before planning or claiming thread-bound tasks.",
+    ].join("\n");
+  }
   return [
     "Spark is already initialized; existing state was not overwritten.",
     `- Current thread for this session: ${thread.title} (${thread.ref})`,
