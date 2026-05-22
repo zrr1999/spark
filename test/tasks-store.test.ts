@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { RoleRegistry, builtinRoleRef } from "pi-roles";
 import { ArtifactStore } from "spark-artifacts";
-import { newRef, type RoleRef } from "spark-core";
+import { newRef, type RoleRef, type TaskPlan } from "spark-core";
 import {
   RoleRunTimeoutError,
   buildRoleRunArgs,
@@ -27,6 +27,21 @@ import {
   TaskGraphStoreLockTimeoutError,
   TaskTodoStore,
 } from "spark-tasks";
+
+function executionReadyPlan(objective: string): TaskPlan {
+  return {
+    objective,
+    contextRefs: [],
+    constraints: [],
+    nonGoals: [],
+    successCriteria: [`${objective} succeeds`],
+    evidenceRequired: [`${objective} evidence is recorded`],
+    steps: [objective],
+    riskLevel: "normal",
+    openQuestions: [],
+    askRefs: [],
+  };
+}
 
 void test("task graph store keeps TODOs out of thread.json and todo store restores them", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tasks-"));
@@ -94,6 +109,7 @@ void test("todo ops can initialize an empty task and use stable ids", () => {
     title: "Plan",
     description: "plan",
     roleRef: builtinRoleRef("planner"),
+    plan: executionReadyPlan("Plan"),
   });
 
   graph.applyTodoOps(task.ref, [{ op: "init", items: ["Read inputs", "Draft plan"] }]);
@@ -135,6 +151,128 @@ void test("tasks have simple names and can be resolved in plans", () => {
   assert.equal(result.created[0]?.name, "inspect");
   assert.equal(result.created[1]?.name, "implement");
   assert.equal(result.dependencies[0]?.dependsOn, result.created[0]?.ref);
+});
+
+void test("task plan readiness distinguishes minimal and execution-ready plans", () => {
+  const graph = new TaskGraph();
+  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const minimal = graph.createTask({
+    threadRef: thread.ref,
+    title: "Minimal",
+    description: "minimal task",
+    roleRef: builtinRoleRef("worker"),
+  });
+  const minimalReadiness = graph.taskPlanReadiness(minimal.ref);
+  assert.equal(minimalReadiness.ready, false);
+  assert.deepEqual(
+    minimalReadiness.issues.map((issue) => issue.kind),
+    ["missing_success_criteria", "missing_evidence_required"],
+  );
+
+  const blocked = graph.createTask({
+    threadRef: thread.ref,
+    title: "Blocked",
+    description: "blocked task",
+    roleRef: builtinRoleRef("worker"),
+    plan: {
+      objective: "Resolve blocked task",
+      contextRefs: [],
+      constraints: [],
+      nonGoals: [],
+      successCriteria: ["Decision is made"],
+      evidenceRequired: ["Decision artifact is recorded"],
+      steps: ["Ask for direction"],
+      riskLevel: "normal",
+      openQuestions: ["Which direction should we take?"],
+      askRefs: [],
+    },
+  });
+  assert.deepEqual(
+    graph.taskPlanReadiness(blocked.ref).issues.map((issue) => issue.kind),
+    ["open_questions"],
+  );
+
+  const ready = graph.createTask({
+    threadRef: thread.ref,
+    title: "Ready",
+    description: "ready task",
+    roleRef: builtinRoleRef("worker"),
+    plan: {
+      objective: "Execute ready task",
+      contextRefs: [],
+      constraints: [],
+      nonGoals: [],
+      successCriteria: ["Output is produced"],
+      evidenceRequired: ["Test output is attached"],
+      steps: ["Run implementation", "Run tests"],
+      riskLevel: "normal",
+      openQuestions: [],
+      askRefs: [],
+    },
+  });
+  assert.deepEqual(graph.taskPlanReadiness(ready.ref), { ready: true, issues: [] });
+});
+
+void test("ready tasks require role, completed dependencies, and execution-ready plan", () => {
+  const graph = new TaskGraph();
+  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const prerequisite = graph.createTask({
+    threadRef: thread.ref,
+    title: "Prerequisite",
+    description: "prerequisite",
+    roleRef: builtinRoleRef("worker"),
+    plan: {
+      objective: "Complete prerequisite",
+      contextRefs: [],
+      constraints: [],
+      nonGoals: [],
+      successCriteria: ["Prerequisite done"],
+      evidenceRequired: ["Done status"],
+      steps: ["Do prerequisite"],
+      riskLevel: "normal",
+      openQuestions: [],
+      askRefs: [],
+    },
+  });
+  const dependent = graph.createTask({
+    threadRef: thread.ref,
+    title: "Dependent",
+    description: "dependent",
+    roleRef: builtinRoleRef("worker"),
+    plan: {
+      objective: "Complete dependent",
+      contextRefs: [],
+      constraints: [],
+      nonGoals: [],
+      successCriteria: ["Dependent done"],
+      evidenceRequired: ["Done status"],
+      steps: ["Do dependent"],
+      riskLevel: "normal",
+      openQuestions: [],
+      askRefs: [],
+    },
+  });
+  const minimal = graph.createTask({
+    threadRef: thread.ref,
+    title: "Minimal",
+    description: "minimal",
+    roleRef: builtinRoleRef("worker"),
+  });
+  graph.addDependency(dependent.ref, prerequisite.ref);
+
+  assert.deepEqual(
+    graph.readyTasks().map((task) => task.ref),
+    [prerequisite.ref],
+  );
+  graph.setTaskStatus(prerequisite.ref, "done");
+  assert.deepEqual(
+    graph.readyTasks().map((task) => task.ref),
+    [dependent.ref],
+  );
+  assert.equal(
+    graph.readyTasks().some((task) => task.ref === minimal.ref),
+    false,
+  );
 });
 
 void test("task graph store serializes read-modify-write updates with a filesystem lock", async () => {
@@ -262,6 +400,7 @@ void test("task graph store direct save rejects stale loaded snapshots", async (
       name: "claim-me",
       title: "Claim me",
       description: "claim me",
+      plan: executionReadyPlan("Claim me"),
     });
     await store.save(graph);
 
@@ -353,6 +492,7 @@ void test("task graph store rejects concurrent claims under lock", async () => {
       name: "claim-me",
       title: "Claim me",
       description: "claim me",
+      plan: executionReadyPlan("Claim me"),
     });
     await store.save(graph);
 
@@ -420,6 +560,37 @@ void test("task graph blocks claim and assignment until dependencies are done", 
     leaseMs: 60_000,
   });
   assert.equal(claimed.status, "running");
+});
+
+void test("task graph blocks role-run claims until task plan is execution-ready", () => {
+  const graph = new TaskGraph();
+  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const task = graph.createTask({
+    threadRef: thread.ref,
+    title: "Needs plan",
+    description: "needs plan",
+    roleRef: builtinRoleRef("worker"),
+  });
+
+  assert.throws(
+    () =>
+      graph.claimTask(task.ref, {
+        kind: "role-run",
+        claimedBy: "run:worker",
+        sessionId: "session:a",
+        runName: "worker",
+        leaseMs: 60_000,
+      }),
+    /task plan is not execution-ready.*success criteria.*evidence requirements/i,
+  );
+
+  const mainClaim = graph.claimTask(task.ref, {
+    kind: "main",
+    claimedBy: "session:a",
+    sessionId: "session:a",
+    leaseMs: 60_000,
+  });
+  assert.equal(mainClaim.status, "running");
 });
 
 void test("task graph enforces one unfinished main claim per session", () => {
@@ -501,11 +672,13 @@ void test("task graph allows one main claim and multiple distinct role-run claim
     threadRef: thread.ref,
     title: "Worker",
     description: "worker",
+    plan: executionReadyPlan("Worker"),
   });
   const reviewer = graph.createTask({
     threadRef: thread.ref,
     title: "Reviewer",
     description: "reviewer",
+    plan: executionReadyPlan("Reviewer"),
   });
 
   const mainClaim = graph.claimTask(main.ref, {
@@ -541,16 +714,19 @@ void test("task graph enforces one unfinished role-run claim per session and rol
     threadRef: thread.ref,
     title: "First worker",
     description: "first worker",
+    plan: executionReadyPlan("First worker"),
   });
   const second = graph.createTask({
     threadRef: thread.ref,
     title: "Second worker",
     description: "second worker",
+    plan: executionReadyPlan("Second worker"),
   });
   const otherSession = graph.createTask({
     threadRef: thread.ref,
     title: "Other session worker",
     description: "other session worker",
+    plan: executionReadyPlan("Other session worker"),
   });
 
   graph.claimTask(first.ref, {
@@ -629,6 +805,7 @@ void test("finished tasks retain unified attribution after claims clear", () => 
     threadRef: thread.ref,
     title: "Role-run attributed",
     description: "role-run attributed",
+    plan: executionReadyPlan("Role-run attributed"),
   });
 
   graph.claimTask(mainTask.ref, {
@@ -762,6 +939,7 @@ void test("expired claim sweeper persists retryable stale claims", async () => {
       name: "sweep-claim",
       title: "Sweep claim",
       description: "Exercise persisted claim sweeping.",
+      plan: executionReadyPlan("Sweep claim"),
     });
     const runRef = newRef("run");
     graph.recordRun({
@@ -819,6 +997,7 @@ void test("resumable background role-runs include owned stale claims", () => {
     description: "owned",
     roleRef: builtinRoleRef("worker"),
     status: "running",
+    plan: executionReadyPlan("Owned background"),
   });
   graph.claimTask(owned.ref, {
     kind: "role-run",
@@ -835,6 +1014,7 @@ void test("resumable background role-runs include owned stale claims", () => {
     description: "other",
     roleRef: builtinRoleRef("reviewer"),
     status: "running",
+    plan: executionReadyPlan("Other background"),
   });
   graph.claimTask(other.ref, {
     kind: "role-run",
@@ -897,6 +1077,7 @@ void test("runSparkTask keeps timed-out real role-run claims in background", asy
     title: "Plan",
     description: "plan",
     roleRef: builtinRoleRef("planner"),
+    plan: executionReadyPlan("Plan"),
   });
   const dir = await mkdtemp(join(tmpdir(), "spark-timeout-pi-"));
   const fakePi = join(dir, "fake-pi.mjs");
@@ -956,6 +1137,7 @@ void test("tracked Spark role-run processes can be killed after timeout", async 
     title: "Plan",
     description: "plan",
     roleRef: builtinRoleRef("planner"),
+    plan: executionReadyPlan("Plan"),
   });
   const dir = await mkdtemp(join(tmpdir(), "spark-kill-pi-"));
   try {
@@ -1149,6 +1331,7 @@ void test("runReadySparkTasks schedules DAG waves with maxConcurrency 4", async 
         title: `Wave 1-${index}`,
         description: "ok",
         roleRef: builtinRoleRef("worker"),
+        plan: executionReadyPlan(`Wave 1-${index}`),
       }),
     );
     const secondWave = graph.createTask({
@@ -1156,6 +1339,7 @@ void test("runReadySparkTasks schedules DAG waves with maxConcurrency 4", async 
       title: "Wave 2",
       description: "ok",
       roleRef: builtinRoleRef("reviewer"),
+      plan: executionReadyPlan("Wave 2"),
     });
     for (const task of firstWave) graph.addDependency(secondWave.ref, task.ref);
     const fakePi = join(dir, "fake-pi.mjs");
@@ -1207,6 +1391,7 @@ void test("runReadySparkTasks uses DAG-level timeout instead of per-task timeout
       title: "Slow task",
       description: "slow",
       roleRef: builtinRoleRef("worker"),
+      plan: executionReadyPlan("Slow task"),
     });
     const pendingTask = graph.createTask({
       threadRef: thread.ref,
@@ -1263,6 +1448,7 @@ void test("runSparkTask does not complete real tasks when the role run never sta
       title: "Plan",
       description: "plan",
       roleRef: builtinRoleRef("planner"),
+      plan: executionReadyPlan("Plan"),
     });
     const artifactStore = new ArtifactStore({
       rootDir: join(dir, "artifacts"),
@@ -1370,6 +1556,7 @@ void test("runSparkTask can request explicit forked Pi mode when a parent sessio
       title: "Forked spec implementation",
       description: "implement project spec behavior with parent context",
       roleRef: builtinRoleRef("reviewer"),
+      plan: executionReadyPlan("Forked spec implementation"),
     });
     const fakePi = join(dir, "fake-pi.mjs");
     await writeFile(
@@ -1420,6 +1607,7 @@ void test("runSparkTask attributes real project role spec run claims and complet
       title: "Project spec implementation",
       description: "implement project spec behavior",
       roleRef,
+      plan: executionReadyPlan("Project spec implementation"),
     });
     const registry = new RoleRegistry();
     registry.add({
@@ -1491,12 +1679,14 @@ void test("runSparkTask timeout cleanup only leaves the timed-out role-run proce
       title: "Fast task",
       description: "fast",
       roleRef: builtinRoleRef("worker"),
+      plan: executionReadyPlan("Fast task"),
     });
     const slow = graph.createTask({
       threadRef: thread.ref,
       title: "Slow task",
       description: "reviewer",
       roleRef: builtinRoleRef("reviewer"),
+      plan: executionReadyPlan("Slow task"),
     });
     const fakePi = join(dir, "fake-pi.sh");
     await writeFile(

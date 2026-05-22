@@ -57,7 +57,8 @@ but end-to-end local vertical slice.
    - active-run listing/cancellation and timeout signalling
    - explicit `forkFromSession` requirement for forked runs
    - role-ref requirement for every run request
-   - minimal `run_role` tool with dry-run, fresh, and explicit forked modes
+   - role-spec management tools (`list_roles`, `get_role`, `create_role`)
+   - minimal task-agnostic `call_role` tool with dry-run, fresh, and explicit forked modes
 - `spark-review`
    - review gates
    - gate policies
@@ -104,7 +105,7 @@ but end-to-end local vertical slice.
    - `spark_run_ready_tasks` tool
    - flow-native multi-question `spark_ask` and
      `spark_ask_replay` tools
-   - `spark_list_roles`, `spark_get_role`, and `spark_create_role` tools
+   - `spark_finish_task`, `spark_list_artifacts`, and `spark_get_artifact` tools
    - two-layer activation detection: `SPARK.md` /
      `.spark/thread.json` /
      `~/.config/spark/config.toml` allowlist first,

@@ -4,11 +4,17 @@ import { Type } from "typebox";
 
 import {
   RoleRegistry,
+  buildRoleRunArgs,
+  createRoleSpec,
+  defaultProjectRoleStore,
+  defaultUserRoleStore,
   hydrateDefaultRoleRegistry,
   runRole,
-  buildRoleRunArgs,
   type RoleRunMode,
   type RoleRunRef,
+  type RoleSource,
+  type RoleSpec,
+  type RoleSpecProposal,
 } from "./index.ts";
 
 export interface PiRolesExtensionApi {
@@ -58,7 +64,7 @@ class ToolCallText implements ToolCallComponent {
   }
 }
 
-export interface RunRoleToolParams {
+export interface CallRoleToolParams {
   role: string;
   instruction: string;
   mode?: RoleRunMode;
@@ -73,15 +79,175 @@ export interface RunRoleToolParams {
 
 export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
   pi.registerTool({
-    name: "run_role",
-    label: "Run Role",
-    description:
-      "Run one reusable Pi role with an explicit instruction. Defaults to dry-run and returns the Pi CLI args; set dryRun=false to launch a fresh or explicitly forked child Pi run.",
+    name: "list_roles",
+    label: "List Roles",
+    description: "List builtin, project, and optionally user Pi role specs.",
+    parameters: Type.Object({
+      source: Type.Optional(
+        Type.String({ description: "builtin | project | user. Omit to list all loaded roles." }),
+      ),
+      includeUser: Type.Optional(
+        Type.Boolean({
+          description: "Also load user roles from ~/.agents/roles. Defaults to false.",
+        }),
+      ),
+      limit: Type.Optional(Type.Number({ description: "Maximum roles to show. Default: 50." })),
+    }),
+    renderCall(args, theme) {
+      return renderToolCall(
+        "list_roles",
+        [
+          formatStringArg(args.source, { fallback: "all" }),
+          args.includeUser === true ? "include-user" : undefined,
+          formatNumberArg(args.limit, { prefix: "limit=" }),
+        ],
+        theme,
+      );
+    },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = ctx.cwd ?? process.cwd();
+      const includeUser = params.includeUser === true;
+      const source = normalizeRoleSource(params.source);
+      const limit = normalizeLimit(params.limit, 50);
+      const registry = new RoleRegistry();
+      await hydrateDefaultRoleRegistry(registry, cwd, { includeUser });
+      const roles = registry.list(source ? { source } : {}).slice(0, limit);
+      const allCount = registry.list(source ? { source } : {}).length;
+      const lines = roles.map(
+        (role) => `- [${role.source}] ${role.id} (${role.ref}) — ${role.description}`,
+      );
+      if (allCount > roles.length) lines.push(`- … ${allCount - roles.length} more role(s)`);
+      return {
+        content: [{ type: "text", text: lines.length ? lines.join("\n") : "No matching roles." }],
+        details: {
+          count: allCount,
+          shown: roles.length,
+          roles: roles.map(compactRole),
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "get_role",
+    label: "Get Role",
+    description: "Inspect one builtin, project, or user Pi role spec.",
     parameters: Type.Object({
       role: Type.String({
         description: "Role id or full role ref, e.g. worker or role:builtin-worker.",
       }),
-      instruction: Type.String({ description: "Concrete instruction for this one role run." }),
+      includeUser: Type.Optional(
+        Type.Boolean({
+          description: "Also load user roles from ~/.agents/roles. Defaults to false.",
+        }),
+      ),
+      includePrompt: Type.Optional(
+        Type.Boolean({ description: "Include the full system prompt. Defaults to false." }),
+      ),
+    }),
+    renderCall(args, theme) {
+      return renderToolCall(
+        "get_role",
+        [
+          formatStringArg(args.role),
+          args.includePrompt === true ? "include-prompt" : undefined,
+          args.includeUser === true ? "include-user" : undefined,
+        ],
+        theme,
+      );
+    },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = ctx.cwd ?? process.cwd();
+      const registry = new RoleRegistry();
+      await hydrateDefaultRoleRegistry(registry, cwd, { includeUser: params.includeUser === true });
+      const role = registry.select(requiredString(params.role, "get_role role is required"));
+      const includePrompt = params.includePrompt === true;
+      const promptPreview = truncateInline(role.systemPrompt, 240);
+      const lines = [
+        `${role.id} (${role.ref})`,
+        `source: ${role.source}`,
+        `description: ${role.description}`,
+        `systemPrompt: ${role.systemPrompt.length} chars${includePrompt ? "" : `; preview=${JSON.stringify(promptPreview)}`}`,
+      ];
+      if (includePrompt) lines.push("", role.systemPrompt);
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: {
+          role: includePrompt
+            ? { ...compactRole(role), systemPrompt: role.systemPrompt }
+            : compactRole(role),
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "create_role",
+    label: "Create Role",
+    description: "Create and persist a project or explicitly requested user Pi role spec.",
+    parameters: Type.Object({
+      id: Type.String({ description: "Stable role spec id." }),
+      description: Type.String({ description: "What this role spec is for." }),
+      systemPrompt: Type.String({ description: "Fixed system prompt for the role spec." }),
+      rationale: Type.String({ description: "Why this role spec should exist." }),
+      expectedUses: Type.Array(Type.String()),
+      source: Type.Optional(Type.String({ description: "project | user. Defaults to project." })),
+      allowedTools: Type.Optional(Type.Array(Type.String())),
+      defaultModel: Type.Optional(Type.String()),
+    }),
+    renderCall(args, theme) {
+      return renderToolCall(
+        "create_role",
+        [
+          formatStringArg(args.id, { prefix: "id=" }),
+          formatStringArg(args.source, { fallback: "project" }),
+          formatStringArg(args.description, { maxLength: 80 }),
+        ],
+        theme,
+      );
+    },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = ctx.cwd ?? process.cwd();
+      const source = normalizeWritableRoleSource(params.source);
+      const proposal: RoleSpecProposal = {
+        id: requiredString(params.id, "create_role id is required"),
+        source,
+        description: requiredString(params.description, "create_role description is required"),
+        systemPrompt: requiredString(params.systemPrompt, "create_role systemPrompt is required"),
+        rationale: requiredString(params.rationale, "create_role rationale is required"),
+        expectedUses: normalizeStringArray(
+          params.expectedUses,
+          "create_role expectedUses are required",
+        ),
+        allowedTools: normalizeOptionalStringArray(params.allowedTools),
+        defaultModel:
+          typeof params.defaultModel === "string" && params.defaultModel.trim()
+            ? params.defaultModel.trim()
+            : undefined,
+        origin: { kind: "manual" },
+      };
+      const role = createRoleSpec(proposal);
+      const store = source === "user" ? defaultUserRoleStore() : defaultProjectRoleStore(cwd);
+      await store.save(role);
+      return {
+        content: [
+          { type: "text", text: `Role created: ${role.id} (${role.ref}) source=${role.source}` },
+        ],
+        details: { role: compactRole(role) },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "call_role",
+    label: "Call Role",
+    description:
+      "Call one reusable Pi role directly with an explicit instruction. This is a one-off role invocation and is not attached to Spark tasks or DAG runs. Defaults to dry-run and returns the Pi CLI args; set dryRun=false to launch a fresh or explicitly forked child Pi run.",
+    parameters: Type.Object({
+      role: Type.String({
+        description: "Role id or full role ref, e.g. worker or role:builtin-worker.",
+      }),
+      instruction: Type.String({ description: "Concrete instruction for this one role call." }),
       mode: Type.Optional(
         Type.String({
           description: "fresh | forked. Defaults to fresh; forked requires forkFromSession.",
@@ -111,7 +277,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     }),
     renderCall(args, theme) {
       return renderToolCall(
-        "run_role",
+        "call_role",
         [
           formatStringArg(args.role),
           formatStringArg(args.mode, { fallback: "fresh" }),
@@ -123,7 +289,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       );
     },
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const p = normalizeRunRoleToolParams(params);
+      const p = normalizeCallRoleToolParams(params);
       const cwd = p.cwd ?? ctx.cwd ?? process.cwd();
       const registry = new RoleRegistry();
       await hydrateDefaultRoleRegistry(registry, cwd, { includeUser: p.includeUser });
@@ -151,7 +317,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
             {
               type: "text",
               text: [
-                `Role dry-run: ${role.id} (${role.ref})`,
+                `Role call dry-run: ${role.id} (${role.ref})`,
                 `mode: ${mode}`,
                 `cwd: ${cwd}`,
                 `piCommand: ${commandInput.piCommand}`,
@@ -161,7 +327,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
           ],
           details: {
             dryRun: true,
-            role,
+            role: compactRole(role),
             mode,
             runRef,
             cwd,
@@ -172,13 +338,15 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       }
 
       const result = await runRole(commandInput);
+      const stdoutTail = result.stdout ? tailText(result.stdout, 12_000) : undefined;
+      const stderrTail = result.stderr ? tailText(result.stderr, 8_000) : undefined;
       const summary = [
-        `Role run ${result.record.status}: ${role.id} (${role.ref})`,
+        `Role call ${result.record.status}: ${role.id} (${role.ref})`,
         `runRef: ${result.record.ref}`,
         `mode: ${result.record.mode}`,
         result.record.errorMessage ? `error: ${result.record.errorMessage}` : undefined,
-        result.stdout ? `stdout:\n${tailText(result.stdout, 12_000)}` : undefined,
-        result.stderr ? `stderr:\n${tailText(result.stderr, 8_000)}` : undefined,
+        stdoutTail ? `stdout:\n${stdoutTail}` : undefined,
+        stderrTail ? `stderr:\n${stderrTail}` : undefined,
       ]
         .filter((line): line is string => Boolean(line))
         .join("\n");
@@ -186,27 +354,30 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         content: [{ type: "text", text: summary }],
         details: {
           dryRun: false,
-          role,
+          role: compactRole(role),
           mode,
           runRef,
           cwd,
-          result: result as unknown as Record<string, unknown>,
+          record: result.record as unknown as Record<string, unknown>,
+          jsonEventCount: result.jsonEvents.length,
+          stdoutTail,
+          stderrTail,
         },
       };
     },
   });
 }
 
-function normalizeRunRoleToolParams(params: Record<string, unknown>): RunRoleToolParams {
+function normalizeCallRoleToolParams(params: Record<string, unknown>): CallRoleToolParams {
   const role = typeof params.role === "string" ? params.role.trim() : "";
   const instruction = typeof params.instruction === "string" ? params.instruction.trim() : "";
-  if (!role) throw new Error("run_role role is required");
-  if (!instruction) throw new Error("run_role instruction is required");
+  if (!role) throw new Error("call_role role is required");
+  if (!instruction) throw new Error("call_role instruction is required");
   const mode = params.mode === "forked" ? "forked" : "fresh";
   const forkFromSession =
     typeof params.forkFromSession === "string" ? params.forkFromSession.trim() : undefined;
   if (mode === "forked" && !forkFromSession)
-    throw new Error("run_role forked mode requires forkFromSession");
+    throw new Error("call_role forked mode requires forkFromSession");
   return {
     role,
     instruction,
@@ -227,6 +398,50 @@ function normalizeRunRoleToolParams(params: Record<string, unknown>): RunRoleToo
         ? params.timeoutMs
         : undefined,
     includeUser: params.includeUser === true,
+  };
+}
+
+function normalizeRoleSource(value: unknown): RoleSource | undefined {
+  return value === "builtin" || value === "project" || value === "user" ? value : undefined;
+}
+
+function normalizeWritableRoleSource(value: unknown): Exclude<RoleSource, "builtin"> {
+  if (value === "user") return "user";
+  return "project";
+}
+
+function normalizeLimit(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.floor(value));
+}
+
+function requiredString(value: unknown, message: string): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) throw new Error(message);
+  return text;
+}
+
+function normalizeStringArray(value: unknown, message: string): string[] {
+  const items = normalizeOptionalStringArray(value) ?? [];
+  if (items.length === 0) throw new Error(message);
+  return items;
+}
+
+function normalizeOptionalStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const items = value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean);
+  return items.length > 0 ? items : undefined;
+}
+
+function compactRole(role: RoleSpec) {
+  return {
+    ref: role.ref,
+    id: role.id,
+    source: role.source,
+    description: role.description,
+    systemPromptChars: role.systemPrompt.length,
+    allowedTools: role.allowedTools,
+    defaultModel: role.defaultModel,
   };
 }
 

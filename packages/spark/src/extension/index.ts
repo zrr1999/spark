@@ -11,17 +11,13 @@ import {
   type SparkAskToolParams,
   type SparkCopyLanguage,
 } from "spark-ask";
-import {
-  RoleRegistry,
-  builtinRoleRef,
-  createRoleSpec,
-  defaultProjectRoleStore,
-  type RoleSpecProposal,
-} from "pi-roles";
+import { RoleRegistry, builtinRoleRef, defaultProjectRoleStore } from "pi-roles";
 import {
   newRef,
   nowIso,
   type RoleRef,
+  type Artifact,
+  type ArtifactKind,
   type ArtifactRef,
   type AskRef,
   type JsonValue,
@@ -29,6 +25,7 @@ import {
   type SparkRunTrace,
   type Task,
   type TaskPlan,
+  type TaskPlanIssue,
   type TaskRun,
   type TaskStatus,
   type TaskRef,
@@ -55,6 +52,7 @@ import {
   defaultTaskGraphStore,
   defaultTaskTodoStore,
   isUnfinishedTaskStatus,
+  taskPlanReadiness,
   TaskGraph,
   TaskGraphStoreLockTimeoutError,
   type TaskGraphStore,
@@ -63,6 +61,8 @@ import {
   type TaskTodoOp,
   type TaskTodoSummary,
 } from "spark-tasks";
+import { clarifyTaskPlanIfNeeded } from "../flows/task-plan-flow.ts";
+import { clarifyThreadIntentIfNeeded } from "../flows/thread-intent-flow.ts";
 import {
   SparkWidget,
   type SessionTodoEntry,
@@ -214,6 +214,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       isToolExecutionEvent(event, "spark_update_todos") ||
       isToolExecutionEvent(event, "spark_update_task_todos") ||
       isToolExecutionEvent(event, "spark_claim_task") ||
+      isToolExecutionEvent(event, "spark_finish_task") ||
       isToolExecutionEvent(event, "spark_rename_thread") ||
       isToolExecutionEvent(event, "spark_use_thread")
     ) {
@@ -270,7 +271,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       await store.save(graph);
       await sparkTodoStore(cwd, ctx).save(graph);
     }
-    const thread = await currentSparkThread(cwd, ctx, graph, { activate: true });
+    const thread = (await currentSparkThread(cwd, ctx, graph)) ?? singleActiveSparkThread(graph);
     if (!thread) {
       widgetState = undefined;
       widget.update();
@@ -307,6 +308,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           currentSessionKey: sessionKey,
           latestRun: lastRunsByTaskRef.get(task.ref),
         }),
+        planIssueSummary: taskPlanIssueSummary(taskPlanReadiness(task).issues),
         backgroundOwner:
           task.claim?.kind === "role-run" &&
           task.claim.sessionId === ownerSessionKey &&
@@ -591,6 +593,28 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     return claimedBy;
   }
 
+  function taskPlanIssueSummary(issues: TaskPlanIssue[]): string | undefined {
+    const blocking = issues.filter((issue) => issue.severity === "blocking");
+    if (blocking.length === 0) return undefined;
+    const labels = blocking.map((issue) => {
+      switch (issue.kind) {
+        case "missing_plan":
+          return "missing-plan";
+        case "missing_objective":
+          return "missing-objective";
+        case "missing_success_criteria":
+          return "missing-success";
+        case "missing_evidence_required":
+          return "missing-evidence";
+        case "missing_steps":
+          return "missing-steps";
+        case "open_questions":
+          return "open-questions";
+      }
+    });
+    return `not-ready(${labels.join(",")})`;
+  }
+
   function shortRoleLabel(roleRef: string): string {
     return roleRef.replace(/^role:(builtin-|project-|user-)?/, "");
   }
@@ -650,12 +674,46 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     return limit >= 0 ? limit : undefined;
   }
 
-  function normalizeRoleSpecSourceFilter(
-    value: unknown,
-  ): "builtin" | "project" | "user" | undefined {
-    if (value === "builtin" || value === "predefined") return "builtin";
-    if (value === "project" || value === "managed") return "project";
-    if (value === "user") return "user";
+  function normalizeSparkFinishStatus(value: unknown): "done" | "failed" | "cancelled" {
+    if (value === "failed" || value === "cancelled") return value;
+    return "done";
+  }
+
+  function normalizeArtifactLimit(value: unknown, fallback: number): number {
+    if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+    return Math.max(0, Math.floor(value));
+  }
+
+  function normalizeArtifactKind(value: unknown): ArtifactKind | undefined {
+    if (
+      value === "spark-md" ||
+      value === "research" ||
+      value === "plan" ||
+      value === "task-breakdown" ||
+      value === "role-plan" ||
+      value === "handoff" ||
+      value === "review" ||
+      value === "cue-output" ||
+      value === "role-run" ||
+      value === "role-spec-proposal" ||
+      value === "ask-answer" ||
+      value === "run-trace"
+    )
+      return value;
+    return undefined;
+  }
+
+  function normalizeArtifactProducer(value: unknown) {
+    if (
+      value === "spark" ||
+      value === "role" ||
+      value === "task" ||
+      value === "ask" ||
+      value === "cue" ||
+      value === "review" ||
+      value === "user"
+    )
+      return value;
     return undefined;
   }
 
@@ -770,19 +828,45 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     });
   }
 
-  function compactTaskPlanResult(result: TaskPlanResult) {
-    const summarizeTask = (task: Task) => ({
+  function compactTaskDetail(task: Task) {
+    return {
       ref: task.ref,
       name: task.name,
       title: task.title,
       status: task.status,
-    });
+      kind: task.kind,
+      roleRef: task.roleRef,
+      threadRef: task.threadRef,
+    };
+  }
+
+  function compactTaskPlanResult(result: TaskPlanResult) {
     return {
-      created: result.created.map(summarizeTask),
-      updated: result.updated.map(summarizeTask),
+      created: result.created.map(compactTaskDetail),
+      updated: result.updated.map(compactTaskDetail),
       skipped: result.skipped.length,
       dependencies: result.dependencies.length,
     };
+  }
+
+  function compactArtifactDetail(artifact: Artifact) {
+    return {
+      ref: artifact.ref,
+      kind: artifact.kind,
+      title: artifact.title,
+      format: artifact.format,
+      producer: artifact.provenance.producer,
+      threadRef: artifact.provenance.threadRef,
+      taskRef: artifact.provenance.taskRef,
+      roleRef: artifact.provenance.roleRef,
+      createdAt: artifact.createdAt,
+      updatedAt: artifact.updatedAt,
+    };
+  }
+
+  function truncateBlock(value: string, maxChars: number): string {
+    if (value.length <= maxChars) return value;
+    return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
   }
 
   const registerSparkTool = (config: SparkRegisteredToolConfig): void => {
@@ -914,7 +998,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       } else appendSparkDagStatusLines(lines, dagStatus);
       const sessionKey = sparkSessionKey(ctx);
       const independentTodos = await loadIndependentTodos(cwd, ctx);
-      const activeThread = await currentSparkThread(cwd, ctx, graph, { activate: true });
+      const currentThread = await currentSparkThread(cwd, ctx, graph);
+      const selectedThread = currentThread ?? singleActiveSparkThread(graph);
       let renderedThreads = 0;
       for (const thread of graph.threads()) {
         const tasks = graph.tasks(thread.ref);
@@ -928,7 +1013,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           !shouldRenderThreadInSparkStatus({
             view,
             threadRef: thread.ref,
-            activeThreadRef: activeThread?.ref,
+            activeThreadRef: selectedThread?.ref,
             sessionClaimedCount: sessionClaimed.length,
           })
         )
@@ -939,7 +1024,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         const lastRunsByTaskRef = latestRunsByTaskRef(graph.runs(thread.ref));
         const hiddenByView = tasks.length - allVisibleTasks.length;
         const hiddenByLimit = allVisibleTasks.length - visibleTasks.length;
-        const currentSuffix = thread.ref === activeThread?.ref ? " [current]" : "";
+        const currentSuffix = thread.ref === currentThread?.ref ? " [current]" : "";
         const statusSuffix = thread.status === "done" ? " [done]" : "";
         const threadPrefix = view === "active" ? "Thread" : `Thread ${thread.ref}:`;
         lines.push(`\n${threadPrefix} ${thread.title}${currentSuffix}${statusSuffix}`);
@@ -961,8 +1046,11 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
             currentSessionKey: sessionKey,
             latestRun: lastRunsByTaskRef.get(task.ref),
           });
+          const planIssue = taskPlanIssueSummary(taskPlanReadiness(task).issues);
           if (view === "active") {
-            lines.push(`  - [${task.status}] @${task.name}: ${task.title} owner=@${owner}`);
+            lines.push(
+              `  - [${task.status}] @${task.name}: ${task.title} owner=@${owner}${planIssue ? ` plan=${planIssue}` : ""}`,
+            );
             if (isClaimOwnedBySession(task, sessionKey)) {
               const taskTodos = graph.taskTodos(task.ref);
               for (const todo of taskTodos.slice(0, DEFAULT_SPARK_STATUS_TODO_LIMIT)) {
@@ -977,7 +1065,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           }
           const taskSummary = graph.todoSummary(task.ref);
           lines.push(
-            `  - [${task.status}] @${task.name}: ${task.title} (${task.ref}) kind=${task.kind} owner=@${owner} claimed=${taskClaimSummary(task)} todos=${taskSummary.total}/${taskSummary.inProgress}/${taskSummary.pending}/${taskSummary.done}`,
+            `  - [${task.status}] @${task.name}: ${task.title} (${task.ref}) kind=${task.kind} owner=@${owner} claimed=${taskClaimSummary(task)} todos=${taskSummary.total}/${taskSummary.inProgress}/${taskSummary.pending}/${taskSummary.done}${planIssue ? ` plan=${planIssue}` : ""}`,
           );
           if (isClaimOwnedBySession(task, sessionKey)) {
             for (const todo of graph.taskTodos(task.ref)) {
@@ -1009,7 +1097,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           found: true,
           view,
           limit: taskLimit,
-          activeThreadRef: activeThread?.ref,
+          activeThreadRef: currentThread?.ref,
           threads: compactThreadStatusSummaries(graph, sessionKey),
           dag: dagStatus,
         },
@@ -1132,6 +1220,65 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   });
 
   registerSparkTool({
+    name: "spark_finish_task",
+    label: "Spark Finish Task",
+    description:
+      "Finish this session's claimed Spark task as done, failed, or cancelled. Defaults to the current claimed task and status=done.",
+    parameters: Type.Object({
+      task: Type.Optional(
+        Type.String({
+          description:
+            "Claimed task ref, @name/name, title, or title prefix. Defaults to current claimed task.",
+        }),
+      ),
+      status: Type.Optional(
+        Type.String({ description: "done | failed | cancelled. Default: done." }),
+      ),
+      summary: Type.Optional(Type.String({ description: "Short completion/failure summary." })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = ctxCwd(ctx);
+      const p = params as { task?: string; status?: string; summary?: string };
+      const status = normalizeSparkFinishStatus(p.status);
+      const store = defaultTaskGraphStore(cwd);
+      const updated = await store.update(
+        async (graph) => {
+          await sparkTodoStore(cwd, ctx).hydrate(graph);
+          const thread = await currentSparkThread(cwd, ctx, graph, { activate: true });
+          if (!thread) return { error: "no_thread" as const };
+          const task = resolveSessionClaimedTask(graph, thread.ref, sparkSessionKey(ctx), p.task);
+          if (!task) return { error: "no_matching_claimed_task" as const };
+          const finished = graph.setTaskStatus(task.ref, status);
+          await sparkTodoStore(cwd, ctx).save(graph);
+          return { task: finished };
+        },
+        { createIfMissing: false },
+      );
+      if (!updated.graph || updated.result.error === "no_thread")
+        return {
+          content: [{ type: "text", text: "No Spark thread found." }],
+          details: { found: false },
+        };
+      if (updated.result.error === "no_matching_claimed_task")
+        return {
+          content: [{ type: "text", text: "No matching claimed task for this session." }],
+          details: { found: true, error: "no_matching_claimed_task" },
+        };
+      await refreshSparkWidget(cwd, ctx);
+      const summarySuffix = p.summary?.trim() ? ` — ${truncateInline(p.summary.trim(), 160)}` : "";
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Finished Spark task: [${updated.result.task.status}] @${updated.result.task.name}: ${updated.result.task.title}${summarySuffix}`,
+          },
+        ],
+        details: { task: compactTaskDetail(updated.result.task) },
+      };
+    },
+  });
+
+  registerSparkTool({
     name: "spark_claim_task",
     label: "Spark Claim Task",
     description:
@@ -1157,7 +1304,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       roleRef: Type.Optional(
         Type.String({
           description:
-            "Optional builtin/project/user Spark role spec id or ref from spark_list_roles, e.g. planner or role:builtin-planner. Role-bound tasks default to pending and are eligible for spark_run_ready_tasks.",
+            "Optional builtin/project/user role spec id or ref from list_roles, e.g. planner or role:builtin-planner. Role-bound tasks default to pending and are eligible for spark_run_ready_tasks.",
         }),
       ),
       plan: Type.Optional(taskPlanSchema()),
@@ -1224,7 +1371,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           const namePatch = requestedName
             ? uniqueTaskNameForExistingTask(tasks, requestedName, existing?.ref)
             : undefined;
-          const task = existing
+          let task = existing
             ? graph.updateTask(existing.ref, {
                 ...(namePatch ? { name: namePatch } : {}),
                 title,
@@ -1246,6 +1393,14 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
                 claimedBySession: sessionKey,
                 plan: normalizeToolTaskPlan(p.plan, description, title),
               });
+          const planClarification = await clarifyTaskPlanIfNeeded({
+            cwd,
+            task,
+            ui: sparkAskUi(ctx),
+          });
+          if (planClarification.asked) {
+            task = graph.updateTask(task.ref, { plan: planClarification.plan });
+          }
           if (isUnfinishedTaskStatus(status)) {
             graph.claimTask(task.ref, {
               kind: "main",
@@ -1265,7 +1420,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
             ]);
             await sparkTodoStore(cwd, ctx).save(graph);
           }
-          return { task: graph.getTask(task.ref) };
+          return { task: graph.getTask(task.ref), planClarification };
         },
         { createIfMissing: false },
       );
@@ -1295,14 +1450,21 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           },
         };
       await refreshSparkWidget(cwd, ctx);
+      const clarification = claimed.result.planClarification;
+      const clarificationSuffix = clarification?.asked
+        ? `; plan clarification saved to ${clarification.artifactRef}`
+        : "";
       return {
         content: [
           {
             type: "text",
-            text: `Claimed Spark task: @${claimed.result.task.name}: ${claimed.result.task.title} (${claimed.result.task.ref})`,
+            text: `Claimed Spark task: @${claimed.result.task.name}: ${claimed.result.task.title} (${claimed.result.task.ref})${clarificationSuffix}`,
           },
         ],
-        details: { task: claimed.result.task as unknown as Record<string, unknown> },
+        details: {
+          task: claimed.result.task as unknown as Record<string, unknown>,
+          planClarification: clarification as unknown as Record<string, unknown> | undefined,
+        },
       };
     },
   });
@@ -1432,13 +1594,22 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
             ],
             details: { found: true, error: "missing_thread_or_title" },
           };
+        const description = p.description?.trim() || title;
+        const clarification = await clarifyThreadIntentIfNeeded({
+          cwd,
+          title,
+          description,
+          explicitThread: p.thread,
+          ui: sparkAskUi(ctx),
+        });
         thread = graph.createThread({
           title,
-          description: p.description?.trim() || title,
+          description,
           outputLanguage:
             p.outputLanguage === "zh" || p.outputLanguage === "en" ? p.outputLanguage : undefined,
         });
         await store.save(graph);
+        await saveThreadIntentTrace(cwd, thread.ref, clarification);
       }
       await saveCurrentThreadRef(cwd, ctx, thread.ref);
       await refreshSparkWidget(cwd, ctx);
@@ -1453,6 +1624,26 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       };
     },
   });
+
+  async function saveThreadIntentTrace(
+    cwd: string,
+    threadRef: ThreadRef,
+    clarification: Awaited<ReturnType<typeof clarifyThreadIntentIfNeeded>>,
+  ): Promise<void> {
+    if (!clarification.asked || !clarification.artifactRef) return;
+    await defaultArtifactStore(cwd).put({
+      kind: "run-trace",
+      title: "Thread intent clarification",
+      format: "json",
+      body: {
+        threadRef,
+        askArtifactRef: clarification.artifactRef,
+        summary: clarification.summary,
+        blocked: clarification.blocked,
+      } as unknown as JsonValue,
+      provenance: { producer: "spark", threadRef, parentArtifactRefs: [clarification.artifactRef] },
+    });
+  }
 
   registerSparkTool({
     name: "spark_plan_tasks",
@@ -1801,127 +1992,91 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     },
   });
 
-  const listRoleSpecsToolConfig: SparkRegisteredToolConfig = {
-    name: "spark_list_roles",
-    label: "Spark List Role Specs",
-    description: "List builtin, project, and user role specs available to Spark.",
+  registerSparkTool({
+    name: "spark_list_artifacts",
+    label: "Spark List Artifacts",
+    description: "List Spark artifacts with a compact, bounded default view.",
     parameters: Type.Object({
-      source: Type.Optional(
-        Type.String({ description: "builtin | project | user (legacy: builtin | managed)" }),
-      ),
-      scope: Type.Optional(Type.String({ description: "Legacy alias for source." })),
+      kind: Type.Optional(Type.String({ description: "Artifact kind filter, e.g. ask-answer." })),
+      producer: Type.Optional(Type.String({ description: "Artifact provenance producer filter." })),
+      threadRef: Type.Optional(Type.String({ description: "Filter by provenance thread ref." })),
+      taskRef: Type.Optional(Type.String({ description: "Filter by provenance task ref." })),
+      roleRef: Type.Optional(Type.String({ description: "Filter by provenance role ref." })),
+      limit: Type.Optional(Type.Number({ description: "Maximum artifacts to show. Default: 20." })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const cwd = ctxCwd(ctx);
-      const registry = new RoleRegistry();
-      await defaultProjectRoleStore(cwd).hydrate(registry);
-      const source = normalizeRoleSpecSourceFilter(params.source ?? params.scope);
-      const roles = registry.list().filter((role) => !source || role.source === source);
-      const lines = roles.map(
-        (role) => `- [${role.source}] ${role.id} (${role.ref}) — ${role.description}`,
-      );
-      return {
-        content: [
-          {
-            type: "text",
-            text: lines.length ? lines.join("\n") : "No matching role specs.",
-          },
-        ],
-        details: { roles: roles as unknown as Record<string, unknown>[] },
-      };
-    },
-  };
-  registerSparkTool(listRoleSpecsToolConfig);
-
-  const getRoleSpecToolConfig: SparkRegisteredToolConfig = {
-    name: "spark_get_role",
-    label: "Spark Get Role Spec",
-    description: "Inspect one builtin, project, or user role spec.",
-    parameters: Type.Object({
-      role: Type.String({ description: "role spec id or full role ref" }),
-    }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const p = params as { role: string };
-      const cwd = ctxCwd(ctx);
-      const registry = new RoleRegistry();
-      await defaultProjectRoleStore(cwd).hydrate(registry);
-      const role = registry.select(p.role);
-      return {
-        content: [
-          {
-            type: "text",
-            text: [
-              `${role.id} (${role.ref})`,
-              `source: ${role.source}`,
-              `description: ${role.description}`,
-            ].join("\n"),
-          },
-        ],
-        details: { role: role as unknown as Record<string, unknown> },
-      };
-    },
-  };
-  registerSparkTool(getRoleSpecToolConfig);
-
-  const createRoleSpecToolConfig: SparkRegisteredToolConfig = {
-    name: "spark_create_role",
-    label: "Spark Create Role Spec",
-    description: "Create and persist a project Spark role spec from a validated proposal shape.",
-    parameters: Type.Object({
-      id: Type.String({ description: "stable role spec id" }),
-      description: Type.String({ description: "what this role spec is for" }),
-      systemPrompt: Type.String({
-        description: "fixed system prompt for the role spec",
-      }),
-      rationale: Type.String({
-        description: "why this role spec should exist",
-      }),
-      expectedUses: Type.Array(Type.String()),
-    }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const p = params as {
-        id: string;
-        description: string;
-        systemPrompt: string;
-        rationale: string;
-        expectedUses: string[];
-      };
-      const cwd = ctxCwd(ctx);
-      const proposal: RoleSpecProposal = {
-        id: p.id,
-        description: p.description,
-        systemPrompt: p.systemPrompt,
-        rationale: p.rationale,
-        expectedUses: p.expectedUses,
-      };
-      const artifactStore = defaultArtifactStore(cwd);
-      const proposalArtifact = await artifactStore.put({
-        kind: "role-spec-proposal",
-        title: `Role spec proposal: ${proposal.id}`,
-        format: "json",
-        body: proposal as unknown as JsonValue,
-        provenance: { producer: "role" },
+      const store = defaultArtifactStore(ctxCwd(ctx));
+      const limit = normalizeArtifactLimit(params.limit, 20);
+      const artifacts = await store.list({
+        kind: normalizeArtifactKind(params.kind),
+        producer: normalizeArtifactProducer(params.producer),
+        threadRef: typeof params.threadRef === "string" ? params.threadRef : undefined,
+        taskRef: typeof params.taskRef === "string" ? params.taskRef : undefined,
+        roleRef: typeof params.roleRef === "string" ? params.roleRef : undefined,
       });
-      const spec = createRoleSpec({
-        ...proposal,
-        artifactRef: proposalArtifact.ref,
-      });
-      await defaultProjectRoleStore(cwd).save(spec);
+      const newest = artifacts.slice().reverse();
+      const visible = newest.slice(0, limit);
+      const lines = [
+        `Spark artifacts: ${artifacts.length}${visible.length < artifacts.length ? ` (showing ${visible.length})` : ""}`,
+      ];
+      for (const artifact of visible)
+        lines.push(`- [${artifact.kind}] ${artifact.ref}: ${artifact.title}`);
+      if (visible.length < artifacts.length)
+        lines.push(`- … ${artifacts.length - visible.length} more artifact(s)`);
       return {
-        content: [
-          {
-            type: "text",
-            text: `Role spec created: ${spec.id} (${spec.ref}) proposal=${proposalArtifact.ref}`,
-          },
-        ],
+        content: [{ type: "text", text: lines.join("\n") }],
         details: {
-          role: spec as unknown as Record<string, unknown>,
-          proposalArtifactRef: proposalArtifact.ref,
+          count: artifacts.length,
+          shown: visible.length,
+          artifacts: visible.map(compactArtifactDetail),
         },
       };
     },
-  };
-  registerSparkTool(createRoleSpecToolConfig);
+  });
+
+  registerSparkTool({
+    name: "spark_get_artifact",
+    label: "Spark Get Artifact",
+    description:
+      "Read one Spark artifact. Defaults to metadata plus a truncated body; set full=true for the complete body.",
+    parameters: Type.Object({
+      artifactRef: Type.String({ description: "Artifact ref, e.g. artifact:<uuid>." }),
+      full: Type.Optional(Type.Boolean({ default: false })),
+      maxChars: Type.Optional(
+        Type.Number({ description: "Maximum body chars when full=false. Default: 4000." }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const store = defaultArtifactStore(ctxCwd(ctx));
+      const artifactRef = params.artifactRef as ArtifactRef;
+      const artifact = await store.get(artifactRef);
+      const body = await store.getBody(artifactRef);
+      const full = params.full === true;
+      const maxChars = normalizeArtifactLimit(params.maxChars, 4_000);
+      const renderedBody = full ? body : truncateBlock(body, maxChars);
+      const truncated = !full && renderedBody.length < body.length;
+      const lines = [
+        `${artifact.ref} [${artifact.kind}] ${artifact.title}`,
+        `format=${artifact.format} producer=${artifact.provenance.producer} updated=${artifact.updatedAt}`,
+        "",
+        renderedBody,
+      ];
+      if (truncated)
+        lines.push(
+          "",
+          `… truncated ${body.length - renderedBody.length} char(s); call full=true for the complete artifact body`,
+        );
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: {
+          artifact: compactArtifactDetail(artifact),
+          bodyChars: body.length,
+          shownChars: renderedBody.length,
+          truncated,
+        },
+      };
+    },
+  });
 }
 
 interface SparkInputEvent {
@@ -1975,7 +2130,7 @@ export async function renderActiveSparkContextSummary(
     await sparkTodoStore(cwd, ctx).save(graph);
   }
   const sparkMd = await readActiveSparkMd(cwd);
-  const thread = await currentSparkThread(cwd, ctx, graph);
+  const thread = (await currentSparkThread(cwd, ctx, graph)) ?? singleActiveSparkThread(graph);
   const sessionKey = sparkSessionKey(ctx);
   const independentTodos = await loadIndependentTodos(cwd, ctx);
   const stateLines = thread
@@ -2149,6 +2304,13 @@ async function currentSparkThread(
   const fallback = activeThreads[0];
   if (fallback) await saveCurrentThreadRef(cwd, ctx, fallback.ref);
   return fallback;
+}
+
+function singleActiveSparkThread(
+  graph: TaskGraph,
+): ReturnType<TaskGraph["threads"]>[number] | undefined {
+  const activeThreads = graph.threads().filter((thread) => thread.status !== "done");
+  return activeThreads.length === 1 ? activeThreads[0] : undefined;
 }
 
 function resolveSparkThread(

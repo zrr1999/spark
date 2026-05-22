@@ -157,15 +157,24 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
     registerTool: (config) => roleTools.set(config.name, config),
   });
   assertAllToolsHaveCallRenderers(roleTools);
+  assert.equal(renderCall(roleTools, "list_roles", { source: "builtin" }), "list_roles builtin");
+  assert.equal(renderCall(roleTools, "get_role", { role: "worker" }), "get_role worker");
   assert.equal(
-    renderCall(roleTools, "run_role", {
+    renderCall(roleTools, "create_role", {
+      id: "repo-inspector",
+      description: "Inspect repository state before implementation.",
+    }),
+    'create_role id=repo-inspector project "Inspect repository state before implementation."',
+  );
+  assert.equal(
+    renderCall(roleTools, "call_role", {
       role: "worker",
       instruction: "Inspect the implementation.",
       mode: "fresh",
       dryRun: true,
       timeoutMs: 1000,
     }),
-    "run_role worker fresh dry-run timeout=1000",
+    "call_role worker fresh dry-run timeout=1000",
   );
 
   const longAskUser = renderCall(

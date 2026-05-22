@@ -152,16 +152,17 @@ export function parsePiJsonlEvents(stdout: string): unknown[];
 
 Every run references an existing role. A run can be fresh or forked regardless of whether the role source is builtin, project, or user. For usage guidance, safety constraints, and Spark attribution rules, see [agent-run-modes.md](./agent-run-modes.md).
 
-## Spark mapping
+## Tool / Spark mapping
 
-| Spark concept / API    | `pi-roles` concept                                            |
+| Surface                | `pi-roles` / Spark concept                                    |
 | ---------------------- | ------------------------------------------------------------- |
-| Task role binding      | `Task.roleRef` string resolved by `RoleRegistry`              |
-| `spark_list_roles`     | Spark wrapper over `RoleRegistry.list()`                      |
-| `spark_get_role`       | Spark wrapper over `RoleRegistry.select()`                    |
-| `spark_create_role`    | Spark wrapper creating a project `RoleSpec`                   |
-| Runtime task execution | `spark-runtime` calls `runRole()`                             |
-| Runtime claim          | `TaskClaim.kind = "role-run"`, `roleRef`, `runName`, `runRef` |
-| Runtime artifact       | `kind: "role-run"` with task/run provenance                   |
+| `list_roles`           | Pi role-spec management over `RoleRegistry.list()`            |
+| `get_role`             | Pi role-spec management over `RoleRegistry.select()`          |
+| `create_role`          | Pi role-spec management creating project/user `RoleSpec`s     |
+| `call_role`            | One-off direct role invocation; not attached to Spark tasks   |
+| Spark task binding     | `Task.roleRef` string resolved by `RoleRegistry`              |
+| Spark task execution   | `spark-runtime` calls `runRole()` via `spark_run_ready_tasks` |
+| Spark runtime claim    | `TaskClaim.kind = "role-run"`, `roleRef`, `runName`, `runRef` |
+| Spark runtime artifact | `kind: "role-run"` with task/run provenance                   |
 
 Compatibility aliases in code should be small and temporary, only to read old state or avoid breaking existing callers during rolling migration.

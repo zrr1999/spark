@@ -274,7 +274,26 @@ export interface TaskPlan {
   decompositionRationale?: string;
   riskLevel?: "trivial" | "normal" | "high";
   openQuestions: string[];
-  askRefs: AskRef[];
+  askRefs: Array<AskRef | ArtifactRef>;
+}
+
+export type TaskPlanIssueKind =
+  | "missing_plan"
+  | "missing_objective"
+  | "missing_success_criteria"
+  | "missing_evidence_required"
+  | "missing_steps"
+  | "open_questions";
+
+export interface TaskPlanIssue {
+  kind: TaskPlanIssueKind;
+  severity: "warning" | "blocking";
+  message: string;
+}
+
+export interface TaskPlanReadiness {
+  ready: boolean;
+  issues: TaskPlanIssue[];
 }
 
 export interface Task {

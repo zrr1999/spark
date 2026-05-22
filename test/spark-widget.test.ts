@@ -161,6 +161,29 @@ void test("spark widget shows thread header with task counts even before claims"
   assert.match(lines.join("\n"), /◆ Tasks\(total=5 claimed=2\/0\)\n◆ Spark UX redesign/);
 });
 
+void test("spark widget shows plan readiness marker on task rows", () => {
+  const lines = renderSparkWidgetLines(
+    widgetState({
+      tasks: [
+        {
+          title: "Refine underspecified task",
+          status: "pending",
+          roleLabel: "worker",
+          planIssueSummary: "not-ready(missing-success,missing-evidence)",
+          todos: [],
+        },
+      ],
+    }),
+    tui,
+    theme,
+  ).join("\n");
+
+  assert.match(
+    lines,
+    /Refine underspecified task plan:not-ready\(missing-success,missing-evidence\)/,
+  );
+});
+
 void test("spark widget shows role/title task rows with nested TODOs and independent TODO siblings", () => {
   const lines = renderSparkWidgetLines(
     {

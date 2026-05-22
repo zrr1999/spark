@@ -13,7 +13,8 @@ Reusable, Spark-independent pieces live in `pi-roles`; Spark keeps task/DAG/work
 - `packages/spark-core/src/index.ts` owns Spark refs, task/artifact/review contracts, role refs as branded strings, and temporary deprecated agent aliases needed for rolling state migration.
 - `packages/spark-tasks/src/index.ts` owns task DAGs, TODOs, dependencies, readiness, claim leases, and run history. It stores `roleRef` strings but does not import or resolve `RoleSpec` objects.
 - `packages/spark-runtime/src/index.ts` owns Spark adaptation: resolving task `roleRef`s through a `RoleRegistry`, creating `role-run` claims, calling `runRole()`, writing artifacts, updating task/run/DAG state, and tracking active background child processes.
-- `packages/spark/src/extension/index.ts` exposes Spark workflow tools plus role wrapper tools: `spark_list_roles`, `spark_get_role`, and `spark_create_role`.
+- `packages/pi-roles/src/extension.ts` exposes role-spec management tools (`list_roles`, `get_role`, `create_role`) plus the one-off direct `call_role` tool.
+- `packages/spark/src/extension/index.ts` exposes Spark workflow tools; Spark task execution uses role refs through `spark_run_ready_tasks`, not direct role wrapper tools.
 
 ## Spec/run separation invariant
 
@@ -46,6 +47,7 @@ Compatibility is intentionally narrow and should shrink in this order:
 - `RoleSpec`, `RoleSpecProposal`, `RoleInstruction`, `RoleRunRequest`, `RoleRunRecord`, and `RoleRunResult`.
 - `RoleRegistry` and Markdown role stores.
 - Builtin roles (`scout`, `planner`, `worker`, `reviewer`, `oracle`).
+- Pi role tools for `list_roles`, `get_role`, `create_role`, and task-agnostic one-off `call_role`.
 - Pi CLI argument construction, fresh/forked launch, stdout/stderr capture, tolerant JSONL parsing, timeout/cancel, and active-run listing.
 
 Storage policy:
@@ -59,7 +61,7 @@ Storage policy:
 
 - `spark-tasks` owns threads, tasks, dependencies, task TODOs, claim leases, readiness, and run history.
 - `spark-runtime` maps Spark tasks to `pi-roles` `RoleRun` primitives and maps completion back to task status, task claims, artifacts, and DAG scheduling.
-- `spark` extension tools keep Spark workflow semantics and role wrapper tools. Deprecated agent-shaped inputs may be accepted only as a narrow rolling migration layer.
+- `spark` extension tools keep Spark workflow semantics. Deprecated agent-shaped inputs may be accepted only as a narrow rolling migration layer.
 
 ## Non-goals
 

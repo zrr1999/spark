@@ -24,6 +24,7 @@ export interface TaskEntry {
   backgroundOwner?: "session";
   /** True when a running agent is parked on user/input rather than actively working. */
   waitingForInput?: boolean;
+  planIssueSummary?: string;
   todos: SessionTodoEntry[];
 }
 
@@ -327,9 +328,12 @@ function formatTaskTitle(task: TaskEntry, theme: SparkWidgetTheme): string {
     : title;
   if (task.status === "done" || task.status === "cancelled")
     return theme.fg("dim", theme.strikethrough(base));
-  if (task.status === "failed") return theme.fg("error", base);
-  if (task.status === "running") return theme.bold(base);
-  return base;
+  const withPlanIssue = task.planIssueSummary
+    ? `${base} ${theme.fg("warning", `plan:${task.planIssueSummary}`)}`
+    : base;
+  if (task.status === "failed") return theme.fg("error", withPlanIssue);
+  if (task.status === "running") return theme.bold(withPlanIssue);
+  return withPlanIssue;
 }
 
 type WidgetRow =

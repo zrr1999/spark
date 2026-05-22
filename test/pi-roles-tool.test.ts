@@ -20,15 +20,15 @@ interface ToolConfig {
   }>;
 }
 
-void test("run_role dry-run resolves builtin roles and returns Pi args", async () => {
+void test("call_role dry-run resolves builtin roles and returns Pi args", async () => {
   const tools = registerRoleToolsForTest();
-  const result = await executeRunRole(tools, {
+  const result = await executeCallRole(tools, {
     role: "worker",
     instruction: "Implement a small change.",
     sessionDir: "/tmp/sessions",
   });
 
-  assert.match(result.content[0]?.text ?? "", /Role dry-run: worker \(role:builtin-worker\)/);
+  assert.match(result.content[0]?.text ?? "", /Role call dry-run: worker \(role:builtin-worker\)/);
   assert.match(result.content[0]?.text ?? "", /mode: fresh/);
   const details = result.details as { args?: string[]; dryRun?: boolean; role?: { ref?: string } };
   assert.equal(details.dryRun, true);
@@ -43,7 +43,39 @@ void test("run_role dry-run resolves builtin roles and returns Pi args", async (
   ]);
 });
 
-void test("run_role launches fresh role runs when dryRun is false", async () => {
+void test("role spec tools list, get, and create project roles", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-spec-tools-"));
+  try {
+    const tools = registerRoleToolsForTest();
+
+    const created = await executeRoleTool(
+      tools,
+      "create_role",
+      {
+        id: "repo-inspector",
+        description: "Inspect repository state before implementation.",
+        systemPrompt: "You inspect repositories and report concise findings.",
+        rationale: "Reusable inspection role for project work.",
+        expectedUses: ["repo inspection"],
+      },
+      dir,
+    );
+    assert.match(
+      created.content[0]?.text ?? "",
+      /Role created: repo-inspector \(role:project-[^)]+\)/,
+    );
+
+    const listed = await executeRoleTool(tools, "list_roles", { source: "project" }, dir);
+    assert.match(listed.content[0]?.text ?? "", /repo-inspector/);
+
+    const got = await executeRoleTool(tools, "get_role", { role: "repo-inspector" }, dir);
+    assert.match(got.content[0]?.text ?? "", /systemPrompt: \d+ chars; preview=/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("call_role launches fresh role runs when dryRun is false", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-roles-tool-"));
   try {
     const fakePi = join(dir, "fake-pi.mjs");
@@ -60,7 +92,7 @@ void test("run_role launches fresh role runs when dryRun is false", async () => 
     await chmod(fakePi, 0o755);
 
     const tools = registerRoleToolsForTest();
-    const result = await executeRunRole(
+    const result = await executeCallRole(
       tools,
       {
         role: "worker",
@@ -73,22 +105,23 @@ void test("run_role launches fresh role runs when dryRun is false", async () => 
       dir,
     );
 
-    assert.match(result.content[0]?.text ?? "", /Role run succeeded: worker/);
+    assert.match(result.content[0]?.text ?? "", /Role call succeeded: worker/);
     const details = result.details as {
-      result?: { record?: { status?: string; mode?: string }; jsonEvents?: unknown[] };
+      record?: { status?: string; mode?: string };
+      jsonEventCount?: number;
     };
-    assert.equal(details.result?.record?.status, "succeeded");
-    assert.equal(details.result?.record?.mode, "fresh");
-    assert.equal(details.result?.jsonEvents?.length, 1);
+    assert.equal(details.record?.status, "succeeded");
+    assert.equal(details.record?.mode, "fresh");
+    assert.equal(details.jsonEventCount, 1);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-void test("run_role forked mode requires explicit parent session", async () => {
+void test("call_role forked mode requires explicit parent session", async () => {
   const tools = registerRoleToolsForTest();
   await assert.rejects(
-    executeRunRole(tools, {
+    executeCallRole(tools, {
       role: "reviewer",
       instruction: "Review with context.",
       dryRun: false,
@@ -104,12 +137,21 @@ function registerRoleToolsForTest(): Map<string, ToolConfig> {
   return tools;
 }
 
-function executeRunRole(
+function executeCallRole(
   tools: Map<string, ToolConfig>,
   params: Record<string, unknown>,
   cwd = process.cwd(),
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }> {
-  const tool = tools.get("run_role");
-  assert.ok(tool, "missing run_role tool");
+  return executeRoleTool(tools, "call_role", params, cwd);
+}
+
+function executeRoleTool(
+  tools: Map<string, ToolConfig>,
+  name: string,
+  params: Record<string, unknown>,
+  cwd = process.cwd(),
+): Promise<{ content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }> {
+  const tool = tools.get(name);
+  assert.ok(tool, `missing ${name} tool`);
   return tool.execute("tool-call", params, new AbortController().signal, () => undefined, { cwd });
 }

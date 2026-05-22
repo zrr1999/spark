@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { newRef, refId, isRef } from "spark-core";
+import { newRef, refId, isRef, type TaskPlan } from "spark-core";
 import { builtinRoleRef, createBuiltinRoles } from "pi-roles";
 import { TaskGraph } from "spark-tasks";
 import {
@@ -10,6 +10,21 @@ import {
   isPlaceholderThreadTitle,
   renderSparkActiveSystemPrompt,
 } from "../packages/spark/src/extension/index.ts";
+
+function executionReadyPlan(objective: string): TaskPlan {
+  return {
+    objective,
+    contextRefs: [],
+    constraints: [],
+    nonGoals: [],
+    successCriteria: [`${objective} succeeds`],
+    evidenceRequired: [`${objective} evidence is recorded`],
+    steps: [objective],
+    riskLevel: "normal",
+    openQuestions: [],
+    askRefs: [],
+  };
+}
 
 void test("refs carry kind and id", () => {
   const ref = newRef("task", "abc");
@@ -81,12 +96,14 @@ void test("task graph plans multiple tasks without claiming them", () => {
       description: "Compare current ask flow with references.",
       kind: "research",
       roleRef: builtinRoleRef("scout"),
+      plan: executionReadyPlan("Inspect ask flow"),
     },
     {
       title: "Design claim registry",
       description: "Plan one-active-task claim semantics.",
       kind: "plan",
       roleRef: builtinRoleRef("planner"),
+      plan: executionReadyPlan("Design claim registry"),
       dependsOn: ["Inspect ask flow"],
     },
   ]);
@@ -108,12 +125,14 @@ void test("ready tasks require role and completed dependencies", () => {
     title: "A",
     description: "a",
     roleRef: builtinRoleRef("planner"),
+    plan: executionReadyPlan("A"),
   });
   const b = graph.createTask({
     threadRef: thread.ref,
     title: "B",
     description: "b",
     roleRef: builtinRoleRef("worker"),
+    plan: executionReadyPlan("B"),
   });
   graph.addDependency(b.ref, a.ref);
   assert.deepEqual(
@@ -127,7 +146,12 @@ void test("task role labels prefer active claim, finished attribution, then late
   const thread = graph.createThread({ title: "Demo", description: "demo" });
   const current = "session:current";
   const main = graph.createTask({ threadRef: thread.ref, title: "Main", description: "main" });
-  const roleRun = graph.createTask({ threadRef: thread.ref, title: "Sub", description: "sub" });
+  const roleRun = graph.createTask({
+    threadRef: thread.ref,
+    title: "Sub",
+    description: "sub",
+    plan: executionReadyPlan("Sub"),
+  });
   const legacy = graph.createTask({
     threadRef: thread.ref,
     title: "Legacy",

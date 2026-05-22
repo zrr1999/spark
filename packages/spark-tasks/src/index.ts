@@ -15,6 +15,8 @@ import {
   type TaskClaimKind,
   type TaskKind,
   type TaskPlan,
+  type TaskPlanIssue,
+  type TaskPlanReadiness,
   type TaskProposal,
   type TaskRef,
   type TaskRun,
@@ -403,6 +405,7 @@ export class TaskGraph {
       sessionId,
       runName,
     });
+    if (input.kind === "role-run") this.assertTaskPlanReady(task);
     const activeClaimScope = task.claim
       ? isExpiredClaim(task.claim, now)
         ? undefined
@@ -682,10 +685,15 @@ export class TaskGraph {
     return tasks.filter((task) => {
       if (task.status !== "pending" && task.status !== "ready") return false;
       if (!task.roleRef) return false;
+      if (!taskPlanReadiness(task).ready) return false;
       return this.#dependencies
         .filter((dep) => dep.taskRef === task.ref)
         .every((dep) => done.has(dep.dependsOn));
     });
+  }
+
+  taskPlanReadiness(taskRef: TaskRef): TaskPlanReadiness {
+    return taskPlanReadiness(this.getTask(taskRef));
   }
 
   enqueueReadyTasks(threadRef?: ThreadRef): Task[] {
@@ -707,6 +715,16 @@ export class TaskGraph {
       `task has unmet dependencies: ${task.ref} depends on ${unmet
         .map((dependency) => dependency.ref)
         .join(", ")}`,
+    );
+  }
+
+  private assertTaskPlanReady(task: Task): void {
+    const readiness = taskPlanReadiness(task);
+    if (readiness.ready) return;
+    throw new DependencyError(
+      `task plan is not execution-ready: ${task.ref}: ${readiness.issues
+        .map((issue) => issue.message)
+        .join("; ")}`,
     );
   }
 
@@ -1200,6 +1218,55 @@ function normalizeTaskPlan(
     openQuestions: normalizeStringList(plan?.openQuestions),
     askRefs: normalizeStringList(plan?.askRefs) as TaskPlan["askRefs"],
   };
+}
+
+export function taskPlanReadiness(task: Pick<Task, "plan">): TaskPlanReadiness {
+  const issues: TaskPlanIssue[] = [];
+  const plan = task.plan;
+  if (!plan) {
+    issues.push({
+      kind: "missing_plan",
+      severity: "blocking",
+      message: "Task has no bound plan.",
+    });
+    return { ready: false, issues };
+  }
+  if (!plan.objective.trim()) {
+    issues.push({
+      kind: "missing_objective",
+      severity: "blocking",
+      message: "Task plan needs an objective.",
+    });
+  }
+  if (plan.successCriteria.length === 0) {
+    issues.push({
+      kind: "missing_success_criteria",
+      severity: "blocking",
+      message: "Task plan needs success criteria.",
+    });
+  }
+  if (plan.evidenceRequired.length === 0) {
+    issues.push({
+      kind: "missing_evidence_required",
+      severity: "blocking",
+      message: "Task plan needs evidence requirements.",
+    });
+  }
+  if (plan.steps.length === 0) {
+    issues.push({
+      kind: "missing_steps",
+      severity: "blocking",
+      message: "Task plan needs execution steps.",
+    });
+  }
+  if (plan.openQuestions.length > 0) {
+    issues.push({
+      kind: "open_questions",
+      severity: "blocking",
+      message: `Task plan has unresolved questions: ${plan.openQuestions.join("; ")}`,
+    });
+  }
+  return { ready: issues.every((issue) => issue.severity !== "blocking"), issues };
 }
 
 function cloneTaskPlan(plan: TaskPlan): TaskPlan {

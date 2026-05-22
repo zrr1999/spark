@@ -15,14 +15,14 @@ Tools:
 - `spark_claim_task` — claim or update concrete task work for the current session in the active thread; tasks render as `@name: title`, and optional `roleRef` bindings can later be auto-claimed by Spark runtime execution. Claiming is an execution commitment: agents should read the task's bound plan before creating TODOs or executing.
 - `spark_update_task_todos` — update TODOs attached to a claimed task.
 - `spark_update_todos` — update independent session TODOs that are siblings of the thread display.
+- `spark_finish_task` — finish this session's claimed task as `done`, `failed`, or `cancelled` without routing through task planning.
 - `spark_run_ready_tasks` — start the Spark DAG manager for ready tasks; dry-run remains synchronous and read-only by default. Ready-task execution uses reusable role specs via task `roleRef`s and creates fresh `role-run`s by default.
 - `spark_dag_manager` — inspect and control persisted DAG manager state with `status`, `reconcile`, `clear_inactive`, and `kill_active` actions. It reads `.spark/dag-runs.json`, reconciles stale running records against the task graph and active role-run process tracker, can clear inactive manager history, and can terminate active background role-run processes.
 - `spark_ask` — run a unified flow-native Spark ask workflow with
   one or more questions and persist the result as an ask artifact.
 - `spark_ask_replay` — replay the latest or a specified Spark ask artifact.
-- `spark_list_roles` — list builtin, project, and user reusable role specs.
-- `spark_get_role` — inspect one reusable role spec.
-- `spark_create_role` — create and persist a project reusable role spec from a proposal shape.
+- `spark_list_artifacts` — list Spark artifacts with compact bounded output.
+- `spark_get_artifact` — read a Spark artifact, truncated by default with `full=true` opt-in.
 
 Automatic behavior:
 
@@ -112,8 +112,8 @@ Automatic behavior:
    `spark_rename_thread`, `spark_plan_tasks`,
    `spark_claim_task`, `spark_update_task_todos`,
    `spark_update_todos`,
-   `spark_list_roles` / `spark_get_role`,
-   `spark_run_ready_tasks`, and `pi-cue` tools.
+   `list_roles` / `get_role`,
+   `spark_run_ready_tasks`, `spark_list_artifacts` / `spark_get_artifact`, and `pi-cue` tools.
 8. Spark display-name quality is model-maintained when the
    improvement is obvious:
    - models may update the active thread title and the current
@@ -181,9 +181,12 @@ allow_dirs = [
 
 ## `pi-roles`
 
-- `run_role` — resolve a builtin/project/user role and run one explicit instruction.
+- `list_roles` — list builtin/project roles, optionally including user roles.
+- `get_role` — inspect one role; the full system prompt is opt-in.
+- `create_role` — persist a project role by default, or a user role when explicitly requested.
+- `call_role` — call one reusable role directly with an explicit instruction.
 
-`run_role` is intentionally minimal and task-agnostic:
+`call_role` is intentionally minimal and task-agnostic:
 
 - defaults to `dryRun: true`, returning the exact Pi CLI args that would be launched;
 - `dryRun: false` launches one child Pi run;

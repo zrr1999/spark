@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { stableId, type TaskRef, type ThreadRef } from "spark-core";
+import { stableId, type TaskPlan, type TaskRef, type ThreadRef } from "spark-core";
+import { defaultArtifactStore } from "spark-artifacts";
 import { defaultSparkDagRunStore } from "spark-runtime";
 import { defaultTaskGraphStore, defaultTaskTodoStore, TaskGraph } from "spark-tasks";
 import sparkExtension from "../packages/spark/src/extension/index.ts";
@@ -14,6 +15,21 @@ type SparkExtensionApiForTest = Parameters<typeof sparkExtension>[0];
 type SparkToolConfig = Parameters<NonNullable<SparkExtensionApiForTest["registerTool"]>>[0];
 type SparkToolResult = Awaited<ReturnType<SparkToolConfig["execute"]>>;
 type TestNotification = { message: string; level?: "info" | "warning" | "error" | "success" };
+
+function executionReadyPlan(objective: string): TaskPlan {
+  return {
+    objective,
+    contextRefs: [],
+    constraints: [],
+    nonGoals: [],
+    successCriteria: [`${objective} succeeds`],
+    evidenceRequired: [`${objective} evidence is recorded`],
+    steps: [objective],
+    riskLevel: "normal",
+    openQuestions: [],
+    askRefs: [],
+  };
+}
 
 type TestSparkContext = {
   cwd: string;
@@ -53,6 +69,35 @@ interface IndependentTodoStoreFile {
     notes?: string[];
   }>;
 }
+
+void test("spark_claim_task attaches task-plan clarification ask refs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-task-plan-ask-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+
+    const claim = await executeSparkTool(tools, "spark_claim_task", ctx, {
+      name: "clarify-plan",
+      title: "Clarify underspecified plan",
+      description: "Exercise task plan clarification attachment.",
+      kind: "implement",
+    });
+
+    const details = claim.details as
+      | {
+          task?: { ref?: TaskRef; plan?: { askRefs?: string[] } };
+          planClarification?: { asked?: boolean; artifactRef?: string };
+        }
+      | undefined;
+    assert.equal(details?.planClarification?.asked, true);
+    assert.ok(details?.planClarification?.artifactRef);
+    assert.deepEqual(details?.task?.plan?.askRefs, [details?.planClarification?.artifactRef]);
+    assert.match(toolText(claim), /plan clarification saved to artifact:/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 void test("spark_claim_task and spark_update_task_todos persist task TODOs across reload", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-task-todos-"));
@@ -322,24 +367,103 @@ void test("spark_claim_task rejects terminal statuses", async () => {
   }
 });
 
-void test("spark_status activates the first active thread as current for the Pi session", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-tool-status-activates-thread-"));
+void test("spark_finish_task completes this session's claimed task", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-finish-task-"));
   try {
     await writeEmptySparkThread(dir);
-    const ctx = testSparkContext(dir, "status-activates");
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+
+    const claim = await executeSparkTool(tools, "spark_claim_task", ctx, {
+      name: "finish-me",
+      title: "Finish me",
+      description: "Exercise task lifecycle completion.",
+    });
+    const taskRef = (claim.details?.task as { ref?: TaskRef } | undefined)?.ref;
+    assert.ok(taskRef);
+
+    const finished = await executeSparkTool(tools, "spark_finish_task", ctx, {
+      summary: "Done for test.",
+    });
+    assert.match(toolText(finished), /Finished Spark task: \[done\] @finish-me: Finish me/);
+    assert.equal((finished.details?.task as { status?: string } | undefined)?.status, "done");
+
+    const loaded = await defaultTaskGraphStore(dir).load();
+    assert.ok(loaded);
+    assert.equal(loaded.getTask(taskRef).status, "done");
+    assert.equal(loaded.getTask(taskRef).claim, undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark artifact tools list and read artifacts with truncated default body", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-artifacts-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const ctx = testSparkContext(dir, "main");
+    const artifact = await defaultArtifactStore(dir).put({
+      kind: "research",
+      title: "Long research note",
+      format: "text",
+      body: "abcdef".repeat(1000),
+      provenance: { producer: "spark" },
+    });
+    const { tools } = registerSparkToolsForTest();
+
+    const listed = await executeSparkTool(tools, "spark_list_artifacts", ctx, { kind: "research" });
+    assert.match(toolText(listed), new RegExp(`${artifact.ref}.*Long research note`));
+
+    const read = await executeSparkTool(tools, "spark_get_artifact", ctx, {
+      artifactRef: artifact.ref,
+      maxChars: 40,
+    });
+    assert.match(toolText(read), /Long research note/);
+    assert.match(toolText(read), /truncated/);
+    assert.equal((read.details as { truncated?: boolean }).truncated, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark_use_thread clarifies generic new thread intent", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-thread-intent-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+
+    const created = await executeSparkTool(tools, "spark_use_thread", ctx, { title: "tasks" });
+    assert.match(toolText(created), /Current Spark thread/);
+    const artifacts = await defaultArtifactStore(dir).list({
+      kind: "ask-answer",
+    });
+    assert.equal(artifacts.length, 1);
+    const traces = await defaultArtifactStore(dir).list({
+      kind: "run-trace",
+    });
+    assert.ok(traces.some((artifact) => artifact.title === "Thread intent clarification"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark_status does not activate an arbitrary thread for the Pi session", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-status-no-auto-thread-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const ctx = testSparkContext(dir, "status-no-auto");
     const { tools } = registerSparkToolsForTest();
 
     const status = await executeSparkTool(tools, "spark_status", ctx, {});
     const statusText = toolText(status);
 
-    assert.match(statusText, /Tool persistence \[current\]/);
-    const statusDetails = status.details as
-      | { activeThreadRef?: string; threads?: Array<{ ref?: string }> }
-      | undefined;
-    assert.equal(statusDetails?.activeThreadRef, statusDetails?.threads?.[0]?.ref);
-    await readFile(
-      join(dir, ".spark", "current-thread", `${ctxSessionStoreScope(ctx)}.json`),
-      "utf8",
+    assert.doesNotMatch(statusText, /\[current\]/);
+    assert.match(statusText, /Tool persistence/);
+    const statusDetails = status.details as { activeThreadRef?: string } | undefined;
+    assert.equal(statusDetails?.activeThreadRef, undefined);
+    await assert.rejects(() =>
+      readFile(join(dir, ".spark", "current-thread", `${ctxSessionStoreScope(ctx)}.json`), "utf8"),
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -356,9 +480,9 @@ void test("done threads are cleared from current selection and not auto-reactiva
       description: "Should not remain current.",
       status: "done",
     });
-    const activeThread = graph.createThread({
+    graph.createThread({
       title: "Next workflow",
-      description: "Should become current.",
+      description: "Should not become current automatically.",
     });
     await defaultTaskGraphStore(dir).save(graph);
     const ctx = testSparkContext(dir, "main");
@@ -367,17 +491,14 @@ void test("done threads are cleared from current selection and not auto-reactiva
     await executeSparkTool(tools, "spark_use_thread", ctx, { thread: doneThread.ref });
     const status = await executeSparkTool(tools, "spark_status", ctx, {});
     const statusDetails = status.details as { activeThreadRef?: string } | undefined;
-    assert.equal(statusDetails?.activeThreadRef, activeThread.ref);
-    assert.match(toolText(status), /Next workflow \[current\]/);
+    assert.equal(statusDetails?.activeThreadRef, undefined);
+    assert.match(toolText(status), /Next workflow/);
+    assert.doesNotMatch(toolText(status), /Next workflow \[current\]/);
     assert.doesNotMatch(toolText(status), /Completed workflow \[current\]/);
 
-    const stored = JSON.parse(
-      await readFile(
-        join(dir, ".spark", "current-thread", `${ctxSessionStoreScope(ctx)}.json`),
-        "utf8",
-      ),
-    ) as { threadRef?: string };
-    assert.equal(stored.threadRef, activeThread.ref);
+    await assert.rejects(() =>
+      readFile(join(dir, ".spark", "current-thread", `${ctxSessionStoreScope(ctx)}.json`), "utf8"),
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -479,6 +600,7 @@ void test("spark_run_ready_tasks emits DAG completion follow-up when manager fin
       kind: "implement",
       status: "pending",
       roleRef: "role:builtin-worker",
+      plan: executionReadyPlan("Ready role task"),
     });
     await store.save(graph);
     const fakePi = join(dir, "pi");
@@ -554,11 +676,13 @@ void test("spark_status defaults to active view, supports full history, summary,
     const active = await executeSparkTool(tools, "spark_status", ctx, {});
     const activeText = toolText(active);
     assert.match(activeText, /Spark tasks \(active view, limit=20\):/);
-    assert.match(activeText, /Tool persistence \[current\]/);
+    assert.match(activeText, /Tool persistence/);
+    assert.doesNotMatch(activeText, /Tool persistence \[current\]/);
     assert.doesNotMatch(activeText, /Thread status: active/);
     assert.match(activeText, /Active tasks:/);
     assert.match(activeText, /Mine running task/);
     assert.match(activeText, /Other pending task/);
+    assert.match(activeText, /plan=not-ready\(missing-success,missing-evidence\)/);
     assert.doesNotMatch(activeText, /Finished task history/);
     assert.doesNotMatch(activeText, /Cancelled task history/);
     assert.doesNotMatch(activeText, /kind=implement/);
@@ -567,7 +691,7 @@ void test("spark_status defaults to active view, supports full history, summary,
     assert.match(activeText, /Hidden finished tasks: 2 \(use view=full to include\)/);
     assert.equal(active.details?.view, "active");
     assert.equal(active.details?.limit, 20);
-    assert.equal(active.details?.activeThreadRef, thread.ref);
+    assert.equal(active.details?.activeThreadRef, undefined);
     assert.equal("tasks" in active.details!, false);
     assert.equal("dependencies" in active.details!, false);
 

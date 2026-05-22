@@ -101,7 +101,7 @@ void test("active Spark prompt preserves base prompt and avoids repeated Spark d
   assert.doesNotMatch(prompt, /Do not satisfy such feedback by only storing memory or preferences/);
 });
 
-void test("active Spark context does not select a current thread before session activation", async () => {
+void test("active Spark context can summarize a sole thread without persisting current selection", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-no-current-before-activation-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -117,7 +117,7 @@ void test("active Spark context does not select a current thread before session 
       },
     });
 
-    assert.equal(summary, undefined);
+    assert.match(summary ?? "", /Dormant thread/);
     await assert.rejects(() => stat(join(dir, ".spark", "current-thread")));
   } finally {
     await rm(dir, { recursive: true, force: true });

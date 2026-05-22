@@ -45,6 +45,15 @@ export function renderSparkToolCall(
         [formatStringArg(args.task, { prefix: "task=" }), formatOpsSummary(args.ops)],
         theme,
       );
+    case "spark_finish_task":
+      return renderToolCall(
+        toolName,
+        [
+          formatStringArg(args.task, { prefix: "task=" }),
+          formatStringArg(args.status, { fallback: "done" }),
+        ],
+        theme,
+      );
     case "spark_claim_task":
       return renderToolCall(
         toolName,
@@ -118,21 +127,23 @@ export function renderSparkToolCall(
         [formatStringArg(args.artifactRef, { prefix: "artifact=" })],
         theme,
       );
-    case "spark_list_roles":
-      return renderToolCall(
-        toolName,
-        [formatStringArg(args.source ?? args.scope, { fallback: "all" })],
-        theme,
-      );
-    case "spark_get_role":
-      return renderToolCall(toolName, [formatStringArg(args.role)], theme);
-    case "spark_create_role":
+    case "spark_list_artifacts":
       return renderToolCall(
         toolName,
         [
-          formatStringArg(args.id, { prefix: "id=" }),
-          formatStringArg(args.description, { maxLength: 80 }),
-          formatArrayCount(args.expectedUses, "uses"),
+          formatStringArg(args.kind, { prefix: "kind=" }),
+          formatStringArg(args.producer, { prefix: "producer=" }),
+          formatNumberArg(args.limit, { prefix: "limit=" }),
+        ],
+        theme,
+      );
+    case "spark_get_artifact":
+      return renderToolCall(
+        toolName,
+        [
+          formatStringArg(args.artifactRef, { prefix: "artifact=" }),
+          args.full === true ? "full" : undefined,
+          formatNumberArg(args.maxChars, { prefix: "max=" }),
         ],
         theme,
       );

@@ -39,14 +39,17 @@ above this package.
 
 ## Tool surface
 
-`pi-roles` also registers one minimal Pi tool:
+`pi-roles` registers role-spec management tools plus one minimal direct-call tool:
 
-- `run_role` — resolve a builtin/project role, optionally including user roles with `includeUser: true`, and run one explicit instruction.
+- `list_roles` — list builtin/project roles, optionally including user roles with `includeUser: true`.
+- `get_role` — inspect one role; full `systemPrompt` is opt-in with `includePrompt: true`.
+- `create_role` — persist a project role by default, or a user role when `source: "user"` is explicit.
+- `call_role` — resolve a builtin/project/user role and call it once with an explicit instruction.
 
-Modes:
+`call_role` modes:
 
 - default / `dryRun: true` — resolve the role and return the exact Pi CLI args without launching a child process.
 - `dryRun: false, mode: "fresh"` — launch a new child Pi session from the role and instruction.
 - `dryRun: false, mode: "forked"` — launch with explicit parent context; requires `forkFromSession`.
 
-This tool intentionally stays below Spark: it does not claim tasks, write Spark artifacts, or schedule DAG work. Use `spark_run_ready_tasks` for Spark-managed task execution.
+`call_role` intentionally stays below Spark: it does not claim tasks, write Spark artifacts, or schedule DAG work. Use `spark_run_ready_tasks` for Spark-managed task execution.
