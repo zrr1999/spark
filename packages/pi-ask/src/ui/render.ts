@@ -9,6 +9,39 @@ function enforceLineWidths(lines: string[], width: number): string[] {
   return lines.map((line) => truncateToWidth(line, maxWidth, "…"));
 }
 
+function appendWrappedText(
+  lines: string[],
+  text: string,
+  width: number,
+  firstPrefix = "",
+  restPrefix = firstPrefix,
+): void {
+  lines.push(...wrapPrefixedText(text, width, firstPrefix, restPrefix));
+}
+
+function wrapPrefixedText(
+  text: string,
+  width: number,
+  firstPrefix = "",
+  restPrefix = firstPrefix,
+): string[] {
+  const wrapped: string[] = [];
+  const contentWidth = Math.max(
+    1,
+    width - Math.max(visibleWidth(firstPrefix), visibleWidth(restPrefix)),
+  );
+  const paragraphs = text.split(/\r?\n/);
+  for (const paragraph of paragraphs) {
+    const paragraphLines = wrapTextWithAnsi(paragraph, contentWidth);
+    const renderedLines = paragraphLines.length > 0 ? paragraphLines : [""];
+    for (const line of renderedLines) {
+      const prefix = wrapped.length === 0 ? firstPrefix : restPrefix;
+      wrapped.push(`${prefix}${line}`);
+    }
+  }
+  return wrapped.length > 0 ? wrapped : [firstPrefix];
+}
+
 // ---- Theme interface (matches pi-tui's Theme) ----
 
 export interface RenderTheme {
@@ -121,15 +154,28 @@ export interface RenderInput {
 }
 
 export function renderAskScreen(input: RenderInput): string[] {
-  const { state, questions, optionsByTab, theme: rawTheme, width, language, title } = input;
+  const {
+    state,
+    questions,
+    optionsByTab,
+    theme: rawTheme,
+    width,
+    language,
+    title,
+    context,
+  } = input;
   const theme = normalizeRenderTheme(rawTheme);
   const labels = L[language];
   const lines: string[] = [];
-  const truncate = (text: string, max?: number) => truncateToWidth(text, max ?? width);
 
   // --- Header ---
   if (title) {
-    lines.push(truncate(`${theme.bold(title)}`));
+    appendWrappedText(lines, theme.bold(title), width);
+  }
+  if (context) {
+    appendWrappedText(lines, theme.dim(context), width);
+  }
+  if (title || context) {
     lines.push(theme.dim("─".repeat(Math.min(width, 60))));
   }
 
@@ -197,10 +243,8 @@ function renderQuestionTab(
   width: number,
   labels: (typeof L)["en"],
 ): void {
-  const truncate = (text: string, max?: number) => truncateToWidth(text, max ?? width);
-
   // Prompt
-  lines.push(truncate(`  ${theme.bold(question.prompt)}`));
+  appendWrappedText(lines, theme.bold(question.prompt), Math.max(1, width - 2), "  ");
   if (question.type === "multi") {
     lines.push(theme.dim("  (multi-select — Space to toggle, then Enter or → to confirm)"));
   }
@@ -252,25 +296,30 @@ function renderQuestionTab(
       }
     }
 
-    let line: string;
+    const main = `${isFocused ? "▶" : icon} ${isFocused ? `${icon} ` : ""}${text}`;
+    let styledMain: string;
     if (isFocused) {
-      const focusedText =
-        opt.kind === "other" && state.inputMode ? `▶ ${icon} ${text}` : `▶ ${icon} ${text}`;
-      line = ` ${theme.fg("accent", focusedText)}`;
+      styledMain = theme.fg("accent", main);
     } else if ((isSelected && opt.kind === "option") || isCustomSelected) {
-      line = `   ${theme.fg("success", `${icon} ${text}`)}`;
+      styledMain = theme.fg("success", main);
     } else if (opt.kind === "other") {
-      line = `   ${theme.dim(`${icon} ${text}`)}`;
+      styledMain = theme.dim(main);
     } else {
-      line = `   ${icon} ${text}`;
+      styledMain = main;
     }
 
-    // Description for focused or non-sentinel options
-    if (opt.description && (isFocused || opt.kind === "option")) {
-      line += theme.dim(`  — ${opt.description}`);
-    }
-
-    optionLines.push(truncateToWidth(line, listWidth));
+    const description =
+      opt.description && (isFocused || opt.kind === "option")
+        ? theme.dim(`  — ${opt.description}`)
+        : "";
+    optionLines.push(
+      ...wrapPrefixedText(
+        `${styledMain}${description}`,
+        listWidth,
+        isFocused ? " " : "   ",
+        "     ",
+      ),
+    );
   }
 
   if (previewWidth > 0 && focusedOption?.preview) {
@@ -291,11 +340,17 @@ function renderQuestionTab(
   // Show current answer if any
   if (answer) {
     const answerText = formatAnswerBrief(answer, labels);
-    lines.push(theme.fg("success", `  ${answerText}`));
+    appendWrappedText(lines, theme.fg("success", answerText), Math.max(1, width - 2), "  ");
 
     // Show notes indicator
     if (answer.notes) {
-      lines.push(theme.dim(`  ${ICONS.note} ${truncate(answer.notes, width - 4)}`));
+      appendWrappedText(
+        lines,
+        theme.dim(`${ICONS.note} ${answer.notes}`),
+        Math.max(1, width - 2),
+        "  ",
+        "    ",
+      );
     }
   }
 
@@ -360,9 +415,7 @@ function renderSubmitTab(
   width: number,
   labels: (typeof L)["en"],
 ): void {
-  const truncate = (text: string, max?: number) => truncateToWidth(text, max ?? width);
-
-  lines.push(truncate(`  ${theme.bold("Review your answers")}`));
+  lines.push(truncateToWidth(`  ${theme.bold("Review your answers")}`, width));
   lines.push("");
 
   let allAnswered = true;
@@ -373,17 +426,33 @@ function renderSubmitTab(
 
     const header = q.header ?? `Q${i + 1}`;
     if (answer) {
-      lines.push(`  ${theme.fg("success", "✓")} ${theme.bold(header)}: ${answerText}`);
+      appendWrappedText(
+        lines,
+        `${theme.fg("success", "✓")} ${theme.bold(header)}: ${answerText}`,
+        Math.max(1, width - 2),
+        "  ",
+        "    ",
+      );
     } else {
       allAnswered = false;
-      lines.push(
-        `  ${theme.fg("warning", "?")} ${theme.bold(header)}: ${theme.fg("warning", labels.noAnswer)}`,
+      appendWrappedText(
+        lines,
+        `${theme.fg("warning", "?")} ${theme.bold(header)}: ${theme.fg("warning", labels.noAnswer)}`,
+        Math.max(1, width - 2),
+        "  ",
+        "    ",
       );
     }
     // Show notes if present
     const note = state.notesByQuestion.get(q.id);
     if (note) {
-      lines.push(`    ${theme.dim(`${ICONS.note} ${truncate(note, width - 6)}`)}`);
+      appendWrappedText(
+        lines,
+        theme.dim(`${ICONS.note} ${note}`),
+        Math.max(1, width - 4),
+        "    ",
+        "      ",
+      );
     }
   }
 
@@ -414,13 +483,21 @@ function renderSubmitTab(
     const action = actions[i];
     const isFocused = i === state.submitChoiceIndex;
     if (isFocused) {
-      lines.push(
-        truncate(
-          `  ${theme.fg("accent", `▶ ${action.icon} ${action.label}`)}  ${theme.dim(action.desc)}`,
-        ),
+      appendWrappedText(
+        lines,
+        `${theme.fg("accent", `▶ ${action.icon} ${action.label}`)}  ${theme.dim(action.desc)}`,
+        Math.max(1, width - 2),
+        "  ",
+        "    ",
       );
     } else {
-      lines.push(`   ${action.icon} ${theme.dim(action.label)}  ${theme.dim(action.desc)}`);
+      appendWrappedText(
+        lines,
+        `${action.icon} ${theme.dim(action.label)}  ${theme.dim(action.desc)}`,
+        Math.max(1, width - 3),
+        "   ",
+        "     ",
+      );
     }
   }
 

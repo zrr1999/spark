@@ -106,6 +106,60 @@ void test("ask flow render keeps all lines within terminal width", () => {
   );
 });
 
+void test("ask flow render wraps long prompt and option copy", () => {
+  const question = {
+    id: "decision",
+    prompt:
+      "Confirm whether the implementation plan should preserve the current state model while changing only the display behavior for very long ask text.",
+    type: "single" as const,
+    options: [
+      {
+        value: "wrap",
+        label: "Wrap long ask copy across multiple terminal rows",
+        description:
+          "Keep the full label and explanation visible instead of truncating it after the first row.",
+      },
+    ],
+  };
+  const lines = renderAskScreen({
+    state: createInitialState({ questions: [question] }),
+    questions: [question],
+    optionsByTab: [buildExtendedOptions(question, new Map())],
+    theme: {
+      fg: (_color, text) => text,
+      bold: (text) => text,
+      strikethrough: (text) => text,
+      dim: (text) => text,
+    },
+    width: 48,
+    language: "en",
+    title: "Ask with a deliberately long title that should wrap instead of disappearing",
+    context:
+      "Context can also be a longer paragraph and should remain readable on narrow terminals.",
+  });
+
+  assert.ok(
+    lines.every((line) => visibleWidth(line) <= 48),
+    lines.join("\n"),
+  );
+  assert.ok(
+    lines.some((line) => line.includes("long title that should")),
+    lines.join("\n"),
+  );
+  assert.ok(
+    lines.some((line) => line.includes("remain readable")),
+    lines.join("\n"),
+  );
+  assert.ok(
+    lines.some((line) => line.includes("changing only the display")),
+    lines.join("\n"),
+  );
+  assert.ok(
+    lines.some((line) => line.includes("instead of truncating")),
+    lines.join("\n"),
+  );
+});
+
 void test("spark ask select path exposes default custom affordance", async () => {
   const request = createSparkAskRequest({
     flow: "custom",
