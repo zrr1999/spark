@@ -5,35 +5,31 @@ description: |
    cue-shell uses direct-exec with its own composition operators:
    |> pipes stdout, -> runs in serial on success, || runs in parallel,
    ~> runs in serial ignoring failures.
-   Use run for ALL commands: quick ones (ls, cat, grep), builds, tests,
-   servers, and background jobs.  status/wait to track, kill to stop,
-   cron for scheduled tasks.  cue-shell has its own grammar — not bash-compatible.
+   Use cue_exec for ALL commands: quick ones (ls, cat, grep), builds, tests,
+   servers, and background jobs.  cue_jobs to list/status/wait/stop,
+   cue_schedule for scheduled tasks.  cue-shell has its own grammar — not bash-compatible.
 ---
 
 # pi-cue
 
 **The bash tool is disabled. cue-shell is the only command execution tool.**
 
-Use `run` for ALL commands — quick filesystem operations (ls, cat, grep),
+Use `cue_exec` for ALL commands — quick filesystem operations (ls, cat, grep),
 builds, test suites, dev servers, and long-running background processes.
 The extension automatically passes the current working directory (cwd) to
 each command via `:run(cwd=...)` mode param.
 
-## Tool reference (8 tools, organized by category)
+## Tool reference (5 resource-oriented tools)
 
-| Category   | Tool     | Purpose                                    | Key parameters                                                          |
-| ---------- | -------- | ------------------------------------------ | ----------------------------------------------------------------------- |
-| **Job**    | `run`    | Create and execute a job                   | `command`, `background?`, `timeout?`, `cwd?`, `tail?`                   |
-| **Job**    | `jobs`   | List jobs                                  | `status?` (running/pending/done/failed/killed)                          |
-| **Job**    | `status` | Inspect job/cron — state + stdout + stderr | `id` (J<n> or C<n>), `tail_bytes?`                                      |
-| **Job**    | `kill`   | Terminate job or remove cron               | `id` (J<n> or C<n>)                                                     |
-| **Job**    | `wait`   | Block until job reaches terminal state     | `id` (J<n>), `timeout?`                                                 |
-| **Cron**   | `cron`   | Unified cron management                    | `action` (add/list/pause/resume/remove), `schedule?`, `command?`, `id?` |
-| **System** | `scopes` | List environment scopes + HEAD env         | _(none)_                                                                |
-| **System** | `log`    | Show history for a job/cron or full log    | `id?`                                                                   |
+| Category     | Tool           | Purpose                                     | Key parameters                                                                          |
+| ------------ | -------------- | ------------------------------------------- | --------------------------------------------------------------------------------------- |
+| **Exec**     | `cue_exec`     | Execute a command and create a job          | `command`, `background?`, `timeout?`, `cwd?`, `tail_bytes?`                             |
+| **Jobs**     | `cue_jobs`     | List/status/wait/stop jobs                  | `action` (list/status/wait/stop), `id?`, `status?`, `limit?`, `timeout?`, `tail_bytes?` |
+| **Schedule** | `cue_schedule` | Add/list/pause/resume/remove scheduled jobs | `action` (add/list/pause/resume/remove), `schedule?`, `command?`, `id?`, `limit?`       |
+| **Scope**    | `cue_scope`    | Inspect scopes, env, or config              | `action` (list/env/config), `limit?`, `includeEnv?`, `tail_bytes?`                      |
+| **History**  | `cue_history`  | Show recent history for a job/cron or all   | `id?`, `limit?`, `tail_bytes?`                                                          |
 
-Tool names correspond directly to category operations on the three core objects
-(Jobs, Crons, Scopes). See `ARCHITECTURE.md` for the categorical model.
+Tool names are resource-oriented: one high-frequency execution tool plus compact managers for jobs, schedules, scopes, and history.
 
 ## How cue-shell works
 
@@ -71,15 +67,14 @@ a |> b -> c || d    =    (a |> b) -> (c || d)
 Group with `()` for explicit precedence:
 
 ```text
-run(command="(cargo build || cargo audit) -> cargo test")
+cue_exec(command="(cargo build || cargo audit) -> cargo test")
 ```
 
-**⚠️ `run(xxx)` ≠ `run (xxx)`** — parentheses immediately after
-`:run` are parsed as mode parameters. Always put a space before `(`
-for chain grouping:
+**⚠️ `cue_exec(command="...")` still sends `:run ...` to cue-shell.** Parentheses immediately after
+`:run` are parsed as mode parameters. The adapter inserts the needed space before grouped commands.
 
 ```text
-✅  run(command="(sleep 0.5 || echo fast) -> echo done")
+✅  cue_exec(command="(sleep 0.5 || echo fast) -> echo done")
 ```
 
 ### Converting from shell syntax
@@ -99,39 +94,40 @@ for chain grouping:
 ### Build and test
 
 ```text
-run(command="cargo build |> grep -E 'error|warning'")
-run(command="cargo build -> cargo test")
-run(command="cargo clippy || cargo test")
-run(command="(cargo build || cargo audit) -> cargo test")
+cue_exec(command="cargo build |> grep -E 'error|warning'")
+cue_exec(command="cargo build -> cargo test")
+cue_exec(command="cargo clippy || cargo test")
+cue_exec(command="(cargo build || cargo audit) -> cargo test")
 ```
 
 ### File operations
 
 ```text
-run(command="ls -la docs/")
-run(command="cat README.md")
-run(command="find . -name '*.rs' |> head -20")
+cue_exec(command="ls -la docs/")
+cue_exec(command="cat README.md")
+cue_exec(command="find . -name '*.rs' |> head -20")
 ```
 
 ### Long output commands (auto-truncated)
 
 ```text
-run(command="system_profiler SPFontsDataType")        # auto-truncated to 64 KiB
-run(command="system_profiler SPFontsDataType", tail=false)  # full output
+cue_exec(command="system_profiler SPFontsDataType")                    # auto-tailed to 16 KiB/stream
+cue_exec(command="system_profiler SPFontsDataType", tail_bytes=0)       # full output
+cue_exec(command="system_profiler SPFontsDataType", tail_bytes=4096)    # smaller tail
 ```
 
 ### Package management
 
 ```text
-run(command="npm install")
-run(command="pip install -r requirements.txt")
+cue_exec(command="npm install")
+cue_exec(command="pip install -r requirements.txt")
 ```
 
 ### Long-running processes (background)
 
 ```text
-run(command="npm run dev", background=true)
-run(command="python -m http.server 8080", background=true)
+cue_exec(command="npm run dev", background=true)
+cue_exec(command="python -m http.server 8080", background=true)
 ```
 
 ---
@@ -141,24 +137,26 @@ run(command="python -m http.server 8080", background=true)
 ### Background job (fire-and-poll)
 
 ```text
-run(command="...", background=true)       → job_id + chain structure
-jobs()                                     → overview list
-status(id="J42")                          → state + stdout + stderr
-log(id="J42")                             → history/log text
-wait(id="J42", timeout=120)               → block until done
-kill(id="J42")                            → stop if needed
+cue_exec(command="...", background=true)   → job_id + chain structure
+cue_jobs(action="list")                            → overview list
+cue_jobs(action="status", id="J42")                      → state + stdout + stderr
+cue_history(id="J42")                         → history/log text
+cue_jobs(action="wait", id="J42", timeout=120)           → block until done
+cue_jobs(action="stop", id="J42")                        → stop if needed
 ```
 
 For chain tasks, each leaf job gets its own ID (e.g., J42, J43, J44).
-Check them individually with `status`. Use `jobs()` when you need
+Check them individually with `cue_jobs(action="status")`. Use `cue_jobs(action="list")` when you need
 a broader overview first.
 
 ### Scope / env inspection
 
 ```text
-scopes()
-log()
-log(id="J42")
+cue_scope(action="list")                         # compact scope list, no env dump
+cue_scope(action="list", includeEnv=true)          # include HEAD env, tailed by default
+cue_history()                                 # recent global history only
+cue_history(id="J42")                         # recent target history
+cue_history(id="J42", limit=0, tail_bytes=0)  # full target history
 ```
 
 ### Changing working directory
@@ -166,21 +164,21 @@ log(id="J42")
 The extension automatically passes cwd. To run in a different directory:
 
 ```text
-run(command="ls", cwd="/path/to/target")
+cue_exec(command="ls", cwd="/path/to/target")
 ```
 
 ### Cron scheduling
 
 ```text
-cron(action="add", schedule="every 5m", command="cargo test")
-cron(action="add", schedule="in 30s", command="echo done")
-cron(action="add", schedule="at 09:00 on weekdays", command="cargo build --release")
-cron(action="add", schedule="*/5 * * * *", command="curl api/health")
-cron(action="list")
-status(id="C1")
-cron(action="pause", id="C1")
-cron(action="resume", id="C1")
-cron(action="remove", id="C1")            # or: kill(id="C1")
+cue_schedule(action="add", schedule="every 5m", command="cargo test")
+cue_schedule(action="add", schedule="in 30s", command="echo done")
+cue_schedule(action="add", schedule="at 09:00 on weekdays", command="cargo build --release")
+cue_schedule(action="add", schedule="*/5 * * * *", command="curl api/health")
+cue_schedule(action="list")
+cue_jobs(action="status", id="C1")
+cue_schedule(action="pause", id="C1")
+cue_schedule(action="resume", id="C1")
+cue_schedule(action="remove", id="C1")        # or: cue_jobs(action="stop", id="C1")
 ```
 
 **Important:** before creating a recurring cron, first test the same command
@@ -194,18 +192,18 @@ it really runs successfully in cue-shell.
 cue-shell provides a full TUI (`cue`) for interactive work — job browsing,
 scrolling output, foreground PTY, scopes, and more. **For multi-step
 interactive tasks, guide the user to the cue TUI instead of trying to
-simulate interaction through run.**
+simulate interaction through `cue_exec`.**
 
-| Task type                      | Use                                     | Why                                         |
-| ------------------------------ | --------------------------------------- | ------------------------------------------- |
-| One-shot commands              | `run`                                   | Fire and forget                             |
-| Reviewing job inventory        | `jobs` / `status`                       | Quick programmatic overview                 |
-| Reviewing cron inventory       | `cron(action="list")` / `status`        | Quick programmatic overview                 |
-| Reading state + output         | `status`                                | Single call returns all                     |
-| Reading history                | `log`                                   | Text snapshot for one target or all history |
-| Managing crons                 | `cron`                                  | Unified create/list/pause/resume/remove     |
-| Managing environment scopes    | Tell user: `cue` → `:scope list --tree` | Visual scope tree                           |
-| Foreground interactive process | Tell user: `cue` → `:run vim` → `:fg`   | PTY interaction                             |
+| Task type                      | Use                                                         | Why                                         |
+| ------------------------------ | ----------------------------------------------------------- | ------------------------------------------- |
+| One-shot commands              | `cue_exec`                                                  | Fire and forget                             |
+| Reviewing job inventory        | `cue_jobs` / `cue_jobs(action="status")`                    | Quick programmatic overview                 |
+| Reviewing cron inventory       | `cue_schedule(action="list")` / `cue_jobs(action="status")` | Quick programmatic overview                 |
+| Reading state + output         | `cue_jobs(action="status")`                                 | Single call returns all                     |
+| Reading history                | `cue_history`                                               | Text snapshot for one target or all history |
+| Managing crons                 | `cue_schedule`                                              | Unified create/list/pause/resume/remove     |
+| Managing environment scopes    | Tell user: `cue` → `:scope list --tree`                     | Visual scope tree                           |
+| Foreground interactive process | Tell user: `cue` → `:run vim` → `:fg`                       | PTY interaction                             |
 
 ---
 
@@ -214,31 +212,31 @@ simulate interaction through run.**
 cue-shell is NOT bash-compatible. These shell-isms will fail silently
 or error out:
 
-| ❌ Don't                           | ✅ Do instead                                 | Why                                                     |
-| ---------------------------------- | --------------------------------------------- | ------------------------------------------------------- | --- | -------------------------------------- |
-| `ls *.pdf` / `rm *.tmp`            | `find . -name '*.pdf'`                        | cue-shell does no glob expansion                        |
-| `cmd 2>/dev/null`                  | `cmd ~> echo ok` or check stderr via `status` | No shell redirect syntax; stderr is buffered per-job    |
-| `cmd1 && cmd2`                     | `cmd1 -> cmd2`                                | `&&` is bash; use `->` for serial-on-success            |
-| `echo $(date)`                     | Not supported                                 | No command substitution (`$()` / backtick)              |
-| heredoc: `cat << EOF ... EOF`      | `write /tmp/x; run cat /tmp/x`                | heredoc syntax not available                            |
-| `python3 -c "...nested quotes..."` | `write /tmp/s.py; run python3 /tmp/s.py`      | Quote nesting in `-c` is fragile; use a temp file       |
-| `cd /some/path` inside `command`   | `run(command="ls", cwd="/some/path")`         | Scope changes belong in `cwd` parameter or chain syntax |
-| `cmd1                              | cmd2`                                         | `cmd1 \|> cmd2`                                         | `   | `is reserved; use`\|>` for stdout pipe |
+| ❌ Don't                           | ✅ Do instead                                                     | Why                                                     |
+| ---------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------- | -------------------------------------- |
+| `ls *.pdf` / `rm *.tmp`            | `find . -name '*.pdf'`                                            | cue-shell does no glob expansion                        |
+| `cmd 2>/dev/null`                  | `cmd ~> echo ok` or check stderr via `cue_jobs(action="status")`  | No shell redirect syntax; stderr is buffered per-job    |
+| `cmd1 && cmd2`                     | `cmd1 -> cmd2`                                                    | `&&` is bash; use `->` for serial-on-success            |
+| `echo $(date)`                     | Not supported                                                     | No command substitution (`$()` / backtick)              |
+| heredoc: `cat << EOF ... EOF`      | Write a file first, then `cue_exec(command="cat /tmp/x")`         | heredoc syntax not available                            |
+| `python3 -c "...nested quotes..."` | Write a temp script, then `cue_exec(command="python3 /tmp/s.py")` | Quote nesting in `-c` is fragile; use a temp file       |
+| `cd /some/path` inside `command`   | `cue_exec(command="ls", cwd="/some/path")`                        | Scope changes belong in `cwd` parameter or chain syntax |
+| `cmd1 \| cmd2`                     | `cmd1 \|> cmd2`                                                   | `                                                       | `is reserved; use`\|>` for stdout pipe |
 
 When in doubt: cue-shell is direct-exec with its own grammar. If you
 catch yourself writing bash-isms, check the operator table above first.
 
-**⚠️ Multiple sync `run()` calls in the same function_call block may be
+**⚠️ Multiple sync `cue_exec()` calls in the same function_call block may be
 merged by the agent framework into a single job.** If you need true
 parallelism, use the `||` operator inside a single command string:
-`run(command="cmd1 || cmd2 || cmd3")` or start background jobs
-(`run(background=true)`).
+`cue_exec(command="cmd1 || cmd2 || cmd3")` or start background jobs
+(`cue_exec(background=true)`).
 
 ## Failed jobs and stderr
 
-Synchronous `run` will automatically include the last ~500 bytes of
-stderr in the error message when a job fails. `status` always fetches
-both stdout and stderr. This avoids extra round-trips for common debugging.
+Synchronous `cue_exec` will automatically include bounded stderr in the
+error message when a job fails. `cue_jobs(action="status")` fetches both stdout and stderr.
+This avoids extra round-trips for common debugging.
 
 ## Interaction with subagents, forks, and worktrees
 
@@ -247,11 +245,11 @@ When cue-shell is used inside `subagent(...)` with `context: "fork"` or
 
 - Each subagent / worktree task gets its **own isolated scope and cwd**
   inside the worktree directory.
-- `scopes()` reflects that isolated environment, not the parent's.
+- `cue_scope(action="list")` reflects that isolated environment, not the parent's.
 - Background jobs started in a subagent do NOT carry over to the parent
-  session. Check `jobs()` before assuming a job is still alive
+  session. Check `cue_jobs(action="list")` before assuming a job is still alive
   after a subagent returns.
-- The `cwd` parameter to `run` always resolves relative to the
+- The `cwd` parameter to `cue_exec` always resolves relative to the
   worktree root (when active), not the original repo root.
 
 When writing `chain` or `parallel` steps, pass explicit `cwd` if the
@@ -278,9 +276,8 @@ cued status
 - Max buffered output per stream: 4 MiB
 - Default timeout: 300 seconds (5 min)
 - File-system commands (mv, cp, rm, ls, cat, find, ...): 10 seconds
-- **`run`**: stdout/stderr truncated to last 64 KiB by
-  default. Set `tail=false` for full output.
-- **`status`**: defaults to last 64 KiB. Pass `tail_bytes=0` for full output.
+- **`cue_exec`**: stdout/stderr tailed to 16 KiB per stream by default. Pass `tail_bytes=0` for full output.
+- **`cue_jobs(action="status")` / `cue_jobs(action="wait")`**: default to 16 KiB per stream. Pass `tail_bytes=0` for full output.
 
 ---
 
@@ -302,17 +299,17 @@ This means you used `cd` inside a `:run` command with extra arguments.
 To change directory for a command, use the `cwd` parameter:
 
 ```text
-run(command="ls", cwd="/some/path")
+cue_exec(command="ls", cwd="/some/path")
 ```
 
 Or use chain syntax to combine `cd` with other scope transforms:
 
 ```text
-run(command="cd /some/path -> cargo build")
+cue_exec(command="cd /some/path -> cargo build")
 ```
 
 ### Stale cron entries
 
-Crons can be removed with `kill(id="C<n>")` or `cron(action="remove", id="C<n>")`.
+Crons can be removed with `cue_jobs(action="stop", id="C<n>")` or `cue_schedule(action="remove", id="C<n>")`.
 If you only want to stop triggering temporarily, prefer
-`cron(action="pause", id="C<n>")` and later `cron(action="resume", id="C<n>")`.
+`cue_schedule(action="pause", id="C<n>")` and later `cue_schedule(action="resume", id="C<n>")`.

@@ -6,15 +6,12 @@ Reusable Pi extension that exposes cue-shell as a durable, observable execution 
 
 ## Tools
 
-Short names are preserved from `pi-cue-shell`:
+Resource-oriented tools:
 
-- `run`
-- `jobs`
-- `status`
-- `kill`
-- `wait`
-- `cron`
-- `scopes`
-- `log`
+- `cue_exec` — execute commands and create cue-shell jobs. Foreground output is tailed to 16 KiB per stream by default (`tail_bytes: 0` for full output).
+- `cue_jobs` — list, inspect, wait for, and stop jobs via `action`. List output is limited to 20 rows by default.
+- `cue_schedule` — add/list/pause/resume/remove scheduled or one-shot jobs. List output is limited to 20 rows by default.
+- `cue_scope` — inspect scopes, HEAD env, or cue-shell config. Scope lists omit env unless requested.
+- `cue_history` — recent history only by default; use `limit: 0` and `tail_bytes: 0` for full text.
 
 The extension also disables the built-in `bash` tool on session start so command execution goes through cue-shell.

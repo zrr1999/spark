@@ -244,16 +244,13 @@ behavior belong in `packages/spark`.
 
 ## `pi-cue`
 
-Short-name tools preserved from `pi-cue-shell`:
+Resource-oriented tools:
 
-- `run` — create and execute a cue-shell job.
-- `jobs` — list jobs.
-- `status` — inspect a job or cron.
-- `kill` — terminate a job or remove a cron.
-- `wait` — wait for a job to reach a terminal state.
-- `cron` — add/list/pause/resume/remove scheduled jobs.
-- `scopes` — list cue-shell environment scopes.
-- `log` — show cue-shell history.
+- `cue_exec` — execute commands and create cue-shell jobs. Foreground stdout/stderr are tailed to 16 KiB per stream by default; pass `tail_bytes: 0` for full output.
+- `cue_jobs` — list, inspect, wait for, and stop jobs via `action`. List output is limited to 20 rows by default; `action=status` / `action=wait` output is tailed by default.
+- `cue_schedule` — add/list/pause/resume/remove scheduled or one-shot jobs. List output is limited to 20 rows by default.
+- `cue_scope` — inspect scopes, HEAD env, or cue-shell config. Scope lists are limited to 20 rows by default and omit env unless requested.
+- `cue_history` — show recent cue-shell history. Defaults to recent lines plus 16 KiB byte tail; pass `limit: 0` and `tail_bytes: 0` for full history.
 
 `pi-cue` also disables the built-in `bash` tool on
 session start, matching the old `pi-cue-shell` execution

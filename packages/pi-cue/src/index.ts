@@ -3,19 +3,18 @@
  *
  * Atomic execution tools organized by the three category objects:
  *
- *   Jobs (category J):
- *     run     — create and execute a job
- *     jobs    — list jobs
- *     status  — inspect a job/cron (state + stdout + stderr)
- *     kill    — terminate a job or remove a cron
- *     wait    — block until a background job completes
+ *   Execution:
+ *     cue_exec     — execute a command and create a job
  *
- *   Crons (recurring Job factories):
- *     cron    — unified cron management (add / list / pause / resume / remove)
+ *   Jobs:
+ *     cue_jobs     — list, inspect, wait for, or stop jobs
  *
- *   System (Scope & history):
- *     scopes  — list environment scopes
- *     log     — show job and daemon history
+ *   Schedules:
+ *     cue_schedule — add, list, pause, resume, or remove scheduled jobs
+ *
+ *   System:
+ *     cue_scope    — inspect scopes, env, or config
+ *     cue_history  — show job and daemon history
  *
  * See ARCHITECTURE.md for the category-theoretic model.
  */
@@ -168,6 +167,10 @@ const SHORT_TIMEOUT_COMMANDS = new Set([
   "[",
 ]);
 const SHORT_TIMEOUT_S = 10;
+const DEFAULT_OUTPUT_TAIL_BYTES = 16 * 1024;
+const DEFAULT_LIST_LIMIT = 20;
+const DEFAULT_LOG_TAIL_BYTES = 16 * 1024;
+const DEFAULT_ENV_TAIL_BYTES = 16 * 1024;
 
 function isFileOp(command: string): boolean {
   const firstWord = command.trim().split(/\s+/)[0];
@@ -196,8 +199,30 @@ function statusLabel(status: JobStatus): string {
 }
 
 function tailStr(s: string, maxBytes: number): { text: string; truncated: boolean } {
+  if (maxBytes <= 0) return { text: s, truncated: false };
   if (s.length <= maxBytes) return { text: s, truncated: false };
   return { text: s.slice(s.length - maxBytes), truncated: true };
+}
+
+function normalizeTailBytes(value: unknown, fallback = DEFAULT_OUTPUT_TAIL_BYTES): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.floor(value));
+}
+
+function normalizeLimit(value: unknown, fallback = DEFAULT_LIST_LIMIT): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.floor(value));
+}
+
+function truncationLine(stream: string, jobId: string): string {
+  return `[${stream} truncated — use cue_jobs action=status id=${jobId} tail_bytes=0 for full output]`;
+}
+
+function limitLines(text: string, maxLines: number): { text: string; truncated: boolean } {
+  if (maxLines <= 0) return { text, truncated: false };
+  const lines = text.split(/\r?\n/);
+  if (lines.length <= maxLines) return { text, truncated: false };
+  return { text: lines.slice(Math.max(0, lines.length - maxLines)).join("\n"), truncated: true };
 }
 
 function renderToolCall(
@@ -244,18 +269,18 @@ function truncateInline(value: string, maxLength: number): string {
 
 export function registerPiCueTools(pi: PiCueExtensionApi) {
   // ═══════════════════════════════════════════════════════════════════
-  //  run — create and execute a job
+  //  cue_exec — execute a command and create a job
   // ═══════════════════════════════════════════════════════════════════
 
   pi.registerTool({
-    name: "run",
+    name: "cue_exec",
     label: "Run Command",
     description:
       "Execute a command in cue-shell. " +
       "cue-shell is direct-exec (execvp), not bash: do not use shell-only syntax such as &&, semicolon command lists, redirection, subshell tests, or bash-style ||. " +
       "Its composition operators are: |> pipes stdout, -> runs in serial on success, || runs in parallel (not OR), ~> runs in serial ignoring failure. " +
       "Prefer direct-exec commands and Pi file tools; use separate tool calls or explicit /bin/sh -lc '...' only when shell semantics are genuinely required. " +
-      "Set background=true to start without waiting; track with status/wait, stop with kill. " +
+      "Set background=true to start without waiting; track with cue_jobs action=status/wait, stop with cue_jobs action=stop. " +
       "File-system commands (mv, cp, rm, ls, cat, find, ...) get a short 10s timeout by default.",
     parameters: Type.Object({
       command: Type.String({
@@ -283,19 +308,26 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       tail: Type.Optional(
         Type.Boolean({
           description:
-            "Truncate stdout/stderr to the last ~64 KiB each. Default: true. Set to false for full output.",
+            "Deprecated. When false, return full stdout/stderr. Prefer tail_bytes=0 for full output.",
           default: true,
+        }),
+      ),
+      tail_bytes: Type.Optional(
+        Type.Number({
+          description:
+            "Limit stdout/stderr to the last N bytes per stream. Default: 16384. Pass 0 for full output.",
         }),
       ),
     }),
     renderCall(args, theme) {
       return renderToolCall(
-        "run",
+        "cue_exec",
         [
           formatStringArg(args.command, { maxLength: 120 }),
           args.background === true ? "background" : undefined,
           formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
           formatStringArg(args.cwd, { prefix: "cwd=" }),
+          formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
           args.tail === false ? "tail=false" : undefined,
         ],
         theme,
@@ -309,6 +341,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         timeout?: number;
         cwd?: string;
         tail?: boolean;
+        tail_bytes?: number;
       },
       _signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
@@ -316,8 +349,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     ) {
       const cued = await getClient(ctx);
       const { command, cwd } = params;
-      const doTail = params.tail !== false; // default true: tail output
-      const TAIL_BYTES = 64 * 1024; // 64 KiB
+      const tailBytes = params.tail === false ? 0 : normalizeTailBytes(params.tail_bytes);
 
       if (params.background) {
         const result = await cued.startJob(command, { cwd });
@@ -331,7 +363,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           lines.push(`Job:   ${result.jobId}  [running]`);
           lines.push(`Cmd:   ${result.pipeline ?? command}`);
         }
-        lines.push("", `Track with status/wait using id ${result.jobId}.`);
+        lines.push("", `Track with cue_jobs action=status/wait using id ${result.jobId}.`);
         return {
           content: [{ type: "text" as const, text: lines.join("\n") }],
           details: {
@@ -352,22 +384,17 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       if (result.timedOut) {
         const lines = [
           `Job ${result.jobId}: Timed out after ${effectiveTimeout}s — switched to background.`,
-          `Track with status/wait using id ${result.jobId}.`,
+          `Track with cue_jobs action=status/wait using id ${result.jobId}.`,
         ];
         if (result.stdout.trim()) {
-          const t = doTail
-            ? tailStr(result.stdout, TAIL_BYTES)
-            : { text: result.stdout, truncated: false };
+          const t = tailStr(result.stdout, tailBytes);
           lines.push("", "[stdout so far]", t.text.trimEnd());
-          if (t.truncated)
-            lines.push(`[stdout truncated — use status with id ${result.jobId} for full output]`);
+          if (t.truncated) lines.push(truncationLine("stdout", result.jobId));
         }
         if (result.stderr.trim()) {
-          const t = doTail
-            ? tailStr(result.stderr, TAIL_BYTES)
-            : { text: result.stderr, truncated: false };
+          const t = tailStr(result.stderr, tailBytes);
           lines.push("", "[stderr so far]", t.text.trimEnd());
-          if (t.truncated) lines.push("[stderr truncated]");
+          if (t.truncated) lines.push(truncationLine("stderr", result.jobId));
         }
         return {
           content: [{ type: "text" as const, text: lines.join("\n") }],
@@ -384,38 +411,32 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         result.status === "Killed" ||
         result.status === "Cancelled"
       ) {
-        const stderrTail = result.stderr ? result.stderr.slice(-500).trimEnd() : "";
         const parts = [`Job ${result.jobId}: ${result.status}`];
         if (result.exitCode !== null) parts.push(` (exit ${result.exitCode})`);
         if (result.stdout.trim()) {
-          const t = doTail
-            ? tailStr(result.stdout, TAIL_BYTES)
-            : { text: result.stdout, truncated: false };
+          const t = tailStr(result.stdout, tailBytes);
           parts.push("\n" + t.text.trimEnd());
-          if (t.truncated)
-            parts.push(`[stdout truncated — use status with id ${result.jobId} for full output]`);
+          if (t.truncated) parts.push(`\n${truncationLine("stdout", result.jobId)}`);
         }
-        if (stderrTail) parts.push("\n[stderr tail]\n" + stderrTail);
+        if (result.stderr.trim()) {
+          const t = tailStr(result.stderr, tailBytes === 0 ? 0 : Math.min(tailBytes, 2_000));
+          parts.push("\n[stderr tail]\n" + t.text.trimEnd());
+          if (t.truncated) parts.push(`\n${truncationLine("stderr", result.jobId)}`);
+        }
         throw new Error(parts.join(""));
       }
 
       const out = [`Job ${result.jobId}: ${result.status}`];
       if (result.exitCode !== null && result.exitCode !== 0) out.push(` (exit ${result.exitCode})`);
       if (result.stdout.trim()) {
-        const t = doTail
-          ? tailStr(result.stdout, TAIL_BYTES)
-          : { text: result.stdout, truncated: false };
+        const t = tailStr(result.stdout, tailBytes);
         out.push("\n" + t.text.trimEnd());
-        if (t.truncated)
-          out.push(`\n[stdout truncated — use status with id ${result.jobId} for full output]`);
+        if (t.truncated) out.push(`\n${truncationLine("stdout", result.jobId)}`);
       }
       if (result.stderr.trim()) {
-        const t = doTail
-          ? tailStr(result.stderr, TAIL_BYTES)
-          : { text: result.stderr, truncated: false };
+        const t = tailStr(result.stderr, tailBytes);
         out.push("\n[stderr]\n" + t.text.trimEnd());
-        if (t.truncated)
-          out.push(`\n[stderr truncated — use status with id ${result.jobId} for full output]`);
+        if (t.truncated) out.push(`\n${truncationLine("stderr", result.jobId)}`);
       }
 
       return {
@@ -430,295 +451,261 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  //  jobs — list jobs
+  //  cue_jobs — manage and inspect jobs
   // ═══════════════════════════════════════════════════════════════════
 
   pi.registerTool({
-    name: "jobs",
-    label: "List Jobs",
-    description: "List cue-shell jobs with status and pipeline.",
+    name: "cue_jobs",
+    label: "Cue Jobs",
+    description:
+      "Manage cue-shell jobs. action='list' lists jobs, action='status' inspects one job or cron ID, action='wait' waits for a job, and action='stop' stops a job or removes a cron.",
     parameters: Type.Object({
-      status: Type.Optional(
+      action: Type.Optional(
         Type.String({
-          description: "Filter: running, pending, done, failed, killed, all. Default: all.",
+          description: "Action: list, status, wait, stop. Default: list.",
         }),
       ),
-    }),
-    renderCall(args, theme) {
-      return renderToolCall("jobs", [formatStringArg(args.status, { fallback: "all" })], theme);
-    },
-    async execute(
-      _toolCallId: string,
-      params: { status?: string },
-      _signal: AbortSignal,
-      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
-      ctx: { ui?: { notify?: (msg: string, level: string) => void } },
-    ) {
-      const cued = await getClient(ctx);
-      let jobs = await cued.listJobs();
-      const filter = (params.status ?? "all").toLowerCase();
-      if (filter !== "all") jobs = jobs.filter((j) => j.status.toLowerCase() === filter);
-      if (jobs.length === 0)
-        return {
-          content: [{ type: "text" as const, text: "No matching jobs." }],
-          details: { jobs: [] },
-        };
-      const lines = jobs.map((j) => {
-        let s = `${j.id}  ${statusLabel(j.status)}  ${j.pipeline}`;
-        if (j.exit_code != null) s += ` (exit ${j.exit_code})`;
-        if (j.chain_id) s += ` [${j.chain_id}]`;
-        return s;
-      });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: lines.join("\n"),
-          },
-        ],
-        details: { jobs },
-      };
-    },
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  //  status — inspect job or cron (state + stdout + stderr)
-  // ═══════════════════════════════════════════════════════════════════
-
-  pi.registerTool({
-    name: "status",
-    label: "Job/Cron Status",
-    description: "Inspect a job or cron by ID. Returns status, exit code, stdout and stderr.",
-    parameters: Type.Object({
-      id: Type.String({ description: "Job ID (J<n>) or cron ID (C<n>)." }),
+      id: Type.Optional(Type.String({ description: "Job ID (J<n>) or cron ID (C<n>)." })),
+      status: Type.Optional(
+        Type.String({
+          description:
+            "Filter for action='list': running, pending, done, failed, killed, all. Default: all.",
+        }),
+      ),
+      limit: Type.Optional(
+        Type.Number({ description: "Maximum jobs to show for action='list'. Default: 20." }),
+      ),
+      timeout: Type.Optional(
+        Type.Number({ description: "Max wait time in seconds for action='wait'. Default: 300." }),
+      ),
       tail_bytes: Type.Optional(
         Type.Number({
           description:
-            "Limit output to last N bytes per stream. Default: 65536 (64 KiB). Pass 0 for full output.",
+            "Limit stdout/stderr to the last N bytes for action='status' or action='wait'. Default: 16384. Pass 0 for full output.",
         }),
       ),
     }),
     renderCall(args, theme) {
       return renderToolCall(
-        "status",
-        [formatStringArg(args.id), formatNumberArg(args.tail_bytes, { prefix: "tail=" })],
-        theme,
-      );
-    },
-    async execute(
-      _toolCallId: string,
-      params: { id: string; tail_bytes?: number },
-      _signal: AbortSignal,
-      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
-      ctx: { ui?: { notify?: (msg: string, level: string) => void } },
-    ) {
-      const cued = await getClient(ctx);
-      const tailBytes = params.tail_bytes !== undefined ? params.tail_bytes : 65536;
-
-      if (params.id.startsWith("C")) {
-        const cron = await cued.cronStatus(params.id);
-        if (!cron)
-          return {
-            content: [{ type: "text" as const, text: `${params.id} not found.` }],
-            details: { found: false },
-          };
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `⏰ ${cron.id}  [${cron.status}]  ${cron.schedule} → ${cron.command}`,
-            },
-          ],
-          details: {
-            cronId: cron.id,
-            status: cron.status,
-            schedule: cron.schedule,
-            command: cron.command,
-          },
-        };
-      }
-
-      const job = await cued.jobStatus(params.id);
-      if (!job)
-        return {
-          content: [{ type: "text" as const, text: `${params.id} not found.` }],
-          details: { found: false },
-        };
-
-      const parts = [`${statusLabel(job.status)} — ${job.pipeline}`];
-      if (job.exit_code != null) parts.push(`Exit code: ${job.exit_code}`);
-      if (job.chain_id)
-        parts.push(
-          `Chain: ${job.chain_id} (leaf ${(job.chain_index ?? 0) + 1}/${job.chain_total ?? "?"})`,
-        );
-
-      try {
-        const out = await cued.jobOutput(params.id, tailBytes === 0 ? undefined : tailBytes);
-        if (out.stdout.trim()) parts.push("", out.stdout.trimEnd());
-        if (out.truncated) parts.push("[stdout truncated]");
-      } catch {
-        /* output may not be ready */
-      }
-
-      try {
-        const errOut = await cued.jobError(params.id);
-        if (errOut.stderr.trim()) parts.push("", "[stderr]", errOut.stderr.trimEnd());
-      } catch {
-        /* stderr may not be ready */
-      }
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: parts.join("\n"),
-          },
-        ],
-        details: {
-          jobId: job.id,
-          status: job.status,
-          exitCode: job.exit_code,
-          pipeline: job.pipeline,
-        },
-      };
-    },
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  //  kill — terminate a job or remove a cron
-  // ═══════════════════════════════════════════════════════════════════
-
-  pi.registerTool({
-    name: "kill",
-    label: "Kill Job / Remove Cron",
-    description: "Kill a running job or remove a cron. Has no effect on already-completed jobs.",
-    parameters: Type.Object({
-      id: Type.String({ description: "Job ID (J<n>) or cron ID (C<n>)." }),
-    }),
-    renderCall(args, theme) {
-      return renderToolCall("kill", [formatStringArg(args.id)], theme);
-    },
-    async execute(
-      _toolCallId: string,
-      params: { id: string },
-      _signal: AbortSignal,
-      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
-      ctx: { ui?: { notify?: (msg: string, level: string) => void } },
-    ) {
-      const cued = await getClient(ctx);
-      await cued.stopJob(params.id);
-      return {
-        content: [{ type: "text" as const, text: `Stopped ${params.id}.` }],
-        details: { targetId: params.id },
-      };
-    },
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  //  wait — block until job reaches terminal state
-  // ═══════════════════════════════════════════════════════════════════
-
-  pi.registerTool({
-    name: "wait",
-    label: "Wait for Job",
-    description:
-      "Block until a background job reaches Done, Failed, or Killed, then return its status and output.",
-    parameters: Type.Object({
-      id: Type.String({
-        description: "Job ID (J<n>) returned by run(background=true).",
-      }),
-      timeout: Type.Optional(
-        Type.Number({
-          description: "Max wait time in seconds. Default: 300.",
-          default: 300,
-        }),
-      ),
-    }),
-    renderCall(args, theme) {
-      return renderToolCall(
-        "wait",
+        "cue_jobs",
         [
-          formatStringArg(args.id),
+          formatStringArg(args.action, { fallback: "list" }),
+          formatStringArg(args.id, { prefix: "id=" }),
+          formatStringArg(args.status, { prefix: "status=" }),
+          formatNumberArg(args.limit, { prefix: "limit=" }),
           formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
+          formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
         ],
         theme,
       );
     },
     async execute(
       _toolCallId: string,
-      params: { id: string; timeout?: number },
+      params: {
+        action?: string;
+        id?: string;
+        status?: string;
+        limit?: number;
+        timeout?: number;
+        tail_bytes?: number;
+      },
       _signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: { ui?: { notify?: (msg: string, level: string) => void } },
     ) {
       const cued = await getClient(ctx);
-      const deadline = Date.now() + (params.timeout ?? 300) * 1000;
+      const action = (params.action ?? "list").toLowerCase();
 
-      while (Date.now() < deadline) {
-        const job = await cued.jobStatus(params.id);
-        if (!job)
+      if (action === "list") {
+        let jobs = await cued.listJobs();
+        const filter = (params.status ?? "all").toLowerCase();
+        if (filter !== "all") jobs = jobs.filter((j) => j.status.toLowerCase() === filter);
+        const total = jobs.length;
+        jobs = jobs.slice(0, normalizeLimit(params.limit));
+        if (total === 0)
+          return {
+            content: [{ type: "text" as const, text: "No matching jobs." }],
+            details: { count: 0, shown: 0, jobs: [] },
+          };
+        const lines = jobs.map((j) => {
+          let s = `${j.id}  ${statusLabel(j.status)}  ${j.pipeline}`;
+          if (j.exit_code != null) s += ` (exit ${j.exit_code})`;
+          if (j.chain_id) s += ` [${j.chain_id}]`;
+          return s;
+        });
+        if (total > jobs.length) lines.push(`… ${total - jobs.length} more job(s)`);
+        return {
+          content: [{ type: "text" as const, text: lines.join("\n") }],
+          details: { count: total, shown: jobs.length, jobs },
+        };
+      }
+
+      if (!params.id)
+        return {
+          content: [{ type: "text" as const, text: `action='${action}' requires id parameter.` }],
+          details: { error: "missing_id" },
+        };
+
+      if (action === "stop") {
+        await cued.stopJob(params.id);
+        return {
+          content: [{ type: "text" as const, text: `Stopped ${params.id}.` }],
+          details: { targetId: params.id },
+        };
+      }
+
+      if (action === "status") {
+        const tailBytes = normalizeTailBytes(params.tail_bytes);
+
+        if (params.id.startsWith("C")) {
+          const cron = await cued.cronStatus(params.id);
+          if (!cron)
+            return {
+              content: [{ type: "text" as const, text: `${params.id} not found.` }],
+              details: { found: false },
+            };
           return {
             content: [
               {
                 type: "text" as const,
-                text: `Job ${params.id} not found.`,
+                text: `⏰ ${cron.id}  [${cron.status}]  ${cron.schedule} → ${cron.command}`,
               },
             ],
-            details: { found: false },
-          };
-
-        if (
-          job.status === "Done" ||
-          job.status === "Failed" ||
-          job.status === "Killed" ||
-          job.status === "Cancelled"
-        ) {
-          const out = await cued.jobOutput(params.id);
-          const lines = [`${statusLabel(job.status)} — ${job.pipeline}`];
-          if (job.exit_code != null) lines.push(`Exit code: ${job.exit_code}`);
-          if (out.stdout.trim()) lines.push("", out.stdout.trimEnd());
-          if (out.stderr.trim()) lines.push("", "[stderr]", out.stderr.trimEnd());
-          const text = `Job ${params.id} completed\n\n${lines.join("\n")}`;
-          if (job.status === "Failed") throw new Error(text);
-          if (job.status === "Killed") throw new Error(`Job ${params.id} was killed`);
-          if (job.status === "Cancelled") throw new Error(`Job ${params.id} was cancelled`);
-          return {
-            content: [{ type: "text" as const, text }],
             details: {
-              jobId: job.id,
-              status: job.status,
-              exitCode: job.exit_code,
+              cronId: cron.id,
+              status: cron.status,
+              schedule: cron.schedule,
+              command: cron.command,
             },
           };
         }
-        await new Promise((r) => setTimeout(r, 500));
+
+        const job = await cued.jobStatus(params.id);
+        if (!job)
+          return {
+            content: [{ type: "text" as const, text: `${params.id} not found.` }],
+            details: { found: false },
+          };
+
+        const parts = [`${statusLabel(job.status)} — ${job.pipeline}`];
+        if (job.exit_code != null) parts.push(`Exit code: ${job.exit_code}`);
+        if (job.chain_id)
+          parts.push(
+            `Chain: ${job.chain_id} (leaf ${(job.chain_index ?? 0) + 1}/${job.chain_total ?? "?"})`,
+          );
+
+        try {
+          const out = await cued.jobOutput(params.id, tailBytes === 0 ? undefined : tailBytes);
+          if (out.stdout.trim()) parts.push("", out.stdout.trimEnd());
+          if (out.truncated) parts.push("[stdout truncated]");
+        } catch {
+          /* output may not be ready */
+        }
+
+        try {
+          const errOut = await cued.jobError(params.id);
+          const err = tailStr(errOut.stderr, tailBytes);
+          if (err.text.trim()) parts.push("", "[stderr]", err.text.trimEnd());
+          if (err.truncated || errOut.truncated) parts.push("[stderr truncated]");
+        } catch {
+          /* stderr may not be ready */
+        }
+
+        return {
+          content: [{ type: "text" as const, text: parts.join("\n") }],
+          details: {
+            jobId: job.id,
+            status: job.status,
+            exitCode: job.exit_code,
+            pipeline: job.pipeline,
+          },
+        };
+      }
+
+      if (action === "wait") {
+        const deadline = Date.now() + (params.timeout ?? 300) * 1000;
+        const tailBytes = normalizeTailBytes(params.tail_bytes);
+
+        while (Date.now() < deadline) {
+          const job = await cued.jobStatus(params.id);
+          if (!job)
+            return {
+              content: [{ type: "text" as const, text: `Job ${params.id} not found.` }],
+              details: { found: false },
+            };
+
+          if (
+            job.status === "Done" ||
+            job.status === "Failed" ||
+            job.status === "Killed" ||
+            job.status === "Cancelled"
+          ) {
+            const out = await cued.jobOutput(params.id, tailBytes === 0 ? undefined : tailBytes);
+            let errOut: { stderr: string; truncated?: boolean } = { stderr: "", truncated: false };
+            try {
+              errOut = await cued.jobError(params.id);
+            } catch {
+              /* stderr may not be ready */
+            }
+            const err = tailStr(errOut.stderr, tailBytes);
+            const lines = [`${statusLabel(job.status)} — ${job.pipeline}`];
+            if (job.exit_code != null) lines.push(`Exit code: ${job.exit_code}`);
+            if (out.stdout.trim()) lines.push("", out.stdout.trimEnd());
+            if (out.truncated) lines.push("[stdout truncated]");
+            if (err.text.trim()) lines.push("", "[stderr]", err.text.trimEnd());
+            if (err.truncated || errOut.truncated) lines.push("[stderr truncated]");
+            const text = `Job ${params.id} completed\n\n${lines.join("\n")}`;
+            if (job.status === "Failed") throw new Error(text);
+            if (job.status === "Killed") throw new Error(`Job ${params.id} was killed`);
+            if (job.status === "Cancelled") throw new Error(`Job ${params.id} was cancelled`);
+            return {
+              content: [{ type: "text" as const, text }],
+              details: {
+                jobId: job.id,
+                status: job.status,
+                exitCode: job.exit_code,
+              },
+            };
+          }
+          await new Promise((r) => setTimeout(r, 500));
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Timed out after ${params.timeout ?? 300}s waiting for ${params.id}.`,
+            },
+          ],
+          details: { timedOut: true },
+        };
       }
 
       return {
         content: [
           {
             type: "text" as const,
-            text: `Timed out after ${params.timeout ?? 300}s waiting for ${params.id}.`,
+            text: `Unknown action: '${action}'. Valid: list, status, wait, stop.`,
           },
         ],
-        details: { timedOut: true },
+        details: { error: "unknown_action" },
       };
     },
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  //  cron — unified cron management
+  //  cue_schedule — unified schedule management
   // ═══════════════════════════════════════════════════════════════════
 
   pi.registerTool({
-    name: "cron",
-    label: "Manage Crons",
+    name: "cue_schedule",
+    label: "Cue Schedule",
     description:
-      "Unified cron management. " +
-      "action='add': schedule a recurring job (requires schedule + command). " +
-      "action='list': list all crons. " +
-      "action='pause'/'resume': control a cron by id. " +
-      "action='remove': delete a cron by id (also available via kill).",
+      "Manage scheduled cue-shell jobs. " +
+      "action='add': schedule a recurring or one-shot job (requires schedule + command). " +
+      "action='list': list schedules. " +
+      "action='pause'/'resume': control a schedule by id. " +
+      "action='remove': delete a schedule by id (also available via cue_jobs action=stop).",
     parameters: Type.Object({
       action: Type.String({
         description: "Action: add, list, pause, resume, remove.",
@@ -736,7 +723,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       ),
       id: Type.Optional(
         Type.String({
-          description: "Cron ID (C<n>), required for pause/resume/remove.",
+          description: "Schedule/cron ID (C<n>), required for pause/resume/remove.",
         }),
       ),
       status: Type.Optional(
@@ -745,16 +732,20 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             "Filter for action='list': scheduled, paused, completed, expired, active, all. Default: all.",
         }),
       ),
+      limit: Type.Optional(
+        Type.Number({ description: "Maximum schedules to show for action=list. Default: 20." }),
+      ),
     }),
     renderCall(args, theme) {
       return renderToolCall(
-        "cron",
+        "cue_schedule",
         [
           formatStringArg(args.action, { fallback: "list" }),
           formatStringArg(args.id, { prefix: "id=" }),
           formatStringArg(args.schedule, { prefix: "schedule=", maxLength: 40 }),
           formatStringArg(args.command, { prefix: "command=", maxLength: 80 }),
           formatStringArg(args.status, { prefix: "status=" }),
+          formatNumberArg(args.limit, { prefix: "limit=" }),
         ],
         theme,
       );
@@ -767,6 +758,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         command?: string;
         id?: string;
         status?: string;
+        limit?: number;
       },
       _signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
@@ -793,7 +785,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           content: [
             {
               type: "text" as const,
-              text: `Cron: ${cronId}\nRemove with kill using id ${cronId}.`,
+              text: `Schedule: ${cronId}\nRemove with cue_schedule action=remove id=${cronId}.`,
             },
           ],
           details: {
@@ -809,12 +801,15 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         let crons = await cued.listCrons();
         const filter = (params.status ?? "all").toLowerCase();
         if (filter !== "all") crons = crons.filter((c) => c.status.toLowerCase() === filter);
-        if (crons.length === 0)
+        const total = crons.length;
+        crons = crons.slice(0, normalizeLimit(params.limit));
+        if (total === 0)
           return {
-            content: [{ type: "text" as const, text: "No matching crons." }],
-            details: { crons: [] },
+            content: [{ type: "text" as const, text: "No matching schedules." }],
+            details: { count: 0, shown: 0, crons: [] },
           };
         const lines = crons.map((c) => `${c.id}  [${c.status}]  ${c.schedule}  →  ${c.command}`);
+        if (total > crons.length) lines.push(`… ${total - crons.length} more schedule(s)`);
         return {
           content: [
             {
@@ -822,7 +817,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
               text: lines.join("\n"),
             },
           ],
-          details: { crons },
+          details: { count: total, shown: crons.length, crons },
         };
       }
 
@@ -845,7 +840,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           content: [
             {
               type: "text" as const,
-              text: `Paused ${params.id}. Resume with cron action=resume id=${params.id}.`,
+              text: `Paused ${params.id}. Resume with cue_schedule action=resume id=${params.id}.`,
             },
           ],
           details: { id: params.id, paused: true },
@@ -889,78 +884,189 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  //  scopes — list environment scopes
+  //  cue_scope — inspect scopes, env, or config
   // ═══════════════════════════════════════════════════════════════════
 
   pi.registerTool({
-    name: "scopes",
-    label: "List Scopes",
+    name: "cue_scope",
+    label: "Cue Scope",
     description:
-      "List cue-shell environment scopes. Each scope is an immutable, content-addressed env snapshot.",
-    parameters: Type.Object({}),
-    renderCall(_args, theme) {
-      return renderToolCall("scopes", [], theme);
+      "Inspect cue-shell scopes and environment state. action='list' lists scopes, action='env' shows HEAD env, and action='config' shows cue-shell config.",
+    parameters: Type.Object({
+      action: Type.Optional(
+        Type.String({ description: "Action: list, env, config. Default: list." }),
+      ),
+      limit: Type.Optional(
+        Type.Number({ description: "Maximum scopes to show for action='list'. Default: 20." }),
+      ),
+      includeEnv: Type.Optional(
+        Type.Boolean({
+          description: "For action='list', also include HEAD env output. Default: false.",
+        }),
+      ),
+      tail_bytes: Type.Optional(
+        Type.Number({
+          description:
+            "For action='env' or action='config', limit output to the last N bytes. Default: 16384. Pass 0 for full output.",
+        }),
+      ),
+      env_tail_bytes: Type.Optional(
+        Type.Number({
+          description:
+            "Deprecated alias for tail_bytes when includeEnv=true. Default: 16384. Pass 0 for full env.",
+        }),
+      ),
+    }),
+    renderCall(args, theme) {
+      return renderToolCall(
+        "cue_scope",
+        [
+          formatStringArg(args.action, { fallback: "list" }),
+          formatNumberArg(args.limit, { prefix: "limit=" }),
+          args.includeEnv === true ? "include-env" : undefined,
+          formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
+          formatNumberArg(args.env_tail_bytes, { prefix: "env-tail=" }),
+        ],
+        theme,
+      );
     },
     async execute(
       _toolCallId: string,
-      _params: Record<string, never>,
+      params: {
+        action?: string;
+        limit?: number;
+        includeEnv?: boolean;
+        tail_bytes?: number;
+        env_tail_bytes?: number;
+      },
       _signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: { ui?: { notify?: (msg: string, level: string) => void } },
     ) {
       const cued = await getClient(ctx);
+      const action = (params.action ?? "list").toLowerCase();
+
+      if (action === "env" || action === "config") {
+        const raw = action === "env" ? await cued.showEnv() : await cued.showConfig();
+        const tailed = tailStr(raw, normalizeTailBytes(params.tail_bytes, DEFAULT_ENV_TAIL_BYTES));
+        const lines = [tailed.text.trimEnd()];
+        if (tailed.truncated)
+          lines.push(`[${action} truncated — use tail_bytes=0 for full output]`);
+        return {
+          content: [{ type: "text" as const, text: lines.join("\n") }],
+          details: {
+            action,
+            rawChars: raw.length,
+            shownChars: tailed.text.length,
+            truncated: tailed.truncated,
+          },
+        };
+      }
+
+      if (action !== "list")
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Unknown action: '${action}'. Valid: list, env, config.`,
+            },
+          ],
+          details: { error: "unknown_action" },
+        };
+
       const all = await cued.listScopes();
+      const visible = all.slice(0, normalizeLimit(params.limit));
       if (all.length === 0)
         return {
           content: [{ type: "text" as const, text: "No scopes." }],
-          details: { scopes: [] },
+          details: { count: 0, shown: 0, scopes: [] },
         };
-      // Also show current env and config
-      const envText = await cued.showEnv();
-      const lines = [
-        ...all.map((s) => `${s.hash}  parent=${s.parent ?? "-"}  cwd=${s.cwd}  env=${s.env_count}`),
-        "",
-        "--- HEAD env ---",
-        envText.trimEnd(),
-      ];
+      const lines = visible.map(
+        (scope) =>
+          `${scope.hash}  parent=${scope.parent ?? "-"}  cwd=${scope.cwd}  env=${scope.env_count}`,
+      );
+      if (all.length > visible.length) lines.push(`… ${all.length - visible.length} more scope(s)`);
+      if (params.includeEnv === true) {
+        const tailBytes = normalizeTailBytes(
+          params.tail_bytes ?? params.env_tail_bytes,
+          DEFAULT_ENV_TAIL_BYTES,
+        );
+        const env = tailStr(await cued.showEnv(), tailBytes);
+        lines.push("", "--- HEAD env ---", env.text.trimEnd());
+        if (env.truncated) lines.push("[HEAD env truncated — use tail_bytes=0 for full env]");
+      }
       return {
         content: [{ type: "text" as const, text: lines.join("\n") }],
-        details: { scopes: all },
+        details: { count: all.length, shown: visible.length, scopes: visible },
       };
     },
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  //  log — show history
+  //  cue_history — show history
   // ═══════════════════════════════════════════════════════════════════
 
   pi.registerTool({
-    name: "log",
-    label: "Show Log",
+    name: "cue_history",
+    label: "Cue History",
     description:
-      "Show cue-shell history. Pass an id to focus on one job/cron, or omit for the full log.",
+      "Show recent cue-shell history. Pass an id to focus on one job/cron. Output is bounded by default; pass tail_bytes=0 and limit=0 for full history.",
     parameters: Type.Object({
       id: Type.Optional(
         Type.String({
           description: "Optional job ID (J<n>) or cron ID (C<n>) to focus on.",
         }),
       ),
+      limit: Type.Optional(
+        Type.Number({
+          description:
+            "Maximum recent history lines to show. Default: 80. Pass 0 for no line limit.",
+        }),
+      ),
+      tail_bytes: Type.Optional(
+        Type.Number({
+          description:
+            "Limit history text to the last N bytes. Default: 16384. Pass 0 for full text.",
+        }),
+      ),
     }),
     renderCall(args, theme) {
-      return renderToolCall("log", [formatStringArg(args.id)], theme);
+      return renderToolCall(
+        "cue_history",
+        [
+          formatStringArg(args.id),
+          formatNumberArg(args.limit, { prefix: "limit=" }),
+          formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
+        ],
+        theme,
+      );
     },
     async execute(
       _toolCallId: string,
-      params: { id?: string },
+      params: { id?: string; limit?: number; tail_bytes?: number },
       _signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: { ui?: { notify?: (msg: string, level: string) => void } },
     ) {
       const cued = await getClient(ctx);
-      const text = await cued.showLog(params.id);
+      const raw = await cued.showLog(params.id);
+      const tailed = tailStr(raw, normalizeTailBytes(params.tail_bytes, DEFAULT_LOG_TAIL_BYTES));
+      const limited = limitLines(tailed.text, normalizeLimit(params.limit, 80));
+      const messages: string[] = [];
+      if (tailed.truncated)
+        messages.push("[history truncated by bytes — use tail_bytes=0 for full text]");
+      if (limited.truncated)
+        messages.push("[history truncated by lines — use limit=0 for full text]");
       return {
-        content: [{ type: "text" as const, text }],
-        details: { id: params.id ?? null },
+        content: [
+          { type: "text" as const, text: [limited.text, ...messages].filter(Boolean).join("\n") },
+        ],
+        details: {
+          id: params.id ?? null,
+          rawChars: raw.length,
+          shownChars: limited.text.length,
+          truncated: tailed.truncated || limited.truncated,
+        },
       };
     },
   });

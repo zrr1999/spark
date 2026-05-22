@@ -65,13 +65,13 @@ void test("Spark extension tools render parameter-aware tool calls", () => {
     "spark_plan_tasks 2 tasks @inspect,@implement",
   );
   assert.equal(
-    renderCall(tools, "run", {
+    renderCall(tools, "cue_exec", {
       command: "pnpm test",
       background: true,
       timeout: 30,
       cwd: "packages/spark",
     }),
-    'run "pnpm test" background timeout=30s cwd=packages/spark',
+    'cue_exec "pnpm test" background timeout=30s cwd=packages/spark',
   );
   const longAsk = renderCall(
     tools,
@@ -131,18 +131,50 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
 
   const cueTools = registerCueToolsForRendering();
   assertAllToolsHaveCallRenderers(cueTools);
+  assert.deepEqual([...cueTools.keys()].sort(), [
+    "cue_exec",
+    "cue_history",
+    "cue_jobs",
+    "cue_schedule",
+    "cue_scope",
+  ]);
   assert.equal(
-    renderCall(cueTools, "status", { id: "J12", tail_bytes: 4096 }),
-    "status J12 tail=4096",
+    renderCall(cueTools, "cue_jobs", { action: "status", id: "J12", tail_bytes: 4096 }),
+    "cue_jobs status id=J12 tail=4096",
   );
   assert.equal(
-    renderCall(cueTools, "cron", { action: "add", schedule: "every 5m", command: "pnpm test" }),
-    'cron add schedule="every 5m" command="pnpm test"',
+    renderCall(cueTools, "cue_jobs", { action: "list", status: "running", limit: 5 }),
+    "cue_jobs list status=running limit=5",
+  );
+  assert.equal(
+    renderCall(cueTools, "cue_jobs", { action: "wait", id: "J12", timeout: 30, tail_bytes: 4096 }),
+    "cue_jobs wait id=J12 timeout=30s tail=4096",
+  );
+  assert.equal(
+    renderCall(cueTools, "cue_scope", {
+      action: "list",
+      limit: 3,
+      includeEnv: true,
+      env_tail_bytes: 2048,
+    }),
+    "cue_scope list limit=3 include-env env-tail=2048",
+  );
+  assert.equal(
+    renderCall(cueTools, "cue_history", { id: "J12", limit: 10, tail_bytes: 4096 }),
+    "cue_history J12 limit=10 tail=4096",
+  );
+  assert.equal(
+    renderCall(cueTools, "cue_schedule", {
+      action: "add",
+      schedule: "every 5m",
+      command: "pnpm test",
+    }),
+    'cue_schedule add schedule="every 5m" command="pnpm test"',
   );
 
   const longRun = renderCall(
     cueTools,
-    "run",
+    "cue_exec",
     {
       command:
         "pnpm exec node -e \"import('@earendil-works/pi-tui').then(m=>console.log(m.visibleWidth('你好'))).catch(e=>{console.error(e);process.exit(1)})\"",
