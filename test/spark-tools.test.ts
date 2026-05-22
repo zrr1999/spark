@@ -5,7 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { stableId, type TaskPlan, type TaskRef, type ThreadRef } from "spark-core";
+import {
+  type ArtifactRef,
+  stableId,
+  type TaskPlan,
+  type TaskRef,
+  type ThreadRef,
+} from "spark-core";
 import { defaultArtifactStore } from "spark-artifacts";
 import { defaultSparkDagRunStore } from "spark-runtime";
 import { defaultTaskGraphStore, defaultTaskTodoStore, TaskGraph } from "spark-tasks";
@@ -93,6 +99,17 @@ void test("spark_claim_task attaches task-plan clarification ask refs", async ()
     assert.equal(details?.planClarification?.asked, true);
     assert.ok(details?.planClarification?.artifactRef);
     assert.deepEqual(details?.task?.plan?.askRefs, [details?.planClarification?.artifactRef]);
+    const artifact = await defaultArtifactStore(dir).get(
+      details.planClarification.artifactRef as ArtifactRef,
+    );
+    const body = artifact.body as {
+      request?: { questions?: Array<{ id: string; type?: string; options?: unknown[] }> };
+    };
+    const successQuestion = body.request?.questions?.find(
+      (question) => question.id === "successCriteria",
+    );
+    assert.equal(successQuestion?.type, "multi");
+    assert.ok((successQuestion?.options?.length ?? 0) >= 2);
     assert.match(toolText(claim), /plan clarification saved to artifact:/);
   } finally {
     await rm(dir, { recursive: true, force: true });

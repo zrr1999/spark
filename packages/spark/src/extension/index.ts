@@ -1351,7 +1351,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const status = requestedStatus ?? (roleRef ? "pending" : "running");
       const sessionKey = sparkSessionKey(ctx);
       const store = defaultTaskGraphStore(cwd);
-      const claimed = await store.update(
+      const prepared = await store.update(
         async (graph) => {
           await sparkTodoStore(cwd, ctx).hydrate(graph);
           const thread = await currentSparkThread(cwd, ctx, graph, { activate: true });
@@ -1371,7 +1371,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           const namePatch = requestedName
             ? uniqueTaskNameForExistingTask(tasks, requestedName, existing?.ref)
             : undefined;
-          let task = existing
+          const task = existing
             ? graph.updateTask(existing.ref, {
                 ...(namePatch ? { name: namePatch } : {}),
                 title,
@@ -1393,11 +1393,52 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
                 claimedBySession: sessionKey,
                 plan: normalizeToolTaskPlan(p.plan, description, title),
               });
-          const planClarification = await clarifyTaskPlanIfNeeded({
-            cwd,
-            task,
-            ui: sparkAskUi(ctx),
-          });
+          return { task: graph.getTask(task.ref) };
+        },
+        { createIfMissing: false },
+      );
+      if (!prepared.graph || prepared.result.error === "no_thread")
+        return {
+          content: [{ type: "text", text: "No Spark thread found." }],
+          details: { found: false },
+        };
+      if (
+        prepared.result.error === "active_claim_exists" ||
+        prepared.result.error === "claimed_by_other"
+      )
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                prepared.result.error === "active_claim_exists"
+                  ? `Cannot claim ${title}: this session already has unfinished claimed task ${prepared.result.activeTask.title} (${prepared.result.activeTask.ref}). Finish, fail, or cancel it before claiming another task.`
+                  : `Cannot update ${title}: matching task is currently claimed by another session (${taskClaimSummary(prepared.result.activeTask)}).`,
+            },
+          ],
+          details: {
+            found: true,
+            error: prepared.result.error,
+            activeTask: prepared.result.activeTask as unknown as Record<string, unknown>,
+          },
+        };
+
+      if (!("task" in prepared.result)) throw new Error("spark_claim_task prepare failed");
+      const preparedTask = prepared.result.task;
+      const planClarification = await clarifyTaskPlanIfNeeded({
+        cwd,
+        task: preparedTask,
+        ui: sparkAskUi(ctx),
+      });
+      const claimed = await store.update(
+        async (graph) => {
+          await sparkTodoStore(cwd, ctx).hydrate(graph);
+          let task = graph.getTask(preparedTask.ref);
+          if (taskClaimedBy(task) && !isClaimOwnedBySession(task, sessionKey))
+            return { error: "claimed_by_other" as const, activeTask: task };
+          const activeClaim = findActiveSessionClaim(graph, task.threadRef, sessionKey, task.ref);
+          if (isUnfinishedTaskStatus(status) && activeClaim)
+            return { error: "active_claim_exists" as const, activeTask: activeClaim };
           if (planClarification.asked) {
             task = graph.updateTask(task.ref, { plan: planClarification.plan });
           }
@@ -1424,7 +1465,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         },
         { createIfMissing: false },
       );
-      if (!claimed.graph || claimed.result.error === "no_thread")
+      if (!claimed.graph)
         return {
           content: [{ type: "text", text: "No Spark thread found." }],
           details: { found: false },
