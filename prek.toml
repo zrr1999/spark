@@ -17,12 +17,7 @@ repo = "https://github.com/tombi-toml/tombi-pre-commit"
 rev = "v0.9.20"
 hooks = [
   { id = "tombi-format", exclude = "^Cargo\\.lock$" },
-  {
-    id = "tombi-lint",
-    args = [
-      "--error-on-warnings",
-    ]
-  },
+  { id = "tombi-lint", args = ["--error-on-warnings"] },
 ]
 
 [[repos]]
@@ -46,7 +41,7 @@ hooks = [
   {
     id = "vp-check",
     name = "vp check --fix",
-    entry = "vp check --fix",
+    entry = "env NO_COLOR=1 vp check --fix",
     language = "system",
     pass_filenames = false
   },
