@@ -81,7 +81,7 @@ void test("spark_plan_tasks asks for task-plan decision before creating underspe
   try {
     await writeEmptySparkThread(dir);
     const ctx = testSparkContext(dir, "main");
-    ctx.ui.select = async () => "Create with plan";
+    ctx.ui.select = async (_message, choices) => choices[0];
     const { tools } = registerSparkToolsForTest();
 
     const planned = await executeSparkTool(tools, "spark_plan_tasks", ctx, {
@@ -109,7 +109,14 @@ void test("spark_plan_tasks asks for task-plan decision before creating underspe
     assert.deepEqual(task?.plan?.askRefs, [decision.artifactRef]);
     const artifact = await defaultArtifactStore(dir).get(decision.artifactRef as ArtifactRef);
     const body = artifact.body as {
-      request?: { questions?: Array<{ id: string; type?: string; options?: unknown[] }> };
+      request?: {
+        questions?: Array<{
+          id: string;
+          prompt?: string;
+          type?: string;
+          options?: Array<{ label?: string; description?: string }>;
+        }>;
+      };
     };
     const decisionQuestion = body.request?.questions?.find(
       (question) => question.id === "decision",
@@ -118,8 +125,15 @@ void test("spark_plan_tasks asks for task-plan decision before creating underspe
       (question) => question.id === "successCriteria",
     );
     assert.equal(decisionQuestion?.type, "single");
+    assert.match(decisionQuestion?.prompt ?? "", /@clarify-plan/);
     assert.equal(successQuestion?.type, "multi");
+    assert.match(successQuestion?.prompt ?? "", /Clarify underspecified plan/);
     assert.ok((successQuestion?.options?.length ?? 0) >= 2);
+    assert.ok(
+      successQuestion?.options?.every((option) =>
+        `${option.label ?? ""} ${option.description ?? ""}`.includes("@clarify-plan"),
+      ),
+    );
     assert.match(toolText(planned), /Planned tasks: created=1 updated=0/);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -492,6 +506,11 @@ void test("spark_use_thread clarifies generic new thread intent", async () => {
     const traces = await defaultArtifactStore(dir).list({
       kind: "run-trace",
     });
+    const askArtifact = await defaultArtifactStore(dir).get(artifacts[0].ref);
+    const askBody = askArtifact.body as {
+      request?: { questions?: Array<{ id: string; prompt?: string }> };
+    };
+    assert.ok(askBody.request?.questions?.every((question) => question.prompt?.includes("tasks")));
     assert.ok(traces.some((artifact) => artifact.title === "Thread intent clarification"));
   } finally {
     await rm(dir, { recursive: true, force: true });

@@ -7,15 +7,6 @@ import {
 } from "spark-ask";
 import { taskPlanReadiness } from "spark-tasks";
 
-export interface TaskPlanClarificationResult {
-  asked: boolean;
-  blocked: boolean;
-  artifactRef?: ArtifactRef;
-  summary?: string;
-  plan: TaskPlan;
-  issues: TaskPlanIssue[];
-}
-
 export interface TaskPlanDecisionResult {
   asked: boolean;
   accepted: boolean;
@@ -60,56 +51,57 @@ export async function decideTaskPlanBeforeCreate(input: {
 }
 
 function taskPlanDecisionAsk(task: Task, issues: TaskPlanIssue[]): SparkAskToolParams {
+  const copy = taskPlanAskCopy(task, issues);
   return {
     mode: "decision",
     flow: "task-plan-decision",
-    title: `Create task plan: ${task.title}`,
+    title: `Create plan for ${copy.taskLabel}`,
     context: [
-      `Task: @${task.name} ${task.title}`,
-      `Description: ${task.description}`,
-      `Proposed objective: ${task.plan?.objective ?? ""}`,
-      `Proposed steps: ${(task.plan?.steps ?? []).join("; ")}`,
-      `Plan issues to resolve before creation: ${issues.map((issue) => issue.message).join("; ")}`,
+      `Task candidate: ${copy.taskLabel}`,
+      `Requested work: ${copy.focus}`,
+      `Proposed objective: ${copy.objective}`,
+      `Proposed steps for ${copy.taskLabel}: ${copy.steps}`,
+      `Readiness gaps for ${copy.taskLabel}: ${copy.issueSummary}`,
     ].join("\n"),
     questions: [
       {
         id: "decision",
-        prompt: "Create this task with the proposed plan, or revise before creating it?",
+        prompt: `Should Spark create ${copy.taskLabel} now while ${copy.issueSummary}, or stop so this plan can be revised first?`,
         type: "single",
         required: true,
         options: [
           option(
             "create-with-this-plan",
-            "Create with plan",
-            "Accept the proposed task plan and create/update the task with the selected plan context attached.",
+            `Create ${copy.taskHandle}`,
+            `Create or update ${copy.taskLabel} now, keeping the proposed plan and recording this decision with the task plan.`,
           ),
           option(
             "revise-before-create",
-            "Revise first",
-            "Do not create the task yet; revise the plan details or scope before creating this task.",
+            `Revise ${copy.taskHandle} first`,
+            `Do not create ${copy.taskLabel} yet; revise the missing plan details for ${copy.issueSummary} before adding it to the thread.`,
           ),
         ],
       },
       {
         id: "successCriteria",
-        prompt: "Suggested observable success criteria for this task plan:",
+        prompt: `Which outcomes would make ${copy.taskLabel} objectively complete for “${copy.focus}”?`,
         type: "multi",
         required: false,
-        options: taskPlanSuggestionOptions(task, "successCriteria"),
+        options: taskPlanSuggestionOptions(task, "successCriteria", copy),
       },
       {
         id: "evidenceRequired",
-        prompt: "Suggested evidence to require before this task is considered complete:",
+        prompt: `What evidence should ${copy.taskLabel} require to prove “${copy.focus}” is done?`,
         type: "multi",
         required: false,
-        options: taskPlanSuggestionOptions(task, "evidenceRequired"),
+        options: taskPlanSuggestionOptions(task, "evidenceRequired", copy),
       },
       {
         id: "openQuestions",
-        prompt: "Do any open questions remain before task creation?",
+        prompt: `Before creating ${copy.taskLabel}, what unresolved question still blocks “${copy.focus}”?`,
         type: "single",
         required: false,
-        options: taskPlanSuggestionOptions(task, "openQuestions"),
+        options: taskPlanSuggestionOptions(task, "openQuestions", copy),
       },
     ],
   };
@@ -117,57 +109,87 @@ function taskPlanDecisionAsk(task: Task, issues: TaskPlanIssue[]): SparkAskToolP
 
 type TaskPlanSuggestionKind = "successCriteria" | "evidenceRequired" | "openQuestions";
 
+interface TaskPlanAskCopy {
+  taskHandle: string;
+  taskLabel: string;
+  focus: string;
+  objective: string;
+  steps: string;
+  issueSummary: string;
+  hasRuntime: boolean;
+  hasBrowser: boolean;
+  hasApi: boolean;
+  hasDocs: boolean;
+  hasTest: boolean;
+}
+
+function taskPlanAskCopy(task: Task, issues: TaskPlanIssue[]): TaskPlanAskCopy {
+  const focus = summarizeSentence(task.plan?.objective || task.description || task.title);
+  const issueSummary = issues.length
+    ? issues.map((issue) => issue.message.toLowerCase()).join(" and ")
+    : "its plan is already structurally complete";
+  const text = `${task.title}\n${task.description}\n${task.plan?.objective ?? ""}`;
+  const lower = text.toLowerCase();
+  return {
+    taskHandle: `@${task.name}`,
+    taskLabel: `@${task.name} “${task.title}”`,
+    focus,
+    objective: summarizeSentence(task.plan?.objective || task.description || task.title),
+    steps: task.plan?.steps.length ? task.plan.steps.map(summarizeSentence).join("; ") : focus,
+    issueSummary,
+    hasRuntime: /runtime|heartbeat|liveness|health|alive|connection|websocket|ws|sse|event/.test(
+      lower,
+    ),
+    hasBrowser: /browser|ui|frontend|client|page|sse|eventsource/.test(lower),
+    hasApi: /api|endpoint|server|http|route/.test(lower),
+    hasDocs: /doc|readme|skill|guide/.test(lower),
+    hasTest: /test|coverage|regression|verify/.test(lower),
+  };
+}
+
 function taskPlanSuggestionOptions(
   task: Task,
   kind: TaskPlanSuggestionKind,
+  copy: TaskPlanAskCopy,
 ): SparkAskToolOptionParams[] {
-  const text = `${task.title}\n${task.description}\n${task.plan?.objective ?? ""}`;
-  const lower = text.toLowerCase();
-  const hasRuntime =
-    /runtime|heartbeat|liveness|health|alive|connection|websocket|ws|sse|event/.test(lower);
-  const hasBrowser = /browser|ui|frontend|client|page|sse|eventsource/.test(lower);
-  const hasApi = /api|endpoint|server|http|route/.test(lower);
-  const hasDocs = /doc|readme|skill|guide/.test(lower);
-  const hasTest = /test|coverage|regression|verify/.test(lower);
-
   if (kind === "successCriteria") {
     return compactOptions([
-      hasRuntime
+      copy.hasRuntime
         ? option(
             "runtime-liveness-visible",
-            "Runtime liveness visible",
-            "Runtime heartbeat or liveness state is observable and distinguishes live, stale, and disconnected states.",
+            `Expose ${copy.taskHandle} runtime health`,
+            `${copy.taskLabel} is complete when ${copy.focus} makes runtime heartbeat or liveness state visibly distinguish live, stale, and disconnected cases.`,
           )
         : undefined,
-      hasBrowser
+      copy.hasBrowser
         ? option(
             "browser-updates-live",
-            "Browser updates live",
-            "Browser-facing UI or client state receives live updates without requiring a manual refresh.",
+            `Show ${copy.taskHandle} browser updates`,
+            `${copy.taskLabel} is complete when the browser-facing surface for ${copy.focus} updates live without requiring a manual refresh.`,
           )
         : undefined,
-      hasApi
+      copy.hasApi
         ? option(
             "api-contract-works",
-            "API contract works",
-            "The public API or protocol returns the expected shape for success and failure paths.",
+            `Validate ${copy.taskHandle} API contract`,
+            `${copy.taskLabel} is complete when the API or protocol path for ${copy.focus} returns the expected success and failure shapes.`,
           )
         : undefined,
       option(
         "implementation-complete",
-        "Implementation complete",
-        "The requested behavior is implemented end-to-end in the relevant production code path.",
+        `Finish ${copy.taskHandle} behavior`,
+        `${copy.taskLabel} is complete when ${copy.focus} is implemented end-to-end in the relevant production code path.`,
       ),
       option(
         "tests-pass",
-        "Tests pass",
-        "Focused automated tests cover the new behavior and pass together with the existing relevant suite.",
+        `Test ${copy.taskHandle} behavior`,
+        `${copy.taskLabel} is complete when focused automated tests cover ${copy.focus} and pass with the relevant existing suite.`,
       ),
-      hasDocs
+      copy.hasDocs
         ? option(
             "docs-updated",
-            "Docs updated",
-            "User-facing documentation or guidance reflects the changed behavior where applicable.",
+            `Document ${copy.taskHandle} behavior`,
+            `${copy.taskLabel} is complete when user-facing documentation or guidance explains ${copy.focus} where applicable.`,
           )
         : undefined,
     ]);
@@ -177,33 +199,33 @@ function taskPlanSuggestionOptions(
     return compactOptions([
       option(
         "tests-output",
-        "Test output",
-        "Include focused test command output showing the behavior is covered and passing.",
+        `Attach ${copy.taskHandle} test output`,
+        `Completion evidence for ${copy.taskLabel} must include focused test command output proving ${copy.focus}.`,
       ),
       option(
         "code-refs",
-        "Code refs",
-        "List the changed files and key functions or modules that implement the behavior.",
+        `List ${copy.taskHandle} code refs`,
+        `Completion evidence for ${copy.taskLabel} must name the changed files and key functions or modules responsible for ${copy.focus}.`,
       ),
-      hasRuntime || hasBrowser
+      copy.hasRuntime || copy.hasBrowser
         ? option(
             "manual-smoke",
-            "Manual smoke result",
-            "Record a manual or simulated runtime/browser smoke result for the live update path.",
+            `Smoke ${copy.taskHandle} live path`,
+            `Completion evidence for ${copy.taskLabel} must record a manual or simulated runtime/browser smoke result for ${copy.focus}.`,
           )
         : undefined,
-      hasApi
+      copy.hasApi
         ? option(
             "protocol-sample",
-            "Protocol sample",
-            "Attach an example response, event, or protocol payload proving the contract works.",
+            `Capture ${copy.taskHandle} protocol sample`,
+            `Completion evidence for ${copy.taskLabel} must include an example response, event, or protocol payload for ${copy.focus}.`,
           )
         : undefined,
-      hasTest
+      copy.hasTest
         ? option(
             "regression-proof",
-            "Regression proof",
-            "Name the regression test or fixture that would fail without this change.",
+            `Name ${copy.taskHandle} regression proof`,
+            `Completion evidence for ${copy.taskLabel} must identify the regression test or fixture that would fail without ${copy.focus}.`,
           )
         : undefined,
     ]);
@@ -212,20 +234,26 @@ function taskPlanSuggestionOptions(
   return compactOptions([
     option(
       "resolved-no-open-questions",
-      "Resolved / none",
-      "There are no remaining open questions; the task can proceed with the selected plan details.",
+      `No blocker for ${copy.taskHandle}`,
+      `${copy.taskLabel} has no remaining open question blocking ${copy.focus}; it can be created with the selected plan details.`,
     ),
     option(
       "needs-scope-choice",
-      "Scope choice needed",
-      "The intended scope or boundary is still unclear and must be decided before execution.",
+      `Decide ${copy.taskHandle} scope`,
+      `${copy.taskLabel} still needs a scope or boundary decision before executing ${copy.focus}.`,
     ),
     option(
       "needs-acceptance-choice",
-      "Acceptance unclear",
-      "The exact acceptance criteria or evidence requirement still needs a decision.",
+      `Decide ${copy.taskHandle} acceptance`,
+      `${copy.taskLabel} still needs concrete acceptance criteria or evidence requirements for ${copy.focus}.`,
     ),
   ]);
+}
+
+function summarizeSentence(value: string): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= 120) return compact;
+  return `${compact.slice(0, 117).trimEnd()}…`;
 }
 
 function option(id: string, label: string, description: string): SparkAskToolOptionParams {

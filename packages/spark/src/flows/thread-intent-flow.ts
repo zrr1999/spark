@@ -29,25 +29,26 @@ export async function clarifyThreadIntentIfNeeded(input: {
   ui?: SparkAskToolUi;
 }): Promise<ThreadIntentClarificationResult> {
   if (!shouldClarifyThreadIntent(input)) return { asked: false, blocked: false };
+  const copy = threadIntentAskCopy(input.title, input.description);
   const request: SparkAskToolParams = {
     mode: "clarification",
     flow: "thread-intent-refinement",
-    title: `Clarify thread intent: ${input.title}`,
+    title: `Clarify thread intent for “${copy.title}”`,
     context: [
-      `Thread title: ${input.title}`,
-      `Thread description: ${input.description?.trim() || input.title}`,
-      "This looks like a generic or placeholder thread. Clarify the intended related task collection before planning concrete work.",
+      `Proposed thread title: ${copy.title}`,
+      `Current description: ${copy.description}`,
+      `Reason for asking: “${copy.title}” does not yet identify the related work this thread should group.`,
     ].join("\n"),
     questions: [
       {
         id: "intent",
-        prompt: "What related work should this thread collect?",
+        prompt: `For the placeholder thread “${copy.title}”, which concrete workstream, feature, bug, or decision family should its tasks belong to?`,
         type: "freeform",
         required: false,
       },
       {
         id: "doneWhen",
-        prompt: "When should this thread be considered complete?",
+        prompt: `For that “${copy.title}” workstream, what observable outcome would make this thread complete enough to close?`,
         type: "freeform",
         required: false,
       },
@@ -65,6 +66,21 @@ export async function clarifyThreadIntentIfNeeded(input: {
     summary: details.summary,
     blocked: details.blocked === true,
   };
+}
+
+function threadIntentAskCopy(
+  title: string,
+  description: string | undefined,
+): { title: string; description: string } {
+  const normalizedTitle = summarizeThreadText(title) || "untitled thread";
+  const normalizedDescription = summarizeThreadText(description) || normalizedTitle;
+  return { title: normalizedTitle, description: normalizedDescription };
+}
+
+function summarizeThreadText(value: string | undefined): string {
+  const compact = value?.replace(/\s+/g, " ").trim() ?? "";
+  if (compact.length <= 100) return compact;
+  return `${compact.slice(0, 97).trimEnd()}…`;
 }
 
 function isGenericThreadTitle(title: string): boolean {
