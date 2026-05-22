@@ -27,6 +27,15 @@ Reusable, Spark-independent pieces live in `pi-roles`; Spark keeps task/DAG/work
 
 See [agent-run-modes.md](./agent-run-modes.md) for operational guidance.
 
+## Legacy compatibility lifecycle
+
+Compatibility is intentionally narrow and should shrink in this order:
+
+1. Keep persisted-state readers for old `.spark/thread.json` snapshots and role stores until migration tests cover `agentRef` → `roleRef`, `agentName` → `runName`, `subagent` → `role-run`, and `agent:*` → `role:*`.
+2. Remove user-facing/source aliases such as `managed` and `predefined` after one compatibility window; new tools and docs should only advertise `builtin`, `project`, and `user`.
+3. Remove local deprecated API inputs only after a state migration/version bump exists and stale-reference scans show no tests or docs rely on them except historical notes.
+4. Keep unrelated Pi/cue documentation about generic subagent/fork/worktree behavior out of Spark role terminology cleanup unless that package changes its own vocabulary.
+
 ## `pi-roles` ownership
 
 `pi-roles` owns reusable role definition data and simple single-run execution, with no `spark-core` dependency:
