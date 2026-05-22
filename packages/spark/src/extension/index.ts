@@ -56,6 +56,7 @@ import {
   defaultTaskTodoStore,
   isUnfinishedTaskStatus,
   TaskGraph,
+  TaskGraphStoreLockTimeoutError,
   type TaskGraphStore,
   type TaskPlanInput,
   type TaskPlanResult,
@@ -156,15 +157,23 @@ const claimReaperTimers = new Map<string, ReturnType<typeof setInterval>>();
 
 function ensureClaimReaper(cwd: string): void {
   if (claimReaperTimers.has(cwd)) return;
-  const timer = setInterval(() => void sweepExpiredSparkClaims(cwd), CLAIM_SWEEP_INTERVAL_MS);
+  const timer = setInterval(
+    () => void sweepExpiredSparkClaims(cwd).catch(() => undefined),
+    CLAIM_SWEEP_INTERVAL_MS,
+  );
   (timer as { unref?: () => void }).unref?.();
   claimReaperTimers.set(cwd, timer);
 }
 
 async function sweepExpiredSparkClaims(cwd: string, ctx?: unknown): Promise<void> {
   const store = defaultTaskGraphStore(cwd);
-  const result = await sweepExpiredTaskClaims(store);
-  if (result.saved && result.graph) await sparkTodoStore(cwd, ctx).save(result.graph);
+  try {
+    const result = await sweepExpiredTaskClaims(store, nowIso(), { timeoutMs: 250 });
+    if (result.saved && result.graph) await sparkTodoStore(cwd, ctx).save(result.graph);
+  } catch (error) {
+    if (error instanceof TaskGraphStoreLockTimeoutError) return;
+    throw error;
+  }
 }
 
 export default function sparkExtension(pi: SparkExtensionAPI) {

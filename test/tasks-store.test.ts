@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -20,7 +20,13 @@ import {
   runSparkTask,
   sweepExpiredTaskClaims,
 } from "spark-runtime";
-import { TaskGraph, TaskGraphStore, TaskGraphStoreConflictError, TaskTodoStore } from "spark-tasks";
+import {
+  TaskGraph,
+  TaskGraphStore,
+  TaskGraphStoreConflictError,
+  TaskGraphStoreLockTimeoutError,
+  TaskTodoStore,
+} from "spark-tasks";
 
 void test("task graph store keeps TODOs out of thread.json and todo store restores them", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tasks-"));
@@ -171,6 +177,75 @@ void test("task graph store serializes read-modify-write updates with a filesyst
         .sort(),
       ["first", "second"],
     );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("task graph store update reports lock timeout without stealing active locks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-lock-timeout-"));
+  try {
+    const file = join(dir, "thread.json");
+    const store = new TaskGraphStore(file);
+    const graph = new TaskGraph();
+    graph.createThread({ title: "Demo", description: "demo" });
+    await store.save(graph);
+
+    let releaseHolder!: () => void;
+    const holder = store.withLock(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseHolder = resolve;
+        }),
+    );
+    const lockPath = `${file}.lock`;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        await stat(lockPath);
+        break;
+      } catch (error) {
+        if (attempt === 49 || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    }
+
+    const contender = new TaskGraphStore(file);
+    await assert.rejects(
+      () => contender.update(() => undefined, { timeoutMs: 10, retryIntervalMs: 1 }),
+      TaskGraphStoreLockTimeoutError,
+    );
+
+    releaseHolder();
+    await holder;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("task graph store stale lock cleanup follows owner heartbeat, not lock directory mtime", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-lock-heartbeat-"));
+  try {
+    const file = join(dir, "thread.json");
+    const store = new TaskGraphStore(file);
+    const graph = new TaskGraph();
+    graph.createThread({ title: "Demo", description: "demo" });
+    await store.save(graph);
+
+    const lockPath = `${file}.lock`;
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      `${JSON.stringify({ ownerId: "active", heartbeatAt: new Date().toISOString() })}\n`,
+      "utf8",
+    );
+    const old = new Date(Date.now() - 120_000);
+    await utimes(lockPath, old, old);
+
+    await assert.rejects(
+      () => store.update(() => undefined, { timeoutMs: 10, retryIntervalMs: 1, staleMs: 60_000 }),
+      TaskGraphStoreLockTimeoutError,
+    );
+    await stat(lockPath);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

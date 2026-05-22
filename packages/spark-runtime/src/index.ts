@@ -27,7 +27,7 @@ import {
   type ThreadRef,
 } from "spark-core";
 import type { RoleInstruction, RoleRunRecord, RoleRunStatus } from "pi-roles";
-import type { TaskGraph, TaskGraphStore } from "spark-tasks";
+import type { TaskGraph, TaskGraphStore, TaskGraphStoreUpdateOptions } from "spark-tasks";
 
 export type SparkDagManagerStatus = "idle" | "running" | "failed";
 export type SparkDagRunStatus = "running" | "succeeded" | "failed" | "timed_out" | "stale";
@@ -783,8 +783,10 @@ export function findResumableBackgroundRoleRunTasks(
 export async function sweepExpiredTaskClaims(
   store: Pick<TaskGraphStore, "update">,
   now = nowIso(),
+  options: Omit<TaskGraphStoreUpdateOptions, "createIfMissing"> = {},
 ): Promise<ExpiredTaskClaimSweepResult> {
   const result = await store.update((graph) => graph.expireTaskClaims(now), {
+    ...options,
     createIfMissing: false,
   });
   if (!result.graph) return { graph: null, expired: [], saved: false };

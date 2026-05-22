@@ -185,6 +185,16 @@ export class TaskGraphStoreConflictError extends Error {
   }
 }
 
+export class TaskGraphStoreLockTimeoutError extends Error {
+  readonly lockPath: string;
+
+  constructor(lockPath: string) {
+    super(`timed out waiting for Spark task graph lock: ${lockPath}`);
+    this.name = "TaskGraphStoreLockTimeoutError";
+    this.lockPath = lockPath;
+  }
+}
+
 const taskGraphSourceHashes = new WeakMap<TaskGraph, string>();
 const taskGraphStoreLockDepth = new AsyncLocalStorage<number>();
 
@@ -880,10 +890,12 @@ async function acquireTaskGraphStoreLock(
   const retryIntervalMs = Math.max(1, options.retryIntervalMs ?? 25);
   const staleMs = options.staleMs ?? 60_000;
   const started = Date.now();
+  const ownerId = stableId(`${process.pid}:${started}:${Math.random()}`);
   const ownerPath = join(lockPath, "owner.json");
   const ownerJson = () =>
     `${JSON.stringify(
       {
+        ownerId,
         pid: process.pid,
         startedAt: new Date(started).toISOString(),
         heartbeatAt: nowIso(),
@@ -895,7 +907,7 @@ async function acquireTaskGraphStoreLock(
   while (true) {
     try {
       await mkdir(lockPath, { recursive: false });
-      await writeFile(ownerPath, ownerJson(), "utf8").catch(() => undefined);
+      await writeFile(ownerPath, ownerJson(), "utf8");
       const refreshMs =
         staleMs > 0 ? Math.max(1_000, Math.min(30_000, Math.floor(staleMs / 3))) : undefined;
       const refreshTimer = refreshMs
@@ -906,13 +918,13 @@ async function acquireTaskGraphStoreLock(
       refreshTimer?.unref?.();
       return async () => {
         if (refreshTimer) clearInterval(refreshTimer);
-        await rm(lockPath, { recursive: true, force: true });
+        if (await lockOwnerMatches(ownerPath, ownerId))
+          await rm(lockPath, { recursive: true, force: true });
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       await removeStaleTaskGraphStoreLock(lockPath, staleMs);
-      if (Date.now() - started >= timeoutMs)
-        throw new Error(`timed out waiting for Spark task graph lock: ${lockPath}`);
+      if (Date.now() - started >= timeoutMs) throw new TaskGraphStoreLockTimeoutError(lockPath);
       await sleep(retryIntervalMs);
     }
   }
@@ -921,12 +933,41 @@ async function acquireTaskGraphStoreLock(
 async function removeStaleTaskGraphStoreLock(lockPath: string, staleMs: number): Promise<void> {
   if (staleMs < 0) return;
   try {
-    const lockStat = await stat(lockPath);
-    if (Date.now() - lockStat.mtimeMs >= staleMs)
-      await rm(lockPath, { recursive: true, force: true });
+    const heartbeatMs = await taskGraphStoreLockHeartbeatMs(lockPath);
+    if (Date.now() - heartbeatMs >= staleMs) await rm(lockPath, { recursive: true, force: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw error;
+  }
+}
+
+async function taskGraphStoreLockHeartbeatMs(lockPath: string): Promise<number> {
+  const ownerPath = join(lockPath, "owner.json");
+  try {
+    const ownerRaw = await readFile(ownerPath, "utf8");
+    try {
+      const owner = JSON.parse(ownerRaw) as { heartbeatAt?: unknown };
+      if (typeof owner.heartbeatAt === "string") {
+        const heartbeatMs = Date.parse(owner.heartbeatAt);
+        if (Number.isFinite(heartbeatMs)) return heartbeatMs;
+      }
+    } catch {
+      // Corrupt owner metadata can still use owner.json mtime as a heartbeat fallback.
+    }
+    return (await stat(ownerPath)).mtimeMs;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return (await stat(lockPath)).mtimeMs;
+  }
+}
+
+async function lockOwnerMatches(ownerPath: string, ownerId: string): Promise<boolean> {
+  try {
+    const owner = JSON.parse(await readFile(ownerPath, "utf8")) as { ownerId?: unknown };
+    return owner.ownerId === ownerId;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    return false;
   }
 }
 
