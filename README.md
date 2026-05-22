@@ -31,8 +31,9 @@ A root `SPARK.md` is only materialized when the current `cwd` looks like a concr
 - `pi-cue` — reusable Pi/cue-shell execution substrate; absorbs `pi-cue-shell` code without a compatibility package and does not depend on `spark-core`.
 - `pi-ask` — minimal `ask_user` plus reusable `ask_flow` protocol/state/renderer with direct custom input handling.
 - `pi-roles` — reusable `RoleSpec` definitions, builtin/project/user role discovery, Markdown stores, role-spec management tools (`list_roles` / `get_role` / `create_role`), and one task-agnostic direct-call tool (`call_role`). It owns fresh/forked CLI launch, timeout/cancel, stdout/stderr capture, and tolerant JSONL parsing; it does not own Spark task DAGs, asks, artifacts, or review gates.
-- `spark-tasks` — durable thread/task DAG, task names/titles/descriptions, TODOs, dependencies, readiness, runs, and unified claim/lease state. Binding a task to a role stores a `roleRef`; running it creates a `role-run` claim.
-- `spark-runtime` — Spark orchestration/runtime adapter that executes ready tasks through `pi-roles`, writes artifacts, and owns task/run/timeout mapping above `RoleRun`.
+- `spark-tasks` — durable thread/task DAG, task names/titles/descriptions, TODOs, dependencies, readiness, runs, and unified claim/lease state. Optional task `roleRef` values are preferred executor hints, not readiness requirements.
+- `spark-runtime` — Spark single-task runtime adapter that executes one task through `pi-roles`, writes artifacts, and owns task/run/timeout mapping above `RoleRun`.
+- `spark-orchestrator` — Spark task-graph control plane that schedules ready frontiers, assigns executor roles at dispatch, and owns DAG manager state.
 - `spark-artifacts` — typed durable artifacts with hashes, blobs, provenance, and lineage links.
 - `spark-review` — verification gates and review artifacts.
 - `spark-ask` — lightweight Spark-specific ask presets and copy built on top of `pi-ask`.

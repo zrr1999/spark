@@ -7,6 +7,7 @@ import test from "node:test";
 import { RoleRegistry, builtinRoleRef } from "pi-roles";
 import { ArtifactStore } from "spark-artifacts";
 import { newRef, type RoleRef, type TaskPlan } from "spark-core";
+import { defaultSparkDagRunStore, runReadySparkTasks } from "spark-orchestrator";
 import {
   RoleRunTimeoutError,
   buildRoleRunArgs,
@@ -15,8 +16,6 @@ import {
   findResumableBackgroundRoleRunTasks,
   killActiveSparkRoleRunProcesses,
   listActiveSparkRoleRunProcesses,
-  defaultSparkDagRunStore,
-  runReadySparkTasks,
   runSparkTask,
   sweepExpiredTaskClaims,
 } from "spark-runtime";

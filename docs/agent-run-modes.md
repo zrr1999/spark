@@ -44,7 +44,8 @@ Safety constraints:
 - Keep task dependencies satisfied before scheduling the run.
 - Use runtime timeouts, claim leases, and heartbeats for non-dry-run execution.
 - Let `pi-roles` own generic Pi subprocess launch, cancellation, timeout signalling, stdout/stderr capture, and JSONL parsing.
-- Let `spark-runtime` own Spark task/DAG adaptation: claims, heartbeat leases, task status transitions, artifact persistence, and Spark-specific active child process tracking.
+- Let `spark-runtime` own single-task Spark adaptation: claims, heartbeat leases, task status transitions, artifact persistence, and Spark-specific active child process tracking.
+- Let `spark-orchestrator` own graph-level ready task scheduling, dispatch-time executor role assignment, and DAG manager state.
 - Prefer Spark-native ready-task execution over manually spawning nested `pi` processes, except when explicitly testing Pi CLI behavior.
 
 Attribution in Spark:

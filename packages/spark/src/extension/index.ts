@@ -34,17 +34,19 @@ import {
 import { registerPiCueTools } from "pi-cue";
 import { createReviewGate } from "spark-review";
 import {
-  createRoleRunClaimId,
-  findResumableBackgroundRoleRunTasks,
   DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
   DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
   defaultSparkDagRunStore,
   type SparkDagCompletionFollowUp,
   type SparkDagRunRecord,
   type SparkDagStatusSummary,
+  runReadySparkTasks,
+} from "spark-orchestrator";
+import {
+  createRoleRunClaimId,
+  findResumableBackgroundRoleRunTasks,
   killActiveSparkRoleRunProcesses,
   listActiveSparkRoleRunProcesses,
-  runReadySparkTasks,
   runSparkTask,
   sweepExpiredTaskClaims,
 } from "spark-runtime";
@@ -143,6 +145,7 @@ interface SparkToolContext {
 interface SparkCommandContext extends SparkToolContext {
   waitForIdle?: () => Promise<void>;
   sendUserMessage?: (content: string) => Promise<void>;
+  setEditorText?: (text: string) => void;
 }
 
 const CLAIM_SWEEP_INTERVAL_MS = 30_000;
@@ -877,59 +880,151 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   };
 
   pi.registerCommand("spark", {
-    description:
-      "Turn an idea into SPARK.md, a thread/task DAG, role plan, artifacts, and review gates.",
+    description: "Open Spark mode selection, or initialize a new Spark idea with /spark <idea>.",
     async handler(args, ctx) {
-      const idea = args.trim();
-      if (!idea) {
-        ctx.ui?.notify?.("Usage: /spark <idea>", "warning");
-        return;
-      }
-
-      const existing = await loadSparkGraph(ctx.cwd, ctx);
-      if (existing) {
-        ctx.ui?.notify?.(
-          "Spark is already initialized for this workspace; existing thread state was not overwritten.",
-          "info",
-        );
-        const existingThread = await currentSparkThread(ctx.cwd, ctx, existing, { activate: true });
-        pi.sendUserMessage?.(renderExistingSparkSummary(existing, existingThread?.ref), {
-          deliverAs: "followUp",
-        });
-        await refreshSparkWidget(ctx.cwd, ctx);
-        return;
-      }
-
-      const language = detectCopyLanguage(idea);
-      const workingTitle = titleFromIdea(idea);
-      const outputLanguage: SparkCopyLanguage = language;
-
-      const result = await initializeSparkIdea(ctx.cwd, idea, {
-        threadTitle: workingTitle,
-        outputLanguage,
-        clarification: {
-          workingTitle,
-          outputLanguage,
-          objective: idea,
-          nextAction: "analyze_then_targeted_ask",
-        },
-      });
-
-      ctx.ui?.notify?.(
-        language === "zh" ? "Spark 线程已初始化" : "Spark thread initialized",
-        "success",
-      );
-      pi.sendUserMessage?.(renderSparkInitSummary(result), {
-        deliverAs: "followUp",
-      });
-
-      await saveCurrentThreadRef(ctx.cwd, ctx, result.threadRef as ThreadRef);
-      await refreshSparkWidget(ctx.cwd, ctx);
-
-      // Hand DAG execution to the background manager instead of driving it from this turn.
-      ensureSparkDagManager(ctx.cwd, ctx);
+      await handleSparkCommand(pi, args, ctx);
     },
   });
+
+  async function handleSparkCommand(
+    piApi: SparkExtensionAPI,
+    args: string,
+    ctx: SparkCommandContext,
+  ): Promise<void> {
+    const idea = args.trim();
+    const graph = await loadSparkGraph(ctx.cwd, ctx);
+    if (idea) {
+      if (!graph) await startSparkNewProject(piApi, ctx, idea);
+      else await enterSparkPlanningMode(piApi, ctx, graph, idea);
+      return;
+    }
+
+    const mode = graph ? await chooseSparkCommandMode(ctx, graph) : "new_project";
+    if (!mode) return;
+    if (mode === "new_project") {
+      const newIdea = await promptSparkNewProjectIdea(ctx);
+      if (!newIdea) return;
+      await startSparkNewProject(piApi, ctx, newIdea);
+      return;
+    }
+    if (!graph) {
+      const newIdea = await promptSparkNewProjectIdea(ctx);
+      if (newIdea) await startSparkNewProject(piApi, ctx, newIdea);
+      return;
+    }
+    if (mode === "planning") await enterSparkPlanningMode(piApi, ctx, graph);
+    else await enterSparkExecutionMode(piApi, ctx, graph);
+  }
+
+  async function startSparkNewProject(
+    piApi: SparkExtensionAPI,
+    ctx: SparkCommandContext,
+    idea: string,
+  ): Promise<void> {
+    const existing = await loadSparkGraph(ctx.cwd, ctx);
+    if (existing) {
+      ctx.ui?.notify?.(
+        "Spark is already initialized for this workspace; entering planning mode instead.",
+        "info",
+      );
+      await enterSparkPlanningMode(piApi, ctx, existing, idea);
+      return;
+    }
+
+    const language = detectCopyLanguage(idea);
+    const workingTitle = titleFromIdea(idea);
+    const outputLanguage: SparkCopyLanguage = language;
+
+    const result = await initializeSparkIdea(ctx.cwd, idea, {
+      threadTitle: workingTitle,
+      outputLanguage,
+      clarification: {
+        workingTitle,
+        outputLanguage,
+        objective: idea,
+        nextAction: "analyze_then_targeted_ask",
+      },
+    });
+
+    ctx.ui?.notify?.(
+      language === "zh" ? "Spark 线程已初始化" : "Spark thread initialized",
+      "success",
+    );
+    piApi.sendUserMessage?.(renderSparkInitSummary(result), {
+      deliverAs: "followUp",
+    });
+
+    await saveCurrentThreadRef(ctx.cwd, ctx, result.threadRef as ThreadRef);
+    await refreshSparkWidget(ctx.cwd, ctx);
+    ensureSparkDagManager(ctx.cwd, ctx);
+  }
+
+  async function chooseSparkCommandMode(
+    ctx: SparkCommandContext,
+    graph: TaskGraph,
+  ): Promise<"new_project" | "planning" | "execution" | undefined> {
+    const thread = await currentSparkThread(ctx.cwd, ctx, graph, { activate: true });
+    const title = thread?.title ?? graph.threads()[0]?.title ?? "current Spark workspace";
+    if (ctx.ui?.select) {
+      const choice = await ctx.ui.select(`Spark mode for “${title}”`, [
+        "Plan: research and add threads/tasks",
+        "Execute: work through ready tasks",
+        "New project: start a different Spark idea",
+      ]);
+      if (choice?.startsWith("Plan:")) return "planning";
+      if (choice?.startsWith("Execute:")) return "execution";
+      if (choice?.startsWith("New project:")) return "new_project";
+      return undefined;
+    }
+
+    const response = await runSparkAskTool(sparkModeAsk(graph, title), {
+      cwd: ctx.cwd,
+      ui: sparkAskUi(ctx),
+    });
+    return sparkModeFromAskDetails(response.details);
+  }
+
+  async function promptSparkNewProjectIdea(ctx: SparkCommandContext): Promise<string | undefined> {
+    const idea = await ctx.ui?.input?.(
+      "What new Spark project or idea should this workspace start?",
+      "",
+    );
+    const trimmed = idea?.trim();
+    if (trimmed) return trimmed;
+    ctx.ui?.notify?.(
+      "Spark new-project mode needs an idea. You can also run /spark <idea>.",
+      "warning",
+    );
+    return undefined;
+  }
+
+  async function enterSparkPlanningMode(
+    piApi: SparkExtensionAPI,
+    ctx: SparkCommandContext,
+    graph: TaskGraph,
+    focus?: string,
+  ): Promise<void> {
+    const thread = await currentSparkThread(ctx.cwd, ctx, graph, { activate: true });
+    await refreshSparkWidget(ctx.cwd, ctx);
+    ctx.ui?.notify?.("Spark planning mode: research, clarify, and add threads/tasks.", "info");
+    piApi.sendUserMessage?.(renderSparkPlanningModePrompt(graph, thread?.ref, focus), {
+      deliverAs: "followUp",
+    });
+  }
+
+  async function enterSparkExecutionMode(
+    piApi: SparkExtensionAPI,
+    ctx: SparkCommandContext,
+    graph: TaskGraph,
+  ): Promise<void> {
+    const thread = await currentSparkThread(ctx.cwd, ctx, graph, { activate: true });
+    await refreshSparkWidget(ctx.cwd, ctx);
+    ensureSparkDagManager(ctx.cwd, ctx);
+    ctx.ui?.notify?.("Spark execution mode: claim or dispatch ready tasks.", "info");
+    piApi.sendUserMessage?.(renderSparkExecutionModePrompt(graph, thread?.ref), {
+      deliverAs: "followUp",
+    });
+  }
 
   registerSparkTool({
     name: "spark_status",
@@ -3163,6 +3258,78 @@ async function sparkInitResultFromExisting(
     traceRef: "spark:existing",
     askArtifactRefs: options.askArtifactRefs ?? [],
   };
+}
+
+function sparkModeAsk(graph: TaskGraph, title: string): SparkAskToolParams {
+  const pendingCount = graph
+    .tasks()
+    .filter((task) => task.status === "pending" || task.status === "ready").length;
+  const threadCount = graph.threads().length;
+  return {
+    mode: "decision",
+    flow: "spark-command-mode",
+    title: `Choose Spark mode for “${truncateInline(title, 80)}”`,
+    context: [
+      `Current Spark workspace has ${threadCount} thread(s) and ${pendingCount} pending/ready task(s).`,
+      "Choose whether this turn should shape the project, plan more work, or execute existing tasks.",
+    ].join("\n"),
+    questions: [
+      {
+        id: "mode",
+        prompt: `For the current Spark workspace “${truncateInline(title, 80)}”, what should /spark do now?`,
+        type: "single",
+        required: true,
+        options: [
+          {
+            id: "planning",
+            label: `Plan “${truncateInline(title, 32)}”`,
+            description:
+              "Enter planning mode for this Spark workspace: research context, clarify intent, and add or refine threads and tasks before execution.",
+          },
+          {
+            id: "execution",
+            label: `Execute “${truncateInline(title, 32)}”`,
+            description:
+              "Enter execution mode for this Spark workspace: inspect ready tasks, claim concrete work, or dispatch ready tasks through the Spark orchestrator.",
+          },
+          {
+            id: "new_project",
+            label: "Start a new Spark project",
+            description:
+              "Start a new Spark idea instead of continuing the current workspace; this asks for the new project idea before initializing state.",
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function sparkModeFromAskDetails(
+  details: Record<string, unknown>,
+): "new_project" | "planning" | "execution" | undefined {
+  const modeAnswer = (details.answers as { mode?: { values?: unknown[] } } | undefined)?.mode;
+  const value = modeAnswer?.values?.[0];
+  return value === "new_project" || value === "planning" || value === "execution"
+    ? value
+    : undefined;
+}
+
+function renderSparkPlanningModePrompt(
+  graph: TaskGraph,
+  selectedThreadRef: ThreadRef | undefined,
+  focus: string | undefined,
+): string {
+  const summary = renderExistingSparkSummary(graph, selectedThreadRef);
+  const focusLine = focus?.trim() ? `\n\nPlanning focus from /spark: ${focus.trim()}` : "";
+  return `${summary}${focusLine}\n\nEnter Spark planning mode. Research and clarify the project context, then use spark_use_thread and spark_plan_tasks to add or refine concrete plan-bound tasks. Do not execute tasks yet unless the user explicitly asks to switch to execution.`;
+}
+
+function renderSparkExecutionModePrompt(
+  graph: TaskGraph,
+  selectedThreadRef: ThreadRef | undefined,
+): string {
+  const summary = renderExistingSparkSummary(graph, selectedThreadRef);
+  return `${summary}\n\nEnter Spark execution mode. Read the current thread/task plan, inspect ready tasks with spark_status, then either claim one concrete task with spark_claim_task or dispatch execution-ready tasks with spark_run_ready_tasks. Do not create broad new planning work unless execution is blocked by missing task plans.`;
 }
 
 function renderExistingSparkSummary(graph: TaskGraph, selectedThreadRef?: ThreadRef): string {

@@ -25,14 +25,17 @@ spark-core
         ↑
    spark-runtime ─────→ spark-artifacts, pi-roles
         ↑
+ spark-orchestrator ─→ spark-artifacts, pi-roles
+        ↑
        spark  ───────→ pi-cue, pi-ask, pi-roles
 ```
 
 Allowed high-level usage:
 
 - `spark` may orchestrate every Spark primitive and may use `pi-cue`, `pi-ask`, and `pi-roles`.
-- `spark-runtime` may combine `spark-tasks`, `pi-roles`, and `spark-artifacts` to run claimed tasks. It maps Spark tasks into `RoleRun` requests and maps completion back into task status, claims, DAG manager state, and artifacts.
-- `spark-tasks` owns DAGs, TODOs, scheduling state, task names, role bindings as plain `roleRef` strings, and claim leases. It must not run roles or import `pi-roles`.
+- `spark-runtime` may combine `spark-tasks`, `pi-roles`, and `spark-artifacts` to run one claimed task. It maps a Spark task into a `RoleRun` request and maps completion back into task status, claims, and artifacts.
+- `spark-orchestrator` may combine `spark-tasks`, `spark-runtime`, `pi-roles`, and `spark-artifacts` to schedule ready task frontiers, assign executor roles at dispatch, and own DAG manager state.
+- `spark-tasks` owns DAGs, TODOs, scheduling state, task names, role refs as optional plain-string executor hints, and claim leases. It must not run roles or import `pi-roles`.
 - `spark-review` may reference tasks, artifacts, and role refs, but must not own task scheduling.
 - `spark-ask` may depend on `pi-ask`, but it should only provide Spark presets and copy.
 - `pi-*` packages must remain generic and usable outside Spark mode.
@@ -57,7 +60,7 @@ pi-* -> spark-*
 - Users know `/spark`.
 - Reusable roles are `RoleSpec`s from `pi-roles` (`builtin`, `project`, or `user`).
 - Long-lived work and claim scheduling are `spark-tasks`.
-- Role execution/runtime orchestration is split: generic single-run launch/control/JSONL helpers live in `pi-roles`; Spark DAG/task adaptation remains in `spark-runtime`.
+- Role execution/runtime orchestration is split: generic single-run launch/control/JSONL helpers live in `pi-roles`; Spark single-task adaptation lives in `spark-runtime`; graph-level ready frontier scheduling lives in `spark-orchestrator`.
 - Durable context is `spark-artifacts`.
 - Execution is `pi-cue`.
 - Generic human/supervisor ask mechanics are `pi-ask`.

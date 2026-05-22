@@ -16,7 +16,8 @@ Spark primitives:
 - `pi-roles`: reusable `RoleSpec`s plus simple `fresh | forked` child Pi `RoleRun` helpers.
 - `spark-review`: verification gates.
 - `spark-tasks`: thread/task DAG and task planning helpers.
-- `spark-runtime`: Spark task/DAG adaptation over `pi-roles` runs.
+- `spark-runtime`: single Spark task execution adaptation over `pi-roles` runs.
+- `spark-orchestrator`: ready task frontier scheduling and DAG manager state.
 
 Rules:
 

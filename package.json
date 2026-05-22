@@ -36,6 +36,7 @@
     "spark-artifacts": "file:packages/spark-artifacts",
     "spark-ask": "file:packages/spark-ask",
     "spark-core": "file:packages/spark-core",
+    "spark-orchestrator": "file:packages/spark-orchestrator",
     "spark-review": "file:packages/spark-review",
     "spark-runtime": "file:packages/spark-runtime",
     "spark-tasks": "file:packages/spark-tasks",

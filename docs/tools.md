@@ -12,11 +12,11 @@ Tools:
 - `spark_use_thread` — set or create this session's current Spark thread.
 - `spark_rename_thread` — rename or update metadata for an existing Spark thread without changing task refs.
 - `spark_plan_tasks` — create or update multiple durable named tasks (`name` / `title` / `description`) in the active thread from a concrete plan without claiming them for the current session. Each task is plan-bound: callers may provide a structured `plan`, and Spark derives a minimal plan from the task description when omitted. Task dependencies are scoped to the active thread only; cross-thread dependencies are intentionally out of scope.
-- `spark_claim_task` — claim or update concrete task work for the current session in the active thread; tasks render as `@name: title`, and optional `roleRef` bindings can later be auto-claimed by Spark runtime execution. Claiming is an execution commitment: agents should read the task's bound plan before creating TODOs or executing.
+- `spark_claim_task` — claim or update concrete task work for the current session in the active thread; tasks render as `@name: title`, and optional `roleRef` values are preferred executor hints for orchestrated runs. Claiming is an execution commitment: agents should read the task's bound plan before creating TODOs or executing.
 - `spark_update_task_todos` — update TODOs attached to a claimed task.
 - `spark_update_todos` — update independent session TODOs that are siblings of the thread display.
 - `spark_finish_task` — finish this session's claimed task as `done`, `failed`, or `cancelled` without routing through task planning.
-- `spark_run_ready_tasks` — start the Spark DAG manager for ready tasks; dry-run remains synchronous and read-only by default. Ready-task execution uses reusable role specs via task `roleRef`s and creates fresh `role-run`s by default.
+- `spark_run_ready_tasks` — start the Spark orchestrator/DAG manager for ready tasks; dry-run remains synchronous and read-only by default. Ready-task execution assigns reusable role specs at dispatch time and creates fresh `role-run`s by default.
 - `spark_dag_manager` — inspect and control persisted DAG manager state with `status`, `reconcile`, `clear_inactive`, and `kill_active` actions. It reads `.spark/dag-runs.json`, reconciles stale running records against the task graph and active role-run process tracker, can clear inactive manager history, and can terminate active background role-run processes.
 - `spark_ask` — run a unified flow-native Spark ask workflow with
   one or more questions and persist the result as an ask artifact.

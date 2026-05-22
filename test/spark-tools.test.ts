@@ -14,7 +14,7 @@ import {
   type ThreadRef,
 } from "spark-core";
 import { defaultArtifactStore } from "spark-artifacts";
-import { defaultSparkDagRunStore } from "spark-runtime";
+import { defaultSparkDagRunStore } from "spark-orchestrator";
 import { defaultTaskGraphStore, defaultTaskTodoStore, TaskGraph } from "spark-tasks";
 import sparkExtension from "../packages/spark/src/extension/index.ts";
 
@@ -46,6 +46,8 @@ type TestSparkContext = {
   };
   hasUI: boolean;
   notifications: TestNotification[];
+  selected?: string;
+  inputValue?: string;
   ui: {
     notify: (message: string, level?: "info" | "warning" | "error" | "success") => void;
     setWidget: (key: string, cb: unknown, opts?: { placement?: string }) => void;
@@ -76,6 +78,30 @@ interface IndependentTodoStoreFile {
     notes?: string[];
   }>;
 }
+
+void test("/spark command auto-initializes new workspaces and selects modes for existing state", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-command-modes-"));
+  try {
+    const ctx = testSparkContext(dir, "main");
+    const { commands, messages } = registerSparkToolsForTest();
+    const command = commands.get("spark");
+    assert.ok(command, "missing /spark command");
+
+    await command.handler("Build a contextual Spark cockpit", ctx);
+    assert.ok(existsSync(join(dir, ".spark", "thread.json")));
+    assert.match(messages.at(-1) ?? "", /Spark initialized|Spark 已初始化/);
+
+    ctx.selected = "Plan: research and add threads/tasks";
+    await command.handler("", ctx);
+    assert.match(messages.at(-1) ?? "", /Enter Spark planning mode/);
+
+    ctx.selected = "Execute: work through ready tasks";
+    await command.handler("", ctx);
+    assert.match(messages.at(-1) ?? "", /Enter Spark execution mode/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 void test("spark_plan_tasks asks for task-plan decision before creating underspecified tasks", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-task-plan-ask-"));
@@ -926,14 +952,21 @@ async function writeEmptySparkThread(cwd: string): Promise<void> {
   await defaultTaskGraphStore(cwd).save(graph);
 }
 
-function registerSparkToolsForTest(): { tools: Map<string, SparkToolConfig>; messages: string[] } {
+function registerSparkToolsForTest(): {
+  tools: Map<string, SparkToolConfig>;
+  messages: string[];
+  commands: Map<string, Parameters<SparkExtensionApiForTest["registerCommand"]>[1]>;
+} {
   const tools = new Map<string, SparkToolConfig>();
   const messages: string[] = [];
+  const commands = new Map<string, Parameters<SparkExtensionApiForTest["registerCommand"]>[1]>();
   const pi: SparkExtensionApiForTest & {
     getAllTools: () => Array<{ name: string }>;
     setActiveTools: (names: string[]) => void;
   } = {
-    registerCommand: () => undefined,
+    registerCommand: (name, config) => {
+      commands.set(name, config);
+    },
     registerTool: (config) => {
       tools.set(config.name, config);
     },
@@ -945,7 +978,7 @@ function registerSparkToolsForTest(): { tools: Map<string, SparkToolConfig>; mes
     setActiveTools: () => undefined,
   };
   sparkExtension(pi);
-  return { tools, messages };
+  return { tools, messages, commands };
 }
 
 async function executeSparkTool(
@@ -976,8 +1009,8 @@ function testSparkContext(cwd: string, sessionName: string): TestSparkContext {
       setWidget: () => undefined,
       setStatus: () => undefined,
       confirm: async () => true,
-      input: async () => undefined,
-      select: async () => undefined,
+      input: async () => context.inputValue,
+      select: async () => context.selected,
     },
   };
   return context;

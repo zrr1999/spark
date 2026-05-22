@@ -1,0 +1,25 @@
+{
+  "name": "spark-orchestrator",
+  "version": "0.1.0",
+  "description": "Spark task graph orchestration for ready frontier scheduling and DAG manager state.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "pi-roles": "file:../pi-roles",
+    "spark-artifacts": "file:../spark-artifacts",
+    "spark-core": "file:../spark-core",
+    "spark-runtime": "file:../spark-runtime",
+    "spark-tasks": "file:../spark-tasks"
+  }
+}

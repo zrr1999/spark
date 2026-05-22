@@ -12,7 +12,8 @@ Reusable, Spark-independent pieces live in `pi-roles`; Spark keeps task/DAG/work
 - `packages/pi-roles/src/index.ts` owns `RoleSpec`, `RoleRegistry`, role stores, builtin roles, Markdown role parsing/serialization, and simple `RoleRun` launch/control helpers. It does not depend on `spark-core`.
 - `packages/spark-core/src/index.ts` owns Spark refs, task/artifact/review contracts, role refs as branded strings, and temporary deprecated agent aliases needed for rolling state migration.
 - `packages/spark-tasks/src/index.ts` owns task DAGs, TODOs, dependencies, readiness, claim leases, and run history. It stores `roleRef` strings but does not import or resolve `RoleSpec` objects.
-- `packages/spark-runtime/src/index.ts` owns Spark adaptation: resolving task `roleRef`s through a `RoleRegistry`, creating `role-run` claims, calling `runRole()`, writing artifacts, updating task/run/DAG state, and tracking active background child processes.
+- `packages/spark-runtime/src/index.ts` owns single-task Spark adaptation: resolving an assigned/task/default `roleRef` through a `RoleRegistry`, creating `role-run` claims, calling `runRole()`, writing artifacts, updating task/run state, and tracking active background child processes.
+- `packages/spark-orchestrator/src/index.ts` owns graph-level orchestration: ready frontier scheduling, dispatch-time executor role assignment, DAG manager state, and stale manager reconciliation.
 - `packages/pi-roles/src/extension.ts` exposes role-spec management tools (`list_roles`, `get_role`, `create_role`) plus the one-off direct `call_role` tool.
 - `packages/spark/src/extension/index.ts` exposes Spark workflow tools; Spark task execution uses role refs through `spark_run_ready_tasks`, not direct role wrapper tools.
 
@@ -60,7 +61,8 @@ Storage policy:
 ## Spark package ownership
 
 - `spark-tasks` owns threads, tasks, dependencies, task TODOs, claim leases, readiness, and run history.
-- `spark-runtime` maps Spark tasks to `pi-roles` `RoleRun` primitives and maps completion back to task status, task claims, artifacts, and DAG scheduling.
+- `spark-runtime` maps one Spark task to one `pi-roles` `RoleRun` primitive and maps completion back to task status, task claims, and artifacts.
+- `spark-orchestrator` maps ready Spark task frontiers to scheduled `spark-runtime` runs and owns DAG manager scheduling/reconciliation state.
 - `spark` extension tools keep Spark workflow semantics. Deprecated agent-shaped inputs may be accepted only as a narrow rolling migration layer.
 
 ## Non-goals

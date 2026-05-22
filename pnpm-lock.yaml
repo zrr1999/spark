@@ -31,6 +31,9 @@ importers:
       spark-core:
         specifier: file:packages/spark-core
         version: link:packages/spark-core
+      spark-orchestrator:
+        specifier: file:packages/spark-orchestrator
+        version: link:packages/spark-orchestrator
       spark-review:
         specifier: file:packages/spark-review
         version: link:packages/spark-review
@@ -125,6 +128,9 @@ importers:
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core
+      spark-orchestrator:
+        specifier: file:../spark-orchestrator
+        version: link:../spark-orchestrator
       spark-review:
         specifier: file:../spark-review
         version: link:../spark-review
@@ -157,6 +163,24 @@ importers:
         version: link:../spark-core
 
   packages/spark-core: {}
+
+  packages/spark-orchestrator:
+    dependencies:
+      pi-roles:
+        specifier: file:../pi-roles
+        version: link:../pi-roles
+      spark-artifacts:
+        specifier: file:../spark-artifacts
+        version: link:../spark-artifacts
+      spark-core:
+        specifier: file:../spark-core
+        version: link:../spark-core
+      spark-runtime:
+        specifier: file:../spark-runtime
+        version: link:../spark-runtime
+      spark-tasks:
+        specifier: file:../spark-tasks
+        version: link:../spark-tasks
 
   packages/spark-review:
     dependencies:
