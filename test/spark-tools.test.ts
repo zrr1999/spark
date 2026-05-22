@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { chmod } from "node:fs/promises";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -691,6 +692,48 @@ void test("spark_run_ready_tasks emits DAG completion follow-up when manager fin
     assert.match(messages.join("\n"), /scheduled 1, completed 1/);
     assert.equal(ctx.notifications.at(-1)?.level, "info");
     assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark DAG run:/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark_run_ready_tasks marks DAG manager failed when child role-run fails", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-child-failed-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const ctx = testSparkContext(dir, "main");
+    const store = defaultTaskGraphStore(dir);
+    const graph = await store.load();
+    assert.ok(graph);
+    const [thread] = graph.threads();
+    assert.ok(thread);
+    graph.createTask({
+      threadRef: thread.ref,
+      name: "empty-role",
+      title: "Empty role task",
+      description: "Run a fake role-run that produces no evidence.",
+      kind: "implement",
+      status: "pending",
+      plan: executionReadyPlan("Empty role task"),
+    });
+    await store.save(graph);
+    const fakePi = join(dir, "pi");
+    await writeFile(fakePi, "#!/usr/bin/env node\nprocess.exit(0);\n", "utf8");
+    await chmod(fakePi, 0o755);
+    process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
+
+    const { tools, messages } = registerSparkToolsForTest();
+    await executeSparkTool(tools, "spark_run_ready_tasks", ctx, { dryRun: false });
+    await waitFor(() => messages.some((message) => message.includes("Spark DAG run:")), 3_000);
+    await waitFor(() => !ctx.notifications.at(-1)?.message.includes("running"), 3_000);
+
+    const dagStatus = await defaultSparkDagRunStore(dir).status();
+    assert.equal(dagStatus.succeeded, 0);
+    assert.equal(dagStatus.failed, 1);
+    assert.equal(dagStatus.lastRun?.status, "failed");
+    assert.match(messages.join("\n"), /Spark DAG .* failed: scheduled 1, completed 1/);
+    assert.match(messages.join("\n"), /Inspect the DAG manager error/);
+    await waitFor(() => existsSync(join(dir, ".spark", "todos")), 3_000);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -1243,6 +1243,37 @@ void test("Spark DAG run store persists manager lifecycle and task progress", as
   }
 });
 
+void test("Spark DAG run store marks finished manager runs failed when child runs fail", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-child-failed-"));
+  try {
+    const store = defaultSparkDagRunStore(dir);
+    const dagRun = await store.startRun({
+      dryRun: false,
+      maxConcurrency: 1,
+      timeoutMs: 100,
+    });
+    const followUp = await store.finishRun(dagRun.ref, {
+      scheduled: 1,
+      completed: 1,
+      failed: 1,
+      cancelled: 0,
+      timedOut: false,
+    });
+
+    assert.ok(followUp);
+    assert.equal(followUp.summary, `Spark DAG ${dagRun.ref} failed: scheduled 1, completed 1.`);
+    assert.match(followUp.nextActions.join("\n"), /Inspect the DAG manager error/);
+    const status = await store.status();
+    assert.equal(status.manager.status, "idle");
+    assert.equal(status.succeeded, 0);
+    assert.equal(status.failed, 1);
+    assert.equal(status.lastRun?.status, "failed");
+    assert.match(status.lastRun?.errorMessage ?? "", /failed=1 cancelled=0/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("Spark DAG run store can clear inactive manager records", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-clear-"));
   try {
@@ -1364,6 +1395,9 @@ void test("runReadySparkTasks assigns default roles and schedules DAG waves with
     assert.equal(result.maxConcurrency, 4);
     assert.equal(result.scheduled, 5);
     assert.equal(result.runs.length, 5);
+    assert.equal(result.succeeded, 5);
+    assert.equal(result.failed, 0);
+    assert.equal(result.cancelled, 0);
     assert.equal(result.timedOut, false);
     assert.ok(firstWave.every((task) => graph.getTask(task.ref).roleRef === undefined));
     assert.ok(
@@ -1380,6 +1414,44 @@ void test("runReadySparkTasks assigns default roles and schedules DAG waves with
       spanMs < 120,
       `expected parallel first wave, span=${spanMs}ms elapsed=${elapsedMs}ms`,
     );
+  } finally {
+    await killActiveSparkRoleRunProcesses();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("runReadySparkTasks reports failed child runs in aggregate result", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-ready-child-failed-"));
+  try {
+    const graph = new TaskGraph();
+    const thread = graph.createThread({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      threadRef: thread.ref,
+      title: "No output",
+      description: "ok",
+      roleRef: builtinRoleRef("worker"),
+      plan: executionReadyPlan("No output"),
+    });
+    const fakePi = join(dir, "fake-pi.mjs");
+    await writeFile(fakePi, "#!/usr/bin/env node\nprocess.exit(0);\n", "utf8");
+    await chmod(fakePi, 0o755);
+
+    const result = await runReadySparkTasks({
+      graph,
+      registry: new RoleRegistry(),
+      cwd: dir,
+      dryRun: false,
+      piCommand: fakePi,
+      timeoutMs: 5_000,
+      claim: { sessionId: "session:parent" },
+    });
+
+    assert.equal(result.scheduled, 1);
+    assert.equal(result.completed, 1);
+    assert.equal(result.succeeded, 0);
+    assert.equal(result.failed, 1);
+    assert.equal(result.cancelled, 0);
+    assert.equal(graph.getTask(task.ref).status, "failed");
   } finally {
     await killActiveSparkRoleRunProcesses();
     await rm(dir, { recursive: true, force: true });

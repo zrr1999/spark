@@ -289,7 +289,8 @@ export class SparkDagRunStore {
 
   async finishRun(
     runRef: RunRef,
-    result: Pick<SparkReadyTaskRunnerResult, "scheduled" | "completed" | "timedOut">,
+    result: Pick<SparkReadyTaskRunnerResult, "scheduled" | "completed" | "timedOut"> &
+      Partial<Pick<SparkReadyTaskRunnerResult, "failed" | "cancelled">>,
     error?: unknown,
   ): Promise<SparkDagCompletionFollowUp | undefined> {
     let followUp: SparkDagCompletionFollowUp | undefined;
@@ -297,12 +298,27 @@ export class SparkDagRunStore {
       const now = nowIso();
       const record = snapshot.runs.find((candidate) => candidate.ref === runRef);
       if (!record) return;
+      const failedChildren = result.failed ?? 0;
+      const cancelledChildren = result.cancelled ?? 0;
+      const hasFailedChildren = failedChildren > 0 || cancelledChildren > 0;
       record.scheduled = result.scheduled;
       record.completed = result.completed;
       record.timedOut = result.timedOut;
-      record.status = error ? "failed" : result.timedOut ? "timed_out" : "succeeded";
+      record.status = error
+        ? "failed"
+        : result.timedOut
+          ? "timed_out"
+          : hasFailedChildren
+            ? "failed"
+            : "succeeded";
       record.errorMessage =
-        error instanceof Error ? error.message : error ? JSON.stringify(error) : undefined;
+        error instanceof Error
+          ? error.message
+          : error
+            ? JSON.stringify(error)
+            : hasFailedChildren
+              ? `Spark DAG child runs failed: failed=${failedChildren} cancelled=${cancelledChildren}`
+              : undefined;
       record.finishedAt = now;
       record.updatedAt = now;
       followUp = createSparkDagCompletionFollowUp(record);
@@ -729,6 +745,9 @@ export interface SparkReadyTaskRunnerResult {
   runs: TaskRun[];
   scheduled: number;
   completed: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
   timedOut: boolean;
   maxConcurrency: number;
 }
@@ -907,6 +926,9 @@ export async function runReadySparkTasks(
     runs,
     scheduled: scheduled.size,
     completed: runs.filter((run) => run.status !== "running" && run.status !== "queued").length,
+    succeeded: runs.filter((run) => run.status === "succeeded").length,
+    failed: runs.filter((run) => run.status === "failed").length,
+    cancelled: runs.filter((run) => run.status === "cancelled").length,
     timedOut,
     maxConcurrency,
   };
