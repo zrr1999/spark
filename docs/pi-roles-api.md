@@ -123,7 +123,16 @@ export function createRoleSpec(proposal: RoleSpecProposal, now?: string): RoleSp
 export function validateRoleSpec(role: RoleSpec): void;
 export function parseRoleSpecMarkdown(markdown: string, options: { source: RoleSource }): RoleSpec;
 export function serializeRoleSpecMarkdown(role: RoleSpec): string;
-export function hydrateDefaultRoleRegistry(cwd?: string, home?: string): Promise<RoleRegistry>;
+export function hydrateDefaultRoleRegistry(
+   registry: RoleRegistry,
+   cwd: string,
+   options?: {
+      home?: string;
+      includeUser?: boolean;
+      includeCompatibility?: boolean;
+      includeLegacySparkJson?: boolean;
+   },
+): Promise<void>;
 ```
 
 Initial ref strategy:

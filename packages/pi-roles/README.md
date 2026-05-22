@@ -41,7 +41,7 @@ above this package.
 
 `pi-roles` also registers one minimal Pi tool:
 
-- `run_role` — resolve a builtin/project role and run one explicit instruction.
+- `run_role` — resolve a builtin/project role, optionally including user roles with `includeUser: true`, and run one explicit instruction.
 
 Modes:
 
