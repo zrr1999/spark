@@ -1,13 +1,13 @@
 ---
 name: pi-cue
 description: |
-   Use cue-shell as the only execution backend (bash is disabled).
-   cue-shell uses direct-exec with its own composition operators:
-   |> pipes stdout, -> runs in serial on success, || runs in parallel,
-   ~> runs in serial ignoring failures.
-   Use run for ALL commands: quick ones (ls, cat, grep), builds, tests,
-   servers, and background jobs.  status/wait to track, kill to stop,
-   cron for scheduled tasks.  cue-shell has its own grammar — not bash-compatible.
+  Use cue-shell as the only execution backend (bash is disabled).
+  cue-shell uses direct-exec with its own composition operators:
+  |> pipes stdout, -> runs in serial on success, || runs in parallel,
+  ~> runs in serial ignoring failures.
+  Use run for ALL commands: quick ones (ls, cat, grep), builds, tests,
+  servers, and background jobs.  status/wait to track, kill to stop,
+  cron for scheduled tasks.  cue-shell has its own grammar — not bash-compatible.
 ---
 
 # pi-cue

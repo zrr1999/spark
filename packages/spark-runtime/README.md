@@ -72,9 +72,9 @@ Control surface:
 
 - `spark_status` includes the persisted DAG manager summary and last/active manager run.
 - `spark_dag_manager` actions:
-   - `status` — report the persisted summary after reconciliation.
-   - `reconcile` — explicitly reconcile stale manager state and report the result.
-   - `clear_inactive` — remove inactive manager records from `.spark/dag-runs.json` while preserving any still-running record.
-   - `kill_active` — terminate active background role-run processes, then reconcile and report the manager summary.
+  - `status` — report the persisted summary after reconciliation.
+  - `reconcile` — explicitly reconcile stale manager state and report the result.
+  - `clear_inactive` — remove inactive manager records from `.spark/dag-runs.json` while preserving any still-running record.
+  - `kill_active` — terminate active background role-run processes, then reconcile and report the manager summary.
 
 Use `runSparkTask()` from the Spark extension or higher-level orchestrators.

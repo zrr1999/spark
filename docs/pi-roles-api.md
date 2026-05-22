@@ -26,34 +26,34 @@ export type RoleRunRef = `run:${string}`;
 export type RoleRunMode = "fresh" | "forked";
 
 export interface RoleSpec {
-   ref: RoleRef;
-   id: string;
-   source: RoleSource;
-   description: string;
-   systemPrompt: string;
-   origin?: { kind: RoleOriginKind; note?: string; artifactRef?: string };
-   metadata?: Record<string, unknown>;
-   createdAt: string;
-   updatedAt: string;
+  ref: RoleRef;
+  id: string;
+  source: RoleSource;
+  description: string;
+  systemPrompt: string;
+  origin?: { kind: RoleOriginKind; note?: string; artifactRef?: string };
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface RoleSpecProposal {
-   id: string;
-   source?: Exclude<RoleSource, "builtin">;
-   description: string;
-   systemPrompt: string;
-   rationale?: string;
-   expectedUses?: string[];
-   origin?: { kind: RoleOriginKind; note?: string; artifactRef?: string };
-   metadata?: Record<string, unknown>;
+  id: string;
+  source?: Exclude<RoleSource, "builtin">;
+  description: string;
+  systemPrompt: string;
+  rationale?: string;
+  expectedUses?: string[];
+  origin?: { kind: RoleOriginKind; note?: string; artifactRef?: string };
+  metadata?: Record<string, unknown>;
 }
 
 export interface RoleRunRequest {
-   runRef: RoleRunRef;
-   roleRef: RoleRef;
-   mode?: RoleRunMode;
-   instruction: string;
-   forkFromSession?: string;
+  runRef: RoleRunRef;
+  roleRef: RoleRef;
+  mode?: RoleRunMode;
+  instruction: string;
+  forkFromSession?: string;
 }
 ```
 
@@ -75,12 +75,12 @@ Do **not** use legacy `managed` as a source or runtime mode. It only described t
 
 ```ts
 export class RoleRegistry {
-   constructor(initialRoles?: RoleSpec[]);
-   add(role: RoleSpec): void;
-   get(ref: RoleRef): RoleSpec;
-   has(ref: RoleRef): boolean;
-   list(filter?: { source?: RoleSource }): RoleSpec[];
-   select(idOrRef: string, filter?: { source?: RoleSource }): RoleSpec;
+  constructor(initialRoles?: RoleSpec[]);
+  add(role: RoleSpec): void;
+  get(ref: RoleRef): RoleSpec;
+  has(ref: RoleRef): boolean;
+  list(filter?: { source?: RoleSource }): RoleSpec[];
+  select(idOrRef: string, filter?: { source?: RoleSource }): RoleSpec;
 }
 ```
 
@@ -95,14 +95,14 @@ Selection rules:
 
 ```ts
 export interface RoleStore {
-   save(role: RoleSpec): Promise<void>;
-   loadAll(): Promise<RoleSpec[]>;
+  save(role: RoleSpec): Promise<void>;
+  loadAll(): Promise<RoleSpec[]>;
 }
 
 export class MarkdownRoleStore implements RoleStore {
-   constructor(rootDir: string, source?: RoleSource);
-   save(role: RoleSpec): Promise<void>;
-   loadAll(): Promise<RoleSpec[]>;
+  constructor(rootDir: string, source?: RoleSource);
+  save(role: RoleSpec): Promise<void>;
+  loadAll(): Promise<RoleSpec[]>;
 }
 ```
 
@@ -124,14 +124,14 @@ export function validateRoleSpec(role: RoleSpec): void;
 export function parseRoleSpecMarkdown(markdown: string, options: { source: RoleSource }): RoleSpec;
 export function serializeRoleSpecMarkdown(role: RoleSpec): string;
 export function hydrateDefaultRoleRegistry(
-   registry: RoleRegistry,
-   cwd: string,
-   options?: {
-      home?: string;
-      includeUser?: boolean;
-      includeCompatibility?: boolean;
-      includeLegacySparkJson?: boolean;
-   },
+  registry: RoleRegistry,
+  cwd: string,
+  options?: {
+    home?: string;
+    includeUser?: boolean;
+    includeCompatibility?: boolean;
+    includeLegacySparkJson?: boolean;
+  },
 ): Promise<void>;
 ```
 
