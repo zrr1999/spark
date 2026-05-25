@@ -137,6 +137,68 @@ void test("/spark command detects empty, existing, and initialized project modes
   }
 });
 
+void test("/plan and /execute enter Spark modes directly", async () => {
+  const existingDir = await mkdtemp(join(tmpdir(), "spark-plan-direct-existing-"));
+  const initializedDir = await mkdtemp(join(tmpdir(), "spark-execute-direct-initialized-"));
+  const emptyDir = await mkdtemp(join(tmpdir(), "spark-execute-direct-empty-"));
+  try {
+    await writeFile(join(existingDir, "README.md"), "# Existing project\n", "utf8");
+    const existingCtx = testSparkContext(existingDir, "main");
+    const existingRun = registerSparkToolsForTest();
+    const planCommand = existingRun.commands.get("plan");
+    assert.ok(planCommand, "missing /plan command");
+    await planCommand.handler("Audit current task flow", existingCtx);
+    assert.ok(existsSync(join(existingDir, ".spark", "thread.json")));
+    assert.match(existingRun.messages.at(-1) ?? "", /Enter Spark planning mode/);
+    assert.match(existingRun.messages.at(-1) ?? "", /Audit current task flow/);
+
+    await writeEmptySparkThread(initializedDir);
+    const initializedCtx = testSparkContext(initializedDir, "main");
+    await defaultTaskGraphStore(initializedDir).update(async (graph) => {
+      const thread = graph.threads()[0];
+      assert.ok(thread);
+      await mkdir(join(initializedDir, ".spark", "current-thread"), { recursive: true });
+      await writeFile(
+        join(
+          initializedDir,
+          ".spark",
+          "current-thread",
+          `${ctxSessionStoreScope(initializedCtx)}.json`,
+        ),
+        JSON.stringify({ threadRef: thread.ref }, null, 2),
+        "utf8",
+      );
+      graph.createTask({
+        threadRef: thread.ref,
+        title: "Ready direct execution task",
+        description: "Ready direct execution task",
+        plan: executionReadyPlan("Ready direct execution task"),
+        status: "pending",
+      });
+    });
+    const initializedRun = registerSparkToolsForTest();
+    const executeCommand = initializedRun.commands.get("execute");
+    assert.ok(executeCommand, "missing /execute command");
+    await executeCommand.handler("", initializedCtx);
+    assert.match(initializedRun.messages.at(-1) ?? "", /Enter Spark execution mode/);
+    assert.equal(
+      initializedCtx.notifications.at(-1)?.message,
+      "Spark execution mode: claim or dispatch ready tasks.",
+    );
+
+    const emptyCtx = testSparkContext(emptyDir, "main");
+    const emptyRun = registerSparkToolsForTest();
+    const emptyExecute = emptyRun.commands.get("execute");
+    assert.ok(emptyExecute, "missing /execute command");
+    await emptyExecute.handler("", emptyCtx);
+    assert.match(emptyCtx.notifications.at(-1)?.message ?? "", /needs initialized Spark state/);
+  } finally {
+    await rm(existingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+    await rm(initializedDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+    await rm(emptyDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
 void test("spark_plan_tasks blocks underspecified executable tasks without opening a canned ask", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-task-plan-not-ready-"));
   try {
