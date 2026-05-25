@@ -187,6 +187,13 @@ interface SparkEntryModeAnalysis {
   pendingTaskCount: number;
 }
 
+interface SparkExecutionModeState {
+  version: 1;
+  threadRef: ThreadRef;
+  focus?: string;
+  enteredAt: string;
+}
+
 type SparkEntryIntent =
   | { kind: "auto"; prompt: string }
   | { kind: "direct"; mode: SparkEntryMode; prompt: string };
@@ -1348,7 +1355,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
   pi.registerCommand("execute", {
     description:
-      "Enter Spark execution mode directly for an initialized workspace without dispatching tasks automatically.",
+      "Enter Spark execution mode directly for an initialized workspace; prefer DAG execution and continue through ready tasks until blocked.",
     async handler(args, ctx) {
       await handleSparkEntryCommand(pi, ctx, {
         kind: "direct",
@@ -1704,6 +1711,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     focus?: string,
   ): Promise<void> {
     const thread = await currentSparkThread(ctx.cwd, ctx, graph);
+    await clearSparkExecutionMode(ctx.cwd, ctx);
     await refreshSparkWidget(ctx.cwd, ctx);
     ctx.ui?.notify?.("Spark planning mode: research, clarify, and add threads/tasks.", "info");
     piApi.sendUserMessage?.(renderSparkPlanningModePrompt(graph, thread?.ref, focus), {
@@ -1718,8 +1726,10 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     focus?: string,
   ): Promise<void> {
     const thread = await currentSparkThread(ctx.cwd, ctx, graph);
+    if (thread) await saveSparkExecutionMode(ctx.cwd, ctx, thread.ref, focus);
+    else await clearSparkExecutionMode(ctx.cwd, ctx);
     await refreshSparkWidget(ctx.cwd, ctx);
-    ctx.ui?.notify?.("Spark execution mode: claim or dispatch ready tasks.", "info");
+    ctx.ui?.notify?.("Spark execution mode: prefer DAG or continue ready tasks.", "info");
     piApi.sendUserMessage?.(renderSparkExecutionModePrompt(graph, thread?.ref, focus), {
       deliverAs: "followUp",
     });
@@ -2043,19 +2053,38 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const cwd = ctxCwd(ctx);
       const p = params as { task?: string; status?: string; summary?: string };
       const status = normalizeSparkFinishStatus(p.status);
+      const executionMode = await loadSparkExecutionMode(cwd, ctx);
       const store = defaultTaskGraphStore(cwd);
       const updated = await store.update(
         async (graph) => {
           await sparkTodoStore(cwd, ctx).hydrate(graph);
           const thread = await currentSparkThread(cwd, ctx, graph);
           if (!thread) return { error: "no_thread" as const };
-          const task = resolveSessionClaimedTask(graph, thread.ref, sparkSessionKey(ctx), p.task);
+          const sessionKey = sparkSessionKey(ctx);
+          const task = resolveSessionClaimedTask(graph, thread.ref, sessionKey, p.task);
           if (!task) return { error: "no_matching_claimed_task" as const };
           const finished = graph.setTaskStatus(task.ref, status);
           const completionReadiness =
             status === "done" ? taskCompletionReadiness(finished) : undefined;
+          const autoClaimed =
+            status === "done" && executionMode?.threadRef === thread.ref
+              ? graph.readyTasks(thread.ref)[0]
+              : undefined;
+          const claimedNext = autoClaimed
+            ? graph.claimTask(autoClaimed.ref, {
+                kind: "main",
+                claimedBy: sessionKey,
+                sessionId: sessionKey,
+                leaseMs: MAIN_TASK_CLAIM_LEASE_MS,
+              })
+            : undefined;
           await sparkTodoStore(cwd, ctx).save(graph);
-          return { task: finished, completionReadiness };
+          return {
+            task: finished,
+            completionReadiness,
+            threadRef: thread.ref,
+            autoClaimed: claimedNext,
+          };
         },
         { createIfMissing: false },
       );
@@ -2085,16 +2114,35 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const candidateSuffix = learningCandidate
         ? `\nLearning candidate: ${learningCandidate.ref}`
         : "";
+      const executionSuffix = updated.result.autoClaimed
+        ? `\nExecution mode continued: auto-claimed next ready task @${updated.result.autoClaimed.name}: ${updated.result.autoClaimed.title}.`
+        : executionMode?.threadRef === updated.result.threadRef && status === "done"
+          ? "\nExecution mode continued: no ready task remains to auto-claim; inspect blockers or finish the thread."
+          : "";
+      if (updated.result.autoClaimed && updated.graph) {
+        pi.sendUserMessage?.(
+          renderSparkExecutionContinuationPrompt(
+            updated.graph,
+            updated.result.threadRef,
+            executionMode?.focus,
+            updated.result.autoClaimed,
+          ),
+          { deliverAs: "followUp" },
+        );
+      }
       return {
         content: [
           {
             type: "text",
-            text: `Finished Spark task: [${updated.result.task.status}] @${updated.result.task.name}: ${updated.result.task.title}${summarySuffix}${completionIssueSuffix}${candidateSuffix}`,
+            text: `Finished Spark task: [${updated.result.task.status}] @${updated.result.task.name}: ${updated.result.task.title}${summarySuffix}${completionIssueSuffix}${candidateSuffix}${executionSuffix}`,
           },
         ],
         details: {
           task: compactTaskDetail(updated.result.task),
           completionReadiness: updated.result.completionReadiness,
+          autoClaimedTask: updated.result.autoClaimed
+            ? compactTaskDetail(updated.result.autoClaimed)
+            : undefined,
           learningCandidate: learningCandidate
             ? compactLearningDetail(learningCandidate)
             : undefined,
@@ -3553,15 +3601,34 @@ function currentThreadStorePath(cwd: string, ctx: unknown): string {
   );
 }
 
-async function loadCurrentThreadRef(cwd: string, ctx: unknown): Promise<ThreadRef | undefined> {
+async function loadCurrentThreadState(
+  cwd: string,
+  ctx: unknown,
+): Promise<{ threadRef?: ThreadRef; executionMode?: SparkExecutionModeState } | undefined> {
   try {
     const raw = JSON.parse(await readFile(currentThreadStorePath(cwd, ctx), "utf8")) as {
       threadRef?: string;
+      executionMode?: Partial<SparkExecutionModeState>;
     };
-    return raw.threadRef as ThreadRef | undefined;
+    return {
+      threadRef: raw.threadRef as ThreadRef | undefined,
+      executionMode:
+        raw.executionMode?.threadRef && raw.executionMode.enteredAt
+          ? {
+              version: 1,
+              threadRef: raw.executionMode.threadRef as ThreadRef,
+              focus: raw.executionMode.focus?.trim() || undefined,
+              enteredAt: raw.executionMode.enteredAt,
+            }
+          : undefined,
+    };
   } catch {
     return undefined;
   }
+}
+
+async function loadCurrentThreadRef(cwd: string, ctx: unknown): Promise<ThreadRef | undefined> {
+  return (await loadCurrentThreadState(cwd, ctx))?.threadRef;
 }
 
 async function saveCurrentThreadRef(
@@ -3572,6 +3639,50 @@ async function saveCurrentThreadRef(
   const filePath = currentThreadStorePath(cwd, ctx);
   await mkdir(dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify({ version: 1, threadRef }, null, 2)}\n`, "utf8");
+}
+
+async function saveSparkExecutionMode(
+  cwd: string,
+  ctx: unknown,
+  threadRef: ThreadRef,
+  focus: string | undefined,
+): Promise<void> {
+  const filePath = currentThreadStorePath(cwd, ctx);
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(
+    filePath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        threadRef,
+        executionMode: {
+          version: 1,
+          threadRef,
+          focus: focus?.trim() || undefined,
+          enteredAt: nowIso(),
+        } satisfies SparkExecutionModeState,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
+async function loadSparkExecutionMode(
+  cwd: string,
+  ctx: unknown,
+): Promise<SparkExecutionModeState | undefined> {
+  return (await loadCurrentThreadState(cwd, ctx))?.executionMode;
+}
+
+async function clearSparkExecutionMode(cwd: string, ctx: unknown): Promise<void> {
+  const state = await loadCurrentThreadState(cwd, ctx);
+  if (!state?.threadRef) {
+    await rm(currentThreadStorePath(cwd, ctx), { force: true });
+    return;
+  }
+  await saveCurrentThreadRef(cwd, ctx, state.threadRef);
 }
 
 async function clearCurrentThreadRef(cwd: string, ctx: unknown): Promise<void> {
@@ -4952,9 +5063,20 @@ function renderSparkExecutionModePrompt(
     ? `\n\nExecution focus: ${focus.trim()}\nUse this focus to filter ready tasks and pre-flight questions; do not auto-dispatch solely because a focus was provided.`
     : "";
   const action = selectedThreadRef
-    ? "Read the current thread/task plan, inspect ready tasks with spark_status, then either claim one concrete task with spark_claim_task or dispatch execution-ready tasks with spark_run_ready_tasks."
+    ? "Read the current thread/task plan and inspect ready tasks with spark_status. Prefer DAG execution with spark_run_ready_tasks dryRun=false when ready tasks can run through the Spark orchestrator; otherwise claim one concrete task with spark_claim_task. After each claimed task finishes, continue by auto-claiming or dispatching the next ready task until the thread is done or blocked."
     : "Select a current thread with spark_use_thread before claiming thread-bound work; use spark_status view=summary/full to inspect available threads first if needed.";
-  return `${summary}${focusLine}\n\nEnter Spark execution mode. ${action} Do not create broad new planning work unless execution is blocked by missing task plans.`;
+  return `${summary}${focusLine}\n\nEnter Spark execution mode. ${action} Do not stop after a single task unless no ready tasks remain, execution is blocked by missing task plans/dependencies, or the user explicitly exits execution mode.`;
+}
+
+function renderSparkExecutionContinuationPrompt(
+  graph: TaskGraph,
+  selectedThreadRef: ThreadRef,
+  focus: string | undefined,
+  autoClaimed: Task,
+): string {
+  const summary = renderExistingSparkSummary(graph, selectedThreadRef);
+  const focusLine = focus?.trim() ? `\n\nExecution focus remains: ${focus.trim()}` : "";
+  return `${summary}${focusLine}\n\nContinue Spark execution mode. The previous task finished and Spark auto-claimed @${autoClaimed.name}: ${autoClaimed.title}. Read that task's plan/TODOs, execute it, then call spark_finish_task; after completion, continue with the next ready task until blocked or done. If the ready frontier is better handled in parallel, prefer spark_run_ready_tasks dryRun=false instead of stopping after this claimed task.`;
 }
 
 function renderExistingSparkSummary(graph: TaskGraph, selectedThreadRef?: ThreadRef): string {

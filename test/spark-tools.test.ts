@@ -190,9 +190,17 @@ void test("/plan and /execute enter Spark modes directly", async () => {
       initializedRun.messages.at(-1) ?? "",
       /Execution focus: Finish the direct execution task/,
     );
+    assert.match(
+      initializedRun.messages.at(-1) ?? "",
+      /Prefer DAG execution with spark_run_ready_tasks dryRun=false/,
+    );
+    assert.match(
+      initializedRun.messages.at(-1) ?? "",
+      /After each claimed task finishes, continue by auto-claiming or dispatching the next ready task/,
+    );
     assert.equal(
       initializedCtx.notifications.at(-1)?.message,
-      "Spark execution mode: claim or dispatch ready tasks.",
+      "Spark execution mode: prefer DAG or continue ready tasks.",
     );
 
     const emptyCtx = testSparkContext(emptyDir, "main");
@@ -205,6 +213,67 @@ void test("/plan and /execute enter Spark modes directly", async () => {
     await rm(existingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
     await rm(initializedDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
     await rm(emptyDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("/execute keeps execution mode active and auto-claims the next ready task", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-execute-continuous-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const ctx = testSparkContext(dir, "main");
+    await defaultTaskGraphStore(dir).update(async (graph) => {
+      const thread = graph.threads()[0];
+      assert.ok(thread);
+      await mkdir(join(dir, ".spark", "current-thread"), { recursive: true });
+      await writeFile(
+        join(dir, ".spark", "current-thread", `${ctxSessionStoreScope(ctx)}.json`),
+        JSON.stringify({ threadRef: thread.ref }, null, 2),
+        "utf8",
+      );
+      graph.createTask({
+        threadRef: thread.ref,
+        name: "first-ready",
+        title: "First ready task",
+        description: "First ready task",
+        plan: executionReadyPlan("First ready task"),
+        status: "pending",
+      });
+      graph.createTask({
+        threadRef: thread.ref,
+        name: "second-ready",
+        title: "Second ready task",
+        description: "Second ready task",
+        plan: executionReadyPlan("Second ready task"),
+        status: "pending",
+      });
+    });
+
+    const { tools, commands, messages } = registerSparkToolsForTest();
+    const executeCommand = commands.get("execute");
+    assert.ok(executeCommand, "missing /execute command");
+    await executeCommand.handler("work through the ready queue", ctx);
+
+    await executeSparkTool(tools, "spark_claim_task", ctx, {
+      name: "first-ready",
+      title: "First ready task",
+      description: "First ready task",
+      status: "running",
+    });
+    const finished = await executeSparkTool(tools, "spark_finish_task", ctx, {
+      summary: "Finished first ready task.",
+    });
+
+    const text = finished.content.map((item) => item.text).join("\n");
+    assert.match(text, /Execution mode continued: auto-claimed next ready task @second-ready/);
+    assert.match(messages.at(-1) ?? "", /Continue Spark execution mode/);
+    assert.match(messages.at(-1) ?? "", /Spark auto-claimed @second-ready/);
+
+    const graph = await defaultTaskGraphStore(dir).load();
+    const next = graph?.tasks().find((task) => task.name === "second-ready");
+    assert.equal(next?.status, "running");
+    assert.equal(next?.claim?.kind, "main");
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
 
