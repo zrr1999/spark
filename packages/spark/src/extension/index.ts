@@ -171,6 +171,52 @@ interface SparkCommandProjectState {
   hasCurrentThread: boolean;
   unfinishedTaskCount: number;
 }
+
+type SparkStateCacheKind =
+  | "current-thread"
+  | "task-todos"
+  | "session-todos"
+  | "todo-display-numbers"
+  | "legacy-task-todos";
+
+type SparkProtectedStoreReason =
+  | "artifact-history"
+  | "task-graph"
+  | "notes"
+  | "review-gate"
+  | "dag-runs";
+
+interface SparkStateCacheSummary {
+  path: string;
+  kind: SparkStateCacheKind;
+  files: number;
+  bytes: number;
+  staleFiles: number;
+  brokenFiles: number;
+  safeToDeleteFiles: number;
+  activeFiles: number;
+}
+
+interface SparkProtectedStoreSummary {
+  path: string;
+  reason: SparkProtectedStoreReason;
+  files: number;
+  bytes: number;
+}
+
+interface SparkStateHousekeepingSummary {
+  root: string;
+  generatedAt: string;
+  caches: SparkStateCacheSummary[];
+  protectedStores: SparkProtectedStoreSummary[];
+}
+
+interface SparkStateFileInfo {
+  path: string;
+  name: string;
+  bytes: number;
+  mtimeMs: number;
+}
 const dagManagerTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const claimReaperTimers = new Map<string, ReturnType<typeof setInterval>>();
 
@@ -1661,6 +1707,9 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         displayedIndependentTodos.length - visibleIndependentTodos.length;
       if (hiddenIndependentTodos > 0)
         lines.push(`  - … ${hiddenIndependentTodos} more independent TODOs`);
+      const state =
+        view === "full" ? await collectSparkStateHousekeeping(cwd, ctx, graph) : undefined;
+      if (state) appendSparkStateHousekeepingLines(lines, state);
       return {
         content: [{ type: "text", text: lines.join("\n") }],
         details: {
@@ -1670,6 +1719,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           activeThreadRef: currentThread?.ref,
           threads: compactThreadStatusSummaries(graph, sessionKey),
           dag: dagStatus,
+          ...(state ? { state } : {}),
         },
       };
     },
@@ -3349,6 +3399,333 @@ async function currentSparkThread(
   if (selected && selected.status !== "done") return selected;
   await clearCurrentThreadRef(cwd, ctx);
   return undefined;
+}
+
+async function collectSparkStateHousekeeping(
+  cwd: string,
+  ctx: unknown,
+  graph: TaskGraph,
+): Promise<SparkStateHousekeepingSummary> {
+  const root = join(cwd, ".spark");
+  const currentSessionScope = sanitizeStoreScope(sparkSessionKey(ctx));
+  const currentOwnerScope = sanitizeStoreScope(sparkSessionOwnerKey(ctx));
+  const threadByRef = new Map(graph.threads().map((thread) => [thread.ref, thread]));
+  const taskByRef = new Map(graph.tasks().map((task) => [task.ref, task]));
+  const staleCutoffMs = Date.now() - 30 * 24 * 60 * 60 * 1_000;
+  return {
+    root: relative(cwd, root) || ".spark",
+    generatedAt: nowIso(),
+    caches: [
+      await summarizeCurrentThreadCache(root, currentOwnerScope, threadByRef, staleCutoffMs),
+      await summarizeTaskTodoCache(root, currentSessionScope, taskByRef, staleCutoffMs),
+      await summarizeSessionTodoCache(root, currentSessionScope, staleCutoffMs),
+      await summarizeTodoDisplayNumberCache(root, currentSessionScope, staleCutoffMs),
+      await summarizeLegacyTaskTodoCache(root),
+    ],
+    protectedStores: [
+      await summarizeProtectedSparkStore(root, "thread.json", "task-graph", false),
+      await summarizeProtectedSparkStore(root, "artifacts", "artifact-history", true),
+      await summarizeProtectedSparkStore(root, "notes", "notes", true),
+      await summarizeProtectedSparkStore(root, "dag-runs.json", "dag-runs", false),
+      await summarizeProtectedSparkStore(root, "review-gate.json", "review-gate", false),
+    ],
+  };
+}
+
+async function summarizeCurrentThreadCache(
+  root: string,
+  currentOwnerScope: string,
+  threadByRef: Map<ThreadRef, ReturnType<TaskGraph["threads"]>[number]>,
+  staleCutoffMs: number,
+): Promise<SparkStateCacheSummary> {
+  const files = await listSparkStateFiles(join(root, "current-thread"));
+  let staleFiles = 0;
+  let brokenFiles = 0;
+  let safeToDeleteFiles = 0;
+  let activeFiles = 0;
+  for (const file of files) {
+    const stale = file.mtimeMs < staleCutoffMs && fileScope(file) !== currentOwnerScope;
+    if (stale) staleFiles += 1;
+    const raw = await readJsonObject(file.path);
+    if (!raw) {
+      brokenFiles += 1;
+      safeToDeleteFiles += 1;
+      continue;
+    }
+    const threadRef = typeof raw.threadRef === "string" ? (raw.threadRef as ThreadRef) : undefined;
+    const thread = threadRef ? threadByRef.get(threadRef) : undefined;
+    const safe = !thread || thread.status === "done" || stale;
+    if (safe) safeToDeleteFiles += 1;
+    else activeFiles += 1;
+  }
+  return cacheSummary(root, "current-thread", "current-thread", files, {
+    staleFiles,
+    brokenFiles,
+    safeToDeleteFiles,
+    activeFiles,
+  });
+}
+
+async function summarizeTaskTodoCache(
+  root: string,
+  currentSessionScope: string,
+  taskByRef: Map<TaskRef, Task>,
+  staleCutoffMs: number,
+): Promise<SparkStateCacheSummary> {
+  const files = await listSparkStateFiles(join(root, "todos"));
+  let staleFiles = 0;
+  let brokenFiles = 0;
+  let safeToDeleteFiles = 0;
+  let activeFiles = 0;
+  for (const file of files) {
+    const stale = file.mtimeMs < staleCutoffMs && fileScope(file) !== currentSessionScope;
+    if (stale) staleFiles += 1;
+    const raw = await readJsonObject(file.path);
+    if (!raw) {
+      brokenFiles += 1;
+      continue;
+    }
+    const todos = Array.isArray(raw.todos) ? raw.todos : [];
+    const hasActiveTodo = todos.some((todo) => isActiveTodoStatus(todoStatus(todo)));
+    const allTerminalTodos = todos.every((todo) => isTerminalTodoStatus(todoStatus(todo)));
+    const allTasksTerminalOrMissing = todos.every((todo) => {
+      const taskRef =
+        todo &&
+        typeof todo === "object" &&
+        typeof (todo as { taskRef?: unknown }).taskRef === "string"
+          ? ((todo as { taskRef: string }).taskRef as TaskRef)
+          : undefined;
+      const task = taskRef ? taskByRef.get(taskRef) : undefined;
+      return !task || !isUnfinishedTaskStatus(task.status);
+    });
+    if (hasActiveTodo) activeFiles += 1;
+    if (todos.length === 0 || (stale && allTerminalTodos && allTasksTerminalOrMissing))
+      safeToDeleteFiles += 1;
+  }
+  return cacheSummary(root, "todos", "task-todos", files, {
+    staleFiles,
+    brokenFiles,
+    safeToDeleteFiles,
+    activeFiles,
+  });
+}
+
+async function summarizeSessionTodoCache(
+  root: string,
+  currentSessionScope: string,
+  staleCutoffMs: number,
+): Promise<SparkStateCacheSummary> {
+  const files = await listSparkStateFiles(join(root, "session-todos"));
+  let staleFiles = 0;
+  let brokenFiles = 0;
+  let safeToDeleteFiles = 0;
+  let activeFiles = 0;
+  for (const file of files) {
+    const stale = file.mtimeMs < staleCutoffMs && fileScope(file) !== currentSessionScope;
+    if (stale) staleFiles += 1;
+    const raw = await readJsonObject(file.path);
+    if (!raw) {
+      brokenFiles += 1;
+      continue;
+    }
+    const todos = Array.isArray(raw.todos) ? raw.todos : [];
+    const hasActiveTodo = todos.some((todo) => isActiveTodoStatus(todoStatus(todo)));
+    const allTerminalTodos = todos.every((todo) => isTerminalTodoStatus(todoStatus(todo)));
+    if (hasActiveTodo) activeFiles += 1;
+    if (todos.length === 0 || (stale && allTerminalTodos)) safeToDeleteFiles += 1;
+  }
+  return cacheSummary(root, "session-todos", "session-todos", files, {
+    staleFiles,
+    brokenFiles,
+    safeToDeleteFiles,
+    activeFiles,
+  });
+}
+
+async function summarizeTodoDisplayNumberCache(
+  root: string,
+  currentSessionScope: string,
+  staleCutoffMs: number,
+): Promise<SparkStateCacheSummary> {
+  const files = await listSparkStateFiles(join(root, "todo-display-numbers"));
+  let staleFiles = 0;
+  let brokenFiles = 0;
+  let safeToDeleteFiles = 0;
+  let activeFiles = 0;
+  for (const file of files) {
+    const stale = file.mtimeMs < staleCutoffMs && fileScope(file) !== currentSessionScope;
+    if (stale) staleFiles += 1;
+    const raw = await readJsonObject(file.path);
+    if (!raw) {
+      brokenFiles += 1;
+      safeToDeleteFiles += 1;
+      continue;
+    }
+    if (stale) safeToDeleteFiles += 1;
+    else activeFiles += 1;
+  }
+  return cacheSummary(root, "todo-display-numbers", "todo-display-numbers", files, {
+    staleFiles,
+    brokenFiles,
+    safeToDeleteFiles,
+    activeFiles,
+  });
+}
+
+async function summarizeLegacyTaskTodoCache(root: string): Promise<SparkStateCacheSummary> {
+  const files = await listSparkStateFiles(root);
+  const legacyFiles = files.filter((file) => file.name === "todos.json");
+  return cacheSummary(root, "todos.json", "legacy-task-todos", legacyFiles, {
+    staleFiles: 0,
+    brokenFiles: 0,
+    safeToDeleteFiles: 0,
+    activeFiles: legacyFiles.length,
+  });
+}
+
+async function summarizeProtectedSparkStore(
+  root: string,
+  child: string,
+  reason: SparkProtectedStoreReason,
+  recursive: boolean,
+): Promise<SparkProtectedStoreSummary> {
+  const files = await listSparkStateFiles(join(root, child), recursive);
+  return {
+    path: join(relative(dirname(root), root), child),
+    reason,
+    files: files.length,
+    bytes: files.reduce((sum, file) => sum + file.bytes, 0),
+  };
+}
+
+function cacheSummary(
+  root: string,
+  child: string,
+  kind: SparkStateCacheKind,
+  files: SparkStateFileInfo[],
+  counts: Omit<SparkStateCacheSummary, "path" | "kind" | "files" | "bytes">,
+): SparkStateCacheSummary {
+  return {
+    path: join(relative(dirname(root), root), child),
+    kind,
+    files: files.length,
+    bytes: files.reduce((sum, file) => sum + file.bytes, 0),
+    ...counts,
+  };
+}
+
+async function listSparkStateFiles(path: string, recursive = false): Promise<SparkStateFileInfo[]> {
+  const rootInfo = await stat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!rootInfo) return [];
+  if (rootInfo.isFile())
+    return [{ path, name: basename(path), bytes: rootInfo.size, mtimeMs: rootInfo.mtimeMs }];
+  if (!rootInfo.isDirectory()) return [];
+  const entries = await readdir(path, { withFileTypes: true });
+  const files: SparkStateFileInfo[] = [];
+  for (const entry of entries) {
+    const entryPath = join(path, entry.name);
+    if (entry.isDirectory()) {
+      if (recursive) files.push(...(await listSparkStateFiles(entryPath, true)));
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    const info = await stat(entryPath).catch(() => undefined);
+    if (!info?.isFile()) continue;
+    files.push({ path: entryPath, name: entry.name, bytes: info.size, mtimeMs: info.mtimeMs });
+  }
+  return files;
+}
+
+async function readJsonObject(path: string): Promise<Record<string, unknown> | undefined> {
+  try {
+    const raw = JSON.parse(await readFile(path, "utf8"));
+    return raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function fileScope(file: SparkStateFileInfo): string {
+  return file.name.replace(/\.json$/u, "");
+}
+
+function todoStatus(todo: unknown): string | undefined {
+  return todo && typeof todo === "object" && "status" in todo
+    ? String((todo as { status?: unknown }).status)
+    : undefined;
+}
+
+function isActiveTodoStatus(status: string | undefined): boolean {
+  return status === "pending" || status === "in_progress" || status === "blocked";
+}
+
+function isTerminalTodoStatus(status: string | undefined): boolean {
+  return status === "done" || status === "cancelled" || status === "deleted";
+}
+
+function appendSparkStateHousekeepingLines(
+  lines: string[],
+  summary: SparkStateHousekeepingSummary,
+): void {
+  lines.push("\nSpark state cache:");
+  for (const cache of summary.caches) {
+    lines.push(
+      `  ${formatSparkStateCacheKind(cache.kind)}: ${cache.files} files, ${formatByteSize(cache.bytes)}, active=${cache.activeFiles}, stale=${cache.staleFiles}, broken=${cache.brokenFiles}, safe-to-delete=${cache.safeToDeleteFiles}`,
+    );
+  }
+  lines.push("Protected stores:");
+  for (const store of summary.protectedStores) {
+    lines.push(
+      `  ${formatSparkProtectedStoreReason(store.reason)}: ${store.files} files, ${formatByteSize(store.bytes)} (${store.path})`,
+    );
+  }
+}
+
+function formatSparkStateCacheKind(kind: SparkStateCacheKind): string {
+  switch (kind) {
+    case "current-thread":
+      return "current-thread";
+    case "task-todos":
+      return "task todos";
+    case "session-todos":
+      return "session todos";
+    case "todo-display-numbers":
+      return "todo display numbers";
+    case "legacy-task-todos":
+      return "legacy task todos";
+  }
+}
+
+function formatSparkProtectedStoreReason(reason: SparkProtectedStoreReason): string {
+  switch (reason) {
+    case "artifact-history":
+      return "artifacts";
+    case "task-graph":
+      return "thread graph";
+    case "notes":
+      return "notes";
+    case "review-gate":
+      return "review gate";
+    case "dag-runs":
+      return "dag runs";
+  }
+}
+
+function formatByteSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  for (const unit of units) {
+    if (value < 1024 || unit === units.at(-1))
+      return `${value.toFixed(value < 10 ? 1 : 0)} ${unit}`;
+    value /= 1024;
+  }
+  return `${bytes} B`;
 }
 
 function resolveSparkThread(

@@ -8,7 +8,7 @@ Command:
 
 Tools:
 
-- `spark_status` — show Spark thread/task status. Defaults to `view: "active"` for unfinished/current-session work, supports `view: "summary"` for counts only, `view: "full"` for done/cancelled history, and optional `limit` for task rows per thread.
+- `spark_status` — show Spark thread/task status. Defaults to `view: "active"` for unfinished/current-session work, supports `view: "summary"` for counts only, `view: "full"` for done/cancelled history plus read-only `.spark` cache/protected-store summary, and optional `limit` for task rows per thread.
 - `spark_use_thread` — set or create this session's current Spark thread.
 - `spark_rename_thread` — rename or update metadata for an existing Spark thread without changing task refs.
 - `spark_plan_tasks` — create or update multiple durable named tasks (`name` / `title` / `description`) in the active thread from a concrete plan without claiming them for the current session. Each task is plan-bound: callers may provide a structured `plan`, and Spark derives a minimal plan from the task description when omitted. Task dependencies are scoped to the active thread only; cross-thread dependencies are intentionally out of scope.

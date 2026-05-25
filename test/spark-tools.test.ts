@@ -1102,9 +1102,28 @@ void test("spark_status defaults to active view, supports full history, summary,
     assert.match(fullText, /Durable tasks:/);
     assert.match(fullText, /Finished task history/);
     assert.match(fullText, /Cancelled task history/);
+    assert.match(fullText, /Spark state cache:/);
+    assert.match(fullText, /current-thread: \d+ files/);
+    assert.match(fullText, /Protected stores:/);
+    assert.match(fullText, /thread graph: 1 files/);
     assert.doesNotMatch(fullText, /Hidden finished tasks/);
     assert.equal(full.details?.view, "full");
     assert.equal(full.details?.limit, undefined);
+    const state = (
+      full.details as
+        | {
+            state?: {
+              caches: Array<{ kind: string; files: number }>;
+              protectedStores: Array<{ reason: string; files: number }>;
+            };
+          }
+        | undefined
+    )?.state;
+    assert.ok(state);
+    assert.ok(state.caches.some((cache) => cache.kind === "current-thread" && cache.files >= 1));
+    assert.ok(
+      state.protectedStores.some((store) => store.reason === "task-graph" && store.files === 1),
+    );
 
     const fullFromLegacyFlag = await executeSparkTool(tools, "spark_status", ctx, {
       showFinished: true,
