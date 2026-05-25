@@ -45,7 +45,7 @@ interface PiCueToolConfig {
     params: Record<string, unknown>,
     signal: AbortSignal,
     onUpdate: (update: { content: Array<{ type: "text"; text: string }> }) => void,
-    ctx: { ui?: { notify?: (msg: string, level: string) => void } },
+    ctx: { cwd?: string; ui?: { notify?: (msg: string, level: string) => void } },
   ): Promise<{
     content: Array<{ type: "text"; text: string }>;
     details?: Record<string, unknown>;
@@ -303,7 +303,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       ),
       cwd: Type.Optional(
         Type.String({
-          description: "Working directory. Default: current directory.",
+          description: "Working directory. Defaults to the current Pi session working directory.",
         }),
       ),
       pty: Type.Optional(
@@ -355,10 +355,11 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       },
       _signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
-      ctx: { ui?: { notify?: (msg: string, level: string) => void } },
+      ctx: { cwd?: string; ui?: { notify?: (msg: string, level: string) => void } },
     ) {
       const cued = await getClient(ctx);
-      const { command, cwd } = params;
+      const { command } = params;
+      const cwd = params.cwd?.trim() || ctx.cwd || process.cwd();
       const tailBytes = params.tail === false ? 0 : normalizeTailBytes(params.tail_bytes);
 
       if (params.background) {
