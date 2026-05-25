@@ -9,6 +9,8 @@ import {
   type ArtifactRef,
   type RunRef,
   type Task,
+  type TaskCompletionIssue,
+  type TaskCompletionReadiness,
   type TaskDependency,
   type TaskAttribution,
   type TaskClaim,
@@ -1268,6 +1270,24 @@ export function taskPlanReadiness(task: Pick<Task, "plan" | "status">): TaskPlan
     });
   }
   return { ready: issues.every((issue) => issue.severity !== "blocking"), issues };
+}
+
+export function taskCompletionReadiness(
+  task: Pick<Task, "plan" | "outputArtifacts" | "status">,
+): TaskCompletionReadiness {
+  if (task.status === "cancelled") return { ready: true, issues: [] };
+  const evidenceRequired = task.plan?.evidenceRequired ?? [];
+  if (evidenceRequired.length === 0) return { ready: true, issues: [] };
+  if (task.outputArtifacts.length > 0) return { ready: true, issues: [] };
+  const issues: TaskCompletionIssue[] = [
+    {
+      kind: "missing_completion_evidence",
+      severity: "blocking",
+      evidenceRequired,
+      message: `Task completion needs evidence artifacts: ${evidenceRequired.join("; ")}`,
+    },
+  ];
+  return { ready: false, issues };
 }
 
 function cloneTaskPlan(plan: TaskPlan): TaskPlan {

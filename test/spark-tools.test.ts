@@ -585,6 +585,7 @@ void test("spark_finish_task completes this session's claimed task", async () =>
       name: "finish-me",
       title: "Finish me",
       description: "Exercise task lifecycle completion.",
+      plan: executionReadyPlan("Finish me"),
     });
     const taskRef = (claim.details?.task as { ref?: TaskRef } | undefined)?.ref;
     assert.ok(taskRef);
@@ -593,8 +594,16 @@ void test("spark_finish_task completes this session's claimed task", async () =>
       summary: "Done for test.",
     });
     assert.match(toolText(finished), /Finished Spark task: \[done\] @finish-me: Finish me/);
+    assert.match(
+      toolText(finished),
+      /Completion evidence warning: Task completion needs evidence artifacts/,
+    );
     assert.match(toolText(finished), /Learning candidate: artifact:/);
     assert.equal((finished.details?.task as { status?: string } | undefined)?.status, "done");
+    assert.equal(
+      (finished.details?.completionReadiness as { ready?: boolean } | undefined)?.ready,
+      false,
+    );
     assert.equal(
       (finished.details?.learningCandidate as { status?: string } | undefined)?.status,
       "candidate",

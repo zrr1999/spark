@@ -15,7 +15,7 @@ Tools:
 - `spark_claim_task` — claim or update concrete task work for the current session in the active thread; tasks render as `@name: title`, and optional `roleRef` values are preferred executor hints for orchestrated runs. Claiming is an execution commitment: agents should read the task's bound plan before creating TODOs or executing.
 - `spark_update_task_todos` — update TODOs attached to a claimed task.
 - `spark_update_todos` — update independent session TODOs that are siblings of the thread display.
-- `spark_finish_task` — finish this session's claimed task as `done`, `failed`, or `cancelled` without routing through task planning.
+- `spark_finish_task` — finish this session's claimed task as `done`, `failed`, or `cancelled` without routing through task planning. When a done task's plan declares `evidenceRequired` but no output artifacts are attached, the tool reports a completion-evidence warning instead of silently treating process/status success as full evidence.
 - `spark_run_ready_tasks` — start the Spark orchestrator/DAG manager for ready tasks; dry-run remains synchronous and read-only by default. Ready-task execution assigns reusable role specs at dispatch time and creates fresh `role-run`s by default.
 - `spark_dag_manager` — inspect and control persisted DAG manager state with `status`, `reconcile`, `clear_inactive`, and `kill_active` actions. It reads `.spark/dag-runs.json`, reconciles stale running records against the task graph and active role-run process tracker, can clear inactive manager history, and can terminate active background role-run processes.
 - `spark_ask` — run a unified flow-native Spark ask workflow with
@@ -104,6 +104,11 @@ Automatic behavior:
    - completed DAG manager runs persist a concise completion
      follow-up with summary and next actions; background manager
      completion emits that follow-up to the session
+   - completion readiness is distinct from task status: a task can
+     be marked done while still surfacing missing completion evidence
+     when its plan declares `evidenceRequired` and no output artifact
+     is attached; role-run execution records output artifacts as the
+     first concrete evidence attachment mechanism
 6. Thread / task / TODO text UI is enabled by default for
    the current session:
    - the above-editor widget shows the generated Spark thread

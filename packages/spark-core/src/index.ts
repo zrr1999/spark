@@ -296,6 +296,8 @@ export type TaskPlanIssueKind =
   | "missing_steps"
   | "open_questions";
 
+export type TaskCompletionIssueKind = "missing_completion_evidence";
+
 export interface TaskPlanIssue {
   kind: TaskPlanIssueKind;
   severity: "warning" | "blocking";
@@ -305,6 +307,18 @@ export interface TaskPlanIssue {
 export interface TaskPlanReadiness {
   ready: boolean;
   issues: TaskPlanIssue[];
+}
+
+export interface TaskCompletionIssue {
+  kind: TaskCompletionIssueKind;
+  severity: "warning" | "blocking";
+  message: string;
+  evidenceRequired?: string[];
+}
+
+export interface TaskCompletionReadiness {
+  ready: boolean;
+  issues: TaskCompletionIssue[];
 }
 
 export interface Task {

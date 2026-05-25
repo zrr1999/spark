@@ -64,6 +64,7 @@ import {
   defaultTaskGraphStore,
   defaultTaskTodoStore,
   isUnfinishedTaskStatus,
+  taskCompletionReadiness,
   taskPlanReadiness,
   TaskGraph,
   TaskGraphStoreLockTimeoutError,
@@ -1971,8 +1972,10 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           const task = resolveSessionClaimedTask(graph, thread.ref, sparkSessionKey(ctx), p.task);
           if (!task) return { error: "no_matching_claimed_task" as const };
           const finished = graph.setTaskStatus(task.ref, status);
+          const completionReadiness =
+            status === "done" ? taskCompletionReadiness(finished) : undefined;
           await sparkTodoStore(cwd, ctx).save(graph);
-          return { task: finished };
+          return { task: finished, completionReadiness };
         },
         { createIfMissing: false },
       );
@@ -1993,6 +1996,12 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           ? await recordTaskLearningCandidate(cwd, updated.result.task, trimmedSummary)
           : undefined;
       const summarySuffix = trimmedSummary ? ` — ${truncateInline(trimmedSummary, 160)}` : "";
+      const completionIssueSuffix =
+        updated.result.completionReadiness && !updated.result.completionReadiness.ready
+          ? `\nCompletion evidence warning: ${updated.result.completionReadiness.issues
+              .map((issue) => issue.message)
+              .join("; ")}`
+          : "";
       const candidateSuffix = learningCandidate
         ? `\nLearning candidate: ${learningCandidate.ref}`
         : "";
@@ -2000,11 +2009,12 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `Finished Spark task: [${updated.result.task.status}] @${updated.result.task.name}: ${updated.result.task.title}${summarySuffix}${candidateSuffix}`,
+            text: `Finished Spark task: [${updated.result.task.status}] @${updated.result.task.name}: ${updated.result.task.title}${summarySuffix}${completionIssueSuffix}${candidateSuffix}`,
           },
         ],
         details: {
           task: compactTaskDetail(updated.result.task),
+          completionReadiness: updated.result.completionReadiness,
           learningCandidate: learningCandidate
             ? compactLearningDetail(learningCandidate)
             : undefined,

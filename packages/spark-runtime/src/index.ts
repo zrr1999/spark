@@ -23,7 +23,12 @@ import {
   type TaskRun,
 } from "spark-core";
 import type { RoleInstruction, RoleRunRecord, RoleRunStatus } from "pi-roles";
-import type { TaskGraph, TaskGraphStore, TaskGraphStoreUpdateOptions } from "spark-tasks";
+import {
+  taskCompletionReadiness,
+  type TaskGraph,
+  type TaskGraphStore,
+  type TaskGraphStoreUpdateOptions,
+} from "spark-tasks";
 
 export interface SparkRoleRunResult {
   record: RoleRunRecord;
@@ -448,7 +453,13 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
       input.graph.attachOutputArtifact(task.ref, artifact.ref);
     }
 
-    const completionFailure = roleRunCompletionFailure(result, dryRun);
+    const completionFailure =
+      roleRunCompletionFailure(result, dryRun) ??
+      roleRunEvidenceCompletionFailure(
+        input.graph.getTask(task.ref),
+        dryRun,
+        Boolean(input.artifactStore),
+      );
     const succeeded = !completionFailure;
     const finished: TaskRun = {
       ...run,
@@ -489,6 +500,16 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
   } finally {
     stopHeartbeat?.();
   }
+}
+
+function roleRunEvidenceCompletionFailure(
+  task: Task,
+  dryRun: boolean,
+  enforceEvidence: boolean,
+): string | undefined {
+  if (dryRun || !enforceEvidence) return undefined;
+  const readiness = taskCompletionReadiness(task);
+  return readiness.ready ? undefined : readiness.issues.map((issue) => issue.message).join("; ");
 }
 
 function roleRunCompletionFailure(result: SparkRoleRunResult, dryRun: boolean): string | undefined {

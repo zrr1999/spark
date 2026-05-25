@@ -25,6 +25,7 @@ import {
   TaskGraphStoreConflictError,
   TaskGraphStoreLockTimeoutError,
   TaskTodoStore,
+  taskCompletionReadiness,
 } from "spark-tasks";
 
 function executionReadyPlan(objective: string): TaskPlan {
@@ -218,6 +219,28 @@ void test("task plan readiness distinguishes minimal and execution-ready plans",
     status: "cancelled",
   });
   assert.deepEqual(graph.taskPlanReadiness(cancelled.ref), { ready: true, issues: [] });
+});
+
+void test("task completion readiness requires output artifacts for declared evidence", () => {
+  const graph = new TaskGraph();
+  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const task = graph.createTask({
+    threadRef: thread.ref,
+    title: "Needs evidence",
+    description: "needs evidence",
+    plan: executionReadyPlan("Needs evidence"),
+  });
+
+  const missing = taskCompletionReadiness(task);
+  assert.equal(missing.ready, false);
+  assert.deepEqual(
+    missing.issues.map((issue) => issue.kind),
+    ["missing_completion_evidence"],
+  );
+  assert.deepEqual(missing.issues[0]?.evidenceRequired, task.plan?.evidenceRequired);
+
+  const withArtifact = graph.attachOutputArtifact(task.ref, "artifact:evidence" as const);
+  assert.deepEqual(taskCompletionReadiness(withArtifact), { ready: true, issues: [] });
 });
 
 void test("ready tasks require completed dependencies and execution-ready plan, not stored role", () => {
