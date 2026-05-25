@@ -123,12 +123,17 @@ void test("/spark command detects empty, existing, and initialized project modes
     const initializedRun = registerSparkToolsForTest();
     const initializedCommand = initializedRun.commands.get("spark");
     assert.ok(initializedCommand, "missing /spark command");
-    initializedCtx.selected = "Plan: research and add threads/tasks";
+    initializedCtx.selected = "Plan “Tool persistence”";
     await initializedCommand.handler("", initializedCtx);
     assert.match(initializedRun.messages.at(-1) ?? "", /Enter Spark planning mode/);
 
-    initializedCtx.selected = "Execute: work through ready tasks";
+    initializedCtx.selected = "Execute “Tool persistence”";
     await initializedCommand.handler("", initializedCtx);
+    assert.match(initializedRun.messages.at(-1) ?? "", /Enter Spark execution mode/);
+
+    initializedCtx.ui.select = async () =>
+      assert.fail("clear /spark execution prompts should not ask for mode");
+    await initializedCommand.handler("execute the ready task", initializedCtx);
     assert.match(initializedRun.messages.at(-1) ?? "", /Enter Spark execution mode/);
   } finally {
     await rm(emptyDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
@@ -179,8 +184,12 @@ void test("/plan and /execute enter Spark modes directly", async () => {
     const initializedRun = registerSparkToolsForTest();
     const executeCommand = initializedRun.commands.get("execute");
     assert.ok(executeCommand, "missing /execute command");
-    await executeCommand.handler("", initializedCtx);
+    await executeCommand.handler("Finish the direct execution task", initializedCtx);
     assert.match(initializedRun.messages.at(-1) ?? "", /Enter Spark execution mode/);
+    assert.match(
+      initializedRun.messages.at(-1) ?? "",
+      /Execution focus: Finish the direct execution task/,
+    );
     assert.equal(
       initializedCtx.notifications.at(-1)?.message,
       "Spark execution mode: claim or dispatch ready tasks.",

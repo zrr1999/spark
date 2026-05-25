@@ -172,6 +172,20 @@ interface SparkCommandProjectState {
 }
 
 type SparkEntryMode = "planning" | "execution";
+type SparkEntryModeChoice = SparkEntryMode | "new_project";
+type SparkEntryConfidence = "high" | "ambiguous" | "conflicting";
+
+interface SparkEntryModeAnalysis {
+  recommendation: SparkEntryModeChoice;
+  confidence: SparkEntryConfidence;
+  reasons: string[];
+  prompt: string;
+  currentThreadTitle: string;
+  threadCount: number;
+  unfinishedTaskCount: number;
+  readyTaskCount: number;
+  pendingTaskCount: number;
+}
 
 type SparkEntryIntent =
   | { kind: "auto"; prompt: string }
@@ -1366,9 +1380,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     const mode =
       intent.kind === "direct"
         ? intent.mode
-        : intent.prompt
-          ? predictSparkModeFromPrompt(intent.prompt, projectState)
-          : await chooseInitializedSparkMode(ctx, graph, projectState);
+        : await chooseInitializedSparkMode(ctx, graph, projectState, intent.prompt);
     if (!mode) return { action: "none" };
     if (mode === "new_project") {
       const idea = intent.prompt || (await promptSparkNewProjectIdea(ctx));
@@ -1433,7 +1445,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         }
         if (resolution.mode === "planning")
           await enterSparkPlanningMode(piApi, ctx, graph, resolution.focus);
-        else await enterSparkExecutionMode(piApi, ctx, graph);
+        else await enterSparkExecutionMode(piApi, ctx, graph, resolution.focus);
         return;
       case "blocked":
         ctx.ui?.notify?.(resolution.message, "warning");
@@ -1465,22 +1477,118 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     };
   }
 
-  function predictSparkModeFromPrompt(
-    prompt: string,
+  function analyzeSparkEntryMode(
+    graph: TaskGraph,
     projectState: SparkCommandProjectState,
-  ): "new_project" | "planning" | "execution" {
-    if (
-      /(执行|运行|完成|继续做|claim|execute|run ready|dispatch|work through|finish)/i.test(prompt)
-    )
-      return "execution";
-    if (
-      /(计划|规划|调研|拆分|增加.*task|新增.*task|thread|plan|research|clarify|break down|task)/i.test(
-        prompt,
-      )
-    )
-      return "planning";
-    if (projectState.kind === "initialized") return "planning";
-    return "new_project";
+    prompt: string,
+    selectedThread: { ref: ThreadRef; title: string } | undefined,
+  ): SparkEntryModeAnalysis {
+    const currentThreadTitle =
+      selectedThread?.title ?? graph.threads()[0]?.title ?? "current Spark workspace";
+    const tasks = graph.tasks(selectedThread?.ref);
+    const pendingTaskCount = tasks.filter(
+      (task) => task.status === "pending" || task.status === "ready",
+    ).length;
+    const readyTaskCount = graph.readyTasks(selectedThread?.ref).length;
+    const normalizedPrompt = prompt.trim();
+    const hasExecutionSignal =
+      /(执行|运行|完成|继续做|认领|claim|execute|run ready|dispatch|work through|finish)/i.test(
+        normalizedPrompt,
+      );
+    const hasPlanningSignal =
+      /(计划|规划|调研|梳理|拆分|增加.*task|新增.*task|thread|plan|research|clarify|break down)/i.test(
+        normalizedPrompt,
+      );
+    const hasNewProjectSignal = /(新项目|新想法|另一个|new project|new idea|start over)/i.test(
+      normalizedPrompt,
+    );
+    const reasons = [
+      `Current thread “${currentThreadTitle}” has ${projectState.unfinishedTaskCount} unfinished task(s).`,
+      `Ready frontier has ${readyTaskCount} execution-ready task(s) out of ${pendingTaskCount} pending/ready task(s).`,
+    ];
+    if (normalizedPrompt) reasons.push(`Prompt: ${normalizedPrompt}`);
+    if (hasNewProjectSignal && !hasPlanningSignal && !hasExecutionSignal)
+      return {
+        recommendation: "new_project",
+        confidence: "high",
+        reasons: [...reasons, "The prompt asks to start a distinct Spark idea."],
+        prompt: normalizedPrompt,
+        currentThreadTitle,
+        threadCount: graph.threads().length,
+        unfinishedTaskCount: projectState.unfinishedTaskCount,
+        readyTaskCount,
+        pendingTaskCount,
+      };
+    if (hasPlanningSignal && hasExecutionSignal)
+      return {
+        recommendation: readyTaskCount > 0 ? "execution" : "planning",
+        confidence: "conflicting",
+        reasons: [
+          ...reasons,
+          "The prompt contains both planning and execution signals, so the mode needs confirmation.",
+        ],
+        prompt: normalizedPrompt,
+        currentThreadTitle,
+        threadCount: graph.threads().length,
+        unfinishedTaskCount: projectState.unfinishedTaskCount,
+        readyTaskCount,
+        pendingTaskCount,
+      };
+    if (hasExecutionSignal)
+      return {
+        recommendation: "execution",
+        confidence: "high",
+        reasons: [...reasons, "The prompt asks to execute, claim, dispatch, run, or finish work."],
+        prompt: normalizedPrompt,
+        currentThreadTitle,
+        threadCount: graph.threads().length,
+        unfinishedTaskCount: projectState.unfinishedTaskCount,
+        readyTaskCount,
+        pendingTaskCount,
+      };
+    if (hasPlanningSignal)
+      return {
+        recommendation: "planning",
+        confidence: "high",
+        reasons: [
+          ...reasons,
+          "The prompt asks to plan, research, clarify, split, or organize tasks.",
+        ],
+        prompt: normalizedPrompt,
+        currentThreadTitle,
+        threadCount: graph.threads().length,
+        unfinishedTaskCount: projectState.unfinishedTaskCount,
+        readyTaskCount,
+        pendingTaskCount,
+      };
+    if (!projectState.hasCurrentThread || projectState.unfinishedTaskCount === 0)
+      return {
+        recommendation: "planning",
+        confidence: "high",
+        reasons: [...reasons, "No active unfinished current-thread work needs execution."],
+        prompt: normalizedPrompt,
+        currentThreadTitle,
+        threadCount: graph.threads().length,
+        unfinishedTaskCount: projectState.unfinishedTaskCount,
+        readyTaskCount,
+        pendingTaskCount,
+      };
+    return {
+      recommendation: readyTaskCount > 0 ? "execution" : "planning",
+      confidence: "ambiguous",
+      reasons: [
+        ...reasons,
+        normalizedPrompt
+          ? "The prompt does not clearly choose planning or execution."
+          : "Bare /spark in an initialized workspace should confirm the next mode.",
+      ],
+      prompt: normalizedPrompt,
+      currentThreadTitle,
+      threadCount: graph.threads().length,
+      unfinishedTaskCount: projectState.unfinishedTaskCount,
+      readyTaskCount,
+      pendingTaskCount,
+    };
   }
 
   async function startSparkNewProject(
@@ -1551,23 +1659,13 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     ctx: SparkCommandContext,
     graph: TaskGraph,
     projectState: SparkCommandProjectState,
-  ): Promise<"new_project" | "planning" | "execution" | undefined> {
-    if (!projectState.hasCurrentThread || projectState.unfinishedTaskCount === 0) return "planning";
+    prompt: string,
+  ): Promise<SparkEntryModeChoice | undefined> {
     const thread = await currentSparkThread(ctx.cwd, ctx, graph);
-    const title = thread?.title ?? graph.threads()[0]?.title ?? "current Spark workspace";
-    if (ctx.ui?.select) {
-      const choice = await ctx.ui.select(`Spark mode for “${title}”`, [
-        "Plan: research and add threads/tasks",
-        "Execute: work through ready tasks",
-        "New project: start a different Spark idea",
-      ]);
-      if (choice?.startsWith("Plan:")) return "planning";
-      if (choice?.startsWith("Execute:")) return "execution";
-      if (choice?.startsWith("New project:")) return "new_project";
-      return undefined;
-    }
+    const analysis = analyzeSparkEntryMode(graph, projectState, prompt, thread);
+    if (analysis.confidence === "high") return analysis.recommendation;
 
-    const response = await runSparkAskTool(sparkModeAsk(graph, title), {
+    const response = await runSparkAskTool(sparkModeAsk(analysis), {
       cwd: ctx.cwd,
       ui: sparkAskUi(ctx),
     });
@@ -1617,11 +1715,12 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     piApi: SparkExtensionAPI,
     ctx: SparkCommandContext,
     graph: TaskGraph,
+    focus?: string,
   ): Promise<void> {
     const thread = await currentSparkThread(ctx.cwd, ctx, graph);
     await refreshSparkWidget(ctx.cwd, ctx);
     ctx.ui?.notify?.("Spark execution mode: claim or dispatch ready tasks.", "info");
-    piApi.sendUserMessage?.(renderSparkExecutionModePrompt(graph, thread?.ref), {
+    piApi.sendUserMessage?.(renderSparkExecutionModePrompt(graph, thread?.ref, focus), {
       deliverAs: "followUp",
     });
   }
@@ -4783,43 +4882,39 @@ async function sparkInitResultFromExisting(
   };
 }
 
-function sparkModeAsk(graph: TaskGraph, title: string): SparkAskToolParams {
-  const pendingCount = graph
-    .tasks()
-    .filter((task) => task.status === "pending" || task.status === "ready").length;
-  const threadCount = graph.threads().length;
+function sparkModeAsk(analysis: SparkEntryModeAnalysis): SparkAskToolParams {
+  const title = analysis.currentThreadTitle;
+  const reasonLines = analysis.reasons.map((reason) => `- ${reason}`);
   return {
     mode: "decision",
     flow: "spark-command-mode",
-    title: `Choose Spark mode for “${truncateInline(title, 80)}”`,
+    title: `Choose the next Spark mode for “${truncateInline(title, 80)}”`,
     context: [
-      `Current Spark workspace has ${threadCount} thread(s) and ${pendingCount} pending/ready task(s).`,
-      "Choose whether this turn should shape the project, plan more work, or execute existing tasks.",
+      `Spark could not choose a high-confidence automatic route for this /spark turn because the signal is ${analysis.confidence}.`,
+      `Current workspace context: ${analysis.threadCount} thread(s), ${analysis.unfinishedTaskCount} unfinished task(s) in the current thread, ${analysis.readyTaskCount} execution-ready task(s), ${analysis.pendingTaskCount} pending/ready task(s).`,
+      ...reasonLines,
     ].join("\n"),
     questions: [
       {
         id: "mode",
-        prompt: `For the current Spark workspace “${truncateInline(title, 80)}”, what should /spark do now?`,
+        prompt: `For “${truncateInline(title, 80)}”, should this turn organize tasks or execute ready work? Recommended: ${analysis.recommendation}.`,
         type: "single",
         required: true,
         options: [
           {
             id: "planning",
             label: `Plan “${truncateInline(title, 32)}”`,
-            description:
-              "Enter planning mode for this Spark workspace: research context, clarify intent, and add or refine threads and tasks before execution.",
+            description: `Use planning mode now: inspect the ${analysis.unfinishedTaskCount} unfinished task(s), ask only targeted clarification questions, and add or refine concrete plan-bound tasks before execution.`,
           },
           {
             id: "execution",
             label: `Execute “${truncateInline(title, 32)}”`,
-            description:
-              "Enter execution mode for this Spark workspace: inspect ready tasks, claim concrete work, or dispatch ready tasks through the Spark orchestrator.",
+            description: `Use execution mode now: inspect the ${analysis.readyTaskCount} execution-ready task(s), then claim one concrete task or dispatch ready work without broad replanning.`,
           },
           {
             id: "new_project",
-            label: "Start a new Spark project",
-            description:
-              "Start a new Spark idea instead of continuing the current workspace; this asks for the new project idea before initializing state.",
+            label: `Start a different Spark idea`,
+            description: `Do not continue “${truncateInline(title, 80)}”; ask for a distinct idea and initialize it as separate Spark project context.`,
           },
         ],
       },
@@ -4843,19 +4938,23 @@ function renderSparkPlanningModePrompt(
   focus: string | undefined,
 ): string {
   const summary = renderExistingSparkSummary(graph, selectedThreadRef);
-  const focusLine = focus?.trim() ? `\n\nPlanning focus from /spark: ${focus.trim()}` : "";
+  const focusLine = focus?.trim() ? `\n\nPlanning focus: ${focus.trim()}` : "";
   return `${summary}${focusLine}\n\nEnter Spark planning mode. Research and clarify the project context, then use spark_use_thread and spark_plan_tasks to add or refine concrete plan-bound tasks. Do not execute tasks yet unless the user explicitly asks to switch to execution.`;
 }
 
 function renderSparkExecutionModePrompt(
   graph: TaskGraph,
   selectedThreadRef: ThreadRef | undefined,
+  focus: string | undefined,
 ): string {
   const summary = renderExistingSparkSummary(graph, selectedThreadRef);
+  const focusLine = focus?.trim()
+    ? `\n\nExecution focus: ${focus.trim()}\nUse this focus to filter ready tasks and pre-flight questions; do not auto-dispatch solely because a focus was provided.`
+    : "";
   const action = selectedThreadRef
     ? "Read the current thread/task plan, inspect ready tasks with spark_status, then either claim one concrete task with spark_claim_task or dispatch execution-ready tasks with spark_run_ready_tasks."
     : "Select a current thread with spark_use_thread before claiming thread-bound work; use spark_status view=summary/full to inspect available threads first if needed.";
-  return `${summary}\n\nEnter Spark execution mode. ${action} Do not create broad new planning work unless execution is blocked by missing task plans.`;
+  return `${summary}${focusLine}\n\nEnter Spark execution mode. ${action} Do not create broad new planning work unless execution is blocked by missing task plans.`;
 }
 
 function renderExistingSparkSummary(graph: TaskGraph, selectedThreadRef?: ThreadRef): string {
