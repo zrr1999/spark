@@ -29,6 +29,7 @@ export interface PiAskQuestion {
   type?: PiAskQuestionType | "preview";
   options?: PiAskOption[];
   required?: boolean;
+  defaultValues?: string[];
 }
 
 export interface PiAskRequest {
@@ -209,6 +210,7 @@ export function registerPiAskTools(pi: PiAskExtensionApi): void {
             ),
           ),
           required: Type.Optional(Type.Boolean()),
+          defaultValues: Type.Optional(Type.Array(Type.String())),
         }),
       ),
     }),
@@ -257,6 +259,9 @@ function decodeAskRequest(params: Record<string, unknown>): PiAskRequest {
                 )
               : undefined,
             required: raw.required === true,
+            defaultValues: Array.isArray(raw.defaultValues)
+              ? raw.defaultValues.filter((value): value is string => typeof value === "string")
+              : undefined,
           }) satisfies PiAskQuestion,
       )
     : [];

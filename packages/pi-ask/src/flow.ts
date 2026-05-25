@@ -242,6 +242,7 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
           header: Type.Optional(Type.String()),
           type: Type.Optional(Type.String({ description: "single | multi | preview | freeform" })),
           required: Type.Optional(Type.Boolean()),
+          defaultValues: Type.Optional(Type.Array(Type.String())),
           options: Type.Optional(
             Type.Array(
               Type.Object({

@@ -30,6 +30,7 @@ export interface SparkAskToolQuestionParams {
   header?: string;
   type?: SparkAskQuestionTypeVal;
   required?: boolean;
+  defaultValues?: string[];
   options?: SparkAskToolOptionParams[];
 }
 
@@ -264,6 +265,7 @@ function normalizeSparkAskToolQuestions(params: SparkAskToolParams): SparkAskReq
       header: question.header,
       type: question.type,
       required: question.required,
+      defaultValues: normalizeDefaultValues(question.defaultValues),
       options:
         question.type === "freeform"
           ? undefined
@@ -282,8 +284,17 @@ function normalizeSparkAskToolQuestions(params: SparkAskToolParams): SparkAskReq
       type: params.multiSelect === true ? "multi" : "single",
       options: normalizeSparkAskToolOptions(params.options, "answer"),
       required: true,
+      defaultValues: normalizeDefaultValues(
+        params.defaultOptionId ? [params.defaultOptionId] : undefined,
+      ),
     },
   ];
+}
+
+function normalizeDefaultValues(values: string[] | undefined): string[] | undefined {
+  if (!values) return undefined;
+  const normalized = values.map((value) => value.trim()).filter(Boolean);
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function normalizeSparkAskToolOptions(

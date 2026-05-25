@@ -2,7 +2,12 @@ import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works
 
 import type { AskState, ExtendedOption } from "../state/state.ts";
 import { isSubmitTab } from "../state/state.ts";
-import { SENTINEL_LABELS, type PiAskFlowQuestion, type PiAskFlowAnswerEntry } from "../schema.ts";
+import {
+  SENTINEL_LABELS,
+  type PiAskFlowAnswerEntry,
+  type PiAskFlowModeVal,
+  type PiAskFlowQuestion,
+} from "../schema.ts";
 
 function enforceLineWidths(lines: string[], width: number): string[] {
   const maxWidth = Math.max(1, width);
@@ -42,6 +47,22 @@ function wrapPrefixedText(
   return wrapped.length > 0 ? wrapped : [firstPrefix];
 }
 
+function appendWrappedParts(lines: string[], parts: readonly string[], width: number): void {
+  const maxWidth = Math.max(1, width);
+  let row = "";
+  for (const part of parts) {
+    const safePart = visibleWidth(part) <= maxWidth ? part : truncateToWidth(part, maxWidth, "…");
+    const nextRow = row ? `${row}  ${safePart}` : safePart;
+    if (!row || visibleWidth(nextRow) <= maxWidth) {
+      row = nextRow;
+      continue;
+    }
+    lines.push(row);
+    row = safePart;
+  }
+  if (row) lines.push(row);
+}
+
 // ---- Theme interface (matches pi-tui's Theme) ----
 
 export interface RenderTheme {
@@ -68,11 +89,7 @@ const ICONS = {
   submit: "→",
   elaborate: "✎",
   cancel: "✕",
-  answered: "✓",
-  unanswered: "?",
   note: "📝",
-  preview: "▸",
-
   other: "○",
 };
 
@@ -88,16 +105,18 @@ const L: Record<
     cancel: string;
     other: string;
     review: string;
-    tab: string;
     question: string;
-    notes: string;
-    pressN: string;
-    pressShiftN: string;
-    typeAnswer: string;
     noAnswer: string;
     allAnswered: string;
     someUnanswered: string;
-    footer: string;
+    hints: {
+      single: string;
+      multi: string;
+      custom: string;
+      notes: string;
+      submit: string;
+    };
+    requestBanner: Record<PiAskFlowModeVal, string>;
   }
 > = {
   zh: {
@@ -106,17 +125,23 @@ const L: Record<
     cancel: "取消",
     other: "输入自定义",
     review: "审核",
-    tab: "Tab",
     question: "问题",
-    notes: "备注",
-    pressN: "n 添加备注",
-    pressShiftN: "Shift+N 问题备注",
-
-    typeAnswer: "输入你的回答…",
     noAnswer: "未回答",
     allAnswered: "全部已回答",
     someUnanswered: "个问题未回答",
-    footer: "Enter 确认 · Esc 取消 · Tab 切换 · ↑↓ 导航",
+    hints: {
+      single: "Enter 回答/下一题 · Tab 下一题 · n 备注",
+      multi: "Space 勾选 · Enter 确认/下一题 · Tab 下一题 · n 备注",
+      custom: "直接输入 · Enter 保存/下一题 · Tab 下一题",
+      notes: "输入备注 · Enter 保存 · Esc 关闭",
+      submit: "1 提交 · 2 补充说明 · 3 取消 · ↑↓ 选择",
+    },
+    requestBanner: {
+      clarification: "Pi 正在请求澄清",
+      decision: "Pi 正在请求决策确认",
+      approval: "Pi 正在请求批准",
+      unblock: "Pi 正在请求解除阻塞信息",
+    },
   },
   en: {
     submit: "Submit",
@@ -124,17 +149,23 @@ const L: Record<
     cancel: "Cancel",
     other: SENTINEL_LABELS.other,
     review: "Review",
-    tab: "Tab",
     question: "Question",
-    notes: "Notes",
-    pressN: "n to add note",
-    pressShiftN: "Shift+N question note",
-
-    typeAnswer: "Type your answer…",
     noAnswer: "unanswered",
     allAnswered: "All answered",
     someUnanswered: "unanswered",
-    footer: "Enter confirm/next · Esc cancel · ←→ switch questions · ↑↓ navigate",
+    hints: {
+      single: "Enter answer/next · Tab next · n note",
+      multi: "Space toggle · Enter accept/next · Tab next · n note",
+      custom: "Type directly · Enter save/next · Tab next",
+      notes: "Type note · Enter save · Esc close",
+      submit: "1=Submit · 2=Elaborate · 3=Cancel · ↑↓ choose",
+    },
+    requestBanner: {
+      clarification: "Pi is requesting clarification",
+      decision: "Pi is requesting a decision",
+      approval: "Pi is requesting approval",
+      unblock: "Pi is requesting unblock information",
+    },
   },
 };
 
@@ -149,6 +180,7 @@ export interface RenderInput {
   language: AskUILanguage;
   title?: string;
   context?: string;
+  mode?: PiAskFlowModeVal;
   editorDraft?: string;
   notesDraft?: string;
 }
@@ -163,19 +195,23 @@ export function renderAskScreen(input: RenderInput): string[] {
     language,
     title,
     context,
+    mode,
   } = input;
   const theme = normalizeRenderTheme(rawTheme);
   const labels = L[language];
   const lines: string[] = [];
 
   // --- Header ---
+  if (mode) {
+    appendWrappedText(lines, theme.fg("accent", theme.bold(labels.requestBanner[mode])), width);
+  }
   if (title) {
     appendWrappedText(lines, theme.bold(title), width);
   }
   if (context) {
     appendWrappedText(lines, theme.dim(context), width);
   }
-  if (title || context) {
+  if (mode || title || context) {
     lines.push(theme.dim("─".repeat(Math.min(width, 60))));
   }
 
@@ -204,7 +240,7 @@ export function renderAskScreen(input: RenderInput): string[] {
     : theme.dim(labels.review);
   tabParts.push(submitTabText);
 
-  lines.push(tabParts.join("  "));
+  appendWrappedParts(lines, tabParts, width);
   lines.push(theme.dim("─".repeat(Math.min(width, 60))));
   lines.push("");
 
@@ -223,11 +259,8 @@ export function renderAskScreen(input: RenderInput): string[] {
   lines.push("");
   lines.push(theme.dim("─".repeat(Math.min(width, 60))));
 
-  if (state.footerHint) {
-    lines.push(theme.dim(state.footerHint));
-  } else {
-    lines.push(theme.dim(labels.footer));
-  }
+  const footerHint = state.footerHint ?? currentFooterHint(state, questions, optionsByTab, labels);
+  lines.push(theme.dim(footerHint));
 
   return enforceLineWidths(lines, width);
 }
@@ -354,14 +387,7 @@ function renderQuestionTab(
     }
   }
 
-  // Hints for available actions
-  if (question.type === "multi") {
-    lines.push(theme.dim(`  Space: toggle · Enter: next · ←→ switch questions · ${labels.pressN}`));
-  } else if (focusedOption?.kind === "other") {
-    lines.push(theme.dim("  Type directly · Enter: save/next · ←→ switch questions"));
-  } else {
-    lines.push(theme.dim(`  Enter: answer/next · ←→ switch questions · ${labels.pressN}`));
-  }
+  // Hints are rendered in the footer so the current mode has one concise action row.
 }
 
 // ---- Preview pane ----
@@ -502,10 +528,27 @@ function renderSubmitTab(
   }
 
   lines.push("");
-  lines.push(theme.dim("  1=Submit · 2=Elaborate · 3=Cancel · ↑↓ navigate"));
 }
 
 // ---- Helpers ----
+
+function currentFooterHint(
+  state: AskState,
+  questions: readonly PiAskFlowQuestion[],
+  optionsByTab: ReadonlyArray<readonly ExtendedOption[]>,
+  labels: (typeof L)["en"],
+): string {
+  if (state.notesVisible) return labels.hints.notes;
+  if (isSubmitTab(state, questions)) return labels.hints.submit;
+
+  const question = questions[state.currentTab];
+  const focused = optionsByTab[state.currentTab]?.[state.optionIndex];
+  if (state.inputMode || focused?.kind === "other" || question?.type === "freeform") {
+    return labels.hints.custom;
+  }
+  if (question?.type === "multi") return labels.hints.multi;
+  return labels.hints.single;
+}
 
 function formatAnswerBrief(answer: PiAskFlowAnswerEntry, labels: (typeof L)["en"]): string {
   switch (answer.kind) {

@@ -1,8 +1,8 @@
 import {
   SENTINEL_LABELS,
+  type PiAskFlowAnswerEntry,
   type PiAskFlowOption,
   type PiAskFlowQuestion,
-  type PiAskFlowAnswerEntry,
 } from "../schema.ts";
 
 /**
@@ -63,15 +63,19 @@ export function createInitialState(request: {
   const notesByQuestion = new Map<string, string>();
   const customDraftsByQuestion = new Map<string, string>();
 
+  const firstQuestion = request.questions[0];
+  const firstOptions = firstQuestion ? buildExtendedOptions(firstQuestion, answers) : [];
+  const optionIndex = initialOptionIndex(firstQuestion, answers);
+
   return {
     currentTab: 0,
-    optionIndex: 0,
+    optionIndex,
     inputMode: false,
     notesVisible: false,
     answers,
-    multiSelectChecked: new Set(),
+    multiSelectChecked: initialMultiSelectChecked(firstQuestion, answers),
     notesByQuestion,
-    focusedOptionHasPreview: false,
+    focusedOptionHasPreview: computeHasPreview(firstOptions[optionIndex]),
     submitChoiceIndex: 0,
     inputDraft: "",
     customDraftsByQuestion,
@@ -100,6 +104,41 @@ export function buildExtendedOptions(
   opts.push({ kind: "other", label: SENTINEL_LABELS.other });
 
   return opts;
+}
+
+export function initialOptionIndex(
+  question: PiAskFlowQuestion | undefined,
+  answers: ReadonlyMap<string, PiAskFlowAnswerEntry>,
+): number {
+  if (!question || question.type === "multi") return 0;
+  const answer = answers.get(question.id);
+  if (answer) {
+    const index = optionIndexForValue(question, answer.values[0]);
+    if (index >= 0) return index;
+    return answer.kind === "custom" ? (question.options?.length ?? 0) : 0;
+  }
+
+  const index = optionIndexForValue(question, question.defaultValues?.[0]);
+  return index >= 0 ? index : 0;
+}
+
+export function initialMultiSelectChecked(
+  question: PiAskFlowQuestion | undefined,
+  answers: ReadonlyMap<string, PiAskFlowAnswerEntry>,
+): ReadonlySet<string> {
+  if (!question || question.type !== "multi") return new Set();
+  const answer = answers.get(question.id);
+  const values = answer ? answer.values : (question.defaultValues ?? []);
+  return new Set(values);
+}
+
+function optionIndexForValue(question: PiAskFlowQuestion, value: string | undefined): number {
+  if (!value) return -1;
+  return question.options?.findIndex((option) => option.value === value) ?? -1;
+}
+
+function computeHasPreview(option?: ExtendedOption): boolean {
+  return !!(option?.preview && option.preview.trim().length > 0);
 }
 
 export function getCurrentQuestion(

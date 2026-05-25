@@ -93,6 +93,119 @@ keeps the useful protocol traits observed in related Pi packages:
 Decision and approval gates must treat `cancelled` and `no_selection` as
 blocked, not as implicit approval.
 
+## Copilot-style ask UX review
+
+The Copilot ask screenshot is useful because it shows a form as an explicit
+information gate, not just a select menu. Current `pi-ask` now adopts the parts
+that fit a terminal-first UI:
+
+Concrete observations from the current renderer/tests:
+
+1. **Request identity is explicit.** `renderAskScreen()` receives request
+   `mode` and renders a top banner such as `Pi is requesting a decision` before
+   the ask-specific title/context. This maps to
+   `packages/pi-ask/src/ui/render.ts` and is covered by
+   `ask flow render shows mode-aware request banner`.
+2. **Long explanatory copy remains readable.** Title, context, prompt, option
+   description, answer, notes, and review rows use width-aware wrapping. The
+   narrow-width regression at width 48 checks that long title/context/prompt and
+   option-description fragments remain visible.
+3. **Decision-dimension tabs survive narrow terminals.** The tab bar wraps tab
+   parts across rows instead of truncating the whole row. The Chinese regression
+   with `替代方案落点`, `必须覆盖的功能范围`, and `兼容策略` checks active brackets,
+   answered checkmarks, review tab visibility, and width <= 60.
+4. **Footer hints are current-mode specific.** The footer now distinguishes
+   multi-select (`Space toggle`), custom/freeform (`Type directly`), and submit
+   (`1=Submit · 2=Elaborate · 3=Cancel`) states instead of always showing a
+   generic navigation string.
+5. **Checkbox clarity is already adequate.** Multi-select uses checked and
+   unchecked glyphs with a separate focus marker, matching the important part of
+   the Copilot checklist without requiring a boxed layout.
+
+Prioritized backlog:
+
+Immediate / next implementation:
+
+- Add a small render fixture helper for future UI reviews so screenshots/snippets
+  can be generated from representative asks without duplicating test setup.
+
+Later / optional:
+
+- Consider a compact actor label if Spark wants `Spark is requesting ...` rather
+  than fixed `Pi is requesting ...`. Keep this facade-level if possible; avoid a
+  broad schema field until there are multiple real actors.
+- Revisit visual separators only if real asks still feel dense after the banner,
+  wrapped context, wrapped tabs, and concise footer changes.
+
+Reject / defer:
+
+- Do not copy Copilot's full bordered card as a requirement. Borders consume
+  width, complicate narrow terminal wrapping, and do not improve the structured
+  answer protocol.
+- Do not add scroll/pagination state for tabs yet. Wrapped rows handle the 2-4
+  question decision forms we have evidence for; pagination would add interaction
+  complexity before need is proven.
+- Do not pre-check recommendation defaults by creating answers. That would turn
+  agent suggestions into implicit approval and break the gate semantics in
+  `shared-semantics.ts`.
+
+## Default selections as recommendations
+
+The Copilot-style checklist pattern is useful when an agent wants to propose
+likely choices for the user to confirm. `pi-ask` supports this with
+question-level `defaultValues?: string[]`. Defaults are **recommendations**, not
+implicit answers.
+
+Schema and validation:
+
+- `defaultValues` must reference that question's business option `value`s.
+- `defaultValues` is valid for `single` and `multi`; it is invalid for
+  `freeform` and cannot reference the UI-only custom sentinel.
+- Single-select questions may contain at most one default value.
+- `spark_ask` question params expose `defaultValues`; the legacy
+  `defaultOptionId` maps to `defaultValues` for the legacy single-question
+  shape.
+
+Runtime semantics:
+
+- `createInitialState()` initializes UI selection state from `defaultValues`,
+  but does not create entries in `state.answers` by itself.
+- For `multi`, defaults initialize `multiSelectChecked`; when navigating away and
+  back, checked state is derived from a committed answer if one exists,
+  otherwise from `defaultValues`.
+- For `single`, defaults move focus to the default option, but Enter/number
+  selection is still required to commit the answer.
+- `submit()` continues to derive status from `state.answers` via
+  `inferAskSubmitStatus()` / `nextActionForAskSubmit()` in
+  `shared-semantics.ts`. Therefore decision/approval gates do not resume until
+  the user explicitly commits or submits answers.
+- Replay/preserved answers override `defaultValues`; defaults are only for
+  questions that have no preserved answer.
+
+Rejected alternatives:
+
+- Option-level `defaultSelected`: convenient for rendering, but spreads a
+  question-level policy over options and makes single-select conflicts harder to
+  validate.
+- Initializing `state.answers` with defaults: too dangerous for
+  decision/approval gates because it can turn recommendations into implicit
+  approval.
+- Treating defaults as `defaultAskChoice()`: current headless/default behavior
+  intentionally remains separate from interactive recommendation state.
+
+Regression coverage:
+
+1. Multi-select defaults render checked but do not produce an answer until the
+   user accepts/commits.
+2. Single-select default focuses the option but does not produce an answer until
+   Enter/number selection.
+3. Decision/approval required questions with defaults still block on direct
+   submit if no explicit answer was committed.
+4. Preserved/replay answers override `defaultValues` in both single and multi
+   questions.
+5. `spark_ask` passes validated `defaultValues` through without accepting custom
+   sentinel labels as default ids.
+
 ## Result and persistence helpers
 
 `pi-ask` exports shared helpers so callers do not reimplement subtly different

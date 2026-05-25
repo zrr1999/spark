@@ -50,6 +50,12 @@ export const PiAskFlowQuestionSchema = Type.Object({
   required: Type.Optional(
     Type.Boolean({ description: "Advisory only; marks the question as important" }),
   ),
+  defaultValues: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "Option values shown as recommended defaults; they do not count as submitted answers.",
+    }),
+  ),
   options: Type.Optional(
     Type.Array(PiAskFlowOptionSchema, { minItems: MIN_OPTIONS, maxItems: MAX_OPTIONS }),
   ),
@@ -137,7 +143,8 @@ export type PiAskFlowValidationError =
   | "reserved_label"
   | "missing_question_id"
   | "missing_option_value"
-  | "missing_option_label";
+  | "missing_option_label"
+  | "invalid_default_value";
 
 export const RESERVED_OPTION_LABELS = ["Other", "Skip", "Type your own", "Chat about this"];
 
@@ -173,6 +180,10 @@ export function validatePiAskFlowRequest(input: unknown): {
       return { valid: false, error: "empty_options", details: question.id };
     }
 
+    if (question.defaultValues?.length && question.type === "freeform") {
+      return { valid: false, error: "invalid_default_value", details: question.id };
+    }
+
     if (opts) {
       const seenValues = new Set<string>();
       for (const option of opts) {
@@ -195,6 +206,22 @@ export function validatePiAskFlowRequest(input: unknown): {
           };
         }
         seenValues.add(option.value);
+      }
+      for (const defaultValue of question.defaultValues ?? []) {
+        if (!seenValues.has(defaultValue)) {
+          return {
+            valid: false,
+            error: "invalid_default_value",
+            details: `${question.id}: ${defaultValue}`,
+          };
+        }
+      }
+      if (question.type !== "multi" && (question.defaultValues?.length ?? 0) > 1) {
+        return {
+          valid: false,
+          error: "invalid_default_value",
+          details: `${question.id}: single-select defaults must contain at most one value`,
+        };
       }
     }
   }

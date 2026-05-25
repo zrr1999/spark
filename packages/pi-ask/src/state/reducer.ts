@@ -1,7 +1,7 @@
 import type { PiAskFlowQuestion, PiAskFlowResult, PiAskFlowAnswerEntry } from "../schema.ts";
 import { inferAskSubmitStatus, nextActionForAskSubmit } from "../shared-semantics.ts";
 import type { AskState, ExtendedOption } from "./state.ts";
-import { isSubmitTab } from "./state.ts";
+import { initialMultiSelectChecked, initialOptionIndex, isSubmitTab } from "./state.ts";
 
 // ---- Actions ----
 
@@ -113,18 +113,19 @@ function moveTab(state: AskState, direction: -1 | 1 | "submit", ctx: ApplyContex
 function jumpTab(state: AskState, index: number, ctx: ApplyContext): ApplyResult {
   const clamped = Math.max(0, Math.min(ctx.questions.length, index));
   const newOptions = clamped < ctx.questions.length ? ctx.optionsByTab[clamped] : undefined;
+  const optionIndex = initialOptionIndex(ctx.questions[clamped], state.answers);
   return {
     state: {
       ...state,
       currentTab: clamped,
-      optionIndex: 0,
+      optionIndex,
       inputMode: false,
       notesVisible: false,
-      multiSelectChecked: new Set(),
+      multiSelectChecked: initialMultiSelectChecked(ctx.questions[clamped], state.answers),
       inputDraft: preservedCustomDraft(state, ctx.questions[clamped]),
       notesDraft: "",
       submitChoiceIndex: 0,
-      focusedOptionHasPreview: newOptions ? computeHasPreview(newOptions[0]) : false,
+      focusedOptionHasPreview: newOptions ? computeHasPreview(newOptions[optionIndex]) : false,
     },
     effects: [{ kind: "request_rerender" }],
   };

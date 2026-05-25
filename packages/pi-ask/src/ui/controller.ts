@@ -95,6 +95,7 @@ export class PiAskFlowController {
       language: this.options.language ?? "en",
       title: this.options.request.title,
       context: this.options.request.context,
+      mode: this.options.request.mode,
     });
   }
 

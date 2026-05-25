@@ -57,6 +57,7 @@ void test("spark_ask tool builds flow-native multi-question forms", () => {
         prompt: "Which scope should run next?",
         type: "single",
         required: true,
+        defaultValues: ["docs"],
         options: [
           {
             id: "tool",
@@ -86,7 +87,31 @@ void test("spark_ask tool builds flow-native multi-question forms", () => {
     request.questions[0]!.options?.map((option) => option.value),
     ["tool", "docs"],
   );
+  assert.deepEqual(request.questions[0]!.defaultValues, ["docs"]);
   assert.equal(request.questions[1]!.type, "freeform");
+});
+
+void test("spark_ask legacy defaultOptionId maps to defaultValues", () => {
+  const request = createSparkAskToolRequest({
+    mode: "decision",
+    title: "Choose route",
+    question: "Which route?",
+    defaultOptionId: "safe",
+    options: [
+      {
+        id: "fast",
+        label: "Fast",
+        description: "Choose the faster route with less validation.",
+      },
+      {
+        id: "safe",
+        label: "Safe",
+        description: "Choose the safer route with more validation.",
+      },
+    ],
+  });
+
+  assert.deepEqual(request.questions[0]!.defaultValues, ["safe"]);
 });
 
 void test("spark_ask tool uses fullscreen ask flow when custom UI is available", async () => {

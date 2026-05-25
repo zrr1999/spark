@@ -160,6 +160,153 @@ void test("ask flow render wraps long prompt and option copy", () => {
   );
 });
 
+void test("ask flow defaultValues initialize recommendations without answers", () => {
+  const multiQuestion = {
+    id: "coverage",
+    prompt: "Which outputs must be covered?",
+    type: "multi" as const,
+    required: true,
+    defaultValues: ["ssh"],
+    options: [
+      { value: "ssh", label: "SSH config" },
+      { value: "dns", label: "DNS output" },
+    ],
+  };
+  const multiState = createInitialState({ questions: [multiQuestion] });
+  assert.deepEqual([...multiState.multiSelectChecked], ["ssh"]);
+  assert.equal(multiState.answers.size, 0);
+
+  const multiLines = renderAskScreen({
+    state: multiState,
+    questions: [multiQuestion],
+    optionsByTab: [buildExtendedOptions(multiQuestion, new Map())],
+    theme: {
+      fg: (_color, text) => text,
+      bold: (text) => text,
+      strikethrough: (text) => text,
+      dim: (text) => text,
+    },
+    width: 80,
+    language: "en",
+    mode: "decision",
+  });
+  assert.match(multiLines.join("\n"), /☑ SSH config/);
+
+  const submitResult = reduce(
+    { ...multiState, currentTab: 1 },
+    { kind: "submit" },
+    {
+      questions: [multiQuestion],
+      optionsByTab: [buildExtendedOptions(multiQuestion, new Map())],
+      mode: "decision",
+    },
+  );
+  const done = submitResult.effects.find((effect) => effect.kind === "done");
+  assert.equal(done?.kind, "done");
+  if (done?.kind === "done") {
+    assert.equal(done.result.status, "no_selection");
+    assert.equal(done.result.nextAction, "block");
+    assert.deepEqual(done.result.answers, {});
+  }
+
+  const singleQuestion = {
+    ...multiQuestion,
+    id: "route",
+    prompt: "Which route?",
+    type: "single" as const,
+    defaultValues: ["dns"],
+  };
+  const singleState = createInitialState({ questions: [singleQuestion] });
+  assert.equal(singleState.optionIndex, 1);
+  assert.equal(singleState.answers.size, 0);
+
+  const previewQuestion = {
+    ...singleQuestion,
+    options: [
+      { value: "ssh", label: "SSH config" },
+      { value: "dns", label: "DNS output", preview: "DNS preview" },
+    ],
+  };
+  assert.equal(createInitialState({ questions: [previewQuestion] }).focusedOptionHasPreview, true);
+  assert.equal(
+    reduce(
+      multiState,
+      { kind: "jump_tab", index: 1 },
+      {
+        questions: [multiQuestion, previewQuestion],
+        optionsByTab: [
+          buildExtendedOptions(multiQuestion, new Map()),
+          buildExtendedOptions(previewQuestion, new Map()),
+        ],
+        mode: "decision",
+      },
+    ).state.focusedOptionHasPreview,
+    true,
+  );
+
+  const customReplayState = createInitialState({
+    questions: [singleQuestion],
+    priorAnswers: {
+      route: {
+        questionId: "route",
+        kind: "custom",
+        values: [],
+        customText: "Use a handwritten route instead",
+      },
+    },
+  });
+  assert.equal(customReplayState.optionIndex, 2);
+  assert.deepEqual(customReplayState.answers.get("route")?.values, []);
+
+  const emptyMultiReplayState = createInitialState({
+    questions: [multiQuestion],
+    priorAnswers: {
+      coverage: {
+        questionId: "coverage",
+        kind: "custom",
+        values: [],
+        customText: "Use a custom coverage set",
+      },
+    },
+  });
+  assert.deepEqual([...emptyMultiReplayState.multiSelectChecked], []);
+
+  const replayState = createInitialState({
+    questions: [multiQuestion],
+    priorAnswers: {
+      coverage: {
+        questionId: "coverage",
+        kind: "multi",
+        values: ["dns"],
+        labels: ["DNS output"],
+      },
+    },
+  });
+  assert.deepEqual([...replayState.multiSelectChecked], ["dns"]);
+});
+
+void test("ask flow rejects invalid defaultValues", () => {
+  assert.equal(
+    validatePiAskFlowRequest({
+      flow: "custom",
+      mode: "decision",
+      questions: [
+        {
+          id: "route",
+          prompt: "Which route?",
+          type: "single",
+          defaultValues: ["missing"],
+          options: [
+            { value: "fast", label: "Fast" },
+            { value: "safe", label: "Safe" },
+          ],
+        },
+      ],
+    }).error,
+    "invalid_default_value",
+  );
+});
+
 void test("spark ask select path exposes default custom affordance", async () => {
   const request = createSparkAskRequest({
     flow: "custom",
