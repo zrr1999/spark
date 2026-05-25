@@ -41,6 +41,30 @@ void test("learning store records active learnings and searches by content", asy
   }
 });
 
+void test("learning store hydrates compacted artifact metadata for list and search", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-learnings-compacted-"));
+  try {
+    const store = new LearningStore({
+      artifactStore: new ArtifactStore({ rootDir: dir, inlineBodyThresholdBytes: 64 }),
+    });
+    const recorded = await store.record({
+      title: "Hydrate compacted learning metadata",
+      statement: "Learning list/search should read full bodies when metadata keeps only previews.",
+      category: "workflow",
+      scope: "project",
+      applicability: "x".repeat(200),
+    });
+    assert.equal(recorded.bodyTruncated, true);
+
+    const listed = await store.list();
+    assert.equal(listed[0]?.body.statement, recorded.body.statement);
+    const results = await store.search({ query: "metadata previews" });
+    assert.equal(results[0]?.ref, recorded.ref);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("learning store keeps candidates out of default active recall", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-learnings-candidate-"));
   try {

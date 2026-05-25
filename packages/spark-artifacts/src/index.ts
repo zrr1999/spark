@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -15,6 +15,9 @@ import {
   validateArtifact,
 } from "spark-core";
 
+const DEFAULT_INLINE_BODY_THRESHOLD_BYTES = 64 * 1024;
+const DEFAULT_BODY_PREVIEW_CHARS = 4_000;
+
 export interface PutArtifactInput<T extends JsonValue | string = JsonValue | string> {
   kind: ArtifactKind;
   title: string;
@@ -27,6 +30,8 @@ export interface PutArtifactInput<T extends JsonValue | string = JsonValue | str
 
 export interface ArtifactStoreOptions {
   rootDir: string;
+  inlineBodyThresholdBytes?: number;
+  bodyPreviewChars?: number;
 }
 
 export interface ArtifactQuery {
@@ -38,13 +43,58 @@ export interface ArtifactQuery {
   linkedTo?: string;
 }
 
+export interface ArtifactMetadataCompactionOptions {
+  /** Defaults to true so callers must opt in before rewriting metadata files. */
+  dryRun?: boolean;
+  inlineBodyThresholdBytes?: number;
+  bodyPreviewChars?: number;
+}
+
+export interface ArtifactMetadataCompactionCandidate {
+  ref: ArtifactRef;
+  path: string;
+  blobPath: string;
+  metadataBytesBefore: number;
+  metadataBytesAfter: number;
+  bodyBytes: number;
+  reclaimableBytes: number;
+}
+
+export interface ArtifactMetadataCompactionSkipped {
+  path: string;
+  reason:
+    | "already_compacted"
+    | "invalid_json"
+    | "missing_blob_path"
+    | "missing_blob"
+    | "hash_mismatch"
+    | "small_body";
+  message?: string;
+}
+
+export interface ArtifactMetadataCompactionResult {
+  dryRun: boolean;
+  scanned: number;
+  compacted: number;
+  skipped: ArtifactMetadataCompactionSkipped[];
+  candidates: ArtifactMetadataCompactionCandidate[];
+  metadataBytesBefore: number;
+  metadataBytesAfter: number;
+  reclaimableBytes: number;
+}
+
 export class ArtifactStore {
   readonly rootDir: string;
   readonly blobDir: string;
+  readonly inlineBodyThresholdBytes: number;
+  readonly bodyPreviewChars: number;
 
   constructor(options: ArtifactStoreOptions) {
     this.rootDir = options.rootDir;
     this.blobDir = join(options.rootDir, "blobs");
+    this.inlineBodyThresholdBytes =
+      options.inlineBodyThresholdBytes ?? DEFAULT_INLINE_BODY_THRESHOLD_BYTES;
+    this.bodyPreviewChars = options.bodyPreviewChars ?? DEFAULT_BODY_PREVIEW_CHARS;
   }
 
   async put<T extends JsonValue | string>(input: PutArtifactInput<T>): Promise<Artifact<T>> {
@@ -53,8 +103,7 @@ export class ArtifactStore {
     const now = nowIso();
     const ref = input.ref ?? newRef("artifact");
     const existing = input.ref ? await this.tryGet<T>(input.ref) : null;
-    const serializedBody =
-      typeof input.body === "string" ? input.body : JSON.stringify(input.body, null, 2);
+    const serializedBody = serializeArtifactBody(input.format, input.body);
     const hash = contentHash(serializedBody);
     const blobPath = join("blobs", `${hash}.${extensionForFormat(input.format)}`);
     await writeFile(join(this.rootDir, blobPath), serializedBody, "utf8");
@@ -70,7 +119,10 @@ export class ArtifactStore {
       kind: input.kind,
       title: input.title,
       format: input.format,
-      body: input.body,
+      body: metadataBodyFor(input.body, serializedBody, {
+        thresholdBytes: this.inlineBodyThresholdBytes,
+        previewChars: this.bodyPreviewChars,
+      }),
       hash,
       blobPath,
       links: [...parentLinks, ...(input.links ?? []).map((link) => ({ ...link, from: ref }))],
@@ -78,9 +130,13 @@ export class ArtifactStore {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
+    addBodyCompactionMetadata(artifact, serializedBody, {
+      thresholdBytes: this.inlineBodyThresholdBytes,
+      previewChars: this.bodyPreviewChars,
+    });
     validateArtifact(artifact);
     await writeFile(this.pathFor(ref), `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
-    return artifact;
+    return { ...artifact, body: input.body };
   }
 
   async update<T extends JsonValue | string>(
@@ -102,16 +158,21 @@ export class ArtifactStore {
   async get<T extends JsonValue | string = JsonValue | string>(
     ref: ArtifactRef,
   ): Promise<Artifact<T>> {
-    const raw = await readFile(this.pathFor(ref), "utf8");
-    return JSON.parse(raw) as Artifact<T>;
+    const artifact = await this.readMetadata<T>(ref);
+    if (artifact.bodyTruncated && artifact.blobPath) {
+      const body = await this.getBody(ref);
+      return {
+        ...artifact,
+        body: parseArtifactBody(artifact.format, body) as T,
+      };
+    }
+    return artifact;
   }
 
   async getBody(ref: ArtifactRef): Promise<string> {
-    const artifact = await this.get(ref);
+    const artifact = await this.readMetadata(ref);
     if (artifact.blobPath) return readFile(join(this.rootDir, artifact.blobPath), "utf8");
-    return typeof artifact.body === "string"
-      ? artifact.body
-      : JSON.stringify(artifact.body, null, 2);
+    return serializeArtifactBody(artifact.format, artifact.body);
   }
 
   async tryGet<T extends JsonValue | string = JsonValue | string>(
@@ -158,13 +219,126 @@ export class ArtifactStore {
     };
   }
 
+  async compactMetadata(
+    options: ArtifactMetadataCompactionOptions = {},
+  ): Promise<ArtifactMetadataCompactionResult> {
+    return compactArtifactMetadata(this.rootDir, {
+      inlineBodyThresholdBytes: options.inlineBodyThresholdBytes ?? this.inlineBodyThresholdBytes,
+      bodyPreviewChars: options.bodyPreviewChars ?? this.bodyPreviewChars,
+      dryRun: options.dryRun,
+    });
+  }
+
   pathFor(ref: ArtifactRef): string {
     return join(this.rootDir, `${refId(ref)}.json`);
+  }
+
+  private async readMetadata<T extends JsonValue | string = JsonValue | string>(
+    ref: ArtifactRef,
+  ): Promise<Artifact<T>> {
+    const raw = await readFile(this.pathFor(ref), "utf8");
+    return JSON.parse(raw) as Artifact<T>;
   }
 }
 
 export function defaultArtifactStore(cwd: string): ArtifactStore {
   return new ArtifactStore({ rootDir: join(cwd, ".spark", "artifacts") });
+}
+
+export async function compactArtifactMetadata(
+  rootDir: string,
+  options: ArtifactMetadataCompactionOptions = {},
+): Promise<ArtifactMetadataCompactionResult> {
+  await mkdir(rootDir, { recursive: true });
+  const dryRun = options.dryRun ?? true;
+  const thresholdBytes = options.inlineBodyThresholdBytes ?? DEFAULT_INLINE_BODY_THRESHOLD_BYTES;
+  const previewChars = options.bodyPreviewChars ?? DEFAULT_BODY_PREVIEW_CHARS;
+  const entries = await readdir(rootDir, { withFileTypes: true });
+  const result: ArtifactMetadataCompactionResult = {
+    dryRun,
+    scanned: 0,
+    compacted: 0,
+    skipped: [],
+    candidates: [],
+    metadataBytesBefore: 0,
+    metadataBytesAfter: 0,
+    reclaimableBytes: 0,
+  };
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    const path = join(rootDir, entry.name);
+    result.scanned += 1;
+    const metadataBytesBefore = await fileSize(path);
+    result.metadataBytesBefore += metadataBytesBefore;
+    let artifact: Artifact;
+    try {
+      artifact = JSON.parse(await readFile(path, "utf8")) as Artifact;
+    } catch (error) {
+      result.skipped.push({
+        path,
+        reason: "invalid_json",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      result.metadataBytesAfter += metadataBytesBefore;
+      continue;
+    }
+    if (artifact.bodyTruncated) {
+      result.skipped.push({ path, reason: "already_compacted" });
+      result.metadataBytesAfter += metadataBytesBefore;
+      continue;
+    }
+    if (!artifact.blobPath) {
+      result.skipped.push({ path, reason: "missing_blob_path" });
+      result.metadataBytesAfter += metadataBytesBefore;
+      continue;
+    }
+    let blobText: string;
+    try {
+      blobText = await readFile(join(rootDir, artifact.blobPath), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        result.skipped.push({ path, reason: "missing_blob" });
+        result.metadataBytesAfter += metadataBytesBefore;
+        continue;
+      }
+      throw error;
+    }
+    if (artifact.hash && contentHash(blobText) !== artifact.hash) {
+      result.skipped.push({ path, reason: "hash_mismatch" });
+      result.metadataBytesAfter += metadataBytesBefore;
+      continue;
+    }
+    if (Buffer.byteLength(blobText, "utf8") <= thresholdBytes) {
+      result.skipped.push({ path, reason: "small_body" });
+      result.metadataBytesAfter += metadataBytesBefore;
+      continue;
+    }
+    const compactedArtifact = compactStoredArtifact(artifact, blobText, {
+      thresholdBytes,
+      previewChars,
+    });
+    const compactedText = `${JSON.stringify(compactedArtifact, null, 2)}\n`;
+    const metadataBytesAfter = Buffer.byteLength(compactedText, "utf8");
+    const candidate: ArtifactMetadataCompactionCandidate = {
+      ref: artifact.ref,
+      path,
+      blobPath: artifact.blobPath,
+      metadataBytesBefore,
+      metadataBytesAfter,
+      bodyBytes: Buffer.byteLength(blobText, "utf8"),
+      reclaimableBytes: Math.max(0, metadataBytesBefore - metadataBytesAfter),
+    };
+    result.candidates.push(candidate);
+    result.metadataBytesAfter += metadataBytesAfter;
+    result.reclaimableBytes += candidate.reclaimableBytes;
+    if (!dryRun) {
+      const tmpPath = `${path}.${process.pid}.tmp`;
+      await writeFile(tmpPath, compactedText, "utf8");
+      await rename(tmpPath, path);
+      result.compacted += 1;
+    }
+  }
+  return result;
 }
 
 function matchesQuery(artifact: Artifact, query: ArtifactQuery): boolean {
@@ -175,6 +349,61 @@ function matchesQuery(artifact: Artifact, query: ArtifactQuery): boolean {
   if (query.roleRef && artifact.provenance.roleRef !== query.roleRef) return false;
   if (query.linkedTo && !artifact.links.some((link) => link.to === query.linkedTo)) return false;
   return true;
+}
+
+function compactStoredArtifact(
+  artifact: Artifact,
+  serializedBody: string,
+  options: { thresholdBytes: number; previewChars: number },
+): Artifact {
+  const compacted: Artifact = {
+    ...artifact,
+    body: previewBody(serializedBody, options.previewChars),
+  };
+  addBodyCompactionMetadata(compacted, serializedBody, options);
+  return compacted;
+}
+
+function metadataBodyFor<T extends JsonValue | string>(
+  body: T,
+  serializedBody: string,
+  options: { thresholdBytes: number; previewChars: number },
+): T {
+  if (Buffer.byteLength(serializedBody, "utf8") <= options.thresholdBytes) return body;
+  return previewBody(serializedBody, options.previewChars) as T;
+}
+
+function addBodyCompactionMetadata(
+  artifact: Artifact,
+  serializedBody: string,
+  options: { thresholdBytes: number; previewChars: number },
+): void {
+  const bodySize = Buffer.byteLength(serializedBody, "utf8");
+  if (bodySize <= options.thresholdBytes) return;
+  artifact.bodyPreview = previewBody(serializedBody, options.previewChars);
+  artifact.bodySize = bodySize;
+  artifact.bodyTruncated = true;
+}
+
+function previewBody(serializedBody: string, previewChars: number): string {
+  return serializedBody.length > previewChars
+    ? `${serializedBody.slice(0, previewChars)}\n… truncated ${serializedBody.length - previewChars} char(s)`
+    : serializedBody;
+}
+
+function serializeArtifactBody(format: Artifact["format"], body: JsonValue | string): string {
+  if (typeof body === "string") return body;
+  if (format === "json") return JSON.stringify(body, null, 2);
+  return JSON.stringify(body, null, 2);
+}
+
+function parseArtifactBody(format: Artifact["format"], body: string): JsonValue | string {
+  if (format === "json") return JSON.parse(body) as JsonValue;
+  return body;
+}
+
+async function fileSize(path: string): Promise<number> {
+  return (await stat(path)).size;
 }
 
 function extensionForFormat(format: Artifact["format"]): string {

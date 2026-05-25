@@ -186,10 +186,13 @@ export class LearningStore {
   }
 
   async list(filter: LearningListFilter = {}): Promise<Array<Artifact<LearningRecord>>> {
-    const artifacts = [
-      ...(await this.artifactStore.list({ kind: "learning" })),
-      ...(await this.artifactStore.list({ kind: "learning-candidate" })),
-    ] as Array<Artifact<LearningRecord>>;
+    const artifacts = await hydrateLearningArtifacts(
+      [
+        ...(await this.artifactStore.list({ kind: "learning" })),
+        ...(await this.artifactStore.list({ kind: "learning-candidate" })),
+      ],
+      this.artifactStore,
+    );
     return artifacts
       .filter((artifact) => isLearningRecord(artifact.body))
       .filter((artifact) => matchesLearningFilter(artifact.body, filter))
@@ -281,6 +284,18 @@ export class LearningStore {
 
 export function defaultLearningStore(cwd: string): LearningStore {
   return new LearningStore({ artifactStore: defaultArtifactStore(cwd) });
+}
+
+async function hydrateLearningArtifacts(
+  artifacts: Artifact[],
+  store: LearningArtifactStore,
+): Promise<Array<Artifact<LearningRecord>>> {
+  const hydrated: Array<Artifact<LearningRecord>> = [];
+  for (const artifact of artifacts) {
+    if (artifact.bodyTruncated) hydrated.push(await store.get<LearningRecord>(artifact.ref));
+    else hydrated.push(artifact as Artifact<LearningRecord>);
+  }
+  return hydrated;
 }
 
 export function validateLearningRecord(record: LearningRecord): void {

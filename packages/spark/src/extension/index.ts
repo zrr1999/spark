@@ -955,6 +955,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       threadRef: artifact.provenance.threadRef,
       taskRef: artifact.provenance.taskRef,
       roleRef: artifact.provenance.roleRef,
+      bodySize: artifact.bodySize,
+      bodyTruncated: artifact.bodyTruncated,
       createdAt: artifact.createdAt,
       updatedAt: artifact.updatedAt,
     };

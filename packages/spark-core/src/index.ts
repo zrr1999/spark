@@ -178,6 +178,12 @@ export interface Artifact<T extends JsonValue | string = JsonValue | string> {
   title: string;
   format: ArtifactFormat;
   body: T;
+  /** Bounded serialized body preview when full metadata body is stored out-of-line. */
+  bodyPreview?: string;
+  /** Serialized body byte size when known. */
+  bodySize?: number;
+  /** True when `body` contains only a preview and `blobPath` is the full body source. */
+  bodyTruncated?: boolean;
   hash?: string;
   blobPath?: string;
   links: ArtifactLink[];

@@ -620,13 +620,16 @@ void test("spark artifact tools list and read artifacts with truncated default b
       kind: "research",
       title: "Long research note",
       format: "text",
-      body: "abcdef".repeat(1000),
+      body: "abcdef".repeat(20_000),
       provenance: { producer: "spark" },
     });
     const { tools } = registerSparkToolsForTest();
 
     const listed = await executeSparkTool(tools, "spark_list_artifacts", ctx, { kind: "research" });
     assert.match(toolText(listed), new RegExp(`${artifact.ref}.*Long research note`));
+    const [listedArtifact] =
+      (listed.details as { artifacts?: Array<{ bodyTruncated?: boolean }> }).artifacts ?? [];
+    assert.equal(listedArtifact?.bodyTruncated, true);
 
     const read = await executeSparkTool(tools, "spark_get_artifact", ctx, {
       artifactRef: artifact.ref,

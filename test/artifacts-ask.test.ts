@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { readFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -49,6 +49,82 @@ void test("artifact store writes hashes, blobs, and lineage links", async () => 
       [second.ref],
     );
     assert.equal((await store.diff(first.ref, second.ref)).same, false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("artifact store compacts large metadata while hydrating full bodies", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-artifacts-compact-"));
+  try {
+    const store = new ArtifactStore({
+      rootDir: dir,
+      inlineBodyThresholdBytes: 64,
+      bodyPreviewChars: 16,
+    });
+    const body = { text: "abcdef".repeat(100) };
+    const artifact = await store.put({
+      kind: "research",
+      title: "Large research",
+      format: "json",
+      body,
+      provenance: { producer: "spark" },
+    });
+
+    const metadata = await readFile(store.pathFor(artifact.ref), "utf8");
+    assert.match(metadata, /"bodyTruncated": true/);
+    assert.doesNotMatch(metadata, /abcdefabcdefabcdefabcdefabcdef/);
+    assert.deepEqual((await store.get<typeof body>(artifact.ref)).body, body);
+    assert.equal(JSON.parse(await store.getBody(artifact.ref)).text, body.text);
+    const [listed] = await store.list({ kind: "research" });
+    assert.equal((listed as { bodyTruncated?: boolean } | undefined)?.bodyTruncated, true);
+
+    const dryRun = await store.compactMetadata({ dryRun: true });
+    assert.equal(dryRun.candidates.length, 0);
+    assert.ok(dryRun.skipped.some((skip) => skip.reason === "already_compacted"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("artifact metadata compaction dry-runs and rewrites legacy inline bodies", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-artifacts-legacy-compact-"));
+  try {
+    const legacyStore = new ArtifactStore({
+      rootDir: dir,
+      inlineBodyThresholdBytes: Number.MAX_SAFE_INTEGER,
+    });
+    const compactingStore = new ArtifactStore({
+      rootDir: dir,
+      inlineBodyThresholdBytes: 64,
+      bodyPreviewChars: 12,
+    });
+    const body = { text: "legacy-body-".repeat(100) };
+    const artifact = await legacyStore.put({
+      kind: "research",
+      title: "Legacy large research",
+      format: "json",
+      body,
+      provenance: { producer: "spark" },
+    });
+    const before = await readFile(legacyStore.pathFor(artifact.ref), "utf8");
+    assert.match(before, /legacy-body-legacy-body-/);
+
+    const dryRun = await compactingStore.compactMetadata({ dryRun: true });
+    assert.equal(dryRun.compacted, 0);
+    assert.equal(dryRun.candidates.length, 1);
+    assert.ok(dryRun.reclaimableBytes > 0);
+    assert.match(
+      await readFile(legacyStore.pathFor(artifact.ref), "utf8"),
+      /legacy-body-legacy-body-/,
+    );
+
+    const executed = await compactingStore.compactMetadata({ dryRun: false });
+    assert.equal(executed.compacted, 1);
+    const after = await readFile(legacyStore.pathFor(artifact.ref), "utf8");
+    assert.match(after, /"bodyTruncated": true/);
+    assert.doesNotMatch(after, /legacy-body-legacy-body-/);
+    assert.deepEqual((await compactingStore.get<typeof body>(artifact.ref)).body, body);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
