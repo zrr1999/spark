@@ -172,6 +172,19 @@ interface SparkCommandProjectState {
   unfinishedTaskCount: number;
 }
 
+type SparkEntryMode = "planning" | "execution";
+
+type SparkEntryIntent =
+  | { kind: "auto"; prompt: string }
+  | { kind: "direct"; mode: SparkEntryMode; prompt: string };
+
+type SparkEntryResolution =
+  | { action: "initialize_new_project"; idea: string; enterPlanning: boolean }
+  | { action: "initialize_existing_project"; idea: string }
+  | { action: "enter_mode"; mode: SparkEntryMode; focus?: string }
+  | { action: "blocked"; message: string }
+  | { action: "none" };
+
 type SparkStateCacheKind =
   | "current-thread"
   | "task-todos"
@@ -1320,7 +1333,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     description:
       "Enter the inferred Spark mode, or initialize a new Spark idea with /spark <idea>.",
     async handler(args, ctx) {
-      await handleSparkCommand(pi, args, ctx);
+      await handleSparkEntryCommand(pi, ctx, { kind: "auto", prompt: args.trim() });
     },
   });
 
@@ -1328,7 +1341,11 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     description:
       "Enter Spark planning mode directly, or initialize an existing non-empty project into planning mode.",
     async handler(args, ctx) {
-      await handleSparkDirectModeCommand(pi, args, ctx, "planning");
+      await handleSparkEntryCommand(pi, ctx, {
+        kind: "direct",
+        mode: "planning",
+        prompt: args.trim(),
+      });
     },
   });
 
@@ -1336,73 +1353,111 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     description:
       "Enter Spark execution mode directly for an initialized workspace without dispatching tasks automatically.",
     async handler(args, ctx) {
-      await handleSparkDirectModeCommand(pi, args, ctx, "execution");
+      await handleSparkEntryCommand(pi, ctx, {
+        kind: "direct",
+        mode: "execution",
+        prompt: args.trim(),
+      });
     },
   });
 
-  async function handleSparkCommand(
+  async function handleSparkEntryCommand(
     piApi: SparkExtensionAPI,
-    args: string,
     ctx: SparkCommandContext,
+    intent: SparkEntryIntent,
   ): Promise<void> {
-    const prompt = args.trim();
     const graph = await loadSparkGraph(ctx.cwd, ctx);
     const projectState = await detectSparkProjectState(ctx.cwd, graph, ctx);
-
-    if (!graph) {
-      if (projectState.kind === "empty_project") {
-        const idea = prompt || (await promptSparkNewProjectIdea(ctx));
-        if (idea) await startSparkNewProject(piApi, ctx, idea, { enterPlanning: false });
-        return;
-      }
-
-      const idea = prompt || (await inferExistingProjectSparkIdea(ctx));
-      if (!idea) return;
-      await startSparkNewProject(piApi, ctx, idea, { enterPlanning: true });
-      return;
-    }
-
-    const mode = prompt
-      ? predictSparkModeFromPrompt(prompt, projectState)
-      : await chooseInitializedSparkMode(ctx, graph, projectState);
-    if (!mode) return;
-    if (mode === "new_project") {
-      const newIdea = prompt || (await promptSparkNewProjectIdea(ctx));
-      if (!newIdea) return;
-      await startSparkNewProject(piApi, ctx, newIdea, { enterPlanning: true });
-      return;
-    }
-    if (mode === "planning") await enterSparkPlanningMode(piApi, ctx, graph, prompt || undefined);
-    else await enterSparkExecutionMode(piApi, ctx, graph);
+    const resolution = await resolveSparkEntry(ctx, intent, graph, projectState);
+    await applySparkEntryResolution(piApi, ctx, graph, resolution);
   }
 
-  async function handleSparkDirectModeCommand(
-    piApi: SparkExtensionAPI,
-    args: string,
+  async function resolveSparkEntry(
     ctx: SparkCommandContext,
-    mode: "planning" | "execution",
-  ): Promise<void> {
-    const focus = args.trim();
-    const graph = await loadSparkGraph(ctx.cwd, ctx);
-    const projectState = await detectSparkProjectState(ctx.cwd, graph, ctx);
-    if (!graph) {
-      if (mode === "planning" && projectState.kind === "existing_project") {
-        const idea = focus || (await inferExistingProjectSparkIdea(ctx));
-        if (idea) await startSparkNewProject(piApi, ctx, idea, { enterPlanning: true });
-        return;
-      }
+    intent: SparkEntryIntent,
+    graph: TaskGraph | null,
+    projectState: SparkCommandProjectState,
+  ): Promise<SparkEntryResolution> {
+    if (!graph) return resolveSparkEntryWithoutGraph(ctx, intent, projectState);
 
-      ctx.ui?.notify?.(
-        mode === "planning"
-          ? "Spark planning mode needs an existing project or a Spark idea. Use /spark <idea> to initialize an empty project."
-          : "Spark execution mode needs initialized Spark state. Use /spark <idea> or /plan first.",
-        "warning",
-      );
-      return;
+    const mode =
+      intent.kind === "direct"
+        ? intent.mode
+        : intent.prompt
+          ? predictSparkModeFromPrompt(intent.prompt, projectState)
+          : await chooseInitializedSparkMode(ctx, graph, projectState);
+    if (!mode) return { action: "none" };
+    if (mode === "new_project") {
+      const idea = intent.prompt || (await promptSparkNewProjectIdea(ctx));
+      return idea
+        ? { action: "initialize_new_project", idea, enterPlanning: true }
+        : { action: "none" };
+    }
+    return { action: "enter_mode", mode, focus: intent.prompt || undefined };
+  }
+
+  async function resolveSparkEntryWithoutGraph(
+    ctx: SparkCommandContext,
+    intent: SparkEntryIntent,
+    projectState: SparkCommandProjectState,
+  ): Promise<SparkEntryResolution> {
+    if (projectState.kind === "empty_project") {
+      if (intent.kind === "auto") {
+        const idea = intent.prompt || (await promptSparkNewProjectIdea(ctx));
+        return idea
+          ? { action: "initialize_new_project", idea, enterPlanning: false }
+          : { action: "none" };
+      }
+      return {
+        action: "blocked",
+        message:
+          intent.mode === "planning"
+            ? "Spark planning mode needs an existing project or a Spark idea. Use /spark <idea> to initialize an empty project."
+            : "Spark execution mode needs initialized Spark state. Use /spark <idea> or /plan first.",
+      };
     }
 
-    if (mode === "planning") await enterSparkPlanningMode(piApi, ctx, graph, focus || undefined);
-    else await enterSparkExecutionMode(piApi, ctx, graph);
+    if (intent.kind === "direct" && intent.mode === "execution")
+      return {
+        action: "blocked",
+        message:
+          "Spark execution mode needs initialized Spark state. Use /spark <idea> or /plan first.",
+      };
+
+    const idea = intent.prompt || (await inferExistingProjectSparkIdea(ctx));
+    return idea ? { action: "initialize_existing_project", idea } : { action: "none" };
+  }
+
+  async function applySparkEntryResolution(
+    piApi: SparkExtensionAPI,
+    ctx: SparkCommandContext,
+    graph: TaskGraph | null,
+    resolution: SparkEntryResolution,
+  ): Promise<void> {
+    switch (resolution.action) {
+      case "initialize_new_project":
+        await startSparkNewProject(piApi, ctx, resolution.idea, {
+          enterPlanning: resolution.enterPlanning,
+        });
+        return;
+      case "initialize_existing_project":
+        await startSparkNewProject(piApi, ctx, resolution.idea, { enterPlanning: true });
+        return;
+      case "enter_mode":
+        if (!graph) {
+          ctx.ui?.notify?.("Spark mode needs initialized Spark state.", "warning");
+          return;
+        }
+        if (resolution.mode === "planning")
+          await enterSparkPlanningMode(piApi, ctx, graph, resolution.focus);
+        else await enterSparkExecutionMode(piApi, ctx, graph);
+        return;
+      case "blocked":
+        ctx.ui?.notify?.(resolution.message, "warning");
+        return;
+      case "none":
+        return;
+    }
   }
 
   async function detectSparkProjectState(
