@@ -1142,7 +1142,9 @@ void test("spark_status defaults to active view, supports full history, summary,
     assert.match(activeText, /Active tasks:/);
     assert.match(activeText, /Mine running task/);
     assert.match(activeText, /Other pending task/);
-    assert.match(activeText, /plan=not-ready\(missing-success,missing-evidence\)/);
+    assert.doesNotMatch(activeText, /plan=present/);
+    assert.doesNotMatch(activeText, /plan=/);
+    assert.doesNotMatch(activeText, /missing-success|missing-evidence/);
     assert.doesNotMatch(activeText, /Finished task history/);
     assert.doesNotMatch(activeText, /Cancelled task history/);
     assert.doesNotMatch(activeText, /kind=implement/);

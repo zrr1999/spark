@@ -35,7 +35,6 @@ import {
   type SparkRunTrace,
   type Task,
   type TaskPlan,
-  type TaskPlanIssue,
   type TaskRun,
   type TaskStatus,
   type TaskRef,
@@ -65,7 +64,6 @@ import {
   defaultTaskTodoStore,
   isUnfinishedTaskStatus,
   taskCompletionReadiness,
-  taskPlanReadiness,
   TaskGraph,
   TaskGraphStoreLockTimeoutError,
   type TaskGraphStore,
@@ -396,7 +394,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           currentSessionKey: sessionKey,
           latestRun: lastRunsByTaskRef.get(task.ref),
         }),
-        planIssueSummary: taskPlanIssueSummary(taskPlanReadiness(task).issues),
+        planSummary: taskPlanSummary(task),
         backgroundOwner:
           task.claim?.kind === "role-run" &&
           task.claim.sessionId === ownerSessionKey &&
@@ -687,26 +685,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     return claimedBy;
   }
 
-  function taskPlanIssueSummary(issues: TaskPlanIssue[]): string | undefined {
-    const blocking = issues.filter((issue) => issue.severity === "blocking");
-    if (blocking.length === 0) return undefined;
-    const labels = blocking.map((issue) => {
-      switch (issue.kind) {
-        case "missing_plan":
-          return "missing-plan";
-        case "missing_objective":
-          return "missing-objective";
-        case "missing_success_criteria":
-          return "missing-success";
-        case "missing_evidence_required":
-          return "missing-evidence";
-        case "missing_steps":
-          return "missing-steps";
-        case "open_questions":
-          return "open-questions";
-      }
-    });
-    return `not-ready(${labels.join(",")})`;
+  function taskPlanSummary(task: Pick<Task, "plan">): "missing" | undefined {
+    return task.plan ? undefined : "missing";
   }
 
   function shortRoleLabel(roleRef: string): string {
@@ -1765,10 +1745,11 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
             currentSessionKey: sessionKey,
             latestRun: lastRunsByTaskRef.get(task.ref),
           });
-          const planIssue = taskPlanIssueSummary(taskPlanReadiness(task).issues);
+          const planSummary = taskPlanSummary(task);
+          const planSuffix = planSummary ? ` plan=${planSummary}` : "";
           if (view === "active") {
             lines.push(
-              `  - [${task.status}] @${task.name}: ${task.title} owner=@${owner}${planIssue ? ` plan=${planIssue}` : ""}`,
+              `  - [${task.status}] @${task.name}: ${task.title} owner=@${owner}${planSuffix}`,
             );
             if (isClaimOwnedBySession(task, sessionKey)) {
               const taskTodos = graph.taskTodos(task.ref);
@@ -1784,7 +1765,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           }
           const taskSummary = graph.todoSummary(task.ref);
           lines.push(
-            `  - [${task.status}] @${task.name}: ${task.title} (${task.ref}) kind=${task.kind} owner=@${owner} claimed=${taskClaimSummary(task)} todos=${taskSummary.total}/${taskSummary.inProgress}/${taskSummary.pending}/${taskSummary.done}${planIssue ? ` plan=${planIssue}` : ""}`,
+            `  - [${task.status}] @${task.name}: ${task.title} (${task.ref}) kind=${task.kind} owner=@${owner} claimed=${taskClaimSummary(task)} todos=${taskSummary.total}/${taskSummary.inProgress}/${taskSummary.pending}/${taskSummary.done}${planSuffix}`,
           );
           if (isClaimOwnedBySession(task, sessionKey)) {
             for (const todo of graph.taskTodos(task.ref)) {
