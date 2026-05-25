@@ -369,7 +369,7 @@ void test("spark widget distinguishes cancelled, failed, and role labels", () =>
       threadTitle: "Spark UX redesign",
       tasks: [
         {
-          title: "Review initial direction",
+          title: "Cancelled review task",
           status: "cancelled",
           roleLabel: "unassigned",
           todos: [],
@@ -406,7 +406,7 @@ void test("spark widget distinguishes cancelled, failed, and role labels", () =>
     theme,
   ).join("\n");
 
-  assert.match(lines, /⊘ Review initial direction/);
+  assert.match(lines, /⊘ Cancelled review task/);
   assert.match(lines, /✗ Broken task/);
   assert.match(lines, /⠧ @me\/worker-a1b2c3d4 Role task/);
   assert.match(lines, /◼ @reviewer Other session task/);

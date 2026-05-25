@@ -89,12 +89,19 @@ void test("/spark command detects empty, existing, and initialized project modes
 
     await writeFile(join(existingDir, "README.md"), "# Existing project\n", "utf8");
     const existingCtx = testSparkContext(existingDir, "main");
+    existingCtx.inputValue = "Audit existing project structure";
     const existingRun = registerSparkToolsForTest();
     const existingCommand = existingRun.commands.get("spark");
     assert.ok(existingCommand, "missing /spark command");
     await existingCommand.handler("", existingCtx);
     assert.ok(existsSync(join(existingDir, ".spark", "thread.json")));
     assert.match(existingRun.messages.at(-1) ?? "", /Enter Spark planning mode/);
+    assert.match(existingRun.messages.at(-1) ?? "", /Audit existing project structure/);
+    const existingThreadJson = await readFile(join(existingDir, ".spark", "thread.json"), "utf8");
+    assert.doesNotMatch(existingThreadJson, /Plan existing project/);
+    assert.doesNotMatch(existingThreadJson, /Analyze project intent/);
+    assert.doesNotMatch(existingThreadJson, /Plan targeted clarification/);
+    assert.doesNotMatch(existingThreadJson, /Review initial direction/);
 
     await writeEmptySparkThread(initializedDir);
     const initializedCtx = testSparkContext(initializedDir, "main");
@@ -139,6 +146,25 @@ void test("/spark command detects empty, existing, and initialized project modes
     await rm(emptyDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
     await rm(existingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
     await rm(initializedDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("bare /spark in an existing project requires a concrete planning focus", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-command-existing-no-focus-"));
+  try {
+    await writeFile(join(dir, "README.md"), "# Existing project\n", "utf8");
+    const ctx = testSparkContext(dir, "main");
+    const run = registerSparkToolsForTest();
+    const command = run.commands.get("spark");
+    assert.ok(command, "missing /spark command");
+
+    await command.handler("", ctx);
+
+    assert.equal(existsSync(join(dir, ".spark", "thread.json")), false);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /needs a concrete focus/);
+    assert.equal(run.messages.length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
 

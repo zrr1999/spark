@@ -1682,12 +1682,14 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   async function inferExistingProjectSparkIdea(
     ctx: SparkCommandContext,
   ): Promise<string | undefined> {
-    const fallback = `Plan existing project in ${basename(ctx.cwd)}`;
-    const idea = await ctx.ui?.input?.(
-      "What should Spark plan for this existing project?",
-      fallback,
+    const idea = await ctx.ui?.input?.("What should Spark plan for this existing project?", "");
+    const trimmed = idea?.trim();
+    if (trimmed) return trimmed;
+    ctx.ui?.notify?.(
+      "Spark planning needs a concrete focus for this existing project. You can also run /spark <focus> or /plan <focus>.",
+      "warning",
     );
-    return idea?.trim() || fallback;
+    return undefined;
   }
 
   async function promptSparkNewProjectIdea(ctx: SparkCommandContext): Promise<string | undefined> {
@@ -4910,32 +4912,9 @@ function createInitialSparkTasks(
     return;
   }
 
-  const scout = graph.createTask({
-    threadRef,
-    title: "Analyze project intent",
-    description:
-      "Inspect the request and workspace context first, then identify only targeted clarification questions; do not start with a broad intake form.",
-    kind: "research",
-    roleRef: builtinRoleRef("scout"),
-  });
-  const planner = graph.createTask({
-    threadRef,
-    title: "Plan targeted clarification",
-    description:
-      "Turn the analysis into a small task graph and targeted asks with explicit role bindings and no guessed scope.",
-    kind: "plan",
-    roleRef: builtinRoleRef("planner"),
-  });
-  const reviewer = graph.createTask({
-    threadRef,
-    title: "Review initial direction",
-    description:
-      "Verify that the task graph follows the analyzed intent, asks only targeted questions after analysis, and avoids premature implementation.",
-    kind: "review",
-    roleRef: builtinRoleRef("reviewer"),
-  });
-  graph.addDependency(planner.ref, scout.ref);
-  graph.addDependency(reviewer.ref, planner.ref);
+  // No scoped clarification means Spark has not learned enough to create real tasks yet.
+  // Leave the thread task-free; planning mode will inspect the workspace and call
+  // spark_plan_tasks with concrete, plan-bound tasks instead of canned scaffolding.
 }
 
 function hasScopedClarification(
