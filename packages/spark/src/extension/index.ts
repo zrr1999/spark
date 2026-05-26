@@ -72,6 +72,13 @@ import {
   type TaskTodoOp,
   type TaskTodoSummary,
 } from "spark-tasks";
+import {
+  applyRoadmapHintsToTaskPlanInput,
+  attachRoadmapPlanningRefs,
+  renderRoadmapPlanningContext,
+  roadmapPlanningContext,
+  type RoadmapPlanningContext,
+} from "../flows/roadmap-flow.ts";
 import { decideTaskPlanBeforeCreate } from "../flows/task-plan-flow.ts";
 import { clarifyThreadIntentIfNeeded } from "../flows/thread-intent-flow.ts";
 import {
@@ -1720,9 +1727,13 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     await clearSparkExecutionMode(ctx.cwd, ctx);
     await refreshSparkWidget(ctx.cwd, ctx);
     ctx.ui?.notify?.("Spark planning mode: research, clarify, and add threads/tasks.", "info");
-    piApi.sendUserMessage?.(renderSparkPlanningModePrompt(graph, thread?.ref, focus), {
-      deliverAs: "followUp",
-    });
+    const roadmapContext = await roadmapPlanningContext(ctx.cwd, focus);
+    piApi.sendUserMessage?.(
+      renderSparkPlanningModePrompt(graph, thread?.ref, focus, roadmapContext),
+      {
+        deliverAs: "followUp",
+      },
+    );
   }
 
   async function enterSparkExecutionMode(
@@ -2592,17 +2603,23 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           content: [{ type: "text", text: "Task plan is required." }],
           details: { found: true, error: "missing_tasks" },
         };
-      const tasks: TaskPlanInput[] = p.tasks.map((task) => ({
-        name: task.name,
-        title: task.title,
-        description: task.description,
-        kind: normalizeTaskKind(task.kind) ?? "generic",
-        status: normalizeTaskStatus(task.status) ?? (task.roleRef ? "pending" : "proposed"),
-        roleRef: task.roleRef?.trim() ? registry.select(task.roleRef.trim()).ref : undefined,
-        plan: normalizeToolTaskPlan(task.plan, task.description, task.title),
-        dependsOn: task.dependsOn,
-        rationale: task.rationale,
-      }));
+      const roadmapContext = await roadmapPlanningContext(cwd);
+      const tasks: TaskPlanInput[] = p.tasks.map((task) =>
+        applyRoadmapHintsToTaskPlanInput(
+          {
+            name: task.name,
+            title: task.title,
+            description: task.description,
+            kind: normalizeTaskKind(task.kind) ?? "generic",
+            status: normalizeTaskStatus(task.status) ?? (task.roleRef ? "pending" : "proposed"),
+            roleRef: task.roleRef?.trim() ? registry.select(task.roleRef.trim()).ref : undefined,
+            plan: normalizeToolTaskPlan(task.plan, task.description, task.title),
+            dependsOn: task.dependsOn,
+            rationale: task.rationale,
+          },
+          roadmapContext?.item,
+        ),
+      );
       const result = graph.planTasks(thread.ref, tasks);
       const changedForDecision = [...result.created, ...result.updated];
       const planDecisions = [] as Array<Awaited<ReturnType<typeof decideTaskPlanBeforeCreate>>>;
@@ -2628,6 +2645,13 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       }
       await store.save(graph);
       await sparkTodoStore(cwd, ctx).save(graph);
+      const changedRefs = [...result.created, ...result.updated].map((task) => task.ref);
+      const updatedRoadmapItem = await attachRoadmapPlanningRefs(
+        cwd,
+        roadmapContext?.item.ref,
+        thread.ref,
+        changedRefs,
+      );
       await refreshSparkWidget(cwd, ctx);
       const changed = [
         ...result.created.map((task) => ({ action: "created" as const, task })),
@@ -2642,9 +2666,14 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         ),
       ];
       if (hiddenChanged > 0) lines.push(`- … ${hiddenChanged} more changed task(s)`);
+      if (updatedRoadmapItem) lines.push(`- roadmap item updated: ${updatedRoadmapItem.ref}`);
       return {
         content: [{ type: "text", text: lines.join("\n") }],
-        details: { result: compactTaskPlanResult(result), planDecisions },
+        details: {
+          result: compactTaskPlanResult(result),
+          planDecisions,
+          roadmapItem: updatedRoadmapItem as unknown as Record<string, unknown> | undefined,
+        },
       };
     },
   });
@@ -5042,10 +5071,12 @@ function renderSparkPlanningModePrompt(
   graph: TaskGraph,
   selectedThreadRef: ThreadRef | undefined,
   focus: string | undefined,
+  roadmapContext: RoadmapPlanningContext | undefined,
 ): string {
   const summary = renderExistingSparkSummary(graph, selectedThreadRef);
   const focusLine = focus?.trim() ? `\n\nPlanning focus: ${focus.trim()}` : "";
-  return `${summary}${focusLine}\n\nEnter Spark planning mode. Research and clarify the project context, then use spark_use_thread and spark_plan_tasks to add or refine concrete plan-bound tasks. Do not execute tasks yet unless the user explicitly asks to switch to execution.`;
+  const roadmapLine = renderRoadmapPlanningContext(roadmapContext);
+  return `${summary}${focusLine}${roadmapLine}\n\nEnter Spark planning mode. Research and clarify the project context, then use spark_use_thread and spark_plan_tasks to add or refine concrete plan-bound tasks. Do not execute tasks yet unless the user explicitly asks to switch to execution.`;
 }
 
 function renderSparkExecutionModePrompt(

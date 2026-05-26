@@ -242,6 +242,107 @@ void test("/plan and /execute enter Spark modes directly", async () => {
   }
 });
 
+void test("/plan includes active roadmap item context and matches focus to an existing item", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-plan-roadmap-context-"));
+  try {
+    await writeEmptySparkThread(dir);
+    await writeRoadmap(dir, {
+      activeItemRef: "roadmap-item:other",
+      items: [
+        {
+          ref: "roadmap-item:other",
+          title: "Other roadmap item",
+          objective: "Keep an unrelated active item available.",
+          status: "active",
+        },
+        {
+          ref: "roadmap-item:planning",
+          title: "Roadmap assisted planning",
+          objective: "Use roadmap item intent while planning tasks.",
+          scope: "Only planning-mode task organization.",
+          successCriteria: ["Planning prompt includes roadmap context."],
+          evidenceRequired: ["Roadmap item refs are visible to planning."],
+        },
+      ],
+    });
+    const ctx = testSparkContext(dir, "main");
+    const run = registerSparkToolsForTest();
+    const planCommand = run.commands.get("plan");
+    assert.ok(planCommand, "missing /plan command");
+
+    await planCommand.handler("Roadmap assisted planning", ctx);
+
+    const message = run.messages.at(-1) ?? "";
+    assert.match(message, /Roadmap planning context:/);
+    assert.match(message, /Roadmap assisted planning/);
+    assert.match(message, /Use roadmap item intent while planning tasks/);
+    assert.match(message, /Only planning-mode task organization/);
+    assert.match(message, /Roadmap item refs are visible to planning/);
+    const roadmap = JSON.parse(await readFile(join(dir, ".spark", "roadmap.json"), "utf8")) as {
+      activeItemRef?: string;
+      roadmaps: Array<{ activeItemRef?: string }>;
+    };
+    assert.equal(roadmap.activeItemRef, "roadmap-item:planning");
+    assert.equal(roadmap.roadmaps[0]?.activeItemRef, "roadmap-item:planning");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark_plan_tasks maps active roadmap item hints into task plans and attaches refs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-plan-roadmap-hints-"));
+  try {
+    await writeEmptySparkThread(dir);
+    await writeRoadmap(dir, {
+      activeItemRef: "roadmap-item:planning",
+      items: [
+        {
+          ref: "roadmap-item:planning",
+          title: "Roadmap assisted planning",
+          objective: "Organize roadmap-backed Spark planning tasks.",
+          scope: "Do not add dashboard or scheduling features.",
+          successCriteria: ["Created tasks use roadmap success criteria."],
+          evidenceRequired: ["Task refs are attached to the roadmap item."],
+          status: "active",
+        },
+      ],
+    });
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+    await useOnlySparkThread(tools, ctx);
+
+    const planned = await executeSparkTool(tools, "spark_plan_tasks", ctx, {
+      tasks: [
+        {
+          name: "roadmap-backed-task",
+          title: "Create roadmap-backed task",
+          description: "Exercise roadmap-assisted planning hints.",
+          kind: "implement",
+        },
+      ],
+    });
+
+    assert.match(toolText(planned), /Planned tasks: created=1 updated=0/);
+    assert.match(toolText(planned), /roadmap item updated: roadmap-item:planning/);
+    const graph = await defaultTaskGraphStore(dir).load();
+    const task = graph?.tasks()[0];
+    assert.ok(task);
+    assert.match(task.plan?.contextRefs.join("\n") ?? "", /Roadmap objective:/);
+    assert.match(task.plan?.constraints.join("\n") ?? "", /Do not add dashboard/);
+    assert.deepEqual(task.plan?.successCriteria, ["Created tasks use roadmap success criteria."]);
+    assert.deepEqual(task.plan?.evidenceRequired, ["Task refs are attached to the roadmap item."]);
+
+    const roadmap = JSON.parse(await readFile(join(dir, ".spark", "roadmap.json"), "utf8")) as {
+      roadmaps: Array<{ items: Array<{ threadRefs?: string[]; taskRefs?: string[] }> }>;
+    };
+    const item = roadmap.roadmaps[0]?.items[0];
+    assert.ok(item?.threadRefs?.includes(task.threadRef));
+    assert.ok(item?.taskRefs?.includes(task.ref));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("/execute keeps execution mode active and auto-claims the next ready task", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-execute-continuous-"));
   try {
@@ -1412,6 +1513,46 @@ async function writeEmptySparkThread(cwd: string): Promise<void> {
   const graph = new TaskGraph();
   graph.createThread({ title: "Tool persistence", description: "Test Spark tool persistence." });
   await defaultTaskGraphStore(cwd).save(graph);
+}
+
+async function writeRoadmap(
+  cwd: string,
+  input: {
+    activeItemRef?: string;
+    items: Array<{
+      ref: string;
+      title?: string;
+      objective: string;
+      scope?: string;
+      status?: string;
+      successCriteria?: string[];
+      evidenceRequired?: string[];
+    }>;
+  },
+): Promise<void> {
+  await mkdir(join(cwd, ".spark"), { recursive: true });
+  await writeFile(
+    join(cwd, ".spark", "roadmap.json"),
+    `${JSON.stringify(
+      {
+        version: 1,
+        activeRoadmapRef: "roadmap:main",
+        activeItemRef: input.activeItemRef,
+        roadmaps: [
+          {
+            ref: "roadmap:main",
+            title: "Project roadmap",
+            status: "active",
+            activeItemRef: input.activeItemRef,
+            items: input.items,
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
 }
 
 function registerSparkToolsForTest(): {
