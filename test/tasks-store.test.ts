@@ -1341,6 +1341,97 @@ void test("Spark DAG run store persists manager lifecycle and task progress", as
   }
 });
 
+void test("Spark DAG run store ignores late progress after terminal finish", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-late-progress-"));
+  try {
+    const store = defaultSparkDagRunStore(dir);
+    const threadRef = newRef("thread");
+    const firstTaskRef = newRef("task");
+    const lateTaskRef = newRef("task");
+    const firstRunRef = newRef("run");
+    const lateRunRef = newRef("run");
+    const dagRun = await store.startRun({
+      threadRef,
+      dryRun: false,
+      maxConcurrency: 2,
+      timeoutMs: 10,
+    });
+    await store.recordSchedule(dagRun.ref, {
+      taskRef: firstTaskRef,
+      runRef: firstRunRef,
+      scheduled: 1,
+    });
+    const followUp = await store.finishRun(dagRun.ref, {
+      scheduled: 1,
+      completed: 0,
+      timedOut: true,
+    });
+
+    await store.recordProgress(dagRun.ref, {
+      taskRef: lateTaskRef,
+      completed: 2,
+      run: {
+        ref: lateRunRef,
+        threadRef,
+        taskRef: lateTaskRef,
+        status: "succeeded",
+        outputArtifacts: [],
+      },
+    });
+
+    const snapshot = await store.load();
+    const record = snapshot.runs.find((run) => run.ref === dagRun.ref);
+    assert.ok(record);
+    assert.equal(record.status, "timed_out");
+    assert.equal(record.scheduled, 1);
+    assert.equal(record.completed, 0);
+    assert.deepEqual(record.scheduledTaskRefs, [firstTaskRef]);
+    assert.deepEqual(record.completedTaskRefs, []);
+    assert.deepEqual(record.taskRunRefs, [firstRunRef]);
+    assert.deepEqual(record.completionFollowUp, followUp);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark DAG run store derives counters from unique scheduled and completed refs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-counter-invariants-"));
+  try {
+    const store = defaultSparkDagRunStore(dir);
+    const threadRef = newRef("thread");
+    const taskRef = newRef("task");
+    const runRef = newRef("run");
+    const dagRun = await store.startRun({
+      threadRef,
+      dryRun: false,
+      maxConcurrency: 2,
+      timeoutMs: 100,
+    });
+
+    await Promise.all([
+      store.recordSchedule(dagRun.ref, { taskRef, runRef, scheduled: 1 }),
+      store.recordSchedule(dagRun.ref, { taskRef, runRef, scheduled: 99 }),
+      store.recordProgress(dagRun.ref, {
+        taskRef,
+        completed: 99,
+        run: { ref: runRef, threadRef, taskRef, status: "succeeded", outputArtifacts: [] },
+      }),
+    ]);
+    await store.finishRun(dagRun.ref, { scheduled: 99, completed: 99, timedOut: false });
+
+    const snapshot = await store.load();
+    const record = snapshot.runs.find((run) => run.ref === dagRun.ref);
+    assert.ok(record);
+    assert.equal(record.scheduled, 1);
+    assert.equal(record.completed, 1);
+    assert.deepEqual(record.scheduledTaskRefs, [taskRef]);
+    assert.deepEqual(record.completedTaskRefs, [taskRef]);
+    assert.deepEqual(record.taskRunRefs, [runRef]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("Spark DAG run store marks finished manager runs failed when child runs fail", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-child-failed-"));
   try {
@@ -1516,6 +1607,38 @@ void test("runReadySparkTasks assigns default roles and schedules DAG waves with
     await killActiveSparkRoleRunProcesses();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+void test("runReadySparkTasks limits ready frontier to the requested thread", async () => {
+  const graph = new TaskGraph();
+  const selected = graph.createThread({ title: "Selected", description: "selected" });
+  const other = graph.createThread({ title: "Other", description: "other" });
+  const selectedTask = graph.createTask({
+    threadRef: selected.ref,
+    title: "Selected ready task",
+    description: "selected",
+    status: "pending",
+    plan: executionReadyPlan("Selected ready task"),
+  });
+  const otherTask = graph.createTask({
+    threadRef: other.ref,
+    title: "Other ready task",
+    description: "other",
+    status: "pending",
+    plan: executionReadyPlan("Other ready task"),
+  });
+
+  const result = await runReadySparkTasks({
+    graph,
+    registry: new RoleRegistry(),
+    dryRun: true,
+    threadRef: selected.ref,
+  });
+
+  assert.equal(result.scheduled, 1);
+  assert.equal(result.runs.length, 1);
+  assert.equal(result.runs[0]?.taskRef, selectedTask.ref);
+  assert.equal(graph.getTask(otherTask.ref).status, "pending");
 });
 
 void test("runReadySparkTasks reports failed child runs in aggregate result", async () => {

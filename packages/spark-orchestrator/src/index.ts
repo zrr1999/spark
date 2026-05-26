@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import type { RoleRegistry, RoleRunMode } from "pi-roles";
@@ -102,9 +102,11 @@ export interface SparkDagRunProgressInput {
 
 export class SparkDagRunStore {
   readonly filePath: string;
+  readonly lockPath: string;
 
   constructor(filePath: string) {
     this.filePath = filePath;
+    this.lockPath = `${filePath}.lock`;
   }
 
   async status(options: SparkDagStatusQueryOptions = {}): Promise<SparkDagStatusSummary> {
@@ -177,52 +179,59 @@ export class SparkDagRunStore {
   }
 
   async startRun(input: SparkDagRunStartInput): Promise<SparkDagRunRecord> {
-    const snapshot = await this.load();
-    const now = nowIso();
-    const record: SparkDagRunRecord = {
-      ref: newRef("run"),
-      threadRef: input.threadRef,
-      ownerSessionId: input.ownerSessionId,
-      dryRun: input.dryRun,
-      maxConcurrency: input.maxConcurrency,
-      timeoutMs: input.timeoutMs,
-      status: "running",
-      startedAt: now,
-      updatedAt: now,
-      scheduled: 0,
-      completed: 0,
-      timedOut: false,
-      scheduledTaskRefs: [],
-      completedTaskRefs: [],
-      taskRunRefs: [],
-    };
-    snapshot.manager = {
-      status: "running",
-      activeRunRef: record.ref,
-      lastRunRef: record.ref,
-      updatedAt: now,
-    };
-    snapshot.runs = [...snapshot.runs, record];
-    await this.save(snapshot);
-    return record;
+    let created: SparkDagRunRecord | undefined;
+    await this.updateSnapshot((snapshot) => {
+      const now = nowIso();
+      const record: SparkDagRunRecord = {
+        ref: newRef("run"),
+        threadRef: input.threadRef,
+        ownerSessionId: input.ownerSessionId,
+        dryRun: input.dryRun,
+        maxConcurrency: input.maxConcurrency,
+        timeoutMs: input.timeoutMs,
+        status: "running",
+        startedAt: now,
+        updatedAt: now,
+        scheduled: 0,
+        completed: 0,
+        timedOut: false,
+        scheduledTaskRefs: [],
+        completedTaskRefs: [],
+        taskRunRefs: [],
+      };
+      snapshot.manager = {
+        status: "running",
+        activeRunRef: record.ref,
+        lastRunRef: record.ref,
+        updatedAt: now,
+      };
+      snapshot.runs = [...snapshot.runs, record];
+      created = record;
+    });
+    if (!created) throw new Error("failed to start Spark DAG run");
+    return created;
   }
 
   async recordSchedule(runRef: RunRef, input: SparkDagRunScheduleInput): Promise<void> {
     await this.updateRun(runRef, (record) => {
-      record.scheduled = input.scheduled;
+      if (isTerminalDagRunStatus(record.status)) return false;
       if (!record.scheduledTaskRefs.includes(input.taskRef))
         record.scheduledTaskRefs.push(input.taskRef);
       if (input.runRef && !record.taskRunRefs.includes(input.runRef))
         record.taskRunRefs.push(input.runRef);
+      reconcileDagRunCounters(record, { scheduledFallback: input.scheduled });
+      return true;
     });
   }
 
   async recordProgress(runRef: RunRef, input: SparkDagRunProgressInput): Promise<void> {
     await this.updateRun(runRef, (record) => {
-      record.completed = input.completed;
+      if (isTerminalDagRunStatus(record.status)) return false;
       if (!record.completedTaskRefs.includes(input.taskRef))
         record.completedTaskRefs.push(input.taskRef);
       if (!record.taskRunRefs.includes(input.run.ref)) record.taskRunRefs.push(input.run.ref);
+      reconcileDagRunCounters(record, { completedFallback: input.completed });
+      return true;
     });
   }
 
@@ -240,8 +249,10 @@ export class SparkDagRunStore {
       const failedChildren = result.failed ?? 0;
       const cancelledChildren = result.cancelled ?? 0;
       const hasFailedChildren = failedChildren > 0 || cancelledChildren > 0;
-      record.scheduled = result.scheduled;
-      record.completed = result.completed;
+      if (isTerminalDagRunStatus(record.status)) {
+        followUp = record.completionFollowUp;
+        return;
+      }
       record.timedOut = result.timedOut;
       record.status = error
         ? "failed"
@@ -250,6 +261,10 @@ export class SparkDagRunStore {
           : hasFailedChildren
             ? "failed"
             : "succeeded";
+      reconcileDagRunCounters(record, {
+        scheduledFallback: result.scheduled,
+        completedFallback: result.completed,
+      });
       record.errorMessage =
         error instanceof Error
           ? error.message
@@ -275,12 +290,13 @@ export class SparkDagRunStore {
 
   private async updateRun(
     runRef: RunRef,
-    update: (record: SparkDagRunRecord) => void,
+    update: (record: SparkDagRunRecord) => boolean | void,
   ): Promise<void> {
     await this.updateSnapshot((snapshot) => {
       const record = snapshot.runs.find((candidate) => candidate.ref === runRef);
       if (!record) return;
-      update(record);
+      const changed = update(record);
+      if (changed === false) return;
       record.updatedAt = nowIso();
     });
   }
@@ -288,9 +304,85 @@ export class SparkDagRunStore {
   private async updateSnapshot(
     update: (snapshot: SparkDagRunStoreSnapshot) => void,
   ): Promise<void> {
-    const snapshot = await this.load();
-    update(snapshot);
-    await this.save(snapshot);
+    await this.withLock(async () => {
+      const snapshot = await this.load();
+      update(snapshot);
+      for (const record of snapshot.runs) reconcileDagRunCounters(record);
+      await this.save(snapshot);
+    });
+  }
+
+  private async withLock<T>(fn: () => T | Promise<T>): Promise<T> {
+    const release = await acquireSparkDagRunStoreLock(this.lockPath);
+    try {
+      return await fn();
+    } finally {
+      await release();
+    }
+  }
+}
+
+function isTerminalDagRunStatus(status: SparkDagRunStatus): boolean {
+  return (
+    status === "succeeded" || status === "failed" || status === "timed_out" || status === "stale"
+  );
+}
+
+function reconcileDagRunCounters(
+  record: SparkDagRunRecord,
+  fallbacks: { scheduledFallback?: number; completedFallback?: number } = {},
+): void {
+  record.scheduledTaskRefs = uniqueRefs(record.scheduledTaskRefs);
+  record.completedTaskRefs = uniqueRefs(record.completedTaskRefs);
+  record.taskRunRefs = uniqueRefs(record.taskRunRefs);
+  const scheduledSet = new Set(record.scheduledTaskRefs);
+  if (scheduledSet.size > 0) {
+    record.completedTaskRefs = record.completedTaskRefs.filter((taskRef) =>
+      scheduledSet.has(taskRef),
+    );
+    record.scheduled = scheduledSet.size;
+    record.completed = record.completedTaskRefs.length;
+    return;
+  }
+  record.scheduled = Math.max(0, record.scheduled, fallbacks.scheduledFallback ?? 0);
+  record.completed = Math.min(
+    record.scheduled,
+    Math.max(0, record.completed, fallbacks.completedFallback ?? 0),
+  );
+}
+
+function uniqueRefs<T extends string>(refs: T[]): T[] {
+  return [...new Set(refs)];
+}
+
+async function acquireSparkDagRunStoreLock(lockPath: string): Promise<() => Promise<void>> {
+  const timeoutMs = 10_000;
+  const retryIntervalMs = 25;
+  const staleMs = 60_000;
+  const started = Date.now();
+  await mkdir(dirname(lockPath), { recursive: true });
+  while (true) {
+    try {
+      await mkdir(lockPath, { recursive: false });
+      return async () => {
+        await rm(lockPath, { recursive: true, force: true });
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      await removeStaleSparkDagRunStoreLock(lockPath, staleMs);
+      if (Date.now() - started >= timeoutMs)
+        throw new Error(`timed out waiting for Spark DAG run store lock: ${lockPath}`);
+      await sleep(retryIntervalMs);
+    }
+  }
+}
+
+async function removeStaleSparkDagRunStoreLock(lockPath: string, staleMs: number): Promise<void> {
+  try {
+    const info = await stat(lockPath);
+    if (Date.now() - info.mtimeMs >= staleMs) await rm(lockPath, { recursive: true, force: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }
 
@@ -348,7 +440,7 @@ function normalizeSparkDagRunSnapshot(
 
 function normalizeSparkDagRunRecord(raw: Partial<SparkDagRunRecord>): SparkDagRunRecord {
   const now = nowIso();
-  return {
+  const record: SparkDagRunRecord = {
     ref: raw.ref ?? newRef("run"),
     threadRef: raw.threadRef,
     ownerSessionId: raw.ownerSessionId,
@@ -380,6 +472,8 @@ function normalizeSparkDagRunRecord(raw: Partial<SparkDagRunRecord>): SparkDagRu
         }
       : undefined,
   };
+  reconcileDagRunCounters(record);
+  return record;
 }
 
 function reconcileStaleDagRun(
@@ -392,10 +486,15 @@ function reconcileStaleDagRun(
     : [];
   const runningRuns = taskRuns.filter((run) => run.status === "queued" || run.status === "running");
   if (runningRuns.length > 0) return;
-  record.completed = Math.max(
-    record.completed,
-    taskRuns.filter((run) => run.status !== "queued" && run.status !== "running").length,
-  );
+  for (const run of taskRuns.filter(
+    (candidate) => candidate.status !== "queued" && candidate.status !== "running",
+  )) {
+    if (!record.completedTaskRefs.includes(run.taskRef)) record.completedTaskRefs.push(run.taskRef);
+  }
+  reconcileDagRunCounters(record, {
+    completedFallback: taskRuns.filter((run) => run.status !== "queued" && run.status !== "running")
+      .length,
+  });
   if (taskRuns.some((run) => run.status === "failed")) record.status = "failed";
   else if (taskRuns.length > 0 && taskRuns.every((run) => run.status === "succeeded"))
     record.status = "succeeded";

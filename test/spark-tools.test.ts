@@ -1110,6 +1110,19 @@ void test("spark_run_ready_tasks emits DAG completion follow-up when manager fin
     assert.ok(graph);
     const [thread] = graph.threads();
     assert.ok(thread);
+    const otherThread = graph.createThread({
+      title: "Other DAG thread",
+      description: "Must not be scheduled by current-thread DAG execution.",
+    });
+    const otherTask = graph.createTask({
+      threadRef: otherThread.ref,
+      name: "other-ready-role",
+      title: "Other ready role task",
+      description: "This task is ready but belongs to another thread.",
+      kind: "implement",
+      status: "pending",
+      plan: executionReadyPlan("Other ready role task"),
+    });
     graph.createTask({
       threadRef: thread.ref,
       name: "ready-role",
@@ -1130,12 +1143,16 @@ void test("spark_run_ready_tasks emits DAG completion follow-up when manager fin
     process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
 
     const { tools, messages } = registerSparkToolsForTest();
+    await useOnlySparkThread(tools, ctx);
     await executeSparkTool(tools, "spark_run_ready_tasks", ctx, { dryRun: false });
     await waitFor(() => messages.some((message) => message.includes("Spark DAG run:")), 10_000);
     await waitFor(() => !ctx.notifications.at(-1)?.message.includes("running"), 10_000);
 
     const dagStatus = await defaultSparkDagRunStore(dir).status();
     assert.equal(dagStatus.succeeded, 1);
+    assert.equal(dagStatus.lastRun?.threadRef, thread.ref);
+    const reloadedGraph = await defaultTaskGraphStore(dir).load();
+    assert.equal(reloadedGraph?.getTask(otherTask.ref).status, "pending");
     assert.match(messages.join("\n"), /Spark DAG run:/);
     assert.match(messages.join("\n"), /scheduled 1, completed 1/);
     assert.equal(ctx.notifications.at(-1)?.level, "info");
@@ -1171,6 +1188,7 @@ void test("spark_run_ready_tasks marks DAG manager failed when child role-run fa
     process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
 
     const { tools, messages } = registerSparkToolsForTest();
+    await useOnlySparkThread(tools, ctx);
     await executeSparkTool(tools, "spark_run_ready_tasks", ctx, { dryRun: false });
     await waitFor(() => messages.some((message) => message.includes("Spark DAG run:")), 3_000);
     await waitFor(() => !ctx.notifications.at(-1)?.message.includes("running"), 3_000);

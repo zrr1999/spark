@@ -598,7 +598,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     const artifactStore = defaultArtifactStore(cwd);
     const touched = new Set<TaskRef>();
     const dagRunStore = defaultSparkDagRunStore(cwd);
-    const readyBeforeReconcile = graph.readyTasks();
+    const currentThread = await currentSparkThread(cwd, ctx, graph);
+    const readyBeforeReconcile = currentThread ? graph.readyTasks(currentThread.ref) : [];
     if (readyBeforeReconcile.length === 0) {
       const dagStatus = await dagRunStore.status();
       if (!dagStatus.activeRun) return 0;
@@ -607,9 +608,11 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       graph,
       activeRunRefs: listActiveSparkRoleRunProcesses().map((process) => process.runRef),
     });
-    if (graph.readyTasks().length === 0) return 0;
+    if (!currentThread) return 0;
+    if (graph.readyTasks(currentThread.ref).length === 0) return 0;
     const ownerSessionId = sparkSessionOwnerKey(ctx);
     const dagRun = await dagRunStore.startRun({
+      threadRef: currentThread.ref,
       dryRun: false,
       maxConcurrency: DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
       timeoutMs: DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
@@ -625,6 +628,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         dryRun: false,
         maxConcurrency: DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
         timeoutMs: DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
+        threadRef: currentThread.ref,
         claim: { sessionId: ownerSessionId },
         onSchedule: async (progress) => {
           touched.add(progress.taskRef);
@@ -2681,6 +2685,17 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         await store.save(graph);
         await sparkTodoStore(cwd, ctx).save(graph);
       }
+      const thread = await currentSparkThread(cwd, ctx, graph);
+      if (!thread)
+        return {
+          content: [
+            {
+              type: "text",
+              text: "No current Spark thread selected. Use spark_use_thread before running ready tasks.",
+            },
+          ],
+          details: { found: false, error: "no_current_thread" },
+        };
       const dryRun = params.dryRun !== false;
       if (!dryRun) {
         ensureSparkDagManager(cwd, ctx);
@@ -2688,10 +2703,10 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           content: [
             {
               type: "text",
-              text: "Started Spark DAG manager. Ready tasks will be scheduled and persisted in the background.",
+              text: `Started Spark DAG manager for current thread “${thread.title}”. Ready tasks in this thread will be scheduled and persisted in the background.`,
             },
           ],
-          details: { manager: "started", dryRun: false },
+          details: { manager: "started", dryRun: false, threadRef: thread.ref },
         };
       }
 
@@ -2703,6 +2718,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         registry,
         artifactStore,
         cwd,
+        threadRef: thread.ref,
         dryRun: true,
         maxConcurrency:
           typeof params.maxConcurrency === "number"
