@@ -55,9 +55,16 @@ export interface SparkDagWidgetEntry {
   active?: boolean;
 }
 
+export interface SparkRunWidgetEntry {
+  status: "running" | "paused" | "blocked" | "done" | "failed" | "cancelled";
+  runRef: string;
+  focus?: string;
+}
+
 export interface SparkWidgetState {
   threadTitle?: string;
   dag?: SparkDagWidgetEntry;
+  run?: SparkRunWidgetEntry;
   tasks: TaskEntry[];
   independentTodos: SessionTodoEntry[];
   taskCountTotal: number;
@@ -144,6 +151,7 @@ function hasWidgetContent(state: SparkWidgetState | undefined): state is SparkWi
     state &&
     (state.threadTitle ||
       state.dag ||
+      state.run ||
       state.tasks.length > 0 ||
       state.independentTodos.some(isVisibleIndependentTodo)),
   );
@@ -167,7 +175,13 @@ export function renderSparkWidgetLines(
   theme: SparkWidgetTheme,
 ): string[] {
   const visibleTodos = state.independentTodos.filter(isVisibleIndependentTodo);
-  if (!state.threadTitle && !state.dag && state.tasks.length === 0 && visibleTodos.length === 0)
+  if (
+    !state.threadTitle &&
+    !state.dag &&
+    !state.run &&
+    state.tasks.length === 0 &&
+    visibleTodos.length === 0
+  )
     return [];
 
   const l = L[state.outputLanguage] ?? L.en;
@@ -180,6 +194,7 @@ export function renderSparkWidgetLines(
   const summaryLine = formatTaskSummaryLine(state, visibleTasks, l.tasks, theme);
   if (summaryLine) lines.push(trunc(summaryLine));
   if (state.dag) lines.push(trunc(formatDagLine(state.dag, theme)));
+  if (state.run) lines.push(trunc(formatRunLine(state.run, theme)));
 
   if (state.threadTitle) {
     lines.push(trunc(`${theme.fg("accent", "◆")} ${theme.bold(state.threadTitle)}`));
@@ -219,6 +234,11 @@ function formatDagStatusLabel(status: SparkDagWidgetEntry["status"]): string {
   if (status === "succeeded") return "done";
   if (status === "timed_out") return "timed out";
   return status;
+}
+
+function formatRunLine(run: SparkRunWidgetEntry, theme: SparkWidgetTheme): string {
+  const focus = run.focus ? ` · focus: ${run.focus}` : "";
+  return `${theme.fg("accent", "◆")} ${theme.fg("dim", `Spark run ${run.status}: ${shortDagRunRef(run.runRef)}${focus}`)}`;
 }
 
 function shortDagRunRef(runRef: string): string {

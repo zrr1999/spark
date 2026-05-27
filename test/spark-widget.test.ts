@@ -165,6 +165,31 @@ void test("spark widget shows compact DAG progress above thread details", () => 
   );
 });
 
+void test("spark widget shows run mode state separately from DAG progress", () => {
+  const lines = renderSparkWidgetLines(
+    widgetState({
+      run: {
+        status: "running",
+        runRef: "run:6a2e8150-1234-4cde-9abc-000000000000",
+        focus: "Finish the queue",
+      },
+      dag: {
+        status: "failed",
+        runRef: "run:9fb95fb0-f08c-41a5-b4a3-bd4e4622034b",
+        scheduled: 13,
+        completed: 13,
+      },
+    }),
+    { terminal: { columns: 120 }, requestRender() {} },
+    theme,
+  );
+
+  assert.match(
+    lines.join("\n"),
+    /◆ Spark DAG failed: 13\/13 tasks · run:9fb95fb0\n◆ Spark run running: run:6a2e8150 · focus: Finish the queue\n◆ Spark UX redesign/,
+  );
+});
+
 void test("spark widget renders completed DAG state in plain language", () => {
   const lines = renderSparkWidgetLines(
     widgetState({

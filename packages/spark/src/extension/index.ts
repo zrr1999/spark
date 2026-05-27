@@ -42,6 +42,7 @@ import {
   type SparkRunTrace,
   type Task,
   type TaskPlan,
+  type RunRef,
   type TaskRun,
   type TaskStatus,
   type TaskRef,
@@ -365,7 +366,7 @@ interface SparkCommandProjectState {
   unfinishedTaskCount: number;
 }
 
-type SparkEntryMode = "planning" | "execution";
+type SparkEntryMode = "planning" | "execution" | "run";
 type SparkPlanningModeSource = "auto" | "direct";
 type SparkEntryModeChoice = SparkEntryMode | "new_project";
 type SparkEntryConfidence = "high" | "ambiguous" | "conflicting";
@@ -387,6 +388,24 @@ interface SparkExecutionModeState {
   threadRef: ThreadRef;
   focus?: string;
   enteredAt: string;
+}
+
+type SparkRunModeStatus = "running" | "paused" | "blocked" | "done" | "failed" | "cancelled";
+
+interface SparkRunModeState {
+  version: 1;
+  runRef: RunRef;
+  threadRef: ThreadRef;
+  focus?: string;
+  status: SparkRunModeStatus;
+  policy: {
+    maxConcurrency: number;
+    timeoutMs: number;
+    stopOnAsk: true;
+    stopOnValidationFailure: true;
+  };
+  enteredAt: string;
+  updatedAt: string;
 }
 
 type SparkEntryIntent =
@@ -664,10 +683,12 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       displayNumber: assignTodoDisplayNumber(todoDisplayNumbers, independentTodoDisplayKey(todo)),
     }));
     const thread = await currentSparkThread(cwd, ctx, graph);
+    const currentState = await loadCurrentThreadState(cwd, ctx);
     if (!thread) {
       const dagStatus = await defaultSparkDagRunStore(cwd).status();
       widgetState = {
         dag: activeSparkDagWidgetEntry(dagStatus),
+        run: sparkRunWidgetEntry(currentState?.runMode),
         tasks: [],
         independentTodos: numberedIndependentTodos,
         taskCountTotal: 0,
@@ -694,6 +715,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     widgetState = {
       threadTitle: isPlaceholderThreadTitle(thread.title) ? undefined : thread.title,
       dag: sparkDagWidgetEntry(dagStatus, thread.ref),
+      run: sparkRunWidgetEntry(currentState?.runMode, thread.ref),
       tasks: allTasks.map((task) => ({
         title: task.title,
         status: mapTaskStatus(task.status),
@@ -866,7 +888,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       dagManagerTimers.delete(cwd);
       if (!(await hasLocalSparkDirectory(cwd))) return;
       const scheduled = await runSparkDagManagerOnce(cwd, ctx);
-      if (scheduled > 0) {
+      const runMode = await loadSparkRunMode(cwd, ctx);
+      if (scheduled > 0 && (!runMode || runMode.status === "running")) {
         const timer = setTimeout(() => void tick(), DAG_MANAGER_POLL_INTERVAL_MS);
         timer.unref?.();
         dagManagerTimers.set(cwd, timer);
@@ -887,23 +910,58 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     const touched = new Set<TaskRef>();
     const dagRunStore = defaultSparkDagRunStore(cwd);
     const currentThread = await currentSparkThread(cwd, ctx, graph);
+    const runMode = await loadSparkRunMode(cwd, ctx);
+    if (runMode && runMode.status !== "running") return 0;
     const readyBeforeReconcile = currentThread ? graph.readyTasks(currentThread.ref) : [];
     if (readyBeforeReconcile.length === 0) {
       const dagStatus = await dagRunStore.status();
-      if (!dagStatus.activeRun) return 0;
+      if (!dagStatus.activeRun) {
+        if (runMode && currentThread?.ref === runMode.threadRef)
+          await updateSparkRunModeStatus(
+            cwd,
+            ctx,
+            terminalSparkRunModeStatus(graph, runMode.threadRef),
+          );
+        return 0;
+      }
     }
     await dagRunStore.reconcile({
       graph,
       activeRunRefs: listActiveSparkRoleRunProcesses().map((process) => process.runRef),
     });
     if (!currentThread) return 0;
-    if (graph.readyTasks(currentThread.ref).length === 0) return 0;
+    const readyTasks = graph.readyTasks(currentThread.ref);
+    if (readyTasks.length === 0) {
+      if (runMode && currentThread.ref === runMode.threadRef)
+        await updateSparkRunModeStatus(
+          cwd,
+          ctx,
+          terminalSparkRunModeStatus(graph, runMode.threadRef),
+        );
+      return 0;
+    }
+    const bindingResult = await ensureRoleModelBindingsForThread({
+      graph,
+      threadRef: currentThread.ref,
+      registry,
+      cwd,
+      ctx,
+    });
+    if (!bindingResult.ready) {
+      if (runMode && currentThread.ref === runMode.threadRef)
+        await updateSparkRunModeStatus(cwd, ctx, "blocked");
+      ctx.ui?.notify?.(bindingResult.message, "warning");
+      return 0;
+    }
     const ownerSessionId = sparkSessionOwnerKey(ctx);
+    const maxConcurrency =
+      runMode?.policy.maxConcurrency ?? DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY;
+    const timeoutMs = runMode?.policy.timeoutMs ?? DEFAULT_SPARK_READY_TASK_TIMEOUT_MS;
     const dagRun = await dagRunStore.startRun({
       threadRef: currentThread.ref,
       dryRun: false,
-      maxConcurrency: DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
-      timeoutMs: DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
+      maxConcurrency,
+      timeoutMs,
       ownerSessionId,
     });
     let result;
@@ -914,8 +972,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         artifactStore,
         cwd,
         dryRun: false,
-        maxConcurrency: DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
-        timeoutMs: DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
+        maxConcurrency,
+        timeoutMs,
         threadRef: currentThread.ref,
         claim: { sessionId: ownerSessionId },
         onSchedule: async (progress) => {
@@ -934,6 +992,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         },
       });
       const followUp = await dagRunStore.finishRun(dagRun.ref, result);
+      if (runMode && currentThread.ref === runMode.threadRef && dagResultTerminalForRunMode(result))
+        await updateSparkRunModeStatus(cwd, ctx, result.timedOut ? "failed" : "blocked");
       emitSparkDagCompletionFollowUp(ctx, followUp);
     } catch (error) {
       const followUp = await dagRunStore.finishRun(
@@ -941,6 +1001,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         { scheduled: touched.size, completed: 0, timedOut: false },
         error,
       );
+      if (runMode && currentThread.ref === runMode.threadRef)
+        await updateSparkRunModeStatus(cwd, ctx, "failed");
       emitSparkDagCompletionFollowUp(ctx, followUp);
       throw error;
     }
@@ -949,7 +1011,22 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       await sparkTodoStore(cwd, ctx).save(graph);
       await refreshSparkWidget(cwd, ctx);
     }
-    return result.scheduled;
+    return runMode && currentThread.ref === runMode.threadRef && dagResultTerminalForRunMode(result)
+      ? 0
+      : result.scheduled;
+  }
+
+  function terminalSparkRunModeStatus(graph: TaskGraph, threadRef: ThreadRef): SparkRunModeStatus {
+    const unfinished = graph.tasks(threadRef).filter((task) => isUnfinishedTaskStatus(task.status));
+    return unfinished.length === 0 ? "done" : "blocked";
+  }
+
+  function dagResultTerminalForRunMode(result: {
+    timedOut: boolean;
+    failed?: number;
+    cancelled?: number;
+  }): boolean {
+    return result.timedOut || (result.failed ?? 0) > 0 || (result.cancelled ?? 0) > 0;
   }
 
   function mapTaskStatus(status: string): TaskEntry["status"] {
@@ -1153,6 +1230,20 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           active: true,
         }
       : undefined;
+  }
+
+  function sparkRunWidgetEntry(
+    runMode: SparkRunModeState | undefined,
+    threadRef?: ThreadRef,
+  ): SparkWidgetState["run"] {
+    if (!runMode) return undefined;
+    if (threadRef && runMode.threadRef !== threadRef) return undefined;
+    return { status: runMode.status, runRef: runMode.runRef, focus: runMode.focus };
+  }
+
+  function sparkRunModeStatusLine(runMode: SparkRunModeState): string {
+    const focusSuffix = runMode.focus ? ` focus=${runMode.focus}` : "";
+    return `Spark run mode: ${runMode.status} ${runMode.runRef} thread=${runMode.threadRef}${focusSuffix} maxConcurrency=${runMode.policy.maxConcurrency} timeoutMs=${runMode.policy.timeoutMs}`;
   }
 
   function sparkDagWidgetEntry(
@@ -1720,12 +1811,23 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   });
 
   pi.registerCommand("execute", {
-    description:
-      "Enter Spark execution mode directly for an initialized workspace; prefer DAG execution and continue through ready tasks until blocked.",
+    description: "Enter Spark execution mode directly to execute one task, then stop.",
     async handler(args, ctx) {
       await handleSparkEntryCommand(pi, ctx, {
         kind: "direct",
         mode: "execution",
+        prompt: args.trim(),
+      });
+    },
+  });
+
+  pi.registerCommand("run", {
+    description:
+      "Start Spark run mode to continuously advance ready tasks in the background until done or blocked.",
+    async handler(args, ctx) {
+      await handleSparkEntryCommand(pi, ctx, {
+        kind: "direct",
+        mode: "run",
         prompt: args.trim(),
       });
     },
@@ -1786,15 +1888,14 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         message:
           intent.mode === "planning"
             ? "Spark planning mode needs an existing project or a Spark idea. Use /spark <idea> to initialize an empty project."
-            : "Spark execution mode needs initialized Spark state. Use /spark <idea> or /plan first.",
+            : `Spark ${intent.mode} mode needs initialized Spark state. Use /spark <idea> or /plan first.`,
       };
     }
 
-    if (intent.kind === "direct" && intent.mode === "execution")
+    if (intent.kind === "direct" && (intent.mode === "execution" || intent.mode === "run"))
       return {
         action: "blocked",
-        message:
-          "Spark execution mode needs initialized Spark state. Use /spark <idea> or /plan first.",
+        message: `Spark ${intent.mode} mode needs initialized Spark state. Use /spark <idea> or /plan first.`,
       };
 
     const idea = intent.prompt || (await inferExistingProjectSparkIdea(ctx));
@@ -1840,7 +1941,9 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
             resolution.focus,
             resolution.planningSource,
           );
-        else await enterSparkExecutionMode(piApi, ctx, graph, resolution.focus);
+        else if (resolution.mode === "execution")
+          await enterSparkExecutionMode(piApi, ctx, graph, resolution.focus);
+        else await enterSparkRunMode(piApi, ctx, graph, resolution.focus);
         return;
       case "blocked":
         ctx.ui?.notify?.(resolution.message, "warning");
@@ -1886,6 +1989,10 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     ).length;
     const readyTaskCount = graph.readyTasks(selectedThread?.ref).length;
     const normalizedPrompt = prompt.trim();
+    const hasRunSignal =
+      /(持续|连续|自动推进|一直做|跑完|直到完成|run\b|keep going|until done|continue until|work through)/i.test(
+        normalizedPrompt,
+      );
     const hasExecutionSignal =
       /(执行|运行|完成|继续做|认领|claim|execute|run ready|dispatch|work through|finish)/i.test(
         normalizedPrompt,
@@ -1902,11 +2009,26 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       `Ready frontier has ${readyTaskCount} execution-ready task(s) out of ${pendingTaskCount} pending/ready task(s).`,
     ];
     if (normalizedPrompt) reasons.push(`Prompt: ${normalizedPrompt}`);
-    if (hasNewProjectSignal && !hasPlanningSignal && !hasExecutionSignal)
+    if (hasNewProjectSignal && !hasPlanningSignal && !hasExecutionSignal && !hasRunSignal)
       return {
         recommendation: "new_project",
         confidence: "high",
         reasons: [...reasons, "The prompt asks to start a distinct Spark idea."],
+        prompt: normalizedPrompt,
+        currentThreadTitle,
+        threadCount: graph.threads().length,
+        unfinishedTaskCount: projectState.unfinishedTaskCount,
+        readyTaskCount,
+        pendingTaskCount,
+      };
+    if (hasRunSignal)
+      return {
+        recommendation: "run",
+        confidence: "conflicting",
+        reasons: [
+          ...reasons,
+          "The prompt asks for continuous or until-done progress, so Spark should ask before starting background run mode.",
+        ],
         prompt: normalizedPrompt,
         currentThreadTitle,
         threadCount: graph.threads().length,
@@ -2144,12 +2266,37 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     if (thread) await saveSparkExecutionMode(ctx.cwd, ctx, thread.ref, focus);
     else await clearSparkExecutionMode(ctx.cwd, ctx);
     await refreshSparkWidget(ctx.cwd, ctx);
-    ctx.ui?.notify?.("Spark execution mode: prefer DAG or continue ready tasks.", "info");
+    ctx.ui?.notify?.("Spark execution mode: execute one task, then stop.", "info");
     dispatchSparkAgentInstruction(
       piApi,
       ctx,
       renderSparkExecutionModePrompt(graph, thread?.ref, focus),
       renderSparkModeVisibleMessage("execution", thread?.title, focus),
+    );
+  }
+
+  async function enterSparkRunMode(
+    piApi: SparkExtensionAPI,
+    ctx: SparkCommandContext,
+    graph: TaskGraph,
+    focus?: string,
+  ): Promise<void> {
+    const thread = await currentSparkThread(ctx.cwd, ctx, graph);
+    const runMode = thread ? await saveSparkRunMode(ctx.cwd, ctx, thread.ref, focus) : undefined;
+    if (!thread) await clearSparkExecutionMode(ctx.cwd, ctx);
+    await refreshSparkWidget(ctx.cwd, ctx);
+    if (runMode) ensureSparkDagManager(ctx.cwd, ctx);
+    ctx.ui?.notify?.(
+      runMode
+        ? `Spark run mode: background run ${runMode.runRef} started for current thread.`
+        : "Spark run mode: select a thread before starting a background run.",
+      "info",
+    );
+    dispatchSparkAgentInstruction(
+      piApi,
+      ctx,
+      renderSparkRunModePrompt(graph, thread?.ref, focus),
+      renderSparkModeVisibleMessage("run", thread?.title, focus),
     );
   }
 
@@ -2225,9 +2372,11 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         activeRunRefs: listActiveSparkRoleRunProcesses().map((process) => process.runRef),
       });
       const dagStatus = await dagRunStore.status();
+      const runMode = await loadSparkRunMode(cwd, ctx);
       const lines = [
         `Spark tasks (${view} view${typeof taskLimit === "number" ? `, limit=${taskLimit}` : ""}):`,
       ];
+      if (runMode) lines.push(sparkRunModeStatusLine(runMode));
       if (view === "active") {
         appendCompactSparkDagStatusLines(lines, dagStatus);
         if (dagStatus.lastRun)
@@ -2409,6 +2558,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         independentTodos: independentTodoDetails,
         threads: compactThreadStatusSummaries(graph, sessionKey),
         dag: dagStatus,
+        runMode,
         ...(state ? { state } : {}),
       };
       return {
@@ -2571,24 +2721,13 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           const finished = graph.setTaskStatus(task.ref, status);
           const completionReadiness =
             status === "done" ? taskCompletionReadiness(finished) : undefined;
-          const autoClaimed =
-            status === "done" && executionMode?.threadRef === thread.ref
-              ? graph.readyTasks(thread.ref)[0]
-              : undefined;
-          const claimedNext = autoClaimed
-            ? graph.claimTask(autoClaimed.ref, {
-                kind: "main",
-                claimedBy: sessionKey,
-                sessionId: sessionKey,
-                leaseMs: MAIN_TASK_CLAIM_LEASE_MS,
-              })
-            : undefined;
+          const nextReady = status === "done" ? graph.readyTasks(thread.ref)[0] : undefined;
           await sparkTodoStore(cwd, ctx).save(graph);
           return {
             task: finished,
             completionReadiness,
             threadRef: thread.ref,
-            autoClaimed: claimedNext,
+            nextReady,
           };
         },
         { createIfMissing: false },
@@ -2619,27 +2758,12 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const candidateSuffix = learningCandidate
         ? `\nLearning candidate: ${learningCandidate.ref}`
         : "";
-      const executionSuffix = updated.result.autoClaimed
-        ? `\nExecution mode continued: auto-claimed next ready task @${updated.result.autoClaimed.name}: ${updated.result.autoClaimed.title}.`
-        : executionMode?.threadRef === updated.result.threadRef && status === "done"
-          ? "\nExecution mode continued: no ready task remains to auto-claim; inspect blockers or finish the thread."
+      const executionSuffix =
+        executionMode?.threadRef === updated.result.threadRef && status === "done"
+          ? updated.result.nextReady
+            ? `\nExecution mode stopped after one task. Next ready task: @${updated.result.nextReady.name}: ${updated.result.nextReady.title}. Run /execute to take one more step, or /run to continue automatically.`
+            : "\nExecution mode stopped after one task. No ready task remains; inspect blockers or finish the thread."
           : "";
-      if (updated.result.autoClaimed && updated.graph) {
-        queueSparkAgentInstruction(
-          ctx,
-          renderSparkExecutionContinuationPrompt(
-            updated.graph,
-            updated.result.threadRef,
-            executionMode?.focus,
-            updated.result.autoClaimed,
-          ),
-          {
-            threadRef: updated.result.threadRef,
-            taskRef: updated.result.autoClaimed.ref,
-            reason: "auto-claim",
-          },
-        );
-      }
       return {
         content: [
           {
@@ -2650,8 +2774,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         details: {
           task: compactTaskDetail(updated.result.task),
           completionReadiness: updated.result.completionReadiness,
-          autoClaimedTask: updated.result.autoClaimed
-            ? compactTaskDetail(updated.result.autoClaimed)
+          nextReadyTask: updated.result.nextReady
+            ? compactTaskDetail(updated.result.nextReady)
             : undefined,
           learningCandidate: learningCandidate
             ? compactLearningDetail(learningCandidate)
@@ -4235,11 +4359,15 @@ function currentThreadStorePath(cwd: string, ctx: unknown): string {
 async function loadCurrentThreadState(
   cwd: string,
   ctx: unknown,
-): Promise<{ threadRef?: ThreadRef; executionMode?: SparkExecutionModeState } | undefined> {
+): Promise<
+  | { threadRef?: ThreadRef; executionMode?: SparkExecutionModeState; runMode?: SparkRunModeState }
+  | undefined
+> {
   try {
     const raw = JSON.parse(await readFile(currentThreadStorePath(cwd, ctx), "utf8")) as {
       threadRef?: string;
       executionMode?: Partial<SparkExecutionModeState>;
+      runMode?: Partial<SparkRunModeState>;
     };
     return {
       threadRef: raw.threadRef as ThreadRef | undefined,
@@ -4252,6 +4380,7 @@ async function loadCurrentThreadState(
               enteredAt: raw.executionMode.enteredAt,
             }
           : undefined,
+      runMode: normalizeSparkRunModeState(raw.runMode),
     };
   } catch {
     return undefined;
@@ -4305,6 +4434,95 @@ async function loadSparkExecutionMode(
   ctx: unknown,
 ): Promise<SparkExecutionModeState | undefined> {
   return (await loadCurrentThreadState(cwd, ctx))?.executionMode;
+}
+
+async function saveSparkRunMode(
+  cwd: string,
+  ctx: unknown,
+  threadRef: ThreadRef,
+  focus: string | undefined,
+): Promise<SparkRunModeState> {
+  const now = nowIso();
+  const runMode: SparkRunModeState = {
+    version: 1,
+    runRef: newRef("run") as RunRef,
+    threadRef,
+    focus: focus?.trim() || undefined,
+    status: "running",
+    policy: {
+      maxConcurrency: DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
+      timeoutMs: DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
+      stopOnAsk: true,
+      stopOnValidationFailure: true,
+    },
+    enteredAt: now,
+    updatedAt: now,
+  };
+  const filePath = currentThreadStorePath(cwd, ctx);
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(
+    filePath,
+    `${JSON.stringify({ version: 1, threadRef, runMode }, null, 2)}\n`,
+    "utf8",
+  );
+  return runMode;
+}
+
+function normalizeSparkRunModeState(
+  raw: Partial<SparkRunModeState> | undefined,
+): SparkRunModeState | undefined {
+  if (!raw?.runRef || !raw.threadRef || !raw.enteredAt) return undefined;
+  const status: SparkRunModeStatus =
+    raw.status === "paused" ||
+    raw.status === "blocked" ||
+    raw.status === "done" ||
+    raw.status === "failed" ||
+    raw.status === "cancelled"
+      ? raw.status
+      : "running";
+  return {
+    version: 1,
+    runRef: raw.runRef as RunRef,
+    threadRef: raw.threadRef as ThreadRef,
+    focus: raw.focus?.trim() || undefined,
+    status,
+    policy: {
+      maxConcurrency:
+        typeof raw.policy?.maxConcurrency === "number"
+          ? raw.policy.maxConcurrency
+          : DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
+      timeoutMs:
+        typeof raw.policy?.timeoutMs === "number"
+          ? raw.policy.timeoutMs
+          : DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
+      stopOnAsk: true,
+      stopOnValidationFailure: true,
+    },
+    enteredAt: raw.enteredAt,
+    updatedAt: raw.updatedAt ?? raw.enteredAt,
+  };
+}
+
+async function loadSparkRunMode(cwd: string, ctx: unknown): Promise<SparkRunModeState | undefined> {
+  return (await loadCurrentThreadState(cwd, ctx))?.runMode;
+}
+
+async function updateSparkRunModeStatus(
+  cwd: string,
+  ctx: unknown,
+  status: SparkRunModeStatus,
+): Promise<SparkRunModeState | undefined> {
+  const state = await loadCurrentThreadState(cwd, ctx);
+  if (!state?.threadRef || !state.runMode) return undefined;
+  const runMode: SparkRunModeState = { ...state.runMode, status, updatedAt: nowIso() };
+  const filePath = currentThreadStorePath(cwd, ctx);
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(
+    filePath,
+    `${JSON.stringify({ version: 1, threadRef: state.threadRef, runMode }, null, 2)}\n`,
+    "utf8",
+  );
+  return runMode;
 }
 
 async function clearSparkExecutionMode(cwd: string, ctx: unknown): Promise<void> {
@@ -5616,7 +5834,7 @@ function sparkModeAsk(analysis: SparkEntryModeAnalysis): SparkAskToolParams {
     questions: [
       {
         id: "mode",
-        prompt: `For “${truncateInline(title, 80)}”, should this turn organize tasks or execute ready work? Recommended: ${analysis.recommendation}.`,
+        prompt: `For “${truncateInline(title, 80)}”, should this turn organize tasks, execute one task, or run continuously? Recommended: ${analysis.recommendation}.`,
         type: "single",
         required: true,
         options: [
@@ -5628,7 +5846,12 @@ function sparkModeAsk(analysis: SparkEntryModeAnalysis): SparkAskToolParams {
           {
             id: "execution",
             label: `Execute “${truncateInline(title, 32)}”`,
-            description: `Use execution mode now: inspect the ${analysis.readyTaskCount} execution-ready task(s), then claim one concrete task or dispatch ready work without broad replanning.`,
+            description: `Use execution mode now: inspect the ${analysis.readyTaskCount} execution-ready task(s), then claim and complete at most one concrete task without broad replanning or continuous background progress.`,
+          },
+          {
+            id: "run",
+            label: `Run “${truncateInline(title, 32)}”`,
+            description: `Use run mode now: start a background Spark run that continuously advances ready tasks until the work is done, blocked, cancelled, or needs a decision.`,
           },
           {
             id: "new_project",
@@ -5643,10 +5866,10 @@ function sparkModeAsk(analysis: SparkEntryModeAnalysis): SparkAskToolParams {
 
 function sparkModeFromAskDetails(
   details: Record<string, unknown>,
-): "new_project" | "planning" | "execution" | undefined {
+): SparkEntryModeChoice | undefined {
   const modeAnswer = (details.answers as { mode?: { values?: unknown[] } } | undefined)?.mode;
   const value = modeAnswer?.values?.[0];
-  return value === "new_project" || value === "planning" || value === "execution"
+  return value === "new_project" || value === "planning" || value === "execution" || value === "run"
     ? value
     : undefined;
 }
@@ -5668,12 +5891,16 @@ function renderSparkPlanningModePrompt(
 }
 
 function renderSparkModeVisibleMessage(
-  mode: "planning" | "execution",
+  mode: SparkEntryMode,
   threadTitle: string | undefined,
   focus: string | undefined,
 ): string {
   const title =
-    mode === "planning" ? "Spark planning mode requested" : "Spark execution mode requested";
+    mode === "planning"
+      ? "Spark planning mode requested"
+      : mode === "execution"
+        ? "Spark execution mode requested"
+        : "Spark run mode requested";
   const parts = [title];
   if (threadTitle?.trim()) parts.push(`thread: ${threadTitle.trim()}`);
   if (focus?.trim()) parts.push(`focus: ${focus.trim()}`);
@@ -5696,17 +5923,7 @@ async function ensureRoleModelBindingsForThread(input: {
   cwd: string;
   ctx: SparkToolContext;
 }): Promise<RoleModelBindingPreflightResult> {
-  const roleRefs = uniqueRoleRefs(
-    input.graph
-      .tasks()
-      .filter(
-        (task) =>
-          task.threadRef === input.threadRef &&
-          task.status !== "proposed" &&
-          isUnfinishedTaskStatus(task.status),
-      )
-      .map(roleRefForSparkTask),
-  );
+  const roleRefs = uniqueRoleRefs(input.graph.readyTasks(input.threadRef).map(roleRefForSparkTask));
   const store = defaultUserRoleModelBindingStore();
   const boundRoleRefs: RoleRef[] = [];
   const missingRoleRefs: RoleRef[] = [];
@@ -5791,20 +6008,24 @@ function renderSparkExecutionModePrompt(
     ? `\n\nExecution focus: ${focus.trim()}\nUse this focus to filter ready tasks and pre-flight questions; do not auto-dispatch solely because a focus was provided.`
     : "";
   const action = selectedThreadRef
-    ? "Read the current thread/task plan and inspect ready tasks with spark_status. Prefer DAG execution with spark_run_ready_tasks dryRun=false when ready tasks can run through the Spark orchestrator; otherwise claim one concrete task with spark_claim_task. Treat DAG execution like background subagent orchestration: do a dry-run/status preflight when readiness is unclear, start the manager once, then rely on the Spark widget, notifications, and spark_dag_manager status for progress instead of injecting synthetic follow-up user messages. After each manually claimed task finishes, continue by auto-claiming or dispatching the next ready task until the thread is done or blocked."
+    ? "Read the current thread/task plan and inspect ready tasks with spark_status. Claim at most one concrete task with spark_claim_task, execute it, verify the required evidence, then call spark_finish_task. Stop after that task finishes; do not auto-claim another task or dispatch a continuous DAG run from /execute. If the user wants background progress through multiple tasks, suggest /run."
     : "Select a current thread with spark_use_thread before claiming thread-bound work; use spark_status view=summary/full to inspect available threads first if needed.";
-  return `${summary}${focusLine}\n\nEnter Spark execution mode. ${action} Do not stop after a single task unless no ready tasks remain, execution is blocked by missing task plans/dependencies, or the user explicitly exits execution mode.`;
+  return `${summary}${focusLine}\n\nEnter Spark execution mode. ${action}`;
 }
 
-function renderSparkExecutionContinuationPrompt(
+function renderSparkRunModePrompt(
   graph: TaskGraph,
-  selectedThreadRef: ThreadRef,
+  selectedThreadRef: ThreadRef | undefined,
   focus: string | undefined,
-  autoClaimed: Task,
 ): string {
   const summary = renderExistingSparkSummary(graph, selectedThreadRef);
-  const focusLine = focus?.trim() ? `\n\nExecution focus remains: ${focus.trim()}` : "";
-  return `${summary}${focusLine}\n\nContinue Spark execution mode. The previous task finished and Spark auto-claimed @${autoClaimed.name}: ${autoClaimed.title}. Read that task's plan/TODOs, execute it, then call spark_finish_task; after completion, continue with the next ready task until blocked or done. If the ready frontier is better handled in parallel, prefer spark_run_ready_tasks dryRun=false instead of stopping after this claimed task.`;
+  const focusLine = focus?.trim()
+    ? `\n\nRun focus: ${focus.trim()}\nUse this focus to select relevant ready tasks before starting background execution.`
+    : "";
+  const action = selectedThreadRef
+    ? "Inspect the current thread and ready frontier with spark_status, then start or preflight continuous background work through the Spark DAG manager. Treat run mode as background orchestration: rely on the Spark widget, notifications, and spark_dag_manager status instead of synthetic follow-up user messages. Stop or pause when work is done, blocked, cancelled, or needs a plan-changing decision."
+    : "Select a current thread with spark_use_thread before starting a background run; use spark_status view=summary/full to inspect available threads first if needed.";
+  return `${summary}${focusLine}\n\nEnter Spark run mode. ${action}`;
 }
 
 function renderExistingSparkSummary(graph: TaskGraph, selectedThreadRef?: ThreadRef): string {

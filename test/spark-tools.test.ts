@@ -135,9 +135,8 @@ void test("/spark command detects empty, existing, and initialized project modes
       );
       graph.createTask({
         threadRef: thread.ref,
-        title: "Ready implementation task",
-        description: "Ready implementation task",
-        plan: executionReadyPlan("Ready implementation task"),
+        title: "Implementation task needing a plan",
+        description: "Implementation task needing a plan",
         status: "pending",
       });
     });
@@ -164,6 +163,14 @@ void test("/spark command detects empty, existing, and initialized project modes
     assert.match(
       await consumeSparkModeContext(initializedRun, initializedCtx),
       /Enter Spark execution mode/,
+    );
+
+    initializedCtx.selected = "Run “Tool persistence”";
+    await initializedCommand.handler("keep running until done", initializedCtx);
+    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /Spark run mode requested/);
+    assert.match(
+      await consumeSparkModeContext(initializedRun, initializedCtx),
+      /Enter Spark run mode/,
     );
 
     initializedCtx.ui.select = async () =>
@@ -203,7 +210,7 @@ void test("bare /spark in an existing project requires a concrete planning focus
   }
 });
 
-void test("/plan and /execute enter Spark modes directly", async () => {
+void test("/plan, /execute, and /run enter Spark modes directly", async () => {
   const existingDir = await mkdtemp(join(tmpdir(), "spark-plan-direct-existing-"));
   const initializedDir = await mkdtemp(join(tmpdir(), "spark-execute-direct-initialized-"));
   const emptyDir = await mkdtemp(join(tmpdir(), "spark-execute-direct-empty-"));
@@ -259,9 +266,8 @@ void test("/plan and /execute enter Spark modes directly", async () => {
       );
       graph.createTask({
         threadRef: thread.ref,
-        title: "Ready direct execution task",
-        description: "Ready direct execution task",
-        plan: executionReadyPlan("Ready direct execution task"),
+        title: "Direct execution task needing a plan",
+        description: "Direct execution task needing a plan",
         status: "pending",
       });
     });
@@ -281,22 +287,83 @@ void test("/plan and /execute enter Spark modes directly", async () => {
     const executeMessage = await consumeSparkModeContext(initializedRun, initializedCtx);
     assert.match(executeMessage, /Enter Spark execution mode/);
     assert.match(executeMessage, /Execution focus: Finish the direct execution task/);
-    assert.match(executeMessage, /Prefer DAG execution with spark_run_ready_tasks dryRun=false/);
-    assert.match(executeMessage, /Treat DAG execution like background subagent orchestration/);
-    assert.match(
-      executeMessage,
-      /After each manually claimed task finishes, continue by auto-claiming or dispatching the next ready task/,
-    );
+    assert.match(executeMessage, /Claim at most one concrete task/);
+    assert.match(executeMessage, /Stop after that task finishes/);
+    assert.match(executeMessage, /suggest \/run/);
+    assert.doesNotMatch(executeMessage, /continue by auto-claiming/);
     assert.equal(
       initializedCtx.notifications.at(-1)?.message,
-      "Spark execution mode: prefer DAG or continue ready tasks.",
+      "Spark execution mode: execute one task, then stop.",
     );
+
+    const runCommand = initializedRun.commands.get("run");
+    assert.ok(runCommand, "missing /run command");
+    await runCommand.handler("Finish the queue until done", initializedCtx);
+    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /Spark run mode requested/);
+    assert.match(
+      initializedRun.customMessages.at(-1)?.content ?? "",
+      /Finish the queue until done/,
+    );
+    const runMessage = await consumeSparkModeContext(initializedRun, initializedCtx);
+    assert.match(runMessage, /Enter Spark run mode/);
+    assert.match(runMessage, /Run focus: Finish the queue until done/);
+    assert.match(runMessage, /Spark DAG manager/);
+    assert.match(
+      initializedCtx.notifications.at(-1)?.message ?? "",
+      /Spark run mode: background run run:/,
+    );
+    const currentThreadState = JSON.parse(
+      await readFile(
+        join(
+          initializedDir,
+          ".spark",
+          "current-thread",
+          `${ctxSessionStoreScope(initializedCtx)}.json`,
+        ),
+        "utf8",
+      ),
+    ) as {
+      runMode?: {
+        runRef?: string;
+        threadRef?: string;
+        focus?: string;
+        status?: string;
+        policy?: { maxConcurrency?: number; timeoutMs?: number };
+      };
+    };
+    assert.match(currentThreadState.runMode?.runRef ?? "", /^run:/);
+    assert.match(currentThreadState.runMode?.threadRef ?? "", /^thread:/);
+    assert.equal(currentThreadState.runMode?.focus, "Finish the queue until done");
+    assert.equal(currentThreadState.runMode?.status, "running");
+    assert.equal(currentThreadState.runMode?.policy?.maxConcurrency, 4);
+    assert.equal(currentThreadState.runMode?.policy?.timeoutMs, 3_600_000);
+    await waitFor(async () => {
+      const status = await executeSparkTool(
+        initializedRun.tools,
+        "spark_status",
+        initializedCtx,
+        {},
+      );
+      return /Spark run mode: blocked run:/.test(toolText(status));
+    });
+    const runStatus = await executeSparkTool(
+      initializedRun.tools,
+      "spark_status",
+      initializedCtx,
+      {},
+    );
+    assert.match(toolText(runStatus), /Spark run mode: blocked run:/);
+    assert.match(toolText(runStatus), /focus=Finish the queue until done/);
 
     const emptyCtx = testSparkContext(emptyDir, "main");
     const emptyRun = registerSparkToolsForTest();
     const emptyExecute = emptyRun.commands.get("execute");
     assert.ok(emptyExecute, "missing /execute command");
     await emptyExecute.handler("", emptyCtx);
+    assert.match(emptyCtx.notifications.at(-1)?.message ?? "", /needs initialized Spark state/);
+    const emptyRunCommand = emptyRun.commands.get("run");
+    assert.ok(emptyRunCommand, "missing /run command");
+    await emptyRunCommand.handler("", emptyCtx);
     assert.match(emptyCtx.notifications.at(-1)?.message ?? "", /needs initialized Spark state/);
   } finally {
     await rm(existingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
@@ -554,8 +621,8 @@ void test("spark_plan_tasks dryRun reports all-rejected readiness without saving
   }
 });
 
-void test("/execute keeps execution mode active and auto-claims the next ready task", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-execute-continuous-"));
+void test("/execute stops after one task and only hints the next ready task", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-execute-one-task-"));
   try {
     await writeEmptySparkThread(dir);
     const ctx = testSparkContext(dir, "main");
@@ -586,171 +653,39 @@ void test("/execute keeps execution mode active and auto-claims the next ready t
       });
     });
 
-    const { tools, commands, messages, customMessages, eventHandlers } =
-      registerSparkToolsForTest();
-    const executeCommand = commands.get("execute");
+    const run = registerSparkToolsForTest();
+    const executeCommand = run.commands.get("execute");
     assert.ok(executeCommand, "missing /execute command");
     await executeCommand.handler("work through the ready queue", ctx);
+    const executePrompt = await consumeSparkModeContext(run, ctx);
+    assert.match(executePrompt, /Claim at most one concrete task/);
+    assert.match(executePrompt, /Stop after that task finishes/);
+    assert.doesNotMatch(executePrompt, /continue through ready tasks until blocked/i);
+    assert.doesNotMatch(executePrompt, /auto-claiming or dispatching the next ready task/i);
 
-    await executeSparkTool(tools, "spark_claim_task", ctx, {
+    await executeSparkTool(run.tools, "spark_claim_task", ctx, {
       name: "first-ready",
       title: "First ready task",
       description: "First ready task",
       status: "running",
     });
-    const messagesBefore = messages.length;
-    const customBefore = customMessages.length;
-    const finished = await executeSparkTool(tools, "spark_finish_task", ctx, {
+    const finished = await executeSparkTool(run.tools, "spark_finish_task", ctx, {
       summary: "Finished first ready task.",
     });
 
     const text = finished.content.map((item) => item.text).join("\n");
-    assert.match(text, /Execution mode continued: auto-claimed next ready task @second-ready/);
-    // Continuation must not occupy the user input lane: spark_finish_task should
-    // not send a user message even when execution mode auto-claims the next task.
-    assert.equal(
-      messages.length,
-      messagesBefore,
-      "spark_finish_task must not inject a user message for execution-mode continuation",
-    );
-    assert.deepEqual(
-      customMessages
-        .slice(customBefore)
-        .filter((message) => message.customType === "spark-execution-continuation"),
-      [],
-      "spark_finish_task must not display queued execution continuation blocks",
-    );
-    const continuationContent = await consumeSparkModeContext(
-      {
-        tools,
-        messages,
-        customMessages,
-        commands,
-        eventHandlers,
-      },
-      ctx,
-    );
-    assert.match(continuationContent, /Continue Spark execution mode/);
-    assert.match(continuationContent, /Spark auto-claimed @second-ready/);
+    assert.match(text, /Execution mode stopped after one task/);
+    assert.match(text, /Next ready task: @second-ready/);
+    assert.match(text, /Run \/execute to take one more step, or \/run to continue automatically/);
+    assert.doesNotMatch(text, /auto-claimed next ready task/);
+    assert.equal((finished.details as { autoClaimedTask?: unknown }).autoClaimedTask, undefined);
+    assert.ok((finished.details as { nextReadyTask?: unknown }).nextReadyTask);
+    assert.equal(await tryConsumeSparkModeContext(run, ctx), undefined);
 
     const graph = await defaultTaskGraphStore(dir).load();
     const next = graph?.tasks().find((task) => task.name === "second-ready");
-    assert.equal(next?.status, "running");
-    assert.equal(next?.claim?.kind, "main");
-  } finally {
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-void test("/execute drops expired hidden execution continuations", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-execute-continuation-expired-"));
-  const originalNow = Date.now;
-  try {
-    await writeEmptySparkThread(dir);
-    const ctx = testSparkContext(dir, "main");
-    await defaultTaskGraphStore(dir).update(async (graph) => {
-      const thread = graph.threads()[0];
-      assert.ok(thread);
-      await mkdir(join(dir, ".spark", "current-thread"), { recursive: true });
-      await writeFile(
-        join(dir, ".spark", "current-thread", `${ctxSessionStoreScope(ctx)}.json`),
-        JSON.stringify({ threadRef: thread.ref }, null, 2),
-        "utf8",
-      );
-      graph.createTask({
-        threadRef: thread.ref,
-        name: "first-ready",
-        title: "First ready task",
-        description: "First ready task",
-        plan: executionReadyPlan("First ready task"),
-        status: "pending",
-      });
-      graph.createTask({
-        threadRef: thread.ref,
-        name: "second-ready",
-        title: "Second ready task",
-        description: "Second ready task",
-        plan: executionReadyPlan("Second ready task"),
-        status: "pending",
-      });
-    });
-
-    const run = registerSparkToolsForTest();
-    const executeCommand = run.commands.get("execute");
-    assert.ok(executeCommand, "missing /execute command");
-    await executeCommand.handler("work through the ready queue", ctx);
-    assert.match(await consumeSparkModeContext(run, ctx), /Enter Spark execution mode/);
-    await executeSparkTool(run.tools, "spark_claim_task", ctx, {
-      name: "first-ready",
-      title: "First ready task",
-      description: "First ready task",
-      status: "running",
-    });
-    await executeSparkTool(run.tools, "spark_finish_task", ctx, {
-      summary: "Finished first ready task.",
-    });
-
-    Date.now = () => originalNow() + 11 * 60 * 1000;
-    assert.equal(await tryConsumeSparkModeContext(run, ctx), undefined);
-  } finally {
-    Date.now = originalNow;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-void test("/execute drops hidden continuations when auto-claimed task is no longer owned", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-execute-continuation-stale-"));
-  try {
-    await writeEmptySparkThread(dir);
-    const ctx = testSparkContext(dir, "main");
-    await defaultTaskGraphStore(dir).update(async (graph) => {
-      const thread = graph.threads()[0];
-      assert.ok(thread);
-      await mkdir(join(dir, ".spark", "current-thread"), { recursive: true });
-      await writeFile(
-        join(dir, ".spark", "current-thread", `${ctxSessionStoreScope(ctx)}.json`),
-        JSON.stringify({ threadRef: thread.ref }, null, 2),
-        "utf8",
-      );
-      graph.createTask({
-        threadRef: thread.ref,
-        name: "first-ready",
-        title: "First ready task",
-        description: "First ready task",
-        plan: executionReadyPlan("First ready task"),
-        status: "pending",
-      });
-      graph.createTask({
-        threadRef: thread.ref,
-        name: "second-ready",
-        title: "Second ready task",
-        description: "Second ready task",
-        plan: executionReadyPlan("Second ready task"),
-        status: "pending",
-      });
-    });
-
-    const run = registerSparkToolsForTest();
-    const executeCommand = run.commands.get("execute");
-    assert.ok(executeCommand, "missing /execute command");
-    await executeCommand.handler("work through the ready queue", ctx);
-    assert.match(await consumeSparkModeContext(run, ctx), /Enter Spark execution mode/);
-    await executeSparkTool(run.tools, "spark_claim_task", ctx, {
-      name: "first-ready",
-      title: "First ready task",
-      description: "First ready task",
-      status: "running",
-    });
-    await executeSparkTool(run.tools, "spark_finish_task", ctx, {
-      summary: "Finished first ready task.",
-    });
-
-    await defaultTaskGraphStore(dir).update((graph) => {
-      const task = graph.tasks().find((candidate) => candidate.name === "second-ready");
-      assert.ok(task?.claim);
-      graph.releaseTaskClaim(task.ref, task.claim.claimedBy);
-    });
-    assert.equal(await tryConsumeSparkModeContext(run, ctx), undefined);
+    assert.equal(next?.status, "pending");
+    assert.equal(next?.claim, undefined);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -1673,6 +1608,187 @@ void test("spark_dag_manager reconciles and clears inactive records", async () =
   }
 });
 
+void test("/run starts background DAG manager and advances newly unblocked tasks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-run-continuous-dag-"));
+  const previousBindingHome = process.env.PI_ROLES_HOME;
+  const previousPath = process.env.PATH;
+  try {
+    process.env.PI_ROLES_HOME = dir;
+    await writeEmptySparkThread(dir);
+    const ctx = testSparkContext(dir, "main");
+    ctx.inputValue = "test/model";
+    const store = defaultTaskGraphStore(dir);
+    const graph = await store.load();
+    assert.ok(graph);
+    const [thread] = graph.threads();
+    assert.ok(thread);
+    const first = graph.createTask({
+      threadRef: thread.ref,
+      name: "run-first",
+      title: "Run first task",
+      description: "First task in continuous run.",
+      kind: "implement",
+      status: "pending",
+      plan: executionReadyPlan("Run first task"),
+    });
+    const second = graph.createTask({
+      threadRef: thread.ref,
+      name: "run-second",
+      title: "Run second task",
+      description: "Second task unblocks after the first task succeeds.",
+      kind: "implement",
+      status: "pending",
+      plan: executionReadyPlan("Run second task"),
+    });
+    graph.addDependency(second.ref, first.ref);
+    await store.save(graph);
+    const fakePi = join(dir, "pi");
+    await writeFile(
+      fakePi,
+      "#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({ type: 'done' }) + '\\n');\nprocess.exit(0);\n",
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+    process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
+
+    const { tools, commands, messages } = registerSparkToolsForTest();
+    await useOnlySparkThread(tools, ctx);
+    const runCommand = commands.get("run");
+    assert.ok(runCommand, "missing /run command");
+    await runCommand.handler("run dependent tasks until done", ctx);
+
+    await waitFor(async () => {
+      const current = await defaultTaskGraphStore(dir).load();
+      return current?.getTask(second.ref).status === "done";
+    }, 10_000);
+    await waitFor(async () => {
+      const status = await executeSparkTool(tools, "spark_status", ctx, {});
+      return /Spark run mode: done run:/.test(toolText(status));
+    }, 10_000);
+
+    const dagStatus = await defaultSparkDagRunStore(dir).status();
+    assert.equal(dagStatus.succeeded, 1);
+    assert.equal(dagStatus.lastRun?.scheduled, 2);
+    assert.equal(dagStatus.lastRun?.completed, 2);
+    const reloaded = await defaultTaskGraphStore(dir).load();
+    assert.equal(reloaded?.getTask(first.ref).status, "done");
+    assert.equal(reloaded?.getTask(second.ref).status, "done");
+    assert.doesNotMatch(messages.join("\n"), /Spark DAG run:/);
+  } finally {
+    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousBindingHome;
+    process.env.PATH = previousPath;
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("/run marks run mode blocked when no ready task can run", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-run-blocked-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const ctx = testSparkContext(dir, "main");
+    const store = defaultTaskGraphStore(dir);
+    const graph = await store.load();
+    assert.ok(graph);
+    const [thread] = graph.threads();
+    assert.ok(thread);
+    graph.createTask({
+      threadRef: thread.ref,
+      name: "blocked-no-plan",
+      title: "Blocked no plan",
+      description: "No execution-ready plan is present.",
+      kind: "implement",
+      status: "pending",
+    });
+    await store.save(graph);
+
+    const { tools, commands } = registerSparkToolsForTest();
+    await useOnlySparkThread(tools, ctx);
+    const runCommand = commands.get("run");
+    assert.ok(runCommand, "missing /run command");
+    await runCommand.handler("run blocked work", ctx);
+
+    await waitFor(async () => {
+      const status = await executeSparkTool(tools, "spark_status", ctx, {});
+      return /Spark run mode: blocked run:/.test(toolText(status));
+    }, 5_000);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("spark_run_ready_tasks preflights only the current ready frontier", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-frontier-preflight-"));
+  const previousBindingHome = process.env.PI_ROLES_HOME;
+  const previousPath = process.env.PATH;
+  try {
+    process.env.PI_ROLES_HOME = dir;
+    await writeEmptySparkThread(dir);
+    const ctx = testSparkContext(dir, "main");
+    ctx.inputValue = "test/model";
+    const store = defaultTaskGraphStore(dir);
+    const graph = await store.load();
+    assert.ok(graph);
+    const [thread] = graph.threads();
+    assert.ok(thread);
+    graph.createTask({
+      threadRef: thread.ref,
+      name: "ready-worker",
+      title: "Ready worker task",
+      description: "Only this ready frontier task should be preflighted.",
+      kind: "implement",
+      status: "pending",
+      plan: executionReadyPlan("Ready worker task"),
+    });
+    graph.createTask({
+      threadRef: thread.ref,
+      name: "blocked-reviewer",
+      title: "Blocked reviewer task",
+      description: "This future task must not block current frontier dispatch.",
+      kind: "review",
+      status: "blocked",
+      plan: executionReadyPlan("Blocked reviewer task"),
+    });
+    await store.save(graph);
+    const fakePi = join(dir, "pi");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "const args = process.argv.slice(2);",
+        "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
+        "if (args[0] === '--list-models') { process.stdout.write('No models matching ' + args[1] + '\\n'); process.exit(0); }",
+        "process.stdout.write(JSON.stringify({ type: 'done' }) + '\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+    process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
+
+    const { tools } = registerSparkToolsForTest();
+    await useOnlySparkThread(tools, ctx);
+    const result = await executeSparkTool(tools, "spark_run_ready_tasks", ctx, { dryRun: false });
+
+    assert.match(toolText(result), /Spark DAG manager started/);
+    const bindingFile = JSON.parse(
+      await readFile(join(dir, ".agents", "role-model-bindings.json"), "utf8"),
+    ) as { bindings: Array<{ roleRef: string }> };
+    assert.deepEqual(
+      bindingFile.bindings.map((binding) => binding.roleRef),
+      ["role:builtin-worker"],
+    );
+    await waitFor(async () => {
+      const dagStatus = await defaultSparkDagRunStore(dir).status();
+      return dagStatus.succeeded === 1 || dagStatus.failed > 0;
+    }, 10_000);
+  } finally {
+    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousBindingHome;
+    process.env.PATH = previousPath;
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
 void test("spark_run_ready_tasks reports DAG completion without queuing a follow-up user message", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-followup-"));
   const previousBindingHome = process.env.PI_ROLES_HOME;
@@ -2201,10 +2317,13 @@ function testSparkContext(cwd: string, sessionName: string): TestSparkContext {
   return context;
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 2_000,
+): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.ok(predicate(), "timed out waiting for condition");
