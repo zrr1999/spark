@@ -642,6 +642,120 @@ void test("/execute keeps execution mode active and auto-claims the next ready t
   }
 });
 
+void test("/execute drops expired hidden execution continuations", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-execute-continuation-expired-"));
+  const originalNow = Date.now;
+  try {
+    await writeEmptySparkThread(dir);
+    const ctx = testSparkContext(dir, "main");
+    await defaultTaskGraphStore(dir).update(async (graph) => {
+      const thread = graph.threads()[0];
+      assert.ok(thread);
+      await mkdir(join(dir, ".spark", "current-thread"), { recursive: true });
+      await writeFile(
+        join(dir, ".spark", "current-thread", `${ctxSessionStoreScope(ctx)}.json`),
+        JSON.stringify({ threadRef: thread.ref }, null, 2),
+        "utf8",
+      );
+      graph.createTask({
+        threadRef: thread.ref,
+        name: "first-ready",
+        title: "First ready task",
+        description: "First ready task",
+        plan: executionReadyPlan("First ready task"),
+        status: "pending",
+      });
+      graph.createTask({
+        threadRef: thread.ref,
+        name: "second-ready",
+        title: "Second ready task",
+        description: "Second ready task",
+        plan: executionReadyPlan("Second ready task"),
+        status: "pending",
+      });
+    });
+
+    const run = registerSparkToolsForTest();
+    const executeCommand = run.commands.get("execute");
+    assert.ok(executeCommand, "missing /execute command");
+    await executeCommand.handler("work through the ready queue", ctx);
+    assert.match(await consumeSparkModeContext(run, ctx), /Enter Spark execution mode/);
+    await executeSparkTool(run.tools, "spark_claim_task", ctx, {
+      name: "first-ready",
+      title: "First ready task",
+      description: "First ready task",
+      status: "running",
+    });
+    await executeSparkTool(run.tools, "spark_finish_task", ctx, {
+      summary: "Finished first ready task.",
+    });
+
+    Date.now = () => originalNow() + 11 * 60 * 1000;
+    assert.equal(await tryConsumeSparkModeContext(run, ctx), undefined);
+  } finally {
+    Date.now = originalNow;
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("/execute drops hidden continuations when auto-claimed task is no longer owned", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-execute-continuation-stale-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const ctx = testSparkContext(dir, "main");
+    await defaultTaskGraphStore(dir).update(async (graph) => {
+      const thread = graph.threads()[0];
+      assert.ok(thread);
+      await mkdir(join(dir, ".spark", "current-thread"), { recursive: true });
+      await writeFile(
+        join(dir, ".spark", "current-thread", `${ctxSessionStoreScope(ctx)}.json`),
+        JSON.stringify({ threadRef: thread.ref }, null, 2),
+        "utf8",
+      );
+      graph.createTask({
+        threadRef: thread.ref,
+        name: "first-ready",
+        title: "First ready task",
+        description: "First ready task",
+        plan: executionReadyPlan("First ready task"),
+        status: "pending",
+      });
+      graph.createTask({
+        threadRef: thread.ref,
+        name: "second-ready",
+        title: "Second ready task",
+        description: "Second ready task",
+        plan: executionReadyPlan("Second ready task"),
+        status: "pending",
+      });
+    });
+
+    const run = registerSparkToolsForTest();
+    const executeCommand = run.commands.get("execute");
+    assert.ok(executeCommand, "missing /execute command");
+    await executeCommand.handler("work through the ready queue", ctx);
+    assert.match(await consumeSparkModeContext(run, ctx), /Enter Spark execution mode/);
+    await executeSparkTool(run.tools, "spark_claim_task", ctx, {
+      name: "first-ready",
+      title: "First ready task",
+      description: "First ready task",
+      status: "running",
+    });
+    await executeSparkTool(run.tools, "spark_finish_task", ctx, {
+      summary: "Finished first ready task.",
+    });
+
+    await defaultTaskGraphStore(dir).update((graph) => {
+      const task = graph.tasks().find((candidate) => candidate.name === "second-ready");
+      assert.ok(task?.claim);
+      graph.releaseTaskClaim(task.ref, task.claim.claimedBy);
+    });
+    assert.equal(await tryConsumeSparkModeContext(run, ctx), undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
 void test("spark_plan_tasks blocks underspecified executable tasks without opening a canned ask", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-task-plan-not-ready-"));
   try {
@@ -2019,10 +2133,10 @@ function registerSparkToolsForTest(): {
   return { tools, messages, customMessages, commands, eventHandlers };
 }
 
-async function consumeSparkModeContext(
+async function tryConsumeSparkModeContext(
   run: ReturnType<typeof registerSparkToolsForTest>,
   ctx: TestSparkContext,
-): Promise<string> {
+): Promise<string | undefined> {
   for (const handler of run.eventHandlers.get("before_agent_start") ?? []) {
     const result = (await handler({}, ctx)) as
       | { message?: { customType?: string; content?: string; display?: boolean } }
@@ -2033,7 +2147,16 @@ async function consumeSparkModeContext(
       return result.message.content;
     }
   }
-  assert.fail("missing hidden Spark mode context");
+  return undefined;
+}
+
+async function consumeSparkModeContext(
+  run: ReturnType<typeof registerSparkToolsForTest>,
+  ctx: TestSparkContext,
+): Promise<string> {
+  return (
+    (await tryConsumeSparkModeContext(run, ctx)) ?? assert.fail("missing hidden Spark mode context")
+  );
 }
 
 async function executeSparkTool(

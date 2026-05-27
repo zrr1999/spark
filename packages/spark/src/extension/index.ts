@@ -479,19 +479,72 @@ async function sweepExpiredSparkClaims(cwd: string, ctx?: unknown): Promise<void
   }
 }
 
+const SPARK_EXECUTION_CONTINUATION_TTL_MS = 10 * 60 * 1000;
+
+interface PendingSparkExecutionContinuation {
+  threadRef: ThreadRef;
+  taskRef: TaskRef;
+  reason: string;
+}
+
+interface PendingSparkAgentInstruction {
+  content: string;
+  queuedAtMs: number;
+  continuation?: PendingSparkExecutionContinuation;
+}
+
+async function validPendingSparkAgentInstructions(
+  ctx: SparkToolContext,
+  entries: PendingSparkAgentInstruction[],
+): Promise<PendingSparkAgentInstruction[]> {
+  const continuations = entries.filter((entry) => entry.continuation);
+  const graph = continuations.length > 0 ? await loadSparkGraph(ctx.cwd, ctx) : undefined;
+  const sessionKey = sparkSessionOwnerKey(ctx);
+  return entries.filter((entry) => {
+    if (!entry.continuation) return true;
+    if (Date.now() - entry.queuedAtMs > SPARK_EXECUTION_CONTINUATION_TTL_MS) return false;
+    if (!graph) return false;
+    const thread = graph.getThread(entry.continuation.threadRef);
+    if (!thread || thread.status !== "active") return false;
+    const task = graph.getTask(entry.continuation.taskRef);
+    if (!task || task.threadRef !== thread.ref) return false;
+    return task.status === "running" && isClaimOwnedBySession(task, sessionKey);
+  });
+}
+
 export default function sparkExtension(pi: SparkExtensionAPI) {
   if (pi.registerTool) {
     registerPiCueTools(pi as unknown as Parameters<typeof registerPiCueTools>[0]);
   }
 
-  const pendingSparkAgentInstructions = new Map<string, string>();
+  const pendingSparkAgentInstructions = new Map<string, PendingSparkAgentInstruction[]>();
 
-  function queueSparkAgentInstruction(ctx: SparkToolContext, instruction: string): void {
+  function queueSparkAgentInstruction(
+    ctx: SparkToolContext,
+    instruction: string,
+    continuation?: PendingSparkExecutionContinuation,
+  ): void {
     const sessionKey = sparkSessionOwnerKey(ctx);
-    const existingInstruction = pendingSparkAgentInstructions.get(sessionKey);
+    const entries = pendingSparkAgentInstructions.get(sessionKey) ?? [];
+    const nextEntry: PendingSparkAgentInstruction = {
+      content: instruction,
+      queuedAtMs: Date.now(),
+      continuation,
+    };
     pendingSparkAgentInstructions.set(
       sessionKey,
-      existingInstruction ? `${existingInstruction}\n\n${instruction}` : instruction,
+      continuation
+        ? [
+            ...entries.filter(
+              (entry) =>
+                !entry.continuation ||
+                entry.continuation.threadRef !== continuation.threadRef ||
+                entry.continuation.taskRef !== continuation.taskRef ||
+                entry.continuation.reason !== continuation.reason,
+            ),
+            nextEntry,
+          ]
+        : [...entries, nextEntry],
     );
   }
 
@@ -501,13 +554,15 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   );
   pi.on?.("before_agent_start", async (_event: unknown, ctx: SparkToolContext) => {
     const sessionKey = sparkSessionOwnerKey(ctx);
-    const instruction = pendingSparkAgentInstructions.get(sessionKey);
-    if (!instruction) return undefined;
+    const entries = pendingSparkAgentInstructions.get(sessionKey) ?? [];
+    if (entries.length === 0) return undefined;
     pendingSparkAgentInstructions.delete(sessionKey);
+    const validEntries = await validPendingSparkAgentInstructions(ctx, entries);
+    if (validEntries.length === 0) return undefined;
     return {
       message: {
         customType: "spark-mode-context",
-        content: instruction,
+        content: validEntries.map((entry) => entry.content).join("\n\n"),
         display: false,
       },
     };
@@ -2578,6 +2633,11 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
             executionMode?.focus,
             updated.result.autoClaimed,
           ),
+          {
+            threadRef: updated.result.threadRef,
+            taskRef: updated.result.autoClaimed.ref,
+            reason: "auto-claim",
+          },
         );
       }
       return {
