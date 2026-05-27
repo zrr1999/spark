@@ -2791,11 +2791,18 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     name: "spark_plan_tasks",
     label: "Spark Plan Tasks",
     description: [
-      "Create or update multiple durable Spark tasks in the active thread from a concrete task plan. Use this dedicated spark-tasks-backed planning tool when asked to梳理/organize work before assigning roles; it does not claim tasks for the current session.",
+      "Create or update multiple durable Spark tasks in the active thread from a concrete task plan. Use this dedicated spark-tasks-backed planning tool when asked to梳理/organize work before assigning roles; it does not claim tasks for the current session. Set dryRun=true to preview normalization, readiness checks, and dependency changes without writing .spark/thread.json.",
       "",
       SPARK_PLAN_TASKS_READINESS_RULES,
     ].join("\n"),
     parameters: Type.Object({
+      dryRun: Type.Optional(
+        Type.Boolean({
+          default: false,
+          description:
+            "Preview normalization, readiness checks, and dependency changes without saving .spark/thread.json or roadmap refs. Defaults to false.",
+        }),
+      ),
       tasks: Type.Array(
         Type.Object({
           name: Type.Optional(
@@ -2854,6 +2861,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const registry = new RoleRegistry();
       await defaultProjectRoleStore(cwd).hydrate(registry);
       const p = params as {
+        dryRun?: boolean;
         tasks?: Array<{
           name?: string;
           title: string;
@@ -2888,39 +2896,43 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           roadmapContext?.item,
         ),
       );
+      const dryRun = p.dryRun === true;
       const result = graph.planTasks(thread.ref, tasks);
       const changedForDecision = [...result.created, ...result.updated];
-      const planDecisions = [] as Array<Awaited<ReturnType<typeof decideTaskPlanBeforeCreate>>>;
-      for (const task of changedForDecision) {
-        const decision = decideTaskPlanBeforeCreate({ cwd, task, ui: sparkAskUi(ctx) });
-        planDecisions.push(decision);
-        if (!decision.accepted) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Task plan not ready: @${task.name}: ${task.title}; revise the task plan with context-specific success criteria and evidence requirements before creating or updating it.`,
-              },
-            ],
-            details: {
-              found: true,
-              error: "task_plan_not_ready",
-              task: compactTaskDetail(task),
-              planDecision: decision as unknown as Record<string, unknown>,
-            },
-          };
-        }
-      }
-      await store.save(graph);
-      await sparkTodoStore(cwd, ctx).save(graph);
-      const changedRefs = [...result.created, ...result.updated].map((task) => task.ref);
-      const updatedRoadmapItem = await attachRoadmapPlanningRefs(
-        cwd,
-        roadmapContext?.item.ref,
-        thread.ref,
-        changedRefs,
+      const planDecisions = changedForDecision.map((task) =>
+        decideTaskPlanBeforeCreate({ cwd, task, ui: sparkAskUi(ctx) }),
       );
-      await refreshSparkWidget(cwd, ctx);
+      const rejectedIndex = planDecisions.findIndex((decision) => !decision.accepted);
+      if (rejectedIndex >= 0) {
+        const task = changedForDecision[rejectedIndex];
+        const decision = planDecisions[rejectedIndex];
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Task plan not ready: @${task.name}: ${task.title}; revise the task plan with context-specific success criteria and evidence requirements before creating or updating it.`,
+            },
+          ],
+          details: {
+            found: true,
+            dryRun,
+            error: "task_plan_not_ready",
+            result: compactTaskPlanResult(result),
+            task: compactTaskDetail(task),
+            planDecision: decision as unknown as Record<string, unknown>,
+            planDecisions,
+          },
+        };
+      }
+      const changedRefs = [...result.created, ...result.updated].map((task) => task.ref);
+      const updatedRoadmapItem = dryRun
+        ? undefined
+        : await attachRoadmapPlanningRefs(cwd, roadmapContext?.item.ref, thread.ref, changedRefs);
+      if (!dryRun) {
+        await store.save(graph);
+        await sparkTodoStore(cwd, ctx).save(graph);
+        await refreshSparkWidget(cwd, ctx);
+      }
       const changed = [
         ...result.created.map((task) => ({ action: "created" as const, task })),
         ...result.updated.map((task) => ({ action: "updated" as const, task })),
@@ -2928,7 +2940,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const visibleChanged = changed.slice(0, DEFAULT_SPARK_PLAN_TASK_OUTPUT_LIMIT);
       const hiddenChanged = changed.length - visibleChanged.length;
       const lines = [
-        `Planned tasks: created=${result.created.length} updated=${result.updated.length} dependencies=${result.dependencies.length}`,
+        `${dryRun ? "Dry-run planned tasks" : "Planned tasks"}: created=${result.created.length} updated=${result.updated.length} dependencies=${result.dependencies.length}`,
         ...visibleChanged.map(
           ({ action, task }) => `- ${action} [${task.status}] @${task.name}: ${task.title}`,
         ),
@@ -2938,6 +2950,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       return {
         content: [{ type: "text", text: lines.join("\n") }],
         details: {
+          dryRun,
           result: compactTaskPlanResult(result),
           planDecisions,
           roadmapItem: updatedRoadmapItem as unknown as Record<string, unknown> | undefined,

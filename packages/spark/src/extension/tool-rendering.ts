@@ -89,7 +89,14 @@ export function renderSparkToolCall(
         theme,
       );
     case "spark_plan_tasks":
-      return renderToolCall(toolName, [formatTaskPlanSummary(args.tasks)], theme);
+      return renderToolCall(
+        toolName,
+        [
+          formatStringArg(args.dryRun === true ? "dry-run" : undefined),
+          formatTaskPlanSummary(args.tasks),
+        ],
+        theme,
+      );
     case "spark_run_ready_tasks":
       return renderToolCall(
         toolName,

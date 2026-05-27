@@ -65,6 +65,13 @@ void test("Spark extension tools render parameter-aware tool calls", () => {
     "spark_plan_tasks 2 tasks @inspect,@implement",
   );
   assert.equal(
+    renderCall(tools, "spark_plan_tasks", {
+      dryRun: true,
+      tasks: [{ name: "inspect", title: "Inspect code", description: "Read sources" }],
+    }),
+    "spark_plan_tasks dry-run 1 tasks @inspect",
+  );
+  assert.equal(
     renderCall(tools, "cue_exec", {
       command: "pnpm test",
       background: true,

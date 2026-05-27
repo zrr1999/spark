@@ -405,6 +405,152 @@ void test("spark_plan_tasks maps active roadmap item hints into task plans and a
   }
 });
 
+void test("spark_plan_tasks dryRun previews ready tasks without saving", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-plan-dry-run-ready-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const before = await readFile(join(dir, ".spark", "thread.json"), "utf8");
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+    await useOnlySparkThread(tools, ctx);
+
+    const planned = await executeSparkTool(tools, "spark_plan_tasks", ctx, {
+      dryRun: true,
+      tasks: [
+        {
+          name: "dry-ready",
+          title: "Preview ready task",
+          description: "Preview a ready task without saving it.",
+          kind: "implement",
+          status: "pending",
+          plan: executionReadyPlan("Preview a ready task without saving it."),
+        },
+      ],
+    });
+
+    assert.match(toolText(planned), /Dry-run planned tasks: created=1 updated=0 dependencies=0/);
+    const details = planned.details as
+      | {
+          dryRun?: boolean;
+          result?: { created?: unknown[] };
+          planDecisions?: Array<{ accepted?: boolean }>;
+        }
+      | undefined;
+    assert.equal(details?.dryRun, true);
+    assert.equal(details?.result?.created?.length, 1);
+    assert.equal(details?.planDecisions?.[0]?.accepted, true);
+    assert.equal(await readFile(join(dir, ".spark", "thread.json"), "utf8"), before);
+    assert.equal((await defaultTaskGraphStore(dir).load())?.tasks().length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark_plan_tasks dryRun reports mixed readiness without saving", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-plan-dry-run-mixed-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const before = await readFile(join(dir, ".spark", "thread.json"), "utf8");
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+    await useOnlySparkThread(tools, ctx);
+
+    const planned = await executeSparkTool(tools, "spark_plan_tasks", ctx, {
+      dryRun: true,
+      tasks: [
+        {
+          name: "dry-ready",
+          title: "Preview ready task",
+          description: "Preview a ready task without saving it.",
+          kind: "implement",
+          status: "pending",
+          plan: executionReadyPlan("Preview a ready task without saving it."),
+        },
+        {
+          name: "dry-blocked",
+          title: "Preview blocked task",
+          description: "Preview a blocked task without saving it.",
+          kind: "implement",
+          status: "pending",
+        },
+      ],
+    });
+
+    assert.match(toolText(planned), /Task plan not ready: @dry-blocked/);
+    const details = planned.details as
+      | {
+          dryRun?: boolean;
+          error?: string;
+          result?: { created?: unknown[] };
+          planDecisions?: Array<{ accepted?: boolean; blocked?: boolean }>;
+        }
+      | undefined;
+    assert.equal(details?.dryRun, true);
+    assert.equal(details?.error, "task_plan_not_ready");
+    assert.equal(details?.result?.created?.length, 2);
+    assert.equal(details?.planDecisions?.[0]?.accepted, true);
+    assert.equal(details?.planDecisions?.[1]?.blocked, true);
+    assert.equal(await readFile(join(dir, ".spark", "thread.json"), "utf8"), before);
+    assert.equal((await defaultTaskGraphStore(dir).load())?.tasks().length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark_plan_tasks dryRun reports all-rejected readiness without saving", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-plan-dry-run-rejected-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const before = await readFile(join(dir, ".spark", "thread.json"), "utf8");
+    const ctx = testSparkContext(dir, "main");
+    ctx.ui.select = async () => assert.fail("dryRun readiness should not open a task-plan ask");
+    ctx.ui.custom = async () => assert.fail("dryRun readiness should not open fullscreen ask UI");
+    const { tools } = registerSparkToolsForTest();
+    await useOnlySparkThread(tools, ctx);
+
+    const planned = await executeSparkTool(tools, "spark_plan_tasks", ctx, {
+      dryRun: true,
+      tasks: [
+        {
+          name: "dry-blocked-one",
+          title: "Preview blocked task one",
+          description: "Preview a blocked task without saving it.",
+          kind: "implement",
+          status: "pending",
+        },
+        {
+          name: "dry-blocked-two",
+          title: "Preview blocked task two",
+          description: "Preview another blocked task without saving it.",
+          kind: "review",
+          status: "pending",
+        },
+      ],
+    });
+
+    assert.match(toolText(planned), /Task plan not ready: @dry-blocked-one/);
+    const details = planned.details as
+      | {
+          dryRun?: boolean;
+          error?: string;
+          result?: { created?: unknown[] };
+          planDecisions?: Array<{ accepted?: boolean; blocked?: boolean }>;
+        }
+      | undefined;
+    assert.equal(details?.dryRun, true);
+    assert.equal(details?.error, "task_plan_not_ready");
+    assert.equal(details?.result?.created?.length, 2);
+    assert.equal(
+      details?.planDecisions?.every((decision) => decision.blocked),
+      true,
+    );
+    assert.equal(await readFile(join(dir, ".spark", "thread.json"), "utf8"), before);
+    assert.equal((await defaultTaskGraphStore(dir).load())?.tasks().length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("/execute keeps execution mode active and auto-claims the next ready task", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-execute-continuous-"));
   try {
