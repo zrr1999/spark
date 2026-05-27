@@ -583,7 +583,8 @@ void test("/execute keeps execution mode active and auto-claims the next ready t
       });
     });
 
-    const { tools, commands, messages, customMessages } = registerSparkToolsForTest();
+    const { tools, commands, messages, customMessages, eventHandlers } =
+      registerSparkToolsForTest();
     const executeCommand = commands.get("execute");
     assert.ok(executeCommand, "missing /execute command");
     await executeCommand.handler("work through the ready queue", ctx);
@@ -609,16 +610,23 @@ void test("/execute keeps execution mode active and auto-claims the next ready t
       messagesBefore,
       "spark_finish_task must not inject a user message for execution-mode continuation",
     );
-    const continuation = customMessages
-      .slice(customBefore)
-      .find((message) => message.customType === "spark-execution-continuation");
-    assert.ok(continuation, "missing spark-execution-continuation custom message");
-    const continuationContent =
-      typeof continuation.content === "string"
-        ? continuation.content
-        : (continuation.content as Array<{ type: string; text?: string }>)
-            .map((part) => (part.type === "text" ? (part.text ?? "") : ""))
-            .join("\n");
+    assert.deepEqual(
+      customMessages
+        .slice(customBefore)
+        .filter((message) => message.customType === "spark-execution-continuation"),
+      [],
+      "spark_finish_task must not display queued execution continuation blocks",
+    );
+    const continuationContent = await consumeSparkModeContext(
+      {
+        tools,
+        messages,
+        customMessages,
+        commands,
+        eventHandlers,
+      },
+      ctx,
+    );
     assert.match(continuationContent, /Continue Spark execution mode/);
     assert.match(continuationContent, /Spark auto-claimed @second-ready/);
 

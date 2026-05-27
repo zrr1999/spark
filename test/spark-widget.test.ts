@@ -161,8 +161,26 @@ void test("spark widget shows compact DAG progress above thread details", () => 
 
   assert.match(
     lines.join("\n"),
-    /◆ Tasks\(total=2 claimed=0\/0\)\n◆ DAG\(running 1\/3\) run:abc\n◆ Spark UX redesign/,
+    /◆ Tasks\(total=2 claimed=0\/0\)\n◆ Spark DAG running: 1\/3 tasks · run:abc\n◆ Spark UX redesign/,
   );
+});
+
+void test("spark widget renders completed DAG state in plain language", () => {
+  const lines = renderSparkWidgetLines(
+    widgetState({
+      dag: {
+        status: "failed",
+        runRef: "run:9fb95fb0-f08c-41a5-b4a3-bd4e4622034b",
+        scheduled: 13,
+        completed: 13,
+      },
+    }),
+    { terminal: { columns: 120 }, requestRender() {} },
+    theme,
+  );
+
+  assert.match(lines.join("\n"), /◆ Spark DAG failed: 13\/13 tasks · run:9fb95fb0/);
+  assert.doesNotMatch(lines.join("\n"), /DAG\(failed/);
 });
 
 void test("spark widget shows thread header with task counts even before claims", () => {

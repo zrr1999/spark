@@ -208,8 +208,22 @@ export function renderSparkWidgetLines(
 
 function formatDagLine(dag: SparkDagWidgetEntry, theme: SparkWidgetTheme): string {
   const status = dag.active ? "running" : dag.status;
-  const ref = dag.runRef ? ` ${dag.runRef}` : "";
-  return `${theme.fg("accent", "◆")} ${theme.fg("dim", `DAG(${status} ${dag.completed}/${dag.scheduled})${ref}`)}`;
+  const statusLabel = formatDagStatusLabel(status);
+  const count = `${dag.completed}/${dag.scheduled} tasks`;
+  const ref = dag.runRef ? ` · ${shortDagRunRef(dag.runRef)}` : "";
+  return `${theme.fg("accent", "◆")} ${theme.fg("dim", `Spark DAG ${statusLabel}: ${count}${ref}`)}`;
+}
+
+function formatDagStatusLabel(status: SparkDagWidgetEntry["status"]): string {
+  if (status === "running") return "running";
+  if (status === "succeeded") return "done";
+  if (status === "timed_out") return "timed out";
+  return status;
+}
+
+function shortDagRunRef(runRef: string): string {
+  const match = /^run:([0-9a-f]{8})/i.exec(runRef);
+  return match ? `run:${match[1]}` : runRef;
 }
 
 function formatTaskSummaryLine(

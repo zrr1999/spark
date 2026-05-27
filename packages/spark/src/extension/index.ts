@@ -486,6 +486,15 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
   const pendingSparkAgentInstructions = new Map<string, string>();
 
+  function queueSparkAgentInstruction(ctx: SparkToolContext, instruction: string): void {
+    const sessionKey = sparkSessionOwnerKey(ctx);
+    const existingInstruction = pendingSparkAgentInstructions.get(sessionKey);
+    pendingSparkAgentInstructions.set(
+      sessionKey,
+      existingInstruction ? `${existingInstruction}\n\n${instruction}` : instruction,
+    );
+  }
+
   pi.on?.("input", async (event: unknown, ctx: SparkToolContext) => handleSparkInput(event, ctx));
   pi.on?.("before_role_start", async (event: unknown, ctx: SparkToolContext) =>
     injectSparkHints(event, ctx),
@@ -603,7 +612,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     if (!thread) {
       const dagStatus = await defaultSparkDagRunStore(cwd).status();
       widgetState = {
-        dag: sparkDagWidgetEntry(dagStatus),
+        dag: activeSparkDagWidgetEntry(dagStatus),
         tasks: [],
         independentTodos: numberedIndependentTodos,
         taskCountTotal: 0,
@@ -1077,6 +1086,18 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     )
       return value;
     return "status";
+  }
+
+  function activeSparkDagWidgetEntry(dagStatus: SparkDagStatusSummary): SparkWidgetState["dag"] {
+    return dagStatus.activeRun
+      ? {
+          status: dagStatus.activeRun.status,
+          runRef: dagStatus.activeRun.ref,
+          scheduled: dagStatus.activeRun.scheduled,
+          completed: dagStatus.activeRun.completed,
+          active: true,
+        }
+      : undefined;
   }
 
   function sparkDagWidgetEntry(
@@ -2027,12 +2048,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     instruction: string,
     visibleMessage: string,
   ): void {
-    const sessionKey = sparkSessionOwnerKey(ctx);
-    const existingInstruction = pendingSparkAgentInstructions.get(sessionKey);
-    pendingSparkAgentInstructions.set(
-      sessionKey,
-      existingInstruction ? `${existingInstruction}\n\n${instruction}` : instruction,
-    );
+    queueSparkAgentInstruction(ctx, instruction);
     piApi.sendMessage(
       {
         customType: "spark-mode-request",
@@ -2554,30 +2570,14 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           ? "\nExecution mode continued: no ready task remains to auto-claim; inspect blockers or finish the thread."
           : "";
       if (updated.result.autoClaimed && updated.graph) {
-        const continuationText = renderSparkExecutionContinuationPrompt(
-          updated.graph,
-          updated.result.threadRef,
-          executionMode?.focus,
-          updated.result.autoClaimed,
-        );
-        // Inject continuation as a Spark custom message rather than a user
-        // message so it does not visually occupy the user input lane and does
-        // not trigger an LLM turn on its own. It will be delivered as context
-        // alongside the next real user prompt.
-        pi.sendMessage(
-          {
-            customType: "spark-execution-continuation",
-            content: continuationText,
-            display: true,
-            details: {
-              threadRef: updated.result.threadRef,
-              autoClaimedTaskRef: updated.result.autoClaimed.ref,
-              autoClaimedTaskName: updated.result.autoClaimed.name,
-              autoClaimedTaskTitle: updated.result.autoClaimed.title,
-              focus: executionMode?.focus,
-            },
-          },
-          { deliverAs: "nextTurn", triggerTurn: false },
+        queueSparkAgentInstruction(
+          ctx,
+          renderSparkExecutionContinuationPrompt(
+            updated.graph,
+            updated.result.threadRef,
+            executionMode?.focus,
+            updated.result.autoClaimed,
+          ),
         );
       }
       return {
