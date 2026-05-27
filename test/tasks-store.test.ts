@@ -26,6 +26,7 @@ import {
   TaskGraphStoreLockTimeoutError,
   TaskTodoStore,
   taskCompletionReadiness,
+  taskPlanReadiness,
 } from "spark-tasks";
 
 function executionReadyPlan(objective: string): TaskPlan {
@@ -165,8 +166,14 @@ void test("task plan readiness distinguishes minimal and execution-ready plans",
   const minimalReadiness = graph.taskPlanReadiness(minimal.ref);
   assert.equal(minimalReadiness.ready, false);
   assert.deepEqual(
-    minimalReadiness.issues.map((issue) => issue.kind),
-    ["missing_success_criteria", "missing_evidence_required"],
+    minimalReadiness.issues.map((issue) => [issue.kind, issue.remediation]),
+    [
+      ["missing_success_criteria", "Add at least one observable entry to plan.successCriteria."],
+      [
+        "missing_evidence_required",
+        "Add at least one concrete validation artifact or command to plan.evidenceRequired.",
+      ],
+    ],
   );
 
   const blocked = graph.createTask({
@@ -188,8 +195,13 @@ void test("task plan readiness distinguishes minimal and execution-ready plans",
     },
   });
   assert.deepEqual(
-    graph.taskPlanReadiness(blocked.ref).issues.map((issue) => issue.kind),
-    ["open_questions"],
+    graph.taskPlanReadiness(blocked.ref).issues.map((issue) => [issue.kind, issue.remediation]),
+    [
+      [
+        "open_questions",
+        "Resolve material questions with spark_ask, then move decisions into askRefs or the plan body.",
+      ],
+    ],
   );
 
   const ready = graph.createTask({
@@ -219,6 +231,59 @@ void test("task plan readiness distinguishes minimal and execution-ready plans",
     status: "cancelled",
   });
   assert.deepEqual(graph.taskPlanReadiness(cancelled.ref), { ready: true, issues: [] });
+});
+
+void test("task plan readiness provides remediation for every issue kind", () => {
+  const noPlan = taskPlanReadiness({ status: "pending", plan: undefined });
+  assert.deepEqual(
+    noPlan.issues.map((issue) => [issue.kind, issue.remediation]),
+    [
+      [
+        "missing_plan",
+        "Add a concrete plan with objective, success criteria, evidence requirements, and steps.",
+      ],
+    ],
+  );
+
+  const issues = taskPlanReadiness({
+    status: "pending",
+    plan: {
+      objective: "",
+      contextRefs: [],
+      constraints: [],
+      nonGoals: [],
+      successCriteria: [],
+      evidenceRequired: [],
+      steps: [],
+      riskLevel: "normal",
+      openQuestions: ["Which direction?"],
+      askRefs: [],
+    },
+  }).issues;
+
+  assert.deepEqual(
+    issues.map((issue) => [issue.kind, issue.remediation]),
+    [
+      [
+        "missing_objective",
+        "Fill plan.objective with the specific outcome this task should achieve.",
+      ],
+      ["missing_success_criteria", "Add at least one observable entry to plan.successCriteria."],
+      [
+        "missing_evidence_required",
+        "Add at least one concrete validation artifact or command to plan.evidenceRequired.",
+      ],
+      ["missing_steps", "Add at least one concrete execution step to plan.steps."],
+      [
+        "open_questions",
+        "Resolve material questions with spark_ask, then move decisions into askRefs or the plan body.",
+      ],
+    ],
+  );
+  assert.equal(
+    issues.every((issue) => issue.remediation.length > 0),
+    true,
+  );
 });
 
 void test("task completion readiness requires output artifacts for declared evidence", () => {

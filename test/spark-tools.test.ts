@@ -655,13 +655,19 @@ void test("spark_plan_tasks blocks underspecified executable tasks without openi
     const details = planned.details as
       | {
           error?: string;
-          planDecision?: { asked?: boolean; accepted?: boolean; blocked?: boolean };
+          planDecision?: {
+            asked?: boolean;
+            accepted?: boolean;
+            blocked?: boolean;
+            summary?: string;
+          };
         }
       | undefined;
     assert.equal(details?.error, "task_plan_not_ready");
     assert.equal(details?.planDecision?.asked, false);
     assert.equal(details?.planDecision?.accepted, false);
     assert.equal(details?.planDecision?.blocked, true);
+    assert.match(details?.planDecision?.summary ?? "", /fix: Add at least one observable entry/);
     assert.match(toolText(planned), /Task plan not ready: @clarify-plan/);
     const graph = await defaultTaskGraphStore(dir).load();
     assert.equal(graph?.tasks().length, 0);

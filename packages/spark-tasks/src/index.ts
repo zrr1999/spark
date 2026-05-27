@@ -772,7 +772,7 @@ export class TaskGraph {
     if (readiness.ready) return;
     throw new DependencyError(
       `task plan is not execution-ready: ${task.ref}: ${readiness.issues
-        .map((issue) => issue.message)
+        .map((issue) => `${issue.message} fix: ${issue.remediation}`)
         .join("; ")}`,
     );
   }
@@ -1286,6 +1286,8 @@ export function taskPlanReadiness(task: Pick<Task, "plan" | "status">): TaskPlan
       kind: "missing_plan",
       severity: "blocking",
       message: "Task has no bound plan.",
+      remediation:
+        "Add a concrete plan with objective, success criteria, evidence requirements, and steps.",
     });
     return { ready: false, issues };
   }
@@ -1294,6 +1296,7 @@ export function taskPlanReadiness(task: Pick<Task, "plan" | "status">): TaskPlan
       kind: "missing_objective",
       severity: "blocking",
       message: "Task plan needs an objective.",
+      remediation: "Fill plan.objective with the specific outcome this task should achieve.",
     });
   }
   if (plan.successCriteria.length === 0) {
@@ -1301,6 +1304,7 @@ export function taskPlanReadiness(task: Pick<Task, "plan" | "status">): TaskPlan
       kind: "missing_success_criteria",
       severity: "blocking",
       message: "Task plan needs success criteria.",
+      remediation: "Add at least one observable entry to plan.successCriteria.",
     });
   }
   if (plan.evidenceRequired.length === 0) {
@@ -1308,6 +1312,8 @@ export function taskPlanReadiness(task: Pick<Task, "plan" | "status">): TaskPlan
       kind: "missing_evidence_required",
       severity: "blocking",
       message: "Task plan needs evidence requirements.",
+      remediation:
+        "Add at least one concrete validation artifact or command to plan.evidenceRequired.",
     });
   }
   if (plan.steps.length === 0) {
@@ -1315,6 +1321,7 @@ export function taskPlanReadiness(task: Pick<Task, "plan" | "status">): TaskPlan
       kind: "missing_steps",
       severity: "blocking",
       message: "Task plan needs execution steps.",
+      remediation: "Add at least one concrete execution step to plan.steps.",
     });
   }
   if (plan.openQuestions.length > 0) {
@@ -1322,6 +1329,8 @@ export function taskPlanReadiness(task: Pick<Task, "plan" | "status">): TaskPlan
       kind: "open_questions",
       severity: "blocking",
       message: `Task plan has unresolved questions: ${plan.openQuestions.join("; ")}`,
+      remediation:
+        "Resolve material questions with spark_ask, then move decisions into askRefs or the plan body.",
     });
   }
   return { ready: issues.every((issue) => issue.severity !== "blocking"), issues };

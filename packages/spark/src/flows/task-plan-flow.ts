@@ -35,6 +35,8 @@ export function decideTaskPlanBeforeCreate(input: {
 }
 
 function summarizeTaskPlanIssues(task: Task, issues: TaskPlanIssue[]): string {
-  const issueSummary = issues.map((issue) => issue.message).join(" ");
+  const issueSummary = issues
+    .map((issue) => `${issue.message} fix: ${issue.remediation}`)
+    .join(" ");
   return `Task @${task.name} “${task.title}” needs a concrete, context-specific plan before creation or update. ${issueSummary}`;
 }

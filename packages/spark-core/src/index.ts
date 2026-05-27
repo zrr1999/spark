@@ -308,6 +308,7 @@ export interface TaskPlanIssue {
   kind: TaskPlanIssueKind;
   severity: "warning" | "blocking";
   message: string;
+  remediation: string;
 }
 
 export interface TaskPlanReadiness {
