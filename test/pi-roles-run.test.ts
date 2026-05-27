@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   cancelRoleRun,
+  defaultUserRoleModelBindingStore,
   listActiveRoleRuns,
   normalizeRoleRef,
   normalizeRoleRunMode,
@@ -14,6 +15,7 @@ import {
   RoleRunCancelledError,
   RoleRunTimeoutError,
   runRole,
+  saveValidatedRoleModelBinding,
 } from "pi-roles";
 import { buildRoleRunArgs } from "spark-runtime";
 
@@ -41,6 +43,18 @@ void test("pi-roles builds fresh JSON Pi role args without accidental fork sessi
   assert.equal(args.at(-1)?.includes("Spark role-run ask policy:"), true);
   assert.equal(args.at(-1)?.includes("Spark naming quality policy:"), true);
   assert.equal(args.at(-1)?.includes("Instruction:\n\nImplement the task."), true);
+});
+
+void test("pi-roles includes resolved user model in JSON Pi role args", () => {
+  const args = buildRoleRunArgs({
+    roleRef: "role:builtin-worker",
+    mode: "fresh",
+    systemPrompt: "You are a worker.",
+    model: "openai/gpt-5.5",
+    instruction: "Implement.",
+  });
+
+  assert.deepEqual(args.slice(0, 5), ["--print", "--mode", "json", "--model", "openai/gpt-5.5"]);
 });
 
 void test("pi-roles builds forked JSON Pi role args only when forked mode is explicit", () => {
@@ -76,6 +90,50 @@ void test("pi-roles requires fork source for forked mode", () => {
       }),
     /forked role run requires forkFromSession/,
   );
+});
+
+void test("pi-roles validates and persists user role model bindings", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-model-binding-"));
+  try {
+    const fakePi = join(dir, "fake-pi.cjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "const args = process.argv.slice(2);",
+        "if (args[0] === '--list-models' && args[1] === 'openai/gpt-5.5') process.exit(0);",
+        "process.exit(42);",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+    const store = defaultUserRoleModelBindingStore(dir);
+
+    const binding = await saveValidatedRoleModelBinding({
+      store,
+      roleRef: "role:builtin-worker",
+      model: "openai/gpt-5.5",
+      piCommand: fakePi,
+      cwd: dir,
+      now: () => "2026-05-26T00:00:00.000Z",
+    });
+
+    assert.equal(binding.model, "openai/gpt-5.5");
+    assert.equal((await store.get("role:builtin-worker"))?.model, "openai/gpt-5.5");
+    await assert.rejects(
+      saveValidatedRoleModelBinding({
+        store,
+        roleRef: "role:builtin-reviewer",
+        model: "missing/model",
+        piCommand: fakePi,
+        cwd: dir,
+      }),
+      /model validation failed/,
+    );
+    assert.equal(await store.get("role:builtin-reviewer"), undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 void test("pi-roles launches Pi, captures JSONL events, and records run metadata", async () => {

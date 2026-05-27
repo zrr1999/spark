@@ -21,26 +21,42 @@ interface ToolConfig {
 }
 
 void test("call_role dry-run resolves builtin roles and returns Pi args", async () => {
-  const tools = registerRoleToolsForTest();
-  const result = await executeCallRole(tools, {
-    role: "worker",
-    instruction: "Implement a small change.",
-    sessionDir: "/tmp/sessions",
-  });
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-tool-dryrun-"));
+  const previousBindingHome = process.env.PI_ROLES_HOME;
+  process.env.PI_ROLES_HOME = dir;
+  try {
+    const tools = registerRoleToolsForTest();
+    const result = await executeCallRole(tools, {
+      role: "worker",
+      instruction: "Implement a small change.",
+      sessionDir: "/tmp/sessions",
+    });
 
-  assert.match(result.content[0]?.text ?? "", /Role call dry-run: worker \(role:builtin-worker\)/);
-  assert.match(result.content[0]?.text ?? "", /mode: fresh/);
-  const details = result.details as { args?: string[]; dryRun?: boolean; role?: { ref?: string } };
-  assert.equal(details.dryRun, true);
-  assert.equal(details.role?.ref, "role:builtin-worker");
-  assert.deepEqual(details.args?.slice(0, 6), [
-    "--print",
-    "--mode",
-    "json",
-    "--session-dir",
-    "/tmp/sessions",
-    "--append-system-prompt",
-  ]);
+    assert.match(
+      result.content[0]?.text ?? "",
+      /Role call dry-run: worker \(role:builtin-worker\)/,
+    );
+    assert.match(result.content[0]?.text ?? "", /mode: fresh/);
+    const details = result.details as {
+      args?: string[];
+      dryRun?: boolean;
+      role?: { ref?: string };
+    };
+    assert.equal(details.dryRun, true);
+    assert.equal(details.role?.ref, "role:builtin-worker");
+    assert.deepEqual(details.args?.slice(0, 6), [
+      "--print",
+      "--mode",
+      "json",
+      "--session-dir",
+      "/tmp/sessions",
+      "--append-system-prompt",
+    ]);
+  } finally {
+    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousBindingHome;
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 void test("role spec tools list, get, and create project roles", async () => {
@@ -77,6 +93,8 @@ void test("role spec tools list, get, and create project roles", async () => {
 
 void test("call_role launches fresh role runs when dryRun is false", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-roles-tool-"));
+  const previousBindingHome = process.env.PI_ROLES_HOME;
+  process.env.PI_ROLES_HOME = dir;
   try {
     const fakePi = join(dir, "fake-pi.mjs");
     await writeFile(
@@ -84,7 +102,9 @@ void test("call_role launches fresh role runs when dryRun is false", async () =>
       [
         "#!/usr/bin/env node",
         "const args = process.argv.slice(2);",
+        "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
         "if (!args.includes('--print')) process.exit(10);",
+        "if (!args.includes('--model') || args[args.indexOf('--model') + 1] !== 'test/model') process.exit(11);",
         "process.stdout.write(JSON.stringify({ type: 'done', args }) + '\\n');",
       ].join("\n"),
       "utf8",
@@ -99,6 +119,7 @@ void test("call_role launches fresh role runs when dryRun is false", async () =>
         instruction: "Run the fake worker.",
         dryRun: false,
         mode: "fresh",
+        model: "test/model",
         piCommand: fakePi,
         timeoutMs: 5_000,
       },
@@ -114,6 +135,8 @@ void test("call_role launches fresh role runs when dryRun is false", async () =>
     assert.equal(details.record?.mode, "fresh");
     assert.equal(details.jsonEventCount, 1);
   } finally {
+    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousBindingHome;
     await rm(dir, { recursive: true, force: true });
   }
 });

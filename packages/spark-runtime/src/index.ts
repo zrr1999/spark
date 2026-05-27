@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import {
   buildRoleRunArgs as buildGenericRoleRunArgs,
+  defaultUserRoleModelBindingStore,
   parsePiJsonlEvents,
   RoleRunCancelledError,
   RoleRunTimeoutError as PiRoleRunTimeoutError,
@@ -261,6 +262,7 @@ export interface PiRoleCommandInput {
   specRef?: RoleRef;
   systemPrompt: string;
   instruction: string;
+  model?: string;
   sessionDir?: string;
   mode?: RoleRunMode;
   forkFromSession?: string;
@@ -272,6 +274,7 @@ export function buildRoleRunArgs(input: PiRoleCommandInput): string[] {
     mode: input.mode,
     systemPrompt: input.systemPrompt,
     instruction: input.instruction,
+    model: input.model,
     runGuidance: sparkRoleRunGuidance(),
     sessionDir: input.sessionDir,
     forkFromSession: input.forkFromSession,
@@ -635,10 +638,17 @@ async function runPiJsonRole(
 ): Promise<SparkRoleRunResult> {
   let tracked: TrackedSparkRoleRunProcess | undefined;
   try {
+    const modelBinding = await defaultUserRoleModelBindingStore().get(role.ref);
+    if (!modelBinding && options.piCommand === "pi") {
+      throw new Error(
+        `role model binding required for ${role.ref}; run the role once interactively or bind a model before dispatch`,
+      );
+    }
     const result = await runRole({
       runRef: runRef as `run:${string}`,
       roleRef: role.ref as `role:${string}`,
       systemPrompt: role.systemPrompt,
+      model: modelBinding?.model,
       instruction: instruction.instruction,
       runGuidance: sparkRoleRunGuidance(),
       sessionDir: options.sessionDir,

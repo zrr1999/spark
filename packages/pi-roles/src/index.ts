@@ -73,6 +73,8 @@ export interface RoleRunRequest {
   instruction: string;
   mode?: RoleRunMode;
   systemPrompt?: string;
+  /** Concrete, user-confirmed Pi model to use for this run. */
+  model?: string;
   sessionDir?: string;
   forkFromSession?: string;
   /** Adapter-specific guidance appended between the role prompt and instruction. */
@@ -97,6 +99,7 @@ export interface RoleRunLauncherInput extends RoleRunCommandInput {
 export interface RoleRunResult {
   record: RoleRunRecord & {
     mode: RoleRunMode;
+    model?: string;
     sessionDir?: string;
     forkFromSession?: string;
     failureKind?: string;
@@ -111,6 +114,7 @@ export interface ActiveRoleRun {
   ref: RoleRunRef;
   roleRef: RoleRef;
   mode: RoleRunMode;
+  model?: string;
   child: ChildProcess;
   startedAt: string;
   cancel(reason?: string): boolean;
@@ -373,6 +377,150 @@ export function defaultProjectRoleStore(cwd: string): MarkdownRoleStore {
 
 export function defaultUserRoleStore(home = homedir()): MarkdownRoleStore {
   return new MarkdownRoleStore({ rootDir: join(home, ".agents", "roles"), source: "user" });
+}
+
+export interface RoleModelBinding {
+  roleRef: RoleRef;
+  model: string;
+  source: "user";
+  validatedAt: string;
+  updatedAt: string;
+  validationCommand: string;
+}
+
+interface RoleModelBindingFile {
+  version: 1;
+  bindings: RoleModelBinding[];
+}
+
+export class RoleModelBindingStore {
+  readonly filePath: string;
+
+  constructor(filePath: string) {
+    this.filePath = filePath;
+  }
+
+  async loadAll(): Promise<RoleModelBinding[]> {
+    let raw: string;
+    try {
+      raw = await readFile(this.filePath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    const parsed = JSON.parse(raw) as Partial<RoleModelBindingFile>;
+    if (parsed.version !== 1 || !Array.isArray(parsed.bindings)) return [];
+    return parsed.bindings.filter(isRoleModelBinding);
+  }
+
+  async get(roleRef: string): Promise<RoleModelBinding | undefined> {
+    const normalized = normalizeRoleRef(roleRef);
+    return (await this.loadAll()).find((binding) => binding.roleRef === normalized);
+  }
+
+  async save(binding: RoleModelBinding): Promise<void> {
+    if (!binding.model.trim()) throw new Error("role model binding model is required");
+    const normalized: RoleModelBinding = {
+      ...binding,
+      roleRef: normalizeRoleRef(binding.roleRef),
+      model: binding.model.trim(),
+    };
+    const bindings = (await this.loadAll()).filter((entry) => entry.roleRef !== normalized.roleRef);
+    bindings.push(normalized);
+    bindings.sort((a, b) => a.roleRef.localeCompare(b.roleRef));
+    await mkdir(dirname(this.filePath), { recursive: true });
+    await writeFile(
+      this.filePath,
+      `${JSON.stringify({ version: 1, bindings } satisfies RoleModelBindingFile, null, 2)}\n`,
+      "utf8",
+    );
+  }
+}
+
+export function defaultUserRoleModelBindingStore(
+  home = process.env.PI_ROLES_HOME || homedir(),
+): RoleModelBindingStore {
+  return new RoleModelBindingStore(join(home, ".agents", "role-model-bindings.json"));
+}
+
+export async function validateRoleModel(input: {
+  piCommand: string;
+  model: string;
+  cwd?: string;
+  timeoutMs?: number;
+}): Promise<void> {
+  const model = input.model.trim();
+  if (!model) throw new Error("role model is required");
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(input.piCommand, ["--list-models", model], {
+      cwd: input.cwd,
+      env: process.env,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    const stderrChunks: Buffer[] = [];
+    child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGTERM");
+      reject(new Error(`model validation timed out for ${model}`));
+    }, input.timeoutMs ?? 15_000);
+    timer.unref?.();
+    child.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else {
+        const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+        reject(new Error(`model validation failed for ${model}: ${stderr || `exit ${code}`}`));
+      }
+    });
+  });
+}
+
+export async function saveValidatedRoleModelBinding(input: {
+  store?: RoleModelBindingStore;
+  roleRef: RoleRef;
+  model: string;
+  piCommand: string;
+  cwd?: string;
+  now?: () => string;
+}): Promise<RoleModelBinding> {
+  await validateRoleModel({ piCommand: input.piCommand, model: input.model, cwd: input.cwd });
+  const now = input.now?.() ?? nowIso();
+  const binding: RoleModelBinding = {
+    roleRef: normalizeRoleRef(input.roleRef),
+    model: input.model.trim(),
+    source: "user",
+    validatedAt: now,
+    updatedAt: now,
+    validationCommand: `${input.piCommand} --list-models ${input.model.trim()}`,
+  };
+  await (input.store ?? defaultUserRoleModelBindingStore()).save(binding);
+  return binding;
+}
+
+function isRoleModelBinding(value: unknown): value is RoleModelBinding {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<RoleModelBinding>;
+  return (
+    typeof candidate.roleRef === "string" &&
+    candidate.roleRef.startsWith("role:") &&
+    typeof candidate.model === "string" &&
+    candidate.model.trim().length > 0 &&
+    candidate.source === "user" &&
+    typeof candidate.validatedAt === "string" &&
+    typeof candidate.updatedAt === "string" &&
+    typeof candidate.validationCommand === "string"
+  );
 }
 
 export function compatibilityProjectRoleStore(cwd: string): MarkdownRoleStore {
@@ -750,6 +898,7 @@ export function buildRoleRunArgs(input: RoleRunCommandInput): string[] {
   if (!input.instruction.trim()) throw new Error("role run instruction is required");
   const mode = normalizeRoleRunMode(input.mode);
   const args = ["--print", "--mode", "json"];
+  if (input.model?.trim()) args.push("--model", input.model.trim());
   if (input.sessionDir) args.push("--session-dir", input.sessionDir);
   if (mode === "forked") {
     if (!input.forkFromSession?.trim()) throw new Error("forked role run requires forkFromSession");
@@ -778,6 +927,7 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
     ref: input.runRef,
     roleRef: input.roleRef,
     mode,
+    model: input.model?.trim() || undefined,
     child,
     startedAt,
     cancel(reason?: string) {
@@ -824,6 +974,7 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
         ref: input.runRef,
         roleRef: input.roleRef,
         mode,
+        model: input.model?.trim() || undefined,
         status: exitCode === 0 ? "succeeded" : "failed",
         instruction: input.instruction,
         startedAt,

@@ -7,9 +7,11 @@ import {
   buildRoleRunArgs,
   createRoleSpec,
   defaultProjectRoleStore,
+  defaultUserRoleModelBindingStore,
   defaultUserRoleStore,
   hydrateDefaultRoleRegistry,
   runRole,
+  saveValidatedRoleModelBinding,
   type RoleRunMode,
   type RoleRunRef,
   type RoleSource,
@@ -36,7 +38,13 @@ interface PiRolesToolConfig {
     params: Record<string, unknown>,
     signal: AbortSignal,
     onUpdate: (update: { content: Array<{ type: "text"; text: string }> }) => void,
-    ctx: { cwd?: string; ui?: { notify?: (message: string, level?: string) => void } },
+    ctx: {
+      cwd?: string;
+      ui?: {
+        notify?: (message: string, level?: string) => void;
+        input?: (title: string, defaultValue?: string) => Promise<string | undefined>;
+      };
+    },
   ): Promise<{
     content: Array<{ type: "text"; text: string }>;
     details?: Record<string, unknown>;
@@ -75,6 +83,7 @@ export interface CallRoleToolParams {
   forkFromSession?: string;
   timeoutMs?: number;
   includeUser?: boolean;
+  model?: string;
 }
 
 export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
@@ -163,10 +172,13 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       const role = registry.select(requiredString(params.role, "get_role role is required"));
       const includePrompt = params.includePrompt === true;
       const promptPreview = truncateInline(role.systemPrompt, 240);
+      const modelBinding = await defaultUserRoleModelBindingStore().get(role.ref);
       const lines = [
         `${role.id} (${role.ref})`,
         `source: ${role.source}`,
         `description: ${role.description}`,
+        `defaultModel: ${role.defaultModel ?? "none"}`,
+        `modelBinding: ${modelBinding ? `${modelBinding.model} (validated ${modelBinding.validatedAt})` : "not set; first actual run will ask for a model"}`,
         `systemPrompt: ${role.systemPrompt.length} chars${includePrompt ? "" : `; preview=${JSON.stringify(promptPreview)}`}`,
       ];
       if (includePrompt) lines.push("", role.systemPrompt);
@@ -174,8 +186,8 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         content: [{ type: "text", text: lines.join("\n") }],
         details: {
           role: includePrompt
-            ? { ...compactRole(role), systemPrompt: role.systemPrompt }
-            : compactRole(role),
+            ? { ...compactRole(role), modelBinding, systemPrompt: role.systemPrompt }
+            : { ...compactRole(role), modelBinding },
         },
       };
     },
@@ -269,6 +281,12 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         }),
       ),
       timeoutMs: Type.Optional(Type.Number({ description: "Child run timeout in milliseconds." })),
+      model: Type.Optional(
+        Type.String({
+          description:
+            "Concrete Pi model to validate and bind on first actual run when no user binding exists.",
+        }),
+      ),
       includeUser: Type.Optional(
         Type.Boolean({
           description: "Also load user roles from ~/.agents/roles. Defaults to false.",
@@ -284,6 +302,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
           args.dryRun === false ? "run" : "dry-run",
           formatNumberArg(args.timeoutMs, { prefix: "timeout=" }),
           formatStringArg(args.cwd, { prefix: "cwd=" }),
+          formatStringArg(args.model, { prefix: "model=" }),
         ],
         theme,
       );
@@ -296,11 +315,20 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       const role = registry.select(p.role);
       const mode = p.mode ?? "fresh";
       const runRef = `run:${randomUUID()}` as RoleRunRef;
+      const model = await resolveRoleModelForCall({
+        role,
+        explicitModel: p.model,
+        piCommand: p.piCommand ?? "pi",
+        cwd,
+        actualRun: p.dryRun === false,
+        ui: ctx.ui,
+      });
       const commandInput = {
         runRef,
         roleRef: role.ref,
         mode,
         systemPrompt: role.systemPrompt,
+        model,
         instruction: p.instruction,
         sessionDir: p.sessionDir,
         forkFromSession: p.forkFromSession,
@@ -321,6 +349,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
                 `mode: ${mode}`,
                 `cwd: ${cwd}`,
                 `piCommand: ${commandInput.piCommand}`,
+                `model: ${model ?? "not bound"}`,
                 `args: ${JSON.stringify(args)}`,
               ].join("\n"),
             },
@@ -332,6 +361,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
             runRef,
             cwd,
             piCommand: commandInput.piCommand,
+            model,
             args,
           },
         };
@@ -358,6 +388,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
           mode,
           runRef,
           cwd,
+          model,
           record: result.record as unknown as Record<string, unknown>,
           jsonEventCount: result.jsonEvents.length,
           stdoutTail,
@@ -366,6 +397,42 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       };
     },
   });
+}
+
+async function resolveRoleModelForCall(input: {
+  role: RoleSpec;
+  explicitModel?: string;
+  piCommand: string;
+  cwd: string;
+  actualRun: boolean;
+  ui?: {
+    notify?: (message: string, level?: string) => void;
+    input?: (title: string, defaultValue?: string) => Promise<string | undefined>;
+  };
+}): Promise<string | undefined> {
+  const store = defaultUserRoleModelBindingStore();
+  const existing = await store.get(input.role.ref);
+  if (existing) return existing.model;
+  if (!input.actualRun) return input.explicitModel?.trim() || undefined;
+
+  const selected =
+    input.explicitModel?.trim() ||
+    (await input.ui?.input?.(`Choose Pi model for role ${input.role.id}`, input.role.defaultModel));
+  const model = selected?.trim();
+  if (!model) {
+    throw new Error(
+      `role model binding required for ${input.role.id} (${input.role.ref}); provide model or rerun with an interactive UI`,
+    );
+  }
+  const binding = await saveValidatedRoleModelBinding({
+    store,
+    roleRef: input.role.ref,
+    model,
+    piCommand: input.piCommand,
+    cwd: input.cwd,
+  });
+  input.ui?.notify?.(`Saved model binding for role ${input.role.id}: ${binding.model}`, "success");
+  return binding.model;
 }
 
 function normalizeCallRoleToolParams(params: Record<string, unknown>): CallRoleToolParams {
@@ -398,6 +465,8 @@ function normalizeCallRoleToolParams(params: Record<string, unknown>): CallRoleT
         ? params.timeoutMs
         : undefined,
     includeUser: params.includeUser === true,
+    model:
+      typeof params.model === "string" && params.model.trim() ? params.model.trim() : undefined,
   };
 }
 
