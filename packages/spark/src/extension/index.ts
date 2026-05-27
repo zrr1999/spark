@@ -173,7 +173,6 @@ interface SparkToolContext {
 
 interface SparkCommandContext extends SparkToolContext {
   waitForIdle?: () => Promise<void>;
-  sendUserMessage?: (content: string) => Promise<void>;
   setEditorText?: (text: string) => void;
 }
 
