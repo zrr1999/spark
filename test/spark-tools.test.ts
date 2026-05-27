@@ -226,12 +226,15 @@ void test("/plan and /execute enter Spark modes directly", async () => {
     const planMessage = await consumeSparkModeContext(existingRun, existingCtx);
     assert.match(planMessage, /Enter Spark planning mode from explicit \/plan/);
     assert.match(planMessage, /Audit current task flow/);
-    assert.match(planMessage, /use spark_ask for context-specific detailed intent/);
+    assert.match(planMessage, /prefer spark_ask before tasking/);
+    assert.match(planMessage, /target thread selection/);
+    assert.match(planMessage, /design options only or durable task planning/);
+    assert.match(planMessage, /Do not call spark_plan_tasks until those choices/);
     assert.match(planMessage, /do not leave them as prose/);
     assert.match(planMessage, /do not use canned intake templates/);
     assert.match(
       planMessage,
-      /call spark_plan_tasks to create or refine concrete plan-bound tasks/,
+      /Once planning-affecting uncertainty is resolved, call spark_plan_tasks/,
     );
     assert.doesNotMatch(
       planMessage,
