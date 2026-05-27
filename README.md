@@ -8,7 +8,14 @@
 /spark <idea>
 ```
 
-`/spark` initializes local Spark state without asking the user to complete a generic intake template. Spark first records the initial intent and uses investigation tasks to gather context. It does not synthesize placeholder current tasks; the model claims one or more concrete tasks within the active thread. Follow-up asks should be grounded in the actual project state: when open questions or decision points would change task scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order, Spark should use a context-specific `spark_ask` instead of leaving those questions as prose. The output language defaults from the current request language and is confirmed only when that decision is genuinely unclear.
+`/spark` initializes local Spark state without asking the user to complete a generic intake template. Spark first records the initial intent and uses investigation tasks to gather context. It does not synthesize placeholder current tasks; the model claims one concrete task at a time within the active thread. Follow-up asks should be grounded in the actual project state: when open questions or decision points would change task scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order, Spark should use a context-specific `spark_ask` instead of leaving those questions as prose. The output language defaults from the current request language and is confirmed only when that decision is genuinely unclear.
+
+Spark command modes are intentionally split:
+
+- `/plan <focus>` plans or refines the task DAG and does not execute work.
+- `/execute <focus>` executes at most one concrete task, then stops. If another task is ready, the finish output may point to it; run `/execute` again for one more step.
+- `/run <focus>` starts a durable background Spark run for the selected thread. The DAG manager advances ready tasks until the run is done, blocked, failed, cancelled, or needs a decision. Progress appears in `spark_status`, the Spark widget, and DAG-manager notifications; it should not be represented as follow-up user messages.
+- `/spark <focus>` infers planning or single-step execution when high confidence. If the prompt asks for continuous/until-done progress, Spark asks before entering `/run`.
 
 The first vertical slice then creates local Spark state under `.spark/`:
 
@@ -28,7 +35,7 @@ A root `SPARK.md` is only materialized when the current `cwd` looks like a concr
 
 ## Packages
 
-- `spark` — high-level `/spark` facade and Spark status/run tools.
+- `spark` — high-level `/spark`, `/plan`, `/execute`, and `/run` facade plus Spark status/run tools.
 - `spark-core` — internal shared refs, schemas, errors, and contracts.
 - `pi-cue` — reusable Pi/cue-shell execution substrate; absorbs `pi-cue-shell` code without a compatibility package and does not depend on `spark-core`.
 - `pi-ask` — minimal `ask_user` plus reusable `ask_flow` protocol/state/renderer with direct custom input handling.
