@@ -2724,6 +2724,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         outputLanguage?: string;
       };
       let thread = resolveSparkThread(graph, p.thread);
+      let created = false;
       if (!thread) {
         const title = p.title?.trim();
         if (!title)
@@ -2750,6 +2751,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           outputLanguage:
             p.outputLanguage === "zh" || p.outputLanguage === "en" ? p.outputLanguage : undefined,
         });
+        created = true;
         await store.save(graph);
         await saveThreadIntentTrace(cwd, thread.ref, clarification);
       }
@@ -2759,10 +2761,10 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `Current Spark thread for this session: ${thread.title} (${thread.ref})`,
+            text: `${created ? "Created new" : "Selected existing"} Spark thread for this session: ${thread.title} (${thread.ref})`,
           },
         ],
-        details: { thread: thread as unknown as Record<string, unknown> },
+        details: { created, thread: thread as unknown as Record<string, unknown> },
       };
     },
   });

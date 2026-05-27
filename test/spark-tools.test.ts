@@ -1270,7 +1270,8 @@ void test("spark_use_thread clarifies generic new thread intent", async () => {
     const { tools } = registerSparkToolsForTest();
 
     const created = await executeSparkTool(tools, "spark_use_thread", ctx, { title: "tasks" });
-    assert.match(toolText(created), /Current Spark thread/);
+    assert.match(toolText(created), /Created new Spark thread/);
+    assert.equal((created.details as { created?: boolean } | undefined)?.created, true);
     const artifacts = await defaultArtifactStore(dir).list({
       kind: "ask-answer",
     });
@@ -1284,6 +1285,24 @@ void test("spark_use_thread clarifies generic new thread intent", async () => {
     };
     assert.ok(askBody.request?.questions?.every((question) => question.prompt?.includes("tasks")));
     assert.ok(traces.some((artifact) => artifact.title === "Thread intent clarification"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark_use_thread reports selected existing threads", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-use-thread-existing-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+
+    const selected = await executeSparkTool(tools, "spark_use_thread", ctx, {
+      thread: "Tool persistence",
+    });
+
+    assert.match(toolText(selected), /Selected existing Spark thread/);
+    assert.equal((selected.details as { created?: boolean } | undefined)?.created, false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
