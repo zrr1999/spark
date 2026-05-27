@@ -20,7 +20,14 @@ import {
   type SparkAskToolParams,
   type SparkCopyLanguage,
 } from "spark-ask";
-import { RoleRegistry, builtinRoleRef, defaultProjectRoleStore } from "pi-roles";
+import {
+  RoleRegistry,
+  builtinRoleRef,
+  defaultProjectRoleStore,
+  defaultUserRoleModelBindingStore,
+  saveValidatedRoleModelBinding,
+  type RoleSpec,
+} from "pi-roles";
 import {
   contentHash,
   newRef,
@@ -48,6 +55,7 @@ import {
   defaultSparkDagRunStore,
   type SparkDagCompletionFollowUp,
   type SparkDagRunRecord,
+  type SparkDagRunStatus,
   type SparkDagStatusSummary,
   runReadySparkTasks,
 } from "spark-orchestrator";
@@ -111,9 +119,14 @@ interface SparkExtensionAPI {
   ): void;
   registerTool?(config: SparkRegisteredToolConfig): void;
   on?(event: string, handler: (event: unknown, ctx: SparkToolContext) => unknown): void;
-  sendUserMessage?(
-    content: string,
-    options?: { deliverAs?: "steer" | "followUp" | "nextTurn" },
+  sendMessage(
+    message: {
+      customType: string;
+      content: string;
+      display?: boolean;
+      details?: Record<string, unknown>;
+    },
+    options?: { deliverAs?: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean },
   ): void;
 }
 
@@ -170,7 +183,19 @@ const DAG_MANAGER_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_SPARK_STATUS_ACTIVE_LIMIT = 20;
 const DEFAULT_SPARK_STATUS_TODO_LIMIT = 3;
 const DEFAULT_SPARK_PLAN_TASK_OUTPUT_LIMIT = 5;
+const SPARK_PLAN_TASKS_READINESS_RULES = [
+  "Readiness rules:",
+  "- TaskPlanIssue kinds currently have no warning-only entries; every current kind below is blocking.",
+  "- missing_plan: the task must have a bound plan.",
+  "- missing_objective: plan.objective must be non-empty.",
+  "- missing_success_criteria: plan.successCriteria must include at least one observable success criterion.",
+  "- missing_evidence_required: plan.evidenceRequired must include at least one concrete evidence item required before completion.",
+  "- missing_steps: plan.steps must include at least one execution step.",
+  "- open_questions: plan.openQuestions must be empty; resolve material questions through context-specific spark_ask artifacts before planning.",
+  "- dependsOn resolution is active-thread scoped and includes both existing thread tasks and every task created/updated in the same spark_plan_tasks batch before dependencies are added. Use a bare task name (displayed as @name, passed without @), exact task title, or task:* ref; unresolved dependencies block the plan, and cross-thread dependencies are unsupported.",
+].join("\n");
 type SparkStatusView = "active" | "summary" | "full";
+type SparkStatusFormat = "text" | "json";
 type SparkCommandProjectStateKind = "empty_project" | "existing_project" | "initialized";
 interface SparkCommandProjectState {
   kind: SparkCommandProjectStateKind;
@@ -179,6 +204,7 @@ interface SparkCommandProjectState {
 }
 
 type SparkEntryMode = "planning" | "execution";
+type SparkPlanningModeSource = "auto" | "direct";
 type SparkEntryModeChoice = SparkEntryMode | "new_project";
 type SparkEntryConfidence = "high" | "ambiguous" | "conflicting";
 
@@ -206,9 +232,19 @@ type SparkEntryIntent =
   | { kind: "direct"; mode: SparkEntryMode; prompt: string };
 
 type SparkEntryResolution =
-  | { action: "initialize_new_project"; idea: string; enterPlanning: boolean }
-  | { action: "initialize_existing_project"; idea: string }
-  | { action: "enter_mode"; mode: SparkEntryMode; focus?: string }
+  | {
+      action: "initialize_new_project";
+      idea: string;
+      enterPlanning: boolean;
+      planningSource?: SparkPlanningModeSource;
+    }
+  | { action: "initialize_existing_project"; idea: string; planningSource: SparkPlanningModeSource }
+  | {
+      action: "enter_mode";
+      mode: SparkEntryMode;
+      focus?: string;
+      planningSource?: SparkPlanningModeSource;
+    }
   | { action: "blocked"; message: string }
   | { action: "none" };
 
@@ -286,10 +322,25 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     registerPiCueTools(pi as unknown as Parameters<typeof registerPiCueTools>[0]);
   }
 
+  const pendingSparkAgentInstructions = new Map<string, string>();
+
   pi.on?.("input", async (event: unknown, ctx: SparkToolContext) => handleSparkInput(event, ctx));
   pi.on?.("before_role_start", async (event: unknown, ctx: SparkToolContext) =>
     injectSparkHints(event, ctx),
   );
+  pi.on?.("before_agent_start", async (_event: unknown, ctx: SparkToolContext) => {
+    const sessionKey = sparkSessionOwnerKey(ctx);
+    const instruction = pendingSparkAgentInstructions.get(sessionKey);
+    if (!instruction) return undefined;
+    pendingSparkAgentInstructions.delete(sessionKey);
+    return {
+      message: {
+        customType: "spark-mode-context",
+        content: instruction,
+        display: false,
+      },
+    };
+  });
   pi.on?.("turn_start", async (_event: unknown, ctx: SparkToolContext) => {
     if (!(await hasLocalSparkDirectory(ctx.cwd))) return;
     ensureClaimReaper(ctx.cwd);
@@ -388,7 +439,9 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     }));
     const thread = await currentSparkThread(cwd, ctx, graph);
     if (!thread) {
+      const dagStatus = await defaultSparkDagRunStore(cwd).status();
       widgetState = {
+        dag: sparkDagWidgetEntry(dagStatus),
         tasks: [],
         independentTodos: numberedIndependentTodos,
         taskCountTotal: 0,
@@ -401,6 +454,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       widget.update();
       return;
     }
+    const dagStatus = await defaultSparkDagRunStore(cwd).status();
     const allTasks = graph.tasks(thread.ref);
     const claimedTasks = allTasks.filter((task) => taskClaimedBy(task));
     const sessionTasks = claimedTasks.filter((task) => isClaimOwnedBySession(task, sessionKey));
@@ -413,6 +467,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     );
     widgetState = {
       threadTitle: isPlaceholderThreadTitle(thread.title) ? undefined : thread.title,
+      dag: sparkDagWidgetEntry(dagStatus, thread.ref),
       tasks: allTasks.map((task) => ({
         title: task.title,
         status: mapTaskStatus(task.status),
@@ -721,6 +776,19 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     return task.plan ? undefined : "missing";
   }
 
+  function taskLifecycleSuffix(task: Task): string {
+    const parts: string[] = [];
+    if (task.supersededBy.length > 0) parts.push(`supersededBy=${task.supersededBy.join(",")}`);
+    if (task.cancellation) {
+      const by = task.cancellation.by ? ` by=${task.cancellation.by}` : "";
+      const reason = task.cancellation.reason
+        ? ` reason=${JSON.stringify(truncateInline(task.cancellation.reason, 120))}`
+        : "";
+      parts.push(`cancelledAt=${task.cancellation.at}${by}${reason}`);
+    }
+    return parts.length > 0 ? ` ${parts.join(" ")}` : "";
+  }
+
   function shortRoleLabel(roleRef: string): string {
     return roleRef.replace(/^role:(builtin-|project-|user-)?/, "");
   }
@@ -774,6 +842,10 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     return "active";
   }
 
+  function normalizeSparkStatusFormat(params: Record<string, unknown>): SparkStatusFormat {
+    return params.format === "json" ? "json" : "text";
+  }
+
   function normalizeSparkStatusLimit(params: Record<string, unknown>): number | undefined {
     if (typeof params.limit !== "number" || !Number.isFinite(params.limit)) return undefined;
     const limit = Math.floor(params.limit);
@@ -781,7 +853,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   }
 
   function normalizeSparkFinishStatus(value: unknown): "done" | "failed" | "cancelled" {
-    if (value === "failed" || value === "cancelled") return value;
+    if (value === "failed" || value === "cancelled" || value === "cancel")
+      return value === "cancel" ? "cancelled" : value;
     return "done";
   }
 
@@ -839,16 +912,52 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     return "status";
   }
 
+  function sparkDagWidgetEntry(
+    dagStatus: SparkDagStatusSummary,
+    threadRef?: ThreadRef,
+  ): SparkWidgetState["dag"] {
+    const activeRun = dagStatus.activeRun;
+    if (activeRun && (!threadRef || activeRun.threadRef === threadRef)) {
+      return {
+        status: activeRun.status,
+        runRef: activeRun.ref,
+        scheduled: activeRun.scheduled,
+        completed: activeRun.completed,
+        active: true,
+      };
+    }
+    const lastRun = dagStatus.lastRun;
+    if (
+      lastRun &&
+      (!threadRef || lastRun.threadRef === threadRef) &&
+      (lastRun.status === "failed" || lastRun.status === "timed_out" || lastRun.status === "stale")
+    ) {
+      return {
+        status: lastRun.status,
+        runRef: lastRun.ref,
+        scheduled: lastRun.scheduled,
+        completed: lastRun.completed,
+      };
+    }
+    return undefined;
+  }
+
   function emitSparkDagCompletionFollowUp(
     ctx: SparkToolContext,
     followUp: SparkDagCompletionFollowUp | undefined,
   ): void {
     if (!followUp) return;
-    const message = [followUp.summary, ...followUp.nextActions.map((action) => `- ${action}`)].join(
-      "\n",
+    const action = followUp.status === "succeeded" ? undefined : followUp.nextActions[0];
+    ctx.ui?.notify?.(
+      action ? `${followUp.summary} ${action}` : followUp.summary,
+      sparkDagCompletionNotificationLevel(followUp.status),
     );
-    pi.sendUserMessage?.(message, { deliverAs: "followUp" });
-    ctx.ui?.notify?.(followUp.summary, "info");
+  }
+
+  function sparkDagCompletionNotificationLevel(
+    status: SparkDagRunStatus,
+  ): "info" | "warning" | "error" {
+    return status === "succeeded" ? "info" : status === "timed_out" ? "warning" : "error";
   }
 
   function appendCompactSparkDagStatusLines(
@@ -946,6 +1055,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       kind: task.kind,
       roleRef: task.roleRef,
       threadRef: task.threadRef,
+      cancellation: task.cancellation,
+      supersededBy: task.supersededBy,
     };
   }
 
@@ -1403,10 +1514,15 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     if (mode === "new_project") {
       const idea = intent.prompt || (await promptSparkNewProjectIdea(ctx));
       return idea
-        ? { action: "initialize_new_project", idea, enterPlanning: true }
+        ? { action: "initialize_new_project", idea, enterPlanning: true, planningSource: "auto" }
         : { action: "none" };
     }
-    return { action: "enter_mode", mode, focus: intent.prompt || undefined };
+    return {
+      action: "enter_mode",
+      mode,
+      focus: intent.prompt || undefined,
+      planningSource: intent.kind === "direct" && mode === "planning" ? "direct" : "auto",
+    };
   }
 
   async function resolveSparkEntryWithoutGraph(
@@ -1418,7 +1534,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       if (intent.kind === "auto") {
         const idea = intent.prompt || (await promptSparkNewProjectIdea(ctx));
         return idea
-          ? { action: "initialize_new_project", idea, enterPlanning: false }
+          ? { action: "initialize_new_project", idea, enterPlanning: false, planningSource: "auto" }
           : { action: "none" };
       }
       return {
@@ -1438,7 +1554,14 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       };
 
     const idea = intent.prompt || (await inferExistingProjectSparkIdea(ctx));
-    return idea ? { action: "initialize_existing_project", idea } : { action: "none" };
+    return idea
+      ? {
+          action: "initialize_existing_project",
+          idea,
+          planningSource:
+            intent.kind === "direct" && intent.mode === "planning" ? "direct" : "auto",
+        }
+      : { action: "none" };
   }
 
   async function applySparkEntryResolution(
@@ -1451,10 +1574,14 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       case "initialize_new_project":
         await startSparkNewProject(piApi, ctx, resolution.idea, {
           enterPlanning: resolution.enterPlanning,
+          planningSource: resolution.planningSource,
         });
         return;
       case "initialize_existing_project":
-        await startSparkNewProject(piApi, ctx, resolution.idea, { enterPlanning: true });
+        await startSparkNewProject(piApi, ctx, resolution.idea, {
+          enterPlanning: true,
+          planningSource: resolution.planningSource,
+        });
         return;
       case "enter_mode":
         if (!graph) {
@@ -1462,7 +1589,13 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           return;
         }
         if (resolution.mode === "planning")
-          await enterSparkPlanningMode(piApi, ctx, graph, resolution.focus);
+          await enterSparkPlanningMode(
+            piApi,
+            ctx,
+            graph,
+            resolution.focus,
+            resolution.planningSource,
+          );
         else await enterSparkExecutionMode(piApi, ctx, graph, resolution.focus);
         return;
       case "blocked":
@@ -1613,7 +1746,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     piApi: SparkExtensionAPI,
     ctx: SparkCommandContext,
     idea: string,
-    options: { enterPlanning?: boolean } = {},
+    options: { enterPlanning?: boolean; planningSource?: SparkPlanningModeSource } = {},
   ): Promise<void> {
     const existing = await loadSparkGraph(ctx.cwd, ctx);
     if (existing) {
@@ -1621,7 +1754,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         "Spark is already initialized for this workspace; entering planning mode instead.",
         "info",
       );
-      await enterSparkPlanningMode(piApi, ctx, existing, idea);
+      await enterSparkPlanningMode(piApi, ctx, existing, idea, options.planningSource);
       return;
     }
 
@@ -1659,9 +1792,12 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       language === "zh" ? "Spark 线程已初始化" : "Spark thread initialized",
       "success",
     );
-    piApi.sendUserMessage?.(renderSparkInitSummary(result), {
-      deliverAs: "followUp",
-    });
+    dispatchSparkAgentInstruction(
+      piApi,
+      ctx,
+      renderSparkInitFollowUp(result),
+      renderSparkInitSummary(result),
+    );
 
     await saveCurrentThreadRef(ctx.cwd, ctx, result.threadRef as ThreadRef);
     await refreshSparkWidget(ctx.cwd, ctx);
@@ -1669,7 +1805,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
     if (options.enterPlanning) {
       const graph = await loadSparkGraph(ctx.cwd, ctx);
-      if (graph) await enterSparkPlanningMode(piApi, ctx, graph, idea);
+      if (graph) await enterSparkPlanningMode(piApi, ctx, graph, idea, options.planningSource);
     }
   }
 
@@ -1717,22 +1853,45 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     return undefined;
   }
 
+  function dispatchSparkAgentInstruction(
+    piApi: SparkExtensionAPI,
+    ctx: SparkCommandContext,
+    instruction: string,
+    visibleMessage: string,
+  ): void {
+    const sessionKey = sparkSessionOwnerKey(ctx);
+    const existingInstruction = pendingSparkAgentInstructions.get(sessionKey);
+    pendingSparkAgentInstructions.set(
+      sessionKey,
+      existingInstruction ? `${existingInstruction}\n\n${instruction}` : instruction,
+    );
+    piApi.sendMessage(
+      {
+        customType: "spark-mode-request",
+        content: visibleMessage,
+        display: true,
+      },
+      { deliverAs: "followUp", triggerTurn: true },
+    );
+  }
+
   async function enterSparkPlanningMode(
     piApi: SparkExtensionAPI,
     ctx: SparkCommandContext,
     graph: TaskGraph,
     focus?: string,
+    source: SparkPlanningModeSource = "auto",
   ): Promise<void> {
     const thread = await currentSparkThread(ctx.cwd, ctx, graph);
     await clearSparkExecutionMode(ctx.cwd, ctx);
     await refreshSparkWidget(ctx.cwd, ctx);
     ctx.ui?.notify?.("Spark planning mode: research, clarify, and add threads/tasks.", "info");
     const roadmapContext = await roadmapPlanningContext(ctx.cwd, focus);
-    piApi.sendUserMessage?.(
-      renderSparkPlanningModePrompt(graph, thread?.ref, focus, roadmapContext),
-      {
-        deliverAs: "followUp",
-      },
+    dispatchSparkAgentInstruction(
+      piApi,
+      ctx,
+      renderSparkPlanningModePrompt(graph, thread?.ref, focus, roadmapContext, source),
+      renderSparkModeVisibleMessage("planning", thread?.title, focus),
     );
   }
 
@@ -1747,9 +1906,12 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     else await clearSparkExecutionMode(ctx.cwd, ctx);
     await refreshSparkWidget(ctx.cwd, ctx);
     ctx.ui?.notify?.("Spark execution mode: prefer DAG or continue ready tasks.", "info");
-    piApi.sendUserMessage?.(renderSparkExecutionModePrompt(graph, thread?.ref, focus), {
-      deliverAs: "followUp",
-    });
+    dispatchSparkAgentInstruction(
+      piApi,
+      ctx,
+      renderSparkExecutionModePrompt(graph, thread?.ref, focus),
+      renderSparkModeVisibleMessage("execution", thread?.title, focus),
+    );
   }
 
   registerSparkTool({
@@ -1771,6 +1933,13 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
             "Maximum number of task rows per thread. Defaults to 20 in active view; omitted in summary/full unless provided.",
         }),
       ),
+      format: Type.Optional(
+        Type.String({
+          default: "text",
+          description:
+            "text | json. text returns the human-readable status; json returns the structured status payload as JSON text for tool/LLM callers.",
+        }),
+      ),
       showFinished: Type.Optional(
         Type.Boolean({
           default: false,
@@ -1784,13 +1953,21 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           ? (ctx as { cwd: string }).cwd
           : process.cwd();
       await ensureSparkStateForActiveWorkspace(cwd, ctx);
+      const format = normalizeSparkStatusFormat(params);
       const store = defaultTaskGraphStore(cwd);
       const graph = await loadSparkGraph(cwd, ctx);
-      if (!graph)
+      if (!graph) {
+        const details = { found: false, active: false, format };
         return {
-          content: [{ type: "text", text: "No Spark thread found." }],
-          details: { found: false, active: false },
+          content: [
+            {
+              type: "text",
+              text: format === "json" ? JSON.stringify(details, null, 2) : "No Spark thread found.",
+            },
+          ],
+          details,
         };
+      }
       if (ensureSparkGraphInvariants(graph)) {
         await store.save(graph);
         await sparkTodoStore(cwd, ctx).save(graph);
@@ -1826,6 +2003,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           "\nSpark available: no thread selected for this session. Use spark_use_thread to select a thread, or use view=summary/full to inspect all threads.",
         );
       let renderedThreads = 0;
+      const renderedThreadDetails: Array<Record<string, unknown>> = [];
       for (const thread of graph.threads()) {
         const tasks = graph.tasks(thread.ref);
         const claimed = tasks.filter((task) => taskClaimedBy(task));
@@ -1846,10 +2024,12 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         renderedThreads += 1;
         const visibleTasks =
           typeof taskLimit === "number" ? allVisibleTasks.slice(0, taskLimit) : allVisibleTasks;
+        const renderedTaskDetails: Array<Record<string, unknown>> = [];
         const lastRunsByTaskRef = latestRunsByTaskRef(graph.runs(thread.ref));
         const hiddenByView = tasks.length - allVisibleTasks.length;
         const hiddenByLimit = allVisibleTasks.length - visibleTasks.length;
         const currentSuffix = thread.ref === currentThread?.ref ? " [current]" : "";
+        const isCurrent = thread.ref === currentThread?.ref;
         const statusSuffix = thread.status === "done" ? " [done]" : "";
         const threadPrefix = view === "active" ? "Thread" : `Thread ${thread.ref}:`;
         lines.push(`\n${threadPrefix} ${thread.title}${currentSuffix}${statusSuffix}`);
@@ -1863,7 +2043,26 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           lines.push(
             `  Hidden by limit: ${hiddenByLimit} (increase limit or use view=full without limit)`,
           );
-        if (view === "summary") continue;
+        const renderedThreadDetail = {
+          ref: thread.ref,
+          title: thread.title,
+          status: thread.status,
+          current: isCurrent,
+          taskCounts: {
+            total: tasks.length,
+            unfinished: tasks.filter((task) => isUnfinishedTaskStatus(task.status)).length,
+            claimed: claimed.length,
+            claimedBySession: sessionClaimed.length,
+            statusCounts,
+          },
+          hiddenFinishedTasks: hiddenByView,
+          hiddenByLimit,
+          tasks: renderedTaskDetails,
+        };
+        if (view === "summary") {
+          renderedThreadDetails.push(renderedThreadDetail);
+          continue;
+        }
         lines.push(view === "full" ? "  Durable tasks:" : "  Active tasks:");
         for (const task of visibleTasks) {
           const owner = deriveTaskRoleLabel({
@@ -1873,13 +2072,43 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           });
           const planSummary = taskPlanSummary(task);
           const planSuffix = planSummary ? ` plan=${planSummary}` : "";
+          const lifecycleSuffix = taskLifecycleSuffix(task);
+          const taskOwnedBySession = isClaimOwnedBySession(task, sessionKey);
+          const taskTodos = taskOwnedBySession ? graph.taskTodos(task.ref) : [];
+          const visibleTaskTodos =
+            view === "active" ? taskTodos.slice(0, DEFAULT_SPARK_STATUS_TODO_LIMIT) : taskTodos;
+          renderedTaskDetails.push({
+            ref: task.ref,
+            name: task.name,
+            title: task.title,
+            description: task.description,
+            status: task.status,
+            kind: task.kind,
+            roleRef: task.roleRef,
+            threadRef: task.threadRef,
+            cancellation: task.cancellation,
+            supersededBy: task.supersededBy,
+            owner,
+            claimed: taskClaimSummary(task),
+            claimedByCurrentSession: taskOwnedBySession,
+            plan: planSummary,
+            todos: {
+              total: taskTodos.length,
+              hidden: taskTodos.length - visibleTaskTodos.length,
+              items: visibleTaskTodos.map((todo) => ({
+                id: todo.id,
+                content: todo.content,
+                status: todo.status,
+                notes: todo.notes,
+              })),
+            },
+          });
           if (view === "active") {
             lines.push(
-              `  - [${task.status}] @${task.name}: ${task.title} owner=@${owner}${planSuffix}`,
+              `  - [${task.status}] @${task.name}: ${task.title} owner=@${owner}${planSuffix}${lifecycleSuffix}`,
             );
-            if (isClaimOwnedBySession(task, sessionKey)) {
-              const taskTodos = graph.taskTodos(task.ref);
-              for (const todo of taskTodos.slice(0, DEFAULT_SPARK_STATUS_TODO_LIMIT)) {
+            if (taskOwnedBySession) {
+              for (const todo of visibleTaskTodos) {
                 lines.push(
                   `    - [${todo.status}] ${todo.id} ${truncateInline(todo.content, 160)}`,
                 );
@@ -1891,15 +2120,16 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           }
           const taskSummary = graph.todoSummary(task.ref);
           lines.push(
-            `  - [${task.status}] @${task.name}: ${task.title} (${task.ref}) kind=${task.kind} owner=@${owner} claimed=${taskClaimSummary(task)} todos=${taskSummary.total}/${taskSummary.inProgress}/${taskSummary.pending}/${taskSummary.done}${planSuffix}`,
+            `  - [${task.status}] @${task.name}: ${task.title} (${task.ref}) kind=${task.kind} owner=@${owner} claimed=${taskClaimSummary(task)} todos=${taskSummary.total}/${taskSummary.inProgress}/${taskSummary.pending}/${taskSummary.done}${planSuffix}${lifecycleSuffix}`,
           );
-          if (isClaimOwnedBySession(task, sessionKey)) {
-            for (const todo of graph.taskTodos(task.ref)) {
+          if (taskOwnedBySession) {
+            for (const todo of visibleTaskTodos) {
               lines.push(`    - [${todo.status}] ${todo.id} ${todo.content}`);
             }
           }
         }
         if (visibleTasks.length === 0) lines.push("  - none");
+        renderedThreadDetails.push(renderedThreadDetail);
       }
       if (renderedThreads === 0) lines.push("\nNo Spark threads matched this view.");
       const displayedIndependentTodos = independentTodos;
@@ -1917,20 +2147,39 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         displayedIndependentTodos.length - visibleIndependentTodos.length;
       if (hiddenIndependentTodos > 0)
         lines.push(`  - … ${hiddenIndependentTodos} more independent TODOs`);
+      const independentTodoDetails = {
+        total: displayedIndependentTodos.length,
+        hidden: hiddenIndependentTodos,
+        todos: visibleIndependentTodos.map((todo) => ({
+          id: todo.id,
+          content: todo.content,
+          status: todo.status,
+          notes: todo.notes,
+        })),
+      };
       const state =
         view === "full" ? await collectSparkStateHousekeeping(cwd, ctx, graph) : undefined;
       if (state) appendSparkStateHousekeepingLines(lines, state);
+      const details = {
+        found: true,
+        format,
+        view,
+        limit: taskLimit,
+        activeThreadRef: currentThread?.ref,
+        renderedThreads: renderedThreadDetails,
+        independentTodos: independentTodoDetails,
+        threads: compactThreadStatusSummaries(graph, sessionKey),
+        dag: dagStatus,
+        ...(state ? { state } : {}),
+      };
       return {
-        content: [{ type: "text", text: lines.join("\n") }],
-        details: {
-          found: true,
-          view,
-          limit: taskLimit,
-          activeThreadRef: currentThread?.ref,
-          threads: compactThreadStatusSummaries(graph, sessionKey),
-          dag: dagStatus,
-          ...(state ? { state } : {}),
-        },
+        content: [
+          {
+            type: "text",
+            text: format === "json" ? JSON.stringify(details, null, 2) : lines.join("\n"),
+          },
+        ],
+        details,
       };
     },
   });
@@ -2137,14 +2386,30 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           ? "\nExecution mode continued: no ready task remains to auto-claim; inspect blockers or finish the thread."
           : "";
       if (updated.result.autoClaimed && updated.graph) {
-        pi.sendUserMessage?.(
-          renderSparkExecutionContinuationPrompt(
-            updated.graph,
-            updated.result.threadRef,
-            executionMode?.focus,
-            updated.result.autoClaimed,
-          ),
-          { deliverAs: "followUp" },
+        const continuationText = renderSparkExecutionContinuationPrompt(
+          updated.graph,
+          updated.result.threadRef,
+          executionMode?.focus,
+          updated.result.autoClaimed,
+        );
+        // Inject continuation as a Spark custom message rather than a user
+        // message so it does not visually occupy the user input lane and does
+        // not trigger an LLM turn on its own. It will be delivered as context
+        // alongside the next real user prompt.
+        pi.sendMessage(
+          {
+            customType: "spark-execution-continuation",
+            content: continuationText,
+            display: true,
+            details: {
+              threadRef: updated.result.threadRef,
+              autoClaimedTaskRef: updated.result.autoClaimed.ref,
+              autoClaimedTaskName: updated.result.autoClaimed.name,
+              autoClaimedTaskTitle: updated.result.autoClaimed.title,
+              focus: executionMode?.focus,
+            },
+          },
+          { deliverAs: "nextTurn", triggerTurn: false },
         );
       }
       return {
@@ -2526,8 +2791,11 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   registerSparkTool({
     name: "spark_plan_tasks",
     label: "Spark Plan Tasks",
-    description:
+    description: [
       "Create or update multiple durable Spark tasks in the active thread from a concrete task plan. Use this dedicated spark-tasks-backed planning tool when asked to梳理/organize work before assigning roles; it does not claim tasks for the current session.",
+      "",
+      SPARK_PLAN_TASKS_READINESS_RULES,
+    ].join("\n"),
     parameters: Type.Object({
       tasks: Type.Array(
         Type.Object({
@@ -2558,7 +2826,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           dependsOn: Type.Optional(
             Type.Array(
               Type.String({
-                description: "Dependency task ref, @name/name, or task title in this plan/thread.",
+                description:
+                  "Dependency task ref, bare task name (displayed as @name), or exact task title in this plan/thread.",
               }),
             ),
           ),
@@ -2726,21 +2995,38 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           details: { found: false, error: "no_current_thread" },
         };
       const dryRun = params.dryRun !== false;
+      const registry = new RoleRegistry();
+      await defaultProjectRoleStore(cwd).hydrate(registry);
       if (!dryRun) {
+        const bindingResult = await ensureRoleModelBindingsForThread({
+          graph,
+          threadRef: thread.ref,
+          registry,
+          cwd,
+          ctx,
+        });
+        if (!bindingResult.ready) {
+          return {
+            content: [{ type: "text", text: bindingResult.message }],
+            details: bindingResult as unknown as Record<string, unknown>,
+          };
+        }
         ensureSparkDagManager(cwd, ctx);
+        ctx.ui?.notify?.(
+          `Spark DAG manager started for “${thread.title}”. Progress appears in the Spark widget; inspect with spark_dag_manager status.`,
+          "info",
+        );
         return {
           content: [
             {
               type: "text",
-              text: `Started Spark DAG manager for current thread “${thread.title}”. Ready tasks in this thread will be scheduled and persisted in the background.`,
+              text: `Spark DAG manager started for current thread “${thread.title}”. Progress appears in the Spark widget; inspect with spark_dag_manager status, or stop active background role-runs with spark_dag_manager kill_active.`,
             },
           ],
           details: { manager: "started", dryRun: false, threadRef: thread.ref },
         };
       }
 
-      const registry = new RoleRegistry();
-      await defaultProjectRoleStore(cwd).hydrate(registry);
       const artifactStore = defaultArtifactStore(cwd);
       const result = await runReadySparkTasks({
         graph,
@@ -2827,8 +3113,10 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       "Ask the user a structured multi-question clarification, decision, approval, or unblock form and persist the answer as an artifact.",
     promptGuidelines: [
       "Use spark_ask as the single Spark ask tool; prefer questions[] for both single- and multi-question asks.",
+      "When user-facing open questions or decision points would change task scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order, turn them into a context-specific spark_ask instead of leaving them as prose.",
       "Each option needs a stable id, short label, and clear description explaining what choosing it means.",
       "Use freeform questions for notes/context instead of creating business options named Other or Type your own.",
+      "Do not use generic or template intake questions; ask only questions grounded in the inspected situation whose answers would change the next action or plan.",
     ],
     parameters: Type.Object({
       kind: Type.Optional(
@@ -5039,7 +5327,7 @@ function sparkModeAsk(analysis: SparkEntryModeAnalysis): SparkAskToolParams {
           {
             id: "planning",
             label: `Plan “${truncateInline(title, 32)}”`,
-            description: `Use planning mode now: inspect the ${analysis.unfinishedTaskCount} unfinished task(s), ask only targeted clarification questions, and add or refine concrete plan-bound tasks before execution.`,
+            description: `Use planning mode now: inspect the ${analysis.unfinishedTaskCount} unfinished task(s), ask context-specific clarification or decision questions when they change the task plan, and add or refine concrete plan-bound tasks before execution.`,
           },
           {
             id: "execution",
@@ -5072,11 +5360,129 @@ function renderSparkPlanningModePrompt(
   selectedThreadRef: ThreadRef | undefined,
   focus: string | undefined,
   roadmapContext: RoadmapPlanningContext | undefined,
+  source: SparkPlanningModeSource,
 ): string {
   const summary = renderExistingSparkSummary(graph, selectedThreadRef);
   const focusLine = focus?.trim() ? `\n\nPlanning focus: ${focus.trim()}` : "";
   const roadmapLine = renderRoadmapPlanningContext(roadmapContext);
-  return `${summary}${focusLine}${roadmapLine}\n\nEnter Spark planning mode. Research and clarify the project context, then use spark_use_thread and spark_plan_tasks to add or refine concrete plan-bound tasks. Do not execute tasks yet unless the user explicitly asks to switch to execution.`;
+  if (source === "direct") {
+    return `${summary}${focusLine}${roadmapLine}\n\nEnter Spark planning mode from explicit /plan. Treat this as a request to plan the next concrete work, not as an answer-only research turn: research the project context, use spark_ask for context-specific detailed intent and decision checks before tasking when the desired outcome, constraints, priority, scope, success evidence, architecture, dependency choices, or implementation order are not already clear, then call spark_plan_tasks to create or refine concrete plan-bound tasks with dependencies and evidence expectations. If you are about to list user-facing open questions or decision points that would change the task plan, do not leave them as prose: group them into spark_ask questions first. Keep asks dynamic and grounded in the inspected context; do not use canned intake templates or ask questions whose answers would not change the task plan. Do not execute tasks yet unless the user explicitly asks to switch to execution.`;
+  }
+  return `${summary}${focusLine}${roadmapLine}\n\nEnter Spark planning mode. Research and clarify the project context first, then choose the lightest appropriate action from the actual request: answer directly for a simple research/read-and-comment turn, call spark_rename_thread when context shows the bootstrap title is only an action/request or a better project label is available, and call spark_plan_tasks only when there are concrete plan-bound tasks to organize. If you are about to list user-facing open questions or decision points that would change task scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order, use spark_ask with context-specific questions instead of leaving them as prose. Do not use generic intake templates. Do not execute tasks yet unless the user explicitly asks to switch to execution.`;
+}
+
+function renderSparkModeVisibleMessage(
+  mode: "planning" | "execution",
+  threadTitle: string | undefined,
+  focus: string | undefined,
+): string {
+  const title =
+    mode === "planning" ? "Spark planning mode requested" : "Spark execution mode requested";
+  const parts = [title];
+  if (threadTitle?.trim()) parts.push(`thread: ${threadTitle.trim()}`);
+  if (focus?.trim()) parts.push(`focus: ${focus.trim()}`);
+  return parts.join(" · ");
+}
+
+interface RoleModelBindingPreflightResult {
+  ready: boolean;
+  message: string;
+  checkedRoleRefs: RoleRef[];
+  boundRoleRefs: RoleRef[];
+  missingRoleRefs: RoleRef[];
+  error?: string;
+}
+
+async function ensureRoleModelBindingsForThread(input: {
+  graph: TaskGraph;
+  threadRef: ThreadRef;
+  registry: RoleRegistry;
+  cwd: string;
+  ctx: SparkToolContext;
+}): Promise<RoleModelBindingPreflightResult> {
+  const roleRefs = uniqueRoleRefs(
+    input.graph
+      .tasks()
+      .filter(
+        (task) =>
+          task.threadRef === input.threadRef &&
+          task.status !== "proposed" &&
+          isUnfinishedTaskStatus(task.status),
+      )
+      .map(roleRefForSparkTask),
+  );
+  const store = defaultUserRoleModelBindingStore();
+  const boundRoleRefs: RoleRef[] = [];
+  const missingRoleRefs: RoleRef[] = [];
+  for (const roleRef of roleRefs) {
+    const existing = await store.get(roleRef);
+    if (existing) {
+      boundRoleRefs.push(roleRef);
+      continue;
+    }
+    const role = input.registry.get(roleRef) as RoleSpec;
+    const selected = await input.ctx.ui?.input?.(
+      `Choose Pi model for Spark role ${role.id}`,
+      role.defaultModel,
+    );
+    const model = selected?.trim();
+    if (!model) {
+      missingRoleRefs.push(roleRef);
+      continue;
+    }
+    try {
+      await saveValidatedRoleModelBinding({
+        store,
+        roleRef,
+        model,
+        piCommand: "pi",
+        cwd: input.cwd,
+      });
+      boundRoleRefs.push(roleRef);
+      input.ctx.ui?.notify?.(`Saved model binding for Spark role ${role.id}: ${model}`, "success");
+    } catch (error) {
+      return {
+        ready: false,
+        message: `Model validation failed for ${role.id} (${roleRef}): ${error instanceof Error ? error.message : String(error)}`,
+        checkedRoleRefs: roleRefs,
+        boundRoleRefs,
+        missingRoleRefs: [roleRef],
+        error: "model_validation_failed",
+      };
+    }
+  }
+  if (missingRoleRefs.length > 0) {
+    return {
+      ready: false,
+      message: `Spark role model binding required before dispatch: ${missingRoleRefs.join(", ")}. Rerun with an interactive UI or bind a concrete model for each role.`,
+      checkedRoleRefs: roleRefs,
+      boundRoleRefs,
+      missingRoleRefs,
+      error: "missing_role_model_binding",
+    };
+  }
+  return {
+    ready: true,
+    message: `Spark role model bindings ready for ${boundRoleRefs.length} role(s).`,
+    checkedRoleRefs: roleRefs,
+    boundRoleRefs,
+    missingRoleRefs: [],
+  };
+}
+
+function roleRefForSparkTask(task: Task): RoleRef {
+  return (task.roleRef ?? defaultRoleRefForSparkTaskKind(task.kind)) as RoleRef;
+}
+
+function defaultRoleRefForSparkTaskKind(kind: Task["kind"]): RoleRef {
+  if (kind === "research") return builtinRoleRef("scout") as RoleRef;
+  if (kind === "plan") return builtinRoleRef("planner") as RoleRef;
+  if (kind === "review") return builtinRoleRef("reviewer") as RoleRef;
+  return builtinRoleRef("worker") as RoleRef;
+}
+
+function uniqueRoleRefs(roleRefs: RoleRef[]): RoleRef[] {
+  return [...new Set(roleRefs)].sort((a, b) => a.localeCompare(b));
 }
 
 function renderSparkExecutionModePrompt(
@@ -5089,7 +5495,7 @@ function renderSparkExecutionModePrompt(
     ? `\n\nExecution focus: ${focus.trim()}\nUse this focus to filter ready tasks and pre-flight questions; do not auto-dispatch solely because a focus was provided.`
     : "";
   const action = selectedThreadRef
-    ? "Read the current thread/task plan and inspect ready tasks with spark_status. Prefer DAG execution with spark_run_ready_tasks dryRun=false when ready tasks can run through the Spark orchestrator; otherwise claim one concrete task with spark_claim_task. After each claimed task finishes, continue by auto-claiming or dispatching the next ready task until the thread is done or blocked."
+    ? "Read the current thread/task plan and inspect ready tasks with spark_status. Prefer DAG execution with spark_run_ready_tasks dryRun=false when ready tasks can run through the Spark orchestrator; otherwise claim one concrete task with spark_claim_task. Treat DAG execution like background subagent orchestration: do a dry-run/status preflight when readiness is unclear, start the manager once, then rely on the Spark widget, notifications, and spark_dag_manager status for progress instead of injecting synthetic follow-up user messages. After each manually claimed task finishes, continue by auto-claiming or dispatching the next ready task until the thread is done or blocked."
     : "Select a current thread with spark_use_thread before claiming thread-bound work; use spark_status view=summary/full to inspect available threads first if needed.";
   return `${summary}${focusLine}\n\nEnter Spark execution mode. ${action} Do not stop after a single task unless no ready tasks remain, execution is blocked by missing task plans/dependencies, or the user explicitly exits execution mode.`;
 }
@@ -5126,12 +5532,28 @@ function renderExistingSparkSummary(graph: TaskGraph, selectedThreadRef?: Thread
   ].join("\n");
 }
 
+function renderSparkInitFollowUp(result: SparkInitResult): string {
+  const summary = renderSparkInitSummary(result);
+  if (result.outputLanguage === "zh") {
+    return [
+      summary,
+      "",
+      "Spark 初始化只创建了最小本地状态；不要把自动线程标题当成最终项目命名。先按用户原始意图研究上下文并给出回应：如果阅读真实上下文后发现当前标题只是动作/请求复述，或已有更合适的项目标签，请用 spark_rename_thread 动态改名。只有在确实需要组织具体可执行工作时才调用 spark_plan_tasks；不要因为 Spark 刚初始化就创建任务。",
+    ].join("\n");
+  }
+  return [
+    summary,
+    "",
+    "Spark initialization only created minimal local state; do not treat the automatic thread title as the final project name. First research the context and respond to the user's original intent: if the inspected context shows the current title only repeats an action/request, or a better project label is available, call spark_rename_thread with that dynamic name. Call spark_plan_tasks only when there are concrete executable work items to organize; do not create tasks merely because Spark just initialized.",
+  ].join("\n");
+}
+
 function renderSparkInitSummary(result: SparkInitResult): string {
   if (result.outputLanguage === "zh") {
     const lines = [
       "Spark 已初始化：",
       `- 想法：${result.idea}`,
-      `- 线程标题：${result.threadTitle}`,
+      `- 初始线程标题：${result.threadTitle}`,
       result.sparkMdPath
         ? `- SPARK.md：${result.sparkMdPath}`
         : "- SPARK.md：未物化（当前 cwd 没有 .git）",
@@ -5152,7 +5574,7 @@ function renderSparkInitSummary(result: SparkInitResult): string {
   const lines = [
     "Spark initialized:",
     `- Idea: ${result.idea}`,
-    `- Thread title: ${result.threadTitle}`,
+    `- Initial thread title: ${result.threadTitle}`,
     result.sparkMdPath
       ? `- SPARK.md: ${result.sparkMdPath}`
       : "- SPARK.md: not materialized (cwd has no .git)",

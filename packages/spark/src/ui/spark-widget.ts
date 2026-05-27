@@ -47,8 +47,17 @@ export interface SessionTodoEntry {
   updatedAt?: string;
 }
 
+export interface SparkDagWidgetEntry {
+  status: "running" | "succeeded" | "failed" | "timed_out" | "stale";
+  runRef?: string;
+  scheduled: number;
+  completed: number;
+  active?: boolean;
+}
+
 export interface SparkWidgetState {
   threadTitle?: string;
+  dag?: SparkDagWidgetEntry;
   tasks: TaskEntry[];
   independentTodos: SessionTodoEntry[];
   taskCountTotal: number;
@@ -134,6 +143,7 @@ function hasWidgetContent(state: SparkWidgetState | undefined): state is SparkWi
   return Boolean(
     state &&
     (state.threadTitle ||
+      state.dag ||
       state.tasks.length > 0 ||
       state.independentTodos.some(isVisibleIndependentTodo)),
   );
@@ -157,7 +167,8 @@ export function renderSparkWidgetLines(
   theme: SparkWidgetTheme,
 ): string[] {
   const visibleTodos = state.independentTodos.filter(isVisibleIndependentTodo);
-  if (!state.threadTitle && state.tasks.length === 0 && visibleTodos.length === 0) return [];
+  if (!state.threadTitle && !state.dag && state.tasks.length === 0 && visibleTodos.length === 0)
+    return [];
 
   const l = L[state.outputLanguage] ?? L.en;
   const width = tui.terminal.columns;
@@ -168,6 +179,7 @@ export function renderSparkWidgetLines(
 
   const summaryLine = formatTaskSummaryLine(state, visibleTasks, l.tasks, theme);
   if (summaryLine) lines.push(trunc(summaryLine));
+  if (state.dag) lines.push(trunc(formatDagLine(state.dag, theme)));
 
   if (state.threadTitle) {
     lines.push(trunc(`${theme.fg("accent", "◆")} ${theme.bold(state.threadTitle)}`));
@@ -192,6 +204,12 @@ export function renderSparkWidgetLines(
   }
 
   return lines;
+}
+
+function formatDagLine(dag: SparkDagWidgetEntry, theme: SparkWidgetTheme): string {
+  const status = dag.active ? "running" : dag.status;
+  const ref = dag.runRef ? ` ${dag.runRef}` : "";
+  return `${theme.fg("accent", "◆")} ${theme.fg("dim", `DAG(${status} ${dag.completed}/${dag.scheduled})${ref}`)}`;
 }
 
 function formatTaskSummaryLine(

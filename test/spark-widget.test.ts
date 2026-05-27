@@ -143,6 +143,28 @@ void test("spark widget hides deleted task TODOs but keeps done task TODOs visib
   assert.doesNotMatch(lines, /Deleted child TODO/);
 });
 
+void test("spark widget shows compact DAG progress above thread details", () => {
+  const lines = renderSparkWidgetLines(
+    widgetState({
+      dag: {
+        status: "running",
+        runRef: "run:abc",
+        scheduled: 3,
+        completed: 1,
+        active: true,
+      },
+      taskCountTotal: 2,
+    }),
+    { terminal: { columns: 120 }, requestRender() {} },
+    theme,
+  );
+
+  assert.match(
+    lines.join("\n"),
+    /◆ Tasks\(total=2 claimed=0\/0\)\n◆ DAG\(running 1\/3\) run:abc\n◆ Spark UX redesign/,
+  );
+});
+
 void test("spark widget shows thread header with task counts even before claims", () => {
   const lines = renderSparkWidgetLines(
     {

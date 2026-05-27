@@ -5,10 +5,12 @@ import { basename, dirname, join } from "node:path";
 import {
   DependencyError,
   NotFoundError,
+  assertRef,
   type RoleRef,
   type ArtifactRef,
   type RunRef,
   type Task,
+  type TaskCancellation,
   type TaskCompletionIssue,
   type TaskCompletionReadiness,
   type TaskDependency,
@@ -60,6 +62,8 @@ export interface CreateTaskInput {
   agentRef?: RoleRef | `agent:${string}`;
   claimedBySession?: string;
   finishedBy?: TaskAttribution;
+  cancellation?: TaskCancellation;
+  supersededBy?: TaskRef[];
   claim?: TaskClaim;
   inputArtifacts?: ArtifactRef[];
   plan?: TaskPlan;
@@ -143,6 +147,7 @@ export interface TaskPlanInput {
   roleRef?: RoleRef;
   /** @deprecated use roleRef. */
   agentRef?: RoleRef | `agent:${string}`;
+  supersededBy?: TaskRef[];
   dependsOn?: Array<TaskRef | string>;
   rationale?: string;
   plan?: TaskPlan;
@@ -251,6 +256,16 @@ export class TaskGraph {
       input.name?.trim() || taskNameFromTitle(input.title),
       new Set(this.tasks(input.threadRef).map((task) => task.name)),
     );
+    const supersededBy = normalizeTaskRefs(input.supersededBy);
+    const requestedStatus =
+      input.status ??
+      (input.kind === "interaction"
+        ? "running"
+        : normalizeRoleRefCompat(input.roleRef ?? input.agentRef)
+          ? "pending"
+          : "proposed");
+    const status =
+      supersededBy.length > 0 && requestedStatus !== "done" ? "cancelled" : requestedStatus;
     const task: Task = {
       ref: newRef("task"),
       threadRef: input.threadRef,
@@ -258,17 +273,16 @@ export class TaskGraph {
       title: input.title,
       description: input.description,
       kind: input.kind ?? "generic",
-      status:
-        input.status ??
-        (input.kind === "interaction"
-          ? "running"
-          : normalizeRoleRefCompat(input.roleRef ?? input.agentRef)
-            ? "pending"
-            : "proposed"),
+      status,
       roleRef: normalizeRoleRefCompat(input.roleRef ?? input.agentRef),
-      claimedBySession: input.claimedBySession,
+      claimedBySession: isUnfinishedTaskStatus(status) ? input.claimedBySession : undefined,
       finishedBy: input.finishedBy,
-      claim: input.claim,
+      cancellation:
+        status === "cancelled"
+          ? (normalizeTaskCancellation(input.cancellation, now) ?? { at: now })
+          : undefined,
+      supersededBy,
+      claim: isUnfinishedTaskStatus(status) ? input.claim : undefined,
       inputArtifacts: input.inputArtifacts ?? [],
       outputArtifacts: [],
       plan: normalizeTaskPlan(input.plan, input.description, input.title),
@@ -316,6 +330,7 @@ export class TaskGraph {
             kind: input.kind ?? existing.kind,
             status: input.status ?? existing.status,
             roleRef: normalizeRoleRefCompat(input.roleRef ?? input.agentRef ?? existing.roleRef),
+            supersededBy: input.supersededBy ?? existing.supersededBy,
             plan: normalizeTaskPlan(input.plan, description, title),
           })
         : this.createTask({
@@ -326,6 +341,7 @@ export class TaskGraph {
             kind: input.kind,
             status: input.status,
             roleRef: normalizeRoleRefCompat(input.roleRef ?? input.agentRef),
+            supersededBy: input.supersededBy,
             plan: normalizeTaskPlan(input.plan, description, title),
           });
       if (existing) updated.push(task);
@@ -371,8 +387,24 @@ export class TaskGraph {
     return updated;
   }
 
-  setTaskStatus(taskRef: TaskRef, status: Task["status"]): Task {
+  setTaskStatus(
+    taskRef: TaskRef,
+    status: Task["status"],
+    options: { cancelledBy?: string; cancellationReason?: string } = {},
+  ): Task {
     const task = this.getTask(taskRef);
+    const now = nowIso();
+    const cancellation =
+      status === "cancelled"
+        ? normalizeTaskCancellation(
+            {
+              at: task.cancellation?.at ?? now,
+              by: options.cancelledBy ?? task.cancellation?.by,
+              reason: options.cancellationReason ?? task.cancellation?.reason,
+            },
+            now,
+          )
+        : undefined;
     const updated = {
       ...task,
       status,
@@ -380,8 +412,9 @@ export class TaskGraph {
       finishedBy: isUnfinishedTaskStatus(status)
         ? task.finishedBy
         : (task.finishedBy ?? attributionFromTask(task)),
+      cancellation,
       claim: isUnfinishedTaskStatus(status) ? task.claim : undefined,
-      updatedAt: nowIso(),
+      updatedAt: now,
     };
     this.#tasks.set(taskRef, updated);
     if (this.getThread(task.threadRef).currentTaskRef === taskRef && !isOpenContextTask(updated)) {
@@ -540,14 +573,27 @@ export class TaskGraph {
         | "roleRef"
         | "claimedBySession"
         | "finishedBy"
+        | "cancellation"
+        | "supersededBy"
         | "claim"
         | "plan"
       >
     >,
   ): Task {
     const task = this.getTask(taskRef);
-    const status = patch.status ?? task.status;
+    const now = nowIso();
+    const supersededBy =
+      patch.supersededBy === undefined ? task.supersededBy : normalizeTaskRefs(patch.supersededBy);
+    const statusCandidate = patch.status ?? task.status;
+    const status =
+      patch.supersededBy !== undefined && supersededBy.length > 0 && statusCandidate !== "done"
+        ? "cancelled"
+        : statusCandidate;
     const name = patch.name === undefined ? task.name : patch.name.trim();
+    const cancellation =
+      status === "cancelled"
+        ? (normalizeTaskCancellation(patch.cancellation ?? task.cancellation, now) ?? { at: now })
+        : undefined;
     const updated: Task = {
       ...task,
       name,
@@ -562,13 +608,15 @@ export class TaskGraph {
       finishedBy: isUnfinishedTaskStatus(status)
         ? (patch.finishedBy ?? task.finishedBy)
         : (patch.finishedBy ?? task.finishedBy ?? attributionFromTask({ ...task, ...patch })),
+      cancellation,
+      supersededBy,
       claim: isUnfinishedTaskStatus(status) ? (patch.claim ?? task.claim) : undefined,
       plan: normalizeTaskPlan(
         patch.plan ?? task.plan,
         patch.description ?? task.description,
         patch.title ?? task.title,
       ),
-      updatedAt: nowIso(),
+      updatedAt: now,
     };
     assertTaskName(updated.name);
     assertUniqueTaskName(this.tasks(task.threadRef), updated.name, taskRef);
@@ -1190,6 +1238,13 @@ function normalizeTask(task: Task): Task {
     roleRef: normalizeRoleRefCompat(task.roleRef ?? legacy.agentRef),
     claimedBySession: claim?.sessionId,
     finishedBy: normalizeTaskAttribution(task.finishedBy),
+    cancellation:
+      task.status === "cancelled"
+        ? (normalizeTaskCancellation(task.cancellation, task.updatedAt ?? task.createdAt) ?? {
+            at: task.updatedAt ?? task.createdAt,
+          })
+        : undefined,
+    supersededBy: normalizeTaskRefs(task.supersededBy),
     claim,
     inputArtifacts: task.inputArtifacts,
     outputArtifacts: task.outputArtifacts,
@@ -1308,6 +1363,25 @@ function normalizeStringList(values: readonly string[] | undefined): string[] {
   return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))];
 }
 
+function normalizeTaskRefs(values: readonly string[] | undefined): TaskRef[] {
+  return normalizeStringList(values).map((value) => assertRef(value, "task"));
+}
+
+function normalizeTaskCancellation(
+  cancellation: TaskCancellation | undefined,
+  fallbackAt: string,
+): TaskCancellation | undefined {
+  const at = cancellation?.at?.trim() || fallbackAt;
+  const by = cancellation?.by?.trim();
+  const reason = cancellation?.reason?.trim();
+  if (!at && !by && !reason) return undefined;
+  return {
+    at,
+    ...(by ? { by } : {}),
+    ...(reason ? { reason } : {}),
+  };
+}
+
 function normalizeTaskPlanRiskLevel(value: unknown): TaskPlan["riskLevel"] {
   return value === "trivial" || value === "high" ? value : "normal";
 }
@@ -1385,6 +1459,8 @@ function cloneTask(task: Task): Task {
     ...task,
     claim: task.claim ? { ...task.claim } : undefined,
     finishedBy: task.finishedBy ? { ...task.finishedBy } : undefined,
+    cancellation: task.cancellation ? { ...task.cancellation } : undefined,
+    supersededBy: [...task.supersededBy],
     inputArtifacts: [...task.inputArtifacts],
     outputArtifacts: [...task.outputArtifacts],
     plan: task.plan ? cloneTaskPlan(task.plan) : undefined,

@@ -34,6 +34,7 @@ export function renderSparkToolCall(
         [
           formatStringArg(args.showFinished === true ? "full" : args.view, { fallback: "active" }),
           formatNumberArg(args.limit, { prefix: "limit=" }),
+          formatStringArg(args.format, { prefix: "format=" }),
         ],
         theme,
       );

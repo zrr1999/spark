@@ -43,7 +43,7 @@ void test("workspace-like cwd keeps Spark state under .spark without root SPARK.
     assert.doesNotMatch(threadJson, /Analyze project intent/);
     assert.doesNotMatch(threadJson, /Plan targeted clarification/);
     assert.doesNotMatch(threadJson, /Review initial direction/);
-    assert.doesNotMatch(threadJson, /do not start with a broad intake form/);
+    assert.doesNotMatch(threadJson, /do not start with a generic intake template/);
     assert.doesNotMatch(threadJson, /"currentTaskRef"/);
     assert.doesNotMatch(threadJson, /"todos"/);
     await assert.rejects(() => readFile(join(dir, ".spark", "todos.json"), "utf8"));
@@ -288,7 +288,7 @@ void test("active Spark context omits finished history and finished TODOs", asyn
   }
 });
 
-void test("shouldClarifyBeforeInit disables broad upfront clarification forms", () => {
+void test("shouldClarifyBeforeInit disables generic upfront clarification templates", () => {
   assert.equal(shouldClarifyBeforeInit("Fix typo"), false);
   assert.equal(shouldClarifyBeforeInit("Build v0 LSP plugin workflow"), false);
   assert.equal(
@@ -354,7 +354,7 @@ async function executeSparkToolInTest(
       tools.set(config.name, config);
     },
     on: () => undefined,
-    sendUserMessage: () => undefined,
+    sendMessage: () => undefined,
   });
   const tool = tools.get(name);
   assert.ok(tool, `missing Spark tool: ${name}`);

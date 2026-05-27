@@ -228,7 +228,7 @@ function registerSparkToolsForRendering(): Map<string, RenderableToolConfig> {
     registerCommand: () => undefined,
     registerTool: (config) => tools.set(config.name, config),
     on: () => undefined,
-    sendUserMessage: () => undefined,
+    sendMessage: () => undefined,
   });
   return tools;
 }

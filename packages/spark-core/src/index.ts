@@ -274,6 +274,12 @@ export interface TaskAttribution {
   runName?: string;
 }
 
+export interface TaskCancellation {
+  at: string;
+  by?: string;
+  reason?: string;
+}
+
 export interface TaskPlan {
   objective: string;
   contextRefs: string[];
@@ -335,6 +341,10 @@ export interface Task {
   claimedBySession?: string;
   /** Last actor that finished this task after active claims are cleared. */
   finishedBy?: TaskAttribution;
+  /** Cancellation metadata when status is cancelled. */
+  cancellation?: TaskCancellation;
+  /** Replacement task refs that supersede this task, matching spark-learnings supersededBy shape. */
+  supersededBy: TaskRef[];
   claim?: TaskClaim;
   inputArtifacts: ArtifactRef[];
   outputArtifacts: ArtifactRef[];
@@ -442,6 +452,10 @@ export function validateTask(task: Task): void {
   assertNonEmpty(task.title, "task title");
   assertNonEmpty(task.description, "task description");
   if (task.roleRef) assertRef(task.roleRef, "role");
+  for (const ref of task.supersededBy) assertRef(ref, "task");
+  if (task.cancellation && !task.cancellation.at.trim()) {
+    throw new ValidationError("task cancellation at is required");
+  }
 }
 
 export function assertNonEmpty(value: string, label: string): void {

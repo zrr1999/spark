@@ -28,6 +28,10 @@ export interface SparkDagManagerState {
 
 export interface SparkDagCompletionFollowUp {
   createdAt: string;
+  runRef: RunRef;
+  status: SparkDagRunStatus;
+  scheduled: number;
+  completed: number;
   summary: string;
   nextActions: string[];
 }
@@ -440,25 +444,29 @@ function normalizeSparkDagRunSnapshot(
 
 function normalizeSparkDagRunRecord(raw: Partial<SparkDagRunRecord>): SparkDagRunRecord {
   const now = nowIso();
+  const ref = raw.ref ?? newRef("run");
+  const status =
+    raw.status === "succeeded" ||
+    raw.status === "failed" ||
+    raw.status === "timed_out" ||
+    raw.status === "stale"
+      ? raw.status
+      : "running";
+  const scheduled = raw.scheduled ?? raw.scheduledTaskRefs?.length ?? 0;
+  const completed = raw.completed ?? raw.completedTaskRefs?.length ?? 0;
   const record: SparkDagRunRecord = {
-    ref: raw.ref ?? newRef("run"),
+    ref,
     threadRef: raw.threadRef,
     ownerSessionId: raw.ownerSessionId,
     dryRun: raw.dryRun ?? false,
     maxConcurrency: raw.maxConcurrency ?? DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
     timeoutMs: raw.timeoutMs ?? DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
-    status:
-      raw.status === "succeeded" ||
-      raw.status === "failed" ||
-      raw.status === "timed_out" ||
-      raw.status === "stale"
-        ? raw.status
-        : "running",
+    status,
     startedAt: raw.startedAt ?? now,
     updatedAt: raw.updatedAt ?? now,
     finishedAt: raw.finishedAt,
-    scheduled: raw.scheduled ?? raw.scheduledTaskRefs?.length ?? 0,
-    completed: raw.completed ?? raw.completedTaskRefs?.length ?? 0,
+    scheduled,
+    completed,
     timedOut: raw.timedOut ?? raw.status === "timed_out",
     scheduledTaskRefs: [...(raw.scheduledTaskRefs ?? [])],
     completedTaskRefs: [...(raw.completedTaskRefs ?? [])],
@@ -467,6 +475,10 @@ function normalizeSparkDagRunRecord(raw: Partial<SparkDagRunRecord>): SparkDagRu
     completionFollowUp: raw.completionFollowUp
       ? {
           createdAt: raw.completionFollowUp.createdAt ?? raw.finishedAt ?? now,
+          runRef: raw.completionFollowUp.runRef ?? ref,
+          status: raw.completionFollowUp.status ?? status,
+          scheduled: raw.completionFollowUp.scheduled ?? scheduled,
+          completed: raw.completionFollowUp.completed ?? completed,
           summary: raw.completionFollowUp.summary ?? "Spark DAG manager run finished.",
           nextActions: [...(raw.completionFollowUp.nextActions ?? [])],
         }
@@ -520,6 +532,10 @@ function createSparkDagCompletionFollowUp(run: SparkDagRunRecord): SparkDagCompl
     nextActions.push("Review task outputs and continue with newly unblocked ready tasks if any.");
   return {
     createdAt: nowIso(),
+    runRef: run.ref,
+    status: run.status,
+    scheduled: run.scheduled,
+    completed: run.completed,
     summary: `Spark DAG ${run.ref} ${run.status}: scheduled ${run.scheduled}, completed ${run.completed}.`,
     nextActions,
   };

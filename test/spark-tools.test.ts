@@ -85,7 +85,13 @@ void test("/spark command detects empty, existing, and initialized project modes
     assert.ok(emptyCommand, "missing /spark command");
     await emptyCommand.handler("Build a contextual Spark cockpit", emptyCtx);
     assert.ok(existsSync(join(emptyDir, ".spark", "thread.json")));
-    assert.match(emptyRun.messages.at(-1) ?? "", /Spark initialized|Spark 已初始化/);
+    assert.equal(emptyRun.messages.length, 0);
+    const emptyMessage = emptyRun.customMessages[0]?.content ?? "";
+    assert.match(emptyMessage, /Spark initialized|Spark 已初始化/);
+    const emptyHidden = await consumeSparkModeContext(emptyRun, emptyCtx);
+    assert.match(emptyHidden, /minimal local state/);
+    assert.match(emptyHidden, /spark_rename_thread/);
+    assert.match(emptyHidden, /do not create tasks merely because Spark just initialized/);
 
     await writeFile(join(existingDir, "README.md"), "# Existing project\n", "utf8");
     const existingCtx = testSparkContext(existingDir, "main");
@@ -95,8 +101,16 @@ void test("/spark command detects empty, existing, and initialized project modes
     assert.ok(existingCommand, "missing /spark command");
     await existingCommand.handler("", existingCtx);
     assert.ok(existsSync(join(existingDir, ".spark", "thread.json")));
-    assert.match(existingRun.messages.at(-1) ?? "", /Enter Spark planning mode/);
-    assert.match(existingRun.messages.at(-1) ?? "", /Audit existing project structure/);
+    assert.equal(existingRun.messages.length, 0);
+    assert.match(existingRun.customMessages[0]?.content ?? "", /Spark initialized/);
+    assert.match(existingRun.customMessages.at(-1)?.content ?? "", /Spark planning mode requested/);
+    const existingMessage = await consumeSparkModeContext(existingRun, existingCtx);
+    assert.match(existingMessage, /Enter Spark planning mode/);
+    assert.match(existingMessage, /Audit existing project structure/);
+    assert.match(existingMessage, /answer directly for a simple research\/read-and-comment turn/);
+    assert.match(existingMessage, /spark_plan_tasks only when there are concrete plan-bound tasks/);
+    assert.match(existingMessage, /use spark_ask with context-specific questions/);
+    assert.match(existingMessage, /Do not use generic intake templates/);
     const existingThreadJson = await readFile(join(existingDir, ".spark", "thread.json"), "utf8");
     assert.doesNotMatch(existingThreadJson, /Plan existing project/);
     assert.doesNotMatch(existingThreadJson, /Analyze project intent/);
@@ -132,16 +146,37 @@ void test("/spark command detects empty, existing, and initialized project modes
     assert.ok(initializedCommand, "missing /spark command");
     initializedCtx.selected = "Plan “Tool persistence”";
     await initializedCommand.handler("", initializedCtx);
-    assert.match(initializedRun.messages.at(-1) ?? "", /Enter Spark planning mode/);
+    assert.match(
+      initializedRun.customMessages.at(-1)?.content ?? "",
+      /Spark planning mode requested/,
+    );
+    assert.match(
+      await consumeSparkModeContext(initializedRun, initializedCtx),
+      /Enter Spark planning mode/,
+    );
 
     initializedCtx.selected = "Execute “Tool persistence”";
     await initializedCommand.handler("", initializedCtx);
-    assert.match(initializedRun.messages.at(-1) ?? "", /Enter Spark execution mode/);
+    assert.match(
+      initializedRun.customMessages.at(-1)?.content ?? "",
+      /Spark execution mode requested/,
+    );
+    assert.match(
+      await consumeSparkModeContext(initializedRun, initializedCtx),
+      /Enter Spark execution mode/,
+    );
 
     initializedCtx.ui.select = async () =>
       assert.fail("clear /spark execution prompts should not ask for mode");
     await initializedCommand.handler("execute the ready task", initializedCtx);
-    assert.match(initializedRun.messages.at(-1) ?? "", /Enter Spark execution mode/);
+    assert.match(
+      initializedRun.customMessages.at(-1)?.content ?? "",
+      /Spark execution mode requested/,
+    );
+    assert.match(
+      await consumeSparkModeContext(initializedRun, initializedCtx),
+      /Enter Spark execution mode/,
+    );
   } finally {
     await rm(emptyDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
     await rm(existingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
@@ -180,8 +215,28 @@ void test("/plan and /execute enter Spark modes directly", async () => {
     assert.ok(planCommand, "missing /plan command");
     await planCommand.handler("Audit current task flow", existingCtx);
     assert.ok(existsSync(join(existingDir, ".spark", "thread.json")));
-    assert.match(existingRun.messages.at(-1) ?? "", /Enter Spark planning mode/);
-    assert.match(existingRun.messages.at(-1) ?? "", /Audit current task flow/);
+    assert.equal(existingRun.messages.length, 0);
+    assert.match(existingRun.customMessages[0]?.content ?? "", /Spark initialized/);
+    assert.doesNotMatch(
+      existingRun.customMessages[0]?.content ?? "",
+      /Enter Spark planning mode from explicit \/plan/,
+    );
+    assert.match(existingRun.customMessages.at(-1)?.content ?? "", /Spark planning mode requested/);
+    assert.match(existingRun.customMessages.at(-1)?.content ?? "", /Audit current task flow/);
+    const planMessage = await consumeSparkModeContext(existingRun, existingCtx);
+    assert.match(planMessage, /Enter Spark planning mode from explicit \/plan/);
+    assert.match(planMessage, /Audit current task flow/);
+    assert.match(planMessage, /use spark_ask for context-specific detailed intent/);
+    assert.match(planMessage, /do not leave them as prose/);
+    assert.match(planMessage, /do not use canned intake templates/);
+    assert.match(
+      planMessage,
+      /call spark_plan_tasks to create or refine concrete plan-bound tasks/,
+    );
+    assert.doesNotMatch(
+      planMessage,
+      /answer directly for a simple research\/read-and-comment turn/,
+    );
 
     await writeEmptySparkThread(initializedDir);
     const initializedCtx = testSparkContext(initializedDir, "main");
@@ -211,18 +266,23 @@ void test("/plan and /execute enter Spark modes directly", async () => {
     const executeCommand = initializedRun.commands.get("execute");
     assert.ok(executeCommand, "missing /execute command");
     await executeCommand.handler("Finish the direct execution task", initializedCtx);
-    assert.match(initializedRun.messages.at(-1) ?? "", /Enter Spark execution mode/);
+    assert.equal(initializedRun.messages.length, 0);
     assert.match(
-      initializedRun.messages.at(-1) ?? "",
-      /Execution focus: Finish the direct execution task/,
+      initializedRun.customMessages.at(-1)?.content ?? "",
+      /Spark execution mode requested/,
     );
     assert.match(
-      initializedRun.messages.at(-1) ?? "",
-      /Prefer DAG execution with spark_run_ready_tasks dryRun=false/,
+      initializedRun.customMessages.at(-1)?.content ?? "",
+      /Finish the direct execution task/,
     );
+    const executeMessage = await consumeSparkModeContext(initializedRun, initializedCtx);
+    assert.match(executeMessage, /Enter Spark execution mode/);
+    assert.match(executeMessage, /Execution focus: Finish the direct execution task/);
+    assert.match(executeMessage, /Prefer DAG execution with spark_run_ready_tasks dryRun=false/);
+    assert.match(executeMessage, /Treat DAG execution like background subagent orchestration/);
     assert.match(
-      initializedRun.messages.at(-1) ?? "",
-      /After each claimed task finishes, continue by auto-claiming or dispatching the next ready task/,
+      executeMessage,
+      /After each manually claimed task finishes, continue by auto-claiming or dispatching the next ready task/,
     );
     assert.equal(
       initializedCtx.notifications.at(-1)?.message,
@@ -272,7 +332,9 @@ void test("/plan includes active roadmap item context and matches focus to an ex
 
     await planCommand.handler("Roadmap assisted planning", ctx);
 
-    const message = run.messages.at(-1) ?? "";
+    assert.equal(run.messages.length, 0);
+    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark planning mode requested/);
+    const message = await consumeSparkModeContext(run, ctx);
     assert.match(message, /Roadmap planning context:/);
     assert.match(message, /Roadmap assisted planning/);
     assert.match(message, /Use roadmap item intent while planning tasks/);
@@ -375,7 +437,7 @@ void test("/execute keeps execution mode active and auto-claims the next ready t
       });
     });
 
-    const { tools, commands, messages } = registerSparkToolsForTest();
+    const { tools, commands, messages, customMessages } = registerSparkToolsForTest();
     const executeCommand = commands.get("execute");
     assert.ok(executeCommand, "missing /execute command");
     await executeCommand.handler("work through the ready queue", ctx);
@@ -386,14 +448,33 @@ void test("/execute keeps execution mode active and auto-claims the next ready t
       description: "First ready task",
       status: "running",
     });
+    const messagesBefore = messages.length;
+    const customBefore = customMessages.length;
     const finished = await executeSparkTool(tools, "spark_finish_task", ctx, {
       summary: "Finished first ready task.",
     });
 
     const text = finished.content.map((item) => item.text).join("\n");
     assert.match(text, /Execution mode continued: auto-claimed next ready task @second-ready/);
-    assert.match(messages.at(-1) ?? "", /Continue Spark execution mode/);
-    assert.match(messages.at(-1) ?? "", /Spark auto-claimed @second-ready/);
+    // Continuation must not occupy the user input lane: spark_finish_task should
+    // not send a user message even when execution mode auto-claims the next task.
+    assert.equal(
+      messages.length,
+      messagesBefore,
+      "spark_finish_task must not inject a user message for execution-mode continuation",
+    );
+    const continuation = customMessages
+      .slice(customBefore)
+      .find((message) => message.customType === "spark-execution-continuation");
+    assert.ok(continuation, "missing spark-execution-continuation custom message");
+    const continuationContent =
+      typeof continuation.content === "string"
+        ? continuation.content
+        : (continuation.content as Array<{ type: string; text?: string }>)
+            .map((part) => (part.type === "text" ? (part.text ?? "") : ""))
+            .join("\n");
+    assert.match(continuationContent, /Continue Spark execution mode/);
+    assert.match(continuationContent, /Spark auto-claimed @second-ready/);
 
     const graph = await defaultTaskGraphStore(dir).load();
     const next = graph?.tasks().find((task) => task.name === "second-ready");
@@ -1201,11 +1282,14 @@ void test("spark_dag_manager reconciles and clears inactive records", async () =
   }
 });
 
-void test("spark_run_ready_tasks emits DAG completion follow-up when manager finishes", async () => {
+void test("spark_run_ready_tasks reports DAG completion without queuing a follow-up user message", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-followup-"));
+  const previousBindingHome = process.env.PI_ROLES_HOME;
   try {
+    process.env.PI_ROLES_HOME = dir;
     await writeEmptySparkThread(dir);
     const ctx = testSparkContext(dir, "main");
+    ctx.inputValue = "test/model";
     const store = defaultTaskGraphStore(dir);
     const graph = await store.load();
     assert.ok(graph);
@@ -1246,7 +1330,10 @@ void test("spark_run_ready_tasks emits DAG completion follow-up when manager fin
     const { tools, messages } = registerSparkToolsForTest();
     await useOnlySparkThread(tools, ctx);
     await executeSparkTool(tools, "spark_run_ready_tasks", ctx, { dryRun: false });
-    await waitFor(() => messages.some((message) => message.includes("Spark DAG run:")), 10_000);
+    await waitFor(
+      () => ctx.notifications.some((notice) => notice.message.includes("Spark DAG run:")),
+      10_000,
+    );
     await waitFor(() => !ctx.notifications.at(-1)?.message.includes("running"), 10_000);
 
     const dagStatus = await defaultSparkDagRunStore(dir).status();
@@ -1254,20 +1341,25 @@ void test("spark_run_ready_tasks emits DAG completion follow-up when manager fin
     assert.equal(dagStatus.lastRun?.threadRef, thread.ref);
     const reloadedGraph = await defaultTaskGraphStore(dir).load();
     assert.equal(reloadedGraph?.getTask(otherTask.ref).status, "pending");
-    assert.match(messages.join("\n"), /Spark DAG run:/);
-    assert.match(messages.join("\n"), /scheduled 1, completed 1/);
+    assert.doesNotMatch(messages.join("\n"), /Spark DAG run:/);
     assert.equal(ctx.notifications.at(-1)?.level, "info");
     assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark DAG run:/);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /scheduled 1, completed 1/);
   } finally {
+    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousBindingHome;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
 
 void test("spark_run_ready_tasks marks DAG manager failed when child role-run fails", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-child-failed-"));
+  const previousBindingHome = process.env.PI_ROLES_HOME;
   try {
+    process.env.PI_ROLES_HOME = dir;
     await writeEmptySparkThread(dir);
     const ctx = testSparkContext(dir, "main");
+    ctx.inputValue = "test/model";
     const store = defaultTaskGraphStore(dir);
     const graph = await store.load();
     assert.ok(graph);
@@ -1291,17 +1383,27 @@ void test("spark_run_ready_tasks marks DAG manager failed when child role-run fa
     const { tools, messages } = registerSparkToolsForTest();
     await useOnlySparkThread(tools, ctx);
     await executeSparkTool(tools, "spark_run_ready_tasks", ctx, { dryRun: false });
-    await waitFor(() => messages.some((message) => message.includes("Spark DAG run:")), 3_000);
+    await waitFor(
+      () => ctx.notifications.some((notice) => notice.message.includes("Spark DAG run:")),
+      3_000,
+    );
     await waitFor(() => !ctx.notifications.at(-1)?.message.includes("running"), 3_000);
 
     const dagStatus = await defaultSparkDagRunStore(dir).status();
     assert.equal(dagStatus.succeeded, 0);
     assert.equal(dagStatus.failed, 1);
     assert.equal(dagStatus.lastRun?.status, "failed");
-    assert.match(messages.join("\n"), /Spark DAG .* failed: scheduled 1, completed 1/);
-    assert.match(messages.join("\n"), /Inspect the DAG manager error/);
+    assert.doesNotMatch(messages.join("\n"), /Spark DAG .* failed: scheduled 1, completed 1/);
+    assert.equal(ctx.notifications.at(-1)?.level, "error");
+    assert.match(
+      ctx.notifications.at(-1)?.message ?? "",
+      /Spark DAG .* failed: scheduled 1, completed 1/,
+    );
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Inspect the DAG manager error/);
     await waitFor(() => existsSync(join(dir, ".spark", "todos")), 3_000);
   } finally {
+    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousBindingHome;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
@@ -1327,6 +1429,14 @@ void test("spark_status defaults to active view, supports full history, summary,
       kind: "implement",
       status: "running",
       claimedBySession: sessionKey,
+      claim: {
+        kind: "main",
+        claimedBy: sessionKey,
+        sessionId: sessionKey,
+        claimedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        heartbeatAt: new Date().toISOString(),
+      },
     });
     graph.createTask({
       threadRef: thread.ref,
@@ -1336,6 +1446,14 @@ void test("spark_status defaults to active view, supports full history, summary,
       kind: "review",
       status: "pending",
       claimedBySession: otherSessionKey,
+      claim: {
+        kind: "main",
+        claimedBy: otherSessionKey,
+        sessionId: otherSessionKey,
+        claimedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        heartbeatAt: new Date().toISOString(),
+      },
     });
     graph.createTask({
       threadRef: thread.ref,
@@ -1379,6 +1497,35 @@ void test("spark_status defaults to active view, supports full history, summary,
     assert.equal(active.details?.activeThreadRef, thread.ref);
     assert.equal("tasks" in active.details!, false);
     assert.equal("dependencies" in active.details!, false);
+
+    const json = await executeSparkTool(tools, "spark_status", ctx, { format: "json" });
+    const jsonText = toolText(json);
+    assert.doesNotMatch(jsonText, /Spark tasks \(/);
+    const jsonStatus = JSON.parse(jsonText) as {
+      found: boolean;
+      format: string;
+      view: string;
+      renderedThreads: Array<{
+        ref: string;
+        current: boolean;
+        taskCounts: { total: number; claimedBySession: number };
+        tasks: Array<{ name: string; title: string; owner: string }>;
+      }>;
+      independentTodos: { total: number; todos: unknown[] };
+    };
+    assert.equal(jsonStatus.found, true);
+    assert.equal(jsonStatus.format, "json");
+    assert.equal(jsonStatus.view, "active");
+    assert.equal(jsonStatus.renderedThreads[0]?.ref, thread.ref);
+    assert.equal(jsonStatus.renderedThreads[0]?.current, true);
+    assert.equal(jsonStatus.renderedThreads[0]?.taskCounts.total, 4);
+    assert.equal(jsonStatus.renderedThreads[0]?.taskCounts.claimedBySession, 1);
+    assert.deepEqual(
+      jsonStatus.renderedThreads[0]?.tasks.map((task) => task.name),
+      ["mine", "other"],
+    );
+    assert.equal(jsonStatus.independentTodos.total, 0);
+    assert.equal(json.details?.format, "json");
 
     const limited = await executeSparkTool(tools, "spark_status", ctx, { limit: 1 });
     const limitedText = toolText(limited);
@@ -1558,11 +1705,18 @@ async function writeRoadmap(
 function registerSparkToolsForTest(): {
   tools: Map<string, SparkToolConfig>;
   messages: string[];
+  customMessages: Array<{ customType: string; content: string; display?: boolean }>;
   commands: Map<string, Parameters<SparkExtensionApiForTest["registerCommand"]>[1]>;
+  eventHandlers: Map<string, Array<(event: unknown, ctx: TestSparkContext) => unknown>>;
 } {
   const tools = new Map<string, SparkToolConfig>();
   const messages: string[] = [];
+  const customMessages: Array<{ customType: string; content: string; display?: boolean }> = [];
   const commands = new Map<string, Parameters<SparkExtensionApiForTest["registerCommand"]>[1]>();
+  const eventHandlers = new Map<
+    string,
+    Array<(event: unknown, ctx: TestSparkContext) => unknown>
+  >();
   const pi: SparkExtensionApiForTest & {
     getAllTools: () => Array<{ name: string }>;
     setActiveTools: (names: string[]) => void;
@@ -1573,15 +1727,36 @@ function registerSparkToolsForTest(): {
     registerTool: (config) => {
       tools.set(config.name, config);
     },
-    on: () => undefined,
-    sendUserMessage: (content) => {
-      messages.push(content);
+    on: (event, handler) => {
+      const handlers = eventHandlers.get(event) ?? [];
+      handlers.push(handler as (event: unknown, ctx: TestSparkContext) => unknown);
+      eventHandlers.set(event, handlers);
+    },
+    sendMessage: (message) => {
+      customMessages.push(message);
     },
     getAllTools: () => [...tools.keys()].map((name) => ({ name })),
     setActiveTools: () => undefined,
   };
   sparkExtension(pi);
-  return { tools, messages, commands };
+  return { tools, messages, customMessages, commands, eventHandlers };
+}
+
+async function consumeSparkModeContext(
+  run: ReturnType<typeof registerSparkToolsForTest>,
+  ctx: TestSparkContext,
+): Promise<string> {
+  for (const handler of run.eventHandlers.get("before_agent_start") ?? []) {
+    const result = (await handler({}, ctx)) as
+      | { message?: { customType?: string; content?: string; display?: boolean } }
+      | undefined;
+    if (result?.message?.customType === "spark-mode-context") {
+      assert.equal(result.message.display, false);
+      assert.ok(result.message.content);
+      return result.message.content;
+    }
+  }
+  assert.fail("missing hidden Spark mode context");
 }
 
 async function executeSparkTool(

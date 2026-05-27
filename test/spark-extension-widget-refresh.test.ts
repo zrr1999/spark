@@ -97,6 +97,7 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
       on(event, handler) {
         handlers.set(event, handler);
       },
+      sendMessage() {},
     };
     sparkExtension(pi);
 
