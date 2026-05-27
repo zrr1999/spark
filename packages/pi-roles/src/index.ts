@@ -455,9 +455,11 @@ export async function validateRoleModel(input: {
     const child = spawn(input.piCommand, ["--list-models", model], {
       cwd: input.cwd,
       env: process.env,
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
     });
+    const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
     let settled = false;
     const timer = setTimeout(() => {
@@ -477,13 +479,19 @@ export async function validateRoleModel(input: {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (code === 0) resolve();
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8").trim();
+      const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+      const output = [stdout, stderr].filter(Boolean).join("\n");
+      if (code === 0 && !isNoMatchingModelOutput(output)) resolve();
       else {
-        const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
-        reject(new Error(`model validation failed for ${model}: ${stderr || `exit ${code}`}`));
+        reject(new Error(`model validation failed for ${model}: ${output || `exit ${code}`}`));
       }
     });
   });
+}
+
+function isNoMatchingModelOutput(output: string): boolean {
+  return /no\s+models?\s+(?:found\s+)?matching\b/i.test(output);
 }
 
 export async function saveValidatedRoleModelBinding(input: {

@@ -102,6 +102,7 @@ void test("pi-roles validates and persists user role model bindings", async () =
         "#!/usr/bin/env node",
         "const args = process.argv.slice(2);",
         "if (args[0] === '--list-models' && args[1] === 'openai/gpt-5.5') process.exit(0);",
+        "if (args[0] === '--list-models' && args[1] === 'missing-zero/model') { process.stdout.write('No models matching missing-zero/model\\n'); process.exit(0); }",
         "process.exit(42);",
       ].join("\n"),
       "utf8",
@@ -131,6 +132,17 @@ void test("pi-roles validates and persists user role model bindings", async () =
       /model validation failed/,
     );
     assert.equal(await store.get("role:builtin-reviewer"), undefined);
+    await assert.rejects(
+      saveValidatedRoleModelBinding({
+        store,
+        roleRef: "role:builtin-planner",
+        model: "missing-zero/model",
+        piCommand: fakePi,
+        cwd: dir,
+      }),
+      /No models matching missing-zero\/model/,
+    );
+    assert.equal(await store.get("role:builtin-planner"), undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
