@@ -1308,6 +1308,90 @@ void test("spark_use_thread reports selected existing threads", async () => {
   }
 });
 
+void test("spark_list_threads returns structured filtered thread summaries", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-list-threads-"));
+  try {
+    await writeEmptySparkThread(dir);
+    const store = defaultTaskGraphStore(dir);
+    const graph = await store.load();
+    assert.ok(graph);
+    const [activeThread] = graph.threads();
+    assert.ok(activeThread);
+    const doneThread = graph.createThread({
+      title: "Finished thread",
+      description: "Thread that should only appear in done/all filters.",
+      status: "done",
+    });
+    graph.createTask({
+      threadRef: activeThread.ref,
+      name: "active-work",
+      title: "Active work",
+      description: "Active work item.",
+      status: "pending",
+    });
+    graph.createTask({
+      threadRef: activeThread.ref,
+      name: "finished-work",
+      title: "Finished work",
+      description: "Finished work item.",
+      status: "done",
+    });
+    graph.createTask({
+      threadRef: activeThread.ref,
+      name: "cancelled-work",
+      title: "Cancelled work",
+      description: "Cancelled work item.",
+      status: "cancelled",
+    });
+    graph.createTask({
+      threadRef: doneThread.ref,
+      name: "done-thread-work",
+      title: "Done thread work",
+      description: "Done thread work item.",
+      status: "done",
+    });
+    await store.save(graph);
+
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+    await executeSparkTool(tools, "spark_use_thread", ctx, { thread: activeThread.ref });
+
+    const active = JSON.parse(
+      toolText(await executeSparkTool(tools, "spark_list_threads", ctx, {})),
+    ) as Array<{
+      ref: string;
+      status: string;
+      currentForSession: boolean;
+      taskCounts: { total: number; active: number; done: number; cancelled: number };
+    }>;
+    assert.deepEqual(
+      active.map((thread) => thread.ref),
+      [activeThread.ref],
+    );
+    assert.equal(active[0]?.currentForSession, true);
+    assert.deepEqual(active[0]?.taskCounts, { total: 3, active: 1, done: 1, cancelled: 1 });
+
+    const done = JSON.parse(
+      toolText(await executeSparkTool(tools, "spark_list_threads", ctx, { status: "done" })),
+    ) as Array<{ ref: string; status: string; currentForSession: boolean }>;
+    assert.deepEqual(
+      done.map((thread) => thread.ref),
+      [doneThread.ref],
+    );
+    assert.equal(done[0]?.currentForSession, false);
+
+    const all = JSON.parse(
+      toolText(await executeSparkTool(tools, "spark_list_threads", ctx, { status: "all" })),
+    ) as Array<{ ref: string }>;
+    assert.deepEqual(
+      all.map((thread) => thread.ref),
+      [activeThread.ref, doneThread.ref],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("spark_status does not activate an arbitrary thread for the Pi session", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-status-no-auto-thread-"));
   try {

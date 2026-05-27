@@ -38,6 +38,10 @@ void test("Spark extension tools render parameter-aware tool calls", () => {
     "spark_status full limit=5",
   );
   assert.equal(
+    renderCall(tools, "spark_list_threads", { status: "all" }),
+    "spark_list_threads all",
+  );
+  assert.equal(
     renderCall(tools, "spark_ask", {
       mode: "decision",
       title: "Proceed with implementation?",

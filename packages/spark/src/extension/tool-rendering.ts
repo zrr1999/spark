@@ -38,6 +38,12 @@ export function renderSparkToolCall(
         ],
         theme,
       );
+    case "spark_list_threads":
+      return renderToolCall(
+        toolName,
+        [formatStringArg(args.status, { fallback: "active" })],
+        theme,
+      );
     case "spark_update_todos":
       return renderToolCall(toolName, [formatOpsSummary(args.ops)], theme);
     case "spark_update_task_todos":

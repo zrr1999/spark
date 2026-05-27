@@ -195,6 +195,7 @@ const SPARK_PLAN_TASKS_READINESS_RULES = [
 ].join("\n");
 type SparkStatusView = "active" | "summary" | "full";
 type SparkStatusFormat = "text" | "json";
+type SparkThreadListStatus = "active" | "done" | "all";
 type SparkCommandProjectStateKind = "empty_project" | "existing_project" | "initialized";
 interface SparkCommandProjectState {
   kind: SparkCommandProjectStateKind;
@@ -843,6 +844,11 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
   function normalizeSparkStatusFormat(params: Record<string, unknown>): SparkStatusFormat {
     return params.format === "json" ? "json" : "text";
+  }
+
+  function normalizeSparkThreadListStatus(params: Record<string, unknown>): SparkThreadListStatus {
+    if (params.status === "done" || params.status === "all") return params.status;
+    return "active";
   }
 
   function normalizeSparkStatusLimit(params: Record<string, unknown>): number | undefined {
@@ -2428,6 +2434,59 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
             ? compactLearningDetail(learningCandidate)
             : undefined,
         },
+      };
+    },
+  });
+
+  registerSparkTool({
+    name: "spark_list_threads",
+    label: "Spark List Threads",
+    description:
+      "List Spark threads as structured JSON without parsing spark_status text. Parameters: status=active|done|all (default active). Example output item: { ref, title, status, taskCounts: { total, active, done, cancelled }, currentForSession }.",
+    parameters: Type.Object({
+      status: Type.Optional(
+        Type.String({
+          default: "active",
+          description: "active | done | all. Defaults to active.",
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = ctxCwd(ctx);
+      const graph = await loadSparkGraph(cwd, ctx);
+      const status = normalizeSparkThreadListStatus(params);
+      if (!graph) {
+        const details = { found: false, status, threads: [] };
+        return { content: [{ type: "text", text: JSON.stringify([], null, 2) }], details };
+      }
+      const currentThread = await currentSparkThread(cwd, ctx, graph);
+      const threads = graph
+        .threads()
+        .filter((thread) =>
+          status === "all"
+            ? true
+            : status === "done"
+              ? thread.status === "done"
+              : thread.status !== "done",
+        )
+        .map((thread) => {
+          const tasks = graph.tasks(thread.ref);
+          return {
+            ref: thread.ref,
+            title: thread.title,
+            status: thread.status,
+            taskCounts: {
+              total: tasks.length,
+              active: tasks.filter((task) => isImportantStatus(task.status)).length,
+              done: tasks.filter((task) => task.status === "done").length,
+              cancelled: tasks.filter((task) => task.status === "cancelled").length,
+            },
+            currentForSession: currentThread?.ref === thread.ref,
+          };
+        });
+      return {
+        content: [{ type: "text", text: JSON.stringify(threads, null, 2) }],
+        details: { found: true, status, threads },
       };
     },
   });
