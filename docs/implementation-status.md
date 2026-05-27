@@ -117,9 +117,11 @@ but end-to-end local vertical slice.
      `spark_claim_task`, `spark_update_task_todos`,
      `spark_update_todos`, `spark_run_ready_tasks`, and
      `pi-cue` tools
-   - `/spark` initializes state without a broad intake form;
-     targeted clarification is deferred until Spark has
-     context from the current workspace
+   - `/spark` initializes state without a generic intake
+     template; clarification and decision asks are grounded in
+     context from the current workspace, and plan-changing open
+     questions should be represented with `spark_ask` rather
+     than prose
    - `.spark/` state is always created and should stay Git-ignored;
      root `SPARK.md` is only materialized when `.git` exists in cwd
    - SPARK.md artifact, task graph, role plan artifact,

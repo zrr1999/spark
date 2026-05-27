@@ -226,7 +226,7 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
       "Ask the user a structured multi-question clarification, decision, approval, or unblock flow.",
     promptGuidelines: [
       "Use ask_flow when a decision needs multiple related questions.",
-      "Ask focused questions and avoid broad intake forms.",
+      "Ask questions grounded in the actual situation; avoid generic intake templates.",
       "After a decision is confirmed, continue with the chosen action when clear.",
     ],
     parameters: Type.Object({

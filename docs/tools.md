@@ -8,7 +8,7 @@ Command:
 
 Tools:
 
-- `spark_status` — show Spark thread/task status. Defaults to `view: "active"` for unfinished/current-session work, supports `view: "summary"` for counts only, `view: "full"` for done/cancelled history plus read-only `.spark` cache/protected-store summary, and optional `limit` for task rows per thread.
+- `spark_status` — show Spark thread/task status. Defaults to `view: "active"` for unfinished/current-session work, supports `view: "summary"` for counts only, `view: "full"` for done/cancelled history plus read-only `.spark` cache/protected-store summary, optional `limit` for task rows per thread, and `format: "json"` for a first-class structured status payload instead of human-formatted text.
 - `spark_use_thread` — set or create this session's current Spark thread.
 - `spark_rename_thread` — rename or update metadata for an existing Spark thread without changing task refs.
 - `spark_plan_tasks` — create or update multiple durable named tasks (`name` / `title` / `description`) in the active thread from a concrete plan without claiming them for the current session. Each task is plan-bound: callers may provide a structured `plan`, and Spark derives a minimal plan from the task description when omitted. Task dependencies are scoped to the active thread only; cross-thread dependencies are intentionally out of scope.
@@ -40,7 +40,7 @@ Automatic behavior:
    - a `.spark/thread.json` exists in cwd or an ancestor
    - cwd is under an allowlisted directory in
      `~/.config/spark/config.toml`
-2. `/spark` does not start with a broad intake form:
+2. `/spark` does not start with a generic intake template:
    - Spark records the initial intent and builds
      investigation/planning tasks first
    - Spark does not create placeholder threads/tasks or a
@@ -48,10 +48,14 @@ Automatic behavior:
      use `spark_claim_task` only after it has concrete work
      from the actual situation
    - each session should have at most one unfinished main-session claim at a time; role-run execution is represented as an auto-claim when the run starts
-   - initialization does not show a broad upfront form;
-     Spark analyzes the request and workspace first, then asks
-     only targeted clarification questions for concrete
-     ambiguities discovered by that analysis
+   - initialization and planning analyze the request and
+     workspace first, then ask context-specific clarification or
+     decision questions grounded in that analysis
+   - when open questions or decision points would change task
+     scope, dependencies, priorities, success criteria,
+     evidence, architecture, dependency choices, or
+     implementation order, Spark should use `spark_ask` instead
+     of leaving those questions as prose
    - the output language defaults from the current request
      language; do not ask a separate language question when the
      language is obvious

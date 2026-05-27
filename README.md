@@ -8,7 +8,7 @@
 /spark <idea>
 ```
 
-`/spark` initializes local Spark state without asking the user to complete a broad intake form. Spark first records the initial intent and uses investigation tasks to gather context. It does not synthesize placeholder current tasks; the model claims one or more concrete tasks within the active thread. Follow-up asks should be targeted to the actual project state. The output language defaults from the current request language and is confirmed when Spark asks a targeted clarification.
+`/spark` initializes local Spark state without asking the user to complete a generic intake template. Spark first records the initial intent and uses investigation tasks to gather context. It does not synthesize placeholder current tasks; the model claims one or more concrete tasks within the active thread. Follow-up asks should be grounded in the actual project state: when open questions or decision points would change task scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order, Spark should use a context-specific `spark_ask` instead of leaving those questions as prose. The output language defaults from the current request language and is confirmed only when that decision is genuinely unclear.
 
 The first vertical slice then creates local Spark state under `.spark/`:
 
