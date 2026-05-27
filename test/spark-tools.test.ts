@@ -1308,6 +1308,17 @@ void test("spark_use_thread reports selected existing threads", async () => {
   }
 });
 
+void test("all spark tools describe prerequisites and operation semantics", () => {
+  const { tools } = registerSparkToolsForTest();
+  const sparkTools = [...tools.values()].filter((tool) => tool.name.startsWith("spark_"));
+  assert.ok(sparkTools.length >= 20);
+  for (const tool of sparkTools) {
+    assert.match(tool.description, /\nAtomic: /, `${tool.name} is missing Atomic marker`);
+    assert.match(tool.description, /\nIdempotent: /, `${tool.name} is missing Idempotent marker`);
+    assert.match(tool.description, /\nPrerequisites:\n- /, `${tool.name} is missing prerequisites`);
+  }
+});
+
 void test("spark_list_threads returns structured filtered thread summaries", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-list-threads-"));
   try {
