@@ -204,6 +204,68 @@ function tailStr(s: string, maxBytes: number): { text: string; truncated: boolea
   return { text: s.slice(s.length - maxBytes), truncated: true };
 }
 
+const ANSI_OSC_SEQUENCE_PATTERN = new RegExp(
+  String.raw`\u001B\][^\u0007]*(?:\u0007|\u001B\\)`,
+  "g",
+);
+const ANSI_CONTROL_SEQUENCE_PATTERN = new RegExp(
+  String.raw`\u001B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])`,
+  "g",
+);
+
+function stripAnsiSequences(value: string): string {
+  return value
+    .replaceAll(ANSI_OSC_SEQUENCE_PATTERN, "")
+    .replaceAll(ANSI_CONTROL_SEQUENCE_PATTERN, "");
+}
+
+function applyCarriageReturnOverwrites(value: string): string {
+  const lines: string[] = [];
+  let current = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === "\r") {
+      current = "";
+      continue;
+    }
+    if (char === "\n") {
+      lines.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  lines.push(current);
+  return lines.join("\n");
+}
+
+function progressLineKey(line: string): string | undefined {
+  const key = line.replace(/^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◒◐◓◑⣾⣽⣻⢿⡿⣟⣯⣷|/\\-]\s+/, "");
+  if (key === line) return undefined;
+  return key.trim() || undefined;
+}
+
+function collapseRepeatedProgressLines(value: string): string {
+  const lines = value.split("\n");
+  const collapsed: string[] = [];
+  let previousProgressKey: string | undefined;
+  for (const line of lines) {
+    const key = progressLineKey(line);
+    if (key && key === previousProgressKey) {
+      collapsed[collapsed.length - 1] = line;
+      continue;
+    }
+    collapsed.push(line);
+    previousProgressKey = key;
+  }
+  return collapsed.join("\n");
+}
+
+export function normalizeCueTerminalOutput(value: string): string {
+  if (!value) return value;
+  return collapseRepeatedProgressLines(applyCarriageReturnOverwrites(stripAnsiSequences(value)));
+}
+
 function normalizeTailBytes(value: unknown, fallback = DEFAULT_OUTPUT_TAIL_BYTES): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   return Math.max(0, Math.floor(value));
@@ -394,17 +456,19 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       });
 
       if (result.timedOut) {
+        const stdout = normalizeCueTerminalOutput(result.stdout);
+        const stderr = normalizeCueTerminalOutput(result.stderr);
         const lines = [
           `Job ${result.jobId}: Timed out after ${effectiveTimeout}s — switched to background.`,
           `Track with cue_jobs action=status/wait using id ${result.jobId}.`,
         ];
-        if (result.stdout.trim()) {
-          const t = tailStr(result.stdout, tailBytes);
+        if (stdout.trim()) {
+          const t = tailStr(stdout, tailBytes);
           lines.push("", "[stdout so far]", t.text.trimEnd());
           if (t.truncated) lines.push(truncationLine("stdout", result.jobId));
         }
-        if (result.stderr.trim()) {
-          const t = tailStr(result.stderr, tailBytes);
+        if (stderr.trim()) {
+          const t = tailStr(stderr, tailBytes);
           lines.push("", "[stderr so far]", t.text.trimEnd());
           if (t.truncated) lines.push(truncationLine("stderr", result.jobId));
         }
@@ -418,6 +482,9 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         };
       }
 
+      const stdout = normalizeCueTerminalOutput(result.stdout);
+      const stderr = normalizeCueTerminalOutput(result.stderr);
+
       if (
         result.status === "Failed" ||
         result.status === "Killed" ||
@@ -425,13 +492,13 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       ) {
         const parts = [`Job ${result.jobId}: ${result.status}`];
         if (result.exitCode !== null) parts.push(` (exit ${result.exitCode})`);
-        if (result.stdout.trim()) {
-          const t = tailStr(result.stdout, tailBytes);
+        if (stdout.trim()) {
+          const t = tailStr(stdout, tailBytes);
           parts.push("\n" + t.text.trimEnd());
           if (t.truncated) parts.push(`\n${truncationLine("stdout", result.jobId)}`);
         }
-        if (result.stderr.trim()) {
-          const t = tailStr(result.stderr, tailBytes === 0 ? 0 : Math.min(tailBytes, 2_000));
+        if (stderr.trim()) {
+          const t = tailStr(stderr, tailBytes === 0 ? 0 : Math.min(tailBytes, 2_000));
           parts.push("\n[stderr tail]\n" + t.text.trimEnd());
           if (t.truncated) parts.push(`\n${truncationLine("stderr", result.jobId)}`);
         }
@@ -440,13 +507,13 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
 
       const out = [`Job ${result.jobId}: ${result.status}`];
       if (result.exitCode !== null && result.exitCode !== 0) out.push(` (exit ${result.exitCode})`);
-      if (result.stdout.trim()) {
-        const t = tailStr(result.stdout, tailBytes);
+      if (stdout.trim()) {
+        const t = tailStr(stdout, tailBytes);
         out.push("\n" + t.text.trimEnd());
         if (t.truncated) out.push(`\n${truncationLine("stdout", result.jobId)}`);
       }
-      if (result.stderr.trim()) {
-        const t = tailStr(result.stderr, tailBytes);
+      if (stderr.trim()) {
+        const t = tailStr(stderr, tailBytes);
         out.push("\n[stderr]\n" + t.text.trimEnd());
         if (t.truncated) out.push(`\n${truncationLine("stderr", result.jobId)}`);
       }
@@ -608,7 +675,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
 
         try {
           const out = await cued.jobOutput(params.id, tailBytes === 0 ? undefined : tailBytes);
-          if (out.stdout.trim()) parts.push("", out.stdout.trimEnd());
+          const stdout = normalizeCueTerminalOutput(out.stdout);
+          if (stdout.trim()) parts.push("", stdout.trimEnd());
           if (out.truncated) parts.push("[stdout truncated]");
         } catch {
           /* output may not be ready */
@@ -616,7 +684,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
 
         try {
           const errOut = await cued.jobError(params.id);
-          const err = tailStr(errOut.stderr, tailBytes);
+          const err = tailStr(normalizeCueTerminalOutput(errOut.stderr), tailBytes);
           if (err.text.trim()) parts.push("", "[stderr]", err.text.trimEnd());
           if (err.truncated || errOut.truncated) parts.push("[stderr truncated]");
         } catch {
@@ -659,10 +727,11 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             } catch {
               /* stderr may not be ready */
             }
-            const err = tailStr(errOut.stderr, tailBytes);
+            const stdout = normalizeCueTerminalOutput(out.stdout);
+            const err = tailStr(normalizeCueTerminalOutput(errOut.stderr), tailBytes);
             const lines = [`${statusLabel(job.status)} — ${job.pipeline}`];
             if (job.exit_code != null) lines.push(`Exit code: ${job.exit_code}`);
-            if (out.stdout.trim()) lines.push("", out.stdout.trimEnd());
+            if (stdout.trim()) lines.push("", stdout.trimEnd());
             if (out.truncated) lines.push("[stdout truncated]");
             if (err.text.trim()) lines.push("", "[stderr]", err.text.trimEnd());
             if (err.truncated || errOut.truncated) lines.push("[stderr truncated]");
