@@ -96,7 +96,7 @@ but end-to-end local vertical slice.
    - Spark-specific active role-run tracking for timeout/reconciliation and kill controls
    - persisted expired-claim sweeper and distinct `runtime_timeout` failure marking
 - `spark`
-   - `/spark <idea>`, `/plan <focus>`, `/execute <focus>`, and `/run <focus>` commands. `/execute` is single-task execution; `/run` persists run-mode state and starts background DAG-manager progress; `/spark` asks before routing continuous/until-done prompts into `/run`.
+   - `/spark <idea>`, `/plan <focus>`, `/execute <focus>`, `/run <focus>`, `/run-sequential <focus>`, and `/run-parallel <focus>` commands. `/execute` is single-task execution; `/run-sequential` persists run-mode state with `maxConcurrency=1`; `/run-parallel` keeps the existing parallel DAG-manager progress; `/run` infers between those strategies.
    - `spark_status` tool
    - `spark_claim_task` tool for named model-claimed current work
    - `spark_update_task_todos` for task-scoped TODOs
@@ -130,7 +130,7 @@ but end-to-end local vertical slice.
      persistent project intent
    - default text UI summary for active thread task counts,
      session-claimed tasks, task TODOs, independent session
-     TODO siblings, DAG manager state, and `/run` mode status after Spark initialization and on active Spark turns
+     TODO siblings, DAG manager state, and run-mode status after Spark initialization and on active Spark turns
    - active-session task TODO files live under
      `.spark/todos/<session>.json`; independent TODOs managed by
      `spark_update_todos` live under
@@ -140,7 +140,7 @@ but end-to-end local vertical slice.
      without creating placeholder tasks
    - ask artifacts linked into the Spark run trace when init clarification runs
    - project role store hydration before ready-task execution
-   - `/run` background orchestration reuses the DAG manager, advances newly unblocked ready work, and records terminal run-mode states (`done`, `blocked`, or `failed`) without queuing synthetic user messages
+   - `/run` / `/run-sequential` / `/run-parallel` background orchestration reuses the DAG manager, advances newly unblocked ready work, and records terminal run-mode states (`done`, `blocked`, or `failed`) without queuing synthetic user messages
 
 ## Boundary cleanup status
 

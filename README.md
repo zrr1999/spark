@@ -14,8 +14,10 @@ Spark command modes are intentionally split:
 
 - `/plan <focus>` plans or refines the task DAG and does not execute work.
 - `/execute <focus>` executes at most one concrete task, then stops. If another task is ready, the finish output may point to it; run `/execute` again for one more step.
-- `/run <focus>` starts a durable background Spark run for the selected thread. The DAG manager advances ready tasks until the run is done, blocked, failed, cancelled, or needs a decision. Progress appears in `spark_status`, the Spark widget, and DAG-manager notifications; it should not be represented as follow-up user messages.
-- `/spark <focus>` infers planning or single-step execution when high confidence. If the prompt asks for continuous/until-done progress, Spark asks before entering `/run`.
+- `/run-sequential <focus>` starts or resumes the background Spark orchestrator with `maxConcurrency=1`, so ready tasks run one at a time until the run is done, blocked, failed, cancelled, or needs a decision.
+- `/run-parallel <focus>` keeps the existing parallel ready-frontier scheduler for background progress.
+- `/run <focus>` remains an inferred-strategy convenience entry point: parallel/concurrent wording selects `/run-parallel`; otherwise it uses safer sequential progress.
+- `/spark <focus>` infers planning or single-step execution when high confidence. If the prompt asks for continuous/until-done progress, Spark asks before entering inferred-strategy `/run`.
 
 The first vertical slice then creates local Spark state under `.spark/`:
 
@@ -35,7 +37,7 @@ A root `SPARK.md` is only materialized when the current `cwd` looks like a concr
 
 ## Packages
 
-- `spark` — high-level `/spark`, `/plan`, `/execute`, and `/run` facade plus Spark status/run tools.
+- `spark` — high-level `/spark`, `/plan`, `/execute`, `/run`, `/run-sequential`, and `/run-parallel` facade plus Spark status/run tools.
 - `spark-core` — internal shared refs, schemas, errors, and contracts.
 - `pi-cue` — reusable Pi/cue-shell execution substrate; absorbs `pi-cue-shell` code without a compatibility package and does not depend on `spark-core`.
 - `pi-ask` — minimal `ask_user` plus reusable `ask_flow` protocol/state/renderer with direct custom input handling.

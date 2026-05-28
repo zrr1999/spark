@@ -367,6 +367,7 @@ interface SparkCommandProjectState {
 }
 
 type SparkEntryMode = "planning" | "execution" | "run";
+type SparkRunStrategy = "sequential" | "parallel";
 type SparkPlanningModeSource = "auto" | "direct";
 type SparkEntryModeChoice = SparkEntryMode | "new_project";
 type SparkEntryConfidence = "high" | "ambiguous" | "conflicting";
@@ -410,7 +411,8 @@ interface SparkRunModeState {
 
 type SparkEntryIntent =
   | { kind: "auto"; prompt: string }
-  | { kind: "direct"; mode: SparkEntryMode; prompt: string };
+  | { kind: "run_auto"; prompt: string }
+  | { kind: "direct"; mode: SparkEntryMode; prompt: string; runStrategy?: SparkRunStrategy };
 
 type SparkEntryResolution =
   | {
@@ -425,6 +427,7 @@ type SparkEntryResolution =
       mode: SparkEntryMode;
       focus?: string;
       planningSource?: SparkPlanningModeSource;
+      runStrategy?: SparkRunStrategy;
     }
   | { action: "blocked"; message: string }
   | { action: "none" };
@@ -1243,7 +1246,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
   function sparkRunModeStatusLine(runMode: SparkRunModeState): string {
     const focusSuffix = runMode.focus ? ` focus=${runMode.focus}` : "";
-    return `Spark run mode: ${runMode.status} ${runMode.runRef} thread=${runMode.threadRef}${focusSuffix} maxConcurrency=${runMode.policy.maxConcurrency} timeoutMs=${runMode.policy.timeoutMs}`;
+    const strategy = sparkRunStrategyForMaxConcurrency(runMode.policy.maxConcurrency);
+    return `Spark run mode: ${runMode.status} ${runMode.runRef} thread=${runMode.threadRef}${focusSuffix} strategy=${strategy} maxConcurrency=${runMode.policy.maxConcurrency} timeoutMs=${runMode.policy.timeoutMs}`;
   }
 
   function sparkDagWidgetEntry(
@@ -1823,12 +1827,37 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
   pi.registerCommand("run", {
     description:
-      "Start Spark run mode to continuously advance ready tasks in the background until done or blocked.",
+      "Start Spark run mode with an inferred execution strategy; use /run-sequential or /run-parallel to be explicit.",
+    async handler(args, ctx) {
+      await handleSparkEntryCommand(pi, ctx, {
+        kind: "run_auto",
+        prompt: args.trim(),
+      });
+    },
+  });
+
+  pi.registerCommand("run-sequential", {
+    description:
+      "Start Spark run mode to continuously execute ready tasks one at a time until done or blocked.",
     async handler(args, ctx) {
       await handleSparkEntryCommand(pi, ctx, {
         kind: "direct",
         mode: "run",
         prompt: args.trim(),
+        runStrategy: "sequential",
+      });
+    },
+  });
+
+  pi.registerCommand("run-parallel", {
+    description:
+      "Start Spark run mode to continuously execute ready tasks in parallel until done or blocked.",
+    async handler(args, ctx) {
+      await handleSparkEntryCommand(pi, ctx, {
+        kind: "direct",
+        mode: "run",
+        prompt: args.trim(),
+        runStrategy: "parallel",
       });
     },
   });
@@ -1855,7 +1884,9 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     const mode =
       intent.kind === "direct"
         ? intent.mode
-        : await chooseInitializedSparkMode(ctx, graph, projectState, intent.prompt);
+        : intent.kind === "run_auto"
+          ? "run"
+          : await chooseInitializedSparkMode(ctx, graph, projectState, intent.prompt);
     if (!mode) return { action: "none" };
     if (mode === "new_project") {
       const idea = intent.prompt || (await promptSparkNewProjectIdea(ctx));
@@ -1863,11 +1894,19 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         ? { action: "initialize_new_project", idea, enterPlanning: true, planningSource: "auto" }
         : { action: "none" };
     }
+    const runStrategy =
+      mode === "run"
+        ? intent.kind === "direct" && intent.runStrategy
+          ? intent.runStrategy
+          : await chooseSparkRunStrategy(ctx, graph, projectState, intent.prompt)
+        : undefined;
+    if (mode === "run" && !runStrategy) return { action: "none" };
     return {
       action: "enter_mode",
       mode,
       focus: intent.prompt || undefined,
       planningSource: intent.kind === "direct" && mode === "planning" ? "direct" : "auto",
+      runStrategy,
     };
   }
 
@@ -1883,20 +1922,26 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           ? { action: "initialize_new_project", idea, enterPlanning: false, planningSource: "auto" }
           : { action: "none" };
       }
+      const modeLabel = intent.kind === "direct" ? intent.mode : "run";
       return {
         action: "blocked",
         message:
-          intent.mode === "planning"
+          modeLabel === "planning"
             ? "Spark planning mode needs an existing project or a Spark idea. Use /spark <idea> to initialize an empty project."
-            : `Spark ${intent.mode} mode needs initialized Spark state. Use /spark <idea> or /plan first.`,
+            : `Spark ${modeLabel} mode needs initialized Spark state. Use /spark <idea> or /plan first.`,
       };
     }
 
-    if (intent.kind === "direct" && (intent.mode === "execution" || intent.mode === "run"))
+    if (
+      intent.kind === "run_auto" ||
+      (intent.kind === "direct" && (intent.mode === "execution" || intent.mode === "run"))
+    ) {
+      const modeLabel = intent.kind === "direct" ? intent.mode : "run";
       return {
         action: "blocked",
-        message: `Spark ${intent.mode} mode needs initialized Spark state. Use /spark <idea> or /plan first.`,
+        message: `Spark ${modeLabel} mode needs initialized Spark state. Use /spark <idea> or /plan first.`,
       };
+    }
 
     const idea = intent.prompt || (await inferExistingProjectSparkIdea(ctx));
     return idea
@@ -1943,7 +1988,14 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           );
         else if (resolution.mode === "execution")
           await enterSparkExecutionMode(piApi, ctx, graph, resolution.focus);
-        else await enterSparkRunMode(piApi, ctx, graph, resolution.focus);
+        else
+          await enterSparkRunMode(
+            piApi,
+            ctx,
+            graph,
+            resolution.focus,
+            resolution.runStrategy ?? "sequential",
+          );
         return;
       case "blocked":
         ctx.ui?.notify?.(resolution.message, "warning");
@@ -2192,6 +2244,41 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     return sparkModeFromAskDetails(response.details);
   }
 
+  async function chooseSparkRunStrategy(
+    ctx: SparkCommandContext,
+    graph: TaskGraph,
+    projectState: SparkCommandProjectState,
+    prompt: string,
+  ): Promise<SparkRunStrategy | undefined> {
+    const inferred = inferSparkRunStrategy(prompt);
+    if (inferred) return inferred;
+
+    const thread = await currentSparkThread(ctx.cwd, ctx, graph);
+    const response = await runSparkAskTool(
+      sparkRunStrategyAsk(graph, projectState, prompt, thread),
+      {
+        cwd: ctx.cwd,
+        ui: sparkAskUi(ctx),
+      },
+    );
+    return sparkRunStrategyFromAskDetails(response.details);
+  }
+
+  function inferSparkRunStrategy(prompt: string): SparkRunStrategy | undefined {
+    const normalizedPrompt = prompt.trim();
+    const hasParallelSignal =
+      /(并行|同时|多任务|并发|parallel|concurrent|concurrency|at once|in parallel)/i.test(
+        normalizedPrompt,
+      );
+    const hasSequentialSignal =
+      /(顺序|串行|一个个|一个一个|逐个|依次|sequential|serial|one by one|one at a time)/i.test(
+        normalizedPrompt,
+      );
+    if (hasParallelSignal && hasSequentialSignal) return undefined;
+    if (hasParallelSignal) return "parallel";
+    return "sequential";
+  }
+
   async function inferExistingProjectSparkIdea(
     ctx: SparkCommandContext,
   ): Promise<string | undefined> {
@@ -2279,16 +2366,19 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     piApi: SparkExtensionAPI,
     ctx: SparkCommandContext,
     graph: TaskGraph,
-    focus?: string,
+    focus: string | undefined,
+    strategy: SparkRunStrategy,
   ): Promise<void> {
     const thread = await currentSparkThread(ctx.cwd, ctx, graph);
-    const runMode = thread ? await saveSparkRunMode(ctx.cwd, ctx, thread.ref, focus) : undefined;
+    const runMode = thread
+      ? await saveSparkRunMode(ctx.cwd, ctx, thread.ref, focus, strategy)
+      : undefined;
     if (!thread) await clearSparkExecutionMode(ctx.cwd, ctx);
     await refreshSparkWidget(ctx.cwd, ctx);
     if (runMode) ensureSparkDagManager(ctx.cwd, ctx);
     ctx.ui?.notify?.(
       runMode
-        ? `Spark run mode: background run ${runMode.runRef} started for current thread.`
+        ? `Spark run mode: ${strategy} background run ${runMode.runRef} started for current thread.`
         : "Spark run mode: select a thread before starting a background run.",
       "info",
     );
@@ -2296,7 +2386,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       piApi,
       ctx,
       renderSparkRunModePrompt(graph, thread?.ref, focus),
-      renderSparkModeVisibleMessage("run", thread?.title, focus),
+      renderSparkModeVisibleMessage("run", thread?.title, focus, strategy),
     );
   }
 
@@ -4441,6 +4531,7 @@ async function saveSparkRunMode(
   ctx: unknown,
   threadRef: ThreadRef,
   focus: string | undefined,
+  strategy: SparkRunStrategy,
 ): Promise<SparkRunModeState> {
   const now = nowIso();
   const runMode: SparkRunModeState = {
@@ -4450,7 +4541,7 @@ async function saveSparkRunMode(
     focus: focus?.trim() || undefined,
     status: "running",
     policy: {
-      maxConcurrency: DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
+      maxConcurrency: sparkRunStrategyMaxConcurrency(strategy),
       timeoutMs: DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
       stopOnAsk: true,
       stopOnValidationFailure: true,
@@ -4466,6 +4557,14 @@ async function saveSparkRunMode(
     "utf8",
   );
   return runMode;
+}
+
+function sparkRunStrategyMaxConcurrency(strategy: SparkRunStrategy): number {
+  return strategy === "sequential" ? 1 : DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY;
+}
+
+function sparkRunStrategyForMaxConcurrency(maxConcurrency: number): SparkRunStrategy {
+  return maxConcurrency === 1 ? "sequential" : "parallel";
 }
 
 function normalizeSparkRunModeState(
@@ -5851,7 +5950,7 @@ function sparkModeAsk(analysis: SparkEntryModeAnalysis): SparkAskToolParams {
           {
             id: "run",
             label: `Run “${truncateInline(title, 32)}”`,
-            description: `Use run mode now: start a background Spark run that continuously advances ready tasks until the work is done, blocked, cancelled, or needs a decision.`,
+            description: `Use run mode now: start a background Spark run that continuously advances ready tasks until the work is done, blocked, cancelled, or needs a decision. The run strategy is inferred from the prompt; use /run-sequential or /run-parallel to be explicit.`,
           },
           {
             id: "new_project",
@@ -5874,6 +5973,56 @@ function sparkModeFromAskDetails(
     : undefined;
 }
 
+function sparkRunStrategyAsk(
+  graph: TaskGraph,
+  projectState: SparkCommandProjectState,
+  prompt: string,
+  selectedThread: { ref: ThreadRef; title: string } | undefined,
+): SparkAskToolParams {
+  const title = selectedThread?.title ?? graph.threads()[0]?.title ?? "current Spark workspace";
+  const readyTaskCount = graph.readyTasks(selectedThread?.ref).length;
+  const promptLine = prompt.trim() ? `\nPrompt: ${prompt.trim()}` : "";
+  return {
+    mode: "decision",
+    flow: "spark-run-strategy",
+    title: `Choose run strategy for “${truncateInline(title, 80)}”`,
+    context: [
+      `Spark run mode can either execute ready tasks one at a time or keep the existing parallel frontier scheduler.`,
+      `Current workspace context: ${projectState.unfinishedTaskCount} unfinished task(s), ${readyTaskCount} execution-ready task(s).${promptLine}`,
+    ].join("\n"),
+    questions: [
+      {
+        id: "strategy",
+        prompt: `How should Spark continuously run “${truncateInline(title, 80)}”?`,
+        type: "single",
+        required: true,
+        options: [
+          {
+            id: "sequential",
+            label: "Sequential",
+            description:
+              "Run ready tasks one at a time (maxConcurrency=1), continuing through newly unblocked work until done or blocked.",
+          },
+          {
+            id: "parallel",
+            label: "Parallel",
+            description:
+              "Use the existing parallel ready-frontier scheduler (default maxConcurrency=4), continuing until done or blocked.",
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function sparkRunStrategyFromAskDetails(
+  details: Record<string, unknown>,
+): SparkRunStrategy | undefined {
+  const answer = (details.answers as { strategy?: { values?: unknown[] } } | undefined)?.strategy;
+  const value = answer?.values?.[0];
+  return value === "sequential" || value === "parallel" ? value : undefined;
+}
+
 function renderSparkPlanningModePrompt(
   graph: TaskGraph,
   selectedThreadRef: ThreadRef | undefined,
@@ -5894,6 +6043,7 @@ function renderSparkModeVisibleMessage(
   mode: SparkEntryMode,
   threadTitle: string | undefined,
   focus: string | undefined,
+  runStrategy?: SparkRunStrategy,
 ): string {
   const title =
     mode === "planning"
@@ -5903,6 +6053,7 @@ function renderSparkModeVisibleMessage(
         : "Spark run mode requested";
   const parts = [title];
   if (threadTitle?.trim()) parts.push(`thread: ${threadTitle.trim()}`);
+  if (mode === "run" && runStrategy) parts.push(`strategy: ${runStrategy}`);
   if (focus?.trim()) parts.push(`focus: ${focus.trim()}`);
   return parts.join(" · ");
 }
@@ -6008,7 +6159,7 @@ function renderSparkExecutionModePrompt(
     ? `\n\nExecution focus: ${focus.trim()}\nUse this focus to filter ready tasks and pre-flight questions; do not auto-dispatch solely because a focus was provided.`
     : "";
   const action = selectedThreadRef
-    ? "Read the current thread/task plan and inspect ready tasks with spark_status. Claim at most one concrete task with spark_claim_task, execute it, verify the required evidence, then call spark_finish_task. Stop after that task finishes; do not auto-claim another task or dispatch a continuous DAG run from /execute. If the user wants background progress through multiple tasks, suggest /run."
+    ? "Read the current thread/task plan and inspect ready tasks with spark_status. Claim at most one concrete task with spark_claim_task, execute it, verify the required evidence, then call spark_finish_task. Stop after that task finishes; do not auto-claim another task or dispatch a continuous DAG run from /execute. If the user wants background progress through multiple tasks, suggest /run-sequential or /run-parallel (or /run for inferred strategy)."
     : "Select a current thread with spark_use_thread before claiming thread-bound work; use spark_status view=summary/full to inspect available threads first if needed.";
   return `${summary}${focusLine}\n\nEnter Spark execution mode. ${action}`;
 }

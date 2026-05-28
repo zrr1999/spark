@@ -289,7 +289,7 @@ void test("/plan, /execute, and /run enter Spark modes directly", async () => {
     assert.match(executeMessage, /Execution focus: Finish the direct execution task/);
     assert.match(executeMessage, /Claim at most one concrete task/);
     assert.match(executeMessage, /Stop after that task finishes/);
-    assert.match(executeMessage, /suggest \/run/);
+    assert.match(executeMessage, /suggest \/run-sequential or \/run-parallel/);
     assert.doesNotMatch(executeMessage, /continue by auto-claiming/);
     assert.equal(
       initializedCtx.notifications.at(-1)?.message,
@@ -310,7 +310,7 @@ void test("/plan, /execute, and /run enter Spark modes directly", async () => {
     assert.match(runMessage, /Spark DAG manager/);
     assert.match(
       initializedCtx.notifications.at(-1)?.message ?? "",
-      /Spark run mode: background run run:/,
+      /Spark run mode: sequential background run run:/,
     );
     const currentThreadState = JSON.parse(
       await readFile(
@@ -335,7 +335,7 @@ void test("/plan, /execute, and /run enter Spark modes directly", async () => {
     assert.match(currentThreadState.runMode?.threadRef ?? "", /^thread:/);
     assert.equal(currentThreadState.runMode?.focus, "Finish the queue until done");
     assert.equal(currentThreadState.runMode?.status, "running");
-    assert.equal(currentThreadState.runMode?.policy?.maxConcurrency, 4);
+    assert.equal(currentThreadState.runMode?.policy?.maxConcurrency, 1);
     assert.equal(currentThreadState.runMode?.policy?.timeoutMs, 3_600_000);
     await waitFor(async () => {
       const status = await executeSparkTool(
@@ -354,6 +354,26 @@ void test("/plan, /execute, and /run enter Spark modes directly", async () => {
     );
     assert.match(toolText(runStatus), /Spark run mode: blocked run:/);
     assert.match(toolText(runStatus), /focus=Finish the queue until done/);
+    assert.match(toolText(runStatus), /strategy=sequential/);
+
+    const runParallelCommand = initializedRun.commands.get("run-parallel");
+    const runSequentialCommand = initializedRun.commands.get("run-sequential");
+    assert.ok(runParallelCommand, "missing /run-parallel command");
+    assert.ok(runSequentialCommand, "missing /run-sequential command");
+    await runParallelCommand.handler("Finish the queue in parallel", initializedCtx);
+    const parallelThreadState = JSON.parse(
+      await readFile(
+        join(
+          initializedDir,
+          ".spark",
+          "current-thread",
+          `${ctxSessionStoreScope(initializedCtx)}.json`,
+        ),
+        "utf8",
+      ),
+    ) as { runMode?: { focus?: string; policy?: { maxConcurrency?: number } } };
+    assert.equal(parallelThreadState.runMode?.focus, "Finish the queue in parallel");
+    assert.equal(parallelThreadState.runMode?.policy?.maxConcurrency, 4);
 
     const emptyCtx = testSparkContext(emptyDir, "main");
     const emptyRun = registerSparkToolsForTest();

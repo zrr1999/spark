@@ -4,10 +4,12 @@
 
 Commands:
 
-- `/spark <idea>` — initialize or advance the Spark idea-to-task flow. High-confidence prompts route to planning or single-step execution; prompts that ask for continuous/until-done progress ask before entering `/run`.
+- `/spark <idea>` — initialize or advance the Spark idea-to-task flow. High-confidence prompts route to planning or single-step execution; prompts that ask for continuous/until-done progress ask before entering inferred-strategy `/run`.
 - `/plan <focus>` — enter planning mode for research, clarification, and task-DAG creation/refinement. Planning mode does not execute tasks.
 - `/execute <focus>` — enter single-step execution mode. Claim and finish at most one concrete task, then stop; run `/execute` again for one more step.
-- `/run <focus>` — start a durable background run for the selected thread. The DAG manager advances ready tasks until done, blocked, failed, cancelled, or needing a decision; progress is visible through `spark_status`, the Spark widget, `spark_dag_manager`, and notifications rather than synthetic user messages.
+- `/run-sequential <focus>` — start or resume the background Spark orchestrator with `maxConcurrency=1`, continuously advancing ready tasks one at a time until done, blocked, failed, cancelled, or needing a decision.
+- `/run-parallel <focus>` — start or resume the existing parallel ready-frontier scheduler for background progress.
+- `/run <focus>` — convenience entry point that infers the strategy from the prompt: parallel/concurrent wording selects parallel; otherwise it uses sequential.
 
 Tools:
 
@@ -19,8 +21,8 @@ Tools:
 - `spark_claim_task` — claim or update concrete task work for the current session in the active thread; tasks render as `@name: title`, and optional `roleRef` values are preferred executor hints for orchestrated runs. Claiming is an execution commitment: agents should read the task's bound plan before creating TODOs or executing.
 - `spark_update_task_todos` — update TODOs attached to a claimed task.
 - `spark_update_todos` — update independent session TODOs that are siblings of the thread display.
-- `spark_finish_task` — finish this session's claimed task as `done`, `failed`, or `cancelled` without routing through task planning or auto-claiming the next task. When a done task's plan declares `evidenceRequired` but no output artifacts are attached, the tool reports a completion-evidence warning instead of silently treating process/status success as full evidence. In `/execute`, a successful finish may mention the next ready task, but the next task remains unclaimed until another `/execute` or `/run`.
-- `spark_run_ready_tasks` — start the Spark orchestrator/DAG manager for ready tasks; dry-run remains synchronous and read-only by default. Ready-task execution assigns reusable role specs at dispatch time and creates fresh `role-run`s by default. `/run` uses the same DAG manager substrate but persists a session run-mode state with `runRef`, `threadRef`, `focus`, `status`, and policy.
+- `spark_finish_task` — finish this session's claimed task as `done`, `failed`, or `cancelled` without routing through task planning or auto-claiming the next task. When a done task's plan declares `evidenceRequired` but no output artifacts are attached, the tool reports a completion-evidence warning instead of silently treating process/status success as full evidence. In `/execute`, a successful finish may mention the next ready task, but the next task remains unclaimed until another `/execute`, `/run-sequential`, `/run-parallel`, or inferred `/run`.
+- `spark_run_ready_tasks` — start the Spark orchestrator/DAG manager for ready tasks; dry-run remains synchronous and read-only by default. Ready-task execution assigns reusable role specs at dispatch time and creates fresh `role-run`s by default. `/run`, `/run-sequential`, and `/run-parallel` use the same DAG manager substrate but persist a session run-mode state with `runRef`, `threadRef`, `focus`, `status`, and policy; `maxConcurrency=1` is sequential, and the default parallel policy is `maxConcurrency=4`.
 - `spark_dag_manager` — inspect and control persisted DAG manager state with `status`, `reconcile`, `clear_inactive`, and `kill_active` actions. It reads `.spark/dag-runs.json`, reconciles stale running records against the task graph and active role-run process tracker, can clear inactive manager history, and can terminate active background role-run processes.
 - `spark_ask` — run a unified flow-native Spark ask workflow with
   one or more questions and persist the result as an ask artifact.
@@ -105,11 +107,12 @@ Automatic behavior:
      in `.spark/dag-runs.json`; `spark_status` includes the
      manager summary, last/active DAG run, completion counts, and
      timeout/stale signals
-   - `/run` mode state is persisted in this session's
+   - `/run` / `/run-sequential` / `/run-parallel` mode state is persisted in this session's
      `.spark/current-thread/<session>.json` entry alongside the
      selected thread. It records `runRef`, `threadRef`, `focus`,
-     `status`, policy, and timestamps; the widget displays it as a
-     Spark run line separate from DAG-run history
+     `status`, policy, and timestamps; `policy.maxConcurrency` is the
+     stored strategy knob, and the widget displays it as a Spark run
+     line separate from DAG-run history
    - before reporting status or starting another background wave,
      Spark reconciles stale `running` manager records from the
      current task graph and active role-run process tracker; runs
@@ -182,7 +185,7 @@ Automatic behavior:
      immediate dispatch; no-selection is not approval
    - prefer Spark-native delegation by binding concrete tasks to
      builtin/project/user reusable role `roleRef`s and handing execution to the
-     `spark_run_ready_tasks` DAG manager or `/run`; this creates concrete
+     `spark_run_ready_tasks` DAG manager, `/run-sequential`, `/run-parallel`, or inferred `/run`; this creates concrete
      fresh role-runs with task claims and run artifacts
      attributed to the task/run, while the `roleRef` remains the
      reusable role identity; do not spawn nested `pi` CLI sessions as
