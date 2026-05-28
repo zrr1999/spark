@@ -2385,12 +2385,14 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       language === "zh" ? "Spark 线程已初始化" : "Spark thread initialized",
       "success",
     );
-    dispatchSparkAgentInstruction(
-      piApi,
-      ctx,
-      renderSparkInitFollowUp(result),
-      renderSparkInitSummary(result),
-    );
+    if (!options.enterPlanning) {
+      dispatchSparkAgentInstruction(
+        piApi,
+        ctx,
+        renderSparkInitFollowUp(result),
+        renderSparkInitSummary(result),
+      );
+    }
 
     await saveCurrentThreadRef(ctx.cwd, ctx, result.threadRef as ThreadRef);
     await refreshSparkWidget(ctx.cwd, ctx);

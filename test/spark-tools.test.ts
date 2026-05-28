@@ -112,8 +112,9 @@ void test("/spark command detects empty, existing, and initialized project modes
     assert.ok(existsSync(join(existingDir, ".spark", "thread.json")));
     assert.ok(existsSync(join(existingDir, "SPARK.md")));
     assert.equal(existingRun.messages.length, 0);
-    assert.match(existingRun.customMessages[0]?.content ?? "", /Spark initialized/);
-    assert.match(existingRun.customMessages.at(-1)?.content ?? "", /Spark planning mode requested/);
+    assert.equal(existingRun.customMessages.length, 1);
+    assert.doesNotMatch(existingRun.customMessages[0]?.content ?? "", /Spark initialized/);
+    assert.match(existingRun.customMessages[0]?.content ?? "", /Spark planning mode requested/);
     const existingMessage = await consumeSparkModeContext(existingRun, existingCtx);
     assert.match(existingMessage, /Enter Spark planning mode/);
     assert.match(existingMessage, /Audit existing project structure/);
@@ -232,13 +233,14 @@ void test("/plan, /execute, and /run enter Spark modes directly", async () => {
     assert.ok(existsSync(join(existingDir, ".spark", "thread.json")));
     assert.equal(existsSync(join(existingDir, "SPARK.md")), false);
     assert.equal(existingRun.messages.length, 0);
-    assert.match(existingRun.customMessages[0]?.content ?? "", /Spark initialized/);
+    assert.equal(existingRun.customMessages.length, 1);
+    assert.doesNotMatch(existingRun.customMessages[0]?.content ?? "", /Spark initialized/);
     assert.doesNotMatch(
       existingRun.customMessages[0]?.content ?? "",
-      /Enter Spark planning mode from explicit \/plan/,
+      /Enter Spark planning mode from \/plan/,
     );
-    assert.match(existingRun.customMessages.at(-1)?.content ?? "", /Spark planning mode requested/);
-    assert.match(existingRun.customMessages.at(-1)?.content ?? "", /Audit current task flow/);
+    assert.match(existingRun.customMessages[0]?.content ?? "", /Spark planning mode requested/);
+    assert.match(existingRun.customMessages[0]?.content ?? "", /Audit current task flow/);
     const planMessage = await consumeSparkModeContext(existingRun, existingCtx);
     assert.match(planMessage, /Enter Spark planning mode from \/plan/);
     assert.match(planMessage, /not as a permission gate/);
