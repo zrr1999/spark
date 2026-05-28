@@ -6,6 +6,7 @@ import test from "node:test";
 
 import sparkExtension from "../packages/spark/src/extension/index.ts";
 import type { SparkWidgetTheme, SparkWidgetTui } from "../packages/spark/src/ui/spark-widget.ts";
+import { defaultSparkDagRunStore } from "spark-orchestrator";
 import { TaskGraph, defaultTaskGraphStore } from "spark-tasks";
 
 type SparkPi = Parameters<typeof sparkExtension>[0];
@@ -55,6 +56,91 @@ async function executeTool(
 ): Promise<Awaited<ReturnType<SparkToolConfig["execute"]>>> {
   return tool.execute("tool-call", params, new AbortController().signal, () => {}, ctx);
 }
+
+void test("Spark extension widget hides acknowledged DAG history and shows actionable failures", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-extension-widget-dag-history-"));
+  try {
+    await mkdir(join(dir, ".spark"), { recursive: true });
+    const graph = new TaskGraph();
+    const thread = graph.createThread({ title: "Widget DAG thread", description: "widget dag" });
+    await defaultTaskGraphStore(dir).save(graph);
+
+    const tools = new Map<string, SparkToolConfig>();
+    const handlers = new Map<string, SparkEventHandler>();
+    let widgetComponent: WidgetComponent | undefined;
+    const widgetTui: SparkWidgetTui = {
+      terminal: { columns: 160 },
+      requestRender() {},
+    };
+    const ctx: TestSparkContext = {
+      cwd: dir,
+      hasUI: true,
+      sessionManager: {
+        getSessionFile: () => join(dir, "session.json"),
+        getLeafId: () => "leaf-widget-dag-history",
+      },
+      ui: {
+        setWidget(_key, cb) {
+          widgetComponent = isWidgetFactory(cb) ? cb(widgetTui, theme) : undefined;
+        },
+      },
+    };
+    const pi: SparkPi = {
+      registerCommand() {},
+      registerTool(config) {
+        tools.set(config.name, config);
+      },
+      on(event, handler) {
+        handlers.set(event, handler);
+      },
+      sendMessage() {},
+    };
+    sparkExtension(pi);
+
+    await executeTool(requireTool(tools, "spark_use_thread"), { thread: thread.ref }, ctx);
+    assert.ok(widgetComponent);
+    assert.doesNotMatch(widgetComponent.render().join("\n"), /Background work:/);
+
+    const dagStore = defaultSparkDagRunStore(dir);
+    const acknowledgedRun = await dagStore.startRun({
+      threadRef: thread.ref,
+      dryRun: false,
+      maxConcurrency: 1,
+      timeoutMs: 100,
+    });
+    await dagStore.finishRun(acknowledgedRun.ref, {
+      scheduled: 1,
+      completed: 0,
+      failed: 1,
+      cancelled: 0,
+      timedOut: false,
+    });
+    await dagStore.acknowledgeFailures({ runRef: acknowledgedRun.ref, sessionId: "session:test" });
+    await handlers.get("session_tree")?.({}, ctx);
+    assert.doesNotMatch(widgetComponent.render().join("\n"), /Background work:/);
+
+    const actionableRun = await dagStore.startRun({
+      threadRef: thread.ref,
+      dryRun: false,
+      maxConcurrency: 1,
+      timeoutMs: 100,
+    });
+    await dagStore.finishRun(actionableRun.ref, {
+      scheduled: 2,
+      completed: 1,
+      failed: 1,
+      cancelled: 0,
+      timedOut: false,
+    });
+    await handlers.get("session_tree")?.({}, ctx);
+    assert.match(
+      widgetComponent.render().join("\n"),
+      /Background work: 1\/2 tasks finished · failed · run:/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 void test("Spark extension refreshes SparkWidget after claim and TODO tools", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-extension-widget-refresh-"));

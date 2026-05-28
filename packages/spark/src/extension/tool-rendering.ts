@@ -95,14 +95,7 @@ export function renderSparkToolCall(
         theme,
       );
     case "spark_plan_tasks":
-      return renderToolCall(
-        toolName,
-        [
-          formatStringArg(args.dryRun === true ? "dry-run" : undefined),
-          formatTaskPlanSummary(args.tasks),
-        ],
-        theme,
-      );
+      return renderToolCall(toolName, [formatTaskPlanSummary(args.tasks)], theme);
     case "spark_run_ready_tasks":
       return renderToolCall(
         toolName,
@@ -110,6 +103,17 @@ export function renderSparkToolCall(
           args.dryRun === false ? "run" : "dry-run",
           formatNumberArg(args.maxConcurrency, { prefix: "max=" }),
           formatNumberArg(args.timeoutMs, { prefix: "timeout=", suffix: "ms" }),
+        ],
+        theme,
+      );
+    case "spark_background_runs":
+      return renderToolCall(
+        toolName,
+        [
+          formatStringArg(args.action, { fallback: "status" }),
+          formatStringArg(args.runRef, { prefix: "run=" }),
+          formatStringArg(args.taskRef, { prefix: "task=" }),
+          args.all === true ? "all" : undefined,
         ],
         theme,
       );

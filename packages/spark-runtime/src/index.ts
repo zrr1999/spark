@@ -22,6 +22,8 @@ import {
   type Task,
   type TaskRef,
   type TaskRun,
+  type TaskRunCompletionSummary,
+  type TaskTodo,
 } from "spark-core";
 import type { RoleInstruction, RoleRunRecord, RoleRunStatus } from "pi-roles";
 import {
@@ -36,6 +38,37 @@ export interface SparkRoleRunResult {
   stdout: string;
   stderr: string;
   jsonEvents: unknown[];
+}
+
+export interface RoleRunTextTail {
+  bytes: number;
+  tail: string;
+  tailBytes: number;
+  truncated: boolean;
+}
+
+export interface RoleRunJsonEventsTail {
+  count: number;
+  tail: string[];
+  tailEventCount: number;
+  truncated: boolean;
+}
+
+export interface RoleRunArtifactBody {
+  schemaVersion: 1;
+  runRef: RunRef;
+  taskRef: TaskRef;
+  roleRef: RoleRef;
+  runName?: string;
+  status: RoleRunStatus;
+  startedAt?: string;
+  finishedAt?: string;
+  summary: string;
+  transcriptRef?: ArtifactRef;
+  record: Omit<RoleRunRecord, "instruction">;
+  stdout: RoleRunTextTail;
+  stderr: RoleRunTextTail;
+  jsonEvents: RoleRunJsonEventsTail;
 }
 
 export { type RoleRunMode } from "pi-roles";
@@ -79,6 +112,11 @@ interface TrackedSparkRoleRunProcess extends ActiveSparkRoleRunProcess {
 }
 
 const EMPTY_ROLE_RUN_FAILURE_KIND = "runtime_error";
+const MAX_TASK_ROLE_INSTRUCTION_CHARS = 6_000;
+const MAX_TASK_ROLE_TODO_PREVIEW_ITEMS = 2;
+const MAX_ROLE_RUN_ARTIFACT_TEXT_TAIL_BYTES = 12 * 1024;
+const MAX_ROLE_RUN_ARTIFACT_JSON_EVENT_TAIL_COUNT = 10;
+const MAX_ROLE_RUN_ARTIFACT_JSON_EVENT_CHARS = 1_000;
 const DEFAULT_ROLE_RUN_FORCE_KILL_AFTER_MS = 1_000;
 const DEFAULT_ROLE_RUN_SHUTDOWN_WAIT_MS = 3_000;
 const activeSparkRoleRunProcesses = new Map<RunRef, TrackedSparkRoleRunProcess>();
@@ -416,7 +454,7 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
       input.registry,
       {
         roleRef: taskRoleRef,
-        instruction: task.description,
+        instruction: buildSparkTaskRoleInstruction(task, input.graph),
         inputs: task.inputArtifacts,
       },
       {
@@ -438,17 +476,17 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
         kind: "role-run",
         title: `Role run ${runName} for ${task.title}`,
         format: "json",
-        body: {
-          record: result.record,
-          stdout: result.stdout,
-          stderr: result.stderr,
-          jsonEvents: result.jsonEvents,
-        } as unknown as JsonValue,
+        body: createRoleRunArtifactBody({
+          result,
+          taskRef: task.ref,
+          roleRef: taskRoleRef,
+        }) as unknown as JsonValue,
         provenance: {
           producer: "task",
           threadRef: task.threadRef,
           taskRef: task.ref,
           roleRef: taskRoleRef,
+          runRef,
           note: `runName=${runName}`,
         },
       });
@@ -464,13 +502,24 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
         Boolean(input.artifactStore),
       );
     const succeeded = !completionFailure;
+    const finishedAt = nowIso();
+    const outputArtifacts = outputArtifactRef ? [outputArtifactRef] : [];
     const finished: TaskRun = {
       ...run,
       status: succeeded ? "succeeded" : "failed",
       failureKind: completionFailure ? EMPTY_ROLE_RUN_FAILURE_KIND : undefined,
       errorMessage: completionFailure,
-      finishedAt: nowIso(),
-      outputArtifacts: outputArtifactRef ? [outputArtifactRef] : [],
+      finishedAt,
+      outputArtifacts,
+      completionSummary: dryRun
+        ? undefined
+        : createTaskRunCompletionSummary({
+            run,
+            status: succeeded ? "succeeded" : "failed",
+            finishedAt,
+            outputArtifacts,
+            summary: completionFailure ?? summarizeRoleRunResult(result),
+          }),
     };
     input.graph.recordRun(finished);
     if (dryRun) input.graph.setTaskStatus(task.ref, originalStatus);
@@ -489,13 +538,24 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
       input.graph.setTaskStatus(task.ref, "running");
       return background;
     }
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const finishedAt = nowIso();
     const failed: TaskRun = {
       ...run,
       status: "failed",
       failureKind: error instanceof RoleRunTimeoutError ? "runtime_timeout" : "runtime_error",
-      errorMessage: error instanceof Error ? error.message : String(error),
-      finishedAt: nowIso(),
+      errorMessage,
+      finishedAt,
       outputArtifacts: [],
+      completionSummary: dryRun
+        ? undefined
+        : createTaskRunCompletionSummary({
+            run,
+            status: "failed",
+            finishedAt,
+            outputArtifacts: [],
+            summary: errorMessage,
+          }),
     };
     input.graph.recordRun(failed);
     input.graph.setTaskStatus(task.ref, dryRun ? originalStatus : "failed");
@@ -503,6 +563,189 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
   } finally {
     stopHeartbeat?.();
   }
+}
+
+function buildSparkTaskRoleInstruction(task: Task, graph: TaskGraph): string {
+  const sections = [task.description.trim()];
+  if (task.plan) {
+    sections.push(
+      [
+        "Task plan (execution contract):",
+        `- Objective: ${task.plan.objective}`,
+        renderInstructionList("Success criteria", task.plan.successCriteria),
+        renderInstructionList("Evidence required", task.plan.evidenceRequired),
+        renderInstructionList("Steps", task.plan.steps),
+        renderInstructionList("Constraints", task.plan.constraints),
+        renderInstructionList("Non-goals", task.plan.nonGoals),
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join("\n"),
+    );
+  }
+
+  const todos = selectTaskTodoPreview(graph.taskTodos(task.ref));
+  if (todos.visible.length > 0) {
+    sections.push(
+      [
+        `Current task TODO preview (showing ${todos.visible.length}/${todos.total} active item${todos.total === 1 ? "" : "s"}; do not expand the full TODO list unless needed):`,
+        ...todos.visible.map((todo) => `- [${todo.status}] ${todo.id}: ${todo.content}`),
+        todos.hidden > 0
+          ? `- … ${todos.hidden} more TODO(s) hidden from the role-run prompt`
+          : undefined,
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join("\n"),
+    );
+  }
+
+  return boundTaskRoleInstruction(sections.filter(Boolean).join("\n\n"));
+}
+
+function renderInstructionList(label: string, values: readonly string[]): string | undefined {
+  if (values.length === 0) return undefined;
+  const visible = values.slice(0, 6).map((value) => `  - ${value}`);
+  const hidden = values.length - visible.length;
+  return [`- ${label}:`, ...visible, hidden > 0 ? `  - … ${hidden} more` : undefined]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
+function selectTaskTodoPreview(todos: TaskTodo[]): {
+  visible: TaskTodo[];
+  total: number;
+  hidden: number;
+} {
+  const active = todos.filter(
+    (todo) => todo.status !== "done" && todo.status !== "cancelled" && todo.status !== "deleted",
+  );
+  const visible = [...active]
+    .sort((a, b) => taskTodoInstructionRank(a) - taskTodoInstructionRank(b))
+    .slice(0, MAX_TASK_ROLE_TODO_PREVIEW_ITEMS);
+  return { visible, total: active.length, hidden: active.length - visible.length };
+}
+
+function taskTodoInstructionRank(todo: TaskTodo): number {
+  switch (todo.status) {
+    case "in_progress":
+      return 0;
+    case "blocked":
+      return 1;
+    case "pending":
+      return 2;
+    default:
+      return 3;
+  }
+}
+
+function boundTaskRoleInstruction(instruction: string): string {
+  if (instruction.length <= MAX_TASK_ROLE_INSTRUCTION_CHARS) return instruction;
+  return `${instruction.slice(0, MAX_TASK_ROLE_INSTRUCTION_CHARS).trimEnd()}\n\n… task instruction truncated; inspect spark_status/spark_get_artifact if more context is needed.`;
+}
+
+function createRoleRunArtifactBody(input: {
+  result: SparkRoleRunResult;
+  taskRef: TaskRef;
+  roleRef: RoleRef;
+}): RoleRunArtifactBody {
+  const { result } = input;
+  return {
+    schemaVersion: 1,
+    runRef: result.record.ref,
+    taskRef: input.taskRef,
+    roleRef: input.roleRef,
+    runName: result.record.runName,
+    status: result.record.status,
+    startedAt: result.record.startedAt,
+    finishedAt: result.record.finishedAt,
+    summary: summarizeRoleRunResult(result),
+    record: compactRoleRunRecord(result.record),
+    stdout: createTextTail(result.stdout),
+    stderr: createTextTail(result.stderr),
+    jsonEvents: createJsonEventsTail(result.jsonEvents),
+  };
+}
+
+function compactRoleRunRecord(record: RoleRunRecord): Omit<RoleRunRecord, "instruction"> {
+  const { instruction: _instruction, ...compact } = record;
+  return compact;
+}
+
+function createTextTail(
+  text: string,
+  maxBytes = MAX_ROLE_RUN_ARTIFACT_TEXT_TAIL_BYTES,
+): RoleRunTextTail {
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes <= maxBytes) return { bytes, tail: text, tailBytes: bytes, truncated: false };
+  const tail = Buffer.from(text, "utf8").subarray(-maxBytes).toString("utf8");
+  return {
+    bytes,
+    tail,
+    tailBytes: Buffer.byteLength(tail, "utf8"),
+    truncated: true,
+  };
+}
+
+function createJsonEventsTail(
+  events: unknown[],
+  maxEvents = MAX_ROLE_RUN_ARTIFACT_JSON_EVENT_TAIL_COUNT,
+): RoleRunJsonEventsTail {
+  const rawTail = events.slice(-maxEvents);
+  let truncated = events.length > rawTail.length;
+  const tail = rawTail.map((event) => {
+    const serialized = JSON.stringify(event) ?? String(event);
+    if (serialized.length <= MAX_ROLE_RUN_ARTIFACT_JSON_EVENT_CHARS) return serialized;
+    truncated = true;
+    return `${serialized.slice(0, MAX_ROLE_RUN_ARTIFACT_JSON_EVENT_CHARS).trimEnd()}…`;
+  });
+  return {
+    count: events.length,
+    tail,
+    tailEventCount: tail.length,
+    truncated,
+  };
+}
+
+function createTaskRunCompletionSummary(input: {
+  run: TaskRun;
+  status: TaskRunCompletionSummary["status"];
+  finishedAt: string;
+  outputArtifacts: ArtifactRef[];
+  summary: string;
+}): TaskRunCompletionSummary {
+  return {
+    runRef: input.run.ref,
+    taskRef: input.run.taskRef,
+    roleRef: input.run.roleRef,
+    runName: input.run.runName,
+    status: input.status,
+    summary: boundCompletionSummary(input.summary),
+    artifactRefs: [...input.outputArtifacts],
+    createdAt: input.finishedAt,
+  };
+}
+
+function summarizeRoleRunResult(result: SparkRoleRunResult): string {
+  const stdout = result.stdout.trim();
+  const stderr = result.stderr.trim();
+  const parts = [stdout, stderr ? `stderr: ${stderr}` : ""].filter(Boolean);
+  if (parts.length > 0) return summarizeText(parts.join("\n"));
+  if (result.jsonEvents.length > 0) return summarizeText(JSON.stringify(result.jsonEvents.at(-1)));
+  return `role run finished with status ${result.record.status}`;
+}
+
+function summarizeText(text: string): string {
+  const lines = text
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  return boundCompletionSummary(lines.join(" "));
+}
+
+function boundCompletionSummary(text: string): string {
+  const normalized = text.replace(/\s+/gu, " ").trim();
+  if (!normalized) return "role run finished without summary output";
+  return normalized.length <= 300 ? normalized : `${normalized.slice(0, 300).trimEnd()}…`;
 }
 
 function roleRunEvidenceCompletionFailure(

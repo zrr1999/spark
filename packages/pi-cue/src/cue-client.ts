@@ -59,10 +59,21 @@ export type OkPayload =
   | { JobList: JobInfo[] }
   | { ScopeInfo: ScopeInfo }
   | { ScopeList: ScopeInfo[] }
-  | { Pong: Record<string, never> }
+  | { Pong: PongPayload }
   | { EvalText: { text: string } }
   | { Output: { id: string; data: string; truncated: boolean } }
   | Record<string, unknown>;
+
+/**
+ * Daemon Pong payload.
+ *
+ * `version` carries `cued`'s `CARGO_PKG_VERSION`. Daemons predating the
+ * Pong-version field (<= cue-shell 0.1.0 era builds) reply with `{}` and
+ * leave `version` undefined, which clients use to detect outdated daemons.
+ */
+export interface PongPayload {
+  version?: string;
+}
 
 export interface JobCreatedPayload {
   job_id: string;
@@ -287,10 +298,31 @@ export class CueClient {
     await this.#waitForResponse(id);
   }
 
+  /**
+   * Ping the daemon and return its self-reported version, if any.
+   *
+   * Returns `null` for daemons that predate Pong-version reporting. Throws
+   * if the IPC roundtrip itself fails, so callers can distinguish "old
+   * daemon" (`null`) from "unreachable daemon" (rejected promise).
+   */
+  async pingForVersion(): Promise<string | null> {
+    const id = await this.#send({ Ping: {} });
+    const response = await this.#waitForResponse(id);
+    if ("Err" in response) {
+      throw new CueError(response.Err.code, response.Err.message);
+    }
+    const ok = (response as { Ok: Record<string, unknown> }).Ok;
+    if (ok && "Pong" in ok) {
+      const pong = (ok as { Pong: PongPayload }).Pong;
+      const version = pong?.version;
+      return typeof version === "string" && version.length > 0 ? version : null;
+    }
+    return null;
+  }
+
   /** Ping the daemon. */
   async ping(): Promise<void> {
-    const id = await this.#send({ Ping: {} });
-    await this.#waitForResponse(id);
+    await this.pingForVersion();
   }
 
   /**

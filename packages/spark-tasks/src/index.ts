@@ -393,6 +393,7 @@ export class TaskGraph {
     options: { cancelledBy?: string; cancellationReason?: string } = {},
   ): Task {
     const task = this.getTask(taskRef);
+    if (status === "cancelled") this.assertTaskCanBeCancelled(task);
     const now = nowIso();
     const cancellation =
       status === "cancelled"
@@ -589,6 +590,7 @@ export class TaskGraph {
       patch.supersededBy !== undefined && supersededBy.length > 0 && statusCandidate !== "done"
         ? "cancelled"
         : statusCandidate;
+    if (status === "cancelled") this.assertTaskCanBeCancelled(task);
     const name = patch.name === undefined ? task.name : patch.name.trim();
     const cancellation =
       status === "cancelled"
@@ -720,6 +722,10 @@ export class TaskGraph {
     if (task.threadRef !== prerequisite.threadRef)
       throw new DependencyError("task dependencies cannot cross threads");
     if (taskRef === dependsOn) throw new DependencyError("task cannot depend on itself");
+    if (prerequisite.status === "cancelled" && task.status !== "cancelled")
+      throw new DependencyError(
+        `task cannot depend on cancelled task: ${taskRef} depends on ${dependsOn}`,
+      );
     const dependency = { taskRef, dependsOn };
     if (this.#dependencies.some((dep) => dep.taskRef === taskRef && dep.dependsOn === dependsOn))
       return dependency;
@@ -755,6 +761,25 @@ export class TaskGraph {
       .filter((dep) => dep.taskRef === task.ref)
       .map((dep) => this.getTask(dep.dependsOn))
       .filter((dependency) => dependency.status !== "done");
+  }
+
+  dependentTasks(taskRef: TaskRef): Task[] {
+    const task = this.getTask(taskRef);
+    return this.#dependencies
+      .filter((dep) => dep.dependsOn === task.ref)
+      .map((dep) => this.getTask(dep.taskRef));
+  }
+
+  private assertTaskCanBeCancelled(task: Task): void {
+    const dependents = this.dependentTasks(task.ref).filter(
+      (dependent) => dependent.status !== "cancelled",
+    );
+    if (dependents.length === 0) return;
+    throw new DependencyError(
+      `task has dependent tasks and cannot be cancelled: ${task.ref} is depended on by ${dependents
+        .map((dependent) => dependent.ref)
+        .join(", ")}`,
+    );
   }
 
   private assertDependenciesDone(task: Task): void {
@@ -1486,6 +1511,12 @@ function normalizeTaskRun(run: TaskRun): TaskRun {
     roleRef: normalizeRoleRefCompat(run.roleRef ?? legacy.agentRef),
     runName: (run.runName ?? legacy.agentName)?.trim() || undefined,
     outputArtifacts: [...run.outputArtifacts],
+    completionSummary: run.completionSummary
+      ? {
+          ...run.completionSummary,
+          artifactRefs: [...run.completionSummary.artifactRefs],
+        }
+      : undefined,
   };
 }
 

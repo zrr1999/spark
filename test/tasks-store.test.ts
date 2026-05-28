@@ -6,8 +6,12 @@ import test from "node:test";
 
 import { RoleRegistry, builtinRoleRef } from "pi-roles";
 import { ArtifactStore } from "spark-artifacts";
-import { newRef, type RoleRef, type TaskPlan } from "spark-core";
-import { defaultSparkDagRunStore, runReadySparkTasks } from "spark-orchestrator";
+import { DependencyError, newRef, type RoleRef, type TaskPlan, type TaskRef } from "spark-core";
+import {
+  defaultSparkDagRunStore,
+  runReadySparkTasks,
+  type SparkDagRunRecord,
+} from "spark-orchestrator";
 import {
   RoleRunTimeoutError,
   buildRoleRunArgs,
@@ -41,6 +45,32 @@ function executionReadyPlan(objective: string): TaskPlan {
     riskLevel: "normal",
     openQuestions: [],
     askRefs: [],
+  };
+}
+
+function testDagRunRecord(
+  input: Pick<SparkDagRunRecord, "ref" | "status" | "startedAt" | "updatedAt"> &
+    Partial<SparkDagRunRecord>,
+): SparkDagRunRecord {
+  return {
+    threadRef: input.threadRef,
+    ownerSessionId: input.ownerSessionId,
+    dryRun: input.dryRun ?? false,
+    maxConcurrency: input.maxConcurrency ?? 1,
+    timeoutMs: input.timeoutMs ?? 100,
+    finishedAt: input.finishedAt,
+    scheduled: input.scheduled ?? 0,
+    completed: input.completed ?? 0,
+    timedOut: input.timedOut ?? input.status === "timed_out",
+    scheduledTaskRefs: input.scheduledTaskRefs ?? [],
+    completedTaskRefs: input.completedTaskRefs ?? [],
+    taskRunRefs: input.taskRunRefs ?? [],
+    errorMessage: input.errorMessage,
+    acknowledgedAt: input.acknowledgedAt,
+    acknowledgedBySession: input.acknowledgedBySession,
+    completionDigest: input.completionDigest ?? [],
+    completionFollowUp: input.completionFollowUp,
+    ...input,
   };
 }
 
@@ -366,6 +396,62 @@ void test("ready tasks require completed dependencies and execution-ready plan, 
   assert.equal(
     graph.readyTasks().some((task) => task.ref === minimal.ref),
     false,
+  );
+});
+
+void test("task cancellation is blocked while non-cancelled tasks depend on it", () => {
+  const graph = new TaskGraph();
+  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const prerequisite = graph.createTask({
+    threadRef: thread.ref,
+    title: "Prerequisite",
+    description: "Must remain available while depended on.",
+    status: "pending",
+    plan: executionReadyPlan("Keep prerequisite"),
+  });
+  const dependent = graph.createTask({
+    threadRef: thread.ref,
+    title: "Dependent",
+    description: "Depends on prerequisite.",
+    status: "pending",
+    plan: executionReadyPlan("Use prerequisite"),
+  });
+  graph.addDependency(dependent.ref, prerequisite.ref);
+
+  assert.throws(
+    () => graph.setTaskStatus(prerequisite.ref, "cancelled"),
+    /task has dependent tasks and cannot be cancelled/,
+  );
+  assert.throws(
+    () => graph.updateTask(prerequisite.ref, { supersededBy: [dependent.ref] }),
+    DependencyError,
+  );
+  assert.equal(graph.getTask(prerequisite.ref).status, "pending");
+
+  graph.setTaskStatus(dependent.ref, "cancelled");
+  assert.equal(graph.setTaskStatus(prerequisite.ref, "cancelled").status, "cancelled");
+});
+
+void test("non-cancelled tasks cannot be made dependent on cancelled tasks", () => {
+  const graph = new TaskGraph();
+  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const cancelled = graph.createTask({
+    threadRef: thread.ref,
+    title: "Cancelled prerequisite",
+    description: "Already cancelled.",
+    status: "cancelled",
+  });
+  const dependent = graph.createTask({
+    threadRef: thread.ref,
+    title: "Dependent",
+    description: "Should not depend on cancelled work.",
+    status: "pending",
+    plan: executionReadyPlan("Do dependent"),
+  });
+
+  assert.throws(
+    () => graph.addDependency(dependent.ref, cancelled.ref),
+    /task cannot depend on cancelled task/,
   );
 });
 
@@ -1230,6 +1316,73 @@ void test("Spark runtime Pi command args use current CLI flags and explicit sess
   );
 });
 
+void test("runSparkTask includes plan and a bounded active TODO preview in role instruction", async () => {
+  const graph = new TaskGraph();
+  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const task = graph.createTask({
+    threadRef: thread.ref,
+    name: "bounded-preview",
+    title: "Implement bounded preview",
+    description: "Implement the bounded child prompt preview.",
+    roleRef: builtinRoleRef("worker"),
+    plan: {
+      ...executionReadyPlan("Implement the bounded child prompt preview."),
+      constraints: ["Do not dump every TODO into the prompt."],
+      nonGoals: ["Do not redesign the role runner."],
+    },
+  });
+  graph.applyTodoOps(task.ref, [
+    {
+      op: "init",
+      items: ["First active TODO", "Second active TODO", "Third hidden TODO"],
+    },
+  ]);
+  const [firstTodo, secondTodo] = graph.taskTodos(task.ref);
+  assert.ok(firstTodo);
+  assert.ok(secondTodo);
+  graph.applyTodoOps(task.ref, [{ op: "start", id: firstTodo.id }]);
+  const dir = await mkdtemp(join(tmpdir(), "spark-task-instruction-preview-"));
+  try {
+    const fakePi = join(dir, "fake-pi.cjs");
+    const argsPath = join(dir, "args.json");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "const { writeFileSync } = require('node:fs');",
+        `writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(process.argv.slice(2)));`,
+        "process.stdout.write(JSON.stringify({ type: 'done' }) + '\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    await runSparkTask({
+      graph,
+      taskRef: task.ref,
+      registry: new RoleRegistry(),
+      cwd: dir,
+      dryRun: false,
+      piCommand: fakePi,
+      timeoutMs: 5_000,
+      claim: { sessionId: "session:preview" },
+    });
+
+    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
+    const prompt = args.at(-1) ?? "";
+    assert.match(prompt, /Task plan \(execution contract\):/);
+    assert.match(prompt, /- Objective: Implement the bounded child prompt preview\./);
+    assert.match(prompt, /- Constraints:\n  - Do not dump every TODO into the prompt\./);
+    assert.match(prompt, /Current task TODO preview \(showing 2\/3 active items/);
+    assert.match(prompt, new RegExp(`\\[in_progress\\] ${firstTodo.id}: First active TODO`));
+    assert.match(prompt, new RegExp(`\\[pending\\] ${secondTodo.id}: Second active TODO`));
+    assert.doesNotMatch(prompt, /Third hidden TODO/);
+    assert.match(prompt, /1 more TODO\(s\) hidden/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("runSparkTask keeps timed-out real role-run claims in background", async () => {
   const graph = new TaskGraph();
   const thread = graph.createThread({ title: "Demo", description: "demo" });
@@ -1381,6 +1534,7 @@ void test("Spark DAG run store persists manager lifecycle and task progress", as
     assert.equal(status.succeeded, 1);
     assert.equal(status.running, 0);
     assert.equal(status.failed, 0);
+    assert.equal(status.stale, 0);
     assert.equal(status.timedOut, 0);
     assert.deepEqual(
       status.recentRuns.map((run) => run.ref),
@@ -1406,7 +1560,94 @@ void test("Spark DAG run store persists manager lifecycle and task progress", as
   }
 });
 
-void test("Spark DAG run store ignores late progress after terminal finish", async () => {
+void test("Spark DAG run store keeps foreground-timeout runs active for late progress", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-foreground-timeout-"));
+  try {
+    const store = defaultSparkDagRunStore(dir);
+    const threadRef = newRef("thread");
+    const taskRef = newRef("task");
+    const taskRunRef = newRef("run");
+    const dagRun = await store.startRun({
+      threadRef,
+      dryRun: false,
+      maxConcurrency: 1,
+      timeoutMs: 10,
+    });
+    await store.recordSchedule(dagRun.ref, {
+      taskRef,
+      runRef: taskRunRef,
+      scheduled: 1,
+    });
+
+    const followUp = await store.finishRun(dagRun.ref, {
+      scheduled: 1,
+      completed: 0,
+      timedOut: false,
+      foregroundTimedOut: true,
+      detached: true,
+    });
+
+    assert.equal(followUp, undefined);
+    let snapshot = await store.load();
+    let record = snapshot.runs.find((run) => run.ref === dagRun.ref);
+    assert.ok(record);
+    assert.equal(record.status, "running");
+    assert.equal(record.timedOut, false);
+    assert.equal(snapshot.manager.status, "running");
+    assert.equal(snapshot.manager.activeRunRef, dagRun.ref);
+
+    await store.recordProgress(dagRun.ref, {
+      taskRef,
+      completed: 1,
+      run: {
+        ref: taskRunRef,
+        threadRef,
+        taskRef,
+        status: "succeeded",
+        outputArtifacts: [],
+      },
+    });
+    await store.reconcile({
+      graph: TaskGraph.fromSnapshot({
+        threads: [
+          {
+            ref: threadRef,
+            title: "Thread",
+            description: "thread",
+            status: "active",
+            createdAt: "2026-05-28T00:00:00.000Z",
+            updatedAt: "2026-05-28T00:00:00.000Z",
+          },
+        ],
+        tasks: [],
+        dependencies: [],
+        runs: [
+          {
+            ref: taskRunRef,
+            threadRef,
+            taskRef,
+            status: "succeeded",
+            outputArtifacts: [],
+          },
+        ],
+      }),
+      activeRunRefs: [],
+    });
+
+    snapshot = await store.load();
+    record = snapshot.runs.find((run) => run.ref === dagRun.ref);
+    assert.ok(record);
+    assert.equal(record.status, "succeeded");
+    assert.equal(record.completed, 1);
+    assert.equal(record.timedOut, false);
+    assert.equal(snapshot.manager.status, "idle");
+    assert.equal(snapshot.manager.activeRunRef, undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark DAG run store ignores late progress after legacy timeout terminal finish", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-late-progress-"));
   try {
     const store = defaultSparkDagRunStore(dir);
@@ -1516,13 +1757,60 @@ void test("Spark DAG run store marks finished manager runs failed when child run
 
     assert.ok(followUp);
     assert.equal(followUp.summary, `Spark DAG ${dagRun.ref} failed: scheduled 1, completed 1.`);
-    assert.match(followUp.nextActions.join("\n"), /Inspect the DAG manager error/);
+    assert.match(followUp.nextActions.join("\n"), /failed: inspect spark_background_runs inspect/);
+    assert.match(followUp.nextActions.join("\n"), /rerun ready background work/);
     const status = await store.status();
     assert.equal(status.manager.status, "idle");
     assert.equal(status.succeeded, 0);
     assert.equal(status.failed, 1);
+    assert.equal(status.stale, 0);
     assert.equal(status.lastRun?.status, "failed");
     assert.match(status.lastRun?.errorMessage ?? "", /failed=1 cancelled=0/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark DAG run store acknowledges terminal problem records without deleting history", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-ack-"));
+  try {
+    const store = defaultSparkDagRunStore(dir);
+    const failed = await store.startRun({
+      dryRun: false,
+      maxConcurrency: 1,
+      timeoutMs: 100,
+    });
+    await store.finishRun(failed.ref, {
+      scheduled: 1,
+      completed: 0,
+      failed: 1,
+      cancelled: 0,
+      timedOut: false,
+    });
+
+    const acknowledged = await store.acknowledgeFailures({
+      sessionId: "session:reviewer",
+      now: "2026-05-27T00:00:00.000Z",
+    });
+    assert.deepEqual(acknowledged.acknowledged, [failed.ref]);
+    assert.deepEqual(acknowledged.alreadyAcknowledged, []);
+    assert.equal(acknowledged.snapshot.runs.length, 1);
+
+    const status = await store.status();
+    assert.equal(status.failed, 1);
+    assert.equal(status.acknowledged, 1);
+    assert.equal(status.actionable, 0);
+    assert.equal(status.actionableRun, undefined);
+    assert.deepEqual(status.nextSteps, []);
+    assert.equal(status.lastRun?.acknowledgedAt, "2026-05-27T00:00:00.000Z");
+    assert.equal(status.lastRun?.acknowledgedBySession, "session:reviewer");
+
+    const repeated = await store.acknowledgeFailures({
+      runRef: failed.ref,
+      sessionId: "session:reviewer",
+    });
+    assert.deepEqual(repeated.acknowledged, []);
+    assert.deepEqual(repeated.alreadyAcknowledged, [failed.ref]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -1538,6 +1826,18 @@ void test("Spark DAG run store can clear inactive manager records", async () => 
       timeoutMs: 100,
     });
     await store.finishRun(finished.ref, { scheduled: 0, completed: 0, timedOut: false });
+    const failed = await store.startRun({
+      dryRun: false,
+      maxConcurrency: 1,
+      timeoutMs: 100,
+    });
+    await store.finishRun(failed.ref, {
+      scheduled: 1,
+      completed: 0,
+      failed: 1,
+      cancelled: 0,
+      timedOut: false,
+    });
     const running = await store.startRun({
       dryRun: false,
       maxConcurrency: 1,
@@ -1547,11 +1847,192 @@ void test("Spark DAG run store can clear inactive manager records", async () => 
     const snapshot = await store.clearInactiveRuns();
     assert.deepEqual(
       snapshot.runs.map((run) => run.ref),
-      [running.ref],
+      [failed.ref, running.ref],
     );
     assert.equal(snapshot.manager.status, "running");
     assert.equal(snapshot.manager.activeRunRef, running.ref);
     assert.equal(snapshot.manager.lastRunRef, running.ref);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark DAG run store prunes old succeeded runs with dry-run preview first", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-prune-succeeded-"));
+  try {
+    const store = defaultSparkDagRunStore(dir);
+    const run = await store.startRun({ dryRun: false, maxConcurrency: 1, timeoutMs: 100 });
+    await store.finishRun(run.ref, { scheduled: 0, completed: 0, timedOut: false });
+
+    const preview = await store.pruneRuns({
+      dryRun: true,
+      now: "2030-01-01T00:00:00.000Z",
+      olderThanDays: 30,
+      keepRecent: 0,
+      keepRecentPerThread: 0,
+    });
+    assert.deepEqual(
+      preview.candidates.map((candidate) => [candidate.ref, candidate.reason]),
+      [[run.ref, "old-succeeded"]],
+    );
+    assert.deepEqual(preview.deleted, []);
+    assert.equal((await store.load()).runs.length, 1);
+
+    const applied = await store.pruneRuns({
+      dryRun: false,
+      now: "2030-01-01T00:00:00.000Z",
+      olderThanDays: 30,
+      keepRecent: 0,
+      keepRecentPerThread: 0,
+    });
+    assert.deepEqual(
+      applied.deleted.map((candidate) => candidate.ref),
+      [run.ref],
+    );
+    assert.equal(applied.after, 0);
+    assert.equal((await store.load()).runs.length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark DAG run store keeps unacknowledged failed runs during prune", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-prune-unack-failed-"));
+  try {
+    const store = defaultSparkDagRunStore(dir);
+    const failed = await store.startRun({ dryRun: false, maxConcurrency: 1, timeoutMs: 100 });
+    await store.finishRun(failed.ref, {
+      scheduled: 1,
+      completed: 1,
+      failed: 1,
+      cancelled: 0,
+      timedOut: false,
+    });
+
+    const pruned = await store.pruneRuns({
+      dryRun: false,
+      now: "2030-01-01T00:00:00.000Z",
+      olderThanDays: 30,
+      keepRecent: 0,
+      keepRecentPerThread: 0,
+    });
+    assert.deepEqual(pruned.candidates, []);
+    assert.deepEqual(pruned.deleted, []);
+    assert.equal(
+      pruned.kept.find((run) => run.ref === failed.ref)?.reason,
+      "unacknowledged-problem",
+    );
+    assert.equal((await store.load()).runs.length, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark DAG run store prunes acknowledged failed runs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-prune-ack-failed-"));
+  try {
+    const store = defaultSparkDagRunStore(dir);
+    const failed = await store.startRun({ dryRun: false, maxConcurrency: 1, timeoutMs: 100 });
+    await store.finishRun(failed.ref, {
+      scheduled: 1,
+      completed: 1,
+      failed: 1,
+      cancelled: 0,
+      timedOut: false,
+    });
+    await store.acknowledgeFailures({
+      runRef: failed.ref,
+      sessionId: "session:reviewer",
+      now: "2026-01-02T00:00:00.000Z",
+    });
+
+    const pruned = await store.pruneRuns({
+      dryRun: false,
+      now: "2030-01-01T00:00:00.000Z",
+      olderThanDays: 30,
+      keepRecent: 0,
+      keepRecentPerThread: 0,
+    });
+    assert.deepEqual(
+      pruned.deleted.map((candidate) => [candidate.ref, candidate.reason]),
+      [[failed.ref, "old-acknowledged-problem"]],
+    );
+    assert.equal((await store.load()).runs.length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark DAG run store keeps active and recent terminal runs during prune", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-prune-active-recent-"));
+  try {
+    const store = defaultSparkDagRunStore(dir);
+    const threadA = newRef("thread");
+    const threadB = newRef("thread");
+    const oldA = newRef("run");
+    const recentA = newRef("run");
+    const recentB = newRef("run");
+    const active = newRef("run");
+    await store.save({
+      version: 1,
+      manager: {
+        status: "running",
+        activeRunRef: active,
+        lastRunRef: active,
+        updatedAt: "2026-01-04T00:00:00.000Z",
+      },
+      runs: [
+        testDagRunRecord({
+          ref: oldA,
+          threadRef: threadA,
+          status: "succeeded",
+          startedAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          finishedAt: "2026-01-01T00:00:00.000Z",
+        }),
+        testDagRunRecord({
+          ref: recentA,
+          threadRef: threadA,
+          status: "succeeded",
+          startedAt: "2026-01-02T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          finishedAt: "2026-01-02T00:00:00.000Z",
+        }),
+        testDagRunRecord({
+          ref: recentB,
+          threadRef: threadB,
+          status: "succeeded",
+          startedAt: "2026-01-03T00:00:00.000Z",
+          updatedAt: "2026-01-03T00:00:00.000Z",
+          finishedAt: "2026-01-03T00:00:00.000Z",
+        }),
+        testDagRunRecord({
+          ref: active,
+          status: "running",
+          startedAt: "2026-01-04T00:00:00.000Z",
+          updatedAt: "2026-01-04T00:00:00.000Z",
+        }),
+      ],
+    });
+
+    const pruned = await store.pruneRuns({
+      dryRun: false,
+      now: "2030-01-01T00:00:00.000Z",
+      olderThanDays: 30,
+      keepRecent: 1,
+      keepRecentPerThread: 1,
+    });
+    assert.deepEqual(
+      pruned.deleted.map((candidate) => candidate.ref),
+      [oldA],
+    );
+    assert.equal(pruned.kept.find((run) => run.ref === active)?.reason, "active-run");
+    assert.equal(pruned.kept.find((run) => run.ref === recentA)?.reason, "thread-recent-window");
+    assert.equal(pruned.kept.find((run) => run.ref === recentB)?.reason, "global-recent-window");
+    assert.deepEqual(
+      (await store.load()).runs.map((run) => run.ref),
+      [recentA, recentB, active],
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -1633,7 +2114,10 @@ void test("runReadySparkTasks assigns default roles and schedules DAG waves with
     );
     await chmod(fakePi, 0o755);
 
-    const startedAt = Date.now();
+    const events: Array<
+      | { kind: "schedule"; taskRef: TaskRef; running: number; scheduled: number }
+      | { kind: "progress"; taskRef: TaskRef; running: number; completed: number }
+    > = [];
     const result = await runReadySparkTasks({
       graph,
       registry: new RoleRegistry(),
@@ -1643,8 +2127,13 @@ void test("runReadySparkTasks assigns default roles and schedules DAG waves with
       maxConcurrency: 4,
       timeoutMs: 5_000,
       claim: { sessionId: "session:parent" },
+      onSchedule: (event) => {
+        events.push({ kind: "schedule", ...event });
+      },
+      onProgress: (event) => {
+        events.push({ kind: "progress", ...event });
+      },
     });
-    const elapsedMs = Date.now() - startedAt;
 
     assert.equal(result.maxConcurrency, 4);
     assert.equal(result.scheduled, 5);
@@ -1661,12 +2150,27 @@ void test("runReadySparkTasks assigns default roles and schedules DAG waves with
     );
     assert.equal(graph.getTask(secondWave.ref).finishedBy?.roleRef, builtinRoleRef("reviewer"));
     assert.equal(graph.getTask(secondWave.ref).status, "done");
-    const firstWaveFinishedAt = firstWave.map((task) => graph.getTask(task.ref).updatedAt).sort();
-    const spanMs =
-      Date.parse(firstWaveFinishedAt.at(-1) ?? "") - Date.parse(firstWaveFinishedAt[0] ?? "");
+    const scheduleEvents = events.filter((event) => event.kind === "schedule");
+    const firstWaveRefs = new Set(firstWave.map((task) => task.ref));
+    assert.deepEqual(
+      scheduleEvents
+        .slice(0, firstWave.length)
+        .map((event) => event.taskRef)
+        .sort(),
+      [...firstWaveRefs].sort(),
+    );
+    assert.equal(scheduleEvents[firstWave.length - 1]?.running, firstWave.length);
+    const firstProgressIndex = events.findIndex((event) => event.kind === "progress");
+    const secondWaveScheduleIndex = events.findIndex(
+      (event) => event.kind === "schedule" && event.taskRef === secondWave.ref,
+    );
     assert.ok(
-      spanMs < 120,
-      `expected parallel first wave, span=${spanMs}ms elapsed=${elapsedMs}ms`,
+      firstProgressIndex >= 0,
+      "expected first wave progress before second wave scheduling",
+    );
+    assert.ok(
+      secondWaveScheduleIndex > firstProgressIndex,
+      "expected dependent second wave to wait for first wave progress",
     );
   } finally {
     await killActiveSparkRoleRunProcesses();
@@ -1744,7 +2248,7 @@ void test("runReadySparkTasks reports failed child runs in aggregate result", as
   }
 });
 
-void test("runReadySparkTasks uses DAG-level timeout instead of per-task timeout", async () => {
+void test("runReadySparkTasks treats timeoutMs as a foreground wait budget", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-timeout-"));
   try {
     const graph = new TaskGraph();
@@ -1783,16 +2287,22 @@ void test("runReadySparkTasks uses DAG-level timeout instead of per-task timeout
     });
 
     const backgroundRuns = result.runs.filter(
-      (run) => run.status === "running" && run.failureKind === "runtime_timeout",
+      (run) =>
+        run.status === "running" &&
+        /foreground wait expired/.test(run.errorMessage ?? "") &&
+        !run.failureKind,
     );
     assert.equal(result.maxConcurrency, 4);
-    assert.equal(result.timedOut, true);
+    assert.equal(result.timedOut, false);
+    assert.equal(result.foregroundTimedOut, true);
+    assert.equal(result.detached, true);
     assert.equal(result.scheduled, 1);
     assert.equal(graph.getTask(slowTask.ref).status, "running");
     assert.equal(graph.getTask(slowTask.ref).claim?.kind, "role-run");
     assert.equal(graph.getTask(pendingTask.ref).status, "pending");
     assert.equal(backgroundRuns.length, 1);
     assert.equal(backgroundRuns[0]?.taskRef, slowTask.ref);
+    assert.match(backgroundRuns[0]?.errorMessage ?? "", /foreground wait expired/);
     assert.match(backgroundRuns[0]?.errorMessage ?? "", /keeping role-run claim in background/);
     assert.equal(listActiveSparkRoleRunProcesses().length, 1);
   } finally {
@@ -1840,15 +2350,124 @@ void test("runSparkTask does not complete real tasks when the role run never sta
     const [artifact] = await artifactStore.list({ kind: "role-run" });
     assert.ok(artifact);
     const body = artifact.body as {
-      record?: { status?: string };
-      stdout?: string;
-      stderr?: string;
-      jsonEvents?: unknown[];
+      schemaVersion?: number;
+      runRef?: string;
+      taskRef?: string;
+      roleRef?: string;
+      status?: string;
+      record?: { status?: string; instruction?: string };
+      stdout?: { tail?: string; bytes?: number; truncated?: boolean };
+      stderr?: { tail?: string; bytes?: number; truncated?: boolean };
+      jsonEvents?: { count?: number; tail?: string[]; truncated?: boolean };
     };
+    assert.equal(body.schemaVersion, 1);
+    assert.equal(body.runRef, run.ref);
+    assert.equal(body.taskRef, task.ref);
+    assert.equal(body.roleRef, builtinRoleRef("planner"));
+    assert.equal(body.status, "succeeded");
     assert.equal(body.record?.status, "succeeded");
-    assert.equal(body.stdout, "");
-    assert.equal(body.stderr, "");
-    assert.deepEqual(body.jsonEvents, []);
+    assert.equal(body.record?.instruction, undefined);
+    assert.equal(body.stdout?.tail, "");
+    assert.equal(body.stdout?.bytes, 0);
+    assert.equal(body.stdout?.truncated, false);
+    assert.equal(body.stderr?.tail, "");
+    assert.equal(body.stderr?.bytes, 0);
+    assert.equal(body.stderr?.truncated, false);
+    assert.equal(body.jsonEvents?.count, 0);
+    assert.deepEqual(body.jsonEvents?.tail, []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("runSparkTask writes compact role-run artifacts for large output", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-large-role-artifact-"));
+  try {
+    const graph = new TaskGraph();
+    const thread = graph.createThread({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      threadRef: thread.ref,
+      title: "Large output task",
+      description: "produce large output",
+      roleRef: builtinRoleRef("worker"),
+      plan: executionReadyPlan("Large output task"),
+    });
+    const artifactStore = new ArtifactStore({
+      rootDir: join(dir, "artifacts"),
+    });
+    const fakePi = join(dir, "fake-pi.cjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "const payload = 'P'.repeat(100_000);",
+        "process.stdout.write('A'.repeat(200_000) + '\\n');",
+        "process.stdout.write(JSON.stringify({ type: 'done', payload }) + '\\n');",
+        "process.stderr.write('E'.repeat(80_000));",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    const run = await runSparkTask({
+      graph,
+      taskRef: task.ref,
+      registry: new RoleRegistry(),
+      artifactStore,
+      cwd: dir,
+      dryRun: false,
+      piCommand: fakePi,
+      claim: { sessionId: "session:parent" },
+    });
+
+    assert.equal(run.status, "succeeded");
+    const [artifact] = await artifactStore.list({ kind: "role-run" });
+    assert.ok(artifact);
+    const artifactPath = artifactStore.pathFor(artifact.ref);
+    const metadata = await readFile(artifactPath, "utf8");
+    const metadataStats = await stat(artifactPath);
+    const artifactBodyText = await artifactStore.getBody(artifact.ref);
+    assert.ok(metadataStats.size < 60_000, `artifact metadata is too large: ${metadataStats.size}`);
+    assert.ok(
+      Buffer.byteLength(artifactBodyText, "utf8") < 60_000,
+      `artifact body is too large: ${Buffer.byteLength(artifactBodyText, "utf8")}`,
+    );
+    assert.equal(metadata.includes("A".repeat(50_000)), false);
+    assert.equal(metadata.includes("P".repeat(50_000)), false);
+    assert.equal(metadata.includes("E".repeat(50_000)), false);
+
+    const body = artifact.body as {
+      schemaVersion?: number;
+      runRef?: string;
+      taskRef?: string;
+      roleRef?: string;
+      status?: string;
+      record?: { instruction?: string };
+      stdout?: { bytes?: number; tail?: string; tailBytes?: number; truncated?: boolean };
+      stderr?: { bytes?: number; tail?: string; tailBytes?: number; truncated?: boolean };
+      jsonEvents?: {
+        count?: number;
+        tail?: string[];
+        tailEventCount?: number;
+        truncated?: boolean;
+      };
+    };
+    assert.equal(body.schemaVersion, 1);
+    assert.equal(body.runRef, run.ref);
+    assert.equal(body.taskRef, task.ref);
+    assert.equal(body.roleRef, builtinRoleRef("worker"));
+    assert.equal(body.status, "succeeded");
+    assert.equal(body.record?.instruction, undefined);
+    assert.ok((body.stdout?.bytes ?? 0) > 250_000);
+    assert.ok((body.stdout?.tailBytes ?? 0) <= 12 * 1024);
+    assert.equal(body.stdout?.truncated, true);
+    assert.ok((body.stderr?.bytes ?? 0) > 70_000);
+    assert.ok((body.stderr?.tailBytes ?? 0) <= 12 * 1024);
+    assert.equal(body.stderr?.truncated, true);
+    assert.equal(body.jsonEvents?.count, 1);
+    assert.equal(body.jsonEvents?.tailEventCount, 1);
+    assert.equal(body.jsonEvents?.truncated, true);
+    assert.ok((body.jsonEvents?.tail?.[0]?.length ?? 0) <= 1_001);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -1892,20 +2511,38 @@ void test("runSparkTask dry-run records validation without completing the task",
     assert.equal(artifact.provenance.taskRef, task.ref);
     assert.equal(graph.getTask(task.ref).roleRef, undefined);
     assert.equal(artifact.provenance.roleRef, builtinRoleRef("planner"));
+    assert.equal(artifact.provenance.runRef, run.ref);
     assert.match(artifact.provenance.note ?? "", /^runName=planner-/);
     const body = artifact.body as {
+      schemaVersion?: number;
+      runRef?: string;
+      taskRef?: string;
+      roleRef?: string;
+      status?: string;
+      summary?: string;
       record?: { ref?: string; runName?: string; status?: string; instruction?: string };
-      stdout?: string;
-      stderr?: string;
-      jsonEvents?: unknown[];
+      stdout?: { tail?: string; bytes?: number; truncated?: boolean };
+      stderr?: { tail?: string; bytes?: number; truncated?: boolean };
+      jsonEvents?: { count?: number; tail?: string[]; truncated?: boolean };
     };
+    assert.equal(body.schemaVersion, 1);
+    assert.equal(body.runRef, run.ref);
+    assert.equal(body.taskRef, task.ref);
+    assert.equal(body.roleRef, builtinRoleRef("planner"));
+    assert.equal(body.status, "not_started");
     assert.equal(body.record?.ref, run.ref);
     assert.equal(body.record?.runName, run.runName);
     assert.equal(body.record?.status, "not_started");
-    assert.equal(body.record?.instruction, "plan");
-    assert.equal(body.stdout, "");
-    assert.equal(body.stderr, "");
-    assert.deepEqual(body.jsonEvents, []);
+    assert.equal(body.record?.instruction, undefined);
+    assert.match(body.summary ?? "", /not_started|without summary output/);
+    assert.equal(body.stdout?.tail, "");
+    assert.equal(body.stdout?.bytes, 0);
+    assert.equal(body.stdout?.truncated, false);
+    assert.equal(body.stderr?.tail, "");
+    assert.equal(body.stderr?.bytes, 0);
+    assert.equal(body.stderr?.truncated, false);
+    assert.equal(body.jsonEvents?.count, 0);
+    assert.deepEqual(body.jsonEvents?.tail, []);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

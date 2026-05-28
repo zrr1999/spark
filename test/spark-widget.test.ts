@@ -161,11 +161,11 @@ void test("spark widget shows compact DAG progress above thread details", () => 
 
   assert.match(
     lines.join("\n"),
-    /◆ Tasks\(total=2 claimed=0\/0\)\n◆ Spark DAG running: 1\/3 tasks · run:abc\n◆ Spark UX redesign/,
+    /◆ Tasks\(total=2 claimed=0\/0\)\n◆ Background work: 1\/3 tasks finished · running · run:abc\n◆ Spark UX redesign/,
   );
 });
 
-void test("spark widget shows run mode state separately from DAG progress", () => {
+void test("spark widget merges run mode state into background progress", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       run: {
@@ -186,8 +186,9 @@ void test("spark widget shows run mode state separately from DAG progress", () =
 
   assert.match(
     lines.join("\n"),
-    /◆ Spark DAG failed: 13\/13 tasks · run:9fb95fb0\n◆ Spark run running: run:6a2e8150 · focus: Finish the queue\n◆ Spark UX redesign/,
+    /◆ Background work: 13\/13 tasks finished · failed · run:9fb95fb0\n◆ Spark UX redesign/,
   );
+  assert.doesNotMatch(lines.join("\n"), /Spark DAG|Spark run/);
 });
 
 void test("spark widget renders completed DAG state in plain language", () => {
@@ -204,8 +205,11 @@ void test("spark widget renders completed DAG state in plain language", () => {
     theme,
   );
 
-  assert.match(lines.join("\n"), /◆ Spark DAG failed: 13\/13 tasks · run:9fb95fb0/);
-  assert.doesNotMatch(lines.join("\n"), /DAG\(failed/);
+  assert.match(
+    lines.join("\n"),
+    /◆ Background work: 13\/13 tasks finished · failed · run:9fb95fb0/,
+  );
+  assert.doesNotMatch(lines.join("\n"), /DAG\(failed|Spark DAG/);
 });
 
 void test("spark widget shows thread header with task counts even before claims", () => {
@@ -473,7 +477,8 @@ void test("spark widget distinguishes cancelled, failed, and role labels", () =>
 
   assert.match(lines, /⊘ Cancelled review task/);
   assert.match(lines, /✗ Broken task/);
-  assert.match(lines, /⠧ @me\/worker-a1b2c3d4 Role task/);
+  assert.match(lines, /⠧ @me\/worker Role task/);
+  assert.doesNotMatch(lines, /worker-a1b2c3d4/);
   assert.match(lines, /◼ @reviewer Other session task/);
 });
 
@@ -502,7 +507,8 @@ void test("spark widget keeps role labels before truncatable task titles", () =>
     theme,
   ).join("\n");
 
-  assert.match(lines, /@me\/worker-a1b2c3d4 This is a delibe/);
+  assert.match(lines, /@me\/worker This is a deliberately/);
+  assert.doesNotMatch(lines, /worker-a1b2c3d4/);
 });
 
 void test("spark widget summarizes tasks and current-session in-memory running role-runs in header", () => {
@@ -515,6 +521,22 @@ void test("spark widget summarizes tasks and current-session in-memory running r
           status: "running",
           claim: "role-run",
           roleLabel: "worker-a1b2c3d4",
+          backgroundOwner: "session",
+          todos: [],
+        },
+        {
+          title: "Update docs",
+          status: "running",
+          claim: "role-run",
+          roleLabel: "worker-0c5a1efe",
+          backgroundOwner: "session",
+          todos: [],
+        },
+        {
+          title: "Review dirty changes",
+          status: "running",
+          claim: "role-run",
+          roleLabel: "reviewer-2dd9591d",
           backgroundOwner: "session",
           todos: [],
         },
@@ -536,8 +558,8 @@ void test("spark widget summarizes tasks and current-session in-memory running r
         { title: "Failed task", status: "failed", roleLabel: "worker-failed", todos: [] },
       ],
       independentTodos: [],
-      taskCountTotal: 5,
-      taskCountClaimed: 2,
+      taskCountTotal: 7,
+      taskCountClaimed: 4,
       taskCountClaimedBySession: 0,
       outputLanguage: "en",
     },
@@ -546,8 +568,8 @@ void test("spark widget summarizes tasks and current-session in-memory running r
   ).join("\n");
 
   const header = lines.split("\n")[0] ?? "";
-  assert.match(header, /◆ Tasks\(running=3 pending=1 failed=1: @worker-a1b2c3d4\)/);
-  assert.doesNotMatch(header, /reviewer|stale-worker/);
+  assert.match(header, /◆ Tasks\(running=5 pending=1 failed=1: agents worker×2, reviewer\)/);
+  assert.doesNotMatch(header, /a1b2c3d4|0c5a1efe|2dd9591d|stale-worker/);
 });
 
 void test("spark widget renders task summary on the thread header", () => {
@@ -581,8 +603,8 @@ void test("spark widget renders task summary on the thread header", () => {
     theme,
   );
 
-  assert.match(lines[0] ?? "", /^◆ Tasks\(running=2: @worker-a1b2c3d4\)/);
-  assert.doesNotMatch(lines[0] ?? "", /^├─/);
+  assert.match(lines[0] ?? "", /^◆ Tasks\(running=2: agents worker\)/);
+  assert.doesNotMatch(lines[0] ?? "", /a1b2c3d4|^├─/);
   assert.match(lines[1] ?? "", /^◆ Spark UX redesign/);
   assert.match(lines[2] ?? "", /^├─ ⠧/);
 });

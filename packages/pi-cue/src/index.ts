@@ -75,6 +75,15 @@ class ToolCallText implements ToolCallComponent {
 
 export { CueClient, CueError, defaultSocketPath } from "./cue-client.ts";
 export type { JobInfo, JobResult, JobStatus, StartJobResult } from "./cue-client.ts";
+export {
+  __resetForTests as __resetVersionCheckForTests,
+  checkAndWarn as checkCuedVersionAndWarn,
+  classifyDaemonVersion,
+  compareSemver,
+  fetchLatestRelease,
+  renderWarning as renderCuedVersionWarning,
+} from "./version-check.ts";
+export type { DaemonVersion, VersionCheckOptions, VersionVerdict } from "./version-check.ts";
 
 import {
   CueClient,
@@ -83,6 +92,7 @@ import {
   type JobStatus,
   defaultSocketPath,
 } from "./cue-client.ts";
+import { checkAndWarn as checkCuedVersionAndWarn } from "./version-check.ts";
 
 // ── Shared state ───────────────────────────────────────────────────────────
 
@@ -95,7 +105,6 @@ async function getClient(ctx?: {
   client = null;
   try {
     client = await CueClient.connect();
-    return client;
   } catch {
     // Daemon not running — auto-start it.
     ctx?.ui?.notify?.("cue-shell: auto-starting daemon…", "info");
@@ -108,12 +117,17 @@ async function getClient(ctx?: {
     // Retry connection after starting.
     try {
       client = await CueClient.connect();
-      return client;
     } catch (err) {
       const msg = `cue-shell daemon started but still not reachable at ${defaultSocketPath()}: ${(err as Error).message}`;
       throw new CueError("DAEMON_UNREACHABLE", msg);
     }
   }
+
+  // Best-effort outdated-cued warning, fired at most once per process.
+  // Detached on purpose: the warning hits GitHub for the latest release
+  // and we never want that to delay the first IPC call.
+  void checkCuedVersionAndWarn(client, ctx);
+  return client;
 }
 
 /** Spawn `cued start` as a detached background process. */

@@ -8,7 +8,11 @@ Tasks belong to threads and have three user-facing identity fields:
 - `title` — concise human title rendered as `@name: title`
 - `description` — detailed objective/instructions for execution
 
-Task planning is first-class: use `TaskGraph.planTasks()` / `spark_plan_tasks` to organize durable tasks before running roles.
+Task planning is first-class: use `TaskGraph.planTasks()` / `spark_plan_tasks`
+to organize durable tasks before running roles. In the Spark extension,
+`spark_plan_tasks` writes directly after readiness checks pass; `/plan` only
+injects stronger planning guidance, and refinements are applied by calling the
+tool again with concrete updates.
 
 Claims are the scheduling primitive. There is no separate assign model: binding a task to reusable role work stores a `roleRef`, and executing it creates a `claim` when the `role-run` starts. Main-session claims and role-run claims use the same schema. Claims support leases via `claimedAt`, `heartbeatAt`, and `expiresAt`; active runs refresh them through `heartbeatTaskClaim()`. Expired claims can be released with `expireTaskClaims()` so failed/stale runs return to `pending` for retry. If an expired claim has a running `TaskRun`, the run is marked `cancelled` with `failureKind: "claim_stale"`.
 

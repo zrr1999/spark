@@ -35,7 +35,7 @@ Allowed high-level usage:
 
 - `spark` may orchestrate every Spark primitive and may use `pi-cue`, `pi-ask`, and `pi-roles`.
 - `spark-runtime` may combine `spark-tasks`, `pi-roles`, and `spark-artifacts` to run one claimed task. It maps a Spark task into a `RoleRun` request and maps completion back into task status, claims, and artifacts.
-- `spark-orchestrator` may combine `spark-tasks`, `spark-runtime`, `pi-roles`, and `spark-artifacts` to schedule ready task frontiers, assign executor roles at dispatch, and own DAG manager state.
+- `spark-orchestrator` may combine `spark-tasks`, `spark-runtime`, `pi-roles`, and `spark-artifacts` to schedule ready task frontiers, assign executor roles at dispatch, and own background orchestration state.
 - `spark-learnings` may combine `spark-core` and `spark-artifacts` to store evidence-backed reusable learning records as local typed artifacts, but it must not own task scheduling or prompt injection.
 - `spark-tasks` owns DAGs, TODOs, scheduling state, task names, role refs as optional plain-string executor hints, and claim leases. It must not run roles or import `pi-roles`.
 - `spark-review` may reference tasks, artifacts, and role refs, but must not own task scheduling.

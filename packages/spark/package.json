@@ -15,7 +15,6 @@
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.74.1",
-    "pi-ask": "file:../pi-ask",
     "pi-cue": "file:../pi-cue",
     "pi-roles": "file:../pi-roles",
     "spark-artifacts": "file:../spark-artifacts",

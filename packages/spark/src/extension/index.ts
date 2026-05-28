@@ -1,5 +1,5 @@
 import { access, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 
 import { Type } from "typebox";
@@ -29,6 +29,7 @@ import {
   type RoleSpec,
 } from "pi-roles";
 import {
+  DependencyError,
   contentHash,
   newRef,
   nowIso,
@@ -41,9 +42,11 @@ import {
   stableId,
   type SparkRunTrace,
   type Task,
+  type TaskCompletionReadiness,
   type TaskPlan,
   type RunRef,
   type TaskRun,
+  type TaskRunCompletionSummary,
   type TaskStatus,
   type TaskRef,
   type ThreadRef,
@@ -59,6 +62,7 @@ import {
   type SparkDagRunStatus,
   type SparkDagStatusSummary,
   runReadySparkTasks,
+  sparkDagRunNextSteps,
 } from "spark-orchestrator";
 import {
   createRoleRunClaimId,
@@ -70,7 +74,6 @@ import {
 } from "spark-runtime";
 import {
   defaultTaskGraphStore,
-  defaultTaskTodoStore,
   isUnfinishedTaskStatus,
   taskCompletionReadiness,
   TaskGraph,
@@ -109,6 +112,63 @@ import {
   type ToolCallComponent,
   type ToolCallRenderTheme,
 } from "./tool-rendering.ts";
+import {
+  acknowledgeBackgroundDagRuns,
+  activeSparkRoleRunProcessesForCwd,
+  buildSparkBackgroundDetails,
+  normalizeForceAfterMs,
+  normalizeKillSignal,
+  normalizeOptionalRunRef,
+  normalizeOptionalTaskSelector,
+  normalizeOptionalThreadRef,
+  normalizeSparkBackgroundAction,
+  reconcileSparkDagRunsWithActiveProcesses,
+  renderSparkBackgroundRunsText,
+  resolveBackgroundTaskRef,
+} from "./background-runs.ts";
+import {
+  SPARK_ROLE_RUN_RETENTION_RENDER_LIMIT,
+  SPARK_ROLE_RUN_RETENTION_TAIL_BYTES,
+  SPARK_STATE_LARGE_ARTIFACT_THRESHOLD_BYTES,
+  appendRoleRunArtifactRetentionLines,
+  appendSparkDagRunPruneLines,
+  appendSparkStateDiagnosticsLines,
+  appendSparkStateHousekeepingLines,
+  collectRoleRunArtifactRetentionPlan,
+  collectSparkStateCleanupPlan,
+  collectSparkStateDiagnostics,
+  collectSparkStateHousekeeping,
+  formatSparkProtectedStoreReason,
+  formatSparkStateCacheKind,
+  type SparkStateSessionScopes,
+} from "./state-housekeeping.ts";
+import {
+  clearCurrentThreadRef,
+  clearSparkExecutionMode,
+  currentSparkThread,
+  loadCurrentThreadRef,
+  loadCurrentThreadState,
+  loadHiddenRoleRunInboxState,
+  loadSparkExecutionMode,
+  loadSparkGraph,
+  loadSparkRunMode,
+  sanitizeStoreScope,
+  saveCurrentThreadRef,
+  saveHiddenRoleRunInboxState,
+  saveSparkExecutionMode,
+  saveSparkPlanningMode,
+  saveSparkRunMode,
+  sparkRunStrategyForMaxConcurrency,
+  sparkSessionKey,
+  sparkSessionOwnerKey,
+  sparkTodoStore,
+  updateSparkRunModeStatus,
+  writeJsonFileAtomic,
+  type SparkPlanningModeSource,
+  type SparkRunModeState,
+  type SparkRunModeStatus,
+  type SparkRunStrategy,
+} from "./session-state.ts";
 
 interface SparkExtensionAPI {
   registerCommand(
@@ -182,9 +242,14 @@ const MAIN_TASK_CLAIM_LEASE_MS = 10 * 60 * 1_000;
 const DAG_MANAGER_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_SPARK_STATUS_ACTIVE_LIMIT = 20;
 const DEFAULT_SPARK_STATUS_TODO_LIMIT = 3;
+const DEFAULT_SPARK_STATUS_RECENT_COMPLETIONS_LIMIT = 5;
+const DEFAULT_SPARK_HIDDEN_INBOX_COMPLETIONS_LIMIT = 5;
+const SPARK_HIDDEN_INBOX_RECENT_MS = 7 * 24 * 60 * 60 * 1_000;
+const SPARK_HIDDEN_INBOX_MAX_DELIVERED = 1_000;
 const DEFAULT_SPARK_PLAN_TASK_OUTPUT_LIMIT = 5;
 const SPARK_PLAN_TASKS_READINESS_RULES = [
   "Readiness rules:",
+  "- Tasks must be concrete executable/review/validation/research work; do not create standalone design/planning tasks. Discuss design with the user first, then place the chosen design and rationale inside each concrete task.plan.",
   "- TaskPlanIssue kinds currently have no warning-only entries; every current kind below is blocking.",
   "- missing_plan: the task must have a bound plan.",
   "- missing_objective: plan.objective must be non-empty.",
@@ -209,6 +274,7 @@ const DEFAULT_SPARK_TOOL_OPERATIONAL_NOTES: SparkToolOperationalNotes = {
 
 const SPARK_TOOL_OPERATIONAL_NOTES: Record<string, SparkToolOperationalNotes> = {
   spark_status: DEFAULT_SPARK_TOOL_OPERATIONAL_NOTES,
+  spark_state: DEFAULT_SPARK_TOOL_OPERATIONAL_NOTES,
   spark_list_threads: DEFAULT_SPARK_TOOL_OPERATIONAL_NOTES,
   spark_list_artifacts: DEFAULT_SPARK_TOOL_OPERATIONAL_NOTES,
   spark_get_artifact: {
@@ -269,7 +335,7 @@ const SPARK_TOOL_OPERATIONAL_NOTES: Record<string, SparkToolOperationalNotes> = 
   },
   spark_plan_tasks: {
     atomic:
-      "yes for thread graph changes; roadmap ref attachment is a follow-up write; dryRun=true writes nothing",
+      "yes for thread graph changes; roadmap ref attachment is a follow-up write after readiness passes",
     idempotent:
       "mostly yes for stable task names/titles, but repeated updates refresh task metadata",
     prerequisites: [
@@ -287,10 +353,20 @@ const SPARK_TOOL_OPERATIONAL_NOTES: Record<string, SparkToolOperationalNotes> = 
       "Required role model bindings exist before real dispatch.",
     ],
   },
+  spark_background_runs: {
+    atomic:
+      "action-dependent; status/list/inspect are read-only except reconcile refresh, kill/ack/reconcile mutate runtime or DAG records",
+    idempotent:
+      "status/list/inspect/reconcile are safe to repeat; ack is safe for the same problem records; kill is state-changing",
+    prerequisites: [
+      "Spark state exists for this workspace.",
+      "Use runRef/taskRef/all=true for kill; broad kills are never implicit.",
+    ],
+  },
   spark_dag_manager: {
     atomic:
-      "action-dependent; status is read-only, reconcile/clear/kill mutate run records or processes",
-    idempotent: "status and reconcile are safe; clear/kill actions are state-changing",
+      "action-dependent; status is read-only; reconcile/ack/clear/kill mutate run records or processes",
+    idempotent: "status, reconcile, and repeat ack are safe; clear/kill actions are state-changing",
     prerequisites: ["Spark DAG run store exists for this workspace."],
   },
   spark_ask: {
@@ -367,8 +443,6 @@ interface SparkCommandProjectState {
 }
 
 type SparkEntryMode = "planning" | "execution" | "run";
-type SparkRunStrategy = "sequential" | "parallel";
-type SparkPlanningModeSource = "auto" | "direct";
 type SparkEntryModeChoice = SparkEntryMode | "new_project";
 type SparkEntryConfidence = "high" | "ambiguous" | "conflicting";
 
@@ -382,31 +456,6 @@ interface SparkEntryModeAnalysis {
   unfinishedTaskCount: number;
   readyTaskCount: number;
   pendingTaskCount: number;
-}
-
-interface SparkExecutionModeState {
-  version: 1;
-  threadRef: ThreadRef;
-  focus?: string;
-  enteredAt: string;
-}
-
-type SparkRunModeStatus = "running" | "paused" | "blocked" | "done" | "failed" | "cancelled";
-
-interface SparkRunModeState {
-  version: 1;
-  runRef: RunRef;
-  threadRef: ThreadRef;
-  focus?: string;
-  status: SparkRunModeStatus;
-  policy: {
-    maxConcurrency: number;
-    timeoutMs: number;
-    stopOnAsk: true;
-    stopOnValidationFailure: true;
-  };
-  enteredAt: string;
-  updatedAt: string;
 }
 
 type SparkEntryIntent =
@@ -432,51 +481,6 @@ type SparkEntryResolution =
   | { action: "blocked"; message: string }
   | { action: "none" };
 
-type SparkStateCacheKind =
-  | "current-thread"
-  | "task-todos"
-  | "session-todos"
-  | "todo-display-numbers"
-  | "legacy-task-todos";
-
-type SparkProtectedStoreReason =
-  | "artifact-history"
-  | "task-graph"
-  | "notes"
-  | "review-gate"
-  | "dag-runs";
-
-interface SparkStateCacheSummary {
-  path: string;
-  kind: SparkStateCacheKind;
-  files: number;
-  bytes: number;
-  staleFiles: number;
-  brokenFiles: number;
-  safeToDeleteFiles: number;
-  activeFiles: number;
-}
-
-interface SparkProtectedStoreSummary {
-  path: string;
-  reason: SparkProtectedStoreReason;
-  files: number;
-  bytes: number;
-}
-
-interface SparkStateHousekeepingSummary {
-  root: string;
-  generatedAt: string;
-  caches: SparkStateCacheSummary[];
-  protectedStores: SparkProtectedStoreSummary[];
-}
-
-interface SparkStateFileInfo {
-  path: string;
-  name: string;
-  bytes: number;
-  mtimeMs: number;
-}
 const dagManagerTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const claimReaperTimers = new Map<string, ReturnType<typeof setInterval>>();
 
@@ -566,7 +570,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
             ),
             nextEntry,
           ]
-        : [...entries, nextEntry],
+        : [nextEntry],
     );
   }
 
@@ -577,14 +581,21 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   pi.on?.("before_agent_start", async (_event: unknown, ctx: SparkToolContext) => {
     const sessionKey = sparkSessionOwnerKey(ctx);
     const entries = pendingSparkAgentInstructions.get(sessionKey) ?? [];
-    if (entries.length === 0) return undefined;
-    pendingSparkAgentInstructions.delete(sessionKey);
-    const validEntries = await validPendingSparkAgentInstructions(ctx, entries);
-    if (validEntries.length === 0) return undefined;
+    const validEntries =
+      entries.length > 0 ? await validPendingSparkAgentInstructions(ctx, entries) : [];
+    const inbox = await collectUnreadHiddenRoleRunInbox(ctx);
+    if (validEntries.length === 0 && inbox.summaries.length === 0) {
+      if (entries.length > 0) pendingSparkAgentInstructions.delete(sessionKey);
+      return undefined;
+    }
+    const contentParts = validEntries.map((entry) => entry.content);
+    if (inbox.summaries.length > 0) contentParts.push(formatHiddenRoleRunInbox(inbox));
+    if (inbox.summaries.length > 0) await markHiddenRoleRunInboxDelivered(ctx, inbox.summaries);
+    if (entries.length > 0) pendingSparkAgentInstructions.delete(sessionKey);
     return {
       message: {
         customType: "spark-mode-context",
-        content: validEntries.map((entry) => entry.content).join("\n\n"),
+        content: contentParts.join("\n\n"),
         display: false,
       },
     };
@@ -690,7 +701,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     if (!thread) {
       const dagStatus = await defaultSparkDagRunStore(cwd).status();
       widgetState = {
-        dag: activeSparkDagWidgetEntry(dagStatus),
+        dag: sparkDagWidgetEntry(dagStatus),
         run: sparkRunWidgetEntry(currentState?.runMode),
         tasks: [],
         independentTodos: numberedIndependentTodos,
@@ -850,8 +861,11 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         await sparkTodoStore(cwd, ctx).save(graph);
         resumed += 1;
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const runRef = newRef("run");
+        const finishedAt = nowIso();
         graph.recordRun({
-          ref: newRef("run"),
+          ref: runRef,
           threadRef: task.threadRef,
           taskRef: task.ref,
           roleRef: task.claim?.roleRef ?? task.roleRef,
@@ -859,10 +873,20 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           ownerSessionId,
           status: "failed",
           failureKind: "runtime_error",
-          errorMessage: error instanceof Error ? error.message : String(error),
-          startedAt: nowIso(),
-          finishedAt: nowIso(),
+          errorMessage,
+          startedAt: finishedAt,
+          finishedAt,
           outputArtifacts: [],
+          completionSummary: {
+            runRef,
+            taskRef: task.ref,
+            roleRef: task.claim?.roleRef ?? task.roleRef,
+            runName,
+            status: "failed",
+            summary: errorMessage,
+            artifactRefs: [],
+            createdAt: finishedAt,
+          },
         });
         graph.setTaskStatus(task.ref, "failed");
         await mergeTaskProgressIntoStore(store, graph, [task.ref]);
@@ -935,6 +959,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     if (!currentThread) return 0;
     const readyTasks = graph.readyTasks(currentThread.ref);
     if (readyTasks.length === 0) {
+      const dagStatus = await dagRunStore.status();
+      if (dagStatus.activeRun?.status === "running") return 1;
       if (runMode && currentThread.ref === runMode.threadRef)
         await updateSparkRunModeStatus(
           cwd,
@@ -996,7 +1022,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       });
       const followUp = await dagRunStore.finishRun(dagRun.ref, result);
       if (runMode && currentThread.ref === runMode.threadRef && dagResultTerminalForRunMode(result))
-        await updateSparkRunModeStatus(cwd, ctx, result.timedOut ? "failed" : "blocked");
+        await updateSparkRunModeStatus(cwd, ctx, "blocked");
       emitSparkDagCompletionFollowUp(ctx, followUp);
     } catch (error) {
       const followUp = await dagRunStore.finishRun(
@@ -1024,12 +1050,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     return unfinished.length === 0 ? "done" : "blocked";
   }
 
-  function dagResultTerminalForRunMode(result: {
-    timedOut: boolean;
-    failed?: number;
-    cancelled?: number;
-  }): boolean {
-    return result.timedOut || (result.failed ?? 0) > 0 || (result.cancelled ?? 0) > 0;
+  function dagResultTerminalForRunMode(result: { failed?: number; cancelled?: number }): boolean {
+    return (result.failed ?? 0) > 0 || (result.cancelled ?? 0) > 0;
   }
 
   function mapTaskStatus(status: string): TaskEntry["status"] {
@@ -1174,6 +1196,11 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     return Math.max(0, Math.floor(value));
   }
 
+  function normalizePositiveInteger(value: unknown, fallback: number): number {
+    if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+    return Math.max(1, Math.floor(value));
+  }
+
   function normalizeArtifactKind(value: unknown): ArtifactKind | undefined {
     if (
       value === "spark-md" ||
@@ -1212,10 +1239,13 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
   function normalizeSparkDagManagerAction(
     value: unknown,
-  ): "status" | "reconcile" | "clear_inactive" | "kill_active" {
+  ): "status" | "reconcile" | "ack" | "clear_inactive" | "prune" | "kill_active" {
+    if (value === "acknowledge") return "ack";
     if (
       value === "reconcile" ||
+      value === "ack" ||
       value === "clear_inactive" ||
+      value === "prune" ||
       value === "kill_active" ||
       value === "status"
     )
@@ -1223,16 +1253,27 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     return "status";
   }
 
-  function activeSparkDagWidgetEntry(dagStatus: SparkDagStatusSummary): SparkWidgetState["dag"] {
-    return dagStatus.activeRun
-      ? {
-          status: dagStatus.activeRun.status,
-          runRef: dagStatus.activeRun.ref,
-          scheduled: dagStatus.activeRun.scheduled,
-          completed: dagStatus.activeRun.completed,
-          active: true,
-        }
-      : undefined;
+  function collectNonConcreteTaskIssues(tasks: TaskPlanInput[]): Array<{
+    name?: string;
+    title: string;
+    message: string;
+  }> {
+    return tasks.flatMap((task) => {
+      const message = nonConcreteTaskMessage(task);
+      return message ? [{ name: task.name, title: task.title, message }] : [];
+    });
+  }
+
+  function nonConcreteTaskMessage(task: TaskPlanInput): string | undefined {
+    if (task.status === "cancelled" || task.status === "done") return undefined;
+    if (task.kind === "plan")
+      return "kind=plan is reserved for planning logic; create concrete implement/review/research/validation work and put design details in task.plan";
+    const title = task.title.trim();
+    if (/^(设计|规划)(\s|[:：]|$)/u.test(title))
+      return "title starts with a design/planning verb; discuss the design with the user, then create concrete implementation/review/validation tasks";
+    if (/^(design|plan)(\s|[:：-]|$)/iu.test(title))
+      return "title starts with a design/planning verb; discuss the design with the user, then create concrete implementation/review/validation tasks";
+    return undefined;
   }
 
   function sparkRunWidgetEntry(
@@ -1264,17 +1305,13 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         active: true,
       };
     }
-    const lastRun = dagStatus.lastRun;
-    if (
-      lastRun &&
-      (!threadRef || lastRun.threadRef === threadRef) &&
-      (lastRun.status === "failed" || lastRun.status === "timed_out" || lastRun.status === "stale")
-    ) {
+    const actionableRun = dagStatus.actionableRun;
+    if (actionableRun && (!threadRef || actionableRun.threadRef === threadRef)) {
       return {
-        status: lastRun.status,
-        runRef: lastRun.ref,
-        scheduled: lastRun.scheduled,
-        completed: lastRun.completed,
+        status: actionableRun.status,
+        runRef: actionableRun.ref,
+        scheduled: actionableRun.scheduled,
+        completed: actionableRun.completed,
       };
     }
     return undefined;
@@ -1301,16 +1338,14 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   function appendCompactSparkDagStatusLines(
     lines: string[],
     dagStatus: SparkDagStatusSummary,
-  ): void {
-    const activeSuffix = dagStatus.manager.activeRunRef
-      ? ` active=${dagStatus.manager.activeRunRef}`
-      : "";
-    const lastSuffix = dagStatus.lastRun
-      ? ` last=${dagStatus.lastRun.status} completed=${dagStatus.lastRun.completed}/${dagStatus.lastRun.scheduled}`
-      : " last=none";
+  ): SparkDagRunRecord | undefined {
+    const compactRun = dagStatus.activeRun ?? dagStatus.actionableRun;
+    if (!compactRun) return undefined;
+    const runKind = compactRun.ref === dagStatus.activeRun?.ref ? "active" : "actionable";
     lines.push(
-      `DAG manager: ${dagStatus.manager.status}${activeSuffix}${lastSuffix} | running=${dagStatus.running} failed=${dagStatus.failed} timed_out=${dagStatus.timedOut}`,
+      `Spark orchestrator: ${dagStatus.manager.status} ${runKind}=${compactRun.ref} | running=${dagStatus.running} actionable=${dagStatus.actionable}`,
     );
+    return compactRun;
   }
 
   function appendSparkDagStatusLines(lines: string[], dagStatus: SparkDagStatusSummary): void {
@@ -1318,17 +1353,151 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       ? ` active=${dagStatus.manager.activeRunRef}`
       : "";
     lines.push(
-      `DAG manager: ${dagStatus.manager.status}${managerSuffix} runs=${dagStatus.recentRuns.length} recent | running=${dagStatus.running} succeeded=${dagStatus.succeeded} failed=${dagStatus.failed} timed_out=${dagStatus.timedOut}`,
+      `Spark orchestrator: ${dagStatus.manager.status}${managerSuffix} runs=${dagStatus.recentRuns.length} recent | running=${dagStatus.running} succeeded=${dagStatus.succeeded} failed=${dagStatus.failed} stale=${dagStatus.stale} timed_out=${dagStatus.timedOut} acknowledged=${dagStatus.acknowledged}`,
     );
-    if (dagStatus.lastRun) lines.push(`  Last DAG run: ${formatSparkDagRun(dagStatus.lastRun)}`);
-    if (dagStatus.activeRun && dagStatus.activeRun.ref !== dagStatus.lastRun?.ref)
+    if (dagStatus.lastRun) {
+      lines.push(`  Last DAG run: ${formatSparkDagRun(dagStatus.lastRun)}`);
+      appendSparkDagRunNextStepLines(lines, dagStatus.lastRun, "  ");
+    }
+    if (dagStatus.activeRun && dagStatus.activeRun.ref !== dagStatus.lastRun?.ref) {
       lines.push(`  Active DAG run: ${formatSparkDagRun(dagStatus.activeRun)}`);
+      appendSparkDagRunNextStepLines(lines, dagStatus.activeRun, "  ");
+    }
+    if (dagStatus.recentRuns.length > 0) {
+      lines.push("  Recent DAG runs:");
+      for (const run of dagStatus.recentRuns) lines.push(`    - ${formatSparkDagRun(run)}`);
+    }
+  }
+
+  function appendSparkDagRunNextStepLines(
+    lines: string[],
+    run: SparkDagRunRecord,
+    indent: string,
+  ): void {
+    const nextSteps = sparkDagRunNextSteps(run);
+    if (!nextSteps) return;
+    lines.push(`${indent}Next steps (${nextSteps.status}):`);
+    for (const action of nextSteps.nextActions) lines.push(`${indent}  - ${action}`);
+  }
+
+  function collectRecentRoleRunCompletions(input: {
+    graph: TaskGraph;
+    threadRef?: ThreadRef;
+    limit: number;
+  }): TaskRunCompletionSummary[] {
+    return input.graph
+      .runs(input.threadRef)
+      .flatMap((run) => (run.completionSummary ? [run.completionSummary] : []))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, input.limit)
+      .map(cloneTaskRunCompletionSummary);
+  }
+
+  async function collectUnreadHiddenRoleRunInbox(
+    ctx: SparkToolContext,
+  ): Promise<{ summaries: TaskRunCompletionSummary[]; remaining: number }> {
+    const graph = await loadSparkGraph(ctx.cwd, ctx);
+    if (!graph) return { summaries: [], remaining: 0 };
+    const ownerSessionId = sparkSessionOwnerKey(ctx);
+    const deliveredRunRefs = new Set(
+      (await loadHiddenRoleRunInboxState(ctx.cwd, ctx)).delivered.map((entry) => entry.runRef),
+    );
+    const recentCutoffMs = Date.now() - SPARK_HIDDEN_INBOX_RECENT_MS;
+    const unread = graph
+      .runs()
+      .filter((run) => run.ownerSessionId === ownerSessionId)
+      .flatMap((run) => {
+        if (!run.completionSummary || deliveredRunRefs.has(run.ref)) return [];
+        const createdAtMs = Date.parse(run.completionSummary.createdAt);
+        if (Number.isFinite(createdAtMs) && createdAtMs < recentCutoffMs) return [];
+        return [run.completionSummary];
+      })
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const summaries = unread
+      .slice(0, DEFAULT_SPARK_HIDDEN_INBOX_COMPLETIONS_LIMIT)
+      .map(cloneTaskRunCompletionSummary);
+    return { summaries, remaining: Math.max(0, unread.length - summaries.length) };
+  }
+
+  function formatHiddenRoleRunInbox(input: {
+    summaries: TaskRunCompletionSummary[];
+    remaining: number;
+  }): string {
+    const lines = ["Recent unread background role-run results:"];
+    for (const summary of input.summaries) {
+      const role = summary.roleRef ? ` role=${shortRoleLabel(summary.roleRef)}` : "";
+      const runName = summary.runName ? ` name=${summary.runName}` : "";
+      const artifacts =
+        summary.artifactRefs.length > 0
+          ? ` artifacts=${summary.artifactRefs.join(",")}`
+          : " artifacts=none";
+      const nextAction = hiddenRoleRunNextAction(summary);
+      lines.push(
+        `- [${summary.status}] task=${summary.taskRef} run=${summary.runRef}${role}${runName} — ${truncateInline(summary.summary, 180)}${artifacts}; next=${nextAction}`,
+      );
+    }
+    if (input.remaining > 0)
+      lines.push(`- ${input.remaining} more unread result(s) remain for a later turn.`);
+    lines.push("Use artifact refs or spark_background_runs inspect for full details if needed.");
+    return lines.join("\n");
+  }
+
+  function hiddenRoleRunNextAction(summary: TaskRunCompletionSummary): string {
+    if (summary.status === "failed") {
+      return `inspect with spark_background_runs inspect runRef=${summary.runRef}; fix the failure cause, then rerun the ready frontier`;
+    }
+    if (summary.status === "cancelled") {
+      return `inspect with spark_background_runs inspect runRef=${summary.runRef}; decide whether to requeue, supersede, or acknowledge cancellation`;
+    }
+    return "continue parent task using this compact summary and artifact refs";
+  }
+
+  async function markHiddenRoleRunInboxDelivered(
+    ctx: SparkToolContext,
+    summaries: TaskRunCompletionSummary[],
+  ): Promise<void> {
+    const state = await loadHiddenRoleRunInboxState(ctx.cwd, ctx);
+    const deliveredAt = nowIso();
+    const byRunRef = new Map(state.delivered.map((entry) => [entry.runRef, entry]));
+    for (const summary of summaries)
+      byRunRef.set(summary.runRef, { runRef: summary.runRef, deliveredAt });
+    state.delivered = [...byRunRef.values()]
+      .sort((a, b) => b.deliveredAt.localeCompare(a.deliveredAt))
+      .slice(0, SPARK_HIDDEN_INBOX_MAX_DELIVERED);
+    await saveHiddenRoleRunInboxState(ctx.cwd, ctx, state);
+  }
+
+  function cloneTaskRunCompletionSummary(
+    summary: TaskRunCompletionSummary,
+  ): TaskRunCompletionSummary {
+    return { ...summary, artifactRefs: [...summary.artifactRefs] };
+  }
+
+  function appendRecentRoleRunCompletionLines(
+    lines: string[],
+    summaries: TaskRunCompletionSummary[],
+  ): void {
+    lines.push("Recent role-run completions:");
+    for (const summary of summaries) {
+      const role = summary.roleRef ? ` role=${shortRoleLabel(summary.roleRef)}` : "";
+      const runName = summary.runName ? ` name=${summary.runName}` : "";
+      const artifacts =
+        summary.artifactRefs.length > 0
+          ? ` artifacts=${summary.artifactRefs.join(",")}`
+          : " artifacts=none";
+      lines.push(
+        `  - [${summary.status}] task=${summary.taskRef} run=${summary.runRef}${role}${runName} — ${truncateInline(summary.summary, 180)}${artifacts}`,
+      );
+    }
   }
 
   function formatSparkDagRun(run: SparkDagRunRecord): string {
     const finishedSuffix = run.finishedAt ? ` finished=${run.finishedAt}` : "";
     const timeoutSuffix = run.timedOut ? " timed_out=true" : "";
-    return `${run.ref} [${run.status}] scheduled=${run.scheduled} completed=${run.completed} maxConcurrency=${run.maxConcurrency} timeoutMs=${run.timeoutMs} updated=${run.updatedAt}${finishedSuffix}${timeoutSuffix}`;
+    const ackSuffix = run.acknowledgedAt
+      ? ` acknowledgedAt=${run.acknowledgedAt} acknowledgedBySession=${run.acknowledgedBySession ?? "unknown"}`
+      : "";
+    return `${run.ref} [${run.status}] scheduled=${run.scheduled} completed=${run.completed} maxConcurrency=${run.maxConcurrency} timeoutMs=${run.timeoutMs} updated=${run.updatedAt}${finishedSuffix}${timeoutSuffix}${ackSuffix}`;
   }
 
   function shouldRenderThreadInSparkStatus(input: {
@@ -1971,6 +2140,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         await startSparkNewProject(piApi, ctx, resolution.idea, {
           enterPlanning: true,
           planningSource: resolution.planningSource,
+          materializeSparkMd: resolution.planningSource !== "direct",
         });
         return;
       case "enter_mode":
@@ -2164,7 +2334,11 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     piApi: SparkExtensionAPI,
     ctx: SparkCommandContext,
     idea: string,
-    options: { enterPlanning?: boolean; planningSource?: SparkPlanningModeSource } = {},
+    options: {
+      enterPlanning?: boolean;
+      planningSource?: SparkPlanningModeSource;
+      materializeSparkMd?: boolean;
+    } = {},
   ): Promise<void> {
     const existing = await loadSparkGraph(ctx.cwd, ctx);
     if (existing) {
@@ -2204,6 +2378,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       clarification,
       askArtifactRefs: initAsk ? [initAsk.askArtifactRef] : undefined,
       askRefs: initAsk ? [initAsk.askRef] : undefined,
+      materializeSparkMd: options.materializeSparkMd,
     });
 
     ctx.ui?.notify?.(
@@ -2331,7 +2506,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     source: SparkPlanningModeSource = "auto",
   ): Promise<void> {
     const thread = await currentSparkThread(ctx.cwd, ctx, graph);
-    await clearSparkExecutionMode(ctx.cwd, ctx);
+    if (thread) await saveSparkPlanningMode(ctx.cwd, ctx, thread.ref, focus, source);
+    else await clearSparkExecutionMode(ctx.cwd, ctx);
     await refreshSparkWidget(ctx.cwd, ctx);
     ctx.ui?.notify?.("Spark planning mode: research, clarify, and add threads/tasks.", "info");
     const roadmapContext = await roadmapPlanningContext(ctx.cwd, focus);
@@ -2378,15 +2554,26 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     if (runMode) ensureSparkDagManager(ctx.cwd, ctx);
     ctx.ui?.notify?.(
       runMode
-        ? `Spark run mode: ${strategy} background run ${runMode.runRef} started for current thread.`
+        ? `Spark run mode: ${strategy} background orchestrator ${runMode.runRef} started for current thread.`
         : "Spark run mode: select a thread before starting a background run.",
       "info",
     );
-    dispatchSparkAgentInstruction(
-      piApi,
-      ctx,
-      renderSparkRunModePrompt(graph, thread?.ref, focus),
-      renderSparkModeVisibleMessage("run", thread?.title, focus, strategy),
+    piApi.sendMessage(
+      {
+        customType: "spark-mode-request",
+        content: renderSparkModeVisibleMessage("run", thread?.title, focus, strategy),
+        display: true,
+        details: {
+          runModeStarted: Boolean(runMode),
+          runModeRef: runMode?.runRef,
+          threadRef: thread?.ref,
+          runStrategy: strategy,
+          backgroundOrchestrator: runMode
+            ? "started_or_resumed_without_agent_turn"
+            : "thread_required",
+        },
+      },
+      { deliverAs: "followUp", triggerTurn: false },
     );
   }
 
@@ -2468,14 +2655,29 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       ];
       if (runMode) lines.push(sparkRunModeStatusLine(runMode));
       if (view === "active") {
+        const compactDagRun = appendCompactSparkDagStatusLines(lines, dagStatus);
+        if (compactDagRun) {
+          const label = compactDagRun.ref === dagStatus.activeRun?.ref ? "Active" : "Actionable";
+          lines.push(`  ${label} DAG run: ${formatSparkDagRun(compactDagRun)}`);
+          appendSparkDagRunNextStepLines(lines, compactDagRun, "  ");
+        }
+      } else if (view === "summary") {
         appendCompactSparkDagStatusLines(lines, dagStatus);
-        if (dagStatus.lastRun)
-          lines.push(`  Last DAG run: ${formatSparkDagRun(dagStatus.lastRun)}`);
       } else appendSparkDagStatusLines(lines, dagStatus);
       const sessionKey = sparkSessionKey(ctx);
       const independentTodos = await loadIndependentTodos(cwd, ctx);
       const currentThread = await currentSparkThread(cwd, ctx, graph);
       const selectedThread = currentThread;
+      const recentRoleRunCompletions =
+        view === "summary"
+          ? []
+          : collectRecentRoleRunCompletions({
+              graph,
+              threadRef: selectedThread?.ref,
+              limit: DEFAULT_SPARK_STATUS_RECENT_COMPLETIONS_LIMIT,
+            });
+      if (recentRoleRunCompletions.length > 0)
+        appendRecentRoleRunCompletionLines(lines, recentRoleRunCompletions);
       if (view === "active" && !currentThread)
         lines.push(
           "\nSpark available: no thread selected for this session. Use spark_use_thread to select a thread, or use view=summary/full to inspect all threads.",
@@ -2636,7 +2838,9 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         })),
       };
       const state =
-        view === "full" ? await collectSparkStateHousekeeping(cwd, ctx, graph) : undefined;
+        view === "full"
+          ? await collectSparkStateHousekeeping(cwd, sparkStateSessionScopes(ctx), graph)
+          : undefined;
       if (state) appendSparkStateHousekeepingLines(lines, state);
       const details = {
         found: true,
@@ -2649,6 +2853,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         threads: compactThreadStatusSummaries(graph, sessionKey),
         dag: dagStatus,
         runMode,
+        recentRoleRunCompletions,
         ...(state ? { state } : {}),
       };
       return {
@@ -2659,6 +2864,208 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           },
         ],
         details,
+      };
+    },
+  });
+
+  registerSparkTool({
+    name: "spark_state",
+    label: "Spark State",
+    description:
+      "Inspect or explicitly clean safe Spark session/cache state. action=status and action=diagnostics/doctor are read-only; action=cleanup defaults to dryRun=true and never deletes protected stores such as thread graph, artifacts, notes, role-reports, dag-runs, or review-gate. action=compact-role-run-artifacts previews or applies historical role-run transcript blob replacement and defaults to dry-run.",
+    parameters: Type.Object({
+      action: Type.Optional(
+        Type.String({
+          default: "status",
+          description:
+            "status | diagnostics | doctor | cleanup | prune | compact-role-run-artifacts. status summarizes cache/protected stores; diagnostics/doctor reports protected-store candidates read-only; cleanup previews or deletes safe cache files; prune previews or applies typed DAG-run retention; compact-role-run-artifacts previews/applies role-run transcript blob replacement.",
+        }),
+      ),
+      dryRun: Type.Optional(
+        Type.Boolean({
+          default: true,
+          description:
+            "Preview deletions without removing files. Defaults to true for cleanup, prune, and compact-role-run-artifacts.",
+        }),
+      ),
+      olderThanDays: Type.Optional(
+        Type.Number({
+          default: 30,
+          description: "Staleness cutoff for cleanup candidates. Defaults to 30 days.",
+        }),
+      ),
+      includeBroken: Type.Optional(
+        Type.Boolean({
+          default: false,
+          description:
+            "Also treat malformed cache JSON as cleanup candidates. Defaults to false so broken files are reported but not deleted unless explicitly requested.",
+        }),
+      ),
+      thresholdBytes: Type.Optional(
+        Type.Number({
+          default: SPARK_STATE_LARGE_ARTIFACT_THRESHOLD_BYTES,
+          description:
+            "For action=compact-role-run-artifacts, only consider role-run/agent-run blobs at or above this byte size.",
+        }),
+      ),
+      tailBytes: Type.Optional(
+        Type.Number({
+          default: SPARK_ROLE_RUN_RETENTION_TAIL_BYTES,
+          description:
+            "For action=compact-role-run-artifacts, retain this many bytes of serialized transcript tail in replacement metadata.",
+        }),
+      ),
+      exportDir: Type.Optional(
+        Type.String({
+          description:
+            "For action=compact-role-run-artifacts apply, copy each full transcript blob to this directory before deleting the in-store blob.",
+        }),
+      ),
+      limit: Type.Optional(
+        Type.Number({
+          default: SPARK_ROLE_RUN_RETENTION_RENDER_LIMIT,
+          description:
+            "For action=compact-role-run-artifacts, maximum candidate rows to render in text output.",
+        }),
+      ),
+      keepRecent: Type.Optional(
+        Type.Number({
+          default: 10,
+          description: "For action=prune, retain this many newest terminal DAG runs globally.",
+        }),
+      ),
+      keepRecentPerThread: Type.Optional(
+        Type.Number({
+          default: 10,
+          description: "For action=prune, retain this many newest terminal DAG runs per thread.",
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = ctxCwd(ctx);
+      await ensureSparkStateForActiveWorkspace(cwd, ctx);
+      const graph = await loadSparkGraph(cwd, ctx);
+      if (!graph)
+        return {
+          content: [{ type: "text", text: "No Spark thread found." }],
+          details: { found: false },
+        };
+      const action =
+        typeof (params as { action?: unknown }).action === "string"
+          ? (params as { action: string }).action
+          : "status";
+      if (action === "status") {
+        const summary = await collectSparkStateHousekeeping(
+          cwd,
+          sparkStateSessionScopes(ctx),
+          graph,
+        );
+        const lines = ["Spark state status:"];
+        appendSparkStateHousekeepingLines(lines, summary);
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
+          details: { found: true, action, state: summary },
+        };
+      }
+      if (action === "diagnostics" || action === "doctor") {
+        const diagnostics = await collectSparkStateDiagnostics(cwd, graph);
+        const lines = ["Spark state diagnostics (read-only):"];
+        appendSparkStateDiagnosticsLines(lines, diagnostics);
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
+          details: { found: true, action, diagnostics },
+        };
+      }
+      const dryRun = (params as { dryRun?: boolean }).dryRun ?? true;
+      const olderThanDaysParam = (params as { olderThanDays?: number }).olderThanDays;
+      const olderThanDays =
+        typeof olderThanDaysParam === "number" && Number.isFinite(olderThanDaysParam)
+          ? Math.max(0, olderThanDaysParam)
+          : 30;
+      if (action === "prune") {
+        const dagRunStore = defaultSparkDagRunStore(cwd);
+        const prune = await dagRunStore.pruneRuns({
+          dryRun,
+          olderThanDays,
+          keepRecent: normalizeArtifactLimit((params as { keepRecent?: unknown }).keepRecent, 10),
+          keepRecentPerThread: normalizeArtifactLimit(
+            (params as { keepRecentPerThread?: unknown }).keepRecentPerThread,
+            10,
+          ),
+          activeRunRefs: activeSparkRoleRunProcessesForCwd(cwd).map((process) => process.runRef),
+        });
+        const lines = [`Spark DAG run prune ${dryRun ? "dry-run" : "apply"}:`];
+        appendSparkDagRunPruneLines(lines, prune);
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
+          details: { found: true, action, prune },
+        };
+      }
+      if (action === "compact-role-run-artifacts") {
+        const retention = await collectRoleRunArtifactRetentionPlan(cwd, {
+          dryRun,
+          thresholdBytes: normalizePositiveInteger(
+            (params as { thresholdBytes?: unknown }).thresholdBytes,
+            SPARK_STATE_LARGE_ARTIFACT_THRESHOLD_BYTES,
+          ),
+          tailBytes: normalizePositiveInteger(
+            (params as { tailBytes?: unknown }).tailBytes,
+            SPARK_ROLE_RUN_RETENTION_TAIL_BYTES,
+          ),
+          exportDir:
+            typeof (params as { exportDir?: unknown }).exportDir === "string"
+              ? (params as { exportDir: string }).exportDir
+              : undefined,
+        });
+        const lines = [
+          `Spark role-run artifact retention ${dryRun ? "dry-run" : "apply"}: ${dryRun ? "would replace" : "replaced"} ${retention.candidates.length} large transcript blob(s).`,
+        ];
+        appendRoleRunArtifactRetentionLines(
+          lines,
+          retention,
+          normalizeArtifactLimit(
+            (params as { limit?: unknown }).limit,
+            SPARK_ROLE_RUN_RETENTION_RENDER_LIMIT,
+          ),
+        );
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
+          details: { found: true, action, retention },
+        };
+      }
+      if (action !== "cleanup")
+        return {
+          content: [{ type: "text", text: `Unsupported spark_state action: ${action}` }],
+          details: { found: true, action, error: "unsupported_action" },
+        };
+      const includeBroken = (params as { includeBroken?: boolean }).includeBroken ?? false;
+      const plan = await collectSparkStateCleanupPlan(cwd, sparkStateSessionScopes(ctx), graph, {
+        dryRun,
+        olderThanDays,
+        includeBroken,
+      });
+      if (!dryRun) {
+        for (const candidate of plan.candidates)
+          await rm(join(cwd, candidate.path), { force: true });
+        plan.deleted = [...plan.candidates];
+      }
+      const actionLabel = dryRun ? "would delete" : "deleted";
+      const lines = [
+        `Spark state cleanup ${dryRun ? "dry-run" : "apply"}: ${actionLabel} ${plan.candidates.length} safe cache file(s).`,
+      ];
+      for (const candidate of plan.candidates)
+        lines.push(
+          `  - ${candidate.path} (${formatSparkStateCacheKind(candidate.kind)}: ${candidate.reason})`,
+        );
+      lines.push("Skipped cache files:");
+      for (const skipped of plan.skipped)
+        lines.push(`  - ${formatSparkStateCacheKind(skipped.kind)}: ${skipped.files}`);
+      lines.push("Protected stores were not considered for cleanup:");
+      for (const store of plan.protectedStores)
+        lines.push(`  - ${formatSparkProtectedStoreReason(store.reason)}: ${store.path}`);
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: { found: true, action, cleanup: plan },
       };
     },
   });
@@ -2800,48 +3207,73 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const status = normalizeSparkFinishStatus(p.status);
       const executionMode = await loadSparkExecutionMode(cwd, ctx);
       const store = defaultTaskGraphStore(cwd);
-      const updated = await store.update(
-        async (graph) => {
-          await sparkTodoStore(cwd, ctx).hydrate(graph);
-          const thread = await currentSparkThread(cwd, ctx, graph);
-          if (!thread) return { error: "no_thread" as const };
-          const sessionKey = sparkSessionKey(ctx);
-          const task = resolveSessionClaimedTask(graph, thread.ref, sessionKey, p.task);
-          if (!task) return { error: "no_matching_claimed_task" as const };
-          const finished = graph.setTaskStatus(task.ref, status);
-          const completionReadiness =
-            status === "done" ? taskCompletionReadiness(finished) : undefined;
-          const nextReady = status === "done" ? graph.readyTasks(thread.ref)[0] : undefined;
-          await sparkTodoStore(cwd, ctx).save(graph);
+      let updated: Awaited<ReturnType<typeof store.update>>;
+      try {
+        updated = await store.update(
+          async (graph) => {
+            await sparkTodoStore(cwd, ctx).hydrate(graph);
+            const thread = await currentSparkThread(cwd, ctx, graph);
+            if (!thread) return { error: "no_thread" as const };
+            const sessionKey = sparkSessionKey(ctx);
+            const task = resolveSessionClaimedTask(graph, thread.ref, sessionKey, p.task);
+            if (!task) return { error: "no_matching_claimed_task" as const };
+            const finished = graph.setTaskStatus(task.ref, status);
+            const completionReadiness =
+              status === "done" ? taskCompletionReadiness(finished) : undefined;
+            const nextReady = status === "done" ? graph.readyTasks(thread.ref)[0] : undefined;
+            await sparkTodoStore(cwd, ctx).save(graph);
+            return {
+              task: finished,
+              completionReadiness,
+              threadRef: thread.ref,
+              nextReady,
+            };
+          },
+          { createIfMissing: false },
+        );
+      } catch (error) {
+        if (error instanceof DependencyError) {
           return {
-            task: finished,
-            completionReadiness,
-            threadRef: thread.ref,
-            nextReady,
+            content: [{ type: "text", text: `Cannot finish Spark task: ${error.message}` }],
+            details: { found: true, error: "task_dependency_error", message: error.message },
           };
-        },
-        { createIfMissing: false },
-      );
-      if (!updated.graph || updated.result.error === "no_thread")
+        }
+        throw error;
+      }
+      const finishResult = updated.result as
+        | { error: "no_thread" | "no_matching_claimed_task" }
+        | {
+            task: Task;
+            completionReadiness?: TaskCompletionReadiness;
+            threadRef: ThreadRef;
+            nextReady?: Task;
+          };
+      if (!updated.graph || ("error" in finishResult && finishResult.error === "no_thread"))
         return {
           content: [{ type: "text", text: "No Spark thread found." }],
           details: { found: false },
         };
-      if (updated.result.error === "no_matching_claimed_task")
+      if ("error" in finishResult && finishResult.error === "no_matching_claimed_task")
         return {
           content: [{ type: "text", text: "No matching claimed task for this session." }],
           details: { found: true, error: "no_matching_claimed_task" },
         };
+      const finishedResult = finishResult as {
+        task: Task;
+        completionReadiness?: TaskCompletionReadiness;
+        threadRef: ThreadRef;
+        nextReady?: Task;
+      };
       await refreshSparkWidget(cwd, ctx);
       const trimmedSummary = p.summary?.trim();
       const learningCandidate =
         status === "done" && trimmedSummary
-          ? await recordTaskLearningCandidate(cwd, updated.result.task, trimmedSummary)
+          ? await recordTaskLearningCandidate(cwd, finishedResult.task, trimmedSummary)
           : undefined;
       const summarySuffix = trimmedSummary ? ` — ${truncateInline(trimmedSummary, 160)}` : "";
       const completionIssueSuffix =
-        updated.result.completionReadiness && !updated.result.completionReadiness.ready
-          ? `\nCompletion evidence warning: ${updated.result.completionReadiness.issues
+        finishedResult.completionReadiness && !finishedResult.completionReadiness.ready
+          ? `\nCompletion evidence warning: ${finishedResult.completionReadiness.issues
               .map((issue) => issue.message)
               .join("; ")}`
           : "";
@@ -2849,23 +3281,23 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         ? `\nLearning candidate: ${learningCandidate.ref}`
         : "";
       const executionSuffix =
-        executionMode?.threadRef === updated.result.threadRef && status === "done"
-          ? updated.result.nextReady
-            ? `\nExecution mode stopped after one task. Next ready task: @${updated.result.nextReady.name}: ${updated.result.nextReady.title}. Run /execute to take one more step, or /run to continue automatically.`
+        executionMode?.threadRef === finishedResult.threadRef && status === "done"
+          ? finishedResult.nextReady
+            ? `\nExecution mode stopped after one task. Next ready task: @${finishedResult.nextReady.name}: ${finishedResult.nextReady.title}. Run /execute to take one more step, or /run to continue automatically.`
             : "\nExecution mode stopped after one task. No ready task remains; inspect blockers or finish the thread."
           : "";
       return {
         content: [
           {
             type: "text",
-            text: `Finished Spark task: [${updated.result.task.status}] @${updated.result.task.name}: ${updated.result.task.title}${summarySuffix}${completionIssueSuffix}${candidateSuffix}${executionSuffix}`,
+            text: `Finished Spark task: [${finishedResult.task.status}] @${finishedResult.task.name}: ${finishedResult.task.title}${summarySuffix}${completionIssueSuffix}${candidateSuffix}${executionSuffix}`,
           },
         ],
         details: {
-          task: compactTaskDetail(updated.result.task),
-          completionReadiness: updated.result.completionReadiness,
-          nextReadyTask: updated.result.nextReady
-            ? compactTaskDetail(updated.result.nextReady)
+          task: compactTaskDetail(finishedResult.task),
+          completionReadiness: finishedResult.completionReadiness,
+          nextReadyTask: finishedResult.nextReady
+            ? compactTaskDetail(finishedResult.nextReady)
             : undefined,
           learningCandidate: learningCandidate
             ? compactLearningDetail(learningCandidate)
@@ -3289,25 +3721,21 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     name: "spark_plan_tasks",
     label: "Spark Plan Tasks",
     description: [
-      "Create or update multiple durable Spark tasks in the active thread from a concrete task plan. Use this dedicated spark-tasks-backed planning tool when asked to梳理/organize work before assigning roles; it does not claim tasks for the current session. Set dryRun=true to preview normalization, readiness checks, and dependency changes without writing .spark/thread.json.",
+      "Create or update multiple durable Spark tasks in the active thread from a concrete task plan. Tasks must be concrete executable/review/validation/research work, not standalone design/planning placeholders; design discussion belongs in conversation with the user and in each task.plan after decisions are clear. Use this dedicated spark-tasks-backed planning tool whenever the request requires durable task planning before assigning roles; it does not claim tasks for the current session. The tool writes directly after readiness checks pass, so clarify all planning-affecting questions before calling it and refine by calling it again with concrete updates.",
       "",
       SPARK_PLAN_TASKS_READINESS_RULES,
     ].join("\n"),
     parameters: Type.Object({
-      dryRun: Type.Optional(
-        Type.Boolean({
-          default: false,
-          description:
-            "Preview normalization, readiness checks, and dependency changes without saving .spark/thread.json or roadmap refs. Defaults to false.",
-        }),
-      ),
       tasks: Type.Array(
         Type.Object({
           name: Type.Optional(
             Type.String({ description: "Stable simple @name handle for the task." }),
           ),
           title: Type.String({ description: "Human-readable task title shown as @name: title." }),
-          description: Type.String({ description: "Concrete task objective/instruction." }),
+          description: Type.String({
+            description:
+              "Concrete task objective/instruction; do not use this for abstract design/planning placeholders.",
+          }),
           kind: Type.Optional(
             Type.String({
               description:
@@ -3359,7 +3787,6 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const registry = new RoleRegistry();
       await defaultProjectRoleStore(cwd).hydrate(registry);
       const p = params as {
-        dryRun?: boolean;
         tasks?: Array<{
           name?: string;
           title: string;
@@ -3394,8 +3821,32 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
           roadmapContext?.item,
         ),
       );
-      const dryRun = p.dryRun === true;
-      const result = graph.planTasks(thread.ref, tasks);
+      const concreteIssues = collectNonConcreteTaskIssues(tasks);
+      if (concreteIssues.length > 0) {
+        const lines = [
+          "task_not_concrete: Spark tasks must be concrete executable/review/validation work, not standalone design/planning placeholders.",
+          ...concreteIssues.map(
+            (issue) => `- @${issue.name ?? "unnamed"}: ${issue.title} — ${issue.message}`,
+          ),
+          "Discuss design/architecture decisions with the user first, then embed the chosen design in each concrete task.plan.",
+        ];
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
+          details: { found: true, error: "task_not_concrete", issues: concreteIssues },
+        };
+      }
+      let result: TaskPlanResult;
+      try {
+        result = graph.planTasks(thread.ref, tasks);
+      } catch (error) {
+        if (error instanceof DependencyError) {
+          return {
+            content: [{ type: "text", text: `Task plan dependency error: ${error.message}` }],
+            details: { found: true, error: "task_dependency_error", message: error.message },
+          };
+        }
+        throw error;
+      }
       const changedForDecision = [...result.created, ...result.updated];
       const planDecisions = changedForDecision.map((task) =>
         decideTaskPlanBeforeCreate({ cwd, task, ui: sparkAskUi(ctx) }),
@@ -3404,16 +3855,16 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       if (rejectedIndex >= 0) {
         const task = changedForDecision[rejectedIndex];
         const decision = planDecisions[rejectedIndex];
+        const rejectionText = `Task plan not ready: @${task.name}: ${task.title}; revise the task plan with context-specific success criteria and evidence requirements before creating or updating it.`;
         return {
           content: [
             {
               type: "text",
-              text: `Task plan not ready: @${task.name}: ${task.title}; revise the task plan with context-specific success criteria and evidence requirements before creating or updating it.`,
+              text: rejectionText,
             },
           ],
           details: {
             found: true,
-            dryRun,
             error: "task_plan_not_ready",
             result: compactTaskPlanResult(result),
             task: compactTaskDetail(task),
@@ -3423,14 +3874,15 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         };
       }
       const changedRefs = [...result.created, ...result.updated].map((task) => task.ref);
-      const updatedRoadmapItem = dryRun
-        ? undefined
-        : await attachRoadmapPlanningRefs(cwd, roadmapContext?.item.ref, thread.ref, changedRefs);
-      if (!dryRun) {
-        await store.save(graph);
-        await sparkTodoStore(cwd, ctx).save(graph);
-        await refreshSparkWidget(cwd, ctx);
-      }
+      const updatedRoadmapItem = await attachRoadmapPlanningRefs(
+        cwd,
+        roadmapContext?.item.ref,
+        thread.ref,
+        changedRefs,
+      );
+      await store.save(graph);
+      await sparkTodoStore(cwd, ctx).save(graph);
+      await refreshSparkWidget(cwd, ctx);
       const changed = [
         ...result.created.map((task) => ({ action: "created" as const, task })),
         ...result.updated.map((task) => ({ action: "updated" as const, task })),
@@ -3438,7 +3890,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const visibleChanged = changed.slice(0, DEFAULT_SPARK_PLAN_TASK_OUTPUT_LIMIT);
       const hiddenChanged = changed.length - visibleChanged.length;
       const lines = [
-        `${dryRun ? "Dry-run planned tasks" : "Planned tasks"}: created=${result.created.length} updated=${result.updated.length} dependencies=${result.dependencies.length}`,
+        `Planned tasks: created=${result.created.length} updated=${result.updated.length} dependencies=${result.dependencies.length}`,
         ...visibleChanged.map(
           ({ action, task }) => `- ${action} [${task.status}] @${task.name}: ${task.title}`,
         ),
@@ -3448,7 +3900,6 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       return {
         content: [{ type: "text", text: lines.join("\n") }],
         details: {
-          dryRun,
           result: compactTaskPlanResult(result),
           planDecisions,
           roadmapItem: updatedRoadmapItem as unknown as Record<string, unknown> | undefined,
@@ -3473,7 +3924,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       timeoutMs: Type.Optional(
         Type.Number({
           default: DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
-          description: "Overall DAG-level timeout in milliseconds. This is not a per-task timeout.",
+          description:
+            "Foreground wait budget in milliseconds for this tool call; active background role-runs continue after it expires.",
         }),
       ),
     }),
@@ -3523,17 +3975,17 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
         }
         ensureSparkDagManager(cwd, ctx);
         ctx.ui?.notify?.(
-          `Spark DAG manager started for “${thread.title}”. Progress appears in the Spark widget; inspect with spark_dag_manager status.`,
+          `Spark orchestrator started for “${thread.title}”. Progress appears in the Spark widget; inspect with spark_background_runs status.`,
           "info",
         );
         return {
           content: [
             {
               type: "text",
-              text: `Spark DAG manager started for current thread “${thread.title}”. Progress appears in the Spark widget; inspect with spark_dag_manager status, or stop active background role-runs with spark_dag_manager kill_active.`,
+              text: `Spark orchestrator started for current thread “${thread.title}”. Progress appears in the Spark widget; inspect with spark_background_runs status, or stop explicit stuck child role-runs with spark_background_runs kill.`,
             },
           ],
-          details: { manager: "started", dryRun: false, threadRef: thread.ref },
+          details: { orchestrator: "started", dryRun: false, threadRef: thread.ref },
         };
       }
 
@@ -3555,7 +4007,9 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
             : DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
       });
       const runLabels = result.runs.map((run) => run.runName ?? run.roleRef ?? run.ref);
-      const timeoutSuffix = result.timedOut ? " Timed out before the DAG finished." : "";
+      const timeoutSuffix = result.foregroundTimedOut
+        ? " Foreground wait expired; active role-runs remain detached in the background."
+        : "";
       return {
         content: [
           {
@@ -3571,19 +4025,308 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   });
 
   registerSparkTool({
-    name: "spark_dag_manager",
-    label: "Spark DAG Manager",
+    name: "spark_background_runs",
+    label: "Spark Background Runs",
     description:
-      "Inspect and control the persisted Spark DAG manager: status, reconcile stale state, clear inactive run records, or kill active background role runs.",
+      "Inspect and control user-facing Spark background work: list/status/inspect/kill/reconcile/ack active child role-runs, compact summaries, transcript refs/tail metadata, task claims, pids, run refs, and next actions.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({
           default: "status",
-          description: "status | reconcile | clear_inactive | kill_active",
+          description: "status | list | inspect | kill | reconcile | ack",
         }),
       ),
       runRef: Type.Optional(
-        Type.String({ description: "Optional child run ref filter for kill_active." }),
+        Type.String({ description: "DAG run ref or child role-run ref to inspect, kill, or ack." }),
+      ),
+      taskRef: Type.Optional(
+        Type.String({
+          description: "Task ref, @name, bare task name, or exact title to inspect or kill.",
+        }),
+      ),
+      threadRef: Type.Optional(
+        Type.String({
+          description: "Optional thread filter; defaults to the current thread for status/list.",
+        }),
+      ),
+      includeHistory: Type.Optional(
+        Type.Boolean({
+          description: "Include acknowledged and terminal recent runs in list/status output.",
+        }),
+      ),
+      includeDetails: Type.Optional(
+        Type.Boolean({ description: "Expand task/run records in text output." }),
+      ),
+      signal: Type.Optional(Type.String({ description: "Kill only; default SIGTERM." })),
+      forceAfterMs: Type.Optional(
+        Type.Number({ description: "Kill only; delay before force-kill scheduling." }),
+      ),
+      all: Type.Optional(
+        Type.Boolean({
+          description:
+            "Kill only; required to kill all active children when no runRef/taskRef is provided.",
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = ctxCwd(ctx);
+      const graph = await loadSparkGraph(cwd, ctx);
+      if (!graph) {
+        return {
+          content: [
+            { type: "text", text: "Spark background runs unavailable: no Spark task graph found." },
+          ],
+          details: { background: { error: "missing_task_graph" } },
+        };
+      }
+      const dagRunStore = defaultSparkDagRunStore(cwd);
+      const action = normalizeSparkBackgroundAction(params.action);
+      const currentThread = await currentSparkThread(cwd, ctx, graph);
+      const currentThreadRef = currentThread?.ref;
+      const requestedThreadRef = normalizeOptionalThreadRef(params.threadRef);
+      const scopeThreadRef = requestedThreadRef ?? currentThreadRef;
+      const runRef = normalizeOptionalRunRef(params.runRef);
+      const taskSelector = normalizeOptionalTaskSelector(params.taskRef);
+      const taskRef = resolveBackgroundTaskRef(graph, taskSelector, scopeThreadRef);
+      const runMode = await loadSparkRunMode(cwd, ctx);
+      if (taskSelector && !taskRef) {
+        const background = await buildSparkBackgroundDetails({
+          action,
+          cwd,
+          graph,
+          dagRunStore,
+          currentThreadRef,
+          threadRef: requestedThreadRef,
+          runMode,
+          includeHistory: Boolean(params.includeHistory),
+          targetRunRef: runRef,
+        });
+        return {
+          content: [{ type: "text", text: `Spark background task not found: ${taskSelector}` }],
+          details: { background: { ...background, error: "task_not_found", taskSelector } },
+        };
+      }
+      if (action === "status" || action === "list") {
+        await reconcileSparkDagRunsWithActiveProcesses(dagRunStore, graph, cwd);
+      }
+      if (action === "reconcile") {
+        const before = await dagRunStore.load();
+        await reconcileSparkDagRunsWithActiveProcesses(dagRunStore, graph, cwd);
+        const after = await dagRunStore.load();
+        const changed = after.runs.filter((run) => {
+          const previous = before.runs.find((candidate) => candidate.ref === run.ref);
+          return (
+            previous && (previous.status !== run.status || previous.completed !== run.completed)
+          );
+        });
+        const background = await buildSparkBackgroundDetails({
+          action,
+          cwd,
+          graph,
+          dagRunStore,
+          currentThreadRef,
+          threadRef: requestedThreadRef,
+          runMode,
+          includeHistory: true,
+          targetRunRef: runRef,
+          targetTaskRef: taskRef,
+        });
+        const text = `${renderSparkBackgroundRunsText(background, { includeDetails: params.includeDetails === true })}\nReconciled background records changed: ${changed.length}`;
+        return {
+          content: [{ type: "text", text }],
+          details: { background, changedDagRuns: changed },
+        };
+      }
+      if (action === "kill") {
+        if (!runRef && !taskRef && params.all !== true) {
+          const background = await buildSparkBackgroundDetails({
+            action,
+            cwd,
+            graph,
+            dagRunStore,
+            currentThreadRef,
+            threadRef: requestedThreadRef,
+            runMode,
+            includeHistory: Boolean(params.includeHistory),
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text: "kill_requires_target: Provide runRef, taskRef, or all:true to kill background child role-runs.",
+              },
+            ],
+            details: { background: { ...background, error: "kill_requires_target" } },
+          };
+        }
+        const before = await buildSparkBackgroundDetails({
+          action,
+          cwd,
+          graph,
+          dagRunStore,
+          currentThreadRef,
+          threadRef: requestedThreadRef,
+          runMode,
+          includeHistory: true,
+          targetRunRef: runRef,
+          targetTaskRef: taskRef,
+        });
+        let targetRunRefs: RunRef[] = [];
+        const dagTarget = runRef ? before.dagRuns.find((run) => run.runRef === runRef) : undefined;
+        if (params.all === true && !runRef && !taskRef) {
+          targetRunRefs = before.childRuns
+            .filter((child) => child.activeProcess)
+            .map((child) => child.runRef);
+        } else if (dagTarget) {
+          targetRunRefs = before.childRuns
+            .filter((child) => child.activeProcess && child.dagRunRef === dagTarget.runRef)
+            .map((child) => child.runRef);
+        } else {
+          targetRunRefs = before.childRuns
+            .filter(
+              (child) =>
+                child.activeProcess &&
+                (!runRef || child.runRef === runRef) &&
+                (!taskRef || child.taskRef === taskRef),
+            )
+            .map((child) => child.runRef);
+          if (runRef && targetRunRefs.length === 0) targetRunRefs = [runRef];
+        }
+        const killed = await killActiveSparkRoleRunProcesses({
+          runRefs: targetRunRefs,
+          signal: normalizeKillSignal(params.signal),
+          forceAfterMs: normalizeForceAfterMs(params.forceAfterMs),
+          reason: "spark_background_runs kill",
+        });
+        await reconcileSparkDagRunsWithActiveProcesses(dagRunStore, graph, cwd);
+        const background = await buildSparkBackgroundDetails({
+          action,
+          cwd,
+          graph,
+          dagRunStore,
+          currentThreadRef,
+          threadRef: requestedThreadRef,
+          runMode,
+          includeHistory: true,
+          targetRunRef: runRef,
+          targetTaskRef: taskRef,
+          killed,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: renderSparkBackgroundRunsText(background, {
+                includeDetails: params.includeDetails === true,
+              }),
+            },
+          ],
+          details: { background },
+        };
+      }
+      if (action === "ack") {
+        await reconcileSparkDagRunsWithActiveProcesses(dagRunStore, graph, cwd);
+        const snapshot = await dagRunStore.load();
+        const acknowledged = await acknowledgeBackgroundDagRuns({
+          dagRunStore,
+          snapshot,
+          sessionId: sparkSessionOwnerKey(ctx),
+          threadRef: scopeThreadRef,
+          runRef,
+        });
+        const background = await buildSparkBackgroundDetails({
+          action,
+          cwd,
+          graph,
+          dagRunStore,
+          currentThreadRef,
+          threadRef: requestedThreadRef,
+          runMode,
+          includeHistory: true,
+          targetRunRef: runRef,
+          targetTaskRef: taskRef,
+          acknowledged,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: renderSparkBackgroundRunsText(background, {
+                includeDetails: params.includeDetails === true,
+              }),
+            },
+          ],
+          details: { background },
+        };
+      }
+      const background = await buildSparkBackgroundDetails({
+        action,
+        cwd,
+        graph,
+        dagRunStore,
+        currentThreadRef,
+        threadRef: requestedThreadRef,
+        runMode,
+        includeHistory: Boolean(params.includeHistory) || action === "inspect",
+        targetRunRef: runRef,
+        targetTaskRef: taskRef,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: renderSparkBackgroundRunsText(background, {
+              includeDetails: params.includeDetails === true || action === "inspect",
+            }),
+          },
+        ],
+        details: { background },
+      };
+    },
+  });
+
+  registerSparkTool({
+    name: "spark_dag_manager",
+    label: "Spark Orchestrator Debug",
+    description:
+      "Low-level persisted Spark orchestrator compatibility/debug surface. Prefer spark_background_runs status/inspect/kill and spark_state prune for normal user-facing background work; kill_active targets child role-run processes, and timed_out is a legacy problem record.",
+    parameters: Type.Object({
+      action: Type.Optional(
+        Type.String({
+          default: "status",
+          description:
+            "status | reconcile | ack | prune | clear_inactive | kill_active. Prefer spark_background_runs for user-facing background inspection and spark_state prune for retention.",
+        }),
+      ),
+      runRef: Type.Optional(
+        Type.String({
+          description: "Optional DAG run ref for ack, or child run ref filter for kill_active.",
+        }),
+      ),
+      dryRun: Type.Optional(
+        Type.Boolean({
+          default: true,
+          description: "For action=prune, preview deletions without writing by default.",
+        }),
+      ),
+      olderThanDays: Type.Optional(
+        Type.Number({
+          default: 30,
+          description:
+            "For action=prune, only old terminal DAG runs older than this age are candidates.",
+        }),
+      ),
+      keepRecent: Type.Optional(
+        Type.Number({
+          default: 10,
+          description: "For action=prune, retain this many newest terminal DAG runs globally.",
+        }),
+      ),
+      keepRecentPerThread: Type.Optional(
+        Type.Number({
+          default: 10,
+          description: "For action=prune, retain this many newest terminal DAG runs per thread.",
+        }),
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -3591,27 +4334,63 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       const graph = await loadSparkGraph(cwd, ctx);
       const dagRunStore = defaultSparkDagRunStore(cwd);
       const action = normalizeSparkDagManagerAction(params.action);
+      const runRef = typeof params.runRef === "string" ? (params.runRef as RunRef) : undefined;
       let killed: Awaited<ReturnType<typeof killActiveSparkRoleRunProcesses>> = [];
+      let acknowledged: Awaited<ReturnType<typeof dagRunStore.acknowledgeFailures>> | undefined;
       if (action === "kill_active") {
-        killed = await killActiveSparkRoleRunProcesses({
-          runRef: typeof params.runRef === "string" ? (params.runRef as never) : undefined,
-        });
+        killed = await killActiveSparkRoleRunProcesses({ runRef });
       }
-      if (action === "reconcile" || action === "status" || action === "kill_active") {
+      if (
+        action === "reconcile" ||
+        action === "status" ||
+        action === "kill_active" ||
+        action === "ack"
+      ) {
         await dagRunStore.reconcile({
           graph: graph ?? undefined,
           activeRunRefs: listActiveSparkRoleRunProcesses().map((process) => process.runRef),
         });
       }
+      if (action === "ack") {
+        acknowledged = await dagRunStore.acknowledgeFailures({
+          runRef,
+          sessionId: sparkSessionOwnerKey(ctx),
+        });
+      }
+      let prune: Awaited<ReturnType<typeof dagRunStore.pruneRuns>> | undefined;
+      if (action === "prune") {
+        prune = await dagRunStore.pruneRuns({
+          dryRun: (params as { dryRun?: boolean }).dryRun ?? true,
+          olderThanDays: normalizeArtifactLimit(
+            (params as { olderThanDays?: unknown }).olderThanDays,
+            30,
+          ),
+          keepRecent: normalizeArtifactLimit((params as { keepRecent?: unknown }).keepRecent, 10),
+          keepRecentPerThread: normalizeArtifactLimit(
+            (params as { keepRecentPerThread?: unknown }).keepRecentPerThread,
+            10,
+          ),
+          activeRunRefs: activeSparkRoleRunProcessesForCwd(cwd).map((process) => process.runRef),
+        });
+      }
       if (action === "clear_inactive") await dagRunStore.clearInactiveRuns();
       const status = await dagRunStore.status({ limit: 10 });
-      const lines = [`Spark DAG manager action=${action}`];
+      const lines = [
+        `Spark orchestrator debug action=${action}`,
+        "Low-level compatibility tool; prefer spark_background_runs status/inspect/kill for user-facing background work.",
+      ];
       appendSparkDagStatusLines(lines, status);
+      if (action === "ack" && acknowledged) {
+        lines.push(
+          `Acknowledged DAG problem runs: ${acknowledged.acknowledged.length} newly, ${acknowledged.alreadyAcknowledged.length} already, ${acknowledged.skipped.length} skipped, ${acknowledged.missing.length} missing`,
+        );
+      }
+      if (action === "prune" && prune) appendSparkDagRunPruneLines(lines, prune);
       if (action === "kill_active")
         lines.push(`Killed active role-run processes: ${killed.length}`);
       return {
         content: [{ type: "text", text: lines.join("\n") }],
-        details: { action, dag: status, killed },
+        details: { action, dag: status, killed, acknowledged, prune },
       };
     },
   });
@@ -4426,559 +5205,6 @@ function truncateSparkContextBlock(value: string): string | undefined {
   return truncated ? `${text}\n… (read SPARK.md for full intent)` : text;
 }
 
-async function loadSparkGraph(cwd: string, ctx?: unknown): Promise<TaskGraph | null> {
-  const graph = await defaultTaskGraphStore(cwd).load();
-  if (!graph) return null;
-  await sparkTodoStore(cwd, ctx).hydrate(graph);
-  return graph;
-}
-
-function sparkTodoStore(cwd: string, ctx: unknown): ReturnType<typeof defaultTaskTodoStore> {
-  return defaultTaskTodoStore(cwd, sparkSessionKey(ctx));
-}
-
-function currentThreadStorePath(cwd: string, ctx: unknown): string {
-  return join(
-    cwd,
-    ".spark",
-    "current-thread",
-    `${sanitizeStoreScope(sparkSessionOwnerKey(ctx))}.json`,
-  );
-}
-
-async function loadCurrentThreadState(
-  cwd: string,
-  ctx: unknown,
-): Promise<
-  | { threadRef?: ThreadRef; executionMode?: SparkExecutionModeState; runMode?: SparkRunModeState }
-  | undefined
-> {
-  try {
-    const raw = JSON.parse(await readFile(currentThreadStorePath(cwd, ctx), "utf8")) as {
-      threadRef?: string;
-      executionMode?: Partial<SparkExecutionModeState>;
-      runMode?: Partial<SparkRunModeState>;
-    };
-    return {
-      threadRef: raw.threadRef as ThreadRef | undefined,
-      executionMode:
-        raw.executionMode?.threadRef && raw.executionMode.enteredAt
-          ? {
-              version: 1,
-              threadRef: raw.executionMode.threadRef as ThreadRef,
-              focus: raw.executionMode.focus?.trim() || undefined,
-              enteredAt: raw.executionMode.enteredAt,
-            }
-          : undefined,
-      runMode: normalizeSparkRunModeState(raw.runMode),
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-async function loadCurrentThreadRef(cwd: string, ctx: unknown): Promise<ThreadRef | undefined> {
-  return (await loadCurrentThreadState(cwd, ctx))?.threadRef;
-}
-
-async function saveCurrentThreadRef(
-  cwd: string,
-  ctx: unknown,
-  threadRef: ThreadRef,
-): Promise<void> {
-  const filePath = currentThreadStorePath(cwd, ctx);
-  await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(filePath, `${JSON.stringify({ version: 1, threadRef }, null, 2)}\n`, "utf8");
-}
-
-async function saveSparkExecutionMode(
-  cwd: string,
-  ctx: unknown,
-  threadRef: ThreadRef,
-  focus: string | undefined,
-): Promise<void> {
-  const filePath = currentThreadStorePath(cwd, ctx);
-  await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(
-    filePath,
-    `${JSON.stringify(
-      {
-        version: 1,
-        threadRef,
-        executionMode: {
-          version: 1,
-          threadRef,
-          focus: focus?.trim() || undefined,
-          enteredAt: nowIso(),
-        } satisfies SparkExecutionModeState,
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
-}
-
-async function loadSparkExecutionMode(
-  cwd: string,
-  ctx: unknown,
-): Promise<SparkExecutionModeState | undefined> {
-  return (await loadCurrentThreadState(cwd, ctx))?.executionMode;
-}
-
-async function saveSparkRunMode(
-  cwd: string,
-  ctx: unknown,
-  threadRef: ThreadRef,
-  focus: string | undefined,
-  strategy: SparkRunStrategy,
-): Promise<SparkRunModeState> {
-  const now = nowIso();
-  const runMode: SparkRunModeState = {
-    version: 1,
-    runRef: newRef("run") as RunRef,
-    threadRef,
-    focus: focus?.trim() || undefined,
-    status: "running",
-    policy: {
-      maxConcurrency: sparkRunStrategyMaxConcurrency(strategy),
-      timeoutMs: DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
-      stopOnAsk: true,
-      stopOnValidationFailure: true,
-    },
-    enteredAt: now,
-    updatedAt: now,
-  };
-  const filePath = currentThreadStorePath(cwd, ctx);
-  await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(
-    filePath,
-    `${JSON.stringify({ version: 1, threadRef, runMode }, null, 2)}\n`,
-    "utf8",
-  );
-  return runMode;
-}
-
-function sparkRunStrategyMaxConcurrency(strategy: SparkRunStrategy): number {
-  return strategy === "sequential" ? 1 : DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY;
-}
-
-function sparkRunStrategyForMaxConcurrency(maxConcurrency: number): SparkRunStrategy {
-  return maxConcurrency === 1 ? "sequential" : "parallel";
-}
-
-function normalizeSparkRunModeState(
-  raw: Partial<SparkRunModeState> | undefined,
-): SparkRunModeState | undefined {
-  if (!raw?.runRef || !raw.threadRef || !raw.enteredAt) return undefined;
-  const status: SparkRunModeStatus =
-    raw.status === "paused" ||
-    raw.status === "blocked" ||
-    raw.status === "done" ||
-    raw.status === "failed" ||
-    raw.status === "cancelled"
-      ? raw.status
-      : "running";
-  return {
-    version: 1,
-    runRef: raw.runRef as RunRef,
-    threadRef: raw.threadRef as ThreadRef,
-    focus: raw.focus?.trim() || undefined,
-    status,
-    policy: {
-      maxConcurrency:
-        typeof raw.policy?.maxConcurrency === "number"
-          ? raw.policy.maxConcurrency
-          : DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
-      timeoutMs:
-        typeof raw.policy?.timeoutMs === "number"
-          ? raw.policy.timeoutMs
-          : DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
-      stopOnAsk: true,
-      stopOnValidationFailure: true,
-    },
-    enteredAt: raw.enteredAt,
-    updatedAt: raw.updatedAt ?? raw.enteredAt,
-  };
-}
-
-async function loadSparkRunMode(cwd: string, ctx: unknown): Promise<SparkRunModeState | undefined> {
-  return (await loadCurrentThreadState(cwd, ctx))?.runMode;
-}
-
-async function updateSparkRunModeStatus(
-  cwd: string,
-  ctx: unknown,
-  status: SparkRunModeStatus,
-): Promise<SparkRunModeState | undefined> {
-  const state = await loadCurrentThreadState(cwd, ctx);
-  if (!state?.threadRef || !state.runMode) return undefined;
-  const runMode: SparkRunModeState = { ...state.runMode, status, updatedAt: nowIso() };
-  const filePath = currentThreadStorePath(cwd, ctx);
-  await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(
-    filePath,
-    `${JSON.stringify({ version: 1, threadRef: state.threadRef, runMode }, null, 2)}\n`,
-    "utf8",
-  );
-  return runMode;
-}
-
-async function clearSparkExecutionMode(cwd: string, ctx: unknown): Promise<void> {
-  const state = await loadCurrentThreadState(cwd, ctx);
-  if (!state?.threadRef) {
-    await rm(currentThreadStorePath(cwd, ctx), { force: true });
-    return;
-  }
-  await saveCurrentThreadRef(cwd, ctx, state.threadRef);
-}
-
-async function clearCurrentThreadRef(cwd: string, ctx: unknown): Promise<void> {
-  await rm(currentThreadStorePath(cwd, ctx), { force: true });
-}
-
-async function currentSparkThread(
-  cwd: string,
-  ctx: unknown,
-  graph: TaskGraph,
-): Promise<ReturnType<TaskGraph["threads"]>[number] | undefined> {
-  const threads = graph.threads();
-  if (threads.length === 0) return undefined;
-  const stored = await loadCurrentThreadRef(cwd, ctx);
-  if (!stored) return undefined;
-  const selected = threads.find((thread) => thread.ref === stored);
-  if (selected && selected.status !== "done") return selected;
-  await clearCurrentThreadRef(cwd, ctx);
-  return undefined;
-}
-
-async function collectSparkStateHousekeeping(
-  cwd: string,
-  ctx: unknown,
-  graph: TaskGraph,
-): Promise<SparkStateHousekeepingSummary> {
-  const root = join(cwd, ".spark");
-  const currentSessionScope = sanitizeStoreScope(sparkSessionKey(ctx));
-  const currentOwnerScope = sanitizeStoreScope(sparkSessionOwnerKey(ctx));
-  const threadByRef = new Map(graph.threads().map((thread) => [thread.ref, thread]));
-  const taskByRef = new Map(graph.tasks().map((task) => [task.ref, task]));
-  const staleCutoffMs = Date.now() - 30 * 24 * 60 * 60 * 1_000;
-  return {
-    root: relative(cwd, root) || ".spark",
-    generatedAt: nowIso(),
-    caches: [
-      await summarizeCurrentThreadCache(root, currentOwnerScope, threadByRef, staleCutoffMs),
-      await summarizeTaskTodoCache(root, currentSessionScope, taskByRef, staleCutoffMs),
-      await summarizeSessionTodoCache(root, currentSessionScope, staleCutoffMs),
-      await summarizeTodoDisplayNumberCache(root, currentSessionScope, staleCutoffMs),
-      await summarizeLegacyTaskTodoCache(root),
-    ],
-    protectedStores: [
-      await summarizeProtectedSparkStore(root, "thread.json", "task-graph", false),
-      await summarizeProtectedSparkStore(root, "artifacts", "artifact-history", true),
-      await summarizeProtectedSparkStore(root, "notes", "notes", true),
-      await summarizeProtectedSparkStore(root, "dag-runs.json", "dag-runs", false),
-      await summarizeProtectedSparkStore(root, "review-gate.json", "review-gate", false),
-    ],
-  };
-}
-
-async function summarizeCurrentThreadCache(
-  root: string,
-  currentOwnerScope: string,
-  threadByRef: Map<ThreadRef, ReturnType<TaskGraph["threads"]>[number]>,
-  staleCutoffMs: number,
-): Promise<SparkStateCacheSummary> {
-  const files = await listSparkStateFiles(join(root, "current-thread"));
-  let staleFiles = 0;
-  let brokenFiles = 0;
-  let safeToDeleteFiles = 0;
-  let activeFiles = 0;
-  for (const file of files) {
-    const stale = file.mtimeMs < staleCutoffMs && fileScope(file) !== currentOwnerScope;
-    if (stale) staleFiles += 1;
-    const raw = await readJsonObject(file.path);
-    if (!raw) {
-      brokenFiles += 1;
-      safeToDeleteFiles += 1;
-      continue;
-    }
-    const threadRef = typeof raw.threadRef === "string" ? (raw.threadRef as ThreadRef) : undefined;
-    const thread = threadRef ? threadByRef.get(threadRef) : undefined;
-    const safe = !thread || thread.status === "done" || stale;
-    if (safe) safeToDeleteFiles += 1;
-    else activeFiles += 1;
-  }
-  return cacheSummary(root, "current-thread", "current-thread", files, {
-    staleFiles,
-    brokenFiles,
-    safeToDeleteFiles,
-    activeFiles,
-  });
-}
-
-async function summarizeTaskTodoCache(
-  root: string,
-  currentSessionScope: string,
-  taskByRef: Map<TaskRef, Task>,
-  staleCutoffMs: number,
-): Promise<SparkStateCacheSummary> {
-  const files = await listSparkStateFiles(join(root, "todos"));
-  let staleFiles = 0;
-  let brokenFiles = 0;
-  let safeToDeleteFiles = 0;
-  let activeFiles = 0;
-  for (const file of files) {
-    const stale = file.mtimeMs < staleCutoffMs && fileScope(file) !== currentSessionScope;
-    if (stale) staleFiles += 1;
-    const raw = await readJsonObject(file.path);
-    if (!raw) {
-      brokenFiles += 1;
-      continue;
-    }
-    const todos = Array.isArray(raw.todos) ? raw.todos : [];
-    const hasActiveTodo = todos.some((todo) => isActiveTodoStatus(todoStatus(todo)));
-    const allTerminalTodos = todos.every((todo) => isTerminalTodoStatus(todoStatus(todo)));
-    const allTasksTerminalOrMissing = todos.every((todo) => {
-      const taskRef =
-        todo &&
-        typeof todo === "object" &&
-        typeof (todo as { taskRef?: unknown }).taskRef === "string"
-          ? ((todo as { taskRef: string }).taskRef as TaskRef)
-          : undefined;
-      const task = taskRef ? taskByRef.get(taskRef) : undefined;
-      return !task || !isUnfinishedTaskStatus(task.status);
-    });
-    if (hasActiveTodo) activeFiles += 1;
-    if (todos.length === 0 || (stale && allTerminalTodos && allTasksTerminalOrMissing))
-      safeToDeleteFiles += 1;
-  }
-  return cacheSummary(root, "todos", "task-todos", files, {
-    staleFiles,
-    brokenFiles,
-    safeToDeleteFiles,
-    activeFiles,
-  });
-}
-
-async function summarizeSessionTodoCache(
-  root: string,
-  currentSessionScope: string,
-  staleCutoffMs: number,
-): Promise<SparkStateCacheSummary> {
-  const files = await listSparkStateFiles(join(root, "session-todos"));
-  let staleFiles = 0;
-  let brokenFiles = 0;
-  let safeToDeleteFiles = 0;
-  let activeFiles = 0;
-  for (const file of files) {
-    const stale = file.mtimeMs < staleCutoffMs && fileScope(file) !== currentSessionScope;
-    if (stale) staleFiles += 1;
-    const raw = await readJsonObject(file.path);
-    if (!raw) {
-      brokenFiles += 1;
-      continue;
-    }
-    const todos = Array.isArray(raw.todos) ? raw.todos : [];
-    const hasActiveTodo = todos.some((todo) => isActiveTodoStatus(todoStatus(todo)));
-    const allTerminalTodos = todos.every((todo) => isTerminalTodoStatus(todoStatus(todo)));
-    if (hasActiveTodo) activeFiles += 1;
-    if (todos.length === 0 || (stale && allTerminalTodos)) safeToDeleteFiles += 1;
-  }
-  return cacheSummary(root, "session-todos", "session-todos", files, {
-    staleFiles,
-    brokenFiles,
-    safeToDeleteFiles,
-    activeFiles,
-  });
-}
-
-async function summarizeTodoDisplayNumberCache(
-  root: string,
-  currentSessionScope: string,
-  staleCutoffMs: number,
-): Promise<SparkStateCacheSummary> {
-  const files = await listSparkStateFiles(join(root, "todo-display-numbers"));
-  let staleFiles = 0;
-  let brokenFiles = 0;
-  let safeToDeleteFiles = 0;
-  let activeFiles = 0;
-  for (const file of files) {
-    const stale = file.mtimeMs < staleCutoffMs && fileScope(file) !== currentSessionScope;
-    if (stale) staleFiles += 1;
-    const raw = await readJsonObject(file.path);
-    if (!raw) {
-      brokenFiles += 1;
-      safeToDeleteFiles += 1;
-      continue;
-    }
-    if (stale) safeToDeleteFiles += 1;
-    else activeFiles += 1;
-  }
-  return cacheSummary(root, "todo-display-numbers", "todo-display-numbers", files, {
-    staleFiles,
-    brokenFiles,
-    safeToDeleteFiles,
-    activeFiles,
-  });
-}
-
-async function summarizeLegacyTaskTodoCache(root: string): Promise<SparkStateCacheSummary> {
-  const files = await listSparkStateFiles(root);
-  const legacyFiles = files.filter((file) => file.name === "todos.json");
-  return cacheSummary(root, "todos.json", "legacy-task-todos", legacyFiles, {
-    staleFiles: 0,
-    brokenFiles: 0,
-    safeToDeleteFiles: 0,
-    activeFiles: legacyFiles.length,
-  });
-}
-
-async function summarizeProtectedSparkStore(
-  root: string,
-  child: string,
-  reason: SparkProtectedStoreReason,
-  recursive: boolean,
-): Promise<SparkProtectedStoreSummary> {
-  const files = await listSparkStateFiles(join(root, child), recursive);
-  return {
-    path: join(relative(dirname(root), root), child),
-    reason,
-    files: files.length,
-    bytes: files.reduce((sum, file) => sum + file.bytes, 0),
-  };
-}
-
-function cacheSummary(
-  root: string,
-  child: string,
-  kind: SparkStateCacheKind,
-  files: SparkStateFileInfo[],
-  counts: Omit<SparkStateCacheSummary, "path" | "kind" | "files" | "bytes">,
-): SparkStateCacheSummary {
-  return {
-    path: join(relative(dirname(root), root), child),
-    kind,
-    files: files.length,
-    bytes: files.reduce((sum, file) => sum + file.bytes, 0),
-    ...counts,
-  };
-}
-
-async function listSparkStateFiles(path: string, recursive = false): Promise<SparkStateFileInfo[]> {
-  const rootInfo = await stat(path).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return undefined;
-    throw error;
-  });
-  if (!rootInfo) return [];
-  if (rootInfo.isFile())
-    return [{ path, name: basename(path), bytes: rootInfo.size, mtimeMs: rootInfo.mtimeMs }];
-  if (!rootInfo.isDirectory()) return [];
-  const entries = await readdir(path, { withFileTypes: true });
-  const files: SparkStateFileInfo[] = [];
-  for (const entry of entries) {
-    const entryPath = join(path, entry.name);
-    if (entry.isDirectory()) {
-      if (recursive) files.push(...(await listSparkStateFiles(entryPath, true)));
-      continue;
-    }
-    if (!entry.isFile()) continue;
-    const info = await stat(entryPath).catch(() => undefined);
-    if (!info?.isFile()) continue;
-    files.push({ path: entryPath, name: entry.name, bytes: info.size, mtimeMs: info.mtimeMs });
-  }
-  return files;
-}
-
-async function readJsonObject(path: string): Promise<Record<string, unknown> | undefined> {
-  try {
-    const raw = JSON.parse(await readFile(path, "utf8"));
-    return raw && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function fileScope(file: SparkStateFileInfo): string {
-  return file.name.replace(/\.json$/u, "");
-}
-
-function todoStatus(todo: unknown): string | undefined {
-  return todo && typeof todo === "object" && "status" in todo
-    ? String((todo as { status?: unknown }).status)
-    : undefined;
-}
-
-function isActiveTodoStatus(status: string | undefined): boolean {
-  return status === "pending" || status === "in_progress" || status === "blocked";
-}
-
-function isTerminalTodoStatus(status: string | undefined): boolean {
-  return status === "done" || status === "cancelled" || status === "deleted";
-}
-
-function appendSparkStateHousekeepingLines(
-  lines: string[],
-  summary: SparkStateHousekeepingSummary,
-): void {
-  lines.push("\nSpark state cache:");
-  for (const cache of summary.caches) {
-    lines.push(
-      `  ${formatSparkStateCacheKind(cache.kind)}: ${cache.files} files, ${formatByteSize(cache.bytes)}, active=${cache.activeFiles}, stale=${cache.staleFiles}, broken=${cache.brokenFiles}, safe-to-delete=${cache.safeToDeleteFiles}`,
-    );
-  }
-  lines.push("Protected stores:");
-  for (const store of summary.protectedStores) {
-    lines.push(
-      `  ${formatSparkProtectedStoreReason(store.reason)}: ${store.files} files, ${formatByteSize(store.bytes)} (${store.path})`,
-    );
-  }
-}
-
-function formatSparkStateCacheKind(kind: SparkStateCacheKind): string {
-  switch (kind) {
-    case "current-thread":
-      return "current-thread";
-    case "task-todos":
-      return "task todos";
-    case "session-todos":
-      return "session todos";
-    case "todo-display-numbers":
-      return "todo display numbers";
-    case "legacy-task-todos":
-      return "legacy task todos";
-  }
-}
-
-function formatSparkProtectedStoreReason(reason: SparkProtectedStoreReason): string {
-  switch (reason) {
-    case "artifact-history":
-      return "artifacts";
-    case "task-graph":
-      return "thread graph";
-    case "notes":
-      return "notes";
-    case "review-gate":
-      return "review gate";
-    case "dag-runs":
-      return "dag runs";
-  }
-}
-
-function formatByteSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
-  for (const unit of units) {
-    if (value < 1024 || unit === units.at(-1))
-      return `${value.toFixed(value < 10 ? 1 : 0)} ${unit}`;
-    value /= 1024;
-  }
-  return `${bytes} B`;
-}
-
 function resolveSparkThread(
   graph: TaskGraph,
   query?: string,
@@ -5220,13 +5446,11 @@ async function saveTodoDisplayNumberState(
   ctx: unknown,
   state: TodoDisplayNumberState,
 ): Promise<void> {
-  const filePath = todoDisplayNumberStorePath(cwd, ctx);
-  await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(
-    filePath,
-    `${JSON.stringify({ version: 1, next: state.next, numbers: state.numbers }, null, 2)}\n`,
-    "utf8",
-  );
+  await writeJsonFileAtomic(todoDisplayNumberStorePath(cwd, ctx), {
+    version: 1,
+    next: state.next,
+    numbers: state.numbers,
+  });
   state.changed = false;
 }
 
@@ -5255,13 +5479,11 @@ async function saveIndependentTodos(
   ctx: unknown,
   todos: SessionTodoEntry[],
 ): Promise<void> {
-  const filePath = independentTodoStorePath(cwd, ctx);
-  await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(
-    filePath,
-    `${JSON.stringify({ version: 1, todos, updatedAt: nowIso() }, null, 2)}\n`,
-    "utf8",
-  );
+  await writeJsonFileAtomic(independentTodoStorePath(cwd, ctx), {
+    version: 1,
+    todos,
+    updatedAt: nowIso(),
+  });
 }
 
 function applyIndependentTodoOps(todos: SessionTodoEntry[], ops: TaskTodoOp[]): SessionTodoEntry[] {
@@ -5400,8 +5622,11 @@ function normalizeIndependentTodos(todos: SessionTodoEntry[]): SessionTodoEntry[
   return next;
 }
 
-function sanitizeStoreScope(scope: string): string {
-  return scope.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/-+/g, "-") || "default";
+function sparkStateSessionScopes(ctx: unknown): SparkStateSessionScopes {
+  return {
+    currentSessionScope: sanitizeStoreScope(sparkSessionKey(ctx)),
+    currentOwnerScope: sanitizeStoreScope(sparkSessionOwnerKey(ctx)),
+  };
 }
 
 async function ensureSparkStateForActiveWorkspace(
@@ -5536,26 +5761,6 @@ function shutdownReason(event: unknown): string {
     : "unknown";
 }
 
-function sparkSessionKey(ctx: unknown): string {
-  if (ctx && typeof ctx === "object") {
-    const manager = (ctx as SparkToolContext).sessionManager;
-    const sessionFile = manager?.getSessionFile?.();
-    if (sessionFile) return `session:${stableId(sessionFile)}`;
-    const leaf = manager?.getLeafId?.();
-    if (leaf) return `leaf:${leaf}`;
-  }
-  return "session:ephemeral";
-}
-
-function sparkSessionOwnerKey(ctx: unknown): string {
-  if (ctx && typeof ctx === "object") {
-    const manager = (ctx as SparkToolContext).sessionManager;
-    const sessionFile = manager?.getSessionFile?.();
-    if (sessionFile) return `session:${stableId(sessionFile)}`;
-  }
-  return sparkSessionKey(ctx);
-}
-
 function sparkAskUi(ctx: unknown) {
   if (!ctx || typeof ctx !== "object") return undefined;
   const ui = (ctx as { ui?: unknown }).ui;
@@ -5670,6 +5875,7 @@ interface SparkInitOptions {
   sparkMd?: string;
   askArtifactRefs?: ArtifactRef[];
   askRefs?: AskRef[];
+  materializeSparkMd?: boolean;
 }
 
 function maybeClarifySparkInit(
@@ -5721,7 +5927,9 @@ export async function initializeSparkIdea(
     body: sparkMd,
     provenance: { producer: "spark", threadRef: thread.ref },
   });
-  const sparkMdPath = (await shouldMaterializeSparkMd(cwd)) ? join(cwd, "SPARK.md") : undefined;
+  const shouldWriteSparkMd =
+    options.materializeSparkMd !== false && (await shouldMaterializeSparkMd(cwd));
+  const sparkMdPath = shouldWriteSparkMd ? join(cwd, "SPARK.md") : undefined;
   if (sparkMdPath) await writeFile(sparkMdPath, sparkMd, "utf8");
 
   const rolePlan = renderRolePlan({ idea, tasks: graph.tasks(thread.ref) });
@@ -5770,7 +5978,7 @@ export async function initializeSparkIdea(
   });
   await defaultTaskGraphStore(cwd).save(graph);
   await sparkTodoStore(cwd, undefined).save(graph);
-  await writeFile(join(sparkDir, "review-gate.json"), `${JSON.stringify(gate, null, 2)}\n`, "utf8");
+  await writeJsonFileAtomic(join(sparkDir, "review-gate.json"), gate);
 
   const currentTask = graph.currentTask(thread.ref);
   const todoSummary = currentTask ? graph.todoSummary(currentTask.ref) : emptyTodoSummary();
@@ -6034,9 +6242,9 @@ function renderSparkPlanningModePrompt(
   const focusLine = focus?.trim() ? `\n\nPlanning focus: ${focus.trim()}` : "";
   const roadmapLine = renderRoadmapPlanningContext(roadmapContext);
   if (source === "direct") {
-    return `${summary}${focusLine}${roadmapLine}\n\nEnter Spark planning mode from explicit /plan. Treat this as a request to plan the next concrete work, not as an answer-only research turn. First do a short context scan, then prefer spark_ask before tasking whenever the inspected situation leaves planning-affecting choices unresolved, including target thread selection, whether the user wants design options only or durable task planning, desired outcome, constraints, priority, scope, success evidence, architecture, dependency choices, or implementation order. Do not call spark_plan_tasks until those choices are either clear from context or answered through context-specific detailed intent and decision checks. If you are about to list user-facing open questions or decision points that would change the task plan, do not leave them as prose: group them into spark_ask questions first. Keep asks dynamic and grounded in the inspected context; do not use canned intake templates or ask questions whose answers would not change the task plan. Once planning-affecting uncertainty is resolved, call spark_plan_tasks to create or refine concrete plan-bound tasks with dependencies and evidence expectations. Do not execute tasks yet unless the user explicitly asks to switch to execution.`;
+    return `${summary}${focusLine}${roadmapLine}\n\nEnter Spark planning mode from /plan. Treat this as a high-priority planning prompt, not as a permission gate and not as an answer-only research turn. First do a short context scan, then brainstorm the plan shape and keep clarifying until every material planning-affecting choice is either clear from inspected context or answered through context-specific spark_ask questions, including target thread selection, whether the user wants design options only or durable task planning, desired outcome, constraints, priority, scope, success evidence, architecture, dependency choices, and implementation order. Do not call spark_plan_tasks while those choices remain unresolved. If you are about to list user-facing open questions or decision points that would change the task plan, do not leave them as prose: group them into spark_ask questions first. Keep asks dynamic and grounded in the inspected context; do not use canned intake templates or ask questions whose answers would not change the task plan. Once planning-affecting uncertainty is resolved, call spark_plan_tasks directly to create or refine concrete plan-bound tasks with dependencies and evidence expectations. Refine plans by calling spark_plan_tasks again with concrete updates rather than using a separate dry-run/apply phase. Be strict: never create standalone “design”, “规划”, or “planning” tasks; discuss design/architecture with the user in this conversation first, then embed the chosen design, rationale, constraints, alternatives, and success evidence inside each concrete task.plan. Do not execute tasks yet unless the user explicitly asks to switch to execution.`;
   }
-  return `${summary}${focusLine}${roadmapLine}\n\nEnter Spark planning mode. Research and clarify the project context first, then choose the lightest appropriate action from the actual request: answer directly for a simple research/read-and-comment turn, call spark_rename_thread when context shows the bootstrap title is only an action/request or a better project label is available, and call spark_plan_tasks only when there are concrete plan-bound tasks to organize. If you are about to list user-facing open questions or decision points that would change task scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order, use spark_ask with context-specific questions instead of leaving them as prose. Do not use generic intake templates. Do not execute tasks yet unless the user explicitly asks to switch to execution.`;
+  return `${summary}${focusLine}${roadmapLine}\n\nEnter Spark planning mode. Research and clarify the project context first, then choose the lightest appropriate action from the actual request: answer directly for a simple research/read-and-comment turn, call spark_rename_thread when context shows the bootstrap title is only an action/request or a better project label is available, and call spark_plan_tasks only when there are concrete plan-bound tasks (executable/review/validation work) to organize; never create standalone design/planning tasks, and instead put confirmed design inside task.plan. Before generating or changing a durable plan, brainstorm the plan shape and keep clarifying through context-specific spark_ask questions until every material task-scope, dependency, priority, success-criteria, evidence, architecture, dependency-choice, or implementation-order uncertainty is resolved. Do not use generic intake templates. spark_plan_tasks writes directly after readiness checks pass; refine plans by calling it again with concrete updates rather than using a separate dry-run/apply phase. Do not execute tasks yet unless the user explicitly asks to switch to execution.`;
 }
 
 function renderSparkModeVisibleMessage(
@@ -6164,21 +6372,6 @@ function renderSparkExecutionModePrompt(
   return `${summary}${focusLine}\n\nEnter Spark execution mode. ${action}`;
 }
 
-function renderSparkRunModePrompt(
-  graph: TaskGraph,
-  selectedThreadRef: ThreadRef | undefined,
-  focus: string | undefined,
-): string {
-  const summary = renderExistingSparkSummary(graph, selectedThreadRef);
-  const focusLine = focus?.trim()
-    ? `\n\nRun focus: ${focus.trim()}\nUse this focus to select relevant ready tasks before starting background execution.`
-    : "";
-  const action = selectedThreadRef
-    ? "Inspect the current thread and ready frontier with spark_status, then start or preflight continuous background work through the Spark DAG manager. Treat run mode as background orchestration: rely on the Spark widget, notifications, and spark_dag_manager status instead of synthetic follow-up user messages. Stop or pause when work is done, blocked, cancelled, or needs a plan-changing decision."
-    : "Select a current thread with spark_use_thread before starting a background run; use spark_status view=summary/full to inspect available threads first if needed.";
-  return `${summary}${focusLine}\n\nEnter Spark run mode. ${action}`;
-}
-
 function renderExistingSparkSummary(graph: TaskGraph, selectedThreadRef?: ThreadRef): string {
   const threads = graph.threads();
   const thread = selectedThreadRef
@@ -6224,7 +6417,7 @@ function renderSparkInitSummary(result: SparkInitResult): string {
       `- 初始线程标题：${result.threadTitle}`,
       result.sparkMdPath
         ? `- SPARK.md：${result.sparkMdPath}`
-        : "- SPARK.md：未物化（当前 cwd 没有 .git）",
+        : "- SPARK.md：未物化（intent 已保存为 spark-md artifact）",
       `- Thread：${result.threadRef}`,
       `- Tasks：${result.taskCount}`,
       result.currentTaskTitle
@@ -6245,7 +6438,7 @@ function renderSparkInitSummary(result: SparkInitResult): string {
     `- Initial thread title: ${result.threadTitle}`,
     result.sparkMdPath
       ? `- SPARK.md: ${result.sparkMdPath}`
-      : "- SPARK.md: not materialized (cwd has no .git)",
+      : "- SPARK.md: not materialized (intent saved as spark-md artifact)",
     `- Thread: ${result.threadRef}`,
     `- Tasks: ${result.taskCount}`,
     result.currentTaskTitle

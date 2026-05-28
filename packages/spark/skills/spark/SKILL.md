@@ -17,32 +17,34 @@ Spark primitives:
 - `spark-review`: verification gates.
 - `spark-tasks`: thread/task DAG and task planning helpers.
 - `spark-runtime`: single Spark task execution adaptation over `pi-roles` runs.
-- `spark-orchestrator`: ready task frontier scheduling and DAG manager state.
+- `spark-orchestrator`: ready task frontier scheduling and background orchestration state.
 
 Rules:
 
 1. A task must belong to a thread.
 2. Do not create placeholder tasks or threads for display; tasks are model-claimed only when concrete work exists, and a session may claim multiple tasks only within the active thread.
-3. Use the dedicated `spark_plan_tasks` tool to梳理/organize multiple tasks before assigning roles; planning tasks must not be represented by claiming many unfinished tasks in the current session.
-4. Executable tasks must bind to a builtin, project, or user role spec via `roleRef`.
-5. Running a role only accepts an instruction; no runtime system-prompt patching.
-6. Task-generated work must be proposed and validated before persistence.
-7. Store durable context as typed artifacts rather than relying on chat history.
-8. Treat `.spark/` as local runtime state that should be added to `.gitignore`; share stable learnings only through explicit exports, reports, or committed Markdown artifacts.
-9. Treat Spark learnings as evidence-backed reusable judgments for future action, not generic chat memory or source-of-truth replacement; use `spark_learning_search` when prior lessons may be relevant, and current repo/source/tool evidence wins.
-10.   Treat SPARK.md as persistent project intent that the extension injects into the active system prompt.
-11.   Models may improve Spark display names without asking when the active thread title or current task `@name`/title is obviously placeholder, generic, stale, too broad, or inconsistent with the current confirmed intent. Examples include placeholder labels such as `Untitled`, `New thread`, `Task`, `TODO`, `Custom input`, or `「自定义输入」`; generic labels such as `Fix bug`, `Implement task`, `Research`, `Review`, `Spark work`, `Update docs`, or `Plan`; and stale labels that describe an older scope than the active request. Use `spark_rename_thread` for thread metadata and `spark_claim_task` for the claimed task. Display names are mutable labels only: stable `thread:*` and `task:*` refs, dependencies, runs, artifacts, and TODOs continue to point at the same entities after a rename. Preserve user-specific intentional names, distinctive project/code names, issue IDs, release names, and ambiguous naming choices; ask with `spark_ask` only when the right name depends on a real user decision.
-12.   During initialization and planning, analyze the request and workspace context before asking. Do not use broad, generic, or template intake forms; ask context-specific clarification or decision questions grounded in the actual situation. When user-facing open questions or decision points would change task scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order, use `spark_ask` instead of leaving those questions as prose. If language is obvious, follow the user's language without a separate language confirmation.
-13.   After a decision is confirmed and the next action is clear, continue with that action instead of stopping for another permission prompt.
-14.   Show the active thread header with task counts plus claimed task / TODO text summaries by default; render independent session TODOs as siblings of the thread display. `spark_status` defaults to active unfinished/current-session work; use `view: "summary"` for counts only or `view: "full"` for full history.
-15.   Before launching multiple role-runs or parallel workstreams, ask for approval with `spark_ask` unless the user explicitly requested immediate dispatch. Treat no-selection as blocked, not approval; asks do not support automatic timeout.
-16.   Prefer Spark-native delegation: inspect roles with `list_roles` / `get_role`, bind concrete tasks to builtin/project/user `roleRef`s, and hand execution to the Spark orchestrator through `spark_run_ready_tasks`, `/run-sequential`, `/run-parallel`, or inferred-strategy `/run`. Use `call_role` only for one-off direct role calls that should stay outside Spark tasks/DAGs.
-17.   When using `pi-cue` `run`, prefer direct-exec commands and Pi file tools. Use `/bin/sh -lc` only for real shell features such as redirection, here-docs, variable expansion, or compound conditionals.
-18.   Keep temporary plans, role-run reports, and scratch outputs out of the repo root; use `.spark/notes/`, `.spark/role-reports/`, or typed Spark artifacts unless the user asks for committed docs.
+3. Use the dedicated `spark_plan_tasks` tool to梳理/organize multiple tasks before assigning roles; planning tasks must not be represented by claiming many unfinished tasks in the current session. `spark_plan_tasks` writes directly after readiness checks pass and can be used whenever the actual request requires durable task planning; `/plan` only injects stronger planning guidance, not an authorization gate.
+4. Tasks must be concrete executable/review/validation/research work. Do not create standalone “design”, “规划”, or “planning” tasks; discuss design/architecture decisions with the user first, then embed the chosen design, rationale, constraints, alternatives, and evidence requirements inside each concrete `task.plan`.
+5. Do not cancel a task while any non-cancelled task depends on it; cancel or revise downstream dependents first, or leave the prerequisite pending/blocked.
+6. Executable tasks must bind to a builtin, project, or user role spec via `roleRef`.
+7. Running a role only accepts an instruction; no runtime system-prompt patching.
+8. Task-generated work must be proposed and validated before persistence.
+9. Store durable context as typed artifacts rather than relying on chat history.
+10.   Treat `.spark/` as local runtime state that should be added to `.gitignore`; share stable learnings only through explicit exports, reports, or committed Markdown artifacts.
+11.   Treat Spark learnings as evidence-backed reusable judgments for future action, not generic chat memory or source-of-truth replacement; use `spark_learning_search` when prior lessons may be relevant, and current repo/source/tool evidence wins.
+12.   Treat SPARK.md as persistent project intent that the extension injects into the active system prompt.
+13.   Models may improve Spark display names without asking when the active thread title or current task `@name`/title is obviously placeholder, generic, stale, too broad, or inconsistent with the current confirmed intent. Examples include placeholder labels such as `Untitled`, `New thread`, `Task`, `TODO`, `Custom input`, or `「自定义输入」`; generic labels such as `Fix bug`, `Implement task`, `Research`, `Review`, `Spark work`, `Update docs`, or `Plan`; and stale labels that describe an older scope than the active request. Use `spark_rename_thread` for thread metadata and `spark_claim_task` for the claimed task. Display names are mutable labels only: stable `thread:*` and `task:*` refs, dependencies, runs, artifacts, and TODOs continue to point at the same entities after a rename. Preserve user-specific intentional names, distinctive project/code names, issue IDs, release names, and ambiguous naming choices; ask with `spark_ask` only when the right name depends on a real user decision.
+14.   During initialization and planning, analyze the request and workspace context before asking. Brainstorm the plan shape first, then keep clarifying until all material planning-affecting questions are resolved. Do not use broad, generic, or template intake forms; ask context-specific clarification or decision questions grounded in the actual situation. When user-facing open questions or decision points would change task scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order, use `spark_ask` instead of leaving those questions as prose. If language is obvious, follow the user's language without a separate language confirmation.
+15.   After a decision is confirmed and the next action is clear, continue with that action instead of stopping for another permission prompt.
+16.   Show the active thread header with task counts plus claimed task / TODO text summaries by default; render independent session TODOs as siblings of the thread display. `spark_status` defaults to active unfinished/current-session work; use `view: "summary"` for counts only or `view: "full"` for full history.
+17.   Before launching multiple role-runs or parallel workstreams, ask for approval with `spark_ask` unless the user explicitly requested immediate dispatch. Treat no-selection as blocked, not approval; asks do not support automatic timeout.
+18.   Prefer Spark-native delegation: inspect roles with `list_roles` / `get_role`, bind concrete tasks to builtin/project/user `roleRef`s, and hand execution to the Spark orchestrator through `spark_run_ready_tasks`, `/run-sequential`, `/run-parallel`, or inferred-strategy `/run`. Use `call_role` only for one-off direct role calls that should stay outside Spark tasks/DAGs.
+19.   When using `pi-cue` `run`, prefer direct-exec commands and Pi file tools. Use `/bin/sh -lc` only for real shell features such as redirection, here-docs, variable expansion, or compound conditionals.
+20.   Keep temporary plans, role-run reports, and scratch outputs out of the repo root; use `.spark/notes/`, `.spark/role-reports/`, or typed Spark artifacts unless the user asks for committed docs.
 
 ## Readiness rules
 
-`spark_plan_tasks` creates or updates durable tasks only from concrete, plan-bound work. All current `TaskPlanIssue.kind` values are blocking; there are no warning-only `TaskPlanIssue.kind` values today.
+`spark_plan_tasks` creates or updates durable tasks only from concrete, plan-bound work. Standalone design/planning tasks are invalid: resolve design questions with the user first, then encode the selected design in each concrete task's `plan`. All current `TaskPlanIssue.kind` values are blocking; there are no warning-only `TaskPlanIssue.kind` values today. After readiness passes, `spark_plan_tasks` writes the graph and roadmap refs directly; refine plans by calling it again with concrete updates.
 
 - `missing_plan` (blocking): the task must have a bound `plan`.
 - `missing_objective` (blocking): `plan.objective` must be non-empty.

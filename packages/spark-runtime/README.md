@@ -2,7 +2,7 @@
 
 Spark single-task runtime adapter for executing one ready Spark task with a registered role.
 
-Runtime resolves reusable `RoleSpec`s from `pi-roles`, calls `runRole()` for one concrete child Pi execution, and adapts that `RoleRun` back into Spark task/run/artifact state. Graph-wide ready frontier scheduling and durable DAG manager state live in `spark-orchestrator`.
+Runtime resolves reusable `RoleSpec`s from `pi-roles`, calls `runRole()` for one concrete child Pi execution, and adapts that `RoleRun` back into Spark task/run/artifact state. Graph-wide ready frontier scheduling and durable orchestration state live in `spark-orchestrator`.
 
 Responsibilities:
 

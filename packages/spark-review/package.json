@@ -16,7 +16,6 @@
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
-    "spark-artifacts": "file:../spark-artifacts",
     "spark-core": "file:../spark-core"
   }
 }

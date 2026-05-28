@@ -172,6 +172,27 @@ export type ArtifactKind =
 
 export type ArtifactFormat = "markdown" | "json" | "text";
 
+export interface ArtifactTranscriptRetention {
+  schemaVersion: 1;
+  strategy: "role-run-compact-summary-tail";
+  candidateReason: string;
+  originalBlobPath?: string;
+  originalHash?: string;
+  originalBodySize?: number;
+  originalMetadataBytes?: number;
+  replacementSummary: string;
+  transcriptTail?: {
+    bytes: number;
+    tailBytes: number;
+    truncated: boolean;
+    source: "serialized-artifact-body-tail";
+    tail: string;
+  };
+  exportPath?: string;
+  compactedAt: string;
+  fullTranscriptDeletedAt?: string;
+}
+
 export interface Artifact<T extends JsonValue | string = JsonValue | string> {
   ref: ArtifactRef;
   kind: ArtifactKind;
@@ -184,6 +205,8 @@ export interface Artifact<T extends JsonValue | string = JsonValue | string> {
   bodySize?: number;
   /** True when `body` contains only a preview and `blobPath` is the full body source. */
   bodyTruncated?: boolean;
+  /** Audit metadata for historical full transcript blob replacement. */
+  transcriptRetention?: ArtifactTranscriptRetention;
   hash?: string;
   blobPath?: string;
   links: ArtifactLink[];
@@ -370,6 +393,18 @@ export interface TaskProposal {
 }
 
 export type TaskRunFailureKind = "runtime_timeout" | "runtime_error" | "claim_stale";
+export type TaskRunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export interface TaskRunCompletionSummary {
+  runRef: RunRef;
+  taskRef: TaskRef;
+  roleRef?: RoleRef;
+  runName?: string;
+  status: TaskRunStatus;
+  summary: string;
+  artifactRefs: ArtifactRef[];
+  createdAt: string;
+}
 
 export interface TaskRun {
   ref: RunRef;
@@ -380,12 +415,13 @@ export interface TaskRun {
   runName?: string;
   /** Session that owns this concrete role run, used for post-completion attribution. */
   ownerSessionId?: string;
-  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  status: TaskRunStatus;
   failureKind?: TaskRunFailureKind;
   errorMessage?: string;
   startedAt?: string;
   finishedAt?: string;
   outputArtifacts: ArtifactRef[];
+  completionSummary?: TaskRunCompletionSummary;
 }
 
 export type AskKind = "clarification" | "decision" | "approval" | "unblock";

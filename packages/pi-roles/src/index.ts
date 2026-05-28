@@ -880,6 +880,37 @@ export class RoleRunCancelledError extends Error {
 }
 
 const activeRoleRuns = new Map<RoleRunRef, ActiveRoleRun>();
+const DEFAULT_ROLE_RUN_CAPTURE_LIMIT_BYTES = 8 * 1024 * 1024;
+
+interface BoundedOutputCapture {
+  push(chunk: Buffer): void;
+  text(): string;
+}
+
+function createBoundedOutputCapture(
+  label: "stdout" | "stderr",
+  limitBytes = DEFAULT_ROLE_RUN_CAPTURE_LIMIT_BYTES,
+): BoundedOutputCapture {
+  const chunks: Buffer[] = [];
+  let capturedBytes = 0;
+  let droppedBytes = 0;
+  return {
+    push(chunk: Buffer) {
+      const remaining = Math.max(0, limitBytes - capturedBytes);
+      if (remaining > 0) {
+        const captured = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+        chunks.push(captured);
+        capturedBytes += captured.length;
+      }
+      if (chunk.length > remaining) droppedBytes += chunk.length - remaining;
+    },
+    text() {
+      const output = Buffer.concat(chunks).toString("utf8");
+      if (droppedBytes === 0) return output;
+      return `${output}\n[pi-roles ${label} truncated after ${capturedBytes} bytes; dropped ${droppedBytes} bytes]\n`;
+    },
+  };
+}
 
 export function listActiveRoleRuns(): ActiveRoleRun[] {
   return [...activeRoleRuns.values()];
@@ -925,10 +956,10 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
     stdio: ["ignore", "pipe", "pipe"],
   });
   input.onChildProcess?.(child, startedAt);
-  const stdoutChunks: Buffer[] = [];
-  const stderrChunks: Buffer[] = [];
-  child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
-  child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+  const stdoutCapture = createBoundedOutputCapture("stdout");
+  const stderrCapture = createBoundedOutputCapture("stderr");
+  child.stdout.on("data", (chunk: Buffer) => stdoutCapture.push(chunk));
+  child.stderr.on("data", (chunk: Buffer) => stderrCapture.push(chunk));
 
   let cancellationReason: string | undefined;
   const activeRun: ActiveRoleRun = {
@@ -975,8 +1006,8 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
       });
     });
 
-    const stdout = Buffer.concat(stdoutChunks).toString("utf8");
-    const stderr = Buffer.concat(stderrChunks).toString("utf8");
+    const stdout = stdoutCapture.text();
+    const stderr = stderrCapture.text();
     return {
       record: {
         ref: input.runRef,

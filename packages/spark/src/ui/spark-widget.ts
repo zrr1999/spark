@@ -193,8 +193,8 @@ export function renderSparkWidgetLines(
 
   const summaryLine = formatTaskSummaryLine(state, visibleTasks, l.tasks, theme);
   if (summaryLine) lines.push(trunc(summaryLine));
-  if (state.dag) lines.push(trunc(formatDagLine(state.dag, theme)));
-  if (state.run) lines.push(trunc(formatRunLine(state.run, theme)));
+  const backgroundLine = formatBackgroundLine(state.dag, state.run, theme);
+  if (backgroundLine) lines.push(trunc(backgroundLine));
 
   if (state.threadTitle) {
     lines.push(trunc(`${theme.fg("accent", "◆")} ${theme.bold(state.threadTitle)}`));
@@ -221,24 +221,35 @@ export function renderSparkWidgetLines(
   return lines;
 }
 
-function formatDagLine(dag: SparkDagWidgetEntry, theme: SparkWidgetTheme): string {
-  const status = dag.active ? "running" : dag.status;
-  const statusLabel = formatDagStatusLabel(status);
-  const count = `${dag.completed}/${dag.scheduled} tasks`;
-  const ref = dag.runRef ? ` · ${shortDagRunRef(dag.runRef)}` : "";
-  return `${theme.fg("accent", "◆")} ${theme.fg("dim", `Spark DAG ${statusLabel}: ${count}${ref}`)}`;
+function formatBackgroundLine(
+  dag: SparkDagWidgetEntry | undefined,
+  run: SparkRunWidgetEntry | undefined,
+  theme: SparkWidgetTheme,
+): string | undefined {
+  if (!dag && !run) return undefined;
+  const body = dag ? formatBackgroundDagSummary(dag) : formatBackgroundRunSummary(run);
+  return `${theme.fg("accent", "◆")} ${theme.fg("dim", body)}`;
 }
 
-function formatDagStatusLabel(status: SparkDagWidgetEntry["status"]): string {
-  if (status === "running") return "running";
-  if (status === "succeeded") return "done";
+function formatBackgroundDagSummary(dag: SparkDagWidgetEntry): string {
+  const status = dag.active ? "running" : dag.status;
+  const statusLabel = formatBackgroundStatusLabel(status);
+  const ref = dag.runRef ? ` · ${shortDagRunRef(dag.runRef)}` : "";
+  return `Background work: ${dag.completed}/${dag.scheduled} tasks finished · ${statusLabel}${ref}`;
+}
+
+function formatBackgroundRunSummary(run: SparkRunWidgetEntry | undefined): string {
+  if (!run) return "Background work";
+  const focus = run.focus ? ` · focus: ${run.focus}` : "";
+  return `Background work: ${formatBackgroundStatusLabel(run.status)} · ${shortDagRunRef(run.runRef)}${focus}`;
+}
+
+function formatBackgroundStatusLabel(
+  status: SparkDagWidgetEntry["status"] | SparkRunWidgetEntry["status"],
+): string {
+  if (status === "succeeded" || status === "done") return "done";
   if (status === "timed_out") return "timed out";
   return status;
-}
-
-function formatRunLine(run: SparkRunWidgetEntry, theme: SparkWidgetTheme): string {
-  const focus = run.focus ? ` · focus: ${run.focus}` : "";
-  return `${theme.fg("accent", "◆")} ${theme.fg("dim", `Spark run ${run.status}: ${shortDagRunRef(run.runRef)}${focus}`)}`;
 }
 
 function shortDagRunRef(runRef: string): string {
@@ -279,23 +290,23 @@ function formatTaskSummary(state: SparkWidgetState, visibleTasks: TaskEntry[]): 
 }
 
 function formatRunningAgentSummary(tasks: TaskEntry[]): string | undefined {
-  const runningLabels = dedupeTaskAgentLabels(
-    tasks
-      .filter(
-        (task) =>
-          task.status === "running" &&
-          task.claim === "role-run" &&
-          task.backgroundOwner === "session",
-      )
-      .map(taskAgentLabel),
-  );
-  if (runningLabels.length === 0) return undefined;
-  const shown = runningLabels
+  const runningRoles = tasks
+    .filter(
+      (task) =>
+        task.status === "running" &&
+        task.claim === "role-run" &&
+        task.backgroundOwner === "session",
+    )
+    .map(taskAgentRoleLabel);
+  if (runningRoles.length === 0) return undefined;
+  const counts = new Map<string, number>();
+  for (const role of runningRoles) counts.set(role, (counts.get(role) ?? 0) + 1);
+  const shown = [...counts]
     .slice(0, 4)
-    .map((label) => `@${label}`)
+    .map(([role, count]) => (count > 1 ? `${role}×${count}` : role))
     .join(", ");
-  const hidden = runningLabels.length > 4 ? ` +${runningLabels.length - 4}` : "";
-  return `${shown}${hidden}`;
+  const hidden = counts.size > 4 ? ` +${counts.size - 4}` : "";
+  return `agents ${shown}${hidden}`;
 }
 
 function isVisibleTaskEntry(task: TaskEntry): boolean {
@@ -317,15 +328,20 @@ function isOtherSessionAgentLabel(label: string | undefined): boolean {
   );
 }
 
-function dedupeTaskAgentLabels(labels: string[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const label of labels) {
-    if (seen.has(label)) continue;
-    seen.add(label);
-    result.push(label);
-  }
-  return result;
+function compactRoleRunName(label: string): string {
+  return label.replace(/-[0-9a-f]{6,}$/iu, "");
+}
+
+function compactTaskAgentLabel(label: string): string {
+  const parts = label.split("/");
+  const role = parts.pop();
+  if (!role) return compactRoleRunName(label);
+  return [...parts, compactRoleRunName(role)].join("/");
+}
+
+function taskAgentRoleLabel(task: TaskEntry): string {
+  const label = compactTaskAgentLabel(taskAgentLabel(task));
+  return label.split("/").pop() || label;
 }
 
 function taskIcon(task: TaskEntry, theme: SparkWidgetTheme): string {
@@ -434,7 +450,7 @@ function todoVisibilityRank(todo: SessionTodoEntry): number {
 }
 
 function taskActorLabel(task: TaskEntry): string | undefined {
-  const agentLabel = taskAgentLabel(task);
+  const agentLabel = compactTaskAgentLabel(taskAgentLabel(task));
   if (task.claim === "role-run") {
     if (agentLabel.includes("/")) return `@${agentLabel}`;
     return task.backgroundOwner === "session" ? `@me/${agentLabel}` : `@${agentLabel}`;

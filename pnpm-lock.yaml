@@ -113,9 +113,6 @@ importers:
       '@earendil-works/pi-tui':
         specifier: ^0.74.1
         version: 0.74.1
-      pi-ask:
-        specifier: file:../pi-ask
-        version: link:../pi-ask
       pi-cue:
         specifier: file:../pi-cue
         version: link:../pi-cue
@@ -199,9 +196,6 @@ importers:
 
   packages/spark-review:
     dependencies:
-      spark-artifacts:
-        specifier: file:../spark-artifacts
-        version: link:../spark-artifacts
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core
@@ -226,9 +220,6 @@ importers:
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core
-      spark-review:
-        specifier: file:../spark-review
-        version: link:../spark-review
 
 packages:
 

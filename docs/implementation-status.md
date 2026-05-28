@@ -99,6 +99,9 @@ but end-to-end local vertical slice.
    - `/spark <idea>`, `/plan <focus>`, `/execute <focus>`, `/run <focus>`, `/run-sequential <focus>`, and `/run-parallel <focus>` commands. `/execute` is single-task execution; `/run-sequential` persists run-mode state with `maxConcurrency=1`; `/run-parallel` keeps the existing parallel DAG-manager progress; `/run` infers between those strategies.
    - `spark_status` tool
    - `spark_claim_task` tool for named model-claimed current work
+   - `spark_plan_tasks` writes durable task-plan changes directly after
+     readiness passes; `/plan` injects stronger planning guidance but is
+     not a write authorization gate
    - `spark_update_task_todos` for task-scoped TODOs
    - `spark_update_todos` for independent session TODOs
    - `spark_run_ready_tasks` tool
@@ -123,29 +126,30 @@ but end-to-end local vertical slice.
      questions should be represented with `spark_ask` rather
      than prose
    - `.spark/` state is always created and should stay Git-ignored;
-     root `SPARK.md` is only materialized when `.git` exists in cwd
+     root `SPARK.md` is only materialized by `/spark` initialization when `.git` exists in cwd; direct `/plan`/`/execute`/`/run`/`/run-sequential`/`/run-parallel` modes do not create it
    - SPARK.md artifact, task graph, role plan artifact,
      review gate, and run trace generation
    - SPARK.md injection into the active turn system prompt as
      persistent project intent
    - default text UI summary for active thread task counts,
      session-claimed tasks, task TODOs, independent session
-     TODO siblings, DAG manager state, and run-mode status after Spark initialization and on active Spark turns
+     TODO siblings, Spark orchestrator state, and run-mode status after Spark initialization and on active Spark turns
    - active-session task TODO files live under
      `.spark/todos/<session>.json`; independent TODOs managed by
      `spark_update_todos` live under
      `.spark/session-todos/<session>.json`, with stable display
      numbers in `.spark/todo-display-numbers/<session>.json`
+   - `spark_state` provides explicit `.spark` session/cache status and dry-run-by-default cleanup for safe cache files while protecting thread graph, artifacts, notes, DAG runs, and review-gate state
    - invariant repair that clears stale current-task refs
      without creating placeholder tasks
    - ask artifacts linked into the Spark run trace when init clarification runs
    - project role store hydration before ready-task execution
-   - `/run` / `/run-sequential` / `/run-parallel` background orchestration reuses the DAG manager, advances newly unblocked ready work, and records terminal run-mode states (`done`, `blocked`, or `failed`) without queuing synthetic user messages
+   - `/run` / `/run-sequential` / `/run-parallel` background orchestration starts/resumes the Spark orchestrator, advances newly unblocked ready work, and records terminal run-mode states (`done`, `blocked`, or `failed`) without queuing a second main-agent turn or synthetic user messages
 
 ## Boundary cleanup status
 
 - `pi-roles` is now the generic role package. It owns reusable role specs and simple single child Pi role runs.
-- Spark packages keep task DAGs, task claims, TODOs, artifacts, asks, review gates, and DAG manager orchestration.
+- Spark packages keep task DAGs, task claims, TODOs, artifacts, asks, review gates, and background orchestration.
 - Deprecated role-shaped fields and aliases may still be accepted in code as rolling compatibility for persisted state, but new tools/docs should use role terminology. See [role-boundaries.md](./role-boundaries.md) and [role-run-modes.md](./role-run-modes.md).
 
 ## Deferred by design
