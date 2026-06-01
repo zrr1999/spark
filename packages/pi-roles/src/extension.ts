@@ -10,6 +10,7 @@ import {
   defaultUserRoleModelBindingStore,
   defaultUserRoleStore,
   hydrateDefaultRoleRegistry,
+  normalizeRoleRunMode,
   runRole,
   saveValidatedRoleModelBinding,
   type RoleRunMode,
@@ -115,9 +116,13 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd ?? process.cwd();
-      const includeUser = params.includeUser === true;
-      const source = normalizeRoleSource(params.source);
-      const limit = normalizeLimit(params.limit, 50);
+      const includeUser = normalizeOptionalBoolean(
+        params.includeUser,
+        false,
+        "list_roles includeUser",
+      );
+      const source = normalizeRoleSource(params.source, "list_roles source");
+      const limit = normalizeLimit(params.limit, 50, "list_roles limit");
       const registry = new RoleRegistry();
       await hydrateDefaultRoleRegistry(registry, cwd, { includeUser });
       const roles = registry.list(source ? { source } : {}).slice(0, limit);
@@ -168,9 +173,18 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd ?? process.cwd();
       const registry = new RoleRegistry();
-      await hydrateDefaultRoleRegistry(registry, cwd, { includeUser: params.includeUser === true });
-      const role = registry.select(requiredString(params.role, "get_role role is required"));
-      const includePrompt = params.includePrompt === true;
+      const includeUser = normalizeOptionalBoolean(
+        params.includeUser,
+        false,
+        "get_role includeUser",
+      );
+      await hydrateDefaultRoleRegistry(registry, cwd, { includeUser });
+      const role = registry.select(normalizeRequiredString(params.role, "get_role role"));
+      const includePrompt = normalizeOptionalBoolean(
+        params.includePrompt,
+        false,
+        "get_role includePrompt",
+      );
       const promptPreview = truncateInline(role.systemPrompt, 240);
       const modelBinding = await defaultUserRoleModelBindingStore().get(role.ref);
       const lines = [
@@ -222,20 +236,14 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       const cwd = ctx.cwd ?? process.cwd();
       const source = normalizeWritableRoleSource(params.source);
       const proposal: RoleSpecProposal = {
-        id: requiredString(params.id, "create_role id is required"),
+        id: normalizeRequiredString(params.id, "create_role id"),
         source,
-        description: requiredString(params.description, "create_role description is required"),
-        systemPrompt: requiredString(params.systemPrompt, "create_role systemPrompt is required"),
-        rationale: requiredString(params.rationale, "create_role rationale is required"),
-        expectedUses: normalizeStringArray(
-          params.expectedUses,
-          "create_role expectedUses are required",
-        ),
-        allowedTools: normalizeOptionalStringArray(params.allowedTools),
-        defaultModel:
-          typeof params.defaultModel === "string" && params.defaultModel.trim()
-            ? params.defaultModel.trim()
-            : undefined,
+        description: normalizeRequiredString(params.description, "create_role description"),
+        systemPrompt: normalizeRequiredString(params.systemPrompt, "create_role systemPrompt"),
+        rationale: normalizeRequiredString(params.rationale, "create_role rationale"),
+        expectedUses: normalizeRequiredStringArray(params.expectedUses, "create_role expectedUses"),
+        allowedTools: normalizeOptionalStringArray(params.allowedTools, "create_role allowedTools"),
+        defaultModel: normalizeOptionalString(params.defaultModel, "create_role defaultModel"),
         origin: { kind: "manual" },
       };
       const role = createRoleSpec(proposal);
@@ -261,7 +269,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       }),
       instruction: Type.String({ description: "Concrete instruction for this one role call." }),
       mode: Type.Optional(
-        Type.String({
+        Type.Union([Type.Literal("fresh"), Type.Literal("forked")], {
           description: "fresh | forked. Defaults to fresh; forked requires forkFromSession.",
         }),
       ),
@@ -436,69 +444,97 @@ async function resolveRoleModelForCall(input: {
 }
 
 function normalizeCallRoleToolParams(params: Record<string, unknown>): CallRoleToolParams {
-  const role = typeof params.role === "string" ? params.role.trim() : "";
-  const instruction = typeof params.instruction === "string" ? params.instruction.trim() : "";
-  if (!role) throw new Error("call_role role is required");
-  if (!instruction) throw new Error("call_role instruction is required");
-  const mode = params.mode === "forked" ? "forked" : "fresh";
-  const forkFromSession =
-    typeof params.forkFromSession === "string" ? params.forkFromSession.trim() : undefined;
+  const role = normalizeRequiredString(params.role, "call_role role");
+  const instruction = normalizeRequiredString(params.instruction, "call_role instruction");
+  const mode = normalizeRoleRunMode(params.mode);
+  const forkFromSession = normalizeOptionalString(
+    params.forkFromSession,
+    "call_role forkFromSession",
+  );
   if (mode === "forked" && !forkFromSession)
     throw new Error("call_role forked mode requires forkFromSession");
   return {
     role,
     instruction,
     mode,
-    dryRun: typeof params.dryRun === "boolean" ? params.dryRun : true,
-    piCommand:
-      typeof params.piCommand === "string" && params.piCommand.trim()
-        ? params.piCommand.trim()
-        : undefined,
-    cwd: typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : undefined,
-    sessionDir:
-      typeof params.sessionDir === "string" && params.sessionDir.trim()
-        ? params.sessionDir.trim()
-        : undefined,
+    dryRun: normalizeOptionalBoolean(params.dryRun, true, "call_role dryRun"),
+    piCommand: normalizeOptionalString(params.piCommand, "call_role piCommand"),
+    cwd: normalizeOptionalString(params.cwd, "call_role cwd"),
+    sessionDir: normalizeOptionalString(params.sessionDir, "call_role sessionDir"),
     forkFromSession,
-    timeoutMs:
-      typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-        ? params.timeoutMs
-        : undefined,
-    includeUser: params.includeUser === true,
-    model:
-      typeof params.model === "string" && params.model.trim() ? params.model.trim() : undefined,
+    timeoutMs: normalizeOptionalPositiveInteger(params.timeoutMs, "call_role timeoutMs"),
+    includeUser: normalizeOptionalBoolean(params.includeUser, false, "call_role includeUser"),
+    model: normalizeOptionalString(params.model, "call_role model"),
   };
 }
 
-function normalizeRoleSource(value: unknown): RoleSource | undefined {
-  return value === "builtin" || value === "project" || value === "user" ? value : undefined;
+function normalizeRoleSource(value: unknown, field: string): RoleSource | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value === "builtin" || value === "project" || value === "user") return value;
+  throw new Error(`${field} must be builtin, project, or user`);
 }
 
 function normalizeWritableRoleSource(value: unknown): Exclude<RoleSource, "builtin"> {
+  if (value === undefined || value === null) return "project";
   if (value === "user") return "user";
-  return "project";
+  if (value === "project") return "project";
+  throw new Error("create_role source must be project or user");
 }
 
-function normalizeLimit(value: unknown, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-  return Math.max(0, Math.floor(value));
+function normalizeLimit(value: unknown, fallback: number, field: string): number {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value))
+    throw new Error(`${field} must be a finite number`);
+  if (!Number.isInteger(value) || value < 0)
+    throw new Error(`${field} must be a non-negative integer`);
+  return value;
 }
 
-function requiredString(value: unknown, message: string): string {
-  const text = typeof value === "string" ? value.trim() : "";
-  if (!text) throw new Error(message);
+function normalizeOptionalPositiveInteger(value: unknown, field: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value))
+    throw new Error(`${field} must be a finite number`);
+  if (!Number.isInteger(value) || value <= 0)
+    throw new Error(`${field} must be a positive integer`);
+  return value;
+}
+
+function normalizeOptionalBoolean(value: unknown, fallback: boolean, field: string): boolean {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "boolean") return value;
+  throw new Error(`${field} must be a boolean`);
+}
+
+function normalizeRequiredString(value: unknown, field: string): string {
+  if (value === undefined || value === null) throw new Error(`${field} is required`);
+  if (typeof value !== "string") throw new Error(`${field} must be a string`);
+  const text = value.trim();
+  if (!text) throw new Error(`${field} must be a non-empty string`);
   return text;
 }
 
-function normalizeStringArray(value: unknown, message: string): string[] {
-  const items = normalizeOptionalStringArray(value) ?? [];
-  if (items.length === 0) throw new Error(message);
+function normalizeRequiredStringArray(value: unknown, field: string): string[] {
+  const items = normalizeOptionalStringArray(value, field) ?? [];
+  if (items.length === 0) throw new Error(`${field} must be a non-empty array of strings`);
   return items;
 }
 
-function normalizeOptionalStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const items = value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean);
+function normalizeOptionalString(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") throw new Error(`${field} must be a string`);
+  const text = value.trim();
+  return text || undefined;
+}
+
+function normalizeOptionalStringArray(value: unknown, field: string): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array of strings`);
+  const items = value.map((item) => {
+    if (typeof item !== "string") throw new Error(`${field} must be an array of strings`);
+    return item.trim();
+  });
+  if (items.some((item) => !item))
+    throw new Error(`${field} must be an array of non-empty strings`);
   return items.length > 0 ? items : undefined;
 }
 

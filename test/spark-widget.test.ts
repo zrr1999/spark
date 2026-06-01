@@ -31,7 +31,7 @@ type SparkWidgetRegistration = {
 
 function widgetState(patch: Partial<SparkWidgetState> = {}): SparkWidgetState {
   return {
-    threadTitle: "Spark UX redesign",
+    projectTitle: "Spark UX redesign",
     tasks: [],
     independentTodos: [],
     taskCountTotal: 0,
@@ -74,7 +74,7 @@ void test("SparkWidget registers, invalidates renders, clears hidden state, and 
         title: "Refresh task row",
         status: "running",
         claim: "mine",
-        roleLabel: "me",
+        agentLabel: "me",
         todos: [],
       },
     ],
@@ -84,14 +84,14 @@ void test("SparkWidget registers, invalidates renders, clears hidden state, and 
   assert.equal(renderRequests, 1);
   assert.match(component.render().join("\n"), /→ @me Refresh task row/);
 
-  state = widgetState({ threadTitle: undefined });
+  state = widgetState({ projectTitle: undefined });
   widget.update();
   assert.equal(registrations.length, 2);
   assert.deepEqual(registrations[1], { key: "spark-status", cb: undefined });
   assert.deepEqual(component.render(), []);
 
   state = widgetState({
-    threadTitle: undefined,
+    projectTitle: undefined,
     independentTodos: [{ content: "Finished hidden TODO", status: "done" }],
   });
   widget.update();
@@ -124,7 +124,7 @@ void test("spark widget hides deleted task TODOs but keeps done task TODOs visib
           title: "Task-centric row",
           status: "running",
           claim: "mine",
-          roleLabel: "me",
+          agentLabel: "me",
           todos: [
             { displayNumber: 2, content: "Completed child TODO", status: "done" },
             { displayNumber: 3, content: "Deleted child TODO", status: "deleted" },
@@ -143,7 +143,7 @@ void test("spark widget hides deleted task TODOs but keeps done task TODOs visib
   assert.doesNotMatch(lines, /Deleted child TODO/);
 });
 
-void test("spark widget shows compact DAG progress above thread details", () => {
+void test("spark widget shows compact DAG progress above project details", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       dag: {
@@ -212,10 +212,10 @@ void test("spark widget renders completed DAG state in plain language", () => {
   assert.doesNotMatch(lines.join("\n"), /DAG\(failed|Spark DAG/);
 });
 
-void test("spark widget shows thread header with task counts even before claims", () => {
+void test("spark widget shows project header with task counts even before claims", () => {
   const lines = renderSparkWidgetLines(
     {
-      threadTitle: "Spark UX redesign",
+      projectTitle: "Spark UX redesign",
       tasks: [],
       independentTodos: [],
       taskCountTotal: 5,
@@ -237,13 +237,13 @@ void test("spark widget only shows missing plan marker on task rows", () => {
         {
           title: "Refine planned task",
           status: "pending",
-          roleLabel: "worker",
+          agentLabel: "worker",
           todos: [],
         },
         {
           title: "Refine underspecified task",
           status: "pending",
-          roleLabel: "worker",
+          agentLabel: "worker",
           planSummary: "missing",
           todos: [],
         },
@@ -262,20 +262,20 @@ void test("spark widget only shows missing plan marker on task rows", () => {
 void test("spark widget shows role/title task rows with nested TODOs and independent TODO siblings", () => {
   const lines = renderSparkWidgetLines(
     {
-      threadTitle: "Spark UX redesign",
+      projectTitle: "Spark UX redesign",
       tasks: [
         {
           title: "Redesign task and TODO display",
           status: "running",
           claim: "mine",
-          roleLabel: "me",
+          agentLabel: "me",
           todos: [
             { displayNumber: 7, content: "Update widget layout", status: "in_progress" },
             { displayNumber: 12, content: "Update docs", status: "pending" },
           ],
         },
       ],
-      independentTodos: [{ displayNumber: 3, content: "Decide thread symbol", status: "pending" }],
+      independentTodos: [{ displayNumber: 3, content: "Decide project symbol", status: "pending" }],
       taskCountTotal: 3,
       taskCountClaimed: 2,
       taskCountClaimedBySession: 1,
@@ -290,31 +290,31 @@ void test("spark widget shows role/title task rows with nested TODOs and indepen
   assert.doesNotMatch(text, /Implementation details are hidden in the widget/);
   assert.match(text, /#7 Update widget layout/);
   assert.match(text, /#12 Update docs/);
-  assert.match(text, /#3 Decide thread symbol/);
+  assert.match(text, /#3 Decide project symbol/);
 });
 
 void test("spark widget does not expand TODOs for finished tasks", () => {
   const lines = renderSparkWidgetLines(
     {
-      threadTitle: "Spark UX redesign",
+      projectTitle: "Spark UX redesign",
       tasks: [
         {
           title: "Completed task",
           status: "done",
-          roleLabel: "unassigned",
+          agentLabel: "unassigned",
           todos: [{ displayNumber: 1, content: "Finished child TODO", status: "done" }],
         },
         {
           title: "Cancelled task",
           status: "cancelled",
-          roleLabel: "unassigned",
+          agentLabel: "unassigned",
           todos: [{ displayNumber: 2, content: "Cancelled child TODO", status: "pending" }],
         },
         {
           title: "Active task",
           status: "running",
           claim: "mine",
-          roleLabel: "me",
+          agentLabel: "me",
           todos: [{ displayNumber: 3, content: "Active child TODO", status: "pending" }],
         },
       ],
@@ -338,13 +338,13 @@ void test("spark widget does not expand TODOs for finished tasks", () => {
 void test("spark widget uses stable TODO display numbers instead of sorted row ordinals", () => {
   const lines = renderSparkWidgetLines(
     {
-      threadTitle: "Spark UX redesign",
+      projectTitle: "Spark UX redesign",
       tasks: [
         {
           title: "Stable numbering",
           status: "running",
           claim: "mine",
-          roleLabel: "me",
+          agentLabel: "me",
           todos: [
             { displayNumber: 4, content: "Pending item created first", status: "pending" },
             { displayNumber: 9, content: "Active item created later", status: "in_progress" },
@@ -375,7 +375,7 @@ void test("spark widget animates only current-session role-runs and keeps others
           title: "Animated work",
           status: "running",
           claim: "role-run",
-          roleLabel: "worker",
+          agentLabel: "worker",
           backgroundOwner: "session",
           animationFrame: 7,
           todos: [],
@@ -394,7 +394,7 @@ void test("spark widget animates only current-session role-runs and keeps others
           title: "Waiting for input",
           status: "running",
           claim: "role-run",
-          roleLabel: "worker",
+          agentLabel: "worker",
           backgroundOwner: "session",
           animationFrame: 3,
           waitingForInput: true,
@@ -414,7 +414,7 @@ void test("spark widget animates only current-session role-runs and keeps others
           title: "Other session task",
           status: "running",
           claim: "other",
-          roleLabel: "reviewer",
+          agentLabel: "reviewer",
           animationFrame: 7,
           todos: [],
         },
@@ -435,25 +435,25 @@ void test("spark widget animates only current-session role-runs and keeps others
 void test("spark widget distinguishes cancelled, failed, and role labels", () => {
   const lines = renderSparkWidgetLines(
     {
-      threadTitle: "Spark UX redesign",
+      projectTitle: "Spark UX redesign",
       tasks: [
         {
           title: "Cancelled review task",
           status: "cancelled",
-          roleLabel: "unassigned",
+          agentLabel: "unassigned",
           todos: [],
         },
         {
           title: "Broken task",
           status: "failed",
-          roleLabel: "unassigned",
+          agentLabel: "unassigned",
           todos: [],
         },
         {
           title: "Role task",
           status: "running",
           claim: "role-run",
-          roleLabel: "worker-a1b2c3d4",
+          agentLabel: "worker-a1b2c3d4",
           backgroundOwner: "session",
           todos: [],
         },
@@ -461,7 +461,7 @@ void test("spark widget distinguishes cancelled, failed, and role labels", () =>
           title: "Other session task",
           status: "running",
           claim: "other",
-          roleLabel: "reviewer",
+          agentLabel: "reviewer",
           todos: [],
         },
       ],
@@ -485,14 +485,14 @@ void test("spark widget distinguishes cancelled, failed, and role labels", () =>
 void test("spark widget keeps role labels before truncatable task titles", () => {
   const lines = renderSparkWidgetLines(
     {
-      threadTitle: "Spark UX redesign",
+      projectTitle: "Spark UX redesign",
       tasks: [
         {
           title:
             "This is a deliberately long task title that should be truncated after the role identity remains visible",
           status: "running",
           claim: "role-run",
-          roleLabel: "worker-a1b2c3d4",
+          agentLabel: "worker-a1b2c3d4",
           backgroundOwner: "session",
           todos: [],
         },
@@ -514,13 +514,13 @@ void test("spark widget keeps role labels before truncatable task titles", () =>
 void test("spark widget summarizes tasks and current-session in-memory running role-runs in header", () => {
   const lines = renderSparkWidgetLines(
     {
-      threadTitle: "Spark UX redesign",
+      projectTitle: "Spark UX redesign",
       tasks: [
         {
           title: "Harden ask gates",
           status: "running",
           claim: "role-run",
-          roleLabel: "worker-a1b2c3d4",
+          agentLabel: "worker-a1b2c3d4",
           backgroundOwner: "session",
           todos: [],
         },
@@ -528,7 +528,7 @@ void test("spark widget summarizes tasks and current-session in-memory running r
           title: "Update docs",
           status: "running",
           claim: "role-run",
-          roleLabel: "worker-0c5a1efe",
+          agentLabel: "worker-0c5a1efe",
           backgroundOwner: "session",
           todos: [],
         },
@@ -536,7 +536,7 @@ void test("spark widget summarizes tasks and current-session in-memory running r
           title: "Review dirty changes",
           status: "running",
           claim: "role-run",
-          roleLabel: "reviewer-2dd9591d",
+          agentLabel: "reviewer-2dd9591d",
           backgroundOwner: "session",
           todos: [],
         },
@@ -544,18 +544,18 @@ void test("spark widget summarizes tasks and current-session in-memory running r
           title: "Other session worker",
           status: "running",
           claim: "role-run",
-          roleLabel: "reviewer",
+          agentLabel: "reviewer",
           todos: [],
         },
         {
           title: "Persisted but not in-memory running",
           status: "running",
           claim: "role-run",
-          roleLabel: "stale-worker",
+          agentLabel: "stale-worker",
           todos: [],
         },
-        { title: "Pending task", status: "pending", roleLabel: "unassigned", todos: [] },
-        { title: "Failed task", status: "failed", roleLabel: "worker-failed", todos: [] },
+        { title: "Pending task", status: "pending", agentLabel: "unassigned", todos: [] },
+        { title: "Failed task", status: "failed", agentLabel: "worker-failed", todos: [] },
       ],
       independentTodos: [],
       taskCountTotal: 7,
@@ -572,16 +572,16 @@ void test("spark widget summarizes tasks and current-session in-memory running r
   assert.doesNotMatch(header, /a1b2c3d4|0c5a1efe|2dd9591d|stale-worker/);
 });
 
-void test("spark widget renders task summary on the thread header", () => {
+void test("spark widget renders task summary on the project header", () => {
   const lines = renderSparkWidgetLines(
     {
-      threadTitle: "Spark UX redesign",
+      projectTitle: "Spark UX redesign",
       tasks: [
         {
           title: "Background task",
           status: "running",
           claim: "role-run",
-          roleLabel: "worker-a1b2c3d4",
+          agentLabel: "worker-a1b2c3d4",
           backgroundOwner: "session",
           todos: [],
         },
@@ -589,7 +589,7 @@ void test("spark widget renders task summary on the thread header", () => {
           title: "Foreground task",
           status: "running",
           claim: "mine",
-          roleLabel: "me",
+          agentLabel: "me",
           todos: [],
         },
       ],
@@ -612,7 +612,7 @@ void test("spark widget renders task summary on the thread header", () => {
 void test("spark widget hides placeholder-only done TODO state", () => {
   const lines = renderSparkWidgetLines(
     {
-      threadTitle: undefined,
+      projectTitle: undefined,
       tasks: [],
       independentTodos: [{ content: "Old coordination TODO", status: "done" }],
       taskCountTotal: 9,
@@ -630,12 +630,12 @@ void test("spark widget hides placeholder-only done TODO state", () => {
 void test("spark widget prioritizes unfinished rows before done or cancelled rows", () => {
   const lines = renderSparkWidgetLines(
     {
-      threadTitle: "Spark UX redesign",
+      projectTitle: "Spark UX redesign",
       tasks: [
-        { title: "Cancelled task", status: "cancelled", roleLabel: "unassigned", todos: [] },
-        { title: "Done task", status: "done", roleLabel: "unassigned", todos: [] },
-        { title: "Pending task", status: "pending", roleLabel: "unassigned", todos: [] },
-        { title: "Running task", status: "running", roleLabel: "unassigned", todos: [] },
+        { title: "Cancelled task", status: "cancelled", agentLabel: "unassigned", todos: [] },
+        { title: "Done task", status: "done", agentLabel: "unassigned", todos: [] },
+        { title: "Pending task", status: "pending", agentLabel: "unassigned", todos: [] },
+        { title: "Running task", status: "running", agentLabel: "unassigned", todos: [] },
       ],
       independentTodos: [],
       taskCountTotal: 4,
@@ -656,13 +656,13 @@ void test("spark widget prioritizes unfinished rows before done or cancelled row
 void test("spark widget truncates wide rendered rows", () => {
   const lines = renderSparkWidgetLines(
     {
-      threadTitle: "Spark ask 中文宽字符宽度回归测试".repeat(4),
+      projectTitle: "Spark ask 中文宽字符宽度回归测试".repeat(4),
       tasks: [
         {
           title: "处理很长的 ask_flow 中文任务标题，避免 widget 行超过终端宽度".repeat(3),
           status: "running",
           claim: "mine",
-          roleLabel: "me",
+          agentLabel: "me",
           todos: [
             {
               content: "一个很长的中文 TODO，用来确认 Spark widget 使用 Pi TUI 宽度算法截断".repeat(
@@ -691,13 +691,13 @@ void test("spark widget truncates wide rendered rows", () => {
 void test("spark widget collapses overflowing rows", () => {
   const lines = renderSparkWidgetLines(
     {
-      threadTitle: "Spark UX redesign",
+      projectTitle: "Spark UX redesign",
       tasks: [
         {
           title: "Redesign task and TODO display",
           status: "running",
           claim: "mine",
-          roleLabel: "me",
+          agentLabel: "me",
           todos: Array.from({ length: 12 }, (_, index) => ({
             content: `Todo ${index + 1}`,
             status: index === 0 ? "in_progress" : index > 8 ? "done" : "pending",

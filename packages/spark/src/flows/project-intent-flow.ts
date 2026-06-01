@@ -1,54 +1,54 @@
 import { type ArtifactRef } from "spark-core";
 import { runSparkAskTool, type SparkAskToolParams, type SparkAskToolUi } from "spark-ask";
 
-export interface ThreadIntentClarificationResult {
+export interface ProjectIntentClarificationResult {
   asked: boolean;
   artifactRef?: ArtifactRef;
   summary?: string;
   blocked: boolean;
 }
 
-export function shouldClarifyThreadIntent(input: {
+export function shouldClarifyProjectIntent(input: {
   title: string;
   description?: string;
-  explicitThread?: string;
+  explicitProject?: string;
 }): boolean {
-  if (input.explicitThread?.trim()) return false;
+  if (input.explicitProject?.trim()) return false;
   const title = input.title.trim();
   const description = input.description?.trim() ?? "";
   if (!title) return false;
   if (description && description !== title) return false;
-  return isGenericThreadTitle(title);
+  return isGenericProjectTitle(title);
 }
 
-export async function clarifyThreadIntentIfNeeded(input: {
+export async function clarifyProjectIntentIfNeeded(input: {
   cwd: string;
   title: string;
   description?: string;
-  explicitThread?: string;
+  explicitProject?: string;
   ui?: SparkAskToolUi;
-}): Promise<ThreadIntentClarificationResult> {
-  if (!shouldClarifyThreadIntent(input)) return { asked: false, blocked: false };
-  const copy = threadIntentAskCopy(input.title, input.description);
+}): Promise<ProjectIntentClarificationResult> {
+  if (!shouldClarifyProjectIntent(input)) return { asked: false, blocked: false };
+  const copy = projectIntentAskCopy(input.title, input.description);
   const request: SparkAskToolParams = {
     mode: "clarification",
-    flow: "thread-intent-refinement",
-    title: `Clarify thread intent for “${copy.title}”`,
+    flow: "project-intent-refinement",
+    title: `Clarify project intent for “${copy.title}”`,
     context: [
-      `Proposed thread title: ${copy.title}`,
+      `Proposed project title: ${copy.title}`,
       `Current description: ${copy.description}`,
-      `Reason for asking: “${copy.title}” does not yet identify the related work this thread should group.`,
+      `Reason for asking: “${copy.title}” does not yet identify the related work this project should group.`,
     ].join("\n"),
     questions: [
       {
         id: "intent",
-        prompt: `For the placeholder thread “${copy.title}”, which concrete workstream, feature, bug, or decision family should its tasks belong to?`,
+        prompt: `For the placeholder project “${copy.title}”, which concrete workstream, feature, bug, or decision family should its tasks belong to?`,
         type: "freeform",
         required: false,
       },
       {
         id: "doneWhen",
-        prompt: `For that “${copy.title}” workstream, what observable outcome would make this thread complete enough to close?`,
+        prompt: `For that “${copy.title}” workstream, what observable outcome would make this project complete enough to close?`,
         type: "freeform",
         required: false,
       },
@@ -68,33 +68,33 @@ export async function clarifyThreadIntentIfNeeded(input: {
   };
 }
 
-function threadIntentAskCopy(
+function projectIntentAskCopy(
   title: string,
   description: string | undefined,
 ): { title: string; description: string } {
-  const normalizedTitle = summarizeThreadText(title) || "untitled thread";
-  const normalizedDescription = summarizeThreadText(description) || normalizedTitle;
+  const normalizedTitle = summarizeProjectText(title) || "untitled project";
+  const normalizedDescription = summarizeProjectText(description) || normalizedTitle;
   return { title: normalizedTitle, description: normalizedDescription };
 }
 
-function summarizeThreadText(value: string | undefined): string {
+function summarizeProjectText(value: string | undefined): string {
   const compact = value?.replace(/\s+/g, " ").trim() ?? "";
   if (compact.length <= 100) return compact;
   return `${compact.slice(0, 97).trimEnd()}…`;
 }
 
-function isGenericThreadTitle(title: string): boolean {
+function isGenericProjectTitle(title: string): boolean {
   const normalized = title.trim().toLowerCase();
   return (
-    normalized === "spark thread" ||
-    normalized === "new thread" ||
-    normalized === "thread" ||
+    normalized === "spark project" ||
+    normalized === "new project" ||
+    normalized === "project" ||
     normalized === "todo" ||
     normalized === "tasks" ||
     normalized === "整理一下" ||
     normalized === "自定义输入" ||
     normalized === "「自定义输入」" ||
-    /^thread[-_ ]?\d*$/.test(normalized) ||
+    /^project[-_ ]?\d*$/.test(normalized) ||
     /^task[-_ ]?\d*$/.test(normalized)
   );
 }

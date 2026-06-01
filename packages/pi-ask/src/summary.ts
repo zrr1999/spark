@@ -56,11 +56,11 @@ export function createAskArtifactBody<Req extends AskSummaryRequest, Res extends
   result: Res,
   options: { blocked?: boolean } = {},
 ): AskArtifactBody<Req, Res> {
-  return {
+  return omitUndefinedFields({
     request,
     result,
     summary: summarizeAskResult(request, result, options),
-  };
+  }) as AskArtifactBody<Req, Res>;
 }
 
 export function createPiAskFlowArtifactBody(
@@ -85,4 +85,16 @@ export function answerEntriesFromFlow(
   answers: Record<string, PiAskFlowAnswerEntry>,
 ): Record<string, AskSummaryAnswer> {
   return answers;
+}
+
+function omitUndefinedFields(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => (item === undefined ? null : omitUndefinedFields(item)));
+  }
+  if (!value || typeof value !== "object") return value;
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (child !== undefined) result[key] = omitUndefinedFields(child);
+  }
+  return result;
 }

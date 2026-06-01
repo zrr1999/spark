@@ -7,7 +7,7 @@ import {
   type AskRef,
   type TaskPlan,
   type TaskRef,
-  type ThreadRef,
+  type ProjectRef,
 } from "spark-core";
 import { type TaskPlanInput } from "spark-tasks";
 
@@ -44,7 +44,7 @@ export interface RoadmapItemRecord {
   evidenceRefs?: string[];
   openQuestions?: string[];
   askRefs?: Array<AskRef | ArtifactRef | string>;
-  threadRefs?: ThreadRef[];
+  projectRefs?: ProjectRef[];
   taskRefs?: TaskRef[];
   createdAt?: string;
   updatedAt?: string;
@@ -127,7 +127,7 @@ export function applyRoadmapHintsToTaskPlan(plan: TaskPlan, item: RoadmapItemRec
 export async function attachRoadmapPlanningRefs(
   cwd: string,
   itemRef: RoadmapItemRef | undefined,
-  threadRef: ThreadRef,
+  projectRef: ProjectRef,
   taskRefs: TaskRef[],
 ): Promise<RoadmapItemRecord | undefined> {
   if (!itemRef) return undefined;
@@ -135,10 +135,10 @@ export async function attachRoadmapPlanningRefs(
   if (!state) return undefined;
   const found = findRoadmapItem(state, itemRef);
   if (!found) return undefined;
-  found.item.threadRefs = uniqueStrings([
-    ...(found.item.threadRefs ?? []),
-    threadRef,
-  ]) as ThreadRef[];
+  found.item.projectRefs = uniqueStrings([
+    ...(found.item.projectRefs ?? []),
+    projectRef,
+  ]) as ProjectRef[];
   found.item.taskRefs = uniqueStrings([...(found.item.taskRefs ?? []), ...taskRefs]) as TaskRef[];
   found.item.updatedAt = nowIso();
   found.roadmap.updatedAt = found.item.updatedAt;
@@ -169,21 +169,32 @@ export function renderRoadmapPlanningContext(context: RoadmapPlanningContext | u
       "- Planning focus matched this roadmap item; reuse/update it instead of creating a parallel item.",
     );
   lines.push(
-    "- When planning tasks, map this item into TaskPlan contextRefs/constraints/successCriteria/evidenceRequired; spark_plan_tasks will attach produced thread/task refs back to the item.",
+    "- When planning tasks, map this item into TaskPlan contextRefs/constraints/successCriteria/evidenceRequired; spark_plan_tasks will attach produced project/task refs back to the item.",
   );
   return `\n\n${lines.join("\n")}`;
 }
 
 async function loadProjectRoadmap(cwd: string): Promise<ProjectRoadmapState | undefined> {
+  const filePath = roadmapPath(cwd);
+  let raw: string;
   try {
-    const raw = await readFile(roadmapPath(cwd), "utf8");
-    const parsed = JSON.parse(raw) as ProjectRoadmapState;
-    if (parsed?.version !== 1 || !Array.isArray(parsed.roadmaps)) return undefined;
-    return parsed;
+    raw = await readFile(filePath, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `invalid Spark roadmap store: ${filePath}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  validateProjectRoadmapState(parsed, filePath);
+  return parsed as ProjectRoadmapState;
 }
 
 async function saveProjectRoadmap(cwd: string, state: ProjectRoadmapState): Promise<void> {
@@ -245,6 +256,162 @@ function findRoadmapItem(
     if (item) return { roadmap, item };
   }
   return undefined;
+}
+
+function validateProjectRoadmapState(value: unknown, filePath: string): void {
+  const state = requireRecord(value, filePath, "snapshot");
+  if (state.version !== 1) failRoadmapStore(filePath, "snapshot.version must be 1");
+  const roadmaps = requireArray(state.roadmaps, filePath, "snapshot.roadmaps");
+  for (const [roadmapIndex, roadmapValue] of roadmaps.entries())
+    validateRoadmapRecord(roadmapValue, filePath, `snapshot.roadmaps[${roadmapIndex}]`);
+
+  const activeRoadmapRef = optionalRoadmapRef(
+    state.activeRoadmapRef,
+    filePath,
+    "snapshot.activeRoadmapRef",
+  );
+  if (activeRoadmapRef && !roadmaps.some((roadmap) => recordRef(roadmap) === activeRoadmapRef))
+    failRoadmapStore(filePath, `snapshot.activeRoadmapRef ${activeRoadmapRef} is not present`);
+
+  const activeItemRef = optionalRoadmapItemRef(
+    state.activeItemRef,
+    filePath,
+    "snapshot.activeItemRef",
+  );
+  if (activeItemRef && !roadmaps.some((roadmap) => roadmapContainsItem(roadmap, activeItemRef)))
+    failRoadmapStore(filePath, `snapshot.activeItemRef ${activeItemRef} is not present`);
+}
+
+function validateRoadmapRecord(value: unknown, filePath: string, path: string): void {
+  const roadmap = requireRecord(value, filePath, path);
+  requireRoadmapRef(roadmap.ref, filePath, `${path}.ref`);
+  requireString(roadmap.title, filePath, `${path}.title`);
+  optionalOneOf(roadmap.status, ["active", "done"], filePath, `${path}.status`);
+  const activeItemRef = optionalRoadmapItemRef(
+    roadmap.activeItemRef,
+    filePath,
+    `${path}.activeItemRef`,
+  );
+  const items = requireArray(roadmap.items, filePath, `${path}.items`);
+  for (const [itemIndex, itemValue] of items.entries())
+    validateRoadmapItemRecord(itemValue, filePath, `${path}.items[${itemIndex}]`);
+  if (activeItemRef && !items.some((item) => recordRef(item) === activeItemRef))
+    failRoadmapStore(filePath, `${path}.activeItemRef ${activeItemRef} is not present`);
+  optionalString(roadmap.createdAt, filePath, `${path}.createdAt`);
+  optionalString(roadmap.updatedAt, filePath, `${path}.updatedAt`);
+}
+
+function validateRoadmapItemRecord(value: unknown, filePath: string, path: string): void {
+  const item = requireRecord(value, filePath, path);
+  requireRoadmapItemRef(item.ref, filePath, `${path}.ref`);
+  optionalString(item.title, filePath, `${path}.title`);
+  requireString(item.objective, filePath, `${path}.objective`);
+  optionalOneOf(item.status, ["active", "pending", "blocked", "done"], filePath, `${path}.status`);
+  optionalStringOrStringArray(item.scope, filePath, `${path}.scope`);
+  for (const key of [
+    "constraints",
+    "successCriteria",
+    "acceptance",
+    "evidenceRequired",
+    "evidenceRefs",
+    "openQuestions",
+    "askRefs",
+    "projectRefs",
+    "taskRefs",
+  ] as const)
+    optionalStringArray(item[key], filePath, `${path}.${key}`);
+  optionalString(item.createdAt, filePath, `${path}.createdAt`);
+  optionalString(item.updatedAt, filePath, `${path}.updatedAt`);
+}
+
+function requireRecord(value: unknown, filePath: string, path: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    failRoadmapStore(filePath, `${path} must be an object`);
+  return value as Record<string, unknown>;
+}
+
+function requireArray(value: unknown, filePath: string, path: string): unknown[] {
+  if (!Array.isArray(value)) failRoadmapStore(filePath, `${path} must be an array`);
+  return value;
+}
+
+function requireString(value: unknown, filePath: string, path: string): string {
+  if (typeof value !== "string") failRoadmapStore(filePath, `${path} must be a string`);
+  return value;
+}
+
+function optionalString(value: unknown, filePath: string, path: string): void {
+  if (value !== undefined && typeof value !== "string")
+    failRoadmapStore(filePath, `${path} must be a string`);
+}
+
+function optionalStringArray(value: unknown, filePath: string, path: string): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string"))
+    failRoadmapStore(filePath, `${path} must be an array of strings`);
+}
+
+function optionalStringOrStringArray(value: unknown, filePath: string, path: string): void {
+  if (value === undefined || typeof value === "string") return;
+  optionalStringArray(value, filePath, path);
+}
+
+function optionalOneOf(
+  value: unknown,
+  allowed: readonly string[],
+  filePath: string,
+  path: string,
+): void {
+  if (value === undefined) return;
+  if (typeof value !== "string" || !allowed.includes(value))
+    failRoadmapStore(filePath, `${path} must be one of ${allowed.join(", ")}`);
+}
+
+function requireRoadmapRef(value: unknown, filePath: string, path: string): RoadmapRef {
+  const ref = requireString(value, filePath, path);
+  if (!ref.startsWith("roadmap:")) failRoadmapStore(filePath, `${path} must be a roadmap: ref`);
+  return ref as RoadmapRef;
+}
+
+function optionalRoadmapRef(
+  value: unknown,
+  filePath: string,
+  path: string,
+): RoadmapRef | undefined {
+  if (value === undefined) return undefined;
+  return requireRoadmapRef(value, filePath, path);
+}
+
+function requireRoadmapItemRef(value: unknown, filePath: string, path: string): RoadmapItemRef {
+  const ref = requireString(value, filePath, path);
+  if (!ref.startsWith("roadmap-item:"))
+    failRoadmapStore(filePath, `${path} must be a roadmap-item: ref`);
+  return ref as RoadmapItemRef;
+}
+
+function optionalRoadmapItemRef(
+  value: unknown,
+  filePath: string,
+  path: string,
+): RoadmapItemRef | undefined {
+  if (value === undefined) return undefined;
+  return requireRoadmapItemRef(value, filePath, path);
+}
+
+function recordRef(value: unknown): unknown {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>).ref
+    : undefined;
+}
+
+function roadmapContainsItem(value: unknown, itemRef: RoadmapItemRef): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const items = (value as Record<string, unknown>).items;
+  return Array.isArray(items) && items.some((item) => recordRef(item) === itemRef);
+}
+
+function failRoadmapStore(filePath: string, message: string): never {
+  throw new Error(`invalid Spark roadmap store: ${filePath}: ${message}`);
 }
 
 function normalizeStringList(value: unknown): string[] {

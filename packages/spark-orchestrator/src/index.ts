@@ -1,21 +1,59 @@
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import type { RoleRegistry, RoleRunMode } from "pi-roles";
-import type { ArtifactStore } from "spark-artifacts";
 import {
   newRef,
   nowIso,
-  type RoleRef,
   type RunRef,
-  type Task,
   type TaskRef,
   type TaskRun,
   type TaskRunCompletionSummary,
-  type ThreadRef,
+  type ProjectRef,
+  writeJsonFileAtomic,
 } from "spark-core";
 import type { TaskGraph } from "spark-tasks";
-import { RoleRunTimeoutError, runSparkTask } from "spark-runtime";
+
+import {
+  collectSparkDagRunNextSteps,
+  completionDigestFromTaskRuns,
+  createSparkDagCompletionFollowUp,
+} from "./dag-run-completion.ts";
+import { reconcileDagRunCounters } from "./dag-run-counters.ts";
+import { reconcileSparkDagRunSnapshot } from "./dag-run-reconcile.ts";
+import {
+  normalizeSparkDagRunPruneOptions,
+  planSparkDagRunPrune,
+  type SparkDagRunPruneOptions,
+  type SparkDagRunPruneResult,
+} from "./dag-run-retention.ts";
+import {
+  isAcknowledgeableDagRun,
+  isAcknowledgedDagRunProblem,
+  isActionableDagRunProblem,
+  isTerminalDagRunStatus,
+} from "./dag-run-status.ts";
+import { emptySparkDagRunSnapshot, loadSparkDagRunStoreSnapshot } from "./dag-run-serialization.ts";
+
+export {
+  DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
+  DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
+} from "spark-core";
+export { sparkDagRunNextSteps } from "./dag-run-completion.ts";
+export { SparkDagRunStoreFormatError } from "./dag-run-serialization.ts";
+export type {
+  SparkDagRunPruneOptions,
+  SparkDagRunPruneResult,
+  SparkDagRunRetentionCandidateReason,
+  SparkDagRunRetentionEntry,
+  SparkDagRunRetentionKeepReason,
+} from "./dag-run-retention.ts";
+export {
+  runReadySparkTasks,
+  type SparkReadyTaskRunnerOptions,
+  type SparkReadyTaskRunnerProgress,
+  type SparkReadyTaskRunnerResult,
+  type SparkReadyTaskRunnerSchedule,
+} from "./ready-task-runner.ts";
 
 export type SparkDagManagerStatus = "idle" | "running" | "failed";
 export type SparkDagRunStatus = "running" | "succeeded" | "failed" | "timed_out" | "stale";
@@ -59,58 +97,9 @@ export interface SparkDagRunAcknowledgeResult {
   missing: RunRef[];
 }
 
-export type SparkDagRunRetentionCandidateReason = "old-succeeded" | "old-acknowledged-problem";
-
-export type SparkDagRunRetentionKeepReason =
-  | "active-run"
-  | "running"
-  | "non-terminal"
-  | "global-recent-window"
-  | "thread-recent-window"
-  | "within-retention-age"
-  | "unacknowledged-problem"
-  | "unsafe-status"
-  | "invalid-timestamp";
-
-export interface SparkDagRunRetentionEntry {
-  ref: RunRef;
-  threadRef?: ThreadRef;
-  status: SparkDagRunStatus;
-  startedAt: string;
-  updatedAt: string;
-  finishedAt?: string;
-  acknowledgedAt?: string;
-  retentionDate: string;
-  ageDays?: number;
-  reason: SparkDagRunRetentionCandidateReason | SparkDagRunRetentionKeepReason;
-}
-
-export interface SparkDagRunPruneOptions {
-  dryRun?: boolean;
-  olderThanDays?: number;
-  keepRecent?: number;
-  keepRecentPerThread?: number;
-  activeRunRefs?: Iterable<RunRef>;
-  now?: string;
-}
-
-export interface SparkDagRunPruneResult {
-  snapshot: SparkDagRunStoreSnapshot;
-  dryRun: boolean;
-  olderThanDays: number;
-  keepRecent: number;
-  keepRecentPerThread: number;
-  cutoffIso: string;
-  before: number;
-  after: number;
-  candidates: SparkDagRunRetentionEntry[];
-  deleted: SparkDagRunRetentionEntry[];
-  kept: SparkDagRunRetentionEntry[];
-}
-
 export interface SparkDagRunRecord {
   ref: RunRef;
-  threadRef?: ThreadRef;
+  projectRef?: ProjectRef;
   ownerSessionId?: string;
   dryRun: boolean;
   maxConcurrency: number;
@@ -165,22 +154,11 @@ export interface SparkDagRunReconcileInput {
 }
 
 export interface SparkDagRunStartInput {
-  threadRef?: ThreadRef;
+  projectRef?: ProjectRef;
   ownerSessionId?: string;
   dryRun: boolean;
   maxConcurrency: number;
   timeoutMs: number;
-}
-
-interface NormalizedSparkDagRunPruneOptions {
-  dryRun: boolean;
-  olderThanDays: number;
-  keepRecent: number;
-  keepRecentPerThread: number;
-  activeRunRefs: Set<RunRef>;
-  nowMs: number;
-  cutoffMs: number;
-  cutoffIso: string;
 }
 
 export interface SparkDagRunScheduleInput {
@@ -193,6 +171,17 @@ export interface SparkDagRunProgressInput {
   taskRef: TaskRef;
   run: TaskRun;
   completed: number;
+}
+
+export interface SparkDagRunFinishInput {
+  scheduled: number;
+  completed: number;
+  timedOut: boolean;
+  failed?: number;
+  cancelled?: number;
+  foregroundTimedOut?: boolean;
+  detached?: boolean;
+  runs?: TaskRun[];
 }
 
 export class SparkDagRunStore {
@@ -308,46 +297,22 @@ export class SparkDagRunStore {
     const now = input.now ?? nowIso();
     let reconciled: SparkDagRunStoreSnapshot | undefined;
     await this.updateSnapshot((snapshot) => {
-      for (const record of snapshot.runs) {
-        if (record.status !== "running") continue;
-        if (record.taskRunRefs.some((runRef) => activeRunRefs.has(runRef))) continue;
-        reconcileStaleDagRun(record, input.graph, now);
-      }
-      if (
-        snapshot.manager.activeRunRef &&
-        !snapshot.runs.some(
-          (run) => run.ref === snapshot.manager.activeRunRef && run.status === "running",
-        )
-      ) {
-        snapshot.manager.activeRunRef = undefined;
-      }
-      snapshot.manager.status = snapshot.manager.activeRunRef ? "running" : "idle";
-      snapshot.manager.updatedAt = now;
+      reconcileSparkDagRunSnapshot(snapshot, {
+        graph: input.graph,
+        activeRunRefs,
+        now,
+      });
       reconciled = snapshot;
     });
     return reconciled ?? (await this.load());
   }
 
   async load(): Promise<SparkDagRunStoreSnapshot> {
-    try {
-      const raw = JSON.parse(
-        await readFile(this.filePath, "utf8"),
-      ) as Partial<SparkDagRunStoreSnapshot>;
-      return normalizeSparkDagRunSnapshot(raw);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptySparkDagRunSnapshot();
-      throw error;
-    }
+    return loadSparkDagRunStoreSnapshot(this.filePath);
   }
 
   async save(snapshot: SparkDagRunStoreSnapshot): Promise<void> {
-    await mkdir(dirname(this.filePath), { recursive: true });
-    const tempPath = join(
-      dirname(this.filePath),
-      `.${Date.now()}-${Math.random().toString(16).slice(2)}-${this.filePath.split("/").at(-1)}.tmp`,
-    );
-    await writeFile(tempPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
-    await rename(tempPath, this.filePath);
+    await writeJsonFileAtomic(this.filePath, snapshot);
   }
 
   async startRun(input: SparkDagRunStartInput): Promise<SparkDagRunRecord> {
@@ -356,7 +321,7 @@ export class SparkDagRunStore {
       const now = nowIso();
       const record: SparkDagRunRecord = {
         ref: newRef("run"),
-        threadRef: input.threadRef,
+        projectRef: input.projectRef,
         ownerSessionId: input.ownerSessionId,
         dryRun: input.dryRun,
         maxConcurrency: input.maxConcurrency,
@@ -410,13 +375,7 @@ export class SparkDagRunStore {
 
   async finishRun(
     runRef: RunRef,
-    result: Pick<SparkReadyTaskRunnerResult, "scheduled" | "completed" | "timedOut"> &
-      Partial<
-        Pick<
-          SparkReadyTaskRunnerResult,
-          "failed" | "cancelled" | "foregroundTimedOut" | "detached" | "runs"
-        >
-      >,
+    result: SparkDagRunFinishInput,
     error?: unknown,
   ): Promise<SparkDagCompletionFollowUp | undefined> {
     let followUp: SparkDagCompletionFollowUp | undefined;
@@ -516,12 +475,6 @@ export class SparkDagRunStore {
   }
 }
 
-function isTerminalDagRunStatus(status: SparkDagRunStatus): boolean {
-  return (
-    status === "succeeded" || status === "failed" || status === "timed_out" || status === "stale"
-  );
-}
-
 function shouldKeepDagRunWhenClearingInactive(run: SparkDagRunRecord): boolean {
   return run.status === "running" || isActionableDagRunProblem(run);
 }
@@ -532,175 +485,6 @@ function latestRunningDagRun(runs: SparkDagRunRecord[]): SparkDagRunRecord | und
     if (run?.status === "running") return run;
   }
   return undefined;
-}
-
-function normalizeSparkDagRunPruneOptions(
-  options: SparkDagRunPruneOptions,
-): NormalizedSparkDagRunPruneOptions {
-  const olderThanDays = Number.isFinite(options.olderThanDays ?? 30)
-    ? Math.max(0, Math.floor(options.olderThanDays ?? 30))
-    : 30;
-  const keepRecent = Number.isFinite(options.keepRecent ?? 10)
-    ? Math.max(0, Math.floor(options.keepRecent ?? 10))
-    : 10;
-  const keepRecentPerThread = Number.isFinite(options.keepRecentPerThread ?? 10)
-    ? Math.max(0, Math.floor(options.keepRecentPerThread ?? 10))
-    : 10;
-  const nowMs = Date.parse(options.now ?? nowIso());
-  const safeNowMs = Number.isFinite(nowMs) ? nowMs : Date.now();
-  const cutoffMs = safeNowMs - olderThanDays * 24 * 60 * 60 * 1_000;
-  return {
-    dryRun: options.dryRun ?? true,
-    olderThanDays,
-    keepRecent,
-    keepRecentPerThread,
-    activeRunRefs: new Set(options.activeRunRefs ?? []),
-    nowMs: safeNowMs,
-    cutoffMs,
-    cutoffIso: new Date(cutoffMs).toISOString(),
-  };
-}
-
-function planSparkDagRunPrune(
-  snapshot: SparkDagRunStoreSnapshot,
-  options: NormalizedSparkDagRunPruneOptions,
-): SparkDagRunPruneResult {
-  const activeRunRefs = new Set(options.activeRunRefs);
-  if (snapshot.manager.activeRunRef) activeRunRefs.add(snapshot.manager.activeRunRef);
-  const terminalRuns = snapshot.runs
-    .filter((run) => isTerminalDagRunStatus(run.status))
-    .sort(compareSparkDagRunRetentionDateDesc);
-  const globallyRecent = new Set(terminalRuns.slice(0, options.keepRecent).map((run) => run.ref));
-  const recentlyByThread = new Set<RunRef>();
-  const byThread = new Map<string, SparkDagRunRecord[]>();
-  for (const run of terminalRuns) {
-    const threadKey = run.threadRef ?? "__unthreaded__";
-    byThread.set(threadKey, [...(byThread.get(threadKey) ?? []), run]);
-  }
-  for (const runs of byThread.values())
-    for (const run of runs.slice(0, options.keepRecentPerThread)) recentlyByThread.add(run.ref);
-
-  const candidates: SparkDagRunRetentionEntry[] = [];
-  const kept: SparkDagRunRetentionEntry[] = [];
-  for (const run of snapshot.runs) {
-    const decision = sparkDagRunRetentionDecision(run, options, {
-      activeRunRefs,
-      globallyRecent,
-      recentlyByThread,
-    });
-    if (decision.reason === "old-succeeded" || decision.reason === "old-acknowledged-problem")
-      candidates.push(decision);
-    else kept.push(decision);
-  }
-  return {
-    snapshot,
-    dryRun: options.dryRun,
-    olderThanDays: options.olderThanDays,
-    keepRecent: options.keepRecent,
-    keepRecentPerThread: options.keepRecentPerThread,
-    cutoffIso: options.cutoffIso,
-    before: snapshot.runs.length,
-    after: options.dryRun ? snapshot.runs.length : snapshot.runs.length - candidates.length,
-    candidates,
-    deleted: [],
-    kept,
-  };
-}
-
-function sparkDagRunRetentionDecision(
-  run: SparkDagRunRecord,
-  options: NormalizedSparkDagRunPruneOptions,
-  windows: {
-    activeRunRefs: Set<RunRef>;
-    globallyRecent: Set<RunRef>;
-    recentlyByThread: Set<RunRef>;
-  },
-): SparkDagRunRetentionEntry {
-  const retentionDate = sparkDagRunRetentionDate(run);
-  const retentionMs = Date.parse(retentionDate);
-  const ageDays = Number.isFinite(retentionMs)
-    ? Math.max(0, (options.nowMs - retentionMs) / (24 * 60 * 60 * 1_000))
-    : undefined;
-  const entry = (reason: SparkDagRunRetentionEntry["reason"]): SparkDagRunRetentionEntry => ({
-    ref: run.ref,
-    threadRef: run.threadRef,
-    status: run.status,
-    startedAt: run.startedAt,
-    updatedAt: run.updatedAt,
-    finishedAt: run.finishedAt,
-    acknowledgedAt: run.acknowledgedAt,
-    retentionDate,
-    ageDays,
-    reason,
-  });
-  if (
-    windows.activeRunRefs.has(run.ref) ||
-    run.taskRunRefs.some((ref) => windows.activeRunRefs.has(ref))
-  )
-    return entry("active-run");
-  if (run.status === "running") return entry("running");
-  if (!isTerminalDagRunStatus(run.status)) return entry("non-terminal");
-  if (windows.globallyRecent.has(run.ref)) return entry("global-recent-window");
-  if (windows.recentlyByThread.has(run.ref)) return entry("thread-recent-window");
-  if (!Number.isFinite(retentionMs)) return entry("invalid-timestamp");
-  if (retentionMs >= options.cutoffMs) return entry("within-retention-age");
-  if (run.status === "succeeded") return entry("old-succeeded");
-  if (isAcknowledgeableDagRun(run)) {
-    if (!run.acknowledgedAt) return entry("unacknowledged-problem");
-    return entry("old-acknowledged-problem");
-  }
-  return entry("unsafe-status");
-}
-
-function sparkDagRunRetentionDate(run: SparkDagRunRecord): string {
-  return run.finishedAt ?? run.updatedAt ?? run.startedAt;
-}
-
-function compareSparkDagRunRetentionDateDesc(a: SparkDagRunRecord, b: SparkDagRunRecord): number {
-  const byDate = sparkDagRunRetentionDate(b).localeCompare(sparkDagRunRetentionDate(a));
-  if (byDate !== 0) return byDate;
-  return b.ref.localeCompare(a.ref);
-}
-
-function isAcknowledgeableDagRun(run: SparkDagRunRecord): run is SparkDagRunRecord & {
-  status: Extract<SparkDagRunStatus, "failed" | "stale" | "timed_out">;
-} {
-  return run.status === "failed" || run.status === "stale" || run.status === "timed_out";
-}
-
-function isAcknowledgedDagRunProblem(run: SparkDagRunRecord): boolean {
-  return isAcknowledgeableDagRun(run) && Boolean(run.acknowledgedAt);
-}
-
-function isActionableDagRunProblem(run: SparkDagRunRecord): boolean {
-  return isAcknowledgeableDagRun(run) && !isAcknowledgedDagRunProblem(run);
-}
-
-function reconcileDagRunCounters(
-  record: SparkDagRunRecord,
-  fallbacks: { scheduledFallback?: number; completedFallback?: number } = {},
-): void {
-  record.scheduledTaskRefs = uniqueRefs(record.scheduledTaskRefs);
-  record.completedTaskRefs = uniqueRefs(record.completedTaskRefs);
-  record.taskRunRefs = uniqueRefs(record.taskRunRefs);
-  const scheduledSet = new Set(record.scheduledTaskRefs);
-  if (scheduledSet.size > 0) {
-    record.completedTaskRefs = record.completedTaskRefs.filter((taskRef) =>
-      scheduledSet.has(taskRef),
-    );
-    record.scheduled = scheduledSet.size;
-    record.completed = record.completedTaskRefs.length;
-    return;
-  }
-  record.scheduled = Math.max(0, record.scheduled, fallbacks.scheduledFallback ?? 0);
-  record.completed = Math.min(
-    record.scheduled,
-    Math.max(0, record.completed, fallbacks.completedFallback ?? 0),
-  );
-}
-
-function uniqueRefs<T extends string>(refs: T[]): T[] {
-  return [...new Set(refs)];
 }
 
 async function acquireSparkDagRunStoreLock(lockPath: string): Promise<() => Promise<void>> {
@@ -732,6 +516,13 @@ async function removeStaleSparkDagRunStoreLock(lockPath: string, staleMs: number
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
 }
 
 export function defaultSparkDagRunStore(cwd: string): SparkDagRunStore {
@@ -770,508 +561,4 @@ export function summarizeSparkDagRuns(
     actionable: actionableRuns.length,
     nextSteps: collectSparkDagRunNextSteps([actionableRun, lastRun, ...recentRuns]),
   };
-}
-
-function emptySparkDagRunSnapshot(): SparkDagRunStoreSnapshot {
-  const now = nowIso();
-  return { version: 1, manager: { status: "idle", updatedAt: now }, runs: [] };
-}
-
-function normalizeSparkDagRunSnapshot(
-  raw: Partial<SparkDagRunStoreSnapshot>,
-): SparkDagRunStoreSnapshot {
-  const fallback = emptySparkDagRunSnapshot();
-  return {
-    version: 1,
-    manager: {
-      status:
-        raw.manager?.status === "running" || raw.manager?.status === "failed"
-          ? raw.manager.status
-          : "idle",
-      activeRunRef: raw.manager?.activeRunRef,
-      lastRunRef: raw.manager?.lastRunRef,
-      updatedAt: raw.manager?.updatedAt ?? fallback.manager.updatedAt,
-    },
-    runs: (raw.runs ?? []).map(normalizeSparkDagRunRecord),
-  };
-}
-
-function normalizeSparkDagRunRecord(raw: Partial<SparkDagRunRecord>): SparkDagRunRecord {
-  const now = nowIso();
-  const ref = raw.ref ?? newRef("run");
-  const status =
-    raw.status === "succeeded" ||
-    raw.status === "failed" ||
-    raw.status === "timed_out" ||
-    raw.status === "stale"
-      ? raw.status
-      : "running";
-  const scheduled = raw.scheduled ?? raw.scheduledTaskRefs?.length ?? 0;
-  const completed = raw.completed ?? raw.completedTaskRefs?.length ?? 0;
-  const record: SparkDagRunRecord = {
-    ref,
-    threadRef: raw.threadRef,
-    ownerSessionId: raw.ownerSessionId,
-    dryRun: raw.dryRun ?? false,
-    maxConcurrency: raw.maxConcurrency ?? DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
-    timeoutMs: raw.timeoutMs ?? DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
-    status,
-    startedAt: raw.startedAt ?? now,
-    updatedAt: raw.updatedAt ?? now,
-    finishedAt: raw.finishedAt,
-    scheduled,
-    completed,
-    timedOut: raw.timedOut ?? raw.status === "timed_out",
-    scheduledTaskRefs: [...(raw.scheduledTaskRefs ?? [])],
-    completedTaskRefs: [...(raw.completedTaskRefs ?? [])],
-    taskRunRefs: [...(raw.taskRunRefs ?? [])],
-    errorMessage: raw.errorMessage,
-    acknowledgedAt: typeof raw.acknowledgedAt === "string" ? raw.acknowledgedAt : undefined,
-    acknowledgedBySession:
-      typeof raw.acknowledgedBySession === "string" ? raw.acknowledgedBySession : undefined,
-    completionDigest: normalizeTaskRunCompletionSummaries(raw.completionDigest),
-    completionFollowUp: raw.completionFollowUp
-      ? {
-          createdAt: raw.completionFollowUp.createdAt ?? raw.finishedAt ?? now,
-          runRef: raw.completionFollowUp.runRef ?? ref,
-          status: raw.completionFollowUp.status ?? status,
-          scheduled: raw.completionFollowUp.scheduled ?? scheduled,
-          completed: raw.completionFollowUp.completed ?? completed,
-          summary: raw.completionFollowUp.summary ?? "Spark orchestrator run finished.",
-          nextActions: [...(raw.completionFollowUp.nextActions ?? [])],
-          completionDigest: normalizeTaskRunCompletionSummaries(
-            raw.completionFollowUp.completionDigest ?? raw.completionDigest,
-          ),
-        }
-      : undefined,
-  };
-  reconcileDagRunCounters(record);
-  return record;
-}
-
-function reconcileStaleDagRun(
-  record: SparkDagRunRecord,
-  graph: TaskGraph | undefined,
-  now: string,
-): void {
-  const taskRuns = graph
-    ? record.taskRunRefs.flatMap((runRef) => graph.runs().filter((run) => run.ref === runRef))
-    : [];
-  const runningRuns = taskRuns.filter((run) => run.status === "queued" || run.status === "running");
-  if (runningRuns.length > 0) return;
-  for (const run of taskRuns.filter(
-    (candidate) => candidate.status !== "queued" && candidate.status !== "running",
-  )) {
-    if (!record.completedTaskRefs.includes(run.taskRef)) record.completedTaskRefs.push(run.taskRef);
-  }
-  reconcileDagRunCounters(record, {
-    completedFallback: taskRuns.filter((run) => run.status !== "queued" && run.status !== "running")
-      .length,
-  });
-  if (taskRuns.some((run) => run.status === "failed")) record.status = "failed";
-  else if (taskRuns.length > 0 && taskRuns.every((run) => run.status === "succeeded"))
-    record.status = "succeeded";
-  else if (taskRuns.some((run) => run.status === "cancelled")) record.status = "failed";
-  else record.status = "stale";
-  record.errorMessage ??= `Spark orchestrator run was reconciled as ${record.status} after no active child process was found.`;
-  record.finishedAt ??= now;
-  record.updatedAt = now;
-  if (record.completionDigest.length === 0)
-    record.completionDigest = completionDigestFromTaskRuns(taskRuns);
-  record.completionFollowUp ??= createSparkDagCompletionFollowUp(record);
-}
-
-function createSparkDagCompletionFollowUp(run: SparkDagRunRecord): SparkDagCompletionFollowUp {
-  const digest = run.completionDigest;
-  const digestSuffix =
-    digest.length > 0 ? ` Digest: ${formatSparkDagCompletionDigest(digest)}.` : "";
-  return {
-    createdAt: nowIso(),
-    runRef: run.ref,
-    status: run.status,
-    scheduled: run.scheduled,
-    completed: run.completed,
-    summary: `Spark DAG ${run.ref} ${run.status}: scheduled ${run.scheduled}, completed ${run.completed}.${digestSuffix}`,
-    nextActions: sparkDagRunNextActions(run),
-    completionDigest: digest.map(cloneTaskRunCompletionSummary),
-  };
-}
-
-function completionDigestFromTaskRuns(runs: TaskRun[]): TaskRunCompletionSummary[] {
-  return runs
-    .flatMap((run) => (run.completionSummary ? [run.completionSummary] : []))
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .slice(0, 10)
-    .map(cloneTaskRunCompletionSummary);
-}
-
-function formatSparkDagCompletionDigest(summaries: TaskRunCompletionSummary[]): string {
-  const visible = summaries.slice(0, 3).map((summary) => {
-    const role = summary.roleRef ? ` role=${summary.roleRef.replace(/^role:/u, "")}` : "";
-    const artifacts =
-      summary.artifactRefs.length > 0 ? ` artifacts=${summary.artifactRefs.join(",")}` : "";
-    return `task=${summary.taskRef} run=${summary.runRef} status=${summary.status}${role}: ${summary.summary}${artifacts}`;
-  });
-  const hidden = summaries.length - visible.length;
-  if (hidden > 0) visible.push(`… ${hidden} more role-run completion(s)`);
-  return visible.join("; ");
-}
-
-function normalizeTaskRunCompletionSummaries(
-  summaries: TaskRunCompletionSummary[] | undefined,
-): TaskRunCompletionSummary[] {
-  return (summaries ?? []).map(cloneTaskRunCompletionSummary);
-}
-
-function cloneTaskRunCompletionSummary(
-  summary: TaskRunCompletionSummary,
-): TaskRunCompletionSummary {
-  return { ...summary, artifactRefs: [...summary.artifactRefs] };
-}
-
-function collectSparkDagRunNextSteps(
-  runs: Array<SparkDagRunRecord | undefined>,
-): SparkDagRunNextSteps[] {
-  const seen = new Set<RunRef>();
-  const nextSteps: SparkDagRunNextSteps[] = [];
-  for (const run of runs) {
-    const steps = run ? sparkDagRunNextSteps(run) : undefined;
-    if (!steps || seen.has(steps.runRef)) continue;
-    seen.add(steps.runRef);
-    nextSteps.push(steps);
-  }
-  return nextSteps;
-}
-
-export function sparkDagRunNextSteps(run: SparkDagRunRecord): SparkDagRunNextSteps | undefined {
-  if (!isAcknowledgeableDagRun(run) || isAcknowledgedDagRunProblem(run)) return undefined;
-  return {
-    runRef: run.ref,
-    status: run.status,
-    summary: `Next steps for ${run.status} Spark DAG ${run.ref}`,
-    nextActions: sparkDagRunNextActions(run),
-  };
-}
-
-function sparkDagRunNextActions(run: SparkDagRunRecord): string[] {
-  const nextActions: string[] = [];
-  if (run.status === "failed") {
-    nextActions.push(
-      "failed: inspect spark_background_runs inspect plus child task-run artifacts/logs to find the failed or cancelled role-run.",
-      "failed: fix the task, role, model, or dependency error, then rerun ready background work for the remaining ready frontier.",
-    );
-  } else if (run.status === "stale") {
-    nextActions.push(
-      "stale: run spark_background_runs reconcile and compare background records with task runs/claims; the manager lost track of child process completion.",
-      "stale: preserve useful evidence, acknowledge known stale failures with spark_background_runs ack if no more action is needed, then retry ready tasks only after the task graph state is consistent.",
-    );
-  } else if (run.status === "timed_out") {
-    nextActions.push(
-      "timed_out: legacy foreground timeout record; inspect spark_background_runs status for active role-runs or reconcile before retrying.",
-      "timed_out: if child work is still active, kill stuck children with spark_background_runs kill only when you explicitly want to stop it.",
-    );
-  }
-  if (run.scheduled === 0)
-    nextActions.push(
-      "No tasks were scheduled; check pending tasks for dependency or plan-readiness blockers.",
-    );
-  if (run.completed < run.scheduled)
-    nextActions.push(
-      "Review incomplete scheduled task runs in spark_status view=full before launching another DAG wave.",
-    );
-  if (nextActions.length === 0)
-    nextActions.push("Review task outputs and continue with newly unblocked ready tasks if any.");
-  return nextActions;
-}
-
-export interface SparkReadyTaskRunnerOptions {
-  graph: TaskGraph;
-  registry: RoleRegistry;
-  /** Role assigned when a ready task has no task-level role hint. Defaults by task kind, then worker. */
-  defaultRoleRef?: RoleRef;
-  artifactStore?: ArtifactStore;
-  threadRef?: ThreadRef;
-  cwd?: string;
-  piCommand?: string;
-  dryRun?: boolean;
-  /** Maximum number of role runs running at the same time. Default: 4. */
-  maxConcurrency?: number;
-  /** Foreground wait budget for this scheduler call. Expiry detaches active children instead of terminating the DAG run. */
-  timeoutMs?: number;
-  /** Per-role-run timeout. Defaults to no per-task timeout; use only when deliberately bounding each child. */
-  taskTimeoutMs?: number;
-  sessionDir?: string;
-  mode?: RoleRunMode;
-  forkFromSession?: string;
-  heartbeatIntervalMs?: number;
-  onHeartbeat?: (graph: TaskGraph) => void | Promise<void>;
-  onSchedule?: (result: SparkReadyTaskRunnerSchedule) => void | Promise<void>;
-  onProgress?: (result: SparkReadyTaskRunnerProgress) => void | Promise<void>;
-  claim?: {
-    sessionId?: string;
-    leaseMs?: number;
-  };
-}
-
-export interface SparkReadyTaskRunnerSchedule {
-  taskRef: TaskRef;
-  runRef?: RunRef;
-  running: number;
-  scheduled: number;
-}
-
-export interface SparkReadyTaskRunnerProgress {
-  taskRef: TaskRef;
-  run: TaskRun;
-  running: number;
-  completed: number;
-}
-
-export interface SparkReadyTaskRunnerResult {
-  runs: TaskRun[];
-  scheduled: number;
-  completed: number;
-  succeeded: number;
-  failed: number;
-  cancelled: number;
-  /** Legacy DAG timeout flag. New foreground wait expiry is reported via foregroundTimedOut/detached. */
-  timedOut: boolean;
-  foregroundTimedOut: boolean;
-  detached: boolean;
-  detachedRunRefs: RunRef[];
-  maxConcurrency: number;
-}
-
-export const DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY = 4;
-export const DEFAULT_SPARK_READY_TASK_TIMEOUT_MS = 3_600_000;
-
-export async function runReadySparkTasks(
-  input: SparkReadyTaskRunnerOptions,
-): Promise<SparkReadyTaskRunnerResult> {
-  const dryRun = input.dryRun ?? true;
-  const maxConcurrency = normalizeMaxConcurrency(input.maxConcurrency);
-  const timeoutMs = normalizeReadyTaskRunnerTimeoutMs(input.timeoutMs);
-  const taskTimeoutMs = normalizeTaskTimeoutMs(input.taskTimeoutMs);
-  const startedAt = Date.now();
-  const deadline = startedAt + timeoutMs;
-  const runs: TaskRun[] = [];
-  const running = new Set<Promise<TaskRun>>();
-  const scheduled = new Set<TaskRef>();
-  const promiseRunRefs = new Map<Promise<TaskRun>, RunRef>();
-  let foregroundTimedOut = false;
-
-  const schedule = (task: Task): void => {
-    const assignedRoleRef = assignedRoleRefForTask(task, input.defaultRoleRef);
-    scheduled.add(task.ref);
-    const preexistingRunRefs = new Set(input.graph.runs(task.threadRef).map((run) => run.ref));
-    const runPromise = runSparkTask({
-      graph: input.graph,
-      taskRef: task.ref,
-      registry: input.registry,
-      assignedRoleRef,
-      artifactStore: input.artifactStore,
-      cwd: input.cwd,
-      piCommand: input.piCommand,
-      dryRun,
-      timeoutMs: taskTimeoutMs ?? 0,
-      sessionDir: input.sessionDir,
-      mode: input.mode,
-      forkFromSession: input.forkFromSession,
-      heartbeatIntervalMs: input.heartbeatIntervalMs,
-      onHeartbeat: input.onHeartbeat,
-      claim: dryRun
-        ? undefined
-        : {
-            sessionId: input.claim?.sessionId,
-            leaseMs: input.claim?.leaseMs ?? timeoutMs,
-          },
-    })
-      .catch((error: unknown) => taskRunFromError(input.graph.getTask(task.ref), error))
-      .then(async (run) => {
-        runs.push(run);
-        await input.onProgress?.({
-          taskRef: task.ref,
-          run,
-          running: Math.max(0, running.size - 1),
-          completed: runs.length,
-        });
-        return run;
-      })
-      .finally(() => {
-        running.delete(runPromise);
-      });
-    running.add(runPromise);
-    const claimedRunRef = input.graph.getTask(task.ref).claim?.runRef;
-    const recordedRunRef = input.graph
-      .runs(task.threadRef)
-      .find((run) => !preexistingRunRefs.has(run.ref) && run.taskRef === task.ref)?.ref;
-    const runRef = claimedRunRef ?? recordedRunRef;
-    if (runRef) promiseRunRefs.set(runPromise, runRef);
-    void input.onSchedule?.({
-      taskRef: task.ref,
-      runRef,
-      running: running.size,
-      scheduled: scheduled.size,
-    });
-  };
-
-  while (true) {
-    if (Date.now() >= deadline) {
-      foregroundTimedOut = true;
-      break;
-    }
-
-    const ready = input.graph
-      .readyTasks(input.threadRef)
-      .filter((task) => !scheduled.has(task.ref))
-      .slice(0, Math.max(0, maxConcurrency - running.size));
-    for (const task of ready) schedule(task);
-
-    if (running.size === 0) {
-      const hasMoreReady = input.graph
-        .readyTasks(input.threadRef)
-        .some((task) => !scheduled.has(task.ref));
-      if (!hasMoreReady) break;
-      continue;
-    }
-
-    await Promise.race([
-      Promise.race(running),
-      sleep(Math.max(0, deadline - Date.now())).then(() => {
-        foregroundTimedOut = true;
-      }),
-    ]);
-    if (foregroundTimedOut) break;
-  }
-
-  const detachedRunRefs =
-    foregroundTimedOut && running.size > 0
-      ? detachForegroundTimedOutTasks(input.graph, [...running], promiseRunRefs, timeoutMs, runs)
-      : [];
-  if (!foregroundTimedOut) {
-    await Promise.allSettled(running);
-  }
-
-  return {
-    runs,
-    scheduled: scheduled.size,
-    completed: runs.filter((run) => run.status !== "running" && run.status !== "queued").length,
-    succeeded: runs.filter((run) => run.status === "succeeded").length,
-    failed: runs.filter((run) => run.status === "failed").length,
-    cancelled: runs.filter((run) => run.status === "cancelled").length,
-    timedOut: false,
-    foregroundTimedOut,
-    detached: detachedRunRefs.length > 0,
-    detachedRunRefs,
-    maxConcurrency,
-  };
-}
-
-function detachForegroundTimedOutTasks(
-  graph: TaskGraph,
-  running: Array<Promise<TaskRun>>,
-  promiseRunRefs: Map<Promise<TaskRun>, RunRef>,
-  timeoutMs: number,
-  runs: TaskRun[],
-): RunRef[] {
-  const timedOutRunRefs = new Set(
-    running
-      .map((runPromise) => promiseRunRefs.get(runPromise))
-      .filter((runRef): runRef is RunRef => Boolean(runRef)),
-  );
-  for (const task of graph.tasks()) {
-    const runRef = task.claim?.runRef;
-    if (!runRef || !timedOutRunRefs.has(runRef)) continue;
-
-    const run = graph.runs(task.threadRef).find((candidate) => candidate.ref === runRef);
-    if (run?.status !== "running" && run?.status !== "queued") continue;
-    const background: TaskRun = {
-      ...run,
-      status: "running",
-      failureKind: undefined,
-      errorMessage: `Spark foreground wait expired after ${timeoutMs}ms; keeping role-run claim in background`,
-    };
-    graph.recordRun(background);
-    graph.setTaskStatus(task.ref, "running");
-    runs.push(background);
-  }
-  return [...timedOutRunRefs];
-}
-
-function normalizeMaxConcurrency(value: number | undefined): number {
-  if (!Number.isFinite(value ?? DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY))
-    return DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY;
-  return Math.max(1, Math.floor(value ?? DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY));
-}
-
-function normalizeReadyTaskRunnerTimeoutMs(value: number | undefined): number {
-  if (!Number.isFinite(value ?? DEFAULT_SPARK_READY_TASK_TIMEOUT_MS))
-    return DEFAULT_SPARK_READY_TASK_TIMEOUT_MS;
-  return Math.max(1, Math.floor(value ?? DEFAULT_SPARK_READY_TASK_TIMEOUT_MS));
-}
-
-function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
-  if (value === undefined) return undefined;
-  if (!Number.isFinite(value) || value <= 0) return undefined;
-  return Math.floor(value);
-}
-
-function assignedRoleRefForTask(task: Task, defaultRoleRef?: RoleRef): RoleRef {
-  return (
-    normalizeRoleRefCompat(task.roleRef) ?? defaultRoleRef ?? defaultRoleRefForTaskKind(task.kind)
-  );
-}
-
-function defaultRoleRefForTaskKind(kind: Task["kind"]): RoleRef {
-  if (kind === "research") return "role:builtin-scout" as RoleRef;
-  if (kind === "plan") return "role:builtin-planner" as RoleRef;
-  if (kind === "review") return "role:builtin-reviewer" as RoleRef;
-  return "role:builtin-worker" as RoleRef;
-}
-
-function taskRunFromError(task: Task, error: unknown): TaskRun {
-  const latest = task.claim?.runRef ? task.claim.runRef : task.ref.replace(/^task:/, "run:error-");
-  const errorMessage = error instanceof Error ? error.message : String(error);
-  const finishedAt = nowIso();
-  const run: TaskRun = {
-    ref: latest as RunRef,
-    threadRef: task.threadRef,
-    taskRef: task.ref,
-    roleRef: task.claim?.roleRef ?? task.roleRef,
-    runName: task.claim?.runName,
-    ownerSessionId: task.claim?.sessionId,
-    status: "failed",
-    failureKind: error instanceof RoleRunTimeoutError ? "runtime_timeout" : "runtime_error",
-    errorMessage,
-    startedAt: finishedAt,
-    finishedAt,
-    outputArtifacts: [],
-  };
-  return {
-    ...run,
-    completionSummary: {
-      runRef: run.ref,
-      taskRef: run.taskRef,
-      roleRef: run.roleRef,
-      runName: run.runName,
-      status: run.status,
-      summary: errorMessage,
-      artifactRefs: [],
-      createdAt: finishedAt,
-    },
-  };
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref?.();
-  });
-}
-
-function normalizeRoleRefCompat(
-  value: RoleRef | `agent:${string}` | undefined,
-): RoleRef | undefined {
-  if (!value) return undefined;
-  return (value.startsWith("agent:") ? `role:${value.slice("agent:".length)}` : value) as RoleRef;
 }

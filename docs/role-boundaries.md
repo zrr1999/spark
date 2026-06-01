@@ -10,7 +10,7 @@ Reusable, Spark-independent pieces live in `pi-roles`; Spark keeps task/DAG/work
 ## Current boundary
 
 - `packages/pi-roles/src/index.ts` owns `RoleSpec`, `RoleRegistry`, role stores, builtin roles, Markdown role parsing/serialization, and simple `RoleRun` launch/control helpers. It does not depend on `spark-core`.
-- `packages/spark-core/src/index.ts` owns Spark refs, task/artifact/review contracts, role refs as branded strings, and temporary deprecated agent aliases needed for rolling state migration.
+- `packages/spark-core/src/index.ts` owns Spark refs, task/artifact/review contracts, and role refs as branded strings.
 - `packages/spark-tasks/src/index.ts` owns task DAGs, TODOs, dependencies, readiness, claim leases, and run history. It stores `roleRef` strings but does not import or resolve `RoleSpec` objects.
 - `packages/spark-runtime/src/index.ts` owns single-task Spark adaptation: resolving an assigned/task/default `roleRef` through a `RoleRegistry`, creating `role-run` claims, calling `runRole()`, writing artifacts, updating task/run state, and tracking active background child processes.
 - `packages/spark-orchestrator/src/index.ts` owns graph-level orchestration: ready frontier scheduling, dispatch-time executor role assignment, orchestration state, and stale run reconciliation.
@@ -25,25 +25,27 @@ Reusable, Spark-independent pieces live in `pi-roles`; Spark keeps task/DAG/work
 - `fresh` and `forked` are the only runtime launch modes in the current model.
 - `builtin`, `project`, and `user` describe where a reusable role came from.
 - Generated roles are represented by metadata/origin, for example `origin.kind: "generated"`; generated is not a primary `RoleSource`.
-- Legacy `managed`, `predefined`, `agent:*`, `agentRef`, `agentName`, `subagent`, and agent artifact names are compatibility inputs only during migration.
+- Spark role APIs use only `role:*`, `roleRef`, `runName`, and `role-run`; legacy agent-shaped names are rejected rather than migrated in place.
 
 See [role-run-modes.md](./role-run-modes.md) for operational guidance.
 
-## Legacy compatibility lifecycle
+## Role terminology boundary
 
-Compatibility is intentionally narrow and should shrink in this order:
+Persisted state, runtime inputs, and docs use the current role vocabulary directly:
 
-1. Keep persisted-state readers for old `.spark/thread.json` snapshots and role stores until migration tests cover `agentRef` → `roleRef`, `agentName` → `runName`, `subagent` → `role-run`, and `agent:*` → `role:*`.
-2. Remove user-facing/source aliases such as `managed` and `predefined` after one compatibility window; new tools and docs should only advertise `builtin`, `project`, and `user`.
-3. Remove local deprecated API inputs only after a state migration/version bump exists and stale-reference scans show no tests or docs rely on them except historical notes.
-4. Keep unrelated Pi/cue documentation about generic subagent/fork/worktree behavior out of Spark role terminology cleanup unless that package changes its own vocabulary.
+- Role definitions are identified by `role:*` refs.
+- Task assignment and attribution use `roleRef`.
+- Concrete child executions use `runName`.
+- Task claims use `kind: "role-run"` for child role runs.
+
+Old agent-shaped inputs are not part of the package boundary. A stale local snapshot should be repaired explicitly instead of being silently translated by readers.
 
 ## `pi-roles` ownership
 
 `pi-roles` owns reusable role definition data and simple single-run execution, with no `spark-core` dependency:
 
 - `RoleSource = "builtin" | "project" | "user"`.
-- `RoleOriginKind = "manual" | "generated" | "imported" | "migrated" | "builtin"`.
+- `RoleOriginKind = "manual" | "generated" | "builtin"`.
 - `RoleRef = `role:${string}` and `RoleRunRef = `run:${string}`.
 - `RoleSpec`, `RoleSpecProposal`, `RoleInstruction`, `RoleRunRequest`, `RoleRunRecord`, and `RoleRunResult`.
 - `RoleRegistry` and Markdown role stores.
@@ -55,19 +57,18 @@ Storage policy:
 
 - Project roles: `.agents/roles/**/*.md`.
 - User roles: `~/.agents/roles/**/*.md`.
-- Compatibility read paths: `.pi/agents/**/*.md` and `~/.pi/agent/agents/**/*.md`.
-- Old Spark JSON specs under `.spark/agents/*.json` are migration input only.
+- Old agent-shaped paths are not loaded at runtime. Migrate them explicitly into `.agents/roles/**/*.md` before using `pi-roles`.
 
 ## Spark package ownership
 
-- `spark-tasks` owns threads, tasks, dependencies, task TODOs, claim leases, readiness, and run history.
+- `spark-tasks` owns projects, tasks, dependencies, task TODOs, claim leases, readiness, and run history.
 - `spark-runtime` maps one Spark task to one `pi-roles` `RoleRun` primitive and maps completion back to task status, task claims, and artifacts.
 - `spark-orchestrator` maps ready Spark task frontiers to scheduled `spark-runtime` runs and owns background scheduling/reconciliation state.
-- `spark` extension tools keep Spark workflow semantics. Deprecated agent-shaped inputs may be accepted only as a narrow rolling migration layer.
+- `spark` extension tools keep Spark workflow semantics and should not reintroduce agent-shaped role aliases.
 
 ## Non-goals
 
-- Cross-thread or cross-plugin DAG dependencies.
+- Cross-project or cross-plugin DAG dependencies.
 - Capabilities/topology/delegation hierarchy in `pi-roles` v0.1.
 - Running roles that do not reference a persisted or builtin `RoleSpec`.
 - Moving Spark task claims, DAG state, TODOs, asks, artifacts, or review gates into generic Pi packages.

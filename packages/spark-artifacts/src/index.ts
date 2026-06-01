@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import {
   type Artifact,
@@ -36,7 +36,7 @@ export interface ArtifactStoreOptions {
 
 export interface ArtifactQuery {
   kind?: ArtifactKind;
-  threadRef?: string;
+  projectRef?: string;
   taskRef?: string;
   roleRef?: string;
   producer?: Provenance["producer"];
@@ -65,6 +65,8 @@ export interface ArtifactMetadataCompactionSkipped {
   reason:
     | "already_compacted"
     | "invalid_json"
+    | "invalid_metadata"
+    | "invalid_blob_path"
     | "missing_blob_path"
     | "missing_blob"
     | "hash_mismatch"
@@ -81,6 +83,24 @@ export interface ArtifactMetadataCompactionResult {
   metadataBytesBefore: number;
   metadataBytesAfter: number;
   reclaimableBytes: number;
+}
+
+type ArtifactStoreFormatReason = "invalid_json" | "invalid_metadata";
+
+export class ArtifactStoreFormatError extends Error {
+  readonly filePath: string;
+  readonly reason: ArtifactStoreFormatReason;
+
+  constructor(
+    filePath: string,
+    message: string,
+    reason: ArtifactStoreFormatReason = "invalid_metadata",
+  ) {
+    super(`${filePath}: ${message}`);
+    this.name = "ArtifactStoreFormatError";
+    this.filePath = filePath;
+    this.reason = reason;
+  }
 }
 
 export class ArtifactStore {
@@ -103,10 +123,6 @@ export class ArtifactStore {
     const now = nowIso();
     const ref = input.ref ?? newRef("artifact");
     const existing = input.ref ? await this.tryGet<T>(input.ref) : null;
-    const serializedBody = serializeArtifactBody(input.format, input.body);
-    const hash = contentHash(serializedBody);
-    const blobPath = join("blobs", `${hash}.${extensionForFormat(input.format)}`);
-    await writeFile(join(this.rootDir, blobPath), serializedBody, "utf8");
     const parentLinks: ArtifactLink[] = (input.provenance.parentArtifactRefs ?? []).map(
       (parent) => ({
         from: ref,
@@ -119,24 +135,34 @@ export class ArtifactStore {
       kind: input.kind,
       title: input.title,
       format: input.format,
+      body: input.body,
+      links: [...parentLinks, ...(input.links ?? []).map((link) => ({ ...link, from: ref }))],
+      provenance: input.provenance,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    validateArtifact(artifact);
+
+    const serializedBody = serializeArtifactBody(input.format, input.body);
+    const hash = contentHash(serializedBody);
+    const blobPath = join("blobs", `${hash}.${extensionForFormat(input.format)}`);
+    const storedArtifact: Artifact<T> = {
+      ...artifact,
       body: metadataBodyFor(input.body, serializedBody, {
         thresholdBytes: this.inlineBodyThresholdBytes,
         previewChars: this.bodyPreviewChars,
       }),
       hash,
       blobPath,
-      links: [...parentLinks, ...(input.links ?? []).map((link) => ({ ...link, from: ref }))],
-      provenance: input.provenance,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
     };
-    addBodyCompactionMetadata(artifact, serializedBody, {
+    addBodyCompactionMetadata(storedArtifact, serializedBody, {
       thresholdBytes: this.inlineBodyThresholdBytes,
       previewChars: this.bodyPreviewChars,
     });
-    validateArtifact(artifact);
-    await writeFile(this.pathFor(ref), `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
-    return { ...artifact, body: input.body };
+    validateArtifact(storedArtifact);
+    await writeFile(join(this.rootDir, blobPath), serializedBody, "utf8");
+    await writeFile(this.pathFor(ref), `${JSON.stringify(storedArtifact, null, 2)}\n`, "utf8");
+    return { ...storedArtifact, body: input.body };
   }
 
   async update<T extends JsonValue | string>(
@@ -171,7 +197,11 @@ export class ArtifactStore {
 
   async getBody(ref: ArtifactRef): Promise<string> {
     const artifact = await this.readMetadata(ref);
-    if (artifact.blobPath) return readFile(join(this.rootDir, artifact.blobPath), "utf8");
+    if (artifact.blobPath) {
+      const blobPath = resolveArtifactBlobPath(this.rootDir, artifact.blobPath);
+      if (!blobPath) throw new Error(`artifact blob path escapes artifact store: ${artifact.ref}`);
+      return readFile(blobPath, "utf8");
+    }
     return serializeArtifactBody(artifact.format, artifact.body);
   }
 
@@ -192,9 +222,7 @@ export class ArtifactStore {
     const artifacts: Artifact[] = [];
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const artifact = JSON.parse(
-        await readFile(join(this.rootDir, entry.name), "utf8"),
-      ) as Artifact;
+      const artifact = await readArtifactMetadataFile(join(this.rootDir, entry.name));
       if (!matchesQuery(artifact, filter)) continue;
       artifacts.push(artifact);
     }
@@ -236,13 +264,42 @@ export class ArtifactStore {
   private async readMetadata<T extends JsonValue | string = JsonValue | string>(
     ref: ArtifactRef,
   ): Promise<Artifact<T>> {
-    const raw = await readFile(this.pathFor(ref), "utf8");
-    return JSON.parse(raw) as Artifact<T>;
+    return (await readArtifactMetadataFile(this.pathFor(ref))) as Artifact<T>;
   }
 }
 
 export function defaultArtifactStore(cwd: string): ArtifactStore {
   return new ArtifactStore({ rootDir: join(cwd, ".spark", "artifacts") });
+}
+
+async function readArtifactMetadataFile(filePath: string): Promise<Artifact> {
+  const text = await readFile(filePath, "utf8");
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    throw new ArtifactStoreFormatError(
+      filePath,
+      `invalid JSON: ${unknownErrorMessage(error)}`,
+      "invalid_json",
+    );
+  }
+  try {
+    validateArtifact(raw);
+  } catch (error) {
+    throw new ArtifactStoreFormatError(filePath, unknownErrorMessage(error));
+  }
+  return raw;
+}
+
+export function resolveArtifactBlobPath(rootDir: string, blobPath: string): string | undefined {
+  if (!blobPath.trim() || blobPath.includes("\0") || isAbsolute(blobPath)) return undefined;
+  const root = resolve(rootDir);
+  const blobRoot = resolve(root, "blobs");
+  const resolved = resolve(root, blobPath);
+  const scoped = relative(blobRoot, resolved);
+  if (!scoped || scoped.startsWith("..") || isAbsolute(scoped)) return undefined;
+  return resolved;
 }
 
 export async function compactArtifactMetadata(
@@ -272,13 +329,21 @@ export async function compactArtifactMetadata(
     result.metadataBytesBefore += metadataBytesBefore;
     let artifact: Artifact;
     try {
-      artifact = JSON.parse(await readFile(path, "utf8")) as Artifact;
+      artifact = await readArtifactMetadataFile(path);
     } catch (error) {
-      result.skipped.push({
-        path,
-        reason: "invalid_json",
-        message: error instanceof Error ? error.message : String(error),
-      });
+      if (error instanceof ArtifactStoreFormatError) {
+        result.skipped.push({
+          path,
+          reason: error.reason,
+          message: error.message,
+        });
+      } else {
+        result.skipped.push({
+          path,
+          reason: "invalid_json",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
       result.metadataBytesAfter += metadataBytesBefore;
       continue;
     }
@@ -292,9 +357,15 @@ export async function compactArtifactMetadata(
       result.metadataBytesAfter += metadataBytesBefore;
       continue;
     }
+    const blobPath = resolveArtifactBlobPath(rootDir, artifact.blobPath);
+    if (!blobPath) {
+      result.skipped.push({ path, reason: "invalid_blob_path" });
+      result.metadataBytesAfter += metadataBytesBefore;
+      continue;
+    }
     let blobText: string;
     try {
-      blobText = await readFile(join(rootDir, artifact.blobPath), "utf8");
+      blobText = await readFile(blobPath, "utf8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         result.skipped.push({ path, reason: "missing_blob" });
@@ -344,7 +415,7 @@ export async function compactArtifactMetadata(
 function matchesQuery(artifact: Artifact, query: ArtifactQuery): boolean {
   if (query.kind && artifact.kind !== query.kind) return false;
   if (query.producer && artifact.provenance.producer !== query.producer) return false;
-  if (query.threadRef && artifact.provenance.threadRef !== query.threadRef) return false;
+  if (query.projectRef && artifact.provenance.projectRef !== query.projectRef) return false;
   if (query.taskRef && artifact.provenance.taskRef !== query.taskRef) return false;
   if (query.roleRef && artifact.provenance.roleRef !== query.roleRef) return false;
   if (query.linkedTo && !artifact.links.some((link) => link.to === query.linkedTo)) return false;
@@ -410,4 +481,8 @@ function extensionForFormat(format: Artifact["format"]): string {
   if (format === "markdown") return "md";
   if (format === "json") return "json";
   return "txt";
+}
+
+function unknownErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

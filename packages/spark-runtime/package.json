@@ -1,7 +1,7 @@
 {
   "name": "spark-runtime",
   "version": "0.1.0",
-  "description": "Spark runtime orchestration for executing claimed tasks with agents.",
+  "description": "Spark runtime execution for single tasks and active child role-runs.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [

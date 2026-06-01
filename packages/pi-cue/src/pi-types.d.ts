@@ -39,7 +39,7 @@ declare module "@earendil-works/pi-coding-agent" {
 
   export interface ExtensionContext {
     ui?: {
-      notify?: (msg: string, level: string) => void;
+      notify?: (msg: string, level: "info" | "warning" | "error" | "success") => void;
     };
   }
 

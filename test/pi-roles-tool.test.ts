@@ -154,6 +154,156 @@ void test("call_role forked mode requires explicit parent session", async () => 
   );
 });
 
+void test("call_role rejects unknown run modes instead of falling back to fresh", async () => {
+  const tools = registerRoleToolsForTest();
+  await assert.rejects(
+    executeCallRole(tools, {
+      role: "worker",
+      instruction: "Run with an invalid mode.",
+      mode: "legacy-mode",
+    }),
+    /unsupported role run mode/,
+  );
+});
+
+void test("pi-roles tools reject invalid explicit parameters instead of using defaults", async () => {
+  const tools = registerRoleToolsForTest();
+
+  await assert.rejects(
+    executeRoleTool(tools, "list_roles", { limit: "many" }),
+    /list_roles limit must be a finite number/,
+  );
+  await assert.rejects(
+    executeRoleTool(tools, "list_roles", { source: "managed" }),
+    /list_roles source must be builtin, project, or user/,
+  );
+  await assert.rejects(
+    executeRoleTool(tools, "get_role", { role: "worker", includePrompt: "true" }),
+    /get_role includePrompt must be a boolean/,
+  );
+  await assert.rejects(
+    executeRoleTool(tools, "get_role", { role: 42 }),
+    /get_role role must be a string/,
+  );
+  await assert.rejects(
+    executeRoleTool(tools, "create_role", {
+      id: 42,
+      description: "Invalid role id should fail.",
+      systemPrompt: "Do not write this role.",
+      rationale: "Parameter validation should be explicit.",
+      expectedUses: ["validation"],
+    }),
+    /create_role id must be a string/,
+  );
+  await assert.rejects(
+    executeRoleTool(tools, "create_role", {
+      id: "missing-description",
+      systemPrompt: "Do not write this role.",
+      rationale: "Parameter validation should be explicit.",
+      expectedUses: ["validation"],
+    }),
+    /create_role description is required/,
+  );
+  await assert.rejects(
+    executeRoleTool(tools, "create_role", {
+      id: "bad-source",
+      description: "Invalid role source should fail.",
+      systemPrompt: "Do not write this role.",
+      rationale: "Parameter validation should be explicit.",
+      expectedUses: ["validation"],
+      source: "workspace",
+    }),
+    /create_role source must be project or user/,
+  );
+  await assert.rejects(
+    executeRoleTool(tools, "create_role", {
+      id: "bad-expected-uses",
+      description: "Invalid expected uses should fail.",
+      systemPrompt: "Do not write this role.",
+      rationale: "Parameter validation should be explicit.",
+      expectedUses: ["valid", 42],
+    }),
+    /create_role expectedUses must be an array of strings/,
+  );
+  await assert.rejects(
+    executeRoleTool(tools, "create_role", {
+      id: "bad-allowed-tools",
+      description: "Invalid allowed tools should fail.",
+      systemPrompt: "Do not write this role.",
+      rationale: "Parameter validation should be explicit.",
+      expectedUses: ["validation"],
+      allowedTools: ["read", 42],
+    }),
+    /create_role allowedTools must be an array of strings/,
+  );
+  await assert.rejects(
+    executeRoleTool(tools, "create_role", {
+      id: "bad-model",
+      description: "Invalid model should fail.",
+      systemPrompt: "Do not write this role.",
+      rationale: "Parameter validation should be explicit.",
+      expectedUses: ["validation"],
+      defaultModel: 42,
+    }),
+    /create_role defaultModel must be a string/,
+  );
+  await assert.rejects(
+    executeCallRole(tools, {
+      role: 42,
+      instruction: "Run with an invalid role selector.",
+    }),
+    /call_role role must be a string/,
+  );
+  await assert.rejects(
+    executeCallRole(tools, {
+      role: "worker",
+      instruction: 42,
+    }),
+    /call_role instruction must be a string/,
+  );
+  await assert.rejects(
+    executeCallRole(tools, {
+      role: "worker",
+      instruction: "Run with an invalid timeout.",
+      timeoutMs: "5000",
+    }),
+    /call_role timeoutMs must be a finite number/,
+  );
+  await assert.rejects(
+    executeCallRole(tools, {
+      role: "worker",
+      instruction: "Run with an invalid dryRun flag.",
+      dryRun: "false",
+    }),
+    /call_role dryRun must be a boolean/,
+  );
+  await assert.rejects(
+    executeCallRole(tools, {
+      role: "worker",
+      instruction: "Run with an invalid pi command.",
+      piCommand: 42,
+    }),
+    /call_role piCommand must be a string/,
+  );
+  await assert.rejects(
+    executeCallRole(tools, {
+      role: "worker",
+      instruction: "Run with an invalid session directory.",
+      sessionDir: 42,
+    }),
+    /call_role sessionDir must be a string/,
+  );
+  await assert.rejects(
+    executeCallRole(tools, {
+      role: "reviewer",
+      instruction: "Fork with an invalid parent.",
+      mode: "forked",
+      forkFromSession: 42,
+    }),
+    /call_role forkFromSession must be a string/,
+  );
+});
+
 function registerRoleToolsForTest(): Map<string, ToolConfig> {
   const tools = new Map<string, ToolConfig>();
   registerPiRolesTools({ registerTool: (config) => tools.set(config.name, config as ToolConfig) });

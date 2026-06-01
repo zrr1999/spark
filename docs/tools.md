@@ -13,17 +13,17 @@ Commands:
 
 Tools:
 
-- `spark_status` — show Spark thread/task status. Defaults to `view: "active"` for unfinished/current-session work, supports `view: "summary"` for counts only, `view: "full"` for done/cancelled history plus read-only `.spark` cache/protected-store summary, optional `limit` for task rows per thread, and `format: "json"` for a first-class structured status payload instead of human-formatted text.
-- `spark_state` — inspect or explicitly clean `.spark` session/cache state. `action: "status"` is read-only; `action: "diagnostics"`/`"doctor"` is read-only and reports protected-store candidates (terminal/no-unfinished threads, inactive DAG runs, large artifacts, orphan blobs, notes, and role reports) using bounded compact metadata; `action: "cleanup"` defaults to `dryRun: true`, only targets safe session/cache files, and never deletes protected stores such as `.spark/thread.json`, artifacts, notes, role reports, DAG runs, or review-gate state. `action: "prune"` is the typed DAG-run retention entry point: it defaults to dry-run, only considers old terminal non-active DAG runs, preserves unacknowledged failed/stale/timed_out records, and keeps the configured newest runs globally and per thread. `action: "compact-role-run-artifacts"` is the historical role-run/agent-run transcript retention entry point: it defaults to dry-run, lists blobs over `thresholdBytes` with provenance and candidate reason, writes a compact summary plus serialized tail and optional `exportDir` path, and only deletes the full transcript blob on `dryRun:false` after replacement metadata has been written.
-- `spark_list_threads` — list Spark threads as structured JSON with task counts and a `currentForSession` marker. Supports `status: "active" | "done" | "all"`.
-- `spark_use_thread` — set or create this session's current Spark thread.
-- `spark_rename_thread` — rename or update metadata for an existing Spark thread without changing task refs.
-- `spark_plan_tasks` — create or update multiple durable named tasks (`name` / `title` / `description`) in the active thread from a concrete plan without claiming them for the current session. Each task is plan-bound: callers may provide a structured `plan`, and Spark derives a minimal plan from the task description when omitted. The tool writes directly after readiness checks pass and can be used whenever the request requires durable task planning; agents should clarify planning-affecting questions first, then refine by calling it again with concrete updates. Task dependencies are scoped to the active thread only; cross-thread dependencies are intentionally out of scope. Cancelling a task is rejected while any non-cancelled task still depends on it.
-- `spark_claim_task` — claim or update concrete task work for the current session in the active thread; tasks render as `@name: title`, and optional `roleRef` values are preferred executor hints for orchestrated runs. Claiming is an execution commitment: agents should read the task's bound plan before creating TODOs or executing.
+- `spark_status` — show Spark project/task status. Defaults to `view: "active"` for unfinished/current-session work, supports `view: "summary"` for counts only, `view: "full"` for done/cancelled history plus read-only `.spark` cache/protected-store summary, optional `limit` for task rows per project, and `format: "json"` for a first-class structured status payload instead of human-formatted text.
+- `spark_state` — inspect or explicitly clean `.spark` session/cache state. `action: "status"` is read-only; `action: "diagnostics"`/`"doctor"` is read-only and reports protected-store candidates (terminal/no-unfinished projects, inactive DAG runs, large artifacts, orphan blobs, notes, and role reports) using bounded compact metadata; `action: "cleanup"` defaults to `dryRun: true`, only targets safe session/cache files, and never deletes protected stores such as `.spark/projects.json`, artifacts, notes, role reports, DAG runs, or review-gate state. `action: "prune"` is the typed DAG-run retention entry point: it defaults to dry-run, only considers old terminal non-active DAG runs, preserves unacknowledged failed/stale/timed_out records, and keeps the configured newest runs globally and per project. `action: "compact-role-run-artifacts"` is the role-run transcript retention entry point: it defaults to dry-run, lists blobs over `thresholdBytes` with provenance and candidate reason, writes a compact summary plus serialized tail and optional `exportDir` path, and only deletes the full transcript blob on `dryRun:false` after replacement metadata has been written.
+- `spark_list_projects` — list Spark projects as structured JSON with task counts and a `currentForSession` marker. Supports `status: "active" | "done" | "all"`.
+- `spark_use_project` — set or create this session's current Spark project.
+- `spark_rename_project` — rename or update metadata for an existing Spark project without changing task refs.
+- `spark_plan_tasks` — create or update multiple durable named tasks (`name` / `title` / `description`) in the active project from a concrete plan without claiming them for the current session. Each task is plan-bound: callers may provide a structured `plan`, and Spark derives a minimal plan from the task description when omitted. The tool writes directly after readiness checks pass and can be used whenever the request requires durable task planning; agents should clarify planning-affecting questions first, then refine by calling it again with concrete updates. Task dependencies are scoped to the active project only; cross-project dependencies are intentionally out of scope. Cancelling a task is rejected while any non-cancelled task still depends on it.
+- `spark_claim_task` — claim or update concrete task work for the current session in the active project; tasks render as `@name: title`, and optional `roleRef` values are preferred executor hints for orchestrated runs. Claiming is an execution commitment: agents should read the task's bound plan before creating TODOs or executing.
 - `spark_update_task_todos` — update TODOs attached to a claimed task.
-- `spark_update_todos` — update independent session TODOs that are siblings of the thread display.
+- `spark_update_todos` — update independent session TODOs that are siblings of the project display.
 - `spark_finish_task` — finish this session's claimed task as `done`, `failed`, or `cancelled` without routing through task planning or auto-claiming the next task. When a done task's plan declares `evidenceRequired` but no output artifacts are attached, the tool reports a completion-evidence warning instead of silently treating process/status success as full evidence. In `/execute`, a successful finish may mention the next ready task, but the next task remains unclaimed until another `/execute`, `/run-sequential`, `/run-parallel`, or inferred `/run`.
-- `spark_run_ready_tasks` — start or preflight the Spark orchestrator for ready tasks; dry-run remains synchronous and read-only by default. Ready-task execution assigns reusable role specs at dispatch time and creates fresh `role-run`s by default. `/run`, `/run-sequential`, and `/run-parallel` use the same orchestrator substrate but persist a session run-mode state with `runRef`, `threadRef`, `focus`, `status`, and policy; `maxConcurrency=1` is sequential, the default parallel policy is `maxConcurrency=4`, and `timeoutMs` is a foreground wait budget, so active background role-runs continue running after that wait expires.
+- `spark_run_ready_tasks` — start or preflight the Spark orchestrator for ready tasks; dry-run remains synchronous and read-only by default. Ready-task execution assigns reusable role specs at dispatch time and creates fresh `role-run`s by default. `/run`, `/run-sequential`, and `/run-parallel` use the same orchestrator substrate but persist a session run-mode state with `runRef`, `projectRef`, `focus`, `status`, and policy; `maxConcurrency=1` is sequential, the default parallel policy is `maxConcurrency=4`, and `timeoutMs` is a foreground wait budget, so active background role-runs continue running after that wait expires.
 - `spark_background_runs` — user-facing background work interface with `status`, `list`, `inspect`, `kill`, `reconcile`, and `ack`. It exposes active child role-runs, task claims, pids, run refs, DAG progress, legacy timeout records, compact role-run summaries, transcript refs or bounded tail metadata, and next actions. `inspect`/`list` use the compact `role-run` result body and task-run completion summary by default; full stdout/json event transcripts stay behind artifact/transcript refs and are not expanded unless a caller explicitly reads the artifact. Legacy large role-run artifacts are reported by ref with a safe fallback instead of loading full artifact bodies. `kill` requires `runRef`, `taskRef`, or `all:true` and only targets active child role-run processes; `ack` targets failed/stale/legacy `timed_out` problem records.
 - `spark_dag_manager` — legacy low-level compatibility/debug control for persisted Spark orchestrator state with `status`, `reconcile`, `ack`, `prune`, `clear_inactive`, and `kill_active` actions. Prefer `spark_background_runs status/inspect/kill` for normal background inspection and `spark_state prune` for auditable retention; `kill_active` targets child role-run processes, and `timed_out` records are legacy actionable problem records rather than the expected status for new detached background runs.
 - `spark_ask` — run a unified flow-native Spark ask workflow with
@@ -45,13 +45,13 @@ Automatic behavior:
 
 1. Explicit activation first:
    - a `SPARK.md` exists in cwd or an ancestor
-   - a `.spark/thread.json` exists in cwd or an ancestor
+   - a `.spark/projects.json` exists in cwd or an ancestor
    - cwd is under an allowlisted directory in
      `~/.config/spark/config.toml`
 2. `/spark` does not start with a generic intake template:
    - Spark records the initial intent and builds
      investigation/planning tasks first
-   - Spark does not create placeholder threads/tasks or a
+   - Spark does not create placeholder projects/tasks or a
      fake current task just to populate UI; the model should
      use `spark_claim_task` only after it has concrete work
      from the actual situation
@@ -77,24 +77,24 @@ Automatic behavior:
    with Spark invariants:
    - stale current-task refs are cleared, but Spark never
      synthesizes a placeholder task for display
-   - task graph snapshots persist thread/task/dependency/run
-     state in `.spark/thread.json`; task TODOs are intentionally
+   - task graph snapshots persist project/task/dependency/run
+     state in `.spark/projects.json`; task TODOs are intentionally
      excluded from that snapshot
    - `TaskGraphStore` serializes graph writes with a filesystem
-     lock directory at `.spark/thread.json.lock`; the lock is
+     lock directory at `.spark/projects.json.lock`; the lock is
      acquired with `mkdir`, records `owner.json` heartbeat
      metadata, retries for up to 10s at 25ms intervals, and
      removes lock directories older than 60s as stale
-   - `TaskGraphStore` writes `.spark/thread.json` atomically by
+   - `TaskGraphStore` writes `.spark/projects.json` atomically by
      writing a temporary file in `.spark/` and renaming it into
      place
    - stale direct saves of previously loaded graphs are rejected:
-     if `.spark/thread.json` has changed or disappeared since
+     if `.spark/projects.json` has changed or disappeared since
      that graph was loaded, `save()` throws
      `TaskGraphStoreConflictError` instead of overwriting newer
      state; use `update()` for locked read/modify/write flows
    - task-scoped TODO state is loaded from and saved outside
-     `.spark/thread.json`; active sessions use a session-scoped
+     `.spark/projects.json`; active sessions use a session-scoped
      `.spark/todos/<session>.json` path to avoid concurrent
      role-run overwrites
    - independent session TODOs from `spark_update_todos` are
@@ -111,8 +111,8 @@ Automatic behavior:
      counts, acknowledged known-failure counts, and timeout/stale
      signals
    - `/run` / `/run-sequential` / `/run-parallel` mode state is persisted in this session's
-     `.spark/current-thread/<session>.json` entry alongside the
-     selected thread. It records `runRef`, `threadRef`, `focus`,
+     `.spark/sessions/<session>.json` entry alongside the
+     selected project. It records `runRef`, `projectRef`, `focus`,
      `status`, policy, and timestamps; `policy.maxConcurrency` is the
      stored strategy knob, and the widget displays it as a Spark run
      line separate from DAG-run history
@@ -126,39 +126,39 @@ Automatic behavior:
      terminal problem runs can be acknowledged via
      `spark_background_runs ack` (or low-level `spark_dag_manager ack`), which records `acknowledgedAt` and
      `acknowledgedBySession` so status output can stay quiet while
-     preserving history. Old DAG-run history is pruned through typed retention (`spark_state prune` or low-level `spark_dag_manager prune`): dry-run is the default, active/running records and unacknowledged problem records are preserved, and recent terminal windows are retained globally and per thread.
+     preserving history. Old DAG-run history is pruned through typed retention (`spark_state prune` or low-level `spark_dag_manager prune`): dry-run is the default, active/running records and unacknowledged problem records are preserved, and recent terminal windows are retained globally and per project.
    - completion readiness is distinct from task status: a task can
      be marked done while still surfacing missing completion evidence
      when its plan declares `evidenceRequired` and no output artifact
      is attached; role-run execution records output artifacts as the
      first concrete evidence attachment mechanism
-6. Thread / task / TODO text UI is enabled by default for
+6. Project / task / TODO text UI is enabled by default for
    the current session:
-   - the above-editor widget shows the generated Spark thread
+   - the above-editor widget shows the generated Spark project
      title with task counts (`total/claimed/session-claimed`)
    - tasks render as `@name: title`, task TODOs
      render beneath them as `#n`, and independent session TODOs
-     render as siblings of the thread display
+     render as siblings of the project display
    - no placeholder task content is shown when no task is claimed
    - active Spark turns include SPARK.md as persistent
      project intent in the system prompt
    - `spark_status` defaults to an active, limited diagnostic view;
      use `view: "full"` explicitly when full historical task rows are needed
 7. When Spark is active, a turn hint reminds the model to
-   use `spark_status`, `spark_use_thread`,
-   `spark_rename_thread`, `spark_plan_tasks`,
+   use `spark_status`, `spark_use_project`,
+   `spark_rename_project`, `spark_plan_tasks`,
    `spark_claim_task`, `spark_update_task_todos`,
-   `spark_update_todos`,
+   `spark_update_todos`, `spark_ask`,
    `list_roles` / `get_role`,
    `spark_run_ready_tasks`, `spark_list_artifacts` / `spark_get_artifact`,
    `spark_learning_search` / `spark_learning_record`, and `pi-cue` tools.
 8. Spark display-name quality is model-maintained when the
    improvement is obvious:
-   - models may update the active thread title and the current
+   - models may update the active project title and the current
      task `@name`/title when the existing display name is clearly
      placeholder, generic, stale, too broad, or inconsistent with
      the confirmed active intent
-   - placeholder examples: `Untitled`, `New thread`, `Task`,
+   - placeholder examples: `Untitled`, `New project`, `Task`,
      `TODO`, `Custom input`, `「自定义输入」`, or generated names
      that only mirror an intake placeholder
    - generic or too-broad examples: `Fix bug`, `Implement task`,
@@ -166,14 +166,14 @@ Automatic behavior:
      `Plan` when the turn already identifies a narrower outcome
      such as `Harden ask gate semantics` or
      `Document Spark display-name update rules`
-   - stale or inconsistent examples: a thread still titled
+   - stale or inconsistent examples: a project still titled
      `Draft GitHub integration plan` while the active request is
      about ask UX, or a claimed task titled `Investigate CI` after
      the user has narrowed the task to `Fix Node test runner flags`
    - obvious fixes can be made without asking by using
-     `spark_rename_thread` for thread metadata and
+     `spark_rename_project` for project metadata and
      `spark_claim_task` for the claimed task. Display names are
-     mutable labels only: underlying `thread:*` and `task:*` refs,
+     mutable labels only: underlying `project:*` and `task:*` refs,
      dependency edges, runs, artifacts, and TODO state continue to
      point at the same entities after a rename
    - preserve user-specific intentional names, distinctive
@@ -289,6 +289,8 @@ option-description validation, artifacts, and replay tool behavior belong in
 Resource-oriented tools:
 
 - `cue_exec` — execute commands and create cue-shell jobs. Tool/API runs use the current Pi session working directory by default and pipe mode (`pty: false`) by default; set `pty: true` only for commands that genuinely need terminal semantics. Foreground stdout/stderr are tailed to 16 KiB per stream by default; pass `tail_bytes: 0` for full output.
+- `cue_run` — run a `.cue` file via cue-shell script mode, mirroring `cue run <file.cue>`. Top-level items execute sequentially and fail fast; per-item stdout/stderr are tailed by default.
+- `cue_script` — run an inline `.cue` script body. Use this when the script content is generated in the Pi session; prefer `cue_run` when a real `.cue` file exists on disk.
 - `cue_jobs` — list, inspect, wait for, and stop jobs via `action`. List output is limited to 20 rows by default; `action=status` / `action=wait` output is tailed by default.
 - `cue_schedule` — add/list/pause/resume/remove scheduled or one-shot jobs. List output is limited to 20 rows by default.
 - `cue_scope` — inspect scopes, HEAD env, or cue-shell config. Scope lists are limited to 20 rows by default and omit env unless requested.

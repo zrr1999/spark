@@ -1,12 +1,16 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
+import type { SessionTodoEntry, SessionTodoStatus } from "spark-tasks";
+
+export type { SessionTodoEntry, SessionTodoStatus } from "spark-tasks";
+
 /**
- * spark-widget.ts — Above-editor widget showing durable Spark thread/task state plus
+ * spark-widget.ts — Above-editor widget showing durable Spark project/task state plus
  * the current task's TODO working set.
  *
  * Display model:
  *   ◆ Tasks(running=2 pending=1 failed=1): @agent-a, @agent-b
- *   ◆ Thread title
+ *   ◆ Project title
  *   ├─ ◐ @me/worker role-run task title
  *   │  ├─ ✓ #7 task TODO
  *   │  └─ ○ #12 task TODO
@@ -19,32 +23,11 @@ export interface TaskEntry {
   claim?: "mine" | "role-run" | "other";
   animationFrame?: number;
   agentLabel?: string;
-  /** @deprecated use agentLabel until UI naming fully migrates. */
-  roleLabel?: string;
   backgroundOwner?: "session";
   /** True when a running agent is parked on user/input rather than actively working. */
   waitingForInput?: boolean;
   planSummary?: "missing";
   todos: SessionTodoEntry[];
-}
-
-export type SessionTodoStatus =
-  | "pending"
-  | "in_progress"
-  | "done"
-  | "blocked"
-  | "cancelled"
-  | "deleted";
-
-export interface SessionTodoEntry {
-  id?: string;
-  /** Permanent display number within the Pi session; not a row-position ordinal. */
-  displayNumber?: number;
-  content: string;
-  status: SessionTodoStatus;
-  notes?: string[];
-  createdAt?: string;
-  updatedAt?: string;
 }
 
 export interface SparkDagWidgetEntry {
@@ -62,7 +45,7 @@ export interface SparkRunWidgetEntry {
 }
 
 export interface SparkWidgetState {
-  threadTitle?: string;
+  projectTitle?: string;
   dag?: SparkDagWidgetEntry;
   run?: SparkRunWidgetEntry;
   tasks: TaskEntry[];
@@ -149,7 +132,7 @@ function isVisibleTaskTodo(todo: SessionTodoEntry): boolean {
 function hasWidgetContent(state: SparkWidgetState | undefined): state is SparkWidgetState {
   return Boolean(
     state &&
-    (state.threadTitle ||
+    (state.projectTitle ||
       state.dag ||
       state.run ||
       state.tasks.length > 0 ||
@@ -176,7 +159,7 @@ export function renderSparkWidgetLines(
 ): string[] {
   const visibleTodos = state.independentTodos.filter(isVisibleIndependentTodo);
   if (
-    !state.threadTitle &&
+    !state.projectTitle &&
     !state.dag &&
     !state.run &&
     state.tasks.length === 0 &&
@@ -196,8 +179,8 @@ export function renderSparkWidgetLines(
   const backgroundLine = formatBackgroundLine(state.dag, state.run, theme);
   if (backgroundLine) lines.push(trunc(backgroundLine));
 
-  if (state.threadTitle) {
-    lines.push(trunc(`${theme.fg("accent", "◆")} ${theme.bold(state.threadTitle)}`));
+  if (state.projectTitle) {
+    lines.push(trunc(`${theme.fg("accent", "◆")} ${theme.bold(state.projectTitle)}`));
   }
 
   const tasks = visibleTasks.map((task) => ({
@@ -375,8 +358,7 @@ function taskAnimationFrame(task: TaskEntry): number {
 }
 
 function taskAgentLabel(task: TaskEntry): string {
-  if ((task.agentLabel ?? task.roleLabel)?.trim())
-    return (task.agentLabel ?? task.roleLabel)?.trim() ?? "";
+  if (task.agentLabel?.trim()) return task.agentLabel.trim();
   switch (task.claim) {
     case "mine":
       return "me";
@@ -455,7 +437,7 @@ function taskActorLabel(task: TaskEntry): string | undefined {
     if (agentLabel.includes("/")) return `@${agentLabel}`;
     return task.backgroundOwner === "session" ? `@me/${agentLabel}` : `@${agentLabel}`;
   }
-  if (task.claim === "mine" && (task.agentLabel ?? task.roleLabel)?.trim()) return `@${agentLabel}`;
+  if (task.claim === "mine" && task.agentLabel?.trim()) return `@${agentLabel}`;
   if (task.claim === "other") return `@${agentLabel}`;
   return undefined;
 }

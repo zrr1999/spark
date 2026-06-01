@@ -19,7 +19,7 @@ import { renderAskScreen, normalizeRenderTheme, type AskUILanguage } from "./ren
  *
  * Usage:
  *   const controller = new PiAskFlowController({ ... });
- *   controller.run(customCallbackArgs, doneCallback);
+ *   controller.run(tui, theme, doneCallback);
  */
 
 export interface AskFlowOptions {
@@ -29,13 +29,24 @@ export interface AskFlowOptions {
   headless?: boolean;
 }
 
+export interface PiAskTui {
+  terminal?: { columns?: number };
+  requestRender?: () => void;
+}
+
+export interface PiAskView {
+  render(): string[];
+  handleInput(data: string): void;
+  invalidate(): void;
+}
+
 export class PiAskFlowController {
   private state: AskState;
   private questions: readonly PiAskFlowQuestion[];
   private optionsByTab: ReadonlyArray<readonly ExtendedOption[]>;
   private options: AskFlowOptions;
   private done: ((result: PiAskFlowResult) => void) | null = null;
-  private tui: any = null;
+  private tui: PiAskTui | null = null;
 
   constructor(options: AskFlowOptions) {
     this.options = options;
@@ -52,11 +63,7 @@ export class PiAskFlowController {
     this.state = createInitialState({ questions: [...this.questions] });
   }
 
-  run(
-    tui: any,
-    theme: RenderTheme,
-    done: (result: PiAskFlowResult) => void,
-  ): { render(): string[]; handleInput(data: string): void; invalidate(): void } {
+  run(tui: PiAskTui, theme: RenderTheme, done: (result: PiAskFlowResult) => void): PiAskView {
     this.tui = tui;
     this.done = done;
 
@@ -85,7 +92,7 @@ export class PiAskFlowController {
     };
   }
 
-  private renderFrame(tui: any, theme: RenderTheme): string[] {
+  private renderFrame(tui: PiAskTui, theme: RenderTheme): string[] {
     return renderAskScreen({
       state: this.state,
       questions: this.questions,

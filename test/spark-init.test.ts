@@ -1,18 +1,24 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { TaskGraph, defaultTaskGraphStore, defaultTaskTodoStore } from "spark-tasks";
-import sparkExtension, {
-  detectSparkActivation,
-  initializeSparkIdea,
+import sparkExtension from "../packages/spark/src/extension/index.ts";
+import {
   renderActiveSparkContextSummary,
   renderSparkActiveSystemPrompt,
-  shouldClarifyBeforeInit,
+} from "../packages/spark/src/extension/spark-active-injection.ts";
+import {
+  detectSparkActivation,
+  hasNonSparkProjectFiles,
   shouldMaterializeSparkMd,
-} from "../packages/spark/src/extension/index.ts";
+} from "../packages/spark/src/extension/spark-activation.ts";
+import {
+  initializeSparkIdea,
+  shouldClarifyBeforeInit,
+} from "../packages/spark/src/extension/spark-initialization.ts";
 
 type SparkExtensionApiForTest = Parameters<typeof sparkExtension>[0];
 type SparkToolConfig = Parameters<NonNullable<SparkExtensionApiForTest["registerTool"]>>[0];
@@ -30,6 +36,26 @@ void test("Spark activation requires a local .spark directory", async () => {
   }
 });
 
+void test("Spark activation does not treat inaccessible directories as empty projects", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-inaccessible-"));
+  const locked = join(dir, "locked");
+  try {
+    await mkdir(locked);
+    await chmod(locked, 0o000);
+    try {
+      await hasNonSparkProjectFiles(locked);
+    } catch (error) {
+      assert.ok(error instanceof Error && "code" in error);
+      assert.match(String(error.code), /^(EACCES|EPERM)$/);
+      return;
+    }
+    t.skip("filesystem permissions did not block directory reads on this platform");
+  } finally {
+    await chmod(locked, 0o700).catch(() => undefined);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("workspace-like cwd keeps Spark state under .spark without root SPARK.md", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-workspace-"));
   try {
@@ -38,14 +64,14 @@ void test("workspace-like cwd keeps Spark state under .spark without root SPARK.
     assert.equal(result.sparkMdPath, undefined);
     assert.equal(result.taskCount, 0);
     assert.equal(result.currentTaskRef, undefined);
-    const threadJson = await readFile(join(dir, ".spark", "thread.json"), "utf8");
-    assert.doesNotMatch(threadJson, /Maintain current interaction context/);
-    assert.doesNotMatch(threadJson, /Analyze project intent/);
-    assert.doesNotMatch(threadJson, /Plan targeted clarification/);
-    assert.doesNotMatch(threadJson, /Review initial direction/);
-    assert.doesNotMatch(threadJson, /do not start with a generic intake template/);
-    assert.doesNotMatch(threadJson, /"currentTaskRef"/);
-    assert.doesNotMatch(threadJson, /"todos"/);
+    const projectJson = await readFile(join(dir, ".spark", "projects.json"), "utf8");
+    assert.doesNotMatch(projectJson, /Maintain current interaction context/);
+    assert.doesNotMatch(projectJson, /Analyze project intent/);
+    assert.doesNotMatch(projectJson, /Plan targeted clarification/);
+    assert.doesNotMatch(projectJson, /Review initial direction/);
+    assert.doesNotMatch(projectJson, /do not start with a generic intake template/);
+    assert.doesNotMatch(projectJson, /"currentTaskRef"/);
+    assert.doesNotMatch(projectJson, /"todos"/);
     await assert.rejects(() => readFile(join(dir, ".spark", "todos.json"), "utf8"));
     await assert.rejects(() => readFile(join(dir, "SPARK.md"), "utf8"));
   } finally {
@@ -58,10 +84,10 @@ void test("repo-like cwd materializes root SPARK.md as well", async () => {
   try {
     await mkdir(join(dir, ".git"));
     assert.equal(await shouldMaterializeSparkMd(dir), true);
-    const result = await initializeSparkIdea(dir, "Build a repo-local spark thread");
+    const result = await initializeSparkIdea(dir, "Build a repo-local spark project");
     assert.ok(result.sparkMdPath);
     const rootSpark = await readFile(result.sparkMdPath!, "utf8");
-    assert.match(rootSpark, /Build a repo-local spark thread/);
+    assert.match(rootSpark, /Build a repo-local spark project/);
     assert.match(rootSpark, /## Working title/);
     assert.doesNotMatch(rootSpark, /## Delivery expectation/);
     assert.doesNotMatch(rootSpark, /待确认/);
@@ -69,20 +95,20 @@ void test("repo-like cwd materializes root SPARK.md as well", async () => {
     assert.doesNotMatch(rootSpark, /## 生态关系/);
     assert.equal(result.taskCount, 0);
     assert.equal(result.currentTaskRef, undefined);
-    const threadJson = await readFile(join(dir, ".spark", "thread.json"), "utf8");
-    assert.doesNotMatch(threadJson, /Analyze project intent/);
-    assert.doesNotMatch(threadJson, /Plan targeted clarification/);
-    assert.doesNotMatch(threadJson, /Review initial direction/);
-    assert.doesNotMatch(threadJson, /Maintain current interaction context/);
-    assert.doesNotMatch(threadJson, /"currentTaskRef"/);
-    assert.doesNotMatch(threadJson, /"todos"/);
+    const projectJson = await readFile(join(dir, ".spark", "projects.json"), "utf8");
+    assert.doesNotMatch(projectJson, /Analyze project intent/);
+    assert.doesNotMatch(projectJson, /Plan targeted clarification/);
+    assert.doesNotMatch(projectJson, /Review initial direction/);
+    assert.doesNotMatch(projectJson, /Maintain current interaction context/);
+    assert.doesNotMatch(projectJson, /"currentTaskRef"/);
+    assert.doesNotMatch(projectJson, /"todos"/);
     await assert.rejects(() => readFile(join(dir, ".spark", "todos.json"), "utf8"));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-void test("initializeSparkIdea does not overwrite an existing initialized thread", async () => {
+void test("initializeSparkIdea does not overwrite an existing initialized project", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-no-overwrite-"));
   try {
     await mkdir(join(dir, ".git"));
@@ -90,7 +116,7 @@ void test("initializeSparkIdea does not overwrite an existing initialized thread
     const firstSpark = await readFile(join(dir, "SPARK.md"), "utf8");
     const second = await initializeSparkIdea(dir, "New accidental request");
     const secondSpark = await readFile(join(dir, "SPARK.md"), "utf8");
-    assert.equal(second.threadRef, first.threadRef);
+    assert.equal(second.projectRef, first.projectRef);
     assert.equal(secondSpark, firstSpark);
     assert.doesNotMatch(secondSpark, /New accidental request/);
   } finally {
@@ -102,20 +128,21 @@ void test("active Spark prompt preserves base prompt and avoids repeated Spark d
   const prompt = renderSparkActiveSystemPrompt("Base prompt", "SPARK.md");
   assert.match(prompt, /^Base prompt\n\nSpark is active for this workspace/);
   assert.match(prompt, /standing project state/);
-  assert.match(prompt, /Spark tools for thread\/task\/TODO\/DAG\/ask state/);
+  assert.match(prompt, /Spark tools for project\/task\/TODO\/DAG\/ask state/);
+  assert.match(prompt, /Spark ask tools \(`spark_ask`\)/);
   assert.match(prompt, /fix concrete repo behavior feedback in code\/docs\/tests/);
-  assert.doesNotMatch(prompt, /Do not auto-create placeholder tasks or threads/);
+  assert.doesNotMatch(prompt, /Do not auto-create placeholder tasks or projects/);
   assert.doesNotMatch(prompt, /Before launching multiple roles or parallel workstreams/);
   assert.doesNotMatch(prompt, /prefer direct-exec commands and Pi file tools over \/bin\/sh/);
   assert.doesNotMatch(prompt, /Do not satisfy such feedback by only storing memory or preferences/);
 });
 
-void test("active Spark context reports no selected thread without persisting current selection", async () => {
+void test("active Spark context reports no selected project without persisting current selection", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-no-current-before-activation-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
     const graph = new TaskGraph();
-    graph.createThread({ title: "Dormant thread", description: "Not active yet" });
+    graph.createProject({ title: "Dormant project", description: "Not active yet" });
     await defaultTaskGraphStore(dir).save(graph);
 
     const summary = await renderActiveSparkContextSummary(dir, {
@@ -126,10 +153,10 @@ void test("active Spark context reports no selected thread without persisting cu
       },
     });
 
-    assert.match(summary ?? "", /Spark available: no thread selected/);
-    assert.match(summary ?? "", /Threads: 1 total \/ 1 active/);
-    assert.doesNotMatch(summary ?? "", /Current thread: Dormant thread/);
-    await assert.rejects(() => stat(join(dir, ".spark", "current-thread")));
+    assert.match(summary ?? "", /Spark available: no project selected/);
+    assert.match(summary ?? "", /Projects: 1 total \/ 1 active/);
+    assert.doesNotMatch(summary ?? "", /Current project: Dormant project/);
+    await assert.rejects(() => stat(join(dir, ".spark", "sessions")));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -149,9 +176,9 @@ void test("active Spark context keeps strict limits for intent, claimed tasks, a
       "utf8",
     );
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Compact limits", description: "Compact limits" });
+    const project = graph.createProject({ title: "Compact limits", description: "Compact limits" });
     const task = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       name: "claimed-0",
       title: "Claimed task 0",
       description: "Trim active prompt context.",
@@ -167,18 +194,23 @@ void test("active Spark context keeps strict limits for intent, claimed tasks, a
       sessionId: "leaf:test-leaf",
       leaseMs: 60_000,
     });
-    graph.createTask({
-      threadRef: thread.ref,
+    const otherClaimed = graph.createTask({
+      projectRef: project.ref,
       name: "other-claimed",
       title: "Other claimed task",
       description: "Belongs to another session.",
       status: "running",
-      claimedBySession: "leaf:other-leaf",
+    });
+    graph.claimTask(otherClaimed.ref, {
+      kind: "main",
+      claimedBy: "leaf:other-leaf",
+      sessionId: "leaf:other-leaf",
+      leaseMs: 60_000,
     });
     await defaultTaskGraphStore(dir).save(graph);
     await defaultTaskTodoStore(dir, "leaf:test-leaf").save(graph);
     const ctx = { cwd: dir, sessionManager: { getLeafId: () => "test-leaf" } };
-    await executeSparkToolInTest("spark_use_thread", ctx, { thread: thread.ref });
+    await executeSparkToolInTest("spark_use_project", ctx, { project: project.ref });
     await executeSparkToolInTest("spark_status", ctx, {});
 
     const summary = await renderActiveSparkContextSummary(dir, ctx);
@@ -214,9 +246,12 @@ void test("active Spark context omits finished history and finished TODOs", asyn
       "utf8",
     );
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Compact context", description: "Compact context" });
+    const project = graph.createProject({
+      title: "Compact context",
+      description: "Compact context",
+    });
     const active = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       name: "compact-context",
       title: "Compact active context",
       description: "Trim active prompt context.",
@@ -234,7 +269,7 @@ void test("active Spark context omits finished history and finished TODOs", asyn
       leaseMs: 60_000,
     });
     graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       name: "finished-history",
       title: "Finished task history",
       description: "Historical task that should stay out of active context.",
@@ -264,7 +299,7 @@ void test("active Spark context omits finished history and finished TODOs", asyn
       cwd: dir,
       sessionManager: { getLeafId: () => "test-leaf" },
     };
-    await executeSparkToolInTest("spark_use_thread", ctx, { thread: thread.ref });
+    await executeSparkToolInTest("spark_use_project", ctx, { project: project.ref });
     await executeSparkToolInTest("spark_status", ctx, {});
     const summary = await renderActiveSparkContextSummary(dir, ctx);
 
@@ -273,7 +308,10 @@ void test("active Spark context omits finished history and finished TODOs", asyn
     assert.match(summary, /Keep the active prompt compact/);
     assert.doesNotMatch(summary, /Finished historical note/);
     assert.match(summary, /Active Spark context/);
-    assert.match(summary, /Unfinished tasks: 1 \/ claimed: 1 \/ claimed_by_session: 1 \(2 total\)/);
+    assert.match(
+      summary,
+      /Unfinished tasks: 1 \/ claimed: 1 \/ current_session_claimed: 1 \(2 total\)/,
+    );
     assert.match(summary, /My claimed task: \[running\] @compact-context: Compact active context/);
     assert.match(summary, /Keep active TODO/);
     assert.match(summary, /Blocked child TODO/);
@@ -302,7 +340,7 @@ void test("initializeSparkIdea preserves clarified title and trace ask refs", as
   try {
     await mkdir(join(dir, ".git"));
     const result = await initializeSparkIdea(dir, "Build a language service", {
-      threadTitle: "Hypha v0: VS Code-first IDE experience for Spore",
+      projectTitle: "Hypha v0: VS Code-first IDE experience for Spore",
       clarification: {
         workingTitle: "Hypha v0: VS Code-first IDE experience for Spore",
         outputLanguage: "en",
@@ -317,14 +355,14 @@ void test("initializeSparkIdea preserves clarified title and trace ask refs", as
       askArtifactRefs: ["artifact:ask-test"],
       askRefs: ["ask:ask-test"],
     });
-    assert.equal(result.threadTitle, "Hypha v0: VS Code-first IDE experience for Spore");
+    assert.equal(result.projectTitle, "Hypha v0: VS Code-first IDE experience for Spore");
     assert.deepEqual(result.askArtifactRefs, ["artifact:ask-test"]);
-    const threadJson = await readFile(join(dir, ".spark", "thread.json"), "utf8");
-    assert.match(threadJson, /Hypha v0: VS Code-first IDE experience for Spore/);
-    assert.match(threadJson, /Execute smallest confirmed slice/);
-    assert.match(threadJson, /A documented next-step plan for diagnostics and editor UX/);
-    assert.doesNotMatch(threadJson, /Plan targeted clarification/);
-    assert.doesNotMatch(threadJson, /Maintain current interaction context/);
+    const projectJson = await readFile(join(dir, ".spark", "projects.json"), "utf8");
+    assert.match(projectJson, /Hypha v0: VS Code-first IDE experience for Spore/);
+    assert.match(projectJson, /Execute smallest confirmed slice/);
+    assert.match(projectJson, /A documented next-step plan for diagnostics and editor UX/);
+    assert.doesNotMatch(projectJson, /Plan targeted clarification/);
+    assert.doesNotMatch(projectJson, /Maintain current interaction context/);
     const artifactFiles = await readdir(join(dir, ".spark", "artifacts"));
     let traceBody: unknown;
     for (const file of artifactFiles.filter((entry) => entry.endsWith(".json"))) {

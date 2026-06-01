@@ -1,7 +1,7 @@
 {
   "name": "spark-orchestrator",
   "version": "0.1.0",
-  "description": "Spark task graph orchestration for ready frontier scheduling and DAG manager state.",
+  "description": "Spark ready-frontier orchestration and durable DAG run state.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [

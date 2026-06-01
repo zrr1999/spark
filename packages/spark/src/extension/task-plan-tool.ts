@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 
-import { type TaskKind, type TaskPlan, type TaskStatus } from "spark-core";
+import { type Task, type TaskKind, type TaskPlan, type TaskStatus } from "spark-core";
+import { type TaskPlanResult } from "spark-tasks";
 
 export function taskPlanSchema() {
   return Type.Object({
@@ -28,35 +29,8 @@ export function taskPlanSchema() {
   });
 }
 
-export function normalizeToolTaskPlan(
-  plan: Partial<TaskPlan> | undefined,
-  description: string,
-  title: string,
-): TaskPlan {
-  const objective = plan?.objective?.trim() || description.trim() || title.trim();
-  const steps = normalizeStringList(plan?.steps);
-  return {
-    objective,
-    contextRefs: normalizeStringList(plan?.contextRefs),
-    constraints: normalizeStringList(plan?.constraints),
-    nonGoals: normalizeStringList(plan?.nonGoals),
-    successCriteria: normalizeStringList(plan?.successCriteria),
-    evidenceRequired: normalizeStringList(plan?.evidenceRequired),
-    steps: steps.length ? steps : [description.trim() || title.trim()],
-    decompositionRationale: plan?.decompositionRationale?.trim() || undefined,
-    riskLevel:
-      plan?.riskLevel === "trivial" || plan?.riskLevel === "high" ? plan.riskLevel : "normal",
-    openQuestions: normalizeStringList(plan?.openQuestions),
-    askRefs: normalizeStringList(plan?.askRefs) as TaskPlan["askRefs"],
-  };
-}
-
-function normalizeStringList(values: readonly string[] | undefined): string[] {
-  return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))];
-}
-
-export function normalizeTaskKind(value: string | undefined): TaskKind | undefined {
-  if (!value) return undefined;
+export function normalizeTaskKind(value: unknown): TaskKind | undefined {
+  if (value === undefined || value === null) return undefined;
   if (
     value === "research" ||
     value === "plan" ||
@@ -68,13 +42,14 @@ export function normalizeTaskKind(value: string | undefined): TaskKind | undefin
     value === "generic"
   )
     return value;
-  return undefined;
+  throw new Error(
+    "kind must be research, plan, implement, review, ask, cue, interaction, or generic",
+  );
 }
 
-export function normalizeTaskStatus(value: string | undefined): TaskStatus | undefined {
-  if (!value) return undefined;
+export function normalizeTaskStatus(value: unknown): TaskStatus | undefined {
+  if (value === undefined || value === null) return undefined;
   if (
-    value === "proposed" ||
     value === "pending" ||
     value === "ready" ||
     value === "running" ||
@@ -84,10 +59,91 @@ export function normalizeTaskStatus(value: string | undefined): TaskStatus | und
     value === "cancelled"
   )
     return value;
-  return undefined;
+  throw new Error("status must be pending, ready, running, blocked, done, failed, or cancelled");
+}
+
+export function normalizeTaskPlanPatch(
+  value: unknown,
+  path: string,
+): Partial<TaskPlan> | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) throw new Error(`${path} must be an object`);
+  return {
+    objective: normalizeOptionalToolString(value.objective, `${path}.objective`),
+    contextRefs: normalizeToolStringArray(value.contextRefs, `${path}.contextRefs`),
+    constraints: normalizeToolStringArray(value.constraints, `${path}.constraints`),
+    nonGoals: normalizeToolStringArray(value.nonGoals, `${path}.nonGoals`),
+    successCriteria: normalizeToolStringArray(value.successCriteria, `${path}.successCriteria`),
+    evidenceRequired: normalizeToolStringArray(value.evidenceRequired, `${path}.evidenceRequired`),
+    steps: normalizeToolStringArray(value.steps, `${path}.steps`),
+    decompositionRationale: normalizeOptionalToolString(
+      value.decompositionRationale,
+      `${path}.decompositionRationale`,
+    ),
+    riskLevel: normalizeTaskPlanRiskLevel(value.riskLevel, `${path}.riskLevel`),
+    openQuestions: normalizeToolStringArray(value.openQuestions, `${path}.openQuestions`),
+    askRefs: normalizeToolStringArray(value.askRefs, `${path}.askRefs`) as TaskPlan["askRefs"],
+  };
+}
+
+export function normalizeRequiredToolString(value: unknown, path: string): string {
+  const normalized = normalizeOptionalToolString(value, path);
+  if (!normalized) throw new Error(`${path} must be a non-empty string`);
+  return normalized;
+}
+
+export function normalizeOptionalToolString(value: unknown, path: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") throw new Error(`${path} must be a string`);
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+export function normalizeToolStringArray(value: unknown, path: string): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string"))
+    throw new Error(`${path} must be an array of strings`);
+  const normalized = value.map((item) => item.trim()).filter(Boolean);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+export function compactTaskDetail(task: Task) {
+  return {
+    ref: task.ref,
+    name: task.name,
+    title: task.title,
+    status: task.status,
+    kind: task.kind,
+    roleRef: task.roleRef,
+    projectRef: task.projectRef,
+    cancellation: task.cancellation,
+    supersededBy: task.supersededBy,
+  };
+}
+
+export function compactTaskPlanResult(result: TaskPlanResult) {
+  return {
+    created: result.created.map(compactTaskDetail),
+    updated: result.updated.map(compactTaskDetail),
+    skipped: result.skipped.length,
+    dependencies: result.dependencies.length,
+  };
 }
 
 export function escapeYamlLine(value: string): string {
   const line = value.replace(/\s+/g, " ").trim();
   return JSON.stringify(line.length > 160 ? `${line.slice(0, 157)}...` : line);
+}
+
+function normalizeTaskPlanRiskLevel(
+  value: unknown,
+  path: string,
+): TaskPlan["riskLevel"] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value === "trivial" || value === "normal" || value === "high") return value;
+  throw new Error(`${path} must be trivial, normal, or high`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

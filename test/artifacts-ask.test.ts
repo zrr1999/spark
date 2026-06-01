@@ -1,34 +1,41 @@
 import assert from "node:assert/strict";
-import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, readFile, readdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { ArtifactStore } from "spark-artifacts";
+import { ArtifactStore, ArtifactStoreFormatError } from "spark-artifacts";
 import {
+  AskConfigStoreFormatError,
   askUser,
+  createAskArtifactBody,
+  createAskConfigStore,
   createAskUserRequest,
   createAskUserResult,
   createPiAskFlowArtifactBody,
   defaultAskUserResult,
+  getDefaultConfig,
+  PiAskFlowPayloadStore,
+  PiAskFlowPayloadStoreFormatError,
   registerPiAskTools,
   runPiAskFlow,
   summarizeAskResult,
   type PiAskUi,
+  type StoredAskPayload,
 } from "pi-ask";
-import { newRef } from "spark-core";
+import { newRef, type JsonValue } from "spark-core";
 
 void test("artifact store writes hashes, blobs, and lineage links", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-artifacts-"));
   try {
     const store = new ArtifactStore({ rootDir: dir });
-    const threadRef = newRef("thread", "demo-thread");
+    const projectRef = newRef("proj", "demo-project");
     const first = await store.put({
       kind: "plan",
       title: "Plan",
       format: "markdown",
       body: "# Plan\n",
-      provenance: { producer: "spark", threadRef },
+      provenance: { producer: "spark", projectRef },
     });
     const second = await store.put({
       kind: "review",
@@ -37,7 +44,7 @@ void test("artifact store writes hashes, blobs, and lineage links", async () => 
       body: { ok: true },
       provenance: {
         producer: "review",
-        threadRef,
+        projectRef,
         parentArtifactRefs: [first.ref],
       },
     });
@@ -87,6 +94,74 @@ void test("artifact store compacts large metadata while hydrating full bodies", 
   }
 });
 
+void test("artifact store rejects malformed persisted metadata with file context", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-artifacts-malformed-metadata-"));
+  try {
+    const store = new ArtifactStore({ rootDir: dir });
+    const invalidPath = join(dir, "not-an-artifact.json");
+    await writeFile(invalidPath, "[]\n", "utf8");
+
+    await assert.rejects(
+      () => store.list(),
+      (error) =>
+        error instanceof ArtifactStoreFormatError &&
+        error.filePath === invalidPath &&
+        error.reason === "invalid_metadata" &&
+        /artifact metadata must be an object/.test(error.message),
+    );
+    const compacted = await store.compactMetadata();
+    assert.equal(compacted.skipped[0]?.reason, "invalid_metadata");
+    await rm(invalidPath, { force: true });
+
+    const artifact = await store.put({
+      kind: "research",
+      title: "Broken metadata provenance",
+      format: "json",
+      body: { ok: true },
+      provenance: { producer: "spark" },
+    });
+    const metadataPath = store.pathFor(artifact.ref);
+    const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as Record<string, unknown>;
+    delete metadata.provenance;
+    await writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+
+    await assert.rejects(
+      () => store.get(artifact.ref),
+      (error) =>
+        error instanceof ArtifactStoreFormatError &&
+        error.filePath === metadataPath &&
+        /provenance must be an object/.test(error.message),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("artifact store rejects invalid bodies before writing blobs or metadata", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-artifacts-invalid-body-"));
+  try {
+    const store = new ArtifactStore({ rootDir: dir });
+    const ref = newRef("artifact", "invalid-body");
+    await assert.rejects(
+      () =>
+        store.put({
+          ref,
+          kind: "research",
+          title: "Invalid body",
+          format: "json",
+          body: { ok: undefined } as unknown as JsonValue,
+          provenance: { producer: "spark" },
+        }),
+      /body must be a JSON value/,
+    );
+
+    assert.deepEqual(await readdir(join(dir, "blobs")), []);
+    await assert.rejects(() => readFile(store.pathFor(ref), "utf8"), { code: "ENOENT" });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("artifact metadata compaction dry-runs and rewrites legacy inline bodies", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-artifacts-legacy-compact-"));
   try {
@@ -125,6 +200,228 @@ void test("artifact metadata compaction dry-runs and rewrites legacy inline bodi
     assert.match(after, /"bodyTruncated": true/);
     assert.doesNotMatch(after, /legacy-body-legacy-body-/);
     assert.deepEqual((await compactingStore.get<typeof body>(artifact.ref)).body, body);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("artifact store refuses metadata blob paths outside the artifact root", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-artifacts-blob-boundary-"));
+  try {
+    const legacyStore = new ArtifactStore({
+      rootDir: dir,
+      inlineBodyThresholdBytes: Number.MAX_SAFE_INTEGER,
+    });
+    const compactingStore = new ArtifactStore({
+      rootDir: dir,
+      inlineBodyThresholdBytes: 64,
+    });
+    const artifact = await legacyStore.put({
+      kind: "research",
+      title: "External blob path",
+      format: "text",
+      body: "outside-boundary".repeat(100),
+      provenance: { producer: "spark" },
+    });
+    const metadataPath = legacyStore.pathFor(artifact.ref);
+    const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as { blobPath?: string };
+    const outsidePath = `${dir}-outside.txt`;
+    metadata.blobPath = outsidePath;
+    await writeFile(outsidePath, "do not read or compact", "utf8");
+    await writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+
+    await assert.rejects(
+      () => legacyStore.getBody(artifact.ref),
+      /artifact blob path escapes artifact store/,
+    );
+    const executed = await compactingStore.compactMetadata({ dryRun: false });
+
+    assert.equal(executed.compacted, 0);
+    assert.ok(executed.skipped.some((skip) => skip.reason === "invalid_blob_path"));
+    assert.equal(await readFile(outsidePath, "utf8"), "do not read or compact");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+    await rm(`${dir}-outside.txt`, { force: true });
+  }
+});
+
+void test("ask flow payload store saves and loads the latest payload", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-ask-payload-store-"));
+  try {
+    const store = new PiAskFlowPayloadStore();
+    const payload = validAskFlowPayload();
+
+    await store.save(dir, payload);
+
+    assert.deepEqual(await store.load(dir), payload);
+    assert.deepEqual(
+      (await readdir(join(dir, ".pi", "asks"))).filter((entry) => entry.endsWith(".tmp")),
+      [],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("ask flow payload store rejects malformed persisted payloads", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-ask-payload-store-invalid-"));
+  try {
+    const store = new PiAskFlowPayloadStore();
+    const filePath = join(dir, ".pi", "asks", "latest.json");
+
+    assert.equal(await store.load(dir), null);
+    await mkdir(join(dir, ".pi", "asks"), { recursive: true });
+
+    await writeFile(filePath, "{not-json", "utf8");
+    await assert.rejects(
+      () => store.load(dir),
+      (error) =>
+        error instanceof PiAskFlowPayloadStoreFormatError &&
+        error.filePath === filePath &&
+        /not valid JSON/.test(error.message),
+    );
+
+    await writeFile(filePath, "[]\n", "utf8");
+    await assert.rejects(
+      () => store.load(dir),
+      (error) =>
+        error instanceof PiAskFlowPayloadStoreFormatError &&
+        error.filePath === filePath &&
+        /JSON root must be an object/.test(error.message),
+    );
+
+    await writeFile(
+      filePath,
+      `${JSON.stringify({
+        ...validAskFlowPayload(),
+        request: { questions: {} },
+      })}\n`,
+      "utf8",
+    );
+    await assert.rejects(
+      () => store.load(dir),
+      (error) =>
+        error instanceof PiAskFlowPayloadStoreFormatError &&
+        error.filePath === filePath &&
+        /request\.questions must be an array/.test(error.message),
+    );
+
+    await writeFile(
+      filePath,
+      `${JSON.stringify({
+        ...validAskFlowPayload(),
+        request: { questions: [] },
+      })}\n`,
+      "utf8",
+    );
+    await assert.rejects(
+      () => store.load(dir),
+      (error) =>
+        error instanceof PiAskFlowPayloadStoreFormatError &&
+        error.filePath === filePath &&
+        /request is invalid: no_questions/.test(error.message),
+    );
+
+    await writeFile(
+      filePath,
+      `${JSON.stringify({
+        ...validAskFlowPayload(),
+        result: {
+          ...validAskFlowPayload().result,
+          answers: {
+            decision: { questionId: "decision", kind: "option", values: [1] },
+          },
+        },
+      })}\n`,
+      "utf8",
+    );
+    await assert.rejects(
+      () => store.load(dir),
+      (error) =>
+        error instanceof PiAskFlowPayloadStoreFormatError &&
+        error.filePath === filePath &&
+        /result\.answers\.decision\.values must be a string array/.test(error.message),
+    );
+
+    await writeFile(
+      filePath,
+      `${JSON.stringify({ ...validAskFlowPayload(), timestamp: "now" })}\n`,
+      "utf8",
+    );
+    await assert.rejects(
+      () => store.load(dir),
+      (error) =>
+        error instanceof PiAskFlowPayloadStoreFormatError &&
+        error.filePath === filePath &&
+        /timestamp must be a finite number/.test(error.message),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("ask config store defaults only when the config file is missing", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-ask-config-store-"));
+  try {
+    const filePath = join(dir, "pi-ask.json");
+    const store = createAskConfigStore({ filePath });
+
+    assert.deepEqual(store.load(), getDefaultConfig());
+    store.save({ schemaVersion: 1 });
+
+    assert.deepEqual(store.load(), { schemaVersion: 1 });
+    assert.deepEqual(
+      (await readdir(dir)).filter((entry) => entry.endsWith(".tmp")),
+      [],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("ask config store rejects malformed persisted config", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-ask-config-store-invalid-"));
+  try {
+    const filePath = join(dir, "pi-ask.json");
+    const store = createAskConfigStore({ filePath });
+
+    await writeFile(filePath, "{not-json", "utf8");
+    assert.throws(
+      () => store.load(),
+      (error) =>
+        error instanceof AskConfigStoreFormatError &&
+        error.filePath === filePath &&
+        /not valid JSON/.test(error.message),
+    );
+
+    await writeFile(filePath, "[]\n", "utf8");
+    assert.throws(
+      () => store.load(),
+      (error) =>
+        error instanceof AskConfigStoreFormatError &&
+        error.filePath === filePath &&
+        /JSON root must be an object/.test(error.message),
+    );
+
+    await writeFile(filePath, "{}\n", "utf8");
+    assert.deepEqual(store.load(), getDefaultConfig());
+
+    await writeFile(filePath, `${JSON.stringify({ schemaVersion: "1" })}\n`, "utf8");
+    assert.throws(
+      () => store.load(),
+      (error) =>
+        error instanceof AskConfigStoreFormatError &&
+        error.filePath === filePath &&
+        /schemaVersion must be 1/.test(error.message),
+    );
+
+    assert.throws(
+      () => store.save({ schemaVersion: 2 }),
+      (error) =>
+        error instanceof AskConfigStoreFormatError &&
+        error.filePath === filePath &&
+        /schemaVersion must be 1/.test(error.message),
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -303,6 +600,19 @@ void test("ask_user and ask_flow share result summary and artifact body semantic
     createPiAskFlowArtifactBody(request, flowResult).summary,
     "Choose mode: answered; mode=Safe",
   );
+  const artifactBody = createAskArtifactBody(
+    { ...request, context: undefined },
+    {
+      ...flowResult,
+      nextAction: undefined,
+      answers: {
+        mode: { ...flowResult.answers.mode, preview: undefined },
+      },
+    },
+  );
+  assert.equal("context" in artifactBody.request, false);
+  assert.equal("nextAction" in artifactBody.result, false);
+  assert.equal("preview" in artifactBody.result.answers.mode, false);
 });
 
 void test("ask_user tool summary uses option labels rather than raw ids", async () => {
@@ -618,3 +928,41 @@ void test("ask_user returns cancelled envelope without resuming", () => {
   assert.equal(cancelled.cancelled, true);
   assert.equal(cancelled.nextAction, "block");
 });
+
+function validAskFlowPayload(): StoredAskPayload {
+  return {
+    request: {
+      flow: "release-check",
+      mode: "decision",
+      title: "Ship this change?",
+      questions: [
+        {
+          id: "decision",
+          prompt: "Ship this change?",
+          type: "single",
+          required: true,
+          options: [
+            { value: "ship", label: "Ship", description: "Continue with the change." },
+            { value: "hold", label: "Hold", description: "Pause before changing anything." },
+          ],
+        },
+      ],
+    },
+    result: {
+      flow: "release-check",
+      status: "answered",
+      mode: "submit",
+      cancelled: false,
+      nextAction: "resume",
+      answers: {
+        decision: {
+          questionId: "decision",
+          kind: "option",
+          values: ["ship"],
+          labels: ["Ship"],
+        },
+      },
+    },
+    timestamp: 123,
+  };
+}

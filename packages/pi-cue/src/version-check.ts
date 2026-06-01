@@ -57,7 +57,7 @@ export interface VersionCheckOptions {
 }
 
 interface NotifyContext {
-  ui?: { notify?: (message: string, level: string) => void };
+  ui?: { notify?: (message: string, level: "info" | "warning" | "error" | "success") => void };
 }
 
 const DEFAULT_API_URL = "https://api.github.com/repos/zrr1999/cue-shell/releases/latest";

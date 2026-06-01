@@ -5,8 +5,15 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ArtifactStore } from "spark-artifacts";
-import { LearningStore, defaultLearningStore } from "spark-learnings";
-import { newRef } from "spark-core";
+import {
+  defaultLearningStore,
+  LearningExportFormatError,
+  LearningStore,
+  parseLegacyCompoundLearningMarkdown,
+  parseLearningExportMarkdown,
+  renderLearningExportMarkdown,
+} from "spark-learnings";
+import { contentHash, newRef } from "spark-core";
 
 void test("learning store records active learnings and searches by content", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-learnings-"));
@@ -63,6 +70,138 @@ void test("learning store hydrates compacted artifact metadata for list and sear
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+void test("learning store rejects malformed persisted learning artifacts", async () => {
+  const malformedDir = await mkdtemp(join(tmpdir(), "spark-learnings-malformed-"));
+  const mismatchDir = await mkdtemp(join(tmpdir(), "spark-learnings-kind-mismatch-"));
+  try {
+    const malformedArtifactStore = new ArtifactStore({ rootDir: malformedDir });
+    const malformedStore = new LearningStore({ artifactStore: malformedArtifactStore });
+    await malformedArtifactStore.put({
+      ref: newRef("artifact", "malformed-learning"),
+      kind: "learning",
+      title: "Malformed learning",
+      format: "json",
+      body: { status: "active" },
+      provenance: { producer: "spark" },
+    });
+    await assert.rejects(
+      () => malformedStore.list(),
+      /invalid learning artifact artifact:malformed-learning: learning id must be a string/,
+    );
+
+    const mismatchArtifactStore = new ArtifactStore({ rootDir: mismatchDir });
+    const mismatchStore = new LearningStore({ artifactStore: mismatchArtifactStore });
+    const candidate = await mismatchStore.record({
+      id: "candidate-kind-contract",
+      title: "Candidate kind contract",
+      statement: "Candidate learnings must stay in learning-candidate artifacts.",
+      status: "candidate",
+    });
+    await mismatchArtifactStore.put({
+      ref: newRef("artifact", "candidate-kind-mismatch"),
+      kind: "learning",
+      title: "Candidate kind mismatch",
+      format: "json",
+      body: candidate.body,
+      provenance: { producer: "spark" },
+    });
+    await assert.rejects(
+      () => mismatchStore.list({ includeCandidates: true }),
+      /invalid learning artifact artifact:candidate-kind-mismatch: kind must be learning-candidate for candidate status/,
+    );
+  } finally {
+    await rm(malformedDir, { recursive: true, force: true });
+    await rm(mismatchDir, { recursive: true, force: true });
+  }
+});
+
+void test("learning export markdown round-trips and rejects malformed blocks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-learnings-export-format-"));
+  try {
+    const store = new LearningStore({ artifactStore: new ArtifactStore({ rootDir: dir }) });
+    const recorded = await store.record({
+      id: "learning-export-format",
+      title: "Learning export format is package-owned",
+      statement: "Spark learning export Markdown must parse as validated LearningRecord objects.",
+      category: "decision",
+      scope: "project",
+      tags: ["learning", "export"],
+    });
+
+    const markdown = renderLearningExportMarkdown([recorded.body]);
+    assert.deepEqual(parseLearningExportMarkdown(markdown, "learnings.md"), [recorded.body]);
+
+    assert.throws(
+      () =>
+        parseLearningExportMarkdown(
+          ["# Invalid export", "", "```json spark-learning", "{not-json", "```", ""].join("\n"),
+          "invalid-json.md",
+        ),
+      (error) =>
+        error instanceof LearningExportFormatError &&
+        error.filePath === "invalid-json.md" &&
+        error.blockIndex === 1 &&
+        /not valid JSON/.test(error.message),
+    );
+
+    assert.throws(
+      () =>
+        parseLearningExportMarkdown(
+          [
+            "# Invalid export",
+            "",
+            "```json spark-learning",
+            JSON.stringify({ id: 42, title: "Incomplete record" }, null, 2),
+            "```",
+            "",
+          ].join("\n"),
+          "invalid-record.md",
+        ),
+      (error) =>
+        error instanceof LearningExportFormatError &&
+        error.filePath === "invalid-record.md" &&
+        error.blockIndex === 1 &&
+        /not valid learning record: learning id must be a string/.test(error.message),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("legacy compound learning markdown parses as package-owned import input", () => {
+  const markdown = `---
+title: "Webhook 验证必须使用 raw body"
+category: gotchas
+tags: [stripe, webhook, python]
+context: "集成 Stripe webhook 时验证始终失败"
+---
+
+## 问题
+
+Stripe webhook 签名验证要求使用原始请求体（raw body）。
+`;
+  const input = parseLegacyCompoundLearningMarkdown({
+    markdown,
+    sourcePath: ".learnings/gotchas/stripe-webhook-raw-body.md",
+    relativePath: "gotchas/stripe-webhook-raw-body.md",
+  });
+
+  assert.deepEqual(input, {
+    title: "Webhook 验证必须使用 raw body",
+    statement: "集成 Stripe webhook 时验证始终失败",
+    category: "gotcha",
+    scope: "project",
+    status: "active",
+    applicability: "集成 Stripe webhook 时验证始终失败",
+    evidenceRefs: [".learnings/gotchas/stripe-webhook-raw-body.md"],
+    sourcePaths: [".learnings/gotchas/stripe-webhook-raw-body.md"],
+    sourceHash: contentHash(markdown),
+    sourceContent: markdown,
+    tags: ["stripe", "webhook", "python"],
+    confidence: 0.8,
+  });
 });
 
 void test("learning store keeps candidates out of default active recall", async () => {

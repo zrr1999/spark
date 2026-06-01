@@ -162,9 +162,7 @@ Schema and validation:
 - `defaultValues` is valid for `single` and `multi`; it is invalid for
   `freeform` and cannot reference the UI-only custom sentinel.
 - Single-select questions may contain at most one default value.
-- `spark_ask` question params expose `defaultValues`; the legacy
-  `defaultOptionId` maps to `defaultValues` for the legacy single-question
-  shape.
+- `spark_ask` question params expose `defaultValues` directly on each question.
 
 Runtime semantics:
 

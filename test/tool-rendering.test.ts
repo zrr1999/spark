@@ -38,8 +38,8 @@ void test("Spark extension tools render parameter-aware tool calls", () => {
     "spark_status full limit=5",
   );
   assert.equal(
-    renderCall(tools, "spark_list_threads", { status: "all" }),
-    "spark_list_threads all",
+    renderCall(tools, "spark_list_projects", { status: "all" }),
+    "spark_list_projects all",
   );
   assert.equal(
     renderCall(tools, "spark_ask", {
@@ -81,15 +81,21 @@ void test("Spark extension tools render parameter-aware tool calls", () => {
     tools,
     "spark_ask",
     {
-      kind: "decision",
-      question:
+      mode: "decision",
+      title:
         "请确认 standalone Spark 下一阶段 RFC/实现准备采用的决策 bundle。推荐默认：Project-first with intake artifact；local files are source of truth；manager owns DAG.",
-      options: Array.from({ length: 8 }, (_, index) => ({
-        id: `o${index}`,
-        label: `Option ${index}`,
-        description: "Option",
-      })),
-      defaultOptionId: "accept-recommended",
+      questions: [
+        {
+          id: "decision",
+          prompt:
+            "请确认 standalone Spark 下一阶段 RFC/实现准备采用的决策 bundle。推荐默认：Project-first with intake artifact；local files are source of truth；manager owns DAG.",
+          options: Array.from({ length: 8 }, (_, index) => ({
+            id: `o${index}`,
+            label: `Option ${index}`,
+            description: "Option",
+          })),
+        },
+      ],
     },
     80,
   );
@@ -139,8 +145,10 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
     "cue_exec",
     "cue_history",
     "cue_jobs",
+    "cue_run",
     "cue_schedule",
     "cue_scope",
+    "cue_script",
   ]);
   assert.equal(
     renderCall(cueTools, "cue_jobs", { action: "status", id: "J12", tail_bytes: 4096 }),
@@ -159,9 +167,9 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
       action: "list",
       limit: 3,
       includeEnv: true,
-      env_tail_bytes: 2048,
+      tail_bytes: 2048,
     }),
-    "cue_scope list limit=3 include-env env-tail=2048",
+    "cue_scope list limit=3 include-env tail=2048",
   );
   assert.equal(
     renderCall(cueTools, "cue_history", { id: "J12", limit: 10, tail_bytes: 4096 }),
@@ -174,6 +182,19 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
       command: "pnpm test",
     }),
     'cue_schedule add schedule="every 5m" command="pnpm test"',
+  );
+  assert.equal(
+    renderCall(cueTools, "cue_run", { path: "scripts/build.cue", timeout: 30, tail_bytes: 4096 }),
+    "cue_run path=scripts/build.cue timeout=30s tail=4096",
+  );
+  assert.equal(
+    renderCall(cueTools, "cue_script", {
+      script: 'job run { command: "echo ok" }',
+      pathLabel: "inline.cue",
+      timeout: 30,
+      tail_bytes: 4096,
+    }),
+    "cue_script inline=1line(s) label=inline.cue timeout=30s tail=4096",
   );
 
   const longRun = renderCall(

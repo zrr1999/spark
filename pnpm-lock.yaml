@@ -19,6 +19,9 @@ importers:
       pi-cue:
         specifier: file:packages/pi-cue
         version: link:packages/pi-cue
+      pi-graft:
+        specifier: file:packages/pi-graft
+        version: link:packages/pi-graft
       pi-roles:
         specifier: file:packages/pi-roles
         version: link:packages/pi-roles
@@ -89,6 +92,15 @@ importers:
       '@earendil-works/pi-tui':
         specifier: ^0.74.1
         version: 0.74.1
+      typebox:
+        specifier: ^1.1.38
+        version: 1.1.38
+
+  packages/pi-graft:
+    dependencies:
+      '@earendil-works/pi-coding-agent':
+        specifier: '*'
+        version: 0.74.1(ws@8.20.1)(zod@4.4.3)
       typebox:
         specifier: ^1.1.38
         version: 1.1.38

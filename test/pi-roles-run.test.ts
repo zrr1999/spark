@@ -1,17 +1,22 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import {
   cancelRoleRun,
+  createRoleSpec,
+  defaultProjectRoleStore,
   defaultUserRoleModelBindingStore,
+  hydrateDefaultRoleRegistry,
   listActiveRoleRuns,
   normalizeRoleRef,
   normalizeRoleRunMode,
   normalizeRoleSource,
   parsePiJsonlEvents,
+  RoleRegistry,
+  RoleModelBindingStoreFormatError,
   RoleRunCancelledError,
   RoleRunTimeoutError,
   runRole,
@@ -92,6 +97,42 @@ void test("pi-roles requires fork source for forked mode", () => {
   );
 });
 
+void test("pi-roles default registry ignores legacy agent-shaped role stores", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-no-legacy-stores-"));
+  try {
+    const currentRole = createRoleSpec({
+      id: "current-worker",
+      description: "Current project role.",
+      systemPrompt: "You are the current worker.",
+      rationale: "Exercise default role registry boundaries.",
+      expectedUses: ["registry boundary test"],
+    });
+    await defaultProjectRoleStore(dir).save(currentRole);
+
+    await mkdir(join(dir, ".pi", "agents"), { recursive: true });
+    await writeFile(
+      join(dir, ".pi", "agents", "legacy-worker.md"),
+      '---\nid: "legacy-worker"\ndescription: "Legacy role"\nsource: "project"\n---\n\nYou are legacy.\n',
+      "utf8",
+    );
+    await mkdir(join(dir, ".spark", "agents"), { recursive: true });
+    await writeFile(
+      join(dir, ".spark", "agents", "legacy-json.json"),
+      `${JSON.stringify({ id: "legacy-json", description: "Legacy JSON role" })}\n`,
+      "utf8",
+    );
+
+    const registry = new RoleRegistry();
+    await hydrateDefaultRoleRegistry(registry, dir);
+
+    assert.equal(registry.select("current-worker").ref, currentRole.ref);
+    assert.throws(() => registry.select("legacy-worker"), /no role matches/);
+    assert.throws(() => registry.select("legacy-json"), /no role matches/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("pi-roles validates and persists user role model bindings", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-roles-model-binding-"));
   try {
@@ -143,6 +184,78 @@ void test("pi-roles validates and persists user role model bindings", async () =
       /No models matching missing-zero\/model/,
     );
     assert.equal(await store.get("role:builtin-planner"), undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("pi-roles rejects malformed role model binding stores", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-model-binding-invalid-"));
+  try {
+    const store = defaultUserRoleModelBindingStore(dir);
+    assert.deepEqual(await store.loadAll(), []);
+    await mkdir(join(dir, ".agents"), { recursive: true });
+
+    await writeFile(store.filePath, "{not-json", "utf8");
+    await assert.rejects(
+      () => store.loadAll(),
+      (error) =>
+        error instanceof RoleModelBindingStoreFormatError &&
+        error.filePath === store.filePath &&
+        /not valid JSON/.test(error.message),
+    );
+
+    await writeFile(store.filePath, "[]\n", "utf8");
+    await assert.rejects(
+      () => store.loadAll(),
+      (error) =>
+        error instanceof RoleModelBindingStoreFormatError &&
+        error.filePath === store.filePath &&
+        /JSON root must be an object/.test(error.message),
+    );
+
+    await writeFile(store.filePath, `${JSON.stringify({ version: 2, bindings: [] })}\n`, "utf8");
+    await assert.rejects(
+      () => store.loadAll(),
+      (error) =>
+        error instanceof RoleModelBindingStoreFormatError &&
+        error.filePath === store.filePath &&
+        /version must be 1/.test(error.message),
+    );
+
+    await writeFile(store.filePath, `${JSON.stringify({ version: 1, bindings: {} })}\n`, "utf8");
+    await assert.rejects(
+      () => store.loadAll(),
+      (error) =>
+        error instanceof RoleModelBindingStoreFormatError &&
+        error.filePath === store.filePath &&
+        /bindings must be an array/.test(error.message),
+    );
+
+    await writeFile(
+      store.filePath,
+      `${JSON.stringify({
+        version: 1,
+        bindings: [
+          {
+            roleRef: "role:builtin-worker",
+            model: "",
+            source: "user",
+            validatedAt: "2026-05-28T00:00:00.000Z",
+            updatedAt: "2026-05-28T00:00:00.000Z",
+            validationCommand: "pi --list-models ",
+          },
+        ],
+      })}\n`,
+      "utf8",
+    );
+    await assert.rejects(
+      () => store.loadAll(),
+      (error) =>
+        error instanceof RoleModelBindingStoreFormatError &&
+        error.filePath === store.filePath &&
+        /bindings\[0\]\.model must be a non-empty string/.test(error.message),
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -256,20 +369,28 @@ void test("pi-roles enforces timeout control", async () => {
   }
 });
 
-void test("pi-roles normalizes unknown modes to fresh and parses JSONL tolerantly", () => {
+void test("pi-roles defaults omitted run mode but rejects unknown modes", () => {
+  assert.equal(normalizeRoleRunMode(undefined), "fresh");
+  assert.equal(normalizeRoleRunMode("fresh"), "fresh");
   assert.equal(normalizeRoleRunMode("forked"), "forked");
-  assert.equal(normalizeRoleRunMode("legacy-mode"), "fresh");
+  assert.throws(() => normalizeRoleRunMode("legacy-mode"), /unsupported role run mode/);
+});
+
+void test("pi-roles parses JSONL tolerantly", () => {
   assert.deepEqual(parsePiJsonlEvents('{"type":"start"}\nnot-json\n{"type":"stop"}\n'), [
     { type: "start" },
     { type: "stop" },
   ]);
 });
 
-void test("pi-roles keeps narrow role source and ref compatibility", () => {
-  assert.equal(normalizeRoleRef("agent:builtin-worker"), "role:builtin-worker");
-  assert.equal(normalizeRoleSource("predefined"), "builtin");
-  assert.equal(normalizeRoleSource("managed"), "project");
-  assert.equal(normalizeRoleSource("workspace"), "project");
+void test("pi-roles rejects legacy role aliases instead of normalizing them", () => {
+  assert.throws(
+    () => normalizeRoleRef("agent:builtin-worker"),
+    /legacy agent refs are not supported/,
+  );
+  assert.equal(normalizeRoleSource("predefined"), undefined);
+  assert.equal(normalizeRoleSource("managed"), undefined);
+  assert.equal(normalizeRoleSource("workspace"), undefined);
 });
 
 async function eventually(predicate: () => boolean | Promise<boolean>): Promise<void> {

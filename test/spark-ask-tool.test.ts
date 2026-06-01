@@ -91,22 +91,164 @@ void test("spark_ask tool builds flow-native multi-question forms", () => {
   assert.equal(request.questions[1]!.type, "freeform");
 });
 
-void test("spark_ask legacy defaultOptionId maps to defaultValues", () => {
+void test("spark_ask tool requires explicit questions", () => {
+  assert.throws(
+    () =>
+      createSparkAskToolRequest({
+        mode: "decision",
+        title: "Choose route",
+        questions: [],
+      }),
+    /requires a non-empty questions\[\] array/,
+  );
+});
+
+void test("spark_ask tool requires a context-specific title", () => {
+  assert.throws(
+    () =>
+      createSparkAskToolRequest({
+        mode: "decision",
+        questions: [
+          {
+            id: "route",
+            prompt: "Which route?",
+            options: [
+              {
+                id: "fast",
+                label: "Fast",
+                description: "Choose the faster route with less validation.",
+              },
+              {
+                id: "safe",
+                label: "Safe",
+                description: "Choose the safer route with more validation.",
+              },
+            ],
+          },
+        ],
+      }),
+    /requires a context-specific title/,
+  );
+});
+
+void test("spark_ask tool rejects invalid explicit parameter shapes", () => {
+  const validOption = {
+    id: "safe",
+    label: "Safe",
+    description: "Choose the safer route with more validation.",
+  };
+  const otherOption = {
+    id: "fast",
+    label: "Fast",
+    description: "Choose the faster route with less validation.",
+  };
+
+  assert.throws(
+    () =>
+      createSparkAskToolRequest({
+        mode: "survey",
+        title: "Choose route",
+        questions: [{ id: "route", prompt: "Which route?", options: [validOption, otherOption] }],
+      }),
+    /mode must be clarification, decision, approval, or unblock/,
+  );
+  assert.throws(
+    () =>
+      createSparkAskToolRequest({
+        mode: "decision",
+        title: "Choose route",
+        questions: [
+          {
+            id: "route",
+            prompt: "Which route?",
+            type: "dropdown" as never,
+            options: [validOption, otherOption],
+          },
+        ],
+      }),
+    /question route type must be single, multi, preview, or freeform/,
+  );
+  assert.throws(
+    () =>
+      createSparkAskToolRequest({
+        mode: "decision",
+        title: "Choose route",
+        questions: [
+          {
+            id: "route",
+            prompt: "Which route?",
+            required: "true" as never,
+            options: [validOption, otherOption],
+          },
+        ],
+      }),
+    /question route required must be a boolean/,
+  );
+  assert.throws(
+    () =>
+      createSparkAskToolRequest({
+        mode: "decision",
+        title: "Choose route",
+        questions: [
+          {
+            id: "route",
+            prompt: "Which route?",
+            defaultValues: ["safe", 1 as never],
+            options: [validOption, otherOption],
+          },
+        ],
+      }),
+    /question route defaultValues must be a string array/,
+  );
+  assert.throws(
+    () =>
+      createSparkAskToolRequest({
+        mode: "decision",
+        title: "Choose route",
+        questions: [
+          {
+            id: "notes",
+            prompt: "Any notes?",
+            type: "freeform",
+            options: [validOption, otherOption],
+          },
+        ],
+      }),
+    /freeform questions must not include options/,
+  );
+  assert.throws(
+    () =>
+      createSparkAskToolRequest({
+        mode: "decision",
+        title: "Choose route",
+        questions: [{ id: "route", prompt: "Which route?", options: [validOption, otherOption] }],
+        behaviour: { preservePriorAnswers: "true" as never },
+      }),
+    /behaviour\.preservePriorAnswers must be a boolean/,
+  );
+});
+
+void test("spark_ask question defaultValues are preserved", () => {
   const request = createSparkAskToolRequest({
     mode: "decision",
     title: "Choose route",
-    question: "Which route?",
-    defaultOptionId: "safe",
-    options: [
+    questions: [
       {
-        id: "fast",
-        label: "Fast",
-        description: "Choose the faster route with less validation.",
-      },
-      {
-        id: "safe",
-        label: "Safe",
-        description: "Choose the safer route with more validation.",
+        id: "route",
+        prompt: "Which route?",
+        defaultValues: ["safe"],
+        options: [
+          {
+            id: "fast",
+            label: "Fast",
+            description: "Choose the faster route with less validation.",
+          },
+          {
+            id: "safe",
+            label: "Safe",
+            description: "Choose the safer route with more validation.",
+          },
+        ],
       },
     ],
   });
@@ -277,11 +419,17 @@ void test("spark_ask tool requires clear option descriptions", () => {
   assert.throws(
     () =>
       createSparkAskToolRequest({
-        kind: "decision",
-        question: "Dispatch roles?",
-        options: [
-          { id: "yes", label: "Yes", description: "Yes" },
-          { id: "no", label: "No", description: "No" },
+        mode: "decision",
+        title: "Dispatch roles?",
+        questions: [
+          {
+            id: "dispatch",
+            prompt: "Dispatch roles?",
+            options: [
+              { id: "yes", label: "Yes", description: "Yes" },
+              { id: "no", label: "No", description: "No" },
+            ],
+          },
         ],
       }),
     /needs a clearer description|description must explain more/,
@@ -293,11 +441,18 @@ void test("spark_ask tool persists decision no-selection as a blocked artifact",
   try {
     const response = await runSparkAskTool(
       {
-        kind: "decision",
-        question: "Dispatch roles?",
-        options: [
-          { id: "yes", label: "Yes", description: "Dispatch now" },
-          { id: "no", label: "No", description: "Do not dispatch" },
+        mode: "decision",
+        title: "Dispatch roles?",
+        questions: [
+          {
+            id: "dispatch",
+            prompt: "Dispatch roles?",
+            required: true,
+            options: [
+              { id: "yes", label: "Yes", description: "Dispatch now" },
+              { id: "no", label: "No", description: "Do not dispatch" },
+            ],
+          },
         ],
       },
       { cwd: dir, ui: { select: async () => undefined } },
@@ -328,11 +483,18 @@ void test("spark_ask tool preserves custom decision text instead of reporting no
   try {
     const response = await runSparkAskTool(
       {
-        kind: "decision",
-        question: "Dispatch roles?",
-        options: [
-          { id: "yes", label: "Yes", description: "Dispatch now" },
-          { id: "no", label: "No", description: "Do not dispatch" },
+        mode: "decision",
+        title: "Dispatch roles?",
+        questions: [
+          {
+            id: "dispatch",
+            prompt: "Dispatch roles?",
+            required: true,
+            options: [
+              { id: "yes", label: "Yes", description: "Dispatch now" },
+              { id: "no", label: "No", description: "Do not dispatch" },
+            ],
+          },
         ],
       },
       { cwd: dir, ui: { selectWithCustom: async () => ({ customText: "先修 widget" }) } },
@@ -341,18 +503,24 @@ void test("spark_ask tool preserves custom decision text instead of reporting no
     assert.equal(response.details.status, "answered");
     assert.equal(response.details.blocked, true);
     assert.equal(response.details.nextAction, "block");
-    assert.equal(response.details.answers.answer!.values.length, 0);
-    assert.equal(response.details.answers.answer!.customText, "先修 widget");
-    assert.match(response.content[0]!.text, /Dispatch roles\? blocked: answered; 先修 widget/);
+    assert.equal(response.details.answers.dispatch!.values.length, 0);
+    assert.equal(response.details.answers.dispatch!.customText, "先修 widget");
+    assert.match(
+      response.content[0]!.text,
+      /Dispatch roles\? blocked: answered; dispatch=先修 widget; next=block/,
+    );
 
     const artifact = await defaultArtifactStore(dir).get<AskArtifactBodyForTest>(
       response.details.artifactRef as ArtifactRef,
     );
-    assert.match(artifact.body.summary ?? "", /Dispatch roles\? blocked: answered; 先修 widget/);
+    assert.match(
+      artifact.body.summary ?? "",
+      /Dispatch roles\? blocked: answered; dispatch=先修 widget; next=block/,
+    );
     assert.equal(artifact.body.result.status, "answered");
     assert.equal(artifact.body.result.nextAction, "block");
-    assert.deepEqual(artifact.body.result.answers.answer!.values, []);
-    assert.equal(artifact.body.result.answers.answer!.customText, "先修 widget");
+    assert.deepEqual(artifact.body.result.answers.dispatch!.values, []);
+    assert.equal(artifact.body.result.answers.dispatch!.customText, "先修 widget");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -363,13 +531,19 @@ void test("spark_ask tool multi-select decision persists explicit selections", a
   try {
     const response = await runSparkAskTool(
       {
-        kind: "decision",
-        question: "Which workstreams should run?",
-        multiSelect: true,
-        options: [
-          { id: "docs", label: "Docs", description: "Documentation" },
-          { id: "runtime", label: "Runtime", description: "Runtime fixes" },
-          { id: "tests", label: "Tests", description: "Regression tests" },
+        mode: "decision",
+        title: "Which workstreams should run?",
+        questions: [
+          {
+            id: "workstreams",
+            prompt: "Which workstreams should run?",
+            type: "multi",
+            options: [
+              { id: "docs", label: "Docs", description: "Documentation" },
+              { id: "runtime", label: "Runtime", description: "Runtime fixes" },
+              { id: "tests", label: "Tests", description: "Regression tests" },
+            ],
+          },
         ],
       },
       { cwd: dir, ui: { select: async () => "Docs, Tests" } },
@@ -377,18 +551,18 @@ void test("spark_ask tool multi-select decision persists explicit selections", a
     assertSparkToolDetails(response.details);
     assert.equal(response.details.status, "answered");
     assert.equal(response.details.blocked, false);
-    assert.deepEqual(response.details.answers.answer!.values, ["docs", "tests"]);
-    assert.deepEqual(response.details.answers.answer!.labels, ["Docs", "Tests"]);
+    assert.deepEqual(response.details.answers.workstreams!.values, ["docs", "tests"]);
+    assert.deepEqual(response.details.answers.workstreams!.labels, ["Docs", "Tests"]);
     assert.match(
       response.content[0]!.text,
-      /Which workstreams should run\?: answered; Docs, Tests/,
+      /Which workstreams should run\?: answered; workstreams=Docs, Tests/,
     );
     assert.doesNotMatch(response.content[0]!.text, /docs, tests/);
 
     const artifact = await defaultArtifactStore(dir).get<AskArtifactBodyForTest>(
       response.details.artifactRef as ArtifactRef,
     );
-    assert.deepEqual(artifact.body.result.answers.answer!.values, ["docs", "tests"]);
+    assert.deepEqual(artifact.body.result.answers.workstreams!.values, ["docs", "tests"]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

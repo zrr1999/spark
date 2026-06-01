@@ -449,10 +449,17 @@ export type {
   AskSummaryRequest,
   AskSummaryResult,
 } from "./summary.ts";
-export { PiAskFlowPayloadStore } from "./ask-payload-store.ts";
-export { createAskConfigStore } from "./config/store.ts";
+export { PiAskFlowPayloadStore, PiAskFlowPayloadStoreFormatError } from "./ask-payload-store.ts";
+export type { StoredAskPayload } from "./ask-payload-store.ts";
+export {
+  AskConfigStoreFormatError,
+  createAskConfigStore,
+  getDefaultConfig,
+} from "./config/store.ts";
+export type { AskConfigStoreOptions } from "./config/store.ts";
 export type { AskConfig, AskConfigStore } from "./config/schema.ts";
 export { PiAskFlowController, normalizeAskKey, printableAskText } from "./ui/controller.ts";
+export type { PiAskTui, PiAskView } from "./ui/controller.ts";
 export { createInitialState, buildExtendedOptions } from "./state/state.ts";
 export type { AskState } from "./state/state.ts";
 export { reduce } from "./state/reducer.ts";

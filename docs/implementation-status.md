@@ -49,7 +49,6 @@ but end-to-end local vertical slice.
    - reusable `RoleSpec` definitions with `builtin | project | user` sources
    - builtin roles (`scout`, `planner`, `worker`, `reviewer`, `oracle`)
    - project/user Markdown role stores under `.agents/roles` and `~/.agents/roles`
-   - compatibility readers for old role/agent paths and `.spark/agents/*.json` migration input
    - generic `fresh | forked` role run mode types
    - Pi JSON-mode CLI argument construction
    - subprocess launch with stdout/stderr capture and tolerant JSONL parsing
@@ -63,31 +62,31 @@ but end-to-end local vertical slice.
    - gate policies
    - review artifact body helpers
 - `spark-tasks`
-   - thread/task DAG
+   - project/task DAG
    - cycle detection
    - dependency readiness
    - persisted graph store backed by `TaskGraphStore` at
-     `.spark/thread.json`
+     `.spark/projects.json`
    - filesystem locking for graph mutations via
-     `.spark/thread.json.lock`; lock acquisition uses an atomic
+     `.spark/projects.json.lock`; lock acquisition uses an atomic
      `mkdir`, writes owner/heartbeat metadata, retries for up to
      10s every 25ms, and removes lock directories older than 60s
    - atomic graph saves: `TaskGraphStore` writes a temporary file
-     in `.spark/` and renames it over `.spark/thread.json`
+     in `.spark/` and renames it over `.spark/projects.json`
    - stale direct-save protection: saving a graph that was loaded
-     before `.spark/thread.json` changed, or after the file was
+     before `.spark/projects.json` changed, or after the file was
      removed, throws `TaskGraphStoreConflictError` instead of
      clobbering newer state; locked `update()` is the preferred
      read/modify/write path
    - per-task TODO state with summaries and update ops; TODOs
-     are stored outside `.spark/thread.json` snapshots, and
+     are stored outside `.spark/projects.json` snapshots, and
      active sessions can use session-scoped `.spark/todos/<session>.json`
      files to avoid concurrent role-run overwrites
    - `name` / `title` / `description` task identity, rendered as `@name: title` in Pi UI
    - unified main-session/role-run claim schema with lease expiration
    - heartbeat updates via `heartbeatTaskClaim()`
    - stale claim expiry that marks running runs as `claim_stale` and returns tasks to `pending`
-   - model-claimed current-task tracking per thread
+   - model-claimed current-task tracking per project
 - `spark-runtime`
    - dry-run task execution through registered roles
    - Spark task execution via `pi-roles` `runRole()` subprocess launch/control, CLI argument, and JSONL helpers
@@ -113,7 +112,7 @@ but end-to-end local vertical slice.
      for local Spark learnings; legacy `.learnings/{patterns,gotchas,decisions}`
      compound-learnings imports are supported with dry-run by default
    - two-layer activation detection: `SPARK.md` /
-     `.spark/thread.json` /
+     `.spark/projects.json` /
      `~/.config/spark/config.toml` allowlist first,
      high-confidence natural-language idea detection second
    - active-project tool hints for `spark_status`,
@@ -131,7 +130,7 @@ but end-to-end local vertical slice.
      review gate, and run trace generation
    - SPARK.md injection into the active turn system prompt as
      persistent project intent
-   - default text UI summary for active thread task counts,
+   - default text UI summary for active project task counts,
      session-claimed tasks, task TODOs, independent session
      TODO siblings, Spark orchestrator state, and run-mode status after Spark initialization and on active Spark turns
    - active-session task TODO files live under
@@ -139,7 +138,7 @@ but end-to-end local vertical slice.
      `spark_update_todos` live under
      `.spark/session-todos/<session>.json`, with stable display
      numbers in `.spark/todo-display-numbers/<session>.json`
-   - `spark_state` provides explicit `.spark` session/cache status and dry-run-by-default cleanup for safe cache files while protecting thread graph, artifacts, notes, DAG runs, and review-gate state
+   - `spark_state` provides explicit `.spark` session/cache status and dry-run-by-default cleanup for safe cache files while protecting project graph, artifacts, notes, DAG runs, and review-gate state
    - invariant repair that clears stale current-task refs
      without creating placeholder tasks
    - ask artifacts linked into the Spark run trace when init clarification runs
@@ -150,7 +149,7 @@ but end-to-end local vertical slice.
 
 - `pi-roles` is now the generic role package. It owns reusable role specs and simple single child Pi role runs.
 - Spark packages keep task DAGs, task claims, TODOs, artifacts, asks, review gates, and background orchestration.
-- Deprecated role-shaped fields and aliases may still be accepted in code as rolling compatibility for persisted state, but new tools/docs should use role terminology. See [role-boundaries.md](./role-boundaries.md) and [role-run-modes.md](./role-run-modes.md).
+- Deprecated role-shaped fields, aliases, and agent storage paths are rejected at package boundaries. Repair or migrate stale local state explicitly instead of relying on runtime compatibility shims. See [role-boundaries.md](./role-boundaries.md) and [role-run-modes.md](./role-run-modes.md).
 
 ## Deferred by design
 

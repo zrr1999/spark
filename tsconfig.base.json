@@ -20,6 +20,8 @@
       "spark-learnings": ["./packages/spark-learnings/src/index.ts"],
       "pi-roles": ["./packages/pi-roles/src/index.ts"],
       "pi-roles/extension": ["./packages/pi-roles/src/extension.ts"],
+      "pi-graft": ["./packages/pi-graft/src/index.ts"],
+      "pi-graft/extension": ["./packages/pi-graft/src/extension.ts"],
       "pi-ask": ["./packages/pi-ask/src/index.ts"],
       "spark-ask": ["./packages/spark-ask/src/index.ts"],
       "pi-cue": ["./packages/pi-cue/src/index.ts"],

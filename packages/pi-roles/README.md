@@ -10,9 +10,8 @@ asks, scheduler policy, capabilities, or delegation topology.
 - `RoleSpec` — reusable coding role/persona definition.
 - `RoleRun` — one concrete child Pi execution using a role.
 - `RoleSource` — storage/provenance scope: `builtin`, `project`, or `user`.
-- `RoleOrigin` — optional metadata such as `manual`, `generated`, `imported`,
-  `migrated`, or `builtin`. Generated roles are represented here rather than as
-  a primary source.
+- `RoleOrigin` — optional metadata such as `manual`, `generated`, or `builtin`.
+  Generated roles are represented here rather than as a primary source.
 
 ## Storage
 
@@ -21,14 +20,8 @@ Primary Markdown role paths:
 - project: `.agents/roles/**/*.md`
 - user: `~/.agents/roles/**/*.md`
 
-Compatibility read paths:
-
-- project: `.pi/agents/**/*.md`
-- user: `~/.pi/agent/agents/**/*.md`
-
-Old Spark JSON specs under `.spark/agents/*.json` are migration input only. The
-core package keeps a small loader so Spark can migrate existing projects, but new
-writes use Markdown role files.
+Legacy agent-shaped paths and refs are not compatibility inputs. Repair stale
+local state explicitly before loading it; new writes use Markdown role files.
 
 ## Runtime scope
 

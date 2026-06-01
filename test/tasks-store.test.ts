@@ -4,16 +4,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { RoleRegistry, builtinRoleRef } from "pi-roles";
+import { RoleRegistry, builtinRoleRef, defaultUserRoleModelBindingStore } from "pi-roles";
 import { ArtifactStore } from "spark-artifacts";
-import { DependencyError, newRef, type RoleRef, type TaskPlan, type TaskRef } from "spark-core";
 import {
+  DependencyError,
+  newRef,
+  nowIso,
+  type RoleRef,
+  type RunRef,
+  type TaskPlan,
+  type TaskRef,
+} from "spark-core";
+import {
+  SparkDagRunStoreFormatError,
   defaultSparkDagRunStore,
   runReadySparkTasks,
   type SparkDagRunRecord,
 } from "spark-orchestrator";
 import {
-  RoleRunTimeoutError,
   buildRoleRunArgs,
   createRoleRunName,
   createRoleRunClaimId,
@@ -21,17 +29,40 @@ import {
   killActiveSparkRoleRunProcesses,
   listActiveSparkRoleRunProcesses,
   runSparkTask,
+  sparkTaskExecutorRoleRef,
   sweepExpiredTaskClaims,
 } from "spark-runtime";
 import {
   TaskGraph,
   TaskGraphStore,
   TaskGraphStoreConflictError,
+  TaskGraphStoreFormatError,
+  TaskGraphStoreLockOwnerFormatError,
   TaskGraphStoreLockTimeoutError,
+  TaskTodoStoreFormatError,
   TaskTodoStore,
+  TASK_PLAN_READINESS_RULES,
+  applyIndependentTodoOps,
+  collectNonConcreteTaskIssues,
+  decideTaskPlanBeforeCreate,
+  defaultTaskGraphStore,
+  defaultTaskTodoStore,
+  normalizeTaskPlan,
+  renderNonConcreteTaskIssues,
+  renderTaskPlanReadinessRules,
   taskCompletionReadiness,
   taskPlanReadiness,
+  type SessionTodoEntry,
 } from "spark-tasks";
+import {
+  cleanupOwnedBackgroundSubroles,
+  resumeOwnedBackgroundSubroles,
+} from "../packages/spark/src/extension/spark-background-subrole-lifecycle.ts";
+import { SparkDagManagerController } from "../packages/spark/src/extension/spark-dag-manager.ts";
+import {
+  saveCurrentProjectRef,
+  sparkSessionOwnerKey,
+} from "../packages/spark/src/extension/session-state.ts";
 
 function executionReadyPlan(objective: string): TaskPlan {
   return {
@@ -53,7 +84,7 @@ function testDagRunRecord(
     Partial<SparkDagRunRecord>,
 ): SparkDagRunRecord {
   return {
-    threadRef: input.threadRef,
+    projectRef: input.projectRef,
     ownerSessionId: input.ownerSessionId,
     dryRun: input.dryRun ?? false,
     maxConcurrency: input.maxConcurrency ?? 1,
@@ -74,17 +105,47 @@ function testDagRunRecord(
   };
 }
 
-void test("task graph store keeps TODOs out of thread.json and todo store restores them", async () => {
+function testSparkContext(cwd: string, sessionName: string) {
+  const sessionFile = join(cwd, ".pi-sessions", `${sessionName}.json`);
+  return {
+    cwd,
+    sessionManager: {
+      getSessionFile: () => sessionFile,
+      getLeafId: () => `${sessionName}-leaf`,
+    },
+  };
+}
+
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 2_000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(await predicate(), "timed out waiting for condition");
+}
+
+function assertIndependentTodoStatuses(
+  todos: SessionTodoEntry[],
+  statuses: Array<SessionTodoEntry["status"]>,
+): void {
+  assert.deepEqual(
+    todos.map((todo) => todo.status),
+    statuses,
+  );
+}
+
+void test("task graph store keeps TODOs out of projects.json and todo store restores them", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tasks-"));
   try {
-    const file = join(dir, "thread.json");
+    const file = join(dir, "projects.json");
     const todoFile = join(dir, "todos.json");
     const store = new TaskGraphStore(file);
     const todoStore = new TaskTodoStore(todoFile);
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Demo", description: "demo" });
+    const project = graph.createProject({ title: "Demo", description: "demo" });
     const task = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       title: "Plan",
       description: "plan",
       roleRef: builtinRoleRef("planner"),
@@ -95,10 +156,10 @@ void test("task graph store keeps TODOs out of thread.json and todo store restor
     const loaded = await store.load();
     assert.ok(loaded);
     await todoStore.hydrate(loaded);
-    assert.equal(loaded.threads()[0]?.title, "Demo");
-    assert.equal(loaded.tasks(thread.ref).length, 1);
-    assert.equal(loaded.currentTask(thread.ref), undefined);
-    assert.equal(loaded.tasks(thread.ref)[0]?.title, "Plan");
+    assert.equal(loaded.projects()[0]?.title, "Demo");
+    assert.equal(loaded.tasks(project.ref).length, 1);
+    assert.equal(loaded.currentTask(project.ref), undefined);
+    assert.equal(loaded.tasks(project.ref)[0]?.title, "Plan");
     assert.equal(loaded.taskTodos(task.ref).length, 2);
     assert.equal(loaded.todoSummary(task.ref).inProgress, 1);
     assert.doesNotMatch(await readFile(file, "utf8"), /"todos"/);
@@ -108,11 +169,112 @@ void test("task graph store keeps TODOs out of thread.json and todo store restor
   }
 });
 
+void test("default task TODO store always uses an explicit scoped path", () => {
+  const store = defaultTaskTodoStore("/workspace/demo", "leaf:main/session");
+  assert.equal(store.filePath, "/workspace/demo/.spark/todos/leaf-main-session.json");
+});
+
+void test("independent session TODO reducer preserves one active live item", () => {
+  let todos = applyIndependentTodoOps([], [{ op: "init", items: ["Read request", "Patch code"] }]);
+  assertIndependentTodoStatuses(todos, ["in_progress", "pending"]);
+
+  const firstId = todos[0]?.id;
+  const secondId = todos[1]?.id;
+  assert.ok(firstId);
+  assert.ok(secondId);
+
+  todos = applyIndependentTodoOps(todos, [
+    { op: "start", id: secondId },
+    { op: "note", id: secondId, text: "cover behavior, not implementation" },
+    { op: "delete", id: firstId },
+  ]);
+  assertIndependentTodoStatuses(todos, ["deleted", "in_progress"]);
+  assert.equal(todos[0]?.deletedAt !== undefined, true);
+  assert.deepEqual(todos[1]?.notes, ["cover behavior, not implementation"]);
+
+  todos = applyIndependentTodoOps(todos, [{ op: "restore", id: firstId }]);
+  assertIndependentTodoStatuses(todos, ["pending", "in_progress"]);
+  assert.equal(todos[0]?.deletedAt, undefined);
+  assert.equal(todos.filter((todo) => todo.status === "in_progress").length, 1);
+});
+
+void test("task TODO store rejects malformed persisted snapshots", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-task-todos-invalid-"));
+  try {
+    const todoFile = join(dir, "todos.json");
+    const todoStore = new TaskTodoStore(todoFile);
+
+    await mkdir(dir, { recursive: true });
+    await writeFile(todoFile, "{not-json", "utf8");
+    await assert.rejects(
+      () => todoStore.load(),
+      (error) =>
+        error instanceof TaskTodoStoreFormatError &&
+        error.filePath === todoFile &&
+        /not valid JSON/.test(error.message),
+    );
+
+    await writeFile(todoFile, "[]\n", "utf8");
+    await assert.rejects(
+      () => todoStore.load(),
+      (error) =>
+        error instanceof TaskTodoStoreFormatError &&
+        error.filePath === todoFile &&
+        /JSON root must be an object/.test(error.message),
+    );
+
+    await writeFile(todoFile, `${JSON.stringify({ version: 2, todos: [] })}\n`, "utf8");
+    await assert.rejects(
+      () => todoStore.load(),
+      (error) =>
+        error instanceof TaskTodoStoreFormatError &&
+        error.filePath === todoFile &&
+        /version must be 1/.test(error.message),
+    );
+
+    await writeFile(todoFile, `${JSON.stringify({ version: 1 })}\n`, "utf8");
+    await assert.rejects(
+      () => todoStore.load(),
+      (error) =>
+        error instanceof TaskTodoStoreFormatError &&
+        error.filePath === todoFile &&
+        /todos must be an array/.test(error.message),
+    );
+
+    await writeFile(todoFile, `${JSON.stringify({ version: 1, todos: {} })}\n`, "utf8");
+    await assert.rejects(
+      () => todoStore.load(),
+      (error) =>
+        error instanceof TaskTodoStoreFormatError &&
+        error.filePath === todoFile &&
+        /todos must be an array/.test(error.message),
+    );
+
+    await writeFile(
+      todoFile,
+      `${JSON.stringify({
+        version: 1,
+        todos: [{ taskRef: "task:demo", content: "Plan", status: "unknown" }],
+      })}\n`,
+      "utf8",
+    );
+    await assert.rejects(
+      () => todoStore.load(),
+      (error) =>
+        error instanceof TaskTodoStoreFormatError &&
+        error.filePath === todoFile &&
+        /todos\[0\]\.status must be a valid TODO status/.test(error.message),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("task metadata can be updated when a model claims concrete work", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const task = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Initial",
     description: "initial",
     kind: "interaction",
@@ -128,15 +290,15 @@ void test("task metadata can be updated when a model claims concrete work", () =
   assert.equal(updated.title, "Fix Spark prompt injection");
   assert.equal(updated.description, "Inject SPARK.md as standing context.");
   assert.equal(updated.kind, "implement");
-  graph.setCurrentTask(thread.ref, updated.ref);
-  assert.equal(graph.currentTask(thread.ref)?.ref, task.ref);
+  graph.setCurrentTask(project.ref, updated.ref);
+  assert.equal(graph.currentTask(project.ref)?.ref, task.ref);
 });
 
 void test("todo ops can initialize an empty task and use stable ids", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const task = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Plan",
     description: "plan",
     roleRef: builtinRoleRef("planner"),
@@ -163,9 +325,9 @@ void test("todo ops can initialize an empty task and use stable ids", () => {
 
 void test("tasks have simple names and can be resolved in plans", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
 
-  const result = graph.planTasks(thread.ref, [
+  const result = graph.planTasks(project.ref, [
     {
       name: "inspect",
       title: "Inspect package boundaries",
@@ -186,9 +348,9 @@ void test("tasks have simple names and can be resolved in plans", () => {
 
 void test("task plan readiness distinguishes minimal and execution-ready plans", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const minimal = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Minimal",
     description: "minimal task",
     roleRef: builtinRoleRef("worker"),
@@ -207,7 +369,7 @@ void test("task plan readiness distinguishes minimal and execution-ready plans",
   );
 
   const blocked = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Blocked",
     description: "blocked task",
     roleRef: builtinRoleRef("worker"),
@@ -235,7 +397,7 @@ void test("task plan readiness distinguishes minimal and execution-ready plans",
   );
 
   const ready = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Ready",
     description: "ready task",
     roleRef: builtinRoleRef("worker"),
@@ -255,12 +417,124 @@ void test("task plan readiness distinguishes minimal and execution-ready plans",
   assert.deepEqual(graph.taskPlanReadiness(ready.ref), { ready: true, issues: [] });
 
   const cancelled = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Cancelled cleanup",
     description: "cancelled task should not need execution evidence",
     status: "cancelled",
   });
   assert.deepEqual(graph.taskPlanReadiness(cancelled.ref), { ready: true, issues: [] });
+});
+
+void test("task plan normalization is a public spark-tasks contract", () => {
+  const plan = normalizeTaskPlan(
+    {
+      objective: "  ",
+      contextRefs: [" docs/plan.md ", "docs/plan.md", ""],
+      constraints: [" keep scope tight ", "keep scope tight"],
+      nonGoals: [" "],
+      successCriteria: [" command passes ", "command passes"],
+      evidenceRequired: [" focused test output "],
+      steps: ["  "],
+      decompositionRationale: "  avoid a broad rewrite  ",
+      riskLevel: "urgent" as TaskPlan["riskLevel"],
+      openQuestions: [" "],
+      askRefs: [" ask:decision-1 ", "ask:decision-1"] as TaskPlan["askRefs"],
+    },
+    "  Implement focused change  ",
+    "Fallback title",
+  );
+
+  assert.deepEqual(plan, {
+    objective: "Implement focused change",
+    contextRefs: ["docs/plan.md"],
+    constraints: ["keep scope tight"],
+    nonGoals: [],
+    successCriteria: ["command passes"],
+    evidenceRequired: ["focused test output"],
+    steps: ["Implement focused change"],
+    decompositionRationale: "avoid a broad rewrite",
+    riskLevel: "normal",
+    openQuestions: [],
+    askRefs: ["ask:decision-1"],
+  });
+});
+
+void test("task plan input rejects standalone design placeholders as a package contract", () => {
+  const issues = collectNonConcreteTaskIssues([
+    {
+      name: "design-results",
+      title: "设计 DAG 子 agent 完成结果的可见机制",
+      description: "Decide the visibility model.",
+      kind: "plan",
+      status: "pending",
+      plan: executionReadyPlan("Decide result visibility."),
+    },
+    {
+      name: "retire-old-plan",
+      title: "Plan legacy cleanup",
+      description: "Already cancelled placeholder.",
+      kind: "plan",
+      status: "cancelled",
+    },
+    {
+      name: "implement-results",
+      title: "Implement DAG result visibility",
+      description: "Implement the selected visibility model.",
+      kind: "implement",
+      status: "pending",
+      plan: executionReadyPlan("Implement result visibility."),
+    },
+  ]);
+
+  assert.deepEqual(issues, [
+    {
+      name: "design-results",
+      title: "设计 DAG 子 agent 完成结果的可见机制",
+      message:
+        "kind=plan is reserved for planning logic; create concrete implement/review/research/validation work and put design details in task.plan",
+    },
+  ]);
+  assert.match(renderNonConcreteTaskIssues(issues), /task_not_concrete/);
+  assert.match(renderNonConcreteTaskIssues(issues), /embed the chosen design/);
+});
+
+void test("task plan decision uses readiness without UI fallback", () => {
+  const graph = new TaskGraph();
+  const project = graph.createProject({ title: "Demo", description: "demo" });
+  const missingPlan = {
+    ...graph.createTask({
+      projectRef: project.ref,
+      title: "Missing plan",
+      description: "missing plan task",
+      status: "pending",
+    }),
+    plan: undefined,
+  };
+
+  const blocked = decideTaskPlanBeforeCreate(missingPlan);
+  assert.equal(blocked.asked, false);
+  assert.equal(blocked.accepted, false);
+  assert.equal(blocked.blocked, true);
+  assert.equal(blocked.plan, undefined);
+  assert.deepEqual(
+    blocked.issues.map((issue) => issue.kind),
+    ["missing_plan"],
+  );
+  assert.match(blocked.summary ?? "", /fix: Add a concrete plan/);
+
+  const ready = graph.createTask({
+    projectRef: project.ref,
+    title: "Ready plan",
+    description: "ready plan task",
+    status: "pending",
+    plan: executionReadyPlan("Run focused work"),
+  });
+  const accepted = decideTaskPlanBeforeCreate(ready);
+  assert.equal(accepted.asked, false);
+  assert.equal(accepted.accepted, true);
+  assert.equal(accepted.blocked, false);
+  assert.deepEqual(accepted.plan, ready.plan);
+  assert.deepEqual(accepted.issues, []);
 });
 
 void test("task plan readiness provides remediation for every issue kind", () => {
@@ -316,11 +590,29 @@ void test("task plan readiness provides remediation for every issue kind", () =>
   );
 });
 
+void test("task plan readiness rules render from the public spark-tasks contract", () => {
+  const renderedRules = renderTaskPlanReadinessRules();
+  const ruleKinds = TASK_PLAN_READINESS_RULES.map((rule) => rule.kind);
+  assert.deepEqual(ruleKinds, [
+    "missing_plan",
+    "missing_objective",
+    "missing_success_criteria",
+    "missing_evidence_required",
+    "missing_steps",
+    "open_questions",
+  ]);
+  for (const rule of TASK_PLAN_READINESS_RULES) {
+    assert.equal(rule.severity, "blocking");
+    assert.ok(renderedRules.includes(`${rule.kind}:`));
+    assert.ok(renderedRules.includes(rule.description));
+  }
+});
+
 void test("task completion readiness requires output artifacts for declared evidence", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const task = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Needs evidence",
     description: "needs evidence",
     plan: executionReadyPlan("Needs evidence"),
@@ -340,9 +632,9 @@ void test("task completion readiness requires output artifacts for declared evid
 
 void test("ready tasks require completed dependencies and execution-ready plan, not stored role", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const prerequisite = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Prerequisite",
     description: "prerequisite",
     status: "pending",
@@ -360,7 +652,7 @@ void test("ready tasks require completed dependencies and execution-ready plan, 
     },
   });
   const dependent = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Dependent",
     description: "dependent",
     roleRef: builtinRoleRef("worker"),
@@ -378,7 +670,7 @@ void test("ready tasks require completed dependencies and execution-ready plan, 
     },
   });
   const minimal = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Minimal",
     description: "minimal",
   });
@@ -401,16 +693,16 @@ void test("ready tasks require completed dependencies and execution-ready plan, 
 
 void test("task cancellation is blocked while non-cancelled tasks depend on it", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const prerequisite = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Prerequisite",
     description: "Must remain available while depended on.",
     status: "pending",
     plan: executionReadyPlan("Keep prerequisite"),
   });
   const dependent = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Dependent",
     description: "Depends on prerequisite.",
     status: "pending",
@@ -434,15 +726,15 @@ void test("task cancellation is blocked while non-cancelled tasks depend on it",
 
 void test("non-cancelled tasks cannot be made dependent on cancelled tasks", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const cancelled = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Cancelled prerequisite",
     description: "Already cancelled.",
     status: "cancelled",
   });
   const dependent = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Dependent",
     description: "Should not depend on cancelled work.",
     status: "pending",
@@ -455,30 +747,69 @@ void test("non-cancelled tasks cannot be made dependent on cancelled tasks", () 
   );
 });
 
+void test("task graph store rejects malformed persisted snapshots", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-graph-store-invalid-"));
+  try {
+    const file = join(dir, "projects.json");
+    const store = new TaskGraphStore(file);
+    assert.equal(await store.load(), null);
+    await mkdir(dir, { recursive: true });
+
+    await writeFile(file, "{not-json", "utf8");
+    await assert.rejects(
+      () => store.load(),
+      (error) =>
+        error instanceof TaskGraphStoreFormatError &&
+        error.filePath === file &&
+        /not valid JSON/.test(error.message),
+    );
+
+    await writeFile(file, "[]\n", "utf8");
+    await assert.rejects(
+      () => store.load(),
+      (error) =>
+        error instanceof TaskGraphStoreFormatError &&
+        error.filePath === file &&
+        /JSON root must be an object/.test(error.message),
+    );
+
+    await writeFile(file, `${JSON.stringify({ tasks: [], dependencies: [] })}\n`, "utf8");
+    await assert.rejects(
+      () => store.load(),
+      (error) =>
+        error instanceof TaskGraphStoreFormatError &&
+        error.filePath === file &&
+        /not valid task graph snapshot/.test(error.message),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("task graph store serializes read-modify-write updates with a filesystem lock", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-lock-"));
   try {
-    const store = new TaskGraphStore(join(dir, "thread.json"));
+    const store = new TaskGraphStore(join(dir, "projects.json"));
     const graph = new TaskGraph();
-    graph.createThread({ title: "Demo", description: "demo" });
+    graph.createProject({ title: "Demo", description: "demo" });
     await store.save(graph);
 
     const first = store.update(async (locked) => {
-      const [thread] = locked.threads();
-      assert.ok(thread);
+      const [project] = locked.projects();
+      assert.ok(project);
       await new Promise((resolve) => setTimeout(resolve, 50));
       locked.createTask({
-        threadRef: thread.ref,
+        projectRef: project.ref,
         name: "first",
         title: "First",
         description: "first",
       });
     });
     const second = store.update(async (locked) => {
-      const [thread] = locked.threads();
-      assert.ok(thread);
+      const [project] = locked.projects();
+      assert.ok(project);
       locked.createTask({
-        threadRef: thread.ref,
+        projectRef: project.ref,
         name: "second",
         title: "Second",
         description: "second",
@@ -503,10 +834,10 @@ void test("task graph store serializes read-modify-write updates with a filesyst
 void test("task graph store update reports lock timeout without stealing active locks", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-lock-timeout-"));
   try {
-    const file = join(dir, "thread.json");
+    const file = join(dir, "projects.json");
     const store = new TaskGraphStore(file);
     const graph = new TaskGraph();
-    graph.createThread({ title: "Demo", description: "demo" });
+    graph.createProject({ title: "Demo", description: "demo" });
     await store.save(graph);
 
     let releaseHolder!: () => void;
@@ -543,10 +874,10 @@ void test("task graph store update reports lock timeout without stealing active 
 void test("task graph store stale lock cleanup follows owner heartbeat, not lock directory mtime", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-lock-heartbeat-"));
   try {
-    const file = join(dir, "thread.json");
+    const file = join(dir, "projects.json");
     const store = new TaskGraphStore(file);
     const graph = new TaskGraph();
-    graph.createThread({ title: "Demo", description: "demo" });
+    graph.createProject({ title: "Demo", description: "demo" });
     await store.save(graph);
 
     const lockPath = `${file}.lock`;
@@ -569,14 +900,41 @@ void test("task graph store stale lock cleanup follows owner heartbeat, not lock
   }
 });
 
+void test("task graph store rejects corrupt lock owner metadata instead of using mtime fallback", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-lock-owner-corrupt-"));
+  try {
+    const file = join(dir, "projects.json");
+    const store = new TaskGraphStore(file);
+    const graph = new TaskGraph();
+    graph.createProject({ title: "Demo", description: "demo" });
+    await store.save(graph);
+
+    const lockPath = `${file}.lock`;
+    const ownerPath = join(lockPath, "owner.json");
+    await mkdir(lockPath);
+    await writeFile(ownerPath, "{not-json", "utf8");
+    const old = new Date(Date.now() - 120_000);
+    await utimes(lockPath, old, old);
+    await utimes(ownerPath, old, old);
+
+    await assert.rejects(
+      () => store.update(() => undefined, { timeoutMs: 10, retryIntervalMs: 1, staleMs: 60_000 }),
+      TaskGraphStoreLockOwnerFormatError,
+    );
+    await stat(lockPath);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("task graph store direct save rejects stale loaded snapshots", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-stale-save-"));
   try {
-    const store = new TaskGraphStore(join(dir, "thread.json"));
+    const store = new TaskGraphStore(join(dir, "projects.json"));
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Demo", description: "demo" });
+    const project = graph.createProject({ title: "Demo", description: "demo" });
     const task = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       name: "claim-me",
       title: "Claim me",
       description: "claim me",
@@ -611,17 +969,17 @@ void test("task graph store direct save rejects stale loaded snapshots", async (
 void test("task graph store merges task progress from stale snapshots under lock", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-merge-progress-"));
   try {
-    const store = new TaskGraphStore(join(dir, "thread.json"));
+    const store = new TaskGraphStore(join(dir, "projects.json"));
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Demo", description: "demo" });
+    const project = graph.createProject({ title: "Demo", description: "demo" });
     const task = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       name: "role-task",
       title: "Role task",
       description: "role task",
     });
     const other = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       name: "other-task",
       title: "Other task",
       description: "other task",
@@ -636,7 +994,7 @@ void test("task graph store merges task progress from stale snapshots under lock
 
     stale.recordRun({
       ref: "run:role-task",
-      threadRef: thread.ref,
+      projectRef: project.ref,
       taskRef: task.ref,
       status: "succeeded",
       finishedAt: "2026-05-20T00:00:00.000Z",
@@ -652,7 +1010,7 @@ void test("task graph store merges task progress from stale snapshots under lock
     assert.ok(loaded);
     assert.equal(loaded.getTask(task.ref).status, "done");
     assert.equal(
-      loaded.runs(thread.ref).find((run) => run.ref === "run:role-task")?.status,
+      loaded.runs(project.ref).find((run) => run.ref === "run:role-task")?.status,
       "succeeded",
     );
     assert.equal(loaded.getTask(other.ref).description, "fresh update");
@@ -664,11 +1022,11 @@ void test("task graph store merges task progress from stale snapshots under lock
 void test("task graph store rejects concurrent claims under lock", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-claim-lock-"));
   try {
-    const store = new TaskGraphStore(join(dir, "thread.json"));
+    const store = new TaskGraphStore(join(dir, "projects.json"));
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Demo", description: "demo" });
+    const project = graph.createProject({ title: "Demo", description: "demo" });
     const task = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       name: "claim-me",
       title: "Claim me",
       description: "claim me",
@@ -702,14 +1060,14 @@ void test("task graph store rejects concurrent claims under lock", async () => {
 
 void test("task graph blocks claim and assignment until dependencies are done", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const prerequisite = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Prerequisite",
     description: "prerequisite",
   });
   const dependent = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Dependent",
     description: "dependent",
   });
@@ -744,9 +1102,9 @@ void test("task graph blocks claim and assignment until dependencies are done", 
 
 void test("task graph blocks role-run claims until task plan is execution-ready", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const task = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Needs plan",
     description: "needs plan",
   });
@@ -775,14 +1133,14 @@ void test("task graph blocks role-run claims until task plan is execution-ready"
 
 void test("task graph enforces one unfinished main claim per session", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const first = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "First",
     description: "first",
   });
   const second = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Second",
     description: "second",
   });
@@ -819,15 +1177,15 @@ void test("task graph enforces one unfinished main claim per session", () => {
 
 void test("task graph rejects duplicate task names on update", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const first = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     name: "first",
     title: "First",
     description: "first",
   });
   const second = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     name: "second",
     title: "Second",
     description: "second",
@@ -836,26 +1194,26 @@ void test("task graph rejects duplicate task names on update", () => {
   assert.equal(graph.updateTask(first.ref, { name: "first" }).name, "first");
   assert.throws(
     () => graph.updateTask(second.ref, { name: "first" }),
-    /task name already exists in thread: first/,
+    /task name already exists in project: first/,
   );
 });
 
 void test("task graph allows one main claim and multiple distinct role-run claims per session", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const main = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Main",
     description: "main",
   });
   const worker = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Worker",
     description: "worker",
     plan: executionReadyPlan("Worker"),
   });
   const reviewer = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Reviewer",
     description: "reviewer",
     plan: executionReadyPlan("Reviewer"),
@@ -889,21 +1247,21 @@ void test("task graph allows one main claim and multiple distinct role-run claim
 
 void test("task graph enforces one unfinished role-run claim per session and role name", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const first = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "First worker",
     description: "first worker",
     plan: executionReadyPlan("First worker"),
   });
   const second = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Second worker",
     description: "second worker",
     plan: executionReadyPlan("Second worker"),
   });
   const otherSession = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Other session worker",
     description: "other session worker",
     plan: executionReadyPlan("Other session worker"),
@@ -940,14 +1298,14 @@ void test("task graph enforces one unfinished role-run claim per session and rol
 
 void test("task graph requires concrete claim identities", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const main = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Main",
     description: "main",
   });
   const roleRun = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Role-run",
     description: "role-run",
   });
@@ -975,14 +1333,14 @@ void test("task graph requires concrete claim identities", () => {
 
 void test("finished tasks retain unified attribution after claims clear", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const mainTask = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Main attributed",
     description: "main attributed",
   });
   const roleRunTask = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Role-run attributed",
     description: "role-run attributed",
     plan: executionReadyPlan("Role-run attributed"),
@@ -997,7 +1355,6 @@ void test("finished tasks retain unified attribution after claims clear", () => 
   });
   const mainDone = graph.setTaskStatus(mainTask.ref, "done");
   assert.equal(mainDone.claim, undefined);
-  assert.equal(mainDone.claimedBySession, undefined);
   assert.deepEqual(mainDone.finishedBy, { sessionId: "session:a" });
 
   graph.claimTask(roleRunTask.ref, {
@@ -1025,9 +1382,9 @@ void test("finished tasks retain unified attribution after claims clear", () => 
 
 void test("claims without expiresAt are dropped while loading legacy snapshots", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const task = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     name: "legacy-claim",
     title: "Legacy claim",
     description: "Legacy stale claim without expiry.",
@@ -1036,7 +1393,6 @@ void test("claims without expiresAt are dropped while loading legacy snapshots",
   const snapshot = graph.snapshot();
   const [snapshotTask] = snapshot.tasks;
   assert.ok(snapshotTask);
-  snapshotTask.claimedBySession = "session:legacy";
   snapshotTask.claim = {
     kind: "main",
     claimedBy: "session:legacy",
@@ -1048,82 +1404,75 @@ void test("claims without expiresAt are dropped while loading legacy snapshots",
   const restored = TaskGraph.fromSnapshot(snapshot);
   const restoredTask = restored.getTask(task.ref);
   assert.equal(restoredTask.claim, undefined);
-  assert.equal(restoredTask.claimedBySession, undefined);
 });
 
-void test("legacy role-shaped snapshot fields normalize to role terminology", () => {
-  const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
-  const task = graph.createTask({
-    threadRef: thread.ref,
-    name: "legacy-role-fields",
-    title: "Legacy role fields",
-    description: "Legacy fields from an old thread snapshot.",
-    status: "running",
-  });
-  const runRef = newRef("run", "legacy-run");
-  graph.recordRun({
-    ref: runRef,
-    threadRef: thread.ref,
-    taskRef: task.ref,
-    status: "running",
-    outputArtifacts: [],
-  });
+void test("legacy agent-shaped role fields are rejected at task graph load boundaries", () => {
+  function roleSnapshot() {
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      name: "role-boundary",
+      title: "Role boundary",
+      description: "Use current role terminology.",
+      status: "running",
+    });
+    const runRef = newRef("run", "role-boundary-run");
+    graph.recordRun({
+      ref: runRef,
+      projectRef: project.ref,
+      taskRef: task.ref,
+      roleRef: builtinRoleRef("worker"),
+      runName: "worker-current",
+      status: "running",
+      outputArtifacts: [],
+    });
+    return { snapshot: graph.snapshot(), runRef };
+  }
 
-  const snapshot = graph.snapshot();
-  const [snapshotTask] = snapshot.tasks;
-  const [snapshotRun] = snapshot.runs;
-  assert.ok(snapshotTask);
-  assert.ok(snapshotRun);
-  const legacyTask = snapshotTask as typeof snapshotTask & {
-    agentRef?: `agent:${string}`;
-    finishedBy?: NonNullable<(typeof snapshotTask)["finishedBy"]> & {
-      agentRef?: `agent:${string}`;
-      agentName?: string;
-    };
-  };
-  legacyTask.agentRef = "agent:builtin-worker";
-  legacyTask.finishedBy = {
+  const taskSnapshot = roleSnapshot().snapshot;
+  (taskSnapshot.tasks[0] as (typeof taskSnapshot.tasks)[number] & { agentRef?: string }).agentRef =
+    "agent:builtin-worker";
+  assert.throws(() => TaskGraph.fromSnapshot(taskSnapshot), /task uses legacy agentRef/);
+
+  const attributionSnapshot = roleSnapshot().snapshot;
+  attributionSnapshot.tasks[0]!.finishedBy = {
     sessionId: "session:legacy",
-    agentRef: "agent:builtin-reviewer",
     agentName: "reviewer-legacy",
-  };
-  snapshotTask.claim = {
+  } as unknown as NonNullable<(typeof attributionSnapshot.tasks)[number]["finishedBy"]>;
+  assert.throws(
+    () => TaskGraph.fromSnapshot(attributionSnapshot),
+    /task attribution uses legacy agentName/,
+  );
+
+  const claimSnapshot = roleSnapshot();
+  claimSnapshot.snapshot.tasks[0]!.claim = {
     kind: "subagent",
     claimedBy: "session:legacy+worker-legacy",
-    agentRef: "agent:builtin-worker",
-    agentName: "worker-legacy",
+    roleRef: builtinRoleRef("worker"),
+    runName: "worker-legacy",
     sessionId: "session:legacy",
-    runRef,
+    runRef: claimSnapshot.runRef,
     claimedAt: "2026-05-18T00:00:00.000Z",
     heartbeatAt: "2026-05-18T00:00:00.000Z",
     expiresAt: "2026-05-18T00:01:00.000Z",
-  } as unknown as (typeof snapshotTask)["claim"];
-  const legacyRun = snapshotRun as typeof snapshotRun & {
-    agentRef?: `agent:${string}`;
-    agentName?: string;
-  };
-  legacyRun.agentRef = "agent:builtin-worker";
-  legacyRun.agentName = "worker-legacy";
+  } as unknown as NonNullable<(typeof claimSnapshot.snapshot.tasks)[number]["claim"]>;
+  assert.throws(
+    () => TaskGraph.fromSnapshot(claimSnapshot.snapshot),
+    /task claim kind must be main or role-run/,
+  );
 
-  const restored = TaskGraph.fromSnapshot(snapshot);
-  const restoredTask = restored.getTask(task.ref);
-  assert.equal(restoredTask.roleRef, "role:builtin-worker");
-  assert.equal(restoredTask.claim?.kind, "role-run");
-  assert.equal(restoredTask.claim?.roleRef, "role:builtin-worker");
-  assert.equal(restoredTask.claim?.runName, "worker-legacy");
-  assert.equal(restoredTask.finishedBy?.roleRef, "role:builtin-reviewer");
-  assert.equal(restoredTask.finishedBy?.runName, "reviewer-legacy");
-  const [restoredRun] = restored.runs(thread.ref);
-  assert.equal(restoredRun?.roleRef, "role:builtin-worker");
-  assert.equal(restoredRun?.runName, "worker-legacy");
+  const runSnapshot = roleSnapshot().snapshot;
+  (runSnapshot.runs[0] as (typeof runSnapshot.runs)[number] & { agentRef?: string }).agentRef =
+    "agent:builtin-worker";
+  assert.throws(() => TaskGraph.fromSnapshot(runSnapshot), /task run uses legacy agentRef/);
 });
 
 void test("task claims use a lease that can expire", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const task = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     name: "lease-check",
     title: "Lease check",
     description: "Exercise task claim timeout behavior.",
@@ -1132,7 +1481,7 @@ void test("task claims use a lease that can expire", () => {
   const runRef = newRef("run");
   graph.recordRun({
     ref: runRef,
-    threadRef: thread.ref,
+    projectRef: project.ref,
     taskRef: task.ref,
     status: "running",
     startedAt: "2026-05-18T00:00:00.000Z",
@@ -1171,18 +1520,18 @@ void test("task claims use a lease that can expire", () => {
   assert.equal(expired.length, 1);
   assert.equal(graph.getTask(task.ref).status, "pending");
   assert.equal(graph.getTask(task.ref).claim, undefined);
-  assert.equal(graph.runs(thread.ref)[0]?.status, "cancelled");
-  assert.equal(graph.runs(thread.ref)[0]?.failureKind, "claim_stale");
+  assert.equal(graph.runs(project.ref)[0]?.status, "cancelled");
+  assert.equal(graph.runs(project.ref)[0]?.failureKind, "claim_stale");
 });
 
 void test("expired claim sweeper persists retryable stale claims", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-sweep-"));
   try {
-    const store = new TaskGraphStore(join(dir, "thread.json"));
+    const store = new TaskGraphStore(join(dir, "projects.json"));
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Demo", description: "demo" });
+    const project = graph.createProject({ title: "Demo", description: "demo" });
     const task = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       name: "sweep-claim",
       title: "Sweep claim",
       description: "Exercise persisted claim sweeping.",
@@ -1191,7 +1540,7 @@ void test("expired claim sweeper persists retryable stale claims", async () => {
     const runRef = newRef("run");
     graph.recordRun({
       ref: runRef,
-      threadRef: thread.ref,
+      projectRef: project.ref,
       taskRef: task.ref,
       roleRef: builtinRoleRef("worker"),
       status: "running",
@@ -1217,11 +1566,44 @@ void test("expired claim sweeper persists retryable stale claims", async () => {
     assert.ok(loaded);
     assert.equal(loaded.getTask(task.ref).status, "pending");
     assert.equal(loaded.getTask(task.ref).claim, undefined);
-    assert.equal(loaded.runs(thread.ref)[0]?.status, "cancelled");
-    assert.equal(loaded.runs(thread.ref)[0]?.failureKind, "claim_stale");
+    assert.equal(loaded.runs(project.ref)[0]?.status, "cancelled");
+    assert.equal(loaded.runs(project.ref)[0]?.failureKind, "claim_stale");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+void test("expired claim sweeper skips persistence when no claims expire", async () => {
+  const graph = new TaskGraph();
+  const project = graph.createProject({ title: "Demo", description: "demo" });
+  const task = graph.createTask({
+    projectRef: project.ref,
+    name: "fresh-claim",
+    title: "Fresh claim",
+    description: "Exercise no-op claim sweeping.",
+    plan: executionReadyPlan("Fresh claim"),
+  });
+  graph.claimTask(task.ref, {
+    kind: "main",
+    claimedBy: "session:active",
+    sessionId: "session:active",
+    now: "2026-05-18T00:00:00.000Z",
+    leaseMs: 10_000,
+  });
+  let saveCalls = 0;
+  const store: Pick<TaskGraphStore, "withLock" | "load" | "save"> = {
+    withLock: async (fn) => fn(),
+    load: async () => graph,
+    save: async () => {
+      saveCalls += 1;
+    },
+  };
+
+  const result = await sweepExpiredTaskClaims(store, "2026-05-18T00:00:01.000Z");
+  assert.equal(result.saved, false);
+  assert.equal(result.expired.length, 0);
+  assert.equal(saveCalls, 0);
+  assert.equal(graph.getTask(task.ref).claim?.claimedBy, "session:active");
 });
 
 void test("role run names and role-run claim ids are stable and attributable", () => {
@@ -1235,11 +1617,60 @@ void test("role run names and role-run claim ids are stable and attributable", (
   );
 });
 
+void test("Spark runtime exposes one executor role assignment contract", () => {
+  const graph = new TaskGraph();
+  const project = graph.createProject({ title: "Demo", description: "demo" });
+  const research = graph.createTask({
+    projectRef: project.ref,
+    title: "Research",
+    description: "research",
+    kind: "research",
+  });
+  const plan = graph.createTask({
+    projectRef: project.ref,
+    title: "Plan",
+    description: "plan",
+    kind: "plan",
+  });
+  const review = graph.createTask({
+    projectRef: project.ref,
+    title: "Review",
+    description: "review",
+    kind: "review",
+  });
+  const implementation = graph.createTask({
+    projectRef: project.ref,
+    title: "Build",
+    description: "build",
+    kind: "implement",
+  });
+  const explicit = graph.createTask({
+    projectRef: project.ref,
+    title: "Explicit",
+    description: "explicit",
+    kind: "implement",
+    roleRef: builtinRoleRef("reviewer"),
+  });
+
+  assert.equal(sparkTaskExecutorRoleRef(research), builtinRoleRef("scout"));
+  assert.equal(sparkTaskExecutorRoleRef(plan), builtinRoleRef("planner"));
+  assert.equal(sparkTaskExecutorRoleRef(review), builtinRoleRef("reviewer"));
+  assert.equal(sparkTaskExecutorRoleRef(implementation), builtinRoleRef("worker"));
+  assert.equal(
+    sparkTaskExecutorRoleRef(implementation, builtinRoleRef("planner")),
+    builtinRoleRef("planner"),
+  );
+  assert.equal(
+    sparkTaskExecutorRoleRef(explicit, builtinRoleRef("planner")),
+    builtinRoleRef("reviewer"),
+  );
+});
+
 void test("resumable background role-runs include owned stale claims", () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const owned = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Owned background",
     description: "owned",
     roleRef: builtinRoleRef("worker"),
@@ -1256,7 +1687,7 @@ void test("resumable background role-runs include owned stale claims", () => {
     leaseMs: 1_000,
   });
   const other = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Other background",
     description: "other",
     roleRef: builtinRoleRef("reviewer"),
@@ -1318,9 +1749,9 @@ void test("Spark runtime Pi command args use current CLI flags and explicit sess
 
 void test("runSparkTask includes plan and a bounded active TODO preview in role instruction", async () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const task = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     name: "bounded-preview",
     title: "Implement bounded preview",
     description: "Implement the bounded child prompt preview.",
@@ -1383,71 +1814,130 @@ void test("runSparkTask includes plan and a bounded active TODO preview in role 
   }
 });
 
-void test("runSparkTask keeps timed-out real role-run claims in background", async () => {
-  const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
-  const task = graph.createTask({
-    threadRef: thread.ref,
-    title: "Plan",
-    description: "plan",
-    roleRef: builtinRoleRef("planner"),
-    plan: executionReadyPlan("Plan"),
-  });
+void test("runSparkTask marks child timeout failed and clears the task claim", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-timeout-pi-"));
-  const fakePi = join(dir, "fake-pi.mjs");
-  await writeFile(
-    fakePi,
-    "process.on('SIGTERM', () => {}); setTimeout(() => {}, 10_000);\n",
-    "utf8",
-  );
-  const registry = new RoleRegistry();
-  const run = await runSparkTask({
-    graph,
-    taskRef: task.ref,
-    registry,
-    cwd: dir,
-    dryRun: false,
-    piCommand: process.execPath,
-    timeoutMs: 1,
-    claim: { sessionId: "session:parent" },
-  }).catch((error: unknown) => {
-    if (error instanceof RoleRunTimeoutError) throw error;
-    throw error;
-  });
+  try {
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Plan",
+      description: "plan",
+      roleRef: builtinRoleRef("planner"),
+      plan: executionReadyPlan("Plan"),
+    });
+    const fakePi = join(dir, "fake-pi.mjs");
+    await writeFile(
+      fakePi,
+      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);\n",
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+    const registry = new RoleRegistry();
+    const run = await runSparkTask({
+      graph,
+      taskRef: task.ref,
+      registry,
+      cwd: dir,
+      dryRun: false,
+      piCommand: fakePi,
+      timeoutMs: 1,
+      claim: { sessionId: "session:parent" },
+    });
 
-  assert.equal(run.status, "running");
-  assert.equal(run.failureKind, "runtime_timeout");
-  assert.equal(graph.getTask(task.ref).status, "running");
-  const claim = graph.getTask(task.ref).claim;
-  assert.equal(claim?.kind, "role-run");
-  assert.equal(claim?.sessionId, "session:parent");
-  assert.match(claim?.claimedBy ?? "", /^session:parent\+planner-/);
-  assert.match(claim?.runName ?? "", /^planner-/);
-  assert.equal(claim?.roleRef, builtinRoleRef("planner"));
-  assert.equal(run.runName, claim?.runName);
-  assert.equal(run.ownerSessionId, "session:parent");
-  assert.equal(claim?.claimedBy, createRoleRunClaimId("session:parent", claim?.runName ?? ""));
-  assert.equal(
-    listActiveSparkRoleRunProcesses().some((entry) => entry.runName === run.runName),
-    true,
-  );
-  const killed = await killActiveSparkRoleRunProcesses({
-    runName: run.runName,
-    waitMs: 1_000,
-  });
-  assert.equal(killed.length, 1);
-  assert.equal(
-    listActiveSparkRoleRunProcesses().some((entry) => entry.runName === run.runName),
-    false,
-  );
-  await rm(dir, { recursive: true, force: true });
+    assert.equal(run.status, "failed");
+    assert.equal(run.failureKind, "runtime_timeout");
+    assert.match(run.errorMessage ?? "", /timed out/);
+    assert.equal(run.completionSummary?.status, "failed");
+    assert.equal(run.completionSummary?.runRef, run.ref);
+    assert.equal(graph.getTask(task.ref).status, "failed");
+    assert.equal(graph.getTask(task.ref).claim, undefined);
+    assert.match(graph.getTask(task.ref).finishedBy?.runName ?? "", /^planner-/);
+    assert.match(run.runName ?? "", /^planner-/);
+    assert.equal(run.ownerSessionId, "session:parent");
+    assert.equal(
+      listActiveSparkRoleRunProcesses().some((entry) => entry.runName === run.runName),
+      true,
+    );
+    const killed = await killActiveSparkRoleRunProcesses({
+      runName: run.runName,
+      waitMs: 1_000,
+    });
+    assert.equal(killed.length, 1);
+    assert.equal(
+      listActiveSparkRoleRunProcesses().some((entry) => entry.runName === run.runName),
+      false,
+    );
+  } finally {
+    await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
-void test("tracked Spark role-run processes can be killed after timeout", async () => {
+void test("runSparkTask fails loudly when claim heartbeat persistence fails", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-heartbeat-failure-"));
+  try {
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Plan",
+      description: "plan",
+      roleRef: builtinRoleRef("planner"),
+      plan: executionReadyPlan("Plan"),
+    });
+    const fakePi = join(dir, "fake-pi.mjs");
+    await writeFile(
+      fakePi,
+      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1_000);\n",
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    let heartbeatAttempts = 0;
+    await assert.rejects(
+      () =>
+        runSparkTask({
+          graph,
+          taskRef: task.ref,
+          registry: new RoleRegistry(),
+          cwd: dir,
+          dryRun: false,
+          piCommand: fakePi,
+          timeoutMs: 5_000,
+          heartbeatIntervalMs: 5,
+          onHeartbeat: () => {
+            heartbeatAttempts += 1;
+            throw new Error("heartbeat persistence failed");
+          },
+          claim: { sessionId: "session:parent" },
+        }),
+      /task claim heartbeat failed: heartbeat persistence failed/,
+    );
+
+    assert.equal(heartbeatAttempts, 1);
+    assert.equal(graph.getTask(task.ref).status, "failed");
+    assert.equal(graph.getTask(task.ref).claim, undefined);
+    const failedRuns = graph.runs(project.ref).filter((run) => run.taskRef === task.ref);
+    assert.equal(failedRuns.length, 1);
+    assert.equal(failedRuns[0]?.status, "failed");
+    assert.equal(failedRuns[0]?.failureKind, "runtime_error");
+    assert.match(failedRuns[0]?.errorMessage ?? "", /task claim heartbeat failed/);
+    assert.equal(
+      listActiveSparkRoleRunProcesses().some((entry) => entry.runRef === failedRuns[0]?.ref),
+      false,
+    );
+  } finally {
+    await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("timed-out Spark role-run process remains killable after task failure", async () => {
   const graph = new TaskGraph();
-  const thread = graph.createThread({ title: "Demo", description: "demo" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
   const task = graph.createTask({
-    threadRef: thread.ref,
+    projectRef: project.ref,
     title: "Plan",
     description: "plan",
     roleRef: builtinRoleRef("planner"),
@@ -1455,23 +1945,28 @@ void test("tracked Spark role-run processes can be killed after timeout", async 
   });
   const dir = await mkdtemp(join(tmpdir(), "spark-kill-pi-"));
   try {
+    const fakePi = join(dir, "fake-pi.mjs");
     await writeFile(
-      join(dir, "fake-pi.mjs"),
-      "process.on('SIGTERM', () => {}); setTimeout(() => {}, 10_000);\n",
+      fakePi,
+      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);\n",
       "utf8",
     );
+    await chmod(fakePi, 0o755);
     const run = await runSparkTask({
       graph,
       taskRef: task.ref,
       registry: new RoleRegistry(),
       cwd: dir,
       dryRun: false,
-      piCommand: process.execPath,
+      piCommand: fakePi,
       timeoutMs: 1,
       claim: { sessionId: "session:parent" },
     });
 
-    assert.equal(run.status, "running");
+    assert.equal(run.status, "failed");
+    assert.equal(run.failureKind, "runtime_timeout");
+    assert.equal(graph.getTask(task.ref).status, "failed");
+    assert.equal(graph.getTask(task.ref).claim, undefined);
     assert.equal(
       listActiveSparkRoleRunProcesses().some((entry) => entry.runRef === run.ref),
       true,
@@ -1489,15 +1984,239 @@ void test("tracked Spark role-run processes can be killed after timeout", async 
   }
 });
 
+void test("background cleanup does not kill role-runs without an owned task graph", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-shutdown-scope-"));
+  let runRef: RunRef | undefined;
+  let runPromise: Promise<unknown> | undefined;
+  try {
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Plan",
+      description: "plan",
+      roleRef: builtinRoleRef("planner"),
+      plan: executionReadyPlan("Plan"),
+    });
+    const fakePi = join(dir, "fake-pi.mjs");
+    await writeFile(
+      fakePi,
+      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);\n",
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    runPromise = runSparkTask({
+      graph,
+      taskRef: task.ref,
+      registry: new RoleRegistry(),
+      cwd: dir,
+      dryRun: false,
+      piCommand: fakePi,
+      timeoutMs: 10_000,
+      claim: { sessionId: "session:owner" },
+    }).catch((error: unknown) => error);
+    await waitFor(() => listActiveSparkRoleRunProcesses().some((entry) => entry.cwd === dir));
+    const activeRun = listActiveSparkRoleRunProcesses().find((entry) => entry.cwd === dir);
+    assert.ok(activeRun);
+    runRef = activeRun.runRef;
+
+    assert.equal(
+      listActiveSparkRoleRunProcesses().some((entry) => entry.runRef === runRef),
+      true,
+    );
+
+    const missingGraphDir = join(dir, "missing-graph");
+    await mkdir(missingGraphDir, { recursive: true });
+    const killed = await cleanupOwnedBackgroundSubroles(
+      missingGraphDir,
+      testSparkContext(missingGraphDir, "other"),
+      "test",
+    );
+
+    assert.equal(killed, 0);
+    assert.equal(
+      listActiveSparkRoleRunProcesses().some((entry) => entry.runRef === runRef),
+      true,
+    );
+  } finally {
+    if (runRef) await killActiveSparkRoleRunProcesses({ runRef, forceAfterMs: 0, waitMs: 1_000 });
+    await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
+    await runPromise?.catch(() => undefined);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("background resume propagates TODO persistence failures without rewriting task status", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-resume-persistence-"));
+  try {
+    await mkdir(join(dir, ".spark"), { recursive: true });
+    const ctx = testSparkContext(dir, "resume-owner");
+    const ownerSessionId = sparkSessionOwnerKey(ctx);
+    const runName = "resume-worker";
+    const claimedBy = createRoleRunClaimId(ownerSessionId, runName);
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Plan",
+      description: "plan",
+      roleRef: builtinRoleRef("worker"),
+      plan: executionReadyPlan("Plan"),
+    });
+    graph.claimTask(task.ref, {
+      kind: "role-run",
+      claimedBy,
+      sessionId: ownerSessionId,
+      runName,
+      roleRef: builtinRoleRef("worker"),
+      leaseMs: 60_000,
+    });
+    await defaultTaskGraphStore(dir).save(graph);
+
+    let runTaskCalls = 0;
+    await assert.rejects(
+      () =>
+        resumeOwnedBackgroundSubroles(dir, ctx, {
+          runTask: async ({ graph: runningGraph, taskRef }) => {
+            runTaskCalls += 1;
+            const taskAfterClaim = runningGraph.getTask(taskRef);
+            const finishedAt = nowIso();
+            const run = runningGraph.recordRun({
+              ref: newRef("run"),
+              projectRef: taskAfterClaim.projectRef,
+              taskRef,
+              roleRef: taskAfterClaim.roleRef,
+              runName,
+              ownerSessionId,
+              status: "succeeded",
+              startedAt: finishedAt,
+              finishedAt,
+              outputArtifacts: [],
+            });
+            runningGraph.setTaskStatus(taskRef, "done");
+            await writeFile(join(dir, ".spark", "todos"), "not a directory", "utf8");
+            return run;
+          },
+        }),
+      (error) => {
+        const code = (error as NodeJS.ErrnoException).code;
+        assert.ok(code === "EEXIST" || code === "ENOTDIR", `unexpected error code: ${code}`);
+        return true;
+      },
+    );
+
+    assert.equal(runTaskCalls, 1);
+    const stored = await defaultTaskGraphStore(dir).load();
+    assert.ok(stored);
+    assert.equal(stored.getTask(task.ref).status, "done");
+    assert.equal(stored.getTask(task.ref).claim, undefined);
+    assert.equal(
+      stored
+        .runs(project.ref)
+        .some(
+          (run) =>
+            run.status === "failed" &&
+            /not a directory|EEXIST|ENOTDIR/.test(run.errorMessage ?? ""),
+        ),
+      false,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark DAG manager reports widget refresh failures without failing completed DAG work", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dag-refresh-failure-"));
+  const previousPath = process.env.PATH;
+  const previousPiRolesHome = process.env.PI_ROLES_HOME;
+  try {
+    await mkdir(join(dir, ".spark"), { recursive: true });
+    const binDir = join(dir, "bin");
+    await mkdir(binDir, { recursive: true });
+    const fakePi = join(binDir, "pi");
+    await writeFile(
+      fakePi,
+      "#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({ type: 'done', ok: true }) + '\\n');\n",
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+    process.env.PATH = `${binDir}${previousPath ? `:${previousPath}` : ""}`;
+    process.env.PI_ROLES_HOME = dir;
+    await defaultUserRoleModelBindingStore(dir).save({
+      roleRef: builtinRoleRef("worker"),
+      model: "test-model",
+      source: "user",
+      validatedAt: "2026-05-20T00:00:00.000Z",
+      updatedAt: "2026-05-20T00:00:00.000Z",
+      validationCommand: "test",
+    });
+
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Refresh should not fail DAG",
+      description: "complete work even if widget refresh fails",
+      roleRef: builtinRoleRef("worker"),
+      status: "pending",
+      plan: executionReadyPlan("Refresh should not fail DAG"),
+    });
+    await defaultTaskGraphStore(dir).save(graph);
+    const ctx = testSparkContext(dir, "dag-refresh-failure");
+    await saveCurrentProjectRef(dir, ctx, project.ref);
+    const notifications: Array<{ message: string; level?: string }> = [];
+    let refreshCalls = 0;
+    const manager = new SparkDagManagerController({
+      refreshSparkWidget: async () => {
+        refreshCalls += 1;
+        throw new Error("widget unavailable");
+      },
+    });
+
+    const result = await manager.runOnce(dir, {
+      ...ctx,
+      ui: {
+        notify(message, level) {
+          notifications.push({ message, level });
+        },
+      },
+    });
+
+    const stored = await defaultTaskGraphStore(dir).load();
+    assert.ok(stored);
+    const dagStatus = await defaultSparkDagRunStore(dir).status();
+    assert.equal(result.continuePolling, false);
+    assert.equal(stored.getTask(task.ref).status, "done");
+    assert.equal(dagStatus.lastRun?.status, "succeeded");
+    assert.equal(dagStatus.lastRun?.errorMessage, undefined);
+    assert.ok(refreshCalls > 0);
+    assert.ok(
+      notifications.some(
+        (entry) =>
+          entry.level === "warning" &&
+          /Spark widget refresh failed: widget unavailable/.test(entry.message),
+      ),
+    );
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousPiRolesHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousPiRolesHome;
+    await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("Spark DAG run store persists manager lifecycle and task progress", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-store-"));
   try {
     const store = defaultSparkDagRunStore(dir);
-    const threadRef = newRef("thread");
+    const projectRef = newRef("proj");
     const taskRef = newRef("task");
     const taskRunRef = newRef("run");
     const dagRun = await store.startRun({
-      threadRef,
+      projectRef,
       ownerSessionId: "session:parent",
       dryRun: false,
       maxConcurrency: 2,
@@ -1510,7 +2229,7 @@ void test("Spark DAG run store persists manager lifecycle and task progress", as
       completed: 1,
       run: {
         ref: taskRunRef,
-        threadRef,
+        projectRef,
         taskRef,
         status: "succeeded",
         outputArtifacts: [],
@@ -1560,15 +2279,95 @@ void test("Spark DAG run store persists manager lifecycle and task progress", as
   }
 });
 
+void test("Spark DAG run store rejects malformed persisted snapshots", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-store-invalid-"));
+  try {
+    const store = defaultSparkDagRunStore(dir);
+    await mkdir(join(dir, ".spark"), { recursive: true });
+
+    await writeFile(store.filePath, "{not-json", "utf8");
+    await assert.rejects(
+      () => store.load(),
+      (error) =>
+        error instanceof SparkDagRunStoreFormatError &&
+        error.filePath === store.filePath &&
+        /not valid JSON/.test(error.message),
+    );
+
+    await writeFile(store.filePath, "[]\n", "utf8");
+    await assert.rejects(
+      () => store.load(),
+      (error) =>
+        error instanceof SparkDagRunStoreFormatError &&
+        error.filePath === store.filePath &&
+        /JSON root must be an object/.test(error.message),
+    );
+
+    await writeFile(
+      store.filePath,
+      `${JSON.stringify({ version: 2, manager: { status: "idle" }, runs: [] })}\n`,
+      "utf8",
+    );
+    await assert.rejects(
+      () => store.load(),
+      (error) =>
+        error instanceof SparkDagRunStoreFormatError &&
+        error.filePath === store.filePath &&
+        /version must be 1/.test(error.message),
+    );
+
+    await writeFile(store.filePath, `${JSON.stringify({ version: 1, runs: [] })}\n`, "utf8");
+    await assert.rejects(
+      () => store.load(),
+      (error) =>
+        error instanceof SparkDagRunStoreFormatError &&
+        error.filePath === store.filePath &&
+        /manager must be an object/.test(error.message),
+    );
+
+    await writeFile(
+      store.filePath,
+      `${JSON.stringify({ version: 1, manager: { status: "idle" }, runs: {} })}\n`,
+      "utf8",
+    );
+    await assert.rejects(
+      () => store.load(),
+      (error) =>
+        error instanceof SparkDagRunStoreFormatError &&
+        error.filePath === store.filePath &&
+        /runs must be an array/.test(error.message),
+    );
+
+    await writeFile(
+      store.filePath,
+      `${JSON.stringify({
+        version: 1,
+        manager: { status: "idle" },
+        runs: [{ ref: newRef("run"), scheduledTaskRefs: "task:one" }],
+      })}\n`,
+      "utf8",
+    );
+    await assert.rejects(
+      () => store.load(),
+      (error) =>
+        error instanceof SparkDagRunStoreFormatError &&
+        error.filePath === store.filePath &&
+        /runs\[0\]\.scheduledTaskRefs must be a string array/.test(error.message),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("Spark DAG run store keeps foreground-timeout runs active for late progress", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-foreground-timeout-"));
   try {
     const store = defaultSparkDagRunStore(dir);
-    const threadRef = newRef("thread");
+    const projectRef = newRef("proj");
     const taskRef = newRef("task");
     const taskRunRef = newRef("run");
     const dagRun = await store.startRun({
-      threadRef,
+      projectRef,
       dryRun: false,
       maxConcurrency: 1,
       timeoutMs: 10,
@@ -1601,7 +2400,7 @@ void test("Spark DAG run store keeps foreground-timeout runs active for late pro
       completed: 1,
       run: {
         ref: taskRunRef,
-        threadRef,
+        projectRef,
         taskRef,
         status: "succeeded",
         outputArtifacts: [],
@@ -1609,11 +2408,11 @@ void test("Spark DAG run store keeps foreground-timeout runs active for late pro
     });
     await store.reconcile({
       graph: TaskGraph.fromSnapshot({
-        threads: [
+        projects: [
           {
-            ref: threadRef,
-            title: "Thread",
-            description: "thread",
+            ref: projectRef,
+            title: "Project",
+            description: "project",
             status: "active",
             createdAt: "2026-05-28T00:00:00.000Z",
             updatedAt: "2026-05-28T00:00:00.000Z",
@@ -1624,7 +2423,7 @@ void test("Spark DAG run store keeps foreground-timeout runs active for late pro
         runs: [
           {
             ref: taskRunRef,
-            threadRef,
+            projectRef,
             taskRef,
             status: "succeeded",
             outputArtifacts: [],
@@ -1651,13 +2450,13 @@ void test("Spark DAG run store ignores late progress after legacy timeout termin
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-late-progress-"));
   try {
     const store = defaultSparkDagRunStore(dir);
-    const threadRef = newRef("thread");
+    const projectRef = newRef("proj");
     const firstTaskRef = newRef("task");
     const lateTaskRef = newRef("task");
     const firstRunRef = newRef("run");
     const lateRunRef = newRef("run");
     const dagRun = await store.startRun({
-      threadRef,
+      projectRef,
       dryRun: false,
       maxConcurrency: 2,
       timeoutMs: 10,
@@ -1678,7 +2477,7 @@ void test("Spark DAG run store ignores late progress after legacy timeout termin
       completed: 2,
       run: {
         ref: lateRunRef,
-        threadRef,
+        projectRef,
         taskRef: lateTaskRef,
         status: "succeeded",
         outputArtifacts: [],
@@ -1704,11 +2503,11 @@ void test("Spark DAG run store derives counters from unique scheduled and comple
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-counter-invariants-"));
   try {
     const store = defaultSparkDagRunStore(dir);
-    const threadRef = newRef("thread");
+    const projectRef = newRef("proj");
     const taskRef = newRef("task");
     const runRef = newRef("run");
     const dagRun = await store.startRun({
-      threadRef,
+      projectRef,
       dryRun: false,
       maxConcurrency: 2,
       timeoutMs: 100,
@@ -1720,7 +2519,7 @@ void test("Spark DAG run store derives counters from unique scheduled and comple
       store.recordProgress(dagRun.ref, {
         taskRef,
         completed: 99,
-        run: { ref: runRef, threadRef, taskRef, status: "succeeded", outputArtifacts: [] },
+        run: { ref: runRef, projectRef, taskRef, status: "succeeded", outputArtifacts: [] },
       }),
     ]);
     await store.finishRun(dagRun.ref, { scheduled: 99, completed: 99, timedOut: false });
@@ -1869,7 +2668,7 @@ void test("Spark DAG run store prunes old succeeded runs with dry-run preview fi
       now: "2030-01-01T00:00:00.000Z",
       olderThanDays: 30,
       keepRecent: 0,
-      keepRecentPerThread: 0,
+      keepRecentPerProject: 0,
     });
     assert.deepEqual(
       preview.candidates.map((candidate) => [candidate.ref, candidate.reason]),
@@ -1883,7 +2682,7 @@ void test("Spark DAG run store prunes old succeeded runs with dry-run preview fi
       now: "2030-01-01T00:00:00.000Z",
       olderThanDays: 30,
       keepRecent: 0,
-      keepRecentPerThread: 0,
+      keepRecentPerProject: 0,
     });
     assert.deepEqual(
       applied.deleted.map((candidate) => candidate.ref),
@@ -1914,7 +2713,7 @@ void test("Spark DAG run store keeps unacknowledged failed runs during prune", a
       now: "2030-01-01T00:00:00.000Z",
       olderThanDays: 30,
       keepRecent: 0,
-      keepRecentPerThread: 0,
+      keepRecentPerProject: 0,
     });
     assert.deepEqual(pruned.candidates, []);
     assert.deepEqual(pruned.deleted, []);
@@ -1951,7 +2750,7 @@ void test("Spark DAG run store prunes acknowledged failed runs", async () => {
       now: "2030-01-01T00:00:00.000Z",
       olderThanDays: 30,
       keepRecent: 0,
-      keepRecentPerThread: 0,
+      keepRecentPerProject: 0,
     });
     assert.deepEqual(
       pruned.deleted.map((candidate) => [candidate.ref, candidate.reason]),
@@ -1967,8 +2766,8 @@ void test("Spark DAG run store keeps active and recent terminal runs during prun
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-prune-active-recent-"));
   try {
     const store = defaultSparkDagRunStore(dir);
-    const threadA = newRef("thread");
-    const threadB = newRef("thread");
+    const projectA = newRef("proj");
+    const projectB = newRef("proj");
     const oldA = newRef("run");
     const recentA = newRef("run");
     const recentB = newRef("run");
@@ -1984,7 +2783,7 @@ void test("Spark DAG run store keeps active and recent terminal runs during prun
       runs: [
         testDagRunRecord({
           ref: oldA,
-          threadRef: threadA,
+          projectRef: projectA,
           status: "succeeded",
           startedAt: "2026-01-01T00:00:00.000Z",
           updatedAt: "2026-01-01T00:00:00.000Z",
@@ -1992,7 +2791,7 @@ void test("Spark DAG run store keeps active and recent terminal runs during prun
         }),
         testDagRunRecord({
           ref: recentA,
-          threadRef: threadA,
+          projectRef: projectA,
           status: "succeeded",
           startedAt: "2026-01-02T00:00:00.000Z",
           updatedAt: "2026-01-02T00:00:00.000Z",
@@ -2000,7 +2799,7 @@ void test("Spark DAG run store keeps active and recent terminal runs during prun
         }),
         testDagRunRecord({
           ref: recentB,
-          threadRef: threadB,
+          projectRef: projectB,
           status: "succeeded",
           startedAt: "2026-01-03T00:00:00.000Z",
           updatedAt: "2026-01-03T00:00:00.000Z",
@@ -2020,14 +2819,14 @@ void test("Spark DAG run store keeps active and recent terminal runs during prun
       now: "2030-01-01T00:00:00.000Z",
       olderThanDays: 30,
       keepRecent: 1,
-      keepRecentPerThread: 1,
+      keepRecentPerProject: 1,
     });
     assert.deepEqual(
       pruned.deleted.map((candidate) => candidate.ref),
       [oldA],
     );
     assert.equal(pruned.kept.find((run) => run.ref === active)?.reason, "active-run");
-    assert.equal(pruned.kept.find((run) => run.ref === recentA)?.reason, "thread-recent-window");
+    assert.equal(pruned.kept.find((run) => run.ref === recentA)?.reason, "project-recent-window");
     assert.equal(pruned.kept.find((run) => run.ref === recentB)?.reason, "global-recent-window");
     assert.deepEqual(
       (await store.load()).runs.map((run) => run.ref),
@@ -2043,14 +2842,14 @@ void test("Spark DAG run store reconciles stale running manager records", async 
   try {
     const store = defaultSparkDagRunStore(dir);
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Demo", description: "demo" });
+    const project = graph.createProject({ title: "Demo", description: "demo" });
     const task = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       title: "Finished elsewhere",
       description: "done",
     });
     const dagRun = await store.startRun({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       ownerSessionId: "session:parent",
       dryRun: false,
       maxConcurrency: 1,
@@ -2060,7 +2859,7 @@ void test("Spark DAG run store reconciles stale running manager records", async 
     await store.recordSchedule(dagRun.ref, { taskRef: task.ref, runRef: taskRunRef, scheduled: 1 });
     graph.recordRun({
       ref: taskRunRef,
-      threadRef: thread.ref,
+      projectRef: project.ref,
       taskRef: task.ref,
       status: "succeeded",
       outputArtifacts: [],
@@ -2084,14 +2883,157 @@ void test("Spark DAG run store reconciles stale running manager records", async 
   }
 });
 
+void test("Spark DAG run reconcile does not mark the active scheduling window stale", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-reconcile-scheduling-window-"));
+  try {
+    const store = defaultSparkDagRunStore(dir);
+    const dagRun = await store.startRun({
+      ownerSessionId: "session:parent",
+      dryRun: false,
+      maxConcurrency: 1,
+      timeoutMs: 100,
+    });
+    const activeChildRunRef = newRef("run");
+
+    const activeSnapshot = await store.reconcile({ activeRunRefs: [activeChildRunRef] });
+
+    assert.equal(activeSnapshot.manager.status, "running");
+    assert.equal(activeSnapshot.manager.activeRunRef, dagRun.ref);
+    assert.equal(activeSnapshot.runs[0]?.status, "running");
+    assert.deepEqual(activeSnapshot.runs[0]?.scheduledTaskRefs, []);
+    assert.deepEqual(activeSnapshot.runs[0]?.taskRunRefs, []);
+
+    const staleSnapshot = await store.reconcile({ activeRunRefs: [] });
+    assert.equal(staleSnapshot.manager.status, "idle");
+    assert.equal(staleSnapshot.runs[0]?.status, "stale");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark DAG run reconcile keeps DAG running when a scheduled task has an active child claim", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-reconcile-active-claim-"));
+  try {
+    const store = defaultSparkDagRunStore(dir);
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Still running elsewhere",
+      description: "active child process is still running",
+      roleRef: builtinRoleRef("worker"),
+      status: "pending",
+      plan: executionReadyPlan("Still running elsewhere"),
+    });
+    const dagRun = await store.startRun({
+      projectRef: project.ref,
+      ownerSessionId: "session:parent",
+      dryRun: false,
+      maxConcurrency: 1,
+      timeoutMs: 100,
+    });
+    const childRunRef = newRef("run");
+    await store.recordSchedule(dagRun.ref, { taskRef: task.ref, scheduled: 1 });
+    graph.claimTask(task.ref, {
+      kind: "role-run",
+      claimedBy: "session:parent+worker",
+      roleRef: builtinRoleRef("worker"),
+      runName: "worker-active",
+      sessionId: "session:parent",
+      runRef: childRunRef,
+      leaseMs: 60_000,
+    });
+
+    const snapshot = await store.reconcile({ graph, activeRunRefs: [childRunRef] });
+
+    assert.equal(snapshot.manager.status, "running");
+    assert.equal(snapshot.manager.activeRunRef, dagRun.ref);
+    const [record] = snapshot.runs;
+    assert.ok(record);
+    assert.equal(record.status, "running");
+    assert.deepEqual(record.taskRunRefs, [childRunRef]);
+    assert.equal(record.finishedAt, undefined);
+    assert.equal(record.errorMessage, undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark DAG run reconcile revives stale records when a scheduled task still has an active child claim", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-reconcile-revive-active-claim-"));
+  try {
+    const store = defaultSparkDagRunStore(dir);
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Still running after stale mark",
+      description: "active child process is still running after stale reconciliation",
+      roleRef: builtinRoleRef("worker"),
+      status: "pending",
+      plan: executionReadyPlan("Still running after stale mark"),
+    });
+    const dagRun = await store.startRun({
+      projectRef: project.ref,
+      ownerSessionId: "session:parent",
+      dryRun: false,
+      maxConcurrency: 1,
+      timeoutMs: 100,
+    });
+    const childRunRef = newRef("run");
+    await store.recordSchedule(dagRun.ref, { taskRef: task.ref, scheduled: 1 });
+
+    const staleSnapshot = await store.reconcile({
+      graph,
+      activeRunRefs: [],
+      now: "2026-01-01T00:00:00.000Z",
+    });
+    assert.equal(staleSnapshot.manager.status, "idle");
+    assert.equal(staleSnapshot.manager.activeRunRef, undefined);
+    assert.equal(staleSnapshot.runs[0]?.status, "stale");
+    assert.equal(staleSnapshot.runs[0]?.finishedAt, "2026-01-01T00:00:00.000Z");
+    assert.match(staleSnapshot.runs[0]?.errorMessage ?? "", /no active child process/);
+    assert.ok(staleSnapshot.runs[0]?.completionFollowUp);
+
+    graph.claimTask(task.ref, {
+      kind: "role-run",
+      claimedBy: "session:parent+worker",
+      roleRef: builtinRoleRef("worker"),
+      runName: "worker-active",
+      sessionId: "session:parent",
+      runRef: childRunRef,
+      leaseMs: 60_000,
+    });
+
+    const revivedSnapshot = await store.reconcile({
+      graph,
+      activeRunRefs: [childRunRef],
+      now: "2026-01-01T00:00:01.000Z",
+    });
+
+    assert.equal(revivedSnapshot.manager.status, "running");
+    assert.equal(revivedSnapshot.manager.activeRunRef, dagRun.ref);
+    const [record] = revivedSnapshot.runs;
+    assert.ok(record);
+    assert.equal(record.status, "running");
+    assert.deepEqual(record.taskRunRefs, [childRunRef]);
+    assert.equal(record.updatedAt, "2026-01-01T00:00:01.000Z");
+    assert.equal(record.finishedAt, undefined);
+    assert.equal(record.errorMessage, undefined);
+    assert.equal(record.completionFollowUp, undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("runReadySparkTasks assigns default roles and schedules DAG waves with maxConcurrency 4", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-parallel-"));
   try {
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Demo", description: "demo" });
+    const project = graph.createProject({ title: "Demo", description: "demo" });
     const firstWave = Array.from({ length: 4 }, (_, index) =>
       graph.createTask({
-        threadRef: thread.ref,
+        projectRef: project.ref,
         title: `Wave 1-${index}`,
         description: "ok",
         status: "pending",
@@ -2099,7 +3041,7 @@ void test("runReadySparkTasks assigns default roles and schedules DAG waves with
       }),
     );
     const secondWave = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       title: "Wave 2",
       description: "ok",
       roleRef: builtinRoleRef("reviewer"),
@@ -2178,19 +3120,97 @@ void test("runReadySparkTasks assigns default roles and schedules DAG waves with
   }
 });
 
-void test("runReadySparkTasks limits ready frontier to the requested thread", async () => {
+void test("runReadySparkTasks propagates schedule hook failures", async () => {
   const graph = new TaskGraph();
-  const selected = graph.createThread({ title: "Selected", description: "selected" });
-  const other = graph.createThread({ title: "Other", description: "other" });
+  const project = graph.createProject({ title: "Demo", description: "demo" });
+  graph.createTask({
+    projectRef: project.ref,
+    title: "Scheduled task",
+    description: "scheduled",
+    status: "pending",
+    plan: executionReadyPlan("Scheduled task"),
+  });
+
+  await assert.rejects(
+    () =>
+      runReadySparkTasks({
+        graph,
+        registry: new RoleRegistry(),
+        dryRun: true,
+        onSchedule: () => {
+          throw new Error("schedule persistence failed");
+        },
+      }),
+    /schedule persistence failed/,
+  );
+});
+
+void test("runReadySparkTasks aborts launched child work when schedule hook fails", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-schedule-hook-abort-"));
+  try {
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Scheduled task",
+      description: "scheduled",
+      status: "pending",
+      plan: executionReadyPlan("Scheduled task"),
+    });
+    const fakePi = join(dir, "fake-pi.mjs");
+    await writeFile(
+      fakePi,
+      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1_000);\n",
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    await assert.rejects(
+      () =>
+        runReadySparkTasks({
+          graph,
+          registry: new RoleRegistry(),
+          cwd: dir,
+          dryRun: false,
+          piCommand: fakePi,
+          timeoutMs: 5_000,
+          claim: { sessionId: "session:parent" },
+          onSchedule: () => {
+            throw new Error("schedule persistence failed");
+          },
+        }),
+      /schedule persistence failed/,
+    );
+
+    assert.equal(
+      listActiveSparkRoleRunProcesses().some((entry) => entry.cwd === dir),
+      false,
+    );
+    assert.equal(graph.getTask(task.ref).status, "failed");
+    assert.equal(graph.getTask(task.ref).claim, undefined);
+    const runs = graph.runs(project.ref).filter((run) => run.taskRef === task.ref);
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0]?.status, "failed");
+    assert.match(runs[0]?.errorMessage ?? "", /Spark ready task scheduler aborted/);
+  } finally {
+    await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("runReadySparkTasks limits ready frontier to the requested project", async () => {
+  const graph = new TaskGraph();
+  const selected = graph.createProject({ title: "Selected", description: "selected" });
+  const other = graph.createProject({ title: "Other", description: "other" });
   const selectedTask = graph.createTask({
-    threadRef: selected.ref,
+    projectRef: selected.ref,
     title: "Selected ready task",
     description: "selected",
     status: "pending",
     plan: executionReadyPlan("Selected ready task"),
   });
   const otherTask = graph.createTask({
-    threadRef: other.ref,
+    projectRef: other.ref,
     title: "Other ready task",
     description: "other",
     status: "pending",
@@ -2201,7 +3221,7 @@ void test("runReadySparkTasks limits ready frontier to the requested thread", as
     graph,
     registry: new RoleRegistry(),
     dryRun: true,
-    threadRef: selected.ref,
+    projectRef: selected.ref,
   });
 
   assert.equal(result.scheduled, 1);
@@ -2214,9 +3234,9 @@ void test("runReadySparkTasks reports failed child runs in aggregate result", as
   const dir = await mkdtemp(join(tmpdir(), "spark-ready-child-failed-"));
   try {
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Demo", description: "demo" });
+    const project = graph.createProject({ title: "Demo", description: "demo" });
     const task = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       title: "No output",
       description: "ok",
       roleRef: builtinRoleRef("worker"),
@@ -2248,20 +3268,84 @@ void test("runReadySparkTasks reports failed child runs in aggregate result", as
   }
 });
 
+void test("runReadySparkTasks returns the recorded failed run when child launch fails", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-ready-child-launch-failed-"));
+  try {
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Launch child",
+      description: "launch child",
+      roleRef: builtinRoleRef("worker"),
+      plan: executionReadyPlan("Launch child"),
+    });
+
+    const result = await runReadySparkTasks({
+      graph,
+      registry: new RoleRegistry(),
+      cwd: dir,
+      dryRun: false,
+      piCommand: join(dir, "missing-pi"),
+      timeoutMs: 5_000,
+      claim: { sessionId: "session:parent" },
+    });
+
+    const graphRuns = graph.runs(project.ref);
+    assert.equal(result.failed, 1);
+    assert.equal(result.runs.length, 1);
+    assert.equal(graphRuns.length, 1);
+    assert.equal(result.runs[0]?.ref, graphRuns[0]?.ref);
+    assert.equal(result.runs[0]?.status, "failed");
+    assert.equal(graph.getTask(task.ref).status, "failed");
+  } finally {
+    await killActiveSparkRoleRunProcesses();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("runReadySparkTasks propagates missing role errors before creating child runs", async () => {
+  const graph = new TaskGraph();
+  const project = graph.createProject({ title: "Demo", description: "demo" });
+  const task = graph.createTask({
+    projectRef: project.ref,
+    title: "Missing role",
+    description: "missing role",
+    roleRef: "role:project-missing" as RoleRef,
+    plan: executionReadyPlan("Missing role"),
+  });
+
+  await assert.rejects(
+    () =>
+      runReadySparkTasks({
+        graph,
+        registry: new RoleRegistry(),
+        dryRun: false,
+        timeoutMs: 5_000,
+        claim: { sessionId: "session:parent" },
+      }),
+    /unknown role: role:project-missing/,
+  );
+
+  assert.equal(graph.runs(project.ref).length, 0);
+  assert.equal(graph.getTask(task.ref).status, "pending");
+  assert.equal(graph.getTask(task.ref).claim, undefined);
+});
+
 void test("runReadySparkTasks treats timeoutMs as a foreground wait budget", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-timeout-"));
   try {
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Demo", description: "demo" });
+    const project = graph.createProject({ title: "Demo", description: "demo" });
     const slowTask = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       title: "Slow task",
       description: "slow",
       roleRef: builtinRoleRef("worker"),
       plan: executionReadyPlan("Slow task"),
     });
     const pendingTask = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       title: "Still pending",
       description: "pending",
       roleRef: builtinRoleRef("reviewer"),
@@ -2315,9 +3399,9 @@ void test("runSparkTask does not complete real tasks when the role run never sta
   const dir = await mkdtemp(join(tmpdir(), "spark-not-started-"));
   try {
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Demo", description: "demo" });
+    const project = graph.createProject({ title: "Demo", description: "demo" });
     const task = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       title: "Plan",
       description: "plan",
       roleRef: builtinRoleRef("planner"),
@@ -2384,9 +3468,9 @@ void test("runSparkTask writes compact role-run artifacts for large output", asy
   const dir = await mkdtemp(join(tmpdir(), "spark-large-role-artifact-"));
   try {
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Demo", description: "demo" });
+    const project = graph.createProject({ title: "Demo", description: "demo" });
     const task = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       title: "Large output task",
       description: "produce large output",
       roleRef: builtinRoleRef("worker"),
@@ -2477,9 +3561,9 @@ void test("runSparkTask dry-run records validation without completing the task",
   const dir = await mkdtemp(join(tmpdir(), "spark-run-"));
   try {
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Demo", description: "demo" });
+    const project = graph.createProject({ title: "Demo", description: "demo" });
     const task = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       title: "Plan",
       description: "plan",
       kind: "plan",
@@ -2497,7 +3581,7 @@ void test("runSparkTask dry-run records validation without completing the task",
     });
     assert.equal(run.status, "succeeded");
     assert.match(run.runName ?? "", /^planner-/);
-    assert.equal(graph.getTask(task.ref).status, "proposed");
+    assert.equal(graph.getTask(task.ref).status, "ready");
     assert.equal(graph.getTask(task.ref).roleRef, undefined);
     assert.equal(graph.getTask(task.ref).claim, undefined);
     assert.equal(graph.getTask(task.ref).outputArtifacts.length, 1);
@@ -2507,7 +3591,7 @@ void test("runSparkTask dry-run records validation without completing the task",
     assert.equal(artifact.ref, run.outputArtifacts[0]);
     assert.match(artifact.title, /^Role run planner-/);
     assert.equal(artifact.provenance.producer, "task");
-    assert.equal(artifact.provenance.threadRef, thread.ref);
+    assert.equal(artifact.provenance.projectRef, project.ref);
     assert.equal(artifact.provenance.taskRef, task.ref);
     assert.equal(graph.getTask(task.ref).roleRef, undefined);
     assert.equal(artifact.provenance.roleRef, builtinRoleRef("planner"));
@@ -2552,9 +3636,9 @@ void test("runSparkTask can request explicit forked Pi mode when a parent sessio
   const dir = await mkdtemp(join(tmpdir(), "spark-forked-run-"));
   try {
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Demo", description: "demo" });
+    const project = graph.createProject({ title: "Demo", description: "demo" });
     const task = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       title: "Forked spec implementation",
       description: "implement project spec behavior with parent context",
       roleRef: builtinRoleRef("reviewer"),
@@ -2602,10 +3686,10 @@ void test("runSparkTask attributes real project role spec run claims and complet
   const dir = await mkdtemp(join(tmpdir(), "spark-attribution-"));
   try {
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Demo", description: "demo" });
+    const project = graph.createProject({ title: "Demo", description: "demo" });
     const roleRef = "role:project-test-worker" as RoleRef;
     const task = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       title: "Project spec implementation",
       description: "implement project spec behavior",
       roleRef,
@@ -2653,15 +3737,14 @@ void test("runSparkTask attributes real project role spec run claims and complet
     assert.equal(run.ownerSessionId, "session:parent");
     assert.equal(finishedTask.status, "done");
     assert.equal(finishedTask.claim, undefined);
-    assert.equal(finishedTask.claimedBySession, undefined);
     assert.deepEqual(finishedTask.finishedBy, {
       sessionId: "session:parent",
       roleRef,
       runName: run.runName,
     });
-    assert.equal(graph.runs(thread.ref).at(-1)?.ref, run.ref);
-    assert.equal(graph.runs(thread.ref).at(-1)?.ownerSessionId, "session:parent");
-    assert.equal(graph.runs(thread.ref).at(-1)?.runName, run.runName);
+    assert.equal(graph.runs(project.ref).at(-1)?.ref, run.ref);
+    assert.equal(graph.runs(project.ref).at(-1)?.ownerSessionId, "session:parent");
+    assert.equal(graph.runs(project.ref).at(-1)?.runName, run.runName);
     assert.equal(
       listActiveSparkRoleRunProcesses().some((entry) => entry.runRef === run.ref),
       false,
@@ -2672,34 +3755,25 @@ void test("runSparkTask attributes real project role spec run claims and complet
   }
 });
 
-void test("runSparkTask timeout cleanup only leaves the timed-out role-run process tracked", async () => {
+void test("task timeout fails the task while leaving only the stuck child process killable", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-timeout-cleanup-"));
   try {
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Demo", description: "demo" });
-    const fast = graph.createTask({
-      threadRef: thread.ref,
-      title: "Fast task",
-      description: "fast",
-      roleRef: builtinRoleRef("worker"),
-      plan: executionReadyPlan("Fast task"),
-    });
+    const project = graph.createProject({ title: "Demo", description: "demo" });
     const slow = graph.createTask({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       title: "Slow task",
       description: "reviewer",
       roleRef: builtinRoleRef("reviewer"),
       plan: executionReadyPlan("Slow task"),
     });
-    const fakePi = join(dir, "fake-pi.sh");
+    const fakePi = join(dir, "fake-pi.mjs");
     await writeFile(
       fakePi,
       [
-        "#!/bin/sh",
-        'case "$*" in',
-        "  *reviewer*) trap '' TERM; while :; do sleep 1; done ;;",
-        "  *) exit 0 ;;",
-        "esac",
+        "#!/usr/bin/env node",
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1_000);",
       ].join("\n"),
       "utf8",
     );
@@ -2712,30 +3786,27 @@ void test("runSparkTask timeout cleanup only leaves the timed-out role-run proce
       dryRun: false,
       piCommand: fakePi,
       maxConcurrency: 2,
-      taskTimeoutMs: 30,
+      taskTimeoutMs: 500,
       timeoutMs: 5_000,
       claim: { sessionId: "session:parent" },
     });
 
     assert.equal(result.timedOut, false);
-    assert.equal(result.scheduled, 2);
-    const fastRuns = graph.runs(thread.ref).filter((run) => run.taskRef === fast.ref);
-    const slowRuns = graph.runs(thread.ref).filter((run) => run.taskRef === slow.ref);
-    assert.equal(fastRuns.length, 1);
+    assert.equal(result.scheduled, 1);
+    assert.equal(result.completed, 1);
+    assert.equal(result.failed, 1);
+    const slowRuns = graph.runs(project.ref).filter((run) => run.taskRef === slow.ref);
     assert.equal(slowRuns.length, 1);
-    const slowRun = slowRuns.find((run) => run.status === "running") ?? slowRuns[0];
-    assert.equal(slowRun?.status, "running");
+    const slowRun = slowRuns.find((run) => run.status === "failed") ?? slowRuns[0];
+    assert.equal(slowRun?.status, "failed");
     assert.equal(slowRun?.failureKind, "runtime_timeout");
-    assert.ok(["done", "running"].includes(graph.getTask(fast.ref).status));
-    assert.equal(graph.getTask(slow.ref).status, "running");
-    assert.equal(graph.getTask(slow.ref).claim?.kind, "role-run");
-    const active = listActiveSparkRoleRunProcesses();
+    assert.equal(graph.getTask(slow.ref).status, "failed");
+    assert.equal(graph.getTask(slow.ref).claim, undefined);
+    const active = listActiveSparkRoleRunProcesses().filter((entry) => entry.cwd === dir);
     assert.ok(active.length >= 1);
-    const slowActive = active.find(
-      (entry) => entry.runRef === graph.getTask(slow.ref).claim?.runRef,
-    );
+    const slowActive = active.find((entry) => entry.runRef === slowRun?.ref);
     assert.ok(slowActive);
-    assert.equal(slowActive.runName, graph.getTask(slow.ref).claim?.runName);
+    assert.equal(slowActive.runName, slowRun?.runName);
     await killActiveSparkRoleRunProcesses({
       runRef: slowActive.runRef,
       forceAfterMs: 0,

@@ -38,7 +38,7 @@ export function renderSparkToolCall(
         ],
         theme,
       );
-    case "spark_list_threads":
+    case "spark_list_projects":
       return renderToolCall(
         toolName,
         [formatStringArg(args.status, { fallback: "active" })],
@@ -74,21 +74,21 @@ export function renderSparkToolCall(
         ],
         theme,
       );
-    case "spark_rename_thread":
+    case "spark_rename_project":
       return renderToolCall(
         toolName,
         [
-          formatStringArg(args.thread, { prefix: "thread=" }),
+          formatStringArg(args.project, { prefix: "project=" }),
           formatStringArg(args.title, { prefix: "title=", maxLength: 80 }),
           formatStringArg(args.outputLanguage, { prefix: "lang=" }),
         ],
         theme,
       );
-    case "spark_use_thread":
+    case "spark_use_project":
       return renderToolCall(
         toolName,
         [
-          formatStringArg(args.thread, { prefix: "thread=" }),
+          formatStringArg(args.project, { prefix: "project=" }),
           formatStringArg(args.title, { prefix: "title=", maxLength: 80 }),
           formatStringArg(args.outputLanguage, { prefix: "lang=" }),
         ],
@@ -130,12 +130,9 @@ export function renderSparkToolCall(
       return renderToolCall(
         toolName,
         [
-          formatStringArg(args.mode ?? args.kind, { fallback: "clarification" }),
-          formatStringArg(args.title ?? args.question, { maxLength: 100 }),
-          formatArrayCount(args.questions, "questions") ??
-            formatArrayCount(args.options, "options"),
-          args.multiSelect === true ? "multi" : undefined,
-          formatStringArg(args.defaultOptionId, { prefix: "default=" }),
+          formatStringArg(args.mode, { fallback: "clarification" }),
+          formatStringArg(args.title, { maxLength: 100 }),
+          formatArrayCount(args.questions, "questions"),
         ],
         theme,
       );

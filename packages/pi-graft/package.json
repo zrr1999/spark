@@ -1,0 +1,40 @@
+{
+  "name": "pi-graft",
+  "version": "0.1.0",
+  "description": "Pi extension scaffold for future graft tool behavior integration.",
+  "keywords": [
+    "graft",
+    "pi-extension",
+    "pi-package"
+  ],
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./extension": "./src/extension.ts"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "typebox": "^1.1.38"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension-entry.ts"
+    ]
+  }
+}

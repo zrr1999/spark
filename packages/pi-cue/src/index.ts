@@ -5,6 +5,8 @@
  *
  *   Execution:
  *     cue_exec     — execute a command and create a job
+ *     cue_run      — run a `.cue` file-script (sequential, fail-fast)
+ *     cue_script   — run an inline `.cue` script body (sequential, fail-fast)
  *
  *   Jobs:
  *     cue_jobs     — list, inspect, wait for, or stop jobs
@@ -25,12 +27,19 @@ import { Type } from "typebox";
 
 export interface PiCueExtensionApi {
   registerTool(config: PiCueToolConfig): void;
-  on(event: string, handler: (event?: unknown, ctx?: unknown) => unknown): void;
-  getAllTools(): Array<{ name: string }>;
-  setActiveTools(names: string[]): void;
+  on?(event: string, handler: (event?: unknown, ctx?: unknown) => unknown): void;
+  getAllTools?(): Array<{ name: string }>;
+  setActiveTools?(names: string[]): void;
 }
 
-interface PiCueToolConfig {
+export type PiCueNotifyLevel = "info" | "warning" | "error" | "success";
+
+export interface PiCueToolContext {
+  cwd?: string;
+  ui?: { notify?: (msg: string, level: PiCueNotifyLevel) => void };
+}
+
+export interface PiCueToolConfig {
   name: string;
   label?: string;
   description: string;
@@ -45,7 +54,7 @@ interface PiCueToolConfig {
     params: Record<string, unknown>,
     signal: AbortSignal,
     onUpdate: (update: { content: Array<{ type: "text"; text: string }> }) => void,
-    ctx: { cwd?: string; ui?: { notify?: (msg: string, level: string) => void } },
+    ctx: PiCueToolContext,
   ): Promise<{
     content: Array<{ type: "text"; text: string }>;
     details?: Record<string, unknown>;
@@ -74,7 +83,14 @@ class ToolCallText implements ToolCallComponent {
 }
 
 export { CueClient, CueError, defaultSocketPath } from "./cue-client.ts";
-export type { JobInfo, JobResult, JobStatus, StartJobResult } from "./cue-client.ts";
+export type {
+  JobInfo,
+  JobResult,
+  JobStatus,
+  ScriptItemSummary,
+  ScriptResult,
+  StartJobResult,
+} from "./cue-client.ts";
 export {
   __resetForTests as __resetVersionCheckForTests,
   checkAndWarn as checkCuedVersionAndWarn,
@@ -90,6 +106,7 @@ import {
   CueError,
   type JobInfo,
   type JobStatus,
+  type ScriptResult,
   defaultSocketPath,
 } from "./cue-client.ts";
 import { checkAndWarn as checkCuedVersionAndWarn } from "./version-check.ts";
@@ -99,7 +116,7 @@ import { checkAndWarn as checkCuedVersionAndWarn } from "./version-check.ts";
 let client: CueClient | null = null;
 
 async function getClient(ctx?: {
-  ui?: { notify?: (msg: string, level: string) => void };
+  ui?: { notify?: (msg: string, level: PiCueNotifyLevel) => void };
 }): Promise<CueClient> {
   if (client && !client.isClosed) return client;
   client = null;
@@ -187,10 +204,28 @@ const SHORT_TIMEOUT_COMMANDS = new Set([
   "[",
 ]);
 const SHORT_TIMEOUT_S = 10;
-const DEFAULT_OUTPUT_TAIL_BYTES = 16 * 1024;
+const DEFAULT_CUE_TAIL_BYTES = 16 * 1024;
 const DEFAULT_LIST_LIMIT = 20;
-const DEFAULT_LOG_TAIL_BYTES = 16 * 1024;
-const DEFAULT_ENV_TAIL_BYTES = 16 * 1024;
+const CUE_JOB_ACTIONS = ["list", "status", "wait", "stop"] as const;
+const CUE_JOB_STATUS_FILTERS = [
+  "all",
+  "running",
+  "pending",
+  "done",
+  "failed",
+  "killed",
+  "cancelled",
+] as const;
+const CUE_SCHEDULE_ACTIONS = ["add", "list", "pause", "resume", "remove"] as const;
+const CUE_SCHEDULE_STATUS_FILTERS = [
+  "all",
+  "scheduled",
+  "paused",
+  "completed",
+  "expired",
+  "active",
+] as const;
+const CUE_SCOPE_ACTIONS = ["list", "env", "config"] as const;
 
 function isFileOp(command: string): boolean {
   const firstWord = command.trim().split(/\s+/)[0];
@@ -222,6 +257,75 @@ function tailStr(s: string, maxBytes: number): { text: string; truncated: boolea
   if (maxBytes <= 0) return { text: s, truncated: false };
   if (s.length <= maxBytes) return { text: s, truncated: false };
   return { text: s.slice(s.length - maxBytes), truncated: true };
+}
+
+export function renderCueScriptResult(
+  result: ScriptResult,
+  options: { pathLabel: string; timeout: number; tailBytes: number },
+): string[] {
+  const sourceLabel = result.source.kind === "file" ? result.source.path : options.pathLabel;
+  const headerParts = [
+    `Script ${result.scriptId}: ${result.status === "done" ? "✅ done" : "❌ failed"}`,
+  ];
+  if (result.exitCode !== null) headerParts.push(`exit=${result.exitCode}`);
+  if (result.failedItemIndex !== null) headerParts.push(`failed_item=${result.failedItemIndex}`);
+  headerParts.push(`source=${sourceLabel}`);
+  if (result.timedOut) headerParts.push("timed_out=true");
+
+  const lines: string[] = [headerParts.join("  |  ")];
+  if (result.timedOut) {
+    lines.push(
+      `Script timed out after ${options.timeout}s. Submitted jobs may still be running; inspect via cue_jobs action=list.`,
+    );
+  }
+
+  for (const item of result.items) {
+    const idLabel = renderCueScriptItemId(item);
+    const statusBadge = item.kind === "message" ? "ℹ️ message" : statusLabel(item.status);
+    const exitSuffix =
+      item.exitCode !== null && item.exitCode !== 0 ? ` (exit ${item.exitCode})` : "";
+    lines.push("");
+    lines.push(`--- item ${item.index}: ${item.source} [${idLabel}] ${statusBadge}${exitSuffix}`);
+    if (item.kind === "message" && item.message) {
+      lines.push(item.message.trimEnd());
+      continue;
+    }
+    const stdout = normalizeCueTerminalOutput(item.stdout);
+    const stderr = normalizeCueStderrForDisplay(item.stderr, stdout);
+    if (stdout.trim()) {
+      const t = tailStr(stdout, options.tailBytes);
+      lines.push(t.text.trimEnd());
+      if (t.truncated) {
+        lines.push(
+          `[stdout truncated — use cue_jobs action=status id=${item.jobIds[0] ?? "?"} tail_bytes=0 for full output]`,
+        );
+      }
+    }
+    if (stderr.trim()) {
+      const t = tailStr(stderr, options.tailBytes);
+      lines.push("[stderr]");
+      lines.push(t.text.trimEnd());
+      if (t.truncated) {
+        lines.push(
+          `[stderr truncated — use cue_jobs action=status id=${item.jobIds[0] ?? "?"} tail_bytes=0 for full output]`,
+        );
+      }
+    }
+  }
+  return lines;
+}
+
+function renderCueScriptItemId(item: ScriptResult["items"][number]): string {
+  switch (item.kind) {
+    case "chain":
+      return `chain ${item.chainId ?? "?"} (${item.jobIds.join(",")})`;
+    case "job":
+      return `job ${item.jobIds[0] ?? "?"}`;
+    case "cron":
+      return `cron ${item.cronId ?? "?"}`;
+    case "message":
+      return "message";
+  }
 }
 
 const ANSI_OSC_SEQUENCE_PATTERN = new RegExp(
@@ -357,14 +461,104 @@ async function appendJobOutput(
   }
 }
 
-function normalizeTailBytes(value: unknown, fallback = DEFAULT_OUTPUT_TAIL_BYTES): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-  return Math.max(0, Math.floor(value));
+function formatValidValues(values: readonly string[]): string {
+  if (values.length === 1) return values[0] ?? "";
+  return `${values.slice(0, -1).join(", ")}, or ${values[values.length - 1]}`;
 }
 
-function normalizeLimit(value: unknown, fallback = DEFAULT_LIST_LIMIT): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-  return Math.max(0, Math.floor(value));
+function normalizeCueEnum<const T extends readonly string[]>(
+  value: unknown,
+  fallback: T[number] | undefined,
+  values: T,
+  field: string,
+): T[number] {
+  if (value === undefined || value === null) {
+    if (fallback !== undefined) return fallback;
+    throw new Error(`${field} is required`);
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${field} must be ${formatValidValues(values)}`);
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!(values as readonly string[]).includes(normalized)) {
+    throw new Error(`${field} must be ${formatValidValues(values)}`);
+  }
+  return normalized as T[number];
+}
+
+export function normalizeCueTailBytes(
+  value: unknown,
+  fallback = DEFAULT_CUE_TAIL_BYTES,
+  field = "tail_bytes",
+): number {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${field} must be a finite number`);
+  }
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
+export function normalizeCueLimit(
+  value: unknown,
+  fallback = DEFAULT_LIST_LIMIT,
+  field = "limit",
+): number {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${field} must be a finite number`);
+  }
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
+export function normalizeCueTimeoutSeconds(
+  value: unknown,
+  fallback: number,
+  field = "timeout",
+): number {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${field} must be a finite number`);
+  }
+  if (value < 0) throw new Error(`${field} must be non-negative`);
+  return value;
+}
+
+export function normalizeCueBoolean(value: unknown, fallback: boolean, field: string): boolean {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
+  return value;
+}
+
+function normalizeRequiredCueString(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+function normalizeOptionalCueString(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${field} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+function rejectDeprecatedCueParam(
+  params: Record<string, unknown>,
+  param: string,
+  replacement: string,
+  toolName: string,
+): void {
+  if (param in params && params[param] !== undefined && params[param] !== null) {
+    throw new Error(`${toolName} ${param} is no longer supported; use ${replacement}`);
+  }
 }
 
 function truncationLine(stream: string, jobId: string): string {
@@ -466,13 +660,6 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           default: false,
         }),
       ),
-      tail: Type.Optional(
-        Type.Boolean({
-          description:
-            "Deprecated. When false, return full stdout/stderr. Prefer tail_bytes=0 for full output.",
-          default: true,
-        }),
-      ),
       tail_bytes: Type.Optional(
         Type.Number({
           description:
@@ -490,33 +677,37 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           formatStringArg(args.cwd, { prefix: "cwd=" }),
           args.pty === true ? "pty=true" : undefined,
           formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
-          args.tail === false ? "tail=false" : undefined,
         ],
         theme,
       );
     },
     async execute(
       _toolCallId: string,
-      params: {
-        command: string;
-        background?: boolean;
-        timeout?: number;
-        cwd?: string;
-        pty?: boolean;
-        tail?: boolean;
-        tail_bytes?: number;
-      },
+      params: Record<string, unknown>,
       _signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
-      ctx: { cwd?: string; ui?: { notify?: (msg: string, level: string) => void } },
+      ctx: PiCueToolContext,
     ) {
+      rejectDeprecatedCueParam(params, "tail", "tail_bytes=0", "cue_exec");
+      const command = normalizeRequiredCueString(params.command, "cue_exec command");
+      const background = normalizeCueBoolean(params.background, false, "cue_exec background");
+      const pty = normalizeCueBoolean(params.pty, false, "cue_exec pty");
+      const cwd =
+        normalizeOptionalCueString(params.cwd, "cue_exec cwd") ?? ctx.cwd ?? process.cwd();
+      const tailBytes = normalizeCueTailBytes(
+        params.tail_bytes,
+        DEFAULT_CUE_TAIL_BYTES,
+        "cue_exec tail_bytes",
+      );
+      const effectiveTimeout = normalizeCueTimeoutSeconds(
+        params.timeout,
+        isFileOp(command) ? SHORT_TIMEOUT_S : 300,
+        "cue_exec timeout",
+      );
       const cued = await getClient(ctx);
-      const { command } = params;
-      const cwd = params.cwd?.trim() || ctx.cwd || process.cwd();
-      const tailBytes = params.tail === false ? 0 : normalizeTailBytes(params.tail_bytes);
 
-      if (params.background) {
-        const result = await cued.startJob(command, { cwd, pty: params.pty ?? false });
+      if (background) {
+        const result = await cued.startJob(command, { cwd, pty });
         const lines: string[] = [];
         if (result.kind === "chain" && result.chain) {
           const chain = result.chain;
@@ -542,12 +733,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         };
       }
 
-      const effectiveTimeout = params.timeout ?? (isFileOp(command) ? SHORT_TIMEOUT_S : 300);
-
       const result = await cued.runJob(command, {
         timeout: effectiveTimeout,
         cwd,
-        pty: params.pty ?? false,
+        pty,
       });
 
       if (result.timedOut) {
@@ -629,6 +818,213 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     },
   });
 
+  // ══════════════════════════════════════════════════════════════════
+  //  cue_run / cue_script — run a .cue script (path or inline body)
+  // ══════════════════════════════════════════════════════════════════
+
+  async function runCueScript(
+    options: {
+      resolvedPath: string;
+      body: string;
+      pathLabel: string;
+      timeout: number;
+      tailBytes: number;
+      toolName: "cue_run" | "cue_script";
+    },
+    ctx: PiCueToolContext,
+  ) {
+    const { resolvedPath, body, pathLabel, timeout, tailBytes, toolName } = options;
+    if (!body.trim()) {
+      throw new Error(`${toolName} body is empty (cue-shell rejects empty scripts)`);
+    }
+    const cued = await getClient(ctx);
+    const result = await cued.runScript({
+      path: resolvedPath,
+      input: body,
+      timeout,
+    });
+    const lines = renderCueScriptResult(result, { pathLabel, timeout, tailBytes });
+    const summary = result.items.map((item) => ({
+      index: item.index,
+      source: item.source,
+      kind: item.kind,
+      jobIds: item.jobIds,
+      chainId: item.chainId,
+      cronId: item.cronId,
+      status: item.status,
+      exitCode: item.exitCode,
+    }));
+    const output = { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    const details = {
+      scriptId: result.scriptId,
+      source: result.source,
+      status: result.status,
+      exitCode: result.exitCode,
+      failedItemIndex: result.failedItemIndex,
+      timedOut: result.timedOut,
+      items: summary,
+    };
+    if (result.status === "failed" && !result.timedOut) {
+      const err = new Error(lines.join("\n"));
+      (err as unknown as { details?: unknown }).details = details;
+      throw err;
+    }
+    return { ...output, details };
+  }
+
+  pi.registerTool({
+    name: "cue_run",
+    label: "Run Cue File",
+    description:
+      "Run a .cue file in cue-shell, mirroring `cue run <file.cue>`. " +
+      "Top-level items execute sequentially with fail-fast semantics inside a fresh isolated scope forked from HEAD. " +
+      "Each item may use cue-shell composition operators (`|>`, `->`, `~>`, `||`, `||?`) but must not use bash-shell syntax (`&&`, `;`, redirection). " +
+      "For inline bodies (no file on disk) use cue_script instead. " +
+      "Foreground only: blocks until ScriptFinished or `timeout` seconds elapse, in which case the script is reported as timed out (its jobs may continue running and can be inspected via cue_jobs).",
+    parameters: Type.Object({
+      path: Type.String({
+        description:
+          "Path to a .cue file to run. Required. Resolved against the current Pi session working directory when relative.",
+      }),
+      timeout: Type.Optional(
+        Type.Number({
+          description:
+            "Foreground wait budget in seconds. Default: 300. On timeout the tool returns with timedOut=true; submitted jobs may keep running.",
+          default: 300,
+        }),
+      ),
+      tail_bytes: Type.Optional(
+        Type.Number({
+          description:
+            "Limit per-item stdout/stderr to the last N bytes when rendering the aggregated transcript. Default: 16384. Pass 0 for full output.",
+        }),
+      ),
+    }),
+    renderCall(args, theme) {
+      return renderToolCall(
+        "cue_run",
+        [
+          formatStringArg(args.path, { prefix: "path=", maxLength: 60 }),
+          formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
+          formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
+        ],
+        theme,
+      );
+    },
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal: AbortSignal,
+      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
+      ctx: PiCueToolContext,
+    ) {
+      const pathParam = normalizeRequiredCueString(params.path, "cue_run path");
+      const timeout = normalizeCueTimeoutSeconds(params.timeout, 300, "cue_run timeout");
+      const tailBytes = normalizeCueTailBytes(
+        params.tail_bytes,
+        DEFAULT_CUE_TAIL_BYTES,
+        "cue_run tail_bytes",
+      );
+      const baseCwd = ctx.cwd ?? process.cwd();
+      const { isAbsolute, resolve } = await import("node:path");
+      const resolvedPath = isAbsolute(pathParam) ? pathParam : resolve(baseCwd, pathParam);
+      if (!resolvedPath.endsWith(".cue")) {
+        throw new Error(`cue_run path must end in .cue (got ${resolvedPath})`);
+      }
+      const { readFile } = await import("node:fs/promises");
+      let body: string;
+      try {
+        body = await readFile(resolvedPath, "utf-8");
+      } catch (err) {
+        throw new Error(`cue_run failed to read ${resolvedPath}: ${(err as Error).message}`);
+      }
+      return runCueScript(
+        { resolvedPath, body, pathLabel: resolvedPath, timeout, tailBytes, toolName: "cue_run" },
+        ctx,
+      );
+    },
+  });
+
+  pi.registerTool({
+    name: "cue_script",
+    label: "Run Cue Script",
+    description:
+      "Run an inline .cue script body in cue-shell. " +
+      "Top-level items execute sequentially with fail-fast semantics inside a fresh isolated scope forked from HEAD. " +
+      "Each item may use cue-shell composition operators (`|>`, `->`, `~>`, `||`, `||?`) but must not use bash-shell syntax (`&&`, `;`, redirection). " +
+      "If you have a real .cue file on disk, prefer cue_run. " +
+      "Optionally provide `pathLabel` to label the inline script in TUI history. " +
+      "Foreground only: blocks until ScriptFinished or `timeout` seconds elapse, in which case the script is reported as timed out (its jobs may continue running and can be inspected via cue_jobs).",
+    parameters: Type.Object({
+      script: Type.String({
+        description:
+          "Inline .cue script body. Required. The script is sent to the daemon as if it were a file at `pathLabel` (defaults to `<inline>`).",
+      }),
+      pathLabel: Type.Optional(
+        Type.String({
+          description: "Display label for inline scripts. Default: `<inline>`.",
+        }),
+      ),
+      timeout: Type.Optional(
+        Type.Number({
+          description:
+            "Foreground wait budget in seconds. Default: 300. On timeout the tool returns with timedOut=true; submitted jobs may keep running.",
+          default: 300,
+        }),
+      ),
+      tail_bytes: Type.Optional(
+        Type.Number({
+          description:
+            "Limit per-item stdout/stderr to the last N bytes when rendering the aggregated transcript. Default: 16384. Pass 0 for full output.",
+        }),
+      ),
+    }),
+    renderCall(args, theme) {
+      const scriptArg =
+        typeof args.script === "string" && args.script.trim()
+          ? `inline=${(args.script as string).split(/\r?\n/).filter((l) => l.trim()).length}line(s)`
+          : undefined;
+      return renderToolCall(
+        "cue_script",
+        [
+          scriptArg,
+          formatStringArg(args.pathLabel, { prefix: "label=", maxLength: 40 }),
+          formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
+          formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
+        ],
+        theme,
+      );
+    },
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal: AbortSignal,
+      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
+      ctx: PiCueToolContext,
+    ) {
+      const scriptParam = normalizeRequiredCueString(params.script, "cue_script script");
+      const pathLabel =
+        normalizeOptionalCueString(params.pathLabel, "cue_script pathLabel") ?? "<inline>";
+      const timeout = normalizeCueTimeoutSeconds(params.timeout, 300, "cue_script timeout");
+      const tailBytes = normalizeCueTailBytes(
+        params.tail_bytes,
+        DEFAULT_CUE_TAIL_BYTES,
+        "cue_script tail_bytes",
+      );
+      return runCueScript(
+        {
+          resolvedPath: pathLabel,
+          body: scriptParam,
+          pathLabel,
+          timeout,
+          tailBytes,
+          toolName: "cue_script",
+        },
+        ctx,
+      );
+    },
+  });
+
   // ═══════════════════════════════════════════════════════════════════
   //  cue_jobs — manage and inspect jobs
   // ═══════════════════════════════════════════════════════════════════
@@ -680,27 +1076,34 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     },
     async execute(
       _toolCallId: string,
-      params: {
-        action?: string;
-        id?: string;
-        status?: string;
-        limit?: number;
-        timeout?: number;
-        tail_bytes?: number;
-      },
+      params: Record<string, unknown>,
       _signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
-      ctx: { ui?: { notify?: (msg: string, level: string) => void } },
+      ctx: PiCueToolContext,
     ) {
+      const action = normalizeCueEnum(params.action, "list", CUE_JOB_ACTIONS, "cue_jobs action");
+      const id = normalizeOptionalCueString(params.id, "cue_jobs id");
+      const statusFilter = normalizeCueEnum(
+        params.status,
+        "all",
+        CUE_JOB_STATUS_FILTERS,
+        "cue_jobs status",
+      );
+      const limit = normalizeCueLimit(params.limit, DEFAULT_LIST_LIMIT, "cue_jobs limit");
+      const timeout = normalizeCueTimeoutSeconds(params.timeout, 300, "cue_jobs timeout");
+      const tailBytes = normalizeCueTailBytes(
+        params.tail_bytes,
+        DEFAULT_CUE_TAIL_BYTES,
+        "cue_jobs tail_bytes",
+      );
       const cued = await getClient(ctx);
-      const action = (params.action ?? "list").toLowerCase();
 
       if (action === "list") {
         let jobs = await cued.listJobs();
-        const filter = (params.status ?? "all").toLowerCase();
-        if (filter !== "all") jobs = jobs.filter((j) => j.status.toLowerCase() === filter);
+        if (statusFilter !== "all")
+          jobs = jobs.filter((j) => j.status.toLowerCase() === statusFilter);
         const total = jobs.length;
-        jobs = jobs.slice(0, normalizeLimit(params.limit));
+        jobs = jobs.slice(0, limit);
         if (total === 0)
           return {
             content: [{ type: "text" as const, text: "No matching jobs." }],
@@ -719,32 +1122,30 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         };
       }
 
-      if (!params.id)
+      if (!id)
         return {
           content: [{ type: "text" as const, text: `action='${action}' requires id parameter.` }],
           details: { error: "missing_id" },
         };
 
       if (action === "stop") {
-        await cued.stopJob(params.id);
+        await cued.stopJob(id);
         return {
-          content: [{ type: "text" as const, text: `Stopped ${params.id}.` }],
-          details: { targetId: params.id },
+          content: [{ type: "text" as const, text: `Stopped ${id}.` }],
+          details: { targetId: id },
         };
       }
 
       if (action === "status") {
-        const tailBytes = normalizeTailBytes(params.tail_bytes);
-
-        if (params.id.startsWith("CH")) {
-          const jobs = jobsForChain(await cued.listJobs(), params.id);
+        if (id.startsWith("CH")) {
+          const jobs = jobsForChain(await cued.listJobs(), id);
           if (jobs.length === 0)
             return {
-              content: [{ type: "text" as const, text: `${params.id} not found.` }],
+              content: [{ type: "text" as const, text: `${id} not found.` }],
               details: { found: false },
             };
 
-          const lines = [`${statusLabel(chainStatus(jobs))} — chain ${params.id}`];
+          const lines = [`${statusLabel(chainStatus(jobs))} — chain ${id}`];
           for (const job of jobs) {
             const leafLabel = `Leaf ${(job.chain_index ?? 0) + 1}/${job.chain_total ?? jobs.length}`;
             lines.push("", `${leafLabel}: ${statusLabel(job.status)} — ${job.pipeline}`);
@@ -754,18 +1155,18 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           return {
             content: [{ type: "text" as const, text: lines.join("\n") }],
             details: {
-              chainId: params.id,
+              chainId: id,
               status: chainStatus(jobs),
               jobs,
             },
           };
         }
 
-        if (params.id.startsWith("C")) {
-          const cron = await cued.cronStatus(params.id);
+        if (id.startsWith("C")) {
+          const cron = await cued.cronStatus(id);
           if (!cron)
             return {
-              content: [{ type: "text" as const, text: `${params.id} not found.` }],
+              content: [{ type: "text" as const, text: `${id} not found.` }],
               details: { found: false },
             };
           return {
@@ -784,10 +1185,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           };
         }
 
-        const job = await cued.jobStatus(params.id);
+        const job = await cued.jobStatus(id);
         if (!job)
           return {
-            content: [{ type: "text" as const, text: `${params.id} not found.` }],
+            content: [{ type: "text" as const, text: `${id} not found.` }],
             details: { found: false },
           };
 
@@ -812,15 +1213,14 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       }
 
       if (action === "wait") {
-        const deadline = Date.now() + (params.timeout ?? 300) * 1000;
-        const tailBytes = normalizeTailBytes(params.tail_bytes);
+        const deadline = Date.now() + timeout * 1000;
 
-        if (params.id.startsWith("CH")) {
+        if (id.startsWith("CH")) {
           while (Date.now() < deadline) {
-            const jobs = jobsForChain(await cued.listJobs(), params.id);
+            const jobs = jobsForChain(await cued.listJobs(), id);
             if (jobs.length === 0)
               return {
-                content: [{ type: "text" as const, text: `Chain ${params.id} not found.` }],
+                content: [{ type: "text" as const, text: `Chain ${id} not found.` }],
                 details: { found: false },
               };
             const expectedCount = Math.max(...jobs.map((job) => job.chain_total ?? jobs.length));
@@ -832,21 +1232,21 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
               jobs.every((job) => isTerminalJob(job.status))
             ) {
               const status = chainStatus(jobs);
-              const lines = [`${statusLabel(status)} — chain ${params.id}`];
+              const lines = [`${statusLabel(status)} — chain ${id}`];
               for (const job of jobs) {
                 const leafLabel = `Leaf ${(job.chain_index ?? 0) + 1}/${job.chain_total ?? jobs.length}`;
                 lines.push("", `${leafLabel}: ${statusLabel(job.status)} — ${job.pipeline}`);
                 if (job.exit_code != null) lines.push(`Exit code: ${job.exit_code}`);
                 await appendJobOutput(cued, job, lines, tailBytes);
               }
-              const text = `Chain ${params.id} completed\n\n${lines.join("\n")}`;
+              const text = `Chain ${id} completed\n\n${lines.join("\n")}`;
               if (status === "Failed") throw new Error(text);
-              if (status === "Killed") throw new Error(`Chain ${params.id} was killed`);
-              if (status === "Cancelled") throw new Error(`Chain ${params.id} was cancelled`);
+              if (status === "Killed") throw new Error(`Chain ${id} was killed`);
+              if (status === "Cancelled") throw new Error(`Chain ${id} was cancelled`);
               return {
                 content: [{ type: "text" as const, text }],
                 details: {
-                  chainId: params.id,
+                  chainId: id,
                   status,
                   jobs,
                 },
@@ -859,18 +1259,18 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             content: [
               {
                 type: "text" as const,
-                text: `Timed out after ${params.timeout ?? 300}s waiting for ${params.id}.`,
+                text: `Timed out after ${timeout}s waiting for ${id}.`,
               },
             ],
-            details: { timedOut: true, targetId: params.id },
+            details: { timedOut: true, targetId: id },
           };
         }
 
         while (Date.now() < deadline) {
-          const job = await cued.jobStatus(params.id);
+          const job = await cued.jobStatus(id);
           if (!job)
             return {
-              content: [{ type: "text" as const, text: `Job ${params.id} not found.` }],
+              content: [{ type: "text" as const, text: `Job ${id} not found.` }],
               details: { found: false },
             };
 
@@ -883,10 +1283,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             const lines = [`${statusLabel(job.status)} — ${job.pipeline}`];
             if (job.exit_code != null) lines.push(`Exit code: ${job.exit_code}`);
             await appendJobOutput(cued, job, lines, tailBytes);
-            const text = `Job ${params.id} completed\n\n${lines.join("\n")}`;
+            const text = `Job ${id} completed\n\n${lines.join("\n")}`;
             if (job.status === "Failed") throw new Error(text);
-            if (job.status === "Killed") throw new Error(`Job ${params.id} was killed`);
-            if (job.status === "Cancelled") throw new Error(`Job ${params.id} was cancelled`);
+            if (job.status === "Killed") throw new Error(`Job ${id} was killed`);
+            if (job.status === "Cancelled") throw new Error(`Job ${id} was cancelled`);
             return {
               content: [{ type: "text" as const, text }],
               details: {
@@ -903,22 +1303,13 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           content: [
             {
               type: "text" as const,
-              text: `Timed out after ${params.timeout ?? 300}s waiting for ${params.id}.`,
+              text: `Timed out after ${timeout}s waiting for ${id}.`,
             },
           ],
           details: { timedOut: true },
         };
       }
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Unknown action: '${action}'. Valid: list, status, wait, stop.`,
-          },
-        ],
-        details: { error: "unknown_action" },
-      };
+      throw new Error("Unhandled cue_jobs action");
     },
   });
 
@@ -981,24 +1372,32 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     },
     async execute(
       _toolCallId: string,
-      params: {
-        action: string;
-        schedule?: string;
-        command?: string;
-        id?: string;
-        status?: string;
-        limit?: number;
-      },
+      params: Record<string, unknown>,
       _signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
-      ctx: { ui?: { notify?: (msg: string, level: string) => void } },
+      ctx: PiCueToolContext,
     ) {
+      const action = normalizeCueEnum(
+        params.action,
+        undefined,
+        CUE_SCHEDULE_ACTIONS,
+        "cue_schedule action",
+      );
+      const schedule = normalizeOptionalCueString(params.schedule, "cue_schedule schedule");
+      const command = normalizeOptionalCueString(params.command, "cue_schedule command");
+      const id = normalizeOptionalCueString(params.id, "cue_schedule id");
+      const statusFilter = normalizeCueEnum(
+        params.status,
+        "all",
+        CUE_SCHEDULE_STATUS_FILTERS,
+        "cue_schedule status",
+      );
+      const limit = normalizeCueLimit(params.limit, DEFAULT_LIST_LIMIT, "cue_schedule limit");
       const cued = await getClient(ctx);
-      const action = params.action.toLowerCase();
 
       // add
       if (action === "add") {
-        if (!params.schedule || !params.command) {
+        if (!schedule || !command) {
           return {
             content: [
               {
@@ -1009,7 +1408,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             details: {},
           };
         }
-        const cronId = await cued.addCron(params.schedule, params.command);
+        const cronId = await cued.addCron(schedule, command);
         return {
           content: [
             {
@@ -1019,8 +1418,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           ],
           details: {
             cronId,
-            schedule: params.schedule,
-            command: params.command,
+            schedule,
+            command,
           },
         };
       }
@@ -1028,10 +1427,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       // list
       if (action === "list") {
         let crons = await cued.listCrons();
-        const filter = (params.status ?? "all").toLowerCase();
-        if (filter !== "all") crons = crons.filter((c) => c.status.toLowerCase() === filter);
+        if (statusFilter !== "all")
+          crons = crons.filter((c) => c.status.toLowerCase() === statusFilter);
         const total = crons.length;
-        crons = crons.slice(0, normalizeLimit(params.limit));
+        crons = crons.slice(0, limit);
         if (total === 0)
           return {
             content: [{ type: "text" as const, text: "No matching schedules." }],
@@ -1051,7 +1450,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       }
 
       // pause / resume / remove
-      if (!params.id) {
+      if (!id) {
         return {
           content: [
             {
@@ -1064,51 +1463,42 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       }
 
       if (action === "pause") {
-        await cued.pauseCron(params.id);
+        await cued.pauseCron(id);
         return {
           content: [
             {
               type: "text" as const,
-              text: `Paused ${params.id}. Resume with cue_schedule action=resume id=${params.id}.`,
+              text: `Paused ${id}. Resume with cue_schedule action=resume id=${id}.`,
             },
           ],
-          details: { id: params.id, paused: true },
+          details: { id, paused: true },
         };
       }
       if (action === "resume") {
-        await cued.resumeCron(params.id);
+        await cued.resumeCron(id);
         return {
           content: [
             {
               type: "text" as const,
-              text: `Resumed ${params.id}.`,
+              text: `Resumed ${id}.`,
             },
           ],
-          details: { id: params.id, resumed: true },
+          details: { id, resumed: true },
         };
       }
       if (action === "remove") {
-        await cued.stopJob(params.id);
+        await cued.stopJob(id);
         return {
           content: [
             {
               type: "text" as const,
-              text: `Removed ${params.id}.`,
+              text: `Removed ${id}.`,
             },
           ],
-          details: { id: params.id, removed: true },
+          details: { id, removed: true },
         };
       }
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Unknown action: '${action}'. Valid: add, list, pause, resume, remove.`,
-          },
-        ],
-        details: {},
-      };
+      throw new Error("Unhandled cue_schedule action");
     },
   });
 
@@ -1139,12 +1529,6 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             "For action='env' or action='config', limit output to the last N bytes. Default: 16384. Pass 0 for full output.",
         }),
       ),
-      env_tail_bytes: Type.Optional(
-        Type.Number({
-          description:
-            "Deprecated alias for tail_bytes when includeEnv=true. Default: 16384. Pass 0 for full env.",
-        }),
-      ),
     }),
     renderCall(args, theme) {
       return renderToolCall(
@@ -1154,30 +1538,31 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           formatNumberArg(args.limit, { prefix: "limit=" }),
           args.includeEnv === true ? "include-env" : undefined,
           formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
-          formatNumberArg(args.env_tail_bytes, { prefix: "env-tail=" }),
         ],
         theme,
       );
     },
     async execute(
       _toolCallId: string,
-      params: {
-        action?: string;
-        limit?: number;
-        includeEnv?: boolean;
-        tail_bytes?: number;
-        env_tail_bytes?: number;
-      },
+      params: Record<string, unknown>,
       _signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
-      ctx: { ui?: { notify?: (msg: string, level: string) => void } },
+      ctx: PiCueToolContext,
     ) {
+      rejectDeprecatedCueParam(params, "env_tail_bytes", "tail_bytes", "cue_scope");
+      const action = normalizeCueEnum(params.action, "list", CUE_SCOPE_ACTIONS, "cue_scope action");
+      const limit = normalizeCueLimit(params.limit, DEFAULT_LIST_LIMIT, "cue_scope limit");
+      const includeEnv = normalizeCueBoolean(params.includeEnv, false, "cue_scope includeEnv");
+      const tailBytes = normalizeCueTailBytes(
+        params.tail_bytes,
+        DEFAULT_CUE_TAIL_BYTES,
+        "cue_scope tail_bytes",
+      );
       const cued = await getClient(ctx);
-      const action = (params.action ?? "list").toLowerCase();
 
       if (action === "env" || action === "config") {
         const raw = action === "env" ? await cued.showEnv() : await cued.showConfig();
-        const tailed = tailStr(raw, normalizeTailBytes(params.tail_bytes, DEFAULT_ENV_TAIL_BYTES));
+        const tailed = tailStr(raw, tailBytes);
         const lines = [tailed.text.trimEnd()];
         if (tailed.truncated)
           lines.push(`[${action} truncated — use tail_bytes=0 for full output]`);
@@ -1192,19 +1577,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         };
       }
 
-      if (action !== "list")
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Unknown action: '${action}'. Valid: list, env, config.`,
-            },
-          ],
-          details: { error: "unknown_action" },
-        };
-
       const all = await cued.listScopes();
-      const visible = all.slice(0, normalizeLimit(params.limit));
+      const visible = all.slice(0, limit);
       if (all.length === 0)
         return {
           content: [{ type: "text" as const, text: "No scopes." }],
@@ -1215,11 +1589,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           `${scope.hash}  parent=${scope.parent ?? "-"}  cwd=${scope.cwd}  env=${scope.env_count}`,
       );
       if (all.length > visible.length) lines.push(`… ${all.length - visible.length} more scope(s)`);
-      if (params.includeEnv === true) {
-        const tailBytes = normalizeTailBytes(
-          params.tail_bytes ?? params.env_tail_bytes,
-          DEFAULT_ENV_TAIL_BYTES,
-        );
+      if (includeEnv) {
         const env = tailStr(await cued.showEnv(), tailBytes);
         lines.push("", "--- HEAD env ---", env.text.trimEnd());
         if (env.truncated) lines.push("[HEAD env truncated — use tail_bytes=0 for full env]");
@@ -1272,15 +1642,22 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     },
     async execute(
       _toolCallId: string,
-      params: { id?: string; limit?: number; tail_bytes?: number },
+      params: Record<string, unknown>,
       _signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
-      ctx: { ui?: { notify?: (msg: string, level: string) => void } },
+      ctx: PiCueToolContext,
     ) {
+      const id = normalizeOptionalCueString(params.id, "cue_history id");
+      const limit = normalizeCueLimit(params.limit, 80, "cue_history limit");
+      const tailBytes = normalizeCueTailBytes(
+        params.tail_bytes,
+        DEFAULT_CUE_TAIL_BYTES,
+        "cue_history tail_bytes",
+      );
       const cued = await getClient(ctx);
-      const raw = await cued.showLog(params.id);
-      const tailed = tailStr(raw, normalizeTailBytes(params.tail_bytes, DEFAULT_LOG_TAIL_BYTES));
-      const limited = limitLines(tailed.text, normalizeLimit(params.limit, 80));
+      const raw = await cued.showLog(id);
+      const tailed = tailStr(raw, tailBytes);
+      const limited = limitLines(tailed.text, limit);
       const messages: string[] = [];
       if (tailed.truncated)
         messages.push("[history truncated by bytes — use tail_bytes=0 for full text]");
@@ -1291,7 +1668,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           { type: "text" as const, text: [limited.text, ...messages].filter(Boolean).join("\n") },
         ],
         details: {
-          id: params.id ?? null,
+          id: id ?? null,
           rawChars: raw.length,
           shownChars: limited.text.length,
           truncated: tailed.truncated || limited.truncated,
@@ -1302,7 +1679,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
 
   // ── Lifecycle ──────────────────────────────────────────────────────
 
-  pi.on("session_start", () => {
+  pi.on?.("session_start", () => {
+    if (!pi.getAllTools || !pi.setActiveTools) return;
     const withoutBash = pi
       .getAllTools()
       .map((t) => t.name)
@@ -1310,7 +1688,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     pi.setActiveTools(withoutBash);
   });
 
-  pi.on("session_shutdown", async () => {
+  pi.on?.("session_shutdown", async () => {
     if (client && !client.isClosed) {
       client.close();
       client = null;
@@ -1319,5 +1697,15 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
 }
 
 export default function piCueExtension(pi: ExtensionAPI) {
-  registerPiCueTools(pi as PiCueExtensionApi);
+  if (!pi.registerTool) throw new Error("pi-cue extension requires registerTool support");
+  registerPiCueTools({
+    registerTool: (config) => pi.registerTool?.(config),
+    on: pi.on
+      ? (event, handler) => {
+          pi.on?.(event, (payload, ctx) => handler(payload, ctx));
+        }
+      : undefined,
+    getAllTools: pi.getAllTools ? () => pi.getAllTools!() : undefined,
+    setActiveTools: pi.setActiveTools ? (names) => pi.setActiveTools!(names) : undefined,
+  });
 }

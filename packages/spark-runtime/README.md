@@ -1,8 +1,8 @@
 # spark-runtime
 
-Spark single-task runtime adapter for executing one ready Spark task with a registered role.
+Spark runtime adapter for executing one Spark task with a registered role.
 
-Runtime resolves reusable `RoleSpec`s from `pi-roles`, calls `runRole()` for one concrete child Pi execution, and adapts that `RoleRun` back into Spark task/run/artifact state. Graph-wide ready frontier scheduling and durable orchestration state live in `spark-orchestrator`.
+Runtime resolves reusable `RoleSpec`s from `pi-roles`, calls `runRole()` for concrete child Pi executions, and adapts those `RoleRun`s back into Spark task/run/artifact state. Ready-frontier scheduling and durable background orchestration state live in `spark-orchestrator`.
 
 Responsibilities:
 
@@ -15,6 +15,8 @@ Responsibilities:
 - sweep persisted expired claims with `sweepExpiredTaskClaims()`
 - maintain Spark-specific active child process tracking for timeout/reconciliation UI and kill controls
 - persist task-run artifacts through `spark-artifacts`
+- read bounded role-run artifact previews for background-run inspection
+- compact historical role-run transcript artifacts through `collectRoleRunArtifactRetentionPlan()`
 - update `TaskRun` and task status on success/failure
 
 Non-responsibilities:
@@ -42,4 +44,4 @@ Attribution:
 - `runName`, `ownerSessionId`, and `runRef` identify the concrete run in `TaskRun` records and active `TaskClaim`s.
 - Runtime-created artifacts use `kind: "role-run"` with task provenance and run-record data so outputs are attributed to the Spark task and concrete run while still retaining the role ref.
 
-Use `runSparkTask()` from the Spark extension or higher-level orchestrators. Use `spark-orchestrator` `runReadySparkTasks()` for graph-level ready task execution.
+Use `runSparkTask()` for single-task execution. Use `spark-orchestrator` `runReadySparkTasks()` for graph-level ready task scheduling.

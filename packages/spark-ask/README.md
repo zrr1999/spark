@@ -17,7 +17,7 @@ observed.
 - `spark-ask` — Spark artifact persistence/replay helpers, type aliases over
   the generic `pi-ask` flow API, Spark-specific option quality policy, and
   host-UI ask running. It may depend on Spark data contracts, but it must not
-  own roadmap/thread/task/review workflow decisions or canned forms.
+  own roadmap/project/task/review workflow decisions or canned forms.
 - `spark` — Pi extension facade that registers tools, defines host-facing
   schemas/rendering, adapts Pi context (`cwd`, UI, session), and calls
   `spark-ask` or Spark workflow modules. Workflow modules own when to ask and

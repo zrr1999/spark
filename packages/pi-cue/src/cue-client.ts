@@ -38,6 +38,7 @@ export interface RequestEnvelope {
 
 export type RequestPayload =
   | { Eval: { input: string; mode: Mode } }
+  | { RunScript: { path: string; input: string; mode: Mode } }
   | { Subscribe: { channels: string[] } }
   | { Unsubscribe: { channels: string[] } }
   | { Ping: Record<string, never> }
@@ -55,6 +56,7 @@ export type OkPayload =
   | { Ack: Record<string, never> }
   | { JobCreated: JobCreatedPayload }
   | { ChainCreated: ChainCreatedPayload }
+  | { ScriptCreated: ScriptCreatedPayload }
   | { JobInfo: JobInfo }
   | { JobList: JobInfo[] }
   | { ScopeInfo: ScopeInfo }
@@ -90,6 +92,53 @@ export interface ChainCreatedPayload {
   job_ids: string[];
   chain: ChainInfo;
   warnings: string[];
+}
+
+export type ScriptSource = { kind: "inline" } | { kind: "file"; path: string };
+
+export type ScriptItemResult =
+  | {
+      kind: "job";
+      job_id: string;
+      start_scope?: string;
+      open_hint: "stream" | "fg";
+    }
+  | {
+      kind: "chain";
+      chain_id: string;
+      job_ids: string[];
+      chain: ChainInfo;
+    }
+  | { kind: "cron"; cron_id: string }
+  | { kind: "message"; text: string };
+
+export interface ScriptItemInfo {
+  index: number;
+  source: string;
+  result: ScriptItemResult;
+}
+
+export interface ScriptSubmitError {
+  index: number;
+  source: string;
+  code: string;
+  message: string;
+}
+
+export interface ScriptCreatedPayload {
+  script_id: string;
+  source?: ScriptSource;
+  items: ScriptItemInfo[];
+  submit_error: ScriptSubmitError | null;
+}
+
+export type ScriptRunStatus = "done" | "failed";
+
+export interface ScriptFinishedEvent {
+  script_id: string;
+  status: ScriptRunStatus;
+  exit_code: number;
+  failed_item_index: number | null;
 }
 
 export interface ChainInfo {
@@ -151,6 +200,7 @@ export type EventPayload =
   | { ChainStarted: { chain: ChainInfo } }
   | { ChainProgress: { chain: ChainInfo } }
   | { ChainFinished: { chain_id: string; success: boolean } }
+  | { ScriptFinished: ScriptFinishedEvent }
   | { JobRemoved: { job_id: string } }
   | { OutputChunk: OutputChunkEvent }
   | { OutputEof: { id: string } }
@@ -446,6 +496,231 @@ export class CueClient {
     }
 
     throw new CueError("UNEXPECTED_RESPONSE", "expected JobCreated or ChainCreated response");
+  }
+
+  /**
+   * Run a `.cue` file-script and wait for it to complete.
+   *
+   * Mirrors the foreground semantics of cue-shell’s `cue run <file.cue>` CLI:
+   * top-level items execute sequentially, fail-fast, inside a fresh isolated
+   * scope forked from HEAD. Returns the aggregated transcript per item plus
+   * the script-level terminal status.
+   */
+  async runScript(opts: RunScriptOptions): Promise<ScriptResult> {
+    const { path, input, mode = "Job" } = opts;
+    const timeoutMs = (opts.timeout ?? 300) * 1000;
+
+    await this.#ensureSubscribed("jobs");
+
+    const requestId = await this.#send({ RunScript: { path, input, mode } });
+    const response = await this.#waitForResponse(requestId);
+    if ("Err" in response) {
+      throw new CueError(response.Err.code, response.Err.message);
+    }
+    const ok = (response as { Ok: Record<string, unknown> }).Ok;
+    if (!ok || !("ScriptCreated" in ok)) {
+      throw new CueError("UNEXPECTED_RESPONSE", "expected ScriptCreated response");
+    }
+    const created = (ok as { ScriptCreated: ScriptCreatedPayload }).ScriptCreated;
+
+    if (created.submit_error) {
+      const err = created.submit_error;
+      throw new CueError(
+        err.code,
+        `script ${created.script_id} submission failed at item ${err.index}: ${err.message}`,
+      );
+    }
+
+    const itemJobIds = new Map<number, string[]>();
+    const allKnownJobIds = new Set<string>();
+    const stdoutByJob = new Map<string, string[]>();
+    const stderrByJob = new Map<string, string[]>();
+
+    const ensureJobBuffers = (jobId: string) => {
+      if (!stdoutByJob.has(jobId)) stdoutByJob.set(jobId, []);
+      if (!stderrByJob.has(jobId)) stderrByJob.set(jobId, []);
+    };
+
+    const trackJob = async (itemIndex: number, jobId: string) => {
+      const list = itemJobIds.get(itemIndex) ?? [];
+      if (!list.includes(jobId)) list.push(jobId);
+      itemJobIds.set(itemIndex, list);
+      if (!allKnownJobIds.has(jobId)) {
+        allKnownJobIds.add(jobId);
+        ensureJobBuffers(jobId);
+        await this.subscribe([`output:${jobId}`]);
+      }
+    };
+
+    for (const item of created.items) {
+      if (item.result.kind === "job") {
+        await trackJob(item.index, item.result.job_id);
+      } else if (item.result.kind === "chain") {
+        for (const jid of item.result.job_ids) {
+          await trackJob(item.index, jid);
+        }
+      }
+    }
+
+    return new Promise<ScriptResult>((resolve, reject) => {
+      let finished: ScriptFinishedEvent | null = null;
+      let resolved = false;
+      const unsubs: Array<() => void> = [];
+
+      const cleanup = () => {
+        for (const off of unsubs) off();
+      };
+
+      const finalize = async () => {
+        if (resolved) return;
+        if (!finished) return;
+        resolved = true;
+        clearTimeout(timer);
+        cleanup();
+
+        await new Promise((r) => setTimeout(r, 50));
+
+        try {
+          const itemResults: ScriptItemSummary[] = [];
+          for (const item of created.items) {
+            const summary = await this.#summarizeScriptItem(
+              item,
+              itemJobIds.get(item.index) ?? [],
+              stdoutByJob,
+              stderrByJob,
+            );
+            itemResults.push(summary);
+          }
+          resolve({
+            scriptId: created.script_id,
+            source: created.source ?? { kind: "inline" },
+            status: finished.status,
+            exitCode: finished.exit_code,
+            failedItemIndex: finished.failed_item_index ?? null,
+            items: itemResults,
+            timedOut: false,
+          });
+        } catch (error) {
+          reject(error);
+        }
+      };
+
+      const timer = setTimeout(() => {
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+        resolve({
+          scriptId: created.script_id,
+          source: created.source ?? { kind: "inline" },
+          status: "failed",
+          exitCode: null,
+          failedItemIndex: null,
+          items: [],
+          timedOut: true,
+        });
+      }, timeoutMs);
+
+      const onOutput = (event: EventPayload) => {
+        if (!("OutputChunk" in event)) return;
+        const chunk = (event as { OutputChunk: OutputChunkEvent }).OutputChunk;
+        const buf = chunk.stream === "stdout" ? stdoutByJob : stderrByJob;
+        const list = buf.get(chunk.id);
+        if (list) list.push(chunk.data);
+      };
+
+      const installedForwarders = new Set<string>();
+      const ensureForwarder = (jobId: string) => {
+        if (installedForwarders.has(jobId)) return;
+        installedForwarders.add(jobId);
+        unsubs.push(this.onEvent(`output:${jobId}`, onOutput));
+      };
+      for (const jid of allKnownJobIds) ensureForwarder(jid);
+
+      const onJobs = (event: EventPayload) => {
+        if ("ScriptFinished" in event) {
+          const fin = (event as { ScriptFinished: ScriptFinishedEvent }).ScriptFinished;
+          if (fin.script_id === created.script_id) {
+            finished = fin;
+            void finalize();
+          }
+          return;
+        }
+        if ("ChainProgress" in event) {
+          const progress = (event as { ChainProgress: { chain: ChainInfo } }).ChainProgress;
+          const item = created.items.find(
+            (it) => it.result.kind === "chain" && it.result.chain_id === progress.chain.id,
+          );
+          if (item) {
+            for (const job of progress.chain.jobs) {
+              const jid = job.job_id;
+              if (jid) {
+                void trackJob(item.index, jid).then(() => ensureForwarder(jid));
+              }
+            }
+          }
+        }
+      };
+      unsubs.push(this.onEvent("jobs", onJobs));
+    });
+  }
+
+  async #summarizeScriptItem(
+    item: ScriptItemInfo,
+    jobIds: string[],
+    stdoutByJob: Map<string, string[]>,
+    stderrByJob: Map<string, string[]>,
+  ): Promise<ScriptItemSummary> {
+    const stdoutParts: string[] = [];
+    const stderrParts: string[] = [];
+    let status: JobStatus = "Done";
+    let exitCode: number | null = null;
+    const jobStatuses: JobInfo[] = [];
+
+    for (const jobId of jobIds) {
+      let info: JobInfo | null = null;
+      try {
+        info = await this.jobStatus(jobId);
+      } catch {
+        info = null;
+      }
+      if (info) {
+        jobStatuses.push(info);
+        if (info.status !== "Done" && status === "Done") status = info.status;
+        if (info.exit_code != null && info.exit_code !== 0) exitCode = info.exit_code;
+      }
+
+      try {
+        const out = await this.jobOutput(jobId);
+        stdoutParts.push(out.stdout);
+      } catch {
+        const chunks = stdoutByJob.get(jobId) ?? [];
+        stdoutParts.push(chunks.join(""));
+      }
+      try {
+        const err = await this.jobError(jobId);
+        stderrParts.push(err.stderr);
+      } catch {
+        const chunks = stderrByJob.get(jobId) ?? [];
+        stderrParts.push(chunks.join(""));
+      }
+    }
+
+    const messageText = item.result.kind === "message" ? item.result.text : undefined;
+
+    return {
+      index: item.index,
+      source: item.source,
+      kind: item.result.kind,
+      jobIds,
+      chainId: item.result.kind === "chain" ? item.result.chain_id : null,
+      cronId: item.result.kind === "cron" ? item.result.cron_id : null,
+      message: messageText,
+      stdout: stdoutParts.join(""),
+      stderr: stderrParts.join(""),
+      status,
+      exitCode,
+      jobs: jobStatuses,
+    };
   }
 
   /** Stop (kill) a running job or remove a cron. */
@@ -865,6 +1140,8 @@ export class CueClient {
       channel = `jobs`;
     } else if ("ChainFinished" in payload) {
       channel = `jobs`;
+    } else if ("ScriptFinished" in payload) {
+      channel = `jobs`;
     } else if ("JobRemoved" in payload) {
       channel = `jobs`;
     } else if ("OutputChunk" in payload) {
@@ -1155,6 +1432,43 @@ export interface RunJobOptions extends RunEvalOptions {
 }
 
 export interface StartJobOptions extends RunEvalOptions {}
+
+export interface RunScriptOptions {
+  /** Source path to associate with the script (display label only when input is inline). */
+  path: string;
+  /** Raw `.cue` script body to execute. */
+  input: string;
+  /** Submission mode. Defaults to "Job". */
+  mode?: Mode;
+  /** Foreground wait budget in seconds. Defaults to 300. */
+  timeout?: number;
+}
+
+export interface ScriptItemSummary {
+  index: number;
+  source: string;
+  kind: ScriptItemResult["kind"];
+  jobIds: string[];
+  chainId: string | null;
+  cronId: string | null;
+  message?: string;
+  stdout: string;
+  stderr: string;
+  status: JobStatus;
+  exitCode: number | null;
+  jobs: JobInfo[];
+}
+
+export interface ScriptResult {
+  scriptId: string;
+  source: ScriptSource;
+  status: ScriptRunStatus;
+  /** Aggregated exit code reported by ScriptFinished. */
+  exitCode: number | null;
+  failedItemIndex: number | null;
+  items: ScriptItemSummary[];
+  timedOut: boolean;
+}
 
 export interface JobResult {
   jobId: string;

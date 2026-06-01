@@ -1,11 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
 
 export type RoleSource = "builtin" | "project" | "user";
-export type RoleOriginKind = "manual" | "generated" | "imported" | "migrated" | "builtin";
+export type RoleOriginKind = "manual" | "generated" | "builtin";
 export type RoleRef = `role:${string}`;
 export type RoleRunRef = `run:${string}`;
 export type RoleRunMode = "fresh" | "forked";
@@ -157,13 +157,14 @@ export function builtinRoleRef(id: BuiltinRoleId): RoleRef {
 
 export function normalizeRoleRef(value: string): RoleRef {
   if (value.startsWith("role:")) return value as RoleRef;
-  if (value.startsWith("agent:")) return `role:${value.slice("agent:".length)}` as RoleRef;
+  if (value.startsWith("agent:"))
+    throw new Error("legacy agent refs are not supported; use role:*");
   return `role:${value}` as RoleRef;
 }
 
 export function normalizeRoleSource(value: unknown): RoleSource | undefined {
-  if (value === "builtin" || value === "predefined") return "builtin";
-  if (value === "project" || value === "managed" || value === "workspace") return "project";
+  if (value === "builtin") return "builtin";
+  if (value === "project") return "project";
   if (value === "user") return "user";
   return undefined;
 }
@@ -173,31 +174,31 @@ export function createBuiltinRoles(now = nowIso()): RoleSpec[] {
     builtin(
       "scout",
       "Fast repo and context reconnaissance.",
-      "You are a Spark scout. Gather context, identify relevant files and risks, do not edit files, use Spark ask tools for real ambiguities/blockers instead of only listing questions when a user decision is needed, and flag obviously placeholder/generic/stale Spark thread or task names so they can be safely improved without changing refs.",
+      "You are a Spark scout. Gather context, identify relevant files and risks, do not edit files, use Spark ask tools for real ambiguities/blockers instead of only listing questions when a user decision is needed, and flag obviously placeholder/generic/stale Spark project or task names so they can be safely improved without changing refs.",
       now,
     ),
     builtin(
       "planner",
       "Turns context into concrete task plans.",
-      "You are a Spark planner. Produce concrete plans and dependencies without editing files, use Spark ask tools for real ambiguities/blockers instead of only listing questions when a user decision is needed, treat user-reported repo behavior changes as implementation work rather than memory-only updates, and improve obviously placeholder/generic/stale Spark thread or task display names only when the new name is clear and refs stay stable.",
+      "You are a Spark planner. Produce concrete plans and dependencies without editing files, use Spark ask tools for real ambiguities/blockers instead of only listing questions when a user decision is needed, treat user-reported repo behavior changes as implementation work rather than memory-only updates, and improve obviously placeholder/generic/stale Spark project or task display names only when the new name is clear and refs stay stable.",
       now,
     ),
     builtin(
       "worker",
       "Executes approved implementation tasks.",
-      "You are a Spark worker. Implement only the assigned instruction, use Spark ask tools for blockers or missing requirements instead of only reporting questions, and when the user reports a concrete repo behavior change, fix the implementation instead of only recording a preference. Safely improve obviously placeholder/generic/stale Spark thread or claimed-task @name/title when the current intent makes the better name clear while preserving refs and intentional user names.",
+      "You are a Spark worker. Implement only the assigned instruction, use Spark ask tools for blockers or missing requirements instead of only reporting questions, and when the user reports a concrete repo behavior change, fix the implementation instead of only recording a preference. Safely improve obviously placeholder/generic/stale Spark project or claimed-task @name/title when the current intent makes the better name clear while preserving refs and intentional user names.",
       now,
     ),
     builtin(
       "reviewer",
       "Reviews results and artifacts against task intent.",
-      "You are a Spark reviewer. Verify claims from fresh context, return actionable findings, use Spark ask tools for blocking ambiguous intent instead of silently assuming it, and call out placeholder/generic/stale Spark thread or task names only when a safe improvement is obvious and would preserve refs.",
+      "You are a Spark reviewer. Verify claims from fresh context, return actionable findings, use Spark ask tools for blocking ambiguous intent instead of silently assuming it, and call out placeholder/generic/stale Spark project or task names only when a safe improvement is obvious and would preserve refs.",
       now,
     ),
     builtin(
       "oracle",
       "Challenges risky decisions before execution.",
-      "You are a Spark oracle. Challenge assumptions, use Spark ask tools for missing blocking decisions when a concrete user choice is required, recommend the safest next move without editing files, and preserve intentional Spark thread/task names unless a placeholder/generic/stale rename is plainly correct and ref-safe.",
+      "You are a Spark oracle. Challenge assumptions, use Spark ask tools for missing blocking decisions when a concrete user choice is required, recommend the safest next move without editing files, and preserve intentional Spark project/task names unless a placeholder/generic/stale rename is plainly correct and ref-safe.",
       now,
     ),
   ];
@@ -250,10 +251,7 @@ export class RoleRegistry {
   }
 
   select(idOrRef: string, filter: { source?: RoleSource } = {}): RoleSpec {
-    const normalized =
-      idOrRef.startsWith("role:") || idOrRef.startsWith("agent:")
-        ? normalizeRoleRef(idOrRef)
-        : undefined;
+    const normalized = idOrRef.startsWith("role:") ? normalizeRoleRef(idOrRef) : undefined;
     if (normalized) {
       const role = this.get(normalized);
       if (filter.source && role.source !== filter.source)
@@ -336,41 +334,6 @@ export class MarkdownRoleStore implements RoleStore {
   }
 }
 
-export class LegacySparkJsonRoleStore implements RoleStore {
-  readonly rootDir: string;
-
-  constructor(rootDir: string) {
-    this.rootDir = rootDir;
-  }
-
-  async save(_role: RoleSpec): Promise<void> {
-    throw new Error("LegacySparkJsonRoleStore is migration-input only");
-  }
-
-  async loadAll(): Promise<RoleSpec[]> {
-    let entries;
-    try {
-      entries = await readdir(this.rootDir, { withFileTypes: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw error;
-    }
-    const roles: RoleSpec[] = [];
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const filePath = join(this.rootDir, entry.name);
-      roles.push(
-        normalizeLegacySparkRoleSpec(JSON.parse(await readFile(filePath, "utf8")), filePath),
-      );
-    }
-    return roles;
-  }
-
-  async hydrate(registry: RoleRegistry): Promise<void> {
-    for (const role of await this.loadAll()) registry.add(role);
-  }
-}
-
 export function defaultProjectRoleStore(cwd: string): MarkdownRoleStore {
   return new MarkdownRoleStore({ rootDir: join(cwd, ".agents", "roles"), source: "project" });
 }
@@ -393,6 +356,16 @@ interface RoleModelBindingFile {
   bindings: RoleModelBinding[];
 }
 
+export class RoleModelBindingStoreFormatError extends Error {
+  readonly filePath: string;
+
+  constructor(filePath: string, message: string) {
+    super(`invalid role model binding store: ${filePath}: ${message}`);
+    this.name = "RoleModelBindingStoreFormatError";
+    this.filePath = filePath;
+  }
+}
+
 export class RoleModelBindingStore {
   readonly filePath: string;
 
@@ -408,9 +381,9 @@ export class RoleModelBindingStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
     }
-    const parsed = JSON.parse(raw) as Partial<RoleModelBindingFile>;
-    if (parsed.version !== 1 || !Array.isArray(parsed.bindings)) return [];
-    return parsed.bindings.filter(isRoleModelBinding);
+    const parsed = parseRoleModelBindingFileJson(raw, this.filePath);
+    assertRoleModelBindingFile(parsed, this.filePath);
+    return parsed.bindings;
   }
 
   async get(roleRef: string): Promise<RoleModelBinding | undefined> {
@@ -429,10 +402,9 @@ export class RoleModelBindingStore {
     bindings.push(normalized);
     bindings.sort((a, b) => a.roleRef.localeCompare(b.roleRef));
     await mkdir(dirname(this.filePath), { recursive: true });
-    await writeFile(
+    await atomicWriteRoleModelBindingFile(
       this.filePath,
       `${JSON.stringify({ version: 1, bindings } satisfies RoleModelBindingFile, null, 2)}\n`,
-      "utf8",
     );
   }
 }
@@ -494,6 +466,106 @@ function isNoMatchingModelOutput(output: string): boolean {
   return /no\s+models?\s+(?:found\s+)?matching\b/i.test(output);
 }
 
+function parseRoleModelBindingFileJson(text: string, filePath: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new RoleModelBindingStoreFormatError(
+      filePath,
+      `not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+async function atomicWriteRoleModelBindingFile(filePath: string, data: string): Promise<void> {
+  const tempPath = join(
+    dirname(filePath),
+    `.${basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
+  );
+  try {
+    await writeFile(tempPath, data, "utf8");
+    await rename(tempPath, filePath);
+  } catch (error) {
+    await cleanupAtomicWriteTempFile(tempPath, error);
+    throw error;
+  }
+}
+
+async function cleanupAtomicWriteTempFile(tempPath: string, writeError: unknown): Promise<void> {
+  try {
+    await rm(tempPath, { force: true });
+  } catch (cleanupError) {
+    throw new Error(
+      `atomic write failed and temporary file cleanup also failed: ${tempPath}; write error: ${unknownErrorMessage(writeError)}; cleanup error: ${unknownErrorMessage(cleanupError)}`,
+    );
+  }
+}
+
+function unknownErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function assertRoleModelBindingFile(
+  value: unknown,
+  filePath: string,
+): asserts value is RoleModelBindingFile {
+  if (!isRecord(value)) {
+    throw new RoleModelBindingStoreFormatError(filePath, "JSON root must be an object");
+  }
+  if (value.version !== 1) {
+    throw new RoleModelBindingStoreFormatError(filePath, "version must be 1");
+  }
+  if (!Array.isArray(value.bindings)) {
+    throw new RoleModelBindingStoreFormatError(filePath, "bindings must be an array");
+  }
+  value.bindings.forEach((binding, index) => {
+    assertRoleModelBinding(binding, filePath, index);
+  });
+}
+
+function assertRoleModelBinding(
+  value: unknown,
+  filePath: string,
+  index: number,
+): asserts value is RoleModelBinding {
+  if (!isRecord(value)) {
+    throw new RoleModelBindingStoreFormatError(filePath, `bindings[${index}] must be an object`);
+  }
+  if (typeof value.roleRef !== "string" || !value.roleRef.startsWith("role:")) {
+    throw new RoleModelBindingStoreFormatError(
+      filePath,
+      `bindings[${index}].roleRef must be a role ref`,
+    );
+  }
+  if (typeof value.model !== "string" || !value.model.trim()) {
+    throw new RoleModelBindingStoreFormatError(
+      filePath,
+      `bindings[${index}].model must be a non-empty string`,
+    );
+  }
+  if (value.source !== "user") {
+    throw new RoleModelBindingStoreFormatError(filePath, `bindings[${index}].source must be user`);
+  }
+  if (typeof value.validatedAt !== "string") {
+    throw new RoleModelBindingStoreFormatError(
+      filePath,
+      `bindings[${index}].validatedAt must be a string`,
+    );
+  }
+  if (typeof value.updatedAt !== "string") {
+    throw new RoleModelBindingStoreFormatError(
+      filePath,
+      `bindings[${index}].updatedAt must be a string`,
+    );
+  }
+  if (typeof value.validationCommand !== "string") {
+    throw new RoleModelBindingStoreFormatError(
+      filePath,
+      `bindings[${index}].validationCommand must be a string`,
+    );
+  }
+}
+
 export async function saveValidatedRoleModelBinding(input: {
   store?: RoleModelBindingStore;
   roleRef: RoleRef;
@@ -516,41 +588,8 @@ export async function saveValidatedRoleModelBinding(input: {
   return binding;
 }
 
-function isRoleModelBinding(value: unknown): value is RoleModelBinding {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<RoleModelBinding>;
-  return (
-    typeof candidate.roleRef === "string" &&
-    candidate.roleRef.startsWith("role:") &&
-    typeof candidate.model === "string" &&
-    candidate.model.trim().length > 0 &&
-    candidate.source === "user" &&
-    typeof candidate.validatedAt === "string" &&
-    typeof candidate.updatedAt === "string" &&
-    typeof candidate.validationCommand === "string"
-  );
-}
-
-export function compatibilityProjectRoleStore(cwd: string): MarkdownRoleStore {
-  return new MarkdownRoleStore({
-    rootDir: join(cwd, ".pi", "agents"),
-    source: "project",
-    writable: false,
-    originKind: "imported",
-  });
-}
-
-export function compatibilityUserRoleStore(home = homedir()): MarkdownRoleStore {
-  return new MarkdownRoleStore({
-    rootDir: join(home, ".pi", "agent", "agents"),
-    source: "user",
-    writable: false,
-    originKind: "imported",
-  });
-}
-
-export function legacySparkJsonRoleStore(cwd: string): LegacySparkJsonRoleStore {
-  return new LegacySparkJsonRoleStore(join(cwd, ".spark", "agents"));
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 export async function hydrateDefaultRoleRegistry(
@@ -559,17 +598,10 @@ export async function hydrateDefaultRoleRegistry(
   options: {
     home?: string;
     includeUser?: boolean;
-    includeCompatibility?: boolean;
-    includeLegacySparkJson?: boolean;
   } = {},
 ): Promise<void> {
   await defaultProjectRoleStore(cwd).hydrate(registry);
   if (options.includeUser) await defaultUserRoleStore(options.home).hydrate(registry);
-  if (options.includeCompatibility ?? true) {
-    await compatibilityProjectRoleStore(cwd).hydrate(registry);
-    if (options.includeUser) await compatibilityUserRoleStore(options.home).hydrate(registry);
-  }
-  if (options.includeLegacySparkJson ?? true) await legacySparkJsonRoleStore(cwd).hydrate(registry);
 }
 
 export function createRoleSpec(proposal: RoleSpecProposal, now = nowIso()): RoleSpec {
@@ -809,13 +841,18 @@ function arrayFrontmatter(frontmatter: Record<string, unknown>, key: string): st
 
 function parseOrigin(value: unknown): RoleOrigin | undefined {
   if (!value || typeof value !== "object") return undefined;
-  const raw = value as Partial<RoleOrigin>;
-  if (!raw.kind) return undefined;
+  const raw = value as Omit<Partial<RoleOrigin>, "kind"> & { kind?: unknown };
+  const kind = normalizeRoleOriginKind(raw.kind);
+  if (!kind) return undefined;
   return {
-    kind: raw.kind,
+    kind,
     sourcePath: raw.sourcePath,
     note: raw.note,
   };
+}
+
+function normalizeRoleOriginKind(value: unknown): RoleOriginKind | undefined {
+  return value === "manual" || value === "generated" || value === "builtin" ? value : undefined;
 }
 
 function firstMarkdownParagraph(body: string): string {
@@ -824,39 +861,6 @@ function firstMarkdownParagraph(body: string): string {
     .map((part) => part.replace(/^#+\s*/, "").trim())
     .find(Boolean);
   return paragraph?.slice(0, 200) || "Reusable Pi role.";
-}
-
-function normalizeLegacySparkRoleSpec(raw: unknown, sourcePath: string): RoleSpec {
-  const candidate = raw as {
-    ref?: string;
-    id?: string;
-    name?: string;
-    source?: string;
-    scope?: string;
-    description?: string;
-    systemPrompt?: string;
-    allowedTools?: string[];
-    defaultModel?: string;
-    createdAt?: string;
-    updatedAt?: string;
-  };
-  const id = candidate.id ?? candidate.name ?? basename(sourcePath, ".json");
-  const source = normalizeRoleSource(candidate.source ?? candidate.scope) ?? "project";
-  const now = nowIso();
-  const role: RoleSpec = {
-    ref: candidate.ref ? normalizeRoleRef(candidate.ref) : createRoleRef(source, id),
-    id,
-    source: source === "builtin" ? "project" : source,
-    description: candidate.description ?? `Migrated Spark role ${id}.`,
-    systemPrompt: candidate.systemPrompt ?? candidate.description ?? `You are ${id}.`,
-    allowedTools: candidate.allowedTools,
-    defaultModel: candidate.defaultModel,
-    origin: { kind: "migrated", sourcePath },
-    createdAt: candidate.createdAt ?? now,
-    updatedAt: candidate.updatedAt ?? now,
-  };
-  validateRoleSpec(role);
-  return role;
 }
 
 export class RoleRunTimeoutError extends Error {
@@ -921,7 +925,28 @@ export function cancelRoleRun(runRef: RoleRunRef, reason?: string): boolean {
 }
 
 export function normalizeRoleRunMode(value: unknown): RoleRunMode {
-  return value === "forked" ? "forked" : "fresh";
+  if (value === undefined || value === null) return "fresh";
+  if (value === "fresh" || value === "forked") return value;
+  throw new Error(`unsupported role run mode: ${formatUnknownValue(value)}`);
+}
+
+function formatUnknownValue(value: unknown): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    value === null ||
+    value === undefined
+  )
+    return String(value);
+  if (typeof value === "bigint") return `${value}n`;
+  if (typeof value === "symbol")
+    return value.description ? `symbol:${value.description}` : "symbol";
+  try {
+    return JSON.stringify(value) ?? typeof value;
+  } catch {
+    return typeof value;
+  }
 }
 
 export function buildRoleRunPrompt(
@@ -948,6 +973,7 @@ export function buildRoleRunArgs(input: RoleRunCommandInput): string[] {
 }
 
 export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResult> {
+  if (input.signal?.aborted) throw new RoleRunCancelledError(abortSignalReason(input.signal));
   const mode = normalizeRoleRunMode(input.mode);
   const startedAt = input.now?.() ?? nowIso();
   const child = spawn(input.piCommand, buildRoleRunArgs(input), {
@@ -976,8 +1002,9 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
   };
   activeRoleRuns.set(input.runRef, activeRun);
 
-  const abort = () => activeRun.cancel("abort");
+  const abort = () => activeRun.cancel(abortSignalReason(input.signal));
   input.signal?.addEventListener("abort", abort, { once: true });
+  if (input.signal?.aborted) abort();
 
   try {
     const timeoutMs = input.timeoutMs ?? 600_000;
@@ -1043,4 +1070,11 @@ export function parsePiJsonlEvents(text: string): unknown[] {
     }
   }
   return events;
+}
+
+function abortSignalReason(signal: AbortSignal | undefined): string {
+  const reason = (signal as { reason?: unknown } | undefined)?.reason;
+  if (reason instanceof Error) return reason.message;
+  if (typeof reason === "string" && reason.trim()) return reason.trim();
+  return "abort";
 }

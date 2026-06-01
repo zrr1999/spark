@@ -1,11 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 
 import {
   DependencyError,
   NotFoundError,
   assertRef,
+  formatJsonFile,
+  isFileNotFoundError,
+  parseJsonFileText,
+  readJsonFileOptional,
   type RoleRef,
   type ArtifactRef,
   type RunRef,
@@ -20,24 +24,26 @@ import {
   type TaskKind,
   type TaskPlan,
   type TaskPlanIssue,
+  type TaskPlanIssueKind,
   type TaskPlanReadiness,
   type TaskProposal,
   type TaskRef,
   type TaskRun,
   type TaskTodo,
   type TaskTodoStatus,
-  type Thread,
-  type ThreadRef,
-  type ThreadStatus,
+  type Project,
+  type ProjectRef,
+  type ProjectStatus,
   newRef,
   nowIso,
   stableId,
+  writeJsonFileAtomic,
 } from "spark-core";
 
-export interface CreateThreadInput {
+export interface CreateProjectInput {
   title: string;
   description: string;
-  status?: ThreadStatus;
+  status?: ProjectStatus;
   outputLanguage?: "zh" | "en";
 }
 
@@ -50,7 +56,7 @@ export interface CreateTaskTodoInput {
 }
 
 export interface CreateTaskInput {
-  threadRef: ThreadRef;
+  projectRef: ProjectRef;
   /** Simple handle used as @name in Pi TUI and tool references. */
   name?: string;
   title: string;
@@ -58,9 +64,6 @@ export interface CreateTaskInput {
   kind?: TaskKind;
   status?: Task["status"];
   roleRef?: RoleRef;
-  /** @deprecated use roleRef. */
-  agentRef?: RoleRef | `agent:${string}`;
-  claimedBySession?: string;
   finishedBy?: TaskAttribution;
   cancellation?: TaskCancellation;
   supersededBy?: TaskRef[];
@@ -69,7 +72,7 @@ export interface CreateTaskInput {
   plan?: TaskPlan;
   /**
    * Seed durable TODOs for this task. TaskGraphStore intentionally keeps TODOs
-   * out of thread.json; persist them through TaskTodoStore.
+   * out of projects.json; persist them through TaskTodoStore.
    */
   todos?: CreateTaskTodoInput[];
 }
@@ -78,11 +81,7 @@ export interface ClaimTaskInput {
   kind: TaskClaimKind;
   claimedBy: string;
   roleRef?: RoleRef;
-  /** @deprecated use roleRef. */
-  agentRef?: RoleRef | `agent:${string}`;
   runName?: string;
-  /** @deprecated use runName. */
-  agentName?: string;
   sessionId?: string;
   runRef?: RunRef;
   leaseMs: number;
@@ -107,7 +106,7 @@ export interface TaskTodoSummary {
   active?: string;
 }
 
-export interface ThreadTodoSummary extends TaskTodoSummary {
+export interface ProjectTodoSummary extends TaskTodoSummary {
   tasksWithTodos: number;
 }
 
@@ -130,8 +129,47 @@ export interface TaskTodoOp {
   blockedBy?: string[];
 }
 
+export type SessionTodoStatus = TaskTodoStatus;
+
+export interface SessionTodoEntry {
+  id?: string;
+  /** Permanent display number within the Pi session; not a row-position ordinal. */
+  displayNumber?: number;
+  content: string;
+  status: SessionTodoStatus;
+  notes?: string[];
+  blockedBy?: string[];
+  createdAt?: string;
+  updatedAt?: string;
+  deletedAt?: string;
+}
+
+export function independentTodoDisplayKey(todo: SessionTodoEntry): string {
+  return `independent:${todo.id ?? stableId(todo.content)}`;
+}
+
+export function isActiveSessionTodo(todo: Pick<SessionTodoEntry, "status">): boolean {
+  return todo.status !== "done" && todo.status !== "cancelled" && todo.status !== "deleted";
+}
+
+export function isDeletedSessionTodo(todo: Pick<SessionTodoEntry, "status">): boolean {
+  return todo.status === "deleted";
+}
+
+export function applyIndependentTodoOps(
+  todos: SessionTodoEntry[],
+  ops: TaskTodoOp[],
+): SessionTodoEntry[] {
+  return applyTodoListOps(todos, ops, {
+    createItem: materializeIndependentTodo,
+    createNotFoundError: (id, content) =>
+      new Error(id ? `todo id not found: ${id}` : `todo item not found: ${content}`),
+    isLiveForProgress: (todo) => todo.status !== "deleted" && todo.status !== "cancelled",
+  });
+}
+
 export interface TaskGraphSnapshot {
-  threads: Thread[];
+  projects: Project[];
   tasks: Task[];
   dependencies: TaskDependency[];
   runs: TaskRun[];
@@ -145,8 +183,6 @@ export interface TaskPlanInput {
   kind?: TaskKind;
   status?: Task["status"];
   roleRef?: RoleRef;
-  /** @deprecated use roleRef. */
-  agentRef?: RoleRef | `agent:${string}`;
   supersededBy?: TaskRef[];
   dependsOn?: Array<TaskRef | string>;
   rationale?: string;
@@ -160,9 +196,31 @@ export interface TaskPlanResult {
   dependencies: TaskDependency[];
 }
 
+export interface NonConcreteTaskIssue {
+  name?: string;
+  title: string;
+  message: string;
+}
+
+export interface TaskPlanDecisionResult {
+  asked: false;
+  accepted: boolean;
+  blocked: boolean;
+  plan?: TaskPlan;
+  issues: TaskPlanIssue[];
+  summary?: string;
+}
+
 export interface TaskTodoStoreSnapshot {
   version: 1;
   todos: TaskTodo[];
+}
+
+type TaskTodoStoreEntry = Pick<TaskTodo, "taskRef" | "content" | "status"> & Partial<TaskTodo>;
+
+interface LoadableTaskTodoStoreSnapshot {
+  version: 1;
+  todos: TaskTodoStoreEntry[];
 }
 
 export interface TaskGraphStoreLockOptions {
@@ -204,11 +262,41 @@ export class TaskGraphStoreLockTimeoutError extends Error {
   }
 }
 
+export class TaskGraphStoreLockOwnerFormatError extends Error {
+  readonly filePath: string;
+
+  constructor(filePath: string, message: string) {
+    super(`invalid Spark task graph lock owner: ${filePath}: ${message}`);
+    this.name = "TaskGraphStoreLockOwnerFormatError";
+    this.filePath = filePath;
+  }
+}
+
+export class TaskGraphStoreFormatError extends Error {
+  readonly filePath: string;
+
+  constructor(filePath: string, message: string) {
+    super(`invalid Spark task graph store: ${filePath}: ${message}`);
+    this.name = "TaskGraphStoreFormatError";
+    this.filePath = filePath;
+  }
+}
+
+export class TaskTodoStoreFormatError extends Error {
+  readonly filePath: string;
+
+  constructor(filePath: string, message: string) {
+    super(`invalid Spark task TODO store: ${filePath}: ${message}`);
+    this.name = "TaskTodoStoreFormatError";
+    this.filePath = filePath;
+  }
+}
+
 const taskGraphSourceHashes = new WeakMap<TaskGraph, string>();
 const taskGraphStoreLockDepth = new AsyncLocalStorage<number>();
 
 export class TaskGraph {
-  #threads = new Map<ThreadRef, Thread>();
+  #projects = new Map<ProjectRef, Project>();
   #tasks = new Map<TaskRef, Task>();
   #dependencies: TaskDependency[] = [];
   #runs = new Map<string, TaskRun>();
@@ -216,7 +304,8 @@ export class TaskGraph {
 
   static fromSnapshot(snapshot: TaskGraphSnapshot): TaskGraph {
     const graph = new TaskGraph();
-    for (const thread of snapshot.threads) graph.#threads.set(thread.ref, normalizeThread(thread));
+    for (const project of snapshot.projects)
+      graph.#projects.set(project.ref, normalizeProject(project));
     for (const task of snapshot.tasks) graph.#tasks.set(task.ref, normalizeTask(task));
     graph.#dependencies = snapshot.dependencies ?? [];
     for (const run of snapshot.runs ?? []) graph.#runs.set(run.ref, normalizeTaskRun(run));
@@ -225,57 +314,50 @@ export class TaskGraph {
 
   snapshot(): TaskGraphSnapshot {
     return {
-      threads: this.threads(),
+      projects: this.projects(),
       tasks: this.tasks(),
       dependencies: this.dependencies(),
       runs: this.runs(),
     };
   }
 
-  createThread(input: CreateThreadInput): Thread {
-    if (!input.title.trim()) throw new Error("thread title is required");
+  createProject(input: CreateProjectInput): Project {
+    if (!input.title.trim()) throw new Error("project title is required");
     const now = nowIso();
-    const thread: Thread = {
-      ref: newRef("thread"),
+    const project: Project = {
+      ref: newRef("proj"),
       title: input.title,
       description: input.description,
-      status: normalizeThreadStatus(input.status),
+      status: normalizeProjectStatus(input.status),
       outputLanguage: input.outputLanguage,
       createdAt: now,
       updatedAt: now,
     };
-    this.#threads.set(thread.ref, thread);
-    return thread;
+    this.#projects.set(project.ref, project);
+    return project;
   }
 
   createTask(input: CreateTaskInput): Task {
-    this.getThread(input.threadRef);
+    this.getProject(input.projectRef);
     if (!input.title.trim()) throw new Error("task title is required");
     const now = nowIso();
     const name = uniqueTaskName(
       input.name?.trim() || taskNameFromTitle(input.title),
-      new Set(this.tasks(input.threadRef).map((task) => task.name)),
+      new Set(this.tasks(input.projectRef).map((task) => task.name)),
     );
     const supersededBy = normalizeTaskRefs(input.supersededBy);
-    const requestedStatus =
-      input.status ??
-      (input.kind === "interaction"
-        ? "running"
-        : normalizeRoleRefCompat(input.roleRef ?? input.agentRef)
-          ? "pending"
-          : "proposed");
+    const requestedStatus = input.status ?? (input.kind === "interaction" ? "running" : "ready");
     const status =
       supersededBy.length > 0 && requestedStatus !== "done" ? "cancelled" : requestedStatus;
     const task: Task = {
       ref: newRef("task"),
-      threadRef: input.threadRef,
+      projectRef: input.projectRef,
       name,
       title: input.title,
       description: input.description,
       kind: input.kind ?? "generic",
       status,
-      roleRef: normalizeRoleRefCompat(input.roleRef ?? input.agentRef),
-      claimedBySession: isUnfinishedTaskStatus(status) ? input.claimedBySession : undefined,
+      roleRef: normalizeRoleRef(input.roleRef),
       finishedBy: input.finishedBy,
       cancellation:
         status === "cancelled"
@@ -296,7 +378,7 @@ export class TaskGraph {
 
   acceptProposal(proposal: TaskProposal): Task {
     const task = this.createTask({
-      threadRef: proposal.threadRef,
+      projectRef: proposal.projectRef,
       title: proposal.title,
       description: proposal.description,
       kind: proposal.kind,
@@ -306,20 +388,20 @@ export class TaskGraph {
     return task;
   }
 
-  planTasks(threadRef: ThreadRef, inputs: TaskPlanInput[]): TaskPlanResult {
-    this.getThread(threadRef);
+  planTasks(projectRef: ProjectRef, inputs: TaskPlanInput[]): TaskPlanResult {
+    this.getProject(projectRef);
     const created: Task[] = [];
     const updated: Task[] = [];
     const skipped: Task[] = [];
     const dependencies: TaskDependency[] = [];
-    const refsByKey = taskLookup(this.tasks(threadRef));
+    const refsByKey = taskLookup(this.tasks(projectRef));
     for (const input of inputs) {
       const title = input.title.trim();
       const description = input.description.trim();
       const name = input.name?.trim();
       if (!title) throw new Error("task title is required");
       if (!description) throw new Error(`task description is required: ${title}`);
-      const existing = this.tasks(threadRef).find(
+      const existing = this.tasks(projectRef).find(
         (task) => (name && task.name === name) || task.title === title,
       );
       const task = existing
@@ -329,18 +411,18 @@ export class TaskGraph {
             description,
             kind: input.kind ?? existing.kind,
             status: input.status ?? existing.status,
-            roleRef: normalizeRoleRefCompat(input.roleRef ?? input.agentRef ?? existing.roleRef),
+            roleRef: normalizeRoleRef(input.roleRef ?? existing.roleRef),
             supersededBy: input.supersededBy ?? existing.supersededBy,
             plan: normalizeTaskPlan(input.plan, description, title),
           })
         : this.createTask({
-            threadRef,
+            projectRef,
             name,
             title,
             description,
             kind: input.kind,
             status: input.status,
-            roleRef: normalizeRoleRefCompat(input.roleRef ?? input.agentRef),
+            roleRef: normalizeRoleRef(input.roleRef),
             supersededBy: input.supersededBy,
             plan: normalizeTaskPlan(input.plan, description, title),
           });
@@ -370,17 +452,12 @@ export class TaskGraph {
     return { created, updated, skipped, dependencies };
   }
 
-  bindAgent(taskRef: TaskRef, roleRef: RoleRef): Task {
-    return this.bindRole(taskRef, roleRef);
-  }
-
   bindRole(taskRef: TaskRef, roleRef: RoleRef): Task {
     const task = this.getTask(taskRef);
     this.assertDependenciesDone(task);
     const updated: Task = {
       ...task,
       roleRef,
-      status: task.status === "proposed" ? "pending" : task.status,
       updatedAt: nowIso(),
     };
     this.#tasks.set(taskRef, updated);
@@ -409,7 +486,6 @@ export class TaskGraph {
     const updated = {
       ...task,
       status,
-      claimedBySession: isUnfinishedTaskStatus(status) ? task.claimedBySession : undefined,
       finishedBy: isUnfinishedTaskStatus(status)
         ? task.finishedBy
         : (task.finishedBy ?? attributionFromTask(task)),
@@ -418,9 +494,12 @@ export class TaskGraph {
       updatedAt: now,
     };
     this.#tasks.set(taskRef, updated);
-    if (this.getThread(task.threadRef).currentTaskRef === taskRef && !isOpenContextTask(updated)) {
-      const replacement = this.findOpenContextTask(task.threadRef, taskRef);
-      this.setCurrentTask(task.threadRef, replacement?.ref);
+    if (
+      this.getProject(task.projectRef).currentTaskRef === taskRef &&
+      !isOpenContextTask(updated)
+    ) {
+      const replacement = this.findOpenContextTask(task.projectRef, taskRef);
+      this.setCurrentTask(task.projectRef, replacement?.ref);
     }
     return updated;
   }
@@ -433,8 +512,8 @@ export class TaskGraph {
     const claimedBy = input.claimedBy.trim();
     if (!claimedBy) throw new Error("task claim claimedBy is required");
     this.assertDependenciesDone(task);
-    const roleRef = normalizeRoleRefCompat(input.roleRef ?? input.agentRef ?? task.roleRef);
-    const runName = (input.runName ?? input.agentName ?? task.claim?.runName)?.trim() || undefined;
+    const roleRef = normalizeRoleRef(input.roleRef ?? task.roleRef);
+    const runName = input.runName?.trim() || task.claim?.runName;
     const sessionId = input.sessionId?.trim() || undefined;
     const requestedClaimScope = claimScopeForInput({
       kind: input.kind,
@@ -475,7 +554,6 @@ export class TaskGraph {
       ...task,
       roleRef: task.roleRef,
       status: isUnfinishedTaskStatus(task.status) ? "running" : task.status,
-      claimedBySession: sessionId ?? task.claimedBySession,
       claim,
       updatedAt: now,
     };
@@ -508,7 +586,6 @@ export class TaskGraph {
     const updated: Task = {
       ...task,
       claim: undefined,
-      claimedBySession: undefined,
       status: task.status === "running" ? "pending" : task.status,
       updatedAt: nowIso(),
     };
@@ -535,7 +612,6 @@ export class TaskGraph {
       const updated: Task = {
         ...task,
         claim: undefined,
-        claimedBySession: undefined,
         status: task.status === "running" ? "pending" : task.status,
         updatedAt: now,
       };
@@ -572,7 +648,6 @@ export class TaskGraph {
         | "kind"
         | "status"
         | "roleRef"
-        | "claimedBySession"
         | "finishedBy"
         | "cancellation"
         | "supersededBy"
@@ -603,10 +678,7 @@ export class TaskGraph {
       description: patch.description ?? task.description,
       kind: patch.kind ?? task.kind,
       status,
-      roleRef: normalizeRoleRefCompat(patch.roleRef ?? task.roleRef),
-      claimedBySession: isUnfinishedTaskStatus(status)
-        ? (patch.claimedBySession ?? task.claimedBySession)
-        : undefined,
+      roleRef: normalizeRoleRef(patch.roleRef ?? task.roleRef),
       finishedBy: isUnfinishedTaskStatus(status)
         ? (patch.finishedBy ?? task.finishedBy)
         : (patch.finishedBy ?? task.finishedBy ?? attributionFromTask({ ...task, ...patch })),
@@ -621,7 +693,7 @@ export class TaskGraph {
       updatedAt: now,
     };
     assertTaskName(updated.name);
-    assertUniqueTaskName(this.tasks(task.threadRef), updated.name, taskRef);
+    assertUniqueTaskName(this.tasks(task.projectRef), updated.name, taskRef);
     if (!updated.title.trim()) throw new Error("task title is required");
     if (!updated.description.trim()) throw new Error("task description is required");
     this.#tasks.set(taskRef, updated);
@@ -638,27 +710,27 @@ export class TaskGraph {
     return updated;
   }
 
-  setCurrentTask(threadRef: ThreadRef, taskRef?: TaskRef): Thread {
-    const thread = this.getThread(threadRef);
+  setCurrentTask(projectRef: ProjectRef, taskRef?: TaskRef): Project {
+    const project = this.getProject(projectRef);
     if (taskRef) {
       const task = this.getTask(taskRef);
-      if (task.threadRef !== threadRef)
-        throw new DependencyError("current task must belong to thread");
+      if (task.projectRef !== projectRef)
+        throw new DependencyError("current task must belong to project");
     }
-    const updated: Thread = {
-      ...thread,
+    const updated: Project = {
+      ...project,
       currentTaskRef: taskRef,
       updatedAt: nowIso(),
     };
-    this.#threads.set(threadRef, updated);
+    this.#projects.set(projectRef, updated);
     return updated;
   }
 
-  currentTask(threadRef: ThreadRef): Task | undefined {
-    const thread = this.getThread(threadRef);
-    if (!thread.currentTaskRef) return undefined;
-    const current = this.#tasks.get(thread.currentTaskRef);
-    if (current && current.threadRef === threadRef) return current;
+  currentTask(projectRef: ProjectRef): Task | undefined {
+    const project = this.getProject(projectRef);
+    if (!project.currentTaskRef) return undefined;
+    const current = this.#tasks.get(project.currentTaskRef);
+    if (current && current.projectRef === projectRef) return current;
     return undefined;
   }
 
@@ -673,9 +745,7 @@ export class TaskGraph {
   applyTodoOps(taskRef: TaskRef, ops: TaskTodoOp[]): Task {
     if (ops.length === 0) throw new Error("todo ops are required");
     const task = this.getTask(taskRef);
-    let todos = this.taskTodos(taskRef);
-    for (const op of ops) todos = applyTodoOp(taskRef, todos, op);
-    this.#todos.set(taskRef, normalizeTodos(todos));
+    this.#todos.set(taskRef, applyTaskTodoOps(taskRef, this.taskTodos(taskRef), ops));
     const updated: Task = { ...task, updatedAt: nowIso() };
     this.#tasks.set(taskRef, updated);
     return updated;
@@ -707,8 +777,8 @@ export class TaskGraph {
     return summarizeTodos(this.taskTodos(taskRef));
   }
 
-  threadTodoSummary(threadRef: ThreadRef): ThreadTodoSummary {
-    const tasks = this.tasks(threadRef);
+  projectTodoSummary(projectRef: ProjectRef): ProjectTodoSummary {
+    const tasks = this.tasks(projectRef);
     const allTodos = tasks.flatMap((task) => this.taskTodos(task.ref));
     return {
       ...summarizeTodos(allTodos),
@@ -719,8 +789,8 @@ export class TaskGraph {
   addDependency(taskRef: TaskRef, dependsOn: TaskRef): TaskDependency {
     const task = this.getTask(taskRef);
     const prerequisite = this.getTask(dependsOn);
-    if (task.threadRef !== prerequisite.threadRef)
-      throw new DependencyError("task dependencies cannot cross threads");
+    if (task.projectRef !== prerequisite.projectRef)
+      throw new DependencyError("task dependencies cannot cross projects");
     if (taskRef === dependsOn) throw new DependencyError("task cannot depend on itself");
     if (prerequisite.status === "cancelled" && task.status !== "cancelled")
       throw new DependencyError(
@@ -732,11 +802,14 @@ export class TaskGraph {
     const next = [...this.#dependencies, dependency];
     assertAcyclic(next);
     this.#dependencies = next;
+    if (task.status === "ready" && prerequisite.status !== "done") {
+      this.#tasks.set(taskRef, { ...task, status: "pending", updatedAt: nowIso() });
+    }
     return dependency;
   }
 
-  readyTasks(threadRef?: ThreadRef): Task[] {
-    const tasks = this.tasks(threadRef);
+  readyTasks(projectRef?: ProjectRef): Task[] {
+    const tasks = this.tasks(projectRef);
     const done = new Set(tasks.filter((task) => task.status === "done").map((task) => task.ref));
     return tasks.filter((task) => {
       if (task.status !== "pending" && task.status !== "ready") return false;
@@ -751,8 +824,8 @@ export class TaskGraph {
     return taskPlanReadiness(this.getTask(taskRef));
   }
 
-  enqueueReadyTasks(threadRef?: ThreadRef): Task[] {
-    return this.readyTasks(threadRef).map((task) => this.setTaskStatus(task.ref, "ready"));
+  enqueueReadyTasks(projectRef?: ProjectRef): Task[] {
+    return this.readyTasks(projectRef).map((task) => this.setTaskStatus(task.ref, "ready"));
   }
 
   unmetDependencies(taskRef: TaskRef): Task[] {
@@ -802,30 +875,30 @@ export class TaskGraph {
     );
   }
 
-  getThread(ref: ThreadRef): Thread {
-    const thread = this.#threads.get(ref);
-    if (!thread) throw new NotFoundError(`unknown thread: ${ref}`);
-    return thread;
+  getProject(ref: ProjectRef): Project {
+    const project = this.#projects.get(ref);
+    if (!project) throw new NotFoundError(`unknown project: ${ref}`);
+    return project;
   }
 
-  updateThread(
-    threadRef: ThreadRef,
-    patch: Partial<Pick<Thread, "title" | "description" | "status" | "outputLanguage">>,
-  ): Thread {
-    const thread = this.getThread(threadRef);
-    const title = patch.title ?? thread.title;
-    const description = patch.description ?? thread.description;
-    if (!title.trim()) throw new Error("thread title is required");
-    if (!description.trim()) throw new Error("thread description is required");
-    const updated: Thread = {
-      ...thread,
+  updateProject(
+    projectRef: ProjectRef,
+    patch: Partial<Pick<Project, "title" | "description" | "status" | "outputLanguage">>,
+  ): Project {
+    const project = this.getProject(projectRef);
+    const title = patch.title ?? project.title;
+    const description = patch.description ?? project.description;
+    if (!title.trim()) throw new Error("project title is required");
+    if (!description.trim()) throw new Error("project description is required");
+    const updated: Project = {
+      ...project,
       title,
       description,
-      status: normalizeThreadStatus(patch.status ?? thread.status),
-      outputLanguage: patch.outputLanguage ?? thread.outputLanguage,
+      status: normalizeProjectStatus(patch.status ?? project.status),
+      outputLanguage: patch.outputLanguage ?? project.outputLanguage,
       updatedAt: nowIso(),
     };
-    this.#threads.set(threadRef, updated);
+    this.#projects.set(projectRef, updated);
     return updated;
   }
 
@@ -835,30 +908,30 @@ export class TaskGraph {
     return task;
   }
 
-  threads(): Thread[] {
-    return [...this.#threads.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  projects(): Project[] {
+    return [...this.#projects.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
-  tasks(threadRef?: ThreadRef): Task[] {
+  tasks(projectRef?: ProjectRef): Task[] {
     return [...this.#tasks.values()]
-      .filter((task) => !threadRef || task.threadRef === threadRef)
+      .filter((task) => !projectRef || task.projectRef === projectRef)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
-  dependencies(threadRef?: ThreadRef): TaskDependency[] {
-    if (!threadRef) return [...this.#dependencies];
-    const refs = new Set(this.tasks(threadRef).map((task) => task.ref));
+  dependencies(projectRef?: ProjectRef): TaskDependency[] {
+    if (!projectRef) return [...this.#dependencies];
+    const refs = new Set(this.tasks(projectRef).map((task) => task.ref));
     return this.#dependencies.filter((dep) => refs.has(dep.taskRef));
   }
 
-  runs(threadRef?: ThreadRef): TaskRun[] {
+  runs(projectRef?: ProjectRef): TaskRun[] {
     return [...this.#runs.values()]
-      .filter((run) => !threadRef || run.threadRef === threadRef)
+      .filter((run) => !projectRef || run.projectRef === projectRef)
       .sort((a, b) => (a.startedAt ?? "").localeCompare(b.startedAt ?? ""));
   }
 
-  findOpenContextTask(threadRef: ThreadRef, excludeTaskRef?: TaskRef): Task | undefined {
-    return this.tasks(threadRef).find(
+  findOpenContextTask(projectRef: ProjectRef, excludeTaskRef?: TaskRef): Task | undefined {
+    return this.tasks(projectRef).find(
       (task) =>
         task.ref !== excludeTaskRef && task.kind === "interaction" && isOpenContextTask(task),
     );
@@ -886,22 +959,32 @@ export class TaskGraphStore {
   }
 
   private async saveUnlocked(graph: TaskGraph): Promise<void> {
-    await mkdir(dirname(this.filePath), { recursive: true });
-    const data = serializeTaskGraph(graph);
-    await atomicWriteFile(this.filePath, data);
+    const snapshot = graph.snapshot();
+    const data = formatJsonFile(snapshot);
+    await writeJsonFileAtomic(this.filePath, snapshot);
     taskGraphSourceHashes.set(graph, stableId(data));
   }
 
   async load(): Promise<TaskGraph | null> {
+    let data: string;
     try {
-      const data = await readFile(this.filePath, "utf8");
-      const graph = TaskGraph.fromSnapshot(JSON.parse(data) as TaskGraphSnapshot);
-      taskGraphSourceHashes.set(graph, stableId(data));
-      return graph;
+      data = await readFile(this.filePath, "utf8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      if (isFileNotFoundError(error)) return null;
       throw error;
     }
+    const snapshot = parseTaskGraphStoreJson(data, this.filePath);
+    let graph: TaskGraph;
+    try {
+      graph = TaskGraph.fromSnapshot(snapshot as TaskGraphSnapshot);
+    } catch (error) {
+      throw new TaskGraphStoreFormatError(
+        this.filePath,
+        `not valid task graph snapshot: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    taskGraphSourceHashes.set(graph, stableId(data));
+    return graph;
   }
 
   async withLock<T>(fn: () => T | Promise<T>, options: TaskGraphStoreLockOptions = {}): Promise<T> {
@@ -943,35 +1026,26 @@ export class TaskGraphStore {
       const current = await readFile(this.filePath, "utf8");
       if (stableId(current) !== sourceHash) throw new TaskGraphStoreConflictError(this.filePath);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT")
-        throw new TaskGraphStoreConflictError(this.filePath);
+      if (isFileNotFoundError(error)) throw new TaskGraphStoreConflictError(this.filePath);
       throw error;
     }
   }
 }
 
 export function defaultTaskGraphStore(cwd: string): TaskGraphStore {
-  return new TaskGraphStore(join(cwd, ".spark", "thread.json"));
+  return new TaskGraphStore(join(cwd, ".spark", "projects.json"));
 }
 
-function serializeTaskGraph(graph: TaskGraph): string {
-  return `${JSON.stringify(graph.snapshot(), null, 2)}\n`;
-}
-
-async function atomicWriteFile(filePath: string, data: string): Promise<void> {
-  const dir = dirname(filePath);
-  await mkdir(dir, { recursive: true });
-  const tmpPath = join(
-    dir,
-    `.${basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
+function parseTaskGraphStoreJson(text: string, filePath: string): unknown {
+  const raw = parseJsonFileText(
+    text,
+    filePath,
+    (path, message) => new TaskGraphStoreFormatError(path, message),
   );
-  try {
-    await writeFile(tmpPath, data, "utf8");
-    await rename(tmpPath, filePath);
-  } catch (error) {
-    await rm(tmpPath, { force: true }).catch(() => undefined);
-    throw error;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new TaskGraphStoreFormatError(filePath, "JSON root must be an object");
   }
+  return raw;
 }
 
 async function acquireTaskGraphStoreLock(
@@ -999,19 +1073,29 @@ async function acquireTaskGraphStoreLock(
   while (true) {
     try {
       await mkdir(lockPath, { recursive: false });
-      await writeFile(ownerPath, ownerJson(), "utf8");
+      await writeLockOwnerFile(ownerPath, ownerJson());
       const refreshMs =
         staleMs > 0 ? Math.max(1_000, Math.min(30_000, Math.floor(staleMs / 3))) : undefined;
+      let heartbeatError: unknown;
+      let heartbeatWrite: Promise<void> | undefined;
       const refreshTimer = refreshMs
         ? setInterval(() => {
-            void writeFile(ownerPath, ownerJson(), "utf8").catch(() => undefined);
+            heartbeatWrite = writeLockOwnerFile(ownerPath, ownerJson()).catch((error) => {
+              heartbeatError = error;
+            });
           }, refreshMs)
         : undefined;
       refreshTimer?.unref?.();
       return async () => {
         if (refreshTimer) clearInterval(refreshTimer);
+        await heartbeatWrite;
         if (await lockOwnerMatches(ownerPath, ownerId))
           await rm(lockPath, { recursive: true, force: true });
+        if (heartbeatError) {
+          throw new Error(
+            `Spark task graph lock heartbeat failed: ${unknownErrorMessage(heartbeatError)}`,
+          );
+        }
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
@@ -1019,6 +1103,17 @@ async function acquireTaskGraphStoreLock(
       if (Date.now() - started >= timeoutMs) throw new TaskGraphStoreLockTimeoutError(lockPath);
       await sleep(retryIntervalMs);
     }
+  }
+}
+
+async function writeLockOwnerFile(ownerPath: string, data: string): Promise<void> {
+  const tempPath = `${ownerPath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+  try {
+    await writeFile(tempPath, data, "utf8");
+    await rename(tempPath, ownerPath);
+  } catch (error) {
+    await rm(tempPath, { force: true });
+    throw error;
   }
 }
 
@@ -1037,16 +1132,7 @@ async function taskGraphStoreLockHeartbeatMs(lockPath: string): Promise<number> 
   const ownerPath = join(lockPath, "owner.json");
   try {
     const ownerRaw = await readFile(ownerPath, "utf8");
-    try {
-      const owner = JSON.parse(ownerRaw) as { heartbeatAt?: unknown };
-      if (typeof owner.heartbeatAt === "string") {
-        const heartbeatMs = Date.parse(owner.heartbeatAt);
-        if (Number.isFinite(heartbeatMs)) return heartbeatMs;
-      }
-    } catch {
-      // Corrupt owner metadata can still use owner.json mtime as a heartbeat fallback.
-    }
-    return (await stat(ownerPath)).mtimeMs;
+    return parseTaskGraphStoreLockOwner(ownerPath, ownerRaw).heartbeatMs;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return (await stat(lockPath)).mtimeMs;
@@ -1055,12 +1141,49 @@ async function taskGraphStoreLockHeartbeatMs(lockPath: string): Promise<number> 
 
 async function lockOwnerMatches(ownerPath: string, ownerId: string): Promise<boolean> {
   try {
-    const owner = JSON.parse(await readFile(ownerPath, "utf8")) as { ownerId?: unknown };
+    const owner = parseTaskGraphStoreLockOwner(ownerPath, await readFile(ownerPath, "utf8"));
     return owner.ownerId === ownerId;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    return false;
+    throw error;
   }
+}
+
+function parseTaskGraphStoreLockOwner(
+  filePath: string,
+  text: string,
+): { ownerId: string; heartbeatMs: number } {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    throw new TaskGraphStoreLockOwnerFormatError(
+      filePath,
+      `not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new TaskGraphStoreLockOwnerFormatError(filePath, "JSON root must be an object");
+  }
+  const owner = raw as Record<string, unknown>;
+  if (typeof owner.ownerId !== "string" || !owner.ownerId.trim()) {
+    throw new TaskGraphStoreLockOwnerFormatError(filePath, "ownerId must be a non-empty string");
+  }
+  if (typeof owner.heartbeatAt !== "string" || !owner.heartbeatAt.trim()) {
+    throw new TaskGraphStoreLockOwnerFormatError(
+      filePath,
+      "heartbeatAt must be a non-empty string",
+    );
+  }
+  const heartbeatMs = Date.parse(owner.heartbeatAt);
+  if (!Number.isFinite(heartbeatMs)) {
+    throw new TaskGraphStoreLockOwnerFormatError(filePath, "heartbeatAt must be a valid date");
+  }
+  return { ownerId: owner.ownerId, heartbeatMs };
+}
+
+function unknownErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -1082,20 +1205,17 @@ export class TaskTodoStore {
       version: 1,
       todos: Array.isArray(todos) ? cloneTodos(todos) : todos.todoSnapshot(),
     };
-    await mkdir(dirname(this.filePath), { recursive: true });
-    await writeFile(this.filePath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+    await writeJsonFileAtomic(this.filePath, snapshot);
   }
 
   async load(): Promise<TaskTodo[] | null> {
-    try {
-      const raw = JSON.parse(
-        await readFile(this.filePath, "utf8"),
-      ) as Partial<TaskTodoStoreSnapshot>;
-      return (raw.todos ?? []).map(normalizeTodo);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    }
+    const raw = await readJsonFileOptional(
+      this.filePath,
+      (path, message) => new TaskTodoStoreFormatError(path, message),
+    );
+    if (raw === undefined) return null;
+    assertTaskTodoStoreSnapshot(raw, this.filePath);
+    return (raw.todos ?? []).map(normalizeTodo);
   }
 
   async hydrate(graph: TaskGraph): Promise<boolean> {
@@ -1106,14 +1226,82 @@ export class TaskTodoStore {
   }
 }
 
-export function defaultTaskTodoStore(cwd: string, scope?: string): TaskTodoStore {
-  if (!scope) return new TaskTodoStore(join(cwd, ".spark", "todos.json"));
+export function defaultTaskTodoStore(cwd: string, scope: string): TaskTodoStore {
   return new TaskTodoStore(join(cwd, ".spark", "todos", `${sanitizeTodoStoreScope(scope)}.json`));
 }
 
 function sanitizeTodoStoreScope(scope: string): string {
   const safe = scope.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/-+/g, "-");
   return safe || "default";
+}
+
+function assertTaskTodoStoreSnapshot(
+  value: unknown,
+  filePath: string,
+): asserts value is LoadableTaskTodoStoreSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TaskTodoStoreFormatError(filePath, "JSON root must be an object");
+  }
+  const snapshot = value as { todos?: unknown; version?: unknown };
+  if (snapshot.version !== 1) {
+    throw new TaskTodoStoreFormatError(filePath, "version must be 1");
+  }
+  if (!Array.isArray(snapshot.todos)) {
+    throw new TaskTodoStoreFormatError(filePath, "todos must be an array");
+  }
+  snapshot.todos.forEach((todo, index) => {
+    assertTaskTodoStoreEntry(todo, filePath, index);
+  });
+}
+
+function assertTaskTodoStoreEntry(
+  value: unknown,
+  filePath: string,
+  index: number,
+): asserts value is TaskTodoStoreEntry {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TaskTodoStoreFormatError(filePath, `todos[${index}] must be an object`);
+  }
+  const todo = value as Partial<Record<keyof TaskTodo, unknown>>;
+  if (typeof todo.taskRef !== "string" || !todo.taskRef) {
+    throw new TaskTodoStoreFormatError(filePath, `todos[${index}].taskRef must be a string`);
+  }
+  if (typeof todo.content !== "string" || !todo.content.trim()) {
+    throw new TaskTodoStoreFormatError(filePath, `todos[${index}].content must be a string`);
+  }
+  if (!isTaskTodoStatus(todo.status)) {
+    throw new TaskTodoStoreFormatError(
+      filePath,
+      `todos[${index}].status must be a valid TODO status`,
+    );
+  }
+  if (todo.notes !== undefined && !isStringArray(todo.notes)) {
+    throw new TaskTodoStoreFormatError(filePath, `todos[${index}].notes must be a string array`);
+  }
+  if (todo.blockedBy !== undefined && !isStringArray(todo.blockedBy)) {
+    throw new TaskTodoStoreFormatError(
+      filePath,
+      `todos[${index}].blockedBy must be a string array`,
+    );
+  }
+  if (todo.deletedAt !== undefined && typeof todo.deletedAt !== "string") {
+    throw new TaskTodoStoreFormatError(filePath, `todos[${index}].deletedAt must be a string`);
+  }
+}
+
+function isTaskTodoStatus(value: unknown): value is TaskTodoStatus {
+  return (
+    value === "pending" ||
+    value === "in_progress" ||
+    value === "done" ||
+    value === "blocked" ||
+    value === "cancelled" ||
+    value === "deleted"
+  );
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
 export function assertAcyclic(dependencies: TaskDependency[]): void {
@@ -1160,9 +1348,8 @@ function claimScopeForInput(input: {
   kind: TaskClaimKind;
   sessionId?: string;
   runName?: string;
-  agentName?: string;
 }): ClaimScope {
-  return claimScopeForValues(input.kind, input.sessionId, input.runName ?? input.agentName);
+  return claimScopeForValues(input.kind, input.sessionId, input.runName);
 }
 
 function claimScopeForStoredClaim(claim: TaskClaim): ClaimScope {
@@ -1189,11 +1376,24 @@ function claimScopeForValues(
   };
 }
 
-function normalizeRoleRefCompat(
-  value: RoleRef | `agent:${string}` | undefined,
-): RoleRef | undefined {
+function normalizeRoleRef(value: RoleRef | undefined): RoleRef | undefined {
   if (!value) return undefined;
-  return (value.startsWith("agent:") ? `role:${value.slice("agent:".length)}` : value) as RoleRef;
+  return assertRef(value, "role");
+}
+
+function rejectLegacyRoleFields(value: unknown, label: string): void {
+  if (!value || typeof value !== "object") return;
+  const record = value as Record<string, unknown>;
+  if (record.agentRef !== undefined) throw new Error(`${label} uses legacy agentRef; use roleRef`);
+  if (record.agentName !== undefined)
+    throw new Error(`${label} uses legacy agentName; use runName`);
+}
+
+function rejectLegacyClaimFields(value: unknown, label: string): void {
+  if (!value || typeof value !== "object") return;
+  const record = value as Record<string, unknown>;
+  if (record.claimedBySession !== undefined)
+    throw new Error(`${label} uses legacy claimedBySession; use claim.sessionId`);
 }
 
 function taskNameFromTitle(title: string): string {
@@ -1222,7 +1422,7 @@ function uniqueTaskName(preferred: string, existing: Set<string>): string {
 
 function assertUniqueTaskName(tasks: Task[], name: string, exceptTaskRef?: TaskRef): void {
   const conflict = tasks.find((task) => task.ref !== exceptTaskRef && task.name === name);
-  if (conflict) throw new Error(`task name already exists in thread: ${name}`);
+  if (conflict) throw new Error(`task name already exists in project: ${name}`);
 }
 
 function addTaskLookup(lookup: Map<string, TaskRef>, task: Task): void {
@@ -1237,31 +1437,31 @@ function taskLookup(tasks: Task[]): Map<string, TaskRef> {
   return lookup;
 }
 
-function normalizeThread(thread: Thread): Thread {
+function normalizeProject(project: Project): Project {
   return {
-    ...thread,
-    status: normalizeThreadStatus(thread.status),
-    currentTaskRef: thread.currentTaskRef,
+    ...project,
+    status: normalizeProjectStatus(project.status),
+    currentTaskRef: project.currentTaskRef,
   };
 }
 
-function normalizeThreadStatus(status: unknown): ThreadStatus {
+function normalizeProjectStatus(status: unknown): ProjectStatus {
   return status === "done" ? "done" : "active";
 }
 
 function normalizeTask(task: Task): Task {
-  const legacy = task as Task & { agentRef?: RoleRef | `agent:${string}` };
+  rejectLegacyRoleFields(task, "task");
+  rejectLegacyClaimFields(task, "task");
   const claim = isUnfinishedTaskStatus(task.status) ? normalizeTaskClaim(task.claim) : undefined;
   return {
     ref: task.ref,
-    threadRef: task.threadRef,
+    projectRef: task.projectRef,
     name: task.name ?? taskNameFromTitle(task.title),
     title: task.title,
     description: task.description,
     kind: task.kind,
     status: task.status,
-    roleRef: normalizeRoleRefCompat(task.roleRef ?? legacy.agentRef),
-    claimedBySession: claim?.sessionId,
+    roleRef: normalizeRoleRef(task.roleRef),
     finishedBy: normalizeTaskAttribution(task.finishedBy),
     cancellation:
       task.status === "cancelled"
@@ -1279,8 +1479,8 @@ function normalizeTask(task: Task): Task {
   };
 }
 
-function normalizeTaskPlan(
-  plan: TaskPlan | undefined,
+export function normalizeTaskPlan(
+  plan: Partial<TaskPlan> | undefined,
   description: string,
   title: string,
 ): TaskPlan {
@@ -1302,63 +1502,170 @@ function normalizeTaskPlan(
   };
 }
 
+export function collectNonConcreteTaskIssues(
+  tasks: readonly TaskPlanInput[],
+): NonConcreteTaskIssue[] {
+  return tasks.flatMap((task) => {
+    const message = nonConcreteTaskMessage(task);
+    return message ? [{ name: task.name, title: task.title, message }] : [];
+  });
+}
+
+export function renderNonConcreteTaskIssues(issues: readonly NonConcreteTaskIssue[]): string {
+  return [
+    "task_not_concrete: Spark tasks must be concrete executable/review/validation work, not standalone design/planning placeholders.",
+    ...issues.map((issue) => `- @${issue.name ?? "unnamed"}: ${issue.title} - ${issue.message}`),
+    "Discuss design/architecture decisions with the user first, then embed the chosen design in each concrete task.plan.",
+  ].join("\n");
+}
+
+function nonConcreteTaskMessage(task: TaskPlanInput): string | undefined {
+  if (task.status === "cancelled" || task.status === "done") return undefined;
+  if (task.kind === "plan")
+    return "kind=plan is reserved for planning logic; create concrete implement/review/research/validation work and put design details in task.plan";
+  const title = task.title.trim();
+  if (/^(设计|规划)(\s|[:：]|$)/u.test(title))
+    return "title starts with a design/planning verb; discuss the design with the user, then create concrete implementation/review/validation tasks";
+  if (/^(design|plan)(\s|[:：-]|$)/iu.test(title))
+    return "title starts with a design/planning verb; discuss the design with the user, then create concrete implementation/review/validation tasks";
+  return undefined;
+}
+
+export interface TaskPlanReadinessRule {
+  kind: TaskPlanIssueKind;
+  severity: TaskPlanIssue["severity"];
+  message: string;
+  remediation: string;
+  description: string;
+}
+
+export const TASK_PLAN_READINESS_RULES: readonly TaskPlanReadinessRule[] = [
+  {
+    kind: "missing_plan",
+    severity: "blocking",
+    message: "Task has no bound plan.",
+    remediation:
+      "Add a concrete plan with objective, success criteria, evidence requirements, and steps.",
+    description: "the task must have a bound plan.",
+  },
+  {
+    kind: "missing_objective",
+    severity: "blocking",
+    message: "Task plan needs an objective.",
+    remediation: "Fill plan.objective with the specific outcome this task should achieve.",
+    description: "plan.objective must be non-empty.",
+  },
+  {
+    kind: "missing_success_criteria",
+    severity: "blocking",
+    message: "Task plan needs success criteria.",
+    remediation: "Add at least one observable entry to plan.successCriteria.",
+    description: "plan.successCriteria must include at least one observable success criterion.",
+  },
+  {
+    kind: "missing_evidence_required",
+    severity: "blocking",
+    message: "Task plan needs evidence requirements.",
+    remediation:
+      "Add at least one concrete validation artifact or command to plan.evidenceRequired.",
+    description:
+      "plan.evidenceRequired must include at least one concrete evidence item required before completion.",
+  },
+  {
+    kind: "missing_steps",
+    severity: "blocking",
+    message: "Task plan needs execution steps.",
+    remediation: "Add at least one concrete execution step to plan.steps.",
+    description: "plan.steps must include at least one execution step.",
+  },
+  {
+    kind: "open_questions",
+    severity: "blocking",
+    message: "Task plan has unresolved questions.",
+    remediation:
+      "Resolve material questions with spark_ask, then move decisions into askRefs or the plan body.",
+    description:
+      "plan.openQuestions must be empty; resolve material questions through context-specific spark_ask artifacts before planning.",
+  },
+];
+
+const TASK_PLAN_READINESS_RULE_BY_KIND = new Map(
+  TASK_PLAN_READINESS_RULES.map((rule) => [rule.kind, rule]),
+);
+
+export function renderTaskPlanReadinessRules(): string {
+  const warningOnly = TASK_PLAN_READINESS_RULES.filter((rule) => rule.severity === "warning");
+  const severityLine =
+    warningOnly.length === 0
+      ? "- TaskPlanIssue kinds currently have no warning-only entries; every current kind below is blocking."
+      : `- Warning-only TaskPlanIssue kinds: ${warningOnly.map((rule) => rule.kind).join(", ")}.`;
+  return [
+    severityLine,
+    ...TASK_PLAN_READINESS_RULES.map((rule) => `- ${rule.kind}: ${rule.description}`),
+  ].join("\n");
+}
+
 export function taskPlanReadiness(task: Pick<Task, "plan" | "status">): TaskPlanReadiness {
   if (task.status === "cancelled") return { ready: true, issues: [] };
   const issues: TaskPlanIssue[] = [];
   const plan = task.plan;
   if (!plan) {
-    issues.push({
-      kind: "missing_plan",
-      severity: "blocking",
-      message: "Task has no bound plan.",
-      remediation:
-        "Add a concrete plan with objective, success criteria, evidence requirements, and steps.",
-    });
+    issues.push(taskPlanIssue("missing_plan"));
     return { ready: false, issues };
   }
   if (!plan.objective.trim()) {
-    issues.push({
-      kind: "missing_objective",
-      severity: "blocking",
-      message: "Task plan needs an objective.",
-      remediation: "Fill plan.objective with the specific outcome this task should achieve.",
-    });
+    issues.push(taskPlanIssue("missing_objective"));
   }
   if (plan.successCriteria.length === 0) {
-    issues.push({
-      kind: "missing_success_criteria",
-      severity: "blocking",
-      message: "Task plan needs success criteria.",
-      remediation: "Add at least one observable entry to plan.successCriteria.",
-    });
+    issues.push(taskPlanIssue("missing_success_criteria"));
   }
   if (plan.evidenceRequired.length === 0) {
-    issues.push({
-      kind: "missing_evidence_required",
-      severity: "blocking",
-      message: "Task plan needs evidence requirements.",
-      remediation:
-        "Add at least one concrete validation artifact or command to plan.evidenceRequired.",
-    });
+    issues.push(taskPlanIssue("missing_evidence_required"));
   }
   if (plan.steps.length === 0) {
-    issues.push({
-      kind: "missing_steps",
-      severity: "blocking",
-      message: "Task plan needs execution steps.",
-      remediation: "Add at least one concrete execution step to plan.steps.",
-    });
+    issues.push(taskPlanIssue("missing_steps"));
   }
   if (plan.openQuestions.length > 0) {
-    issues.push({
-      kind: "open_questions",
-      severity: "blocking",
-      message: `Task plan has unresolved questions: ${plan.openQuestions.join("; ")}`,
-      remediation:
-        "Resolve material questions with spark_ask, then move decisions into askRefs or the plan body.",
-    });
+    issues.push(
+      taskPlanIssue(
+        "open_questions",
+        `Task plan has unresolved questions: ${plan.openQuestions.join("; ")}`,
+      ),
+    );
   }
   return { ready: issues.every((issue) => issue.severity !== "blocking"), issues };
+}
+
+export function decideTaskPlanBeforeCreate(task: Task): TaskPlanDecisionResult {
+  const readiness = taskPlanReadiness(task);
+  const plan = task.plan;
+  if (readiness.ready) return { asked: false, accepted: true, blocked: false, plan, issues: [] };
+  return {
+    asked: false,
+    accepted: false,
+    blocked: true,
+    plan,
+    issues: readiness.issues,
+    summary: summarizeTaskPlanIssues(task, readiness.issues),
+  };
+}
+
+function summarizeTaskPlanIssues(task: Task, issues: TaskPlanIssue[]): string {
+  const issueSummary = issues
+    .map((issue) => `${issue.message} fix: ${issue.remediation}`)
+    .join(" ");
+  return `Task @${task.name} "${task.title}" needs a concrete, context-specific plan before creation or update. ${issueSummary}`;
+}
+
+function taskPlanIssue(kind: TaskPlanIssueKind, message?: string): TaskPlanIssue {
+  const rule = TASK_PLAN_READINESS_RULE_BY_KIND.get(kind);
+  if (!rule) throw new Error(`unknown task plan readiness rule: ${kind}`);
+  return {
+    kind: rule.kind,
+    severity: rule.severity,
+    message: message ?? rule.message,
+    remediation: rule.remediation,
+  };
 }
 
 export function taskCompletionReadiness(
@@ -1420,10 +1727,8 @@ function normalizeTaskPlanRiskLevel(value: unknown): TaskPlan["riskLevel"] {
   return value === "trivial" || value === "high" ? value : "normal";
 }
 
-function attributionFromTask(
-  task: Pick<Task, "claim" | "claimedBySession">,
-): TaskAttribution | undefined {
-  const sessionId = task.claim?.sessionId ?? task.claimedBySession;
+function attributionFromTask(task: Pick<Task, "claim">): TaskAttribution | undefined {
+  const sessionId = task.claim?.sessionId;
   const roleRef = task.claim?.kind === "role-run" ? task.claim.roleRef : undefined;
   const runName = task.claim?.kind === "role-run" ? task.claim.runName?.trim() : undefined;
   return normalizeTaskAttribution({ sessionId, roleRef, runName });
@@ -1432,12 +1737,10 @@ function attributionFromTask(
 function normalizeTaskAttribution(
   attribution: TaskAttribution | undefined,
 ): TaskAttribution | undefined {
-  const legacy = attribution as
-    | (TaskAttribution & { agentRef?: RoleRef | `agent:${string}`; agentName?: string })
-    | undefined;
+  rejectLegacyRoleFields(attribution, "task attribution");
   const sessionId = attribution?.sessionId?.trim();
-  const roleRef = normalizeRoleRefCompat(attribution?.roleRef ?? legacy?.agentRef);
-  const runName = (attribution?.runName ?? legacy?.agentName)?.trim();
+  const roleRef = normalizeRoleRef(attribution?.roleRef);
+  const runName = attribution?.runName?.trim();
   if (!sessionId && !roleRef && !runName) return undefined;
   return {
     ...(sessionId ? { sessionId } : {}),
@@ -1448,19 +1751,252 @@ function normalizeTaskAttribution(
 
 function normalizeTaskClaim(claim: TaskClaim | undefined): TaskClaim | undefined {
   if (!claim?.expiresAt?.trim()) return undefined;
-  const legacy = claim as TaskClaim & {
-    agentRef?: `agent:${string}` | RoleRef;
-    agentName?: string;
-    kind?: TaskClaimKind | "subagent";
-  };
-  const roleRef = normalizeRoleRefCompat(claim.roleRef ?? legacy.agentRef);
-  const runName = (claim.runName ?? legacy.agentName)?.trim() || undefined;
+  rejectLegacyRoleFields(claim, "task claim");
+  const kind = (claim as { kind?: unknown }).kind;
+  if (kind !== "main" && kind !== "role-run")
+    throw new Error(`task claim kind must be main or role-run: ${String(kind)}`);
+  const roleRef = normalizeRoleRef(claim.roleRef);
+  const runName = claim.runName?.trim() || undefined;
   return {
     ...claim,
-    kind: (legacy.kind as string) === "subagent" ? "role-run" : claim.kind,
+    kind,
     roleRef,
     runName,
     expiresAt: claim.expiresAt,
+  };
+}
+
+interface TodoReducerItem {
+  id?: string;
+  content: string;
+  status: TaskTodoStatus;
+  notes?: string[];
+  blockedBy?: string[];
+  updatedAt?: string;
+  deletedAt?: string;
+}
+
+interface TodoReducerOptions<T extends TodoReducerItem> {
+  createItem: (content: string, index: number, now: string) => T;
+  createNotFoundError: (id: string | undefined, content: string | undefined) => Error;
+  isLiveForProgress: (todo: T) => boolean;
+}
+
+function applyTaskTodoOps(taskRef: TaskRef, todos: TaskTodo[], ops: TaskTodoOp[]): TaskTodo[] {
+  return applyTodoListOps(todos, ops, {
+    createItem: (content, index, now) => ({
+      id: todoIdFromContent(content, index),
+      taskRef,
+      content,
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+    }),
+    createNotFoundError: (id, content) => new NotFoundError(`unknown todo item: ${id ?? content}`),
+    isLiveForProgress: (todo) => todo.status !== "deleted",
+  });
+}
+
+function applyTodoListOps<T extends TodoReducerItem>(
+  todos: T[],
+  ops: TaskTodoOp[],
+  options: TodoReducerOptions<T>,
+): T[] {
+  let next = cloneTodoList(todos);
+  for (const op of ops) next = applyTodoListOp(next, op, options);
+  return normalizeTodoList(next, options.isLiveForProgress);
+}
+
+function applyTodoListOp<T extends TodoReducerItem>(
+  todos: T[],
+  op: TaskTodoOp,
+  options: TodoReducerOptions<T>,
+): T[] {
+  const now = nowIso();
+  switch (op.op) {
+    case "init":
+      return materializeTodoListItems(op.items, options, now, "todo init items are required");
+    case "append": {
+      const next = cloneTodoList(todos);
+      next.push(
+        ...materializeTodoListItems(op.items, options, now, "todo append items are required", next),
+      );
+      return next;
+    }
+    case "start": {
+      const target = resolveTodoListItem(todos, op, options, "todo item is required for start");
+      const next = cloneTodoList(todos);
+      for (const todo of next) {
+        if (todo.status === "in_progress") {
+          todo.status = "pending";
+          todo.updatedAt = now;
+        }
+      }
+      const current = next.find((todo) => sameTodoItem(todo, target))!;
+      current.status = "in_progress";
+      current.updatedAt = now;
+      return next;
+    }
+    case "done":
+      return patchTodoListStatus(todos, op, options, "done", now, "todo item is required for done");
+    case "block":
+      return patchTodoListStatus(
+        todos,
+        op,
+        options,
+        "blocked",
+        now,
+        "todo item is required for block",
+      );
+    case "cancel":
+      return patchTodoListStatus(
+        todos,
+        op,
+        options,
+        "cancelled",
+        now,
+        "todo item is required for cancel",
+      );
+    case "delete":
+    case "remove":
+      return patchTodoListStatus(
+        todos,
+        op,
+        options,
+        "deleted",
+        now,
+        "todo item is required for delete",
+      );
+    case "restore":
+      return patchTodoListStatus(
+        todos,
+        op,
+        options,
+        "pending",
+        now,
+        "todo item is required for restore",
+        true,
+      );
+    case "note": {
+      const target = resolveTodoListItem(todos, op, options, "todo item is required for note");
+      const text = op.text?.trimEnd();
+      if (!text) throw new Error("todo note text is required");
+      const next = cloneTodoList(todos);
+      const current = next.find((todo) => sameTodoItem(todo, target))!;
+      current.notes = current.notes ? [...current.notes, text] : [text];
+      current.updatedAt = now;
+      return next;
+    }
+  }
+}
+
+function materializeTodoListItems<T extends TodoReducerItem>(
+  items: string[] | undefined,
+  options: Pick<TodoReducerOptions<T>, "createItem">,
+  now: string,
+  missingMessage: string,
+  existing: readonly TodoReducerItem[] = [],
+): T[] {
+  if (!items?.length) throw new Error(missingMessage);
+  const next: T[] = [];
+  for (const item of items) {
+    const content = item.trim();
+    if (!content) throw new Error("todo content is required");
+    if (
+      existing.some((todo) => todo.content === content) ||
+      next.some((todo) => todo.content === content)
+    ) {
+      throw new Error(`duplicate todo content: ${content}`);
+    }
+    next.push(options.createItem(content, existing.length + next.length, now));
+  }
+  return next;
+}
+
+function patchTodoListStatus<T extends TodoReducerItem>(
+  todos: T[],
+  op: Pick<TaskTodoOp, "id" | "item" | "blockedBy">,
+  options: TodoReducerOptions<T>,
+  status: TaskTodoStatus,
+  now: string,
+  missingMessage: string,
+  includeDeleted = false,
+): T[] {
+  const target = resolveTodoListItem(todos, op, options, missingMessage, includeDeleted);
+  return cloneTodoList(todos).map((todo) => {
+    if (!sameTodoItem(todo, target)) return todo;
+    return {
+      ...todo,
+      status,
+      blockedBy: status === "blocked" && op.blockedBy?.length ? [...op.blockedBy] : todo.blockedBy,
+      deletedAt: status === "deleted" ? now : undefined,
+      updatedAt: now,
+    };
+  });
+}
+
+function resolveTodoListItem<T extends TodoReducerItem>(
+  todos: T[],
+  op: Pick<TaskTodoOp, "id" | "item">,
+  options: Pick<TodoReducerOptions<T>, "createNotFoundError">,
+  missingMessage: string,
+  includeDeleted = false,
+): T {
+  const id = op.id?.trim();
+  const content = op.item?.trim();
+  if (!id && !content) throw new Error(missingMessage);
+  const candidates = includeDeleted ? todos : todos.filter((todo) => todo.status !== "deleted");
+  const target = id
+    ? candidates.find((todo) => todo.id === id)
+    : candidates.find((todo) => todo.content === content);
+  if (!target) throw options.createNotFoundError(id, content);
+  return target;
+}
+
+function normalizeTodoList<T extends TodoReducerItem>(
+  todos: T[],
+  isLiveForProgress: (todo: T) => boolean,
+): T[] {
+  const next = cloneTodoList(todos);
+  const live = next.filter(isLiveForProgress);
+  const inProgress = live.filter((todo) => todo.status === "in_progress");
+  if (inProgress.length > 1) {
+    for (const todo of inProgress.slice(1)) {
+      todo.status = "pending";
+      todo.updatedAt = nowIso();
+    }
+  }
+  if (live.some((todo) => todo.status === "in_progress")) return next;
+  const firstPending = live.find((todo) => todo.status === "pending");
+  if (firstPending) {
+    firstPending.status = "in_progress";
+    firstPending.updatedAt = nowIso();
+  }
+  return next;
+}
+
+function cloneTodoList<T extends TodoReducerItem>(todos: T[]): T[] {
+  return todos.map((todo) => ({
+    ...todo,
+    notes: todo.notes ? [...todo.notes] : undefined,
+    blockedBy: todo.blockedBy ? [...todo.blockedBy] : undefined,
+  }));
+}
+
+function sameTodoItem(left: TodoReducerItem, right: TodoReducerItem): boolean {
+  if (left.id || right.id) return left.id === right.id;
+  return left.content === right.content;
+}
+
+function materializeIndependentTodo(content: string, index: number, now: string): SessionTodoEntry {
+  const trimmed = content.trim();
+  if (!trimmed) throw new Error("todo content is required");
+  return {
+    id: `todo-${stableId(`${trimmed}:${index}`).slice(0, 8)}`,
+    content: trimmed,
+    status: "pending",
+    createdAt: now,
+    updatedAt: now,
   };
 }
 
@@ -1502,14 +2038,11 @@ function cloneTask(task: Task): Task {
 }
 
 function normalizeTaskRun(run: TaskRun): TaskRun {
-  const legacy = run as TaskRun & {
-    agentRef?: RoleRef | `agent:${string}`;
-    agentName?: string;
-  };
+  rejectLegacyRoleFields(run, "task run");
   return {
     ...run,
-    roleRef: normalizeRoleRefCompat(run.roleRef ?? legacy.agentRef),
-    runName: (run.runName ?? legacy.agentName)?.trim() || undefined,
+    roleRef: normalizeRoleRef(run.roleRef),
+    runName: run.runName?.trim() || undefined,
     outputArtifacts: [...run.outputArtifacts],
     completionSummary: run.completionSummary
       ? {
@@ -1536,7 +2069,7 @@ export function isUnfinishedTaskStatus(status: Task["status"]): boolean {
   return status !== "done" && status !== "failed" && status !== "cancelled";
 }
 
-function normalizeTodo(todo: TaskTodo): TaskTodo {
+function normalizeTodo(todo: TaskTodoStoreEntry): TaskTodo {
   return {
     ...todo,
     id: todo.id || todoIdFromContent(todo.content, 0),
@@ -1549,133 +2082,7 @@ function normalizeTodo(todo: TaskTodo): TaskTodo {
 }
 
 function normalizeTodos(todos: TaskTodo[]): TaskTodo[] {
-  const next = cloneTodos(todos);
-  const live = next.filter((todo) => todo.status !== "deleted");
-  const inProgress = live.filter((todo) => todo.status === "in_progress");
-  if (inProgress.length > 1) {
-    for (const todo of inProgress.slice(1)) {
-      todo.status = "pending";
-      todo.updatedAt = nowIso();
-    }
-  }
-  if (live.some((todo) => todo.status === "in_progress")) return next;
-  const firstPending = live.find((todo) => todo.status === "pending");
-  if (firstPending) {
-    firstPending.status = "in_progress";
-    firstPending.updatedAt = nowIso();
-  }
-  return next;
-}
-
-function applyTodoOp(taskRef: TaskRef, todos: TaskTodo[], op: TaskTodoOp): TaskTodo[] {
-  const now = nowIso();
-  switch (op.op) {
-    case "init":
-      if (!op.items?.length) throw new Error("todo init items are required");
-      return materializeTodos(
-        taskRef,
-        op.items.map((content) => ({ content })),
-        now,
-      );
-    case "append": {
-      if (!op.items?.length) throw new Error("todo append items are required");
-      const next = cloneTodos(todos);
-      for (const content of op.items) {
-        const trimmed = content.trim();
-        if (!trimmed) throw new Error("todo content is required");
-        if (next.some((todo) => todo.content === trimmed)) {
-          throw new Error(`duplicate todo content: ${trimmed}`);
-        }
-        next.push({
-          id: todoIdFromContent(trimmed, next.length),
-          taskRef,
-          content: trimmed,
-          status: "pending",
-          createdAt: now,
-          updatedAt: now,
-        });
-      }
-      return next;
-    }
-    case "start": {
-      const target = resolveTodo(todos, op, "todo item is required for start");
-      const next = cloneTodos(todos);
-      for (const todo of next) {
-        if (todo.status === "in_progress") {
-          todo.status = "pending";
-          todo.updatedAt = now;
-        }
-      }
-      const current = next.find((todo) => todo.id === target.id)!;
-      current.status = "in_progress";
-      current.updatedAt = now;
-      return next;
-    }
-    case "done":
-      return patchTodoStatus(todos, op, "done", now, "todo item is required for done");
-    case "block":
-      return patchTodoStatus(todos, op, "blocked", now, "todo item is required for block");
-    case "cancel":
-      return patchTodoStatus(todos, op, "cancelled", now, "todo item is required for cancel");
-    case "delete":
-    case "remove":
-      return patchTodoStatus(todos, op, "deleted", now, "todo item is required for delete");
-    case "restore": {
-      const target = resolveTodo(todos, op, "todo item is required for restore", true);
-      return cloneTodos(todos).map((todo) =>
-        todo.id === target.id
-          ? { ...todo, status: "pending", deletedAt: undefined, updatedAt: now }
-          : todo,
-      );
-    }
-    case "note": {
-      const target = resolveTodo(todos, op, "todo item is required for note");
-      const text = op.text?.trimEnd();
-      if (!text) throw new Error("todo note text is required");
-      const next = cloneTodos(todos);
-      const current = next.find((todo) => todo.id === target.id)!;
-      current.notes = current.notes ? [...current.notes, text] : [text];
-      current.updatedAt = now;
-      return next;
-    }
-  }
-}
-
-function patchTodoStatus(
-  todos: TaskTodo[],
-  op: Pick<TaskTodoOp, "id" | "item" | "blockedBy">,
-  status: TaskTodoStatus,
-  now: string,
-  missingMessage: string,
-): TaskTodo[] {
-  const target = resolveTodo(todos, op, missingMessage);
-  return cloneTodos(todos).map((todo) => {
-    if (todo.id !== target.id) return todo;
-    return {
-      ...todo,
-      status,
-      blockedBy: status === "blocked" && op.blockedBy?.length ? [...op.blockedBy] : todo.blockedBy,
-      deletedAt: status === "deleted" ? now : undefined,
-      updatedAt: now,
-    };
-  });
-}
-
-function resolveTodo(
-  todos: TaskTodo[],
-  op: Pick<TaskTodoOp, "id" | "item">,
-  missingMessage: string,
-  includeDeleted = false,
-): TaskTodo {
-  const id = op.id?.trim();
-  const content = op.item?.trim();
-  if (!id && !content) throw new Error(missingMessage);
-  const candidates = includeDeleted ? todos : todos.filter((todo) => todo.status !== "deleted");
-  const target = id
-    ? candidates.find((todo) => todo.id === id)
-    : candidates.find((todo) => todo.content === content);
-  if (!target) throw new NotFoundError(`unknown todo item: ${id ?? content}`);
-  return target;
+  return normalizeTodoList(todos, (todo) => todo.status !== "deleted");
 }
 
 function summarizeTodos(todos: TaskTodo[]): TaskTodoSummary {
@@ -1708,6 +2115,3 @@ function stableHash(input: string): string {
 function isOpenContextTask(task: Task): boolean {
   return !["done", "failed", "cancelled"].includes(task.status);
 }
-
-// Compatibility aliases for current tests/callers during role terminology migration.
-declare module "./index.ts" {}

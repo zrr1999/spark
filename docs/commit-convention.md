@@ -7,7 +7,7 @@ Examples:
 ```text
 🔧 chore(workspace): scaffold spark monorepo
 ✨ feat(core): add runtime validation and errors
-✨ feat(tasks): persist thread task graph
+✨ feat(tasks): persist project task graph
 🐛 fix(tasks): reject cyclic dependencies
 ♻️ refactor(agents): split json runner parser
 ✅ test(artifacts): cover artifact lineage queries

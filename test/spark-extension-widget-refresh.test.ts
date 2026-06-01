@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import sparkExtension from "../packages/spark/src/extension/index.ts";
 import type { SparkWidgetTheme, SparkWidgetTui } from "../packages/spark/src/ui/spark-widget.ts";
+import { RoleRegistry, builtinRoleRef } from "pi-roles";
 import { defaultSparkDagRunStore } from "spark-orchestrator";
+import {
+  killActiveSparkRoleRunProcesses,
+  listActiveSparkRoleRunProcesses,
+  runSparkTask,
+} from "spark-runtime";
+import type { RunRef, TaskPlan } from "spark-core";
 import { TaskGraph, defaultTaskGraphStore } from "spark-tasks";
 
 type SparkPi = Parameters<typeof sparkExtension>[0];
@@ -49,6 +56,30 @@ function requireTool(tools: Map<string, SparkToolConfig>, name: string): SparkTo
   return tool;
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(predicate(), true, "condition was not met before timeout");
+}
+
+function executionReadyPlan(objective: string): TaskPlan {
+  return {
+    objective,
+    contextRefs: [],
+    constraints: [],
+    nonGoals: [],
+    successCriteria: [`${objective} succeeds`],
+    evidenceRequired: [`${objective} evidence is recorded`],
+    steps: [objective],
+    riskLevel: "normal",
+    openQuestions: [],
+    askRefs: [],
+  };
+}
+
 async function executeTool(
   tool: SparkToolConfig,
   params: Record<string, unknown>,
@@ -62,7 +93,7 @@ void test("Spark extension widget hides acknowledged DAG history and shows actio
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
     const graph = new TaskGraph();
-    const thread = graph.createThread({ title: "Widget DAG thread", description: "widget dag" });
+    const project = graph.createProject({ title: "Widget DAG project", description: "widget dag" });
     await defaultTaskGraphStore(dir).save(graph);
 
     const tools = new Map<string, SparkToolConfig>();
@@ -97,13 +128,13 @@ void test("Spark extension widget hides acknowledged DAG history and shows actio
     };
     sparkExtension(pi);
 
-    await executeTool(requireTool(tools, "spark_use_thread"), { thread: thread.ref }, ctx);
+    await executeTool(requireTool(tools, "spark_use_project"), { project: project.ref }, ctx);
     assert.ok(widgetComponent);
     assert.doesNotMatch(widgetComponent.render().join("\n"), /Background work:/);
 
     const dagStore = defaultSparkDagRunStore(dir);
     const acknowledgedRun = await dagStore.startRun({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       dryRun: false,
       maxConcurrency: 1,
       timeoutMs: 100,
@@ -120,7 +151,7 @@ void test("Spark extension widget hides acknowledged DAG history and shows actio
     assert.doesNotMatch(widgetComponent.render().join("\n"), /Background work:/);
 
     const actionableRun = await dagStore.startRun({
-      threadRef: thread.ref,
+      projectRef: project.ref,
       dryRun: false,
       maxConcurrency: 1,
       timeoutMs: 100,
@@ -142,12 +173,127 @@ void test("Spark extension widget hides acknowledged DAG history and shows actio
   }
 });
 
+void test("Spark extension widget reconciles stale DAG records when an owned child run is still active", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-extension-widget-dag-reconcile-"));
+  let runPromise: Promise<unknown> | undefined;
+  let activeRunRef: RunRef | undefined;
+  try {
+    await mkdir(join(dir, ".spark"), { recursive: true });
+    const graph = new TaskGraph();
+    const project = graph.createProject({
+      title: "Widget DAG reconcile",
+      description: "widget dag",
+    });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Long running widget task",
+      description: "Keep the child process active while the widget refreshes.",
+      roleRef: builtinRoleRef("worker"),
+      plan: executionReadyPlan("Keep the widget DAG active"),
+    });
+    await defaultTaskGraphStore(dir).save(graph);
+
+    const tools = new Map<string, SparkToolConfig>();
+    const handlers = new Map<string, SparkEventHandler>();
+    let widgetComponent: WidgetComponent | undefined;
+    const widgetTui: SparkWidgetTui = {
+      terminal: { columns: 160 },
+      requestRender() {},
+    };
+    const ctx: TestSparkContext = {
+      cwd: dir,
+      hasUI: true,
+      sessionManager: {
+        getSessionFile: () => join(dir, "session.json"),
+        getLeafId: () => "leaf-widget-dag-reconcile",
+      },
+      ui: {
+        setWidget(_key, cb) {
+          widgetComponent = isWidgetFactory(cb) ? cb(widgetTui, theme) : undefined;
+        },
+      },
+    };
+    const pi: SparkPi = {
+      registerCommand() {},
+      registerTool(config) {
+        tools.set(config.name, config);
+      },
+      on(event, handler) {
+        handlers.set(event, handler);
+      },
+      sendMessage() {},
+    };
+    sparkExtension(pi);
+    await executeTool(requireTool(tools, "spark_use_project"), { project: project.ref }, ctx);
+    assert.ok(widgetComponent);
+
+    const dagStore = defaultSparkDagRunStore(dir);
+    const dagRun = await dagStore.startRun({
+      projectRef: project.ref,
+      dryRun: false,
+      maxConcurrency: 1,
+      timeoutMs: 100,
+    });
+    await dagStore.recordSchedule(dagRun.ref, { taskRef: task.ref, scheduled: 1 });
+    await dagStore.reconcile({ graph, activeRunRefs: [] });
+    await handlers.get("session_tree")?.({}, ctx);
+    assert.match(
+      widgetComponent.render().join("\n"),
+      /Background work: 0\/1 tasks finished · stale/,
+    );
+
+    const fakePi = join(dir, "fake-pi.mjs");
+    await writeFile(
+      fakePi,
+      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1_000);\n",
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+    runPromise = runSparkTask({
+      graph,
+      taskRef: task.ref,
+      registry: new RoleRegistry(),
+      cwd: dir,
+      dryRun: false,
+      piCommand: fakePi,
+      timeoutMs: 10_000,
+      claim: { sessionId: "session:widget" },
+    }).catch((error: unknown) => error);
+    await waitFor(() => listActiveSparkRoleRunProcesses().some((process) => process.cwd === dir));
+    const activeProcess = listActiveSparkRoleRunProcesses().find((process) => process.cwd === dir);
+    assert.ok(activeProcess);
+    activeRunRef = activeProcess.runRef;
+    await defaultTaskGraphStore(dir).save(graph);
+
+    await handlers.get("session_tree")?.({}, ctx);
+
+    assert.match(
+      widgetComponent.render().join("\n"),
+      /Background work: 0\/1 tasks finished · running/,
+    );
+    const revived = await dagStore.load();
+    const [record] = revived.runs;
+    assert.equal(record?.status, "running");
+    assert.deepEqual(record?.taskRunRefs, [activeProcess.runRef]);
+  } finally {
+    if (activeRunRef)
+      await killActiveSparkRoleRunProcesses({
+        runRef: activeRunRef,
+        forceAfterMs: 0,
+        waitMs: 1_000,
+      });
+    await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
+    await runPromise?.catch(() => undefined);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("Spark extension refreshes SparkWidget after claim and TODO tools", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-extension-widget-refresh-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
     const graph = new TaskGraph();
-    graph.createThread({ title: "Widget refresh thread", description: "widget refresh" });
+    graph.createProject({ title: "Widget refresh project", description: "widget refresh" });
     await defaultTaskGraphStore(dir).save(graph);
 
     const tools = new Map<string, SparkToolConfig>();
@@ -188,13 +334,13 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     sparkExtension(pi);
 
     await executeTool(
-      requireTool(tools, "spark_use_thread"),
-      { thread: "Widget refresh thread" },
+      requireTool(tools, "spark_use_project"),
+      { project: "Widget refresh project" },
       ctx,
     );
     assert.equal(widgetCalls.length, 1);
     assert.ok(widgetComponent);
-    assert.match(widgetComponent.render().join("\n"), /Widget refresh thread/);
+    assert.match(widgetComponent.render().join("\n"), /Widget refresh project/);
 
     await executeTool(
       requireTool(tools, "spark_claim_task"),

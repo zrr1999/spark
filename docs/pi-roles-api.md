@@ -13,14 +13,14 @@
 
 - No task graph, dependency, claim, TODO, artifact, ask, or review state.
 - No Spark refs (`TaskRef`, `ArtifactRef`, Spark `RunRef`) or `spark-core` dependency.
-- No cross-thread orchestration semantics.
+- No cross-project orchestration semantics.
 - No capabilities/topology/delegation hierarchy in v0.1.
 
 ## Core types
 
 ```ts
 export type RoleSource = "builtin" | "project" | "user";
-export type RoleOriginKind = "manual" | "generated" | "imported" | "migrated" | "builtin";
+export type RoleOriginKind = "manual" | "generated" | "builtin";
 export type RoleRef = `role:${string}`;
 export type RoleRunRef = `run:${string}`;
 export type RoleRunMode = "fresh" | "forked";
@@ -67,7 +67,7 @@ Use `source` for role storage/provenance scope:
 - `project` — stored in a project repo under `.agents/roles/**/*.md`.
 - `user` — user-global roles under `~/.agents/roles/**/*.md`.
 
-Compatibility readers may import `.pi/agents/**/*.md`, `~/.pi/agent/agents/**/*.md`, and old `.spark/agents/*.json` data. These paths are migration inputs, not the target write format.
+Runtime role loading does not read old agent-shaped paths. If a repository still has `.pi/agents`, `~/.pi/agent/agents`, or `.spark/agents/*.json` data, migrate it explicitly into `.agents/roles` before relying on `pi-roles`.
 
 Do **not** use legacy `managed` as a source or runtime mode. It only described that Spark persisted a file; it did not tell the user where the role came from or how a run is launched.
 
@@ -110,9 +110,6 @@ Helpers provide default stores:
 
 - `defaultProjectRoleStore(cwd)` → `.agents/roles`.
 - `defaultUserRoleStore(home)` → `~/.agents/roles`.
-- `compatibilityProjectRoleStore(cwd)` → `.pi/agents` read path.
-- `compatibilityUserRoleStore(home)` → `~/.pi/agent/agents` read path.
-- `legacySparkJsonRoleStore(cwd)` → `.spark/agents/*.json` migration input.
 
 ## Helper API
 
@@ -129,8 +126,6 @@ export function hydrateDefaultRoleRegistry(
    options?: {
       home?: string;
       includeUser?: boolean;
-      includeCompatibility?: boolean;
-      includeLegacySparkJson?: boolean;
    },
 ): Promise<void>;
 ```
@@ -165,4 +160,4 @@ Every run references an existing role. A run can be fresh or forked regardless o
 | Spark runtime claim    | `TaskClaim.kind = "role-run"`, `roleRef`, `runName`, `runRef` |
 | Spark runtime artifact | `kind: "role-run"` with task/run provenance                   |
 
-Compatibility aliases in code should be small and temporary, only to read old state or avoid breaking existing callers during rolling migration.
+Runtime package boundaries should not keep compatibility aliases. Repair stale local state with explicit migration or cleanup tooling before it reaches `pi-roles`, `spark-tasks`, or `spark-runtime`.

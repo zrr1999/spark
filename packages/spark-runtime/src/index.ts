@@ -32,43 +32,35 @@ import {
   type TaskGraphStore,
   type TaskGraphStoreUpdateOptions,
 } from "spark-tasks";
+import {
+  type RoleRunArtifactBody,
+  type RoleRunJsonEventsTail,
+  type RoleRunTextTail,
+} from "./role-run-artifacts.ts";
+
+export {
+  SPARK_ROLE_RUN_ARTIFACT_PREVIEW_METADATA_MAX_BYTES,
+  SPARK_ROLE_RUN_RETENTION_TAIL_BYTES,
+  collectRoleRunArtifactRetentionPlan,
+  isRoleRunArtifactBody,
+  isRoleRunJsonEventsTail,
+  isRoleRunTextTail,
+  readRoleRunArtifactPreview,
+  type RoleRunArtifactBody,
+  type RoleRunArtifactPreview,
+  type RoleRunArtifactRetentionCandidate,
+  type RoleRunArtifactRetentionPlan,
+  type RoleRunArtifactRetentionSkipReason,
+  type RoleRunArtifactRetentionSkipped,
+  type RoleRunJsonEventsTail,
+  type RoleRunTextTail,
+} from "./role-run-artifacts.ts";
 
 export interface SparkRoleRunResult {
   record: RoleRunRecord;
   stdout: string;
   stderr: string;
   jsonEvents: unknown[];
-}
-
-export interface RoleRunTextTail {
-  bytes: number;
-  tail: string;
-  tailBytes: number;
-  truncated: boolean;
-}
-
-export interface RoleRunJsonEventsTail {
-  count: number;
-  tail: string[];
-  tailEventCount: number;
-  truncated: boolean;
-}
-
-export interface RoleRunArtifactBody {
-  schemaVersion: 1;
-  runRef: RunRef;
-  taskRef: TaskRef;
-  roleRef: RoleRef;
-  runName?: string;
-  status: RoleRunStatus;
-  startedAt?: string;
-  finishedAt?: string;
-  summary: string;
-  transcriptRef?: ArtifactRef;
-  record: Omit<RoleRunRecord, "instruction">;
-  stdout: RoleRunTextTail;
-  stderr: RoleRunTextTail;
-  jsonEvents: RoleRunJsonEventsTail;
 }
 
 export { type RoleRunMode } from "pi-roles";
@@ -120,6 +112,17 @@ const MAX_ROLE_RUN_ARTIFACT_JSON_EVENT_CHARS = 1_000;
 const DEFAULT_ROLE_RUN_FORCE_KILL_AFTER_MS = 1_000;
 const DEFAULT_ROLE_RUN_SHUTDOWN_WAIT_MS = 3_000;
 const activeSparkRoleRunProcesses = new Map<RunRef, TrackedSparkRoleRunProcess>();
+
+function unknownErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function combineAbortSignals(signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const active = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (active.length === 0) return undefined;
+  if (active.length === 1) return active[0];
+  return AbortSignal.any(active);
+}
 
 export function listActiveSparkRoleRunProcesses(): ActiveSparkRoleRunProcess[] {
   return [...activeSparkRoleRunProcesses.values()].map(snapshotSparkRoleRunProcess);
@@ -295,9 +298,7 @@ function sanitizeClaimPart(value: string): string {
 }
 
 export interface PiRoleCommandInput {
-  roleRef?: RoleRef;
-  /** @deprecated use roleRef. */
-  specRef?: RoleRef;
+  roleRef: RoleRef;
   systemPrompt: string;
   instruction: string;
   model?: string;
@@ -308,7 +309,7 @@ export interface PiRoleCommandInput {
 
 export function buildRoleRunArgs(input: PiRoleCommandInput): string[] {
   return buildGenericRoleRunArgs({
-    roleRef: (input.roleRef ?? input.specRef) as `role:${string}`,
+    roleRef: input.roleRef,
     mode: input.mode,
     systemPrompt: input.systemPrompt,
     instruction: input.instruction,
@@ -324,6 +325,7 @@ export interface RoleRunnerOptions {
   piCommand?: string;
   dryRun?: boolean;
   timeoutMs?: number;
+  signal?: AbortSignal;
   sessionDir?: string;
   runName?: string;
   mode?: RoleRunMode;
@@ -336,11 +338,14 @@ export interface SparkTaskRunOptions {
   registry: RoleRegistry;
   /** Concrete executor role assigned for this run. Falls back to task.roleRef, then kind defaults. */
   assignedRoleRef?: RoleRef;
+  /** Fallback role used only when assignedRoleRef and task.roleRef are both absent. */
+  defaultRoleRef?: RoleRef;
   artifactStore?: ArtifactStore;
   cwd?: string;
   piCommand?: string;
   dryRun?: boolean;
   timeoutMs?: number;
+  signal?: AbortSignal;
   sessionDir?: string;
   mode?: RoleRunMode;
   forkFromSession?: string;
@@ -355,6 +360,13 @@ export interface SparkTaskRunOptions {
     sessionId?: string;
     leaseMs?: number;
   };
+}
+
+export class TaskClaimHeartbeatError extends Error {
+  constructor(error: unknown) {
+    super(`task claim heartbeat failed: ${unknownErrorMessage(error)}`);
+    this.name = "TaskClaimHeartbeatError";
+  }
 }
 
 export interface ExpiredTaskClaimSweepResult {
@@ -379,24 +391,25 @@ export function findResumableBackgroundRoleRunTasks(
 }
 
 export async function sweepExpiredTaskClaims(
-  store: Pick<TaskGraphStore, "update">,
+  store: Pick<TaskGraphStore, "withLock" | "load" | "save">,
   now = nowIso(),
   options: Omit<TaskGraphStoreUpdateOptions, "createIfMissing"> = {},
 ): Promise<ExpiredTaskClaimSweepResult> {
-  const result = await store.update((graph) => graph.expireTaskClaims(now), {
-    ...options,
-    createIfMissing: false,
-  });
-  if (!result.graph) return { graph: null, expired: [], saved: false };
-  const expired = result.result ?? [];
-  return { graph: result.graph, expired, saved: expired.length > 0 };
+  return store.withLock(async () => {
+    const graph = await store.load();
+    if (!graph) return { graph: null, expired: [], saved: false };
+    const expired = graph.expireTaskClaims(now);
+    if (expired.length === 0) return { graph, expired, saved: false };
+    await store.save(graph);
+    return { graph, expired, saved: true };
+  }, options);
 }
 
 export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun> {
   const task = input.graph.getTask(input.taskRef);
-  const taskRoleRef = normalizeRoleRefCompat(input.assignedRoleRef) ?? assignedRoleRefForTask(task);
+  const taskRoleRef = input.assignedRoleRef ?? sparkTaskExecutorRoleRef(task, input.defaultRoleRef);
   const unmet = input.graph
-    .dependencies(task.threadRef)
+    .dependencies(task.projectRef)
     .filter(
       (dep) => dep.taskRef === task.ref && input.graph.getTask(dep.dependsOn).status !== "done",
     );
@@ -428,7 +441,7 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
 
   const run: TaskRun = {
     ref: runRef,
-    threadRef: task.threadRef,
+    projectRef: task.projectRef,
     taskRef: task.ref,
     roleRef: taskRoleRef,
     runName,
@@ -438,6 +451,8 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
     outputArtifacts: [],
   };
   input.graph.recordRun(run);
+  const heartbeatAbort = dryRun ? undefined : new AbortController();
+  const runSignal = combineAbortSignals([input.signal, heartbeatAbort?.signal]);
   const stopHeartbeat = dryRun
     ? undefined
     : startTaskClaimHeartbeat({
@@ -447,6 +462,9 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
         leaseMs,
         intervalMs: input.heartbeatIntervalMs,
         onHeartbeat: input.onHeartbeat,
+        onError: (error) => {
+          heartbeatAbort?.abort(new TaskClaimHeartbeatError(error));
+        },
       });
 
   try {
@@ -462,6 +480,7 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
         piCommand: input.piCommand,
         dryRun,
         timeoutMs: input.timeoutMs,
+        signal: runSignal,
         sessionDir: input.sessionDir,
         runName,
         mode: input.mode,
@@ -483,7 +502,7 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
         }) as unknown as JsonValue,
         provenance: {
           producer: "task",
-          threadRef: task.threadRef,
+          projectRef: task.projectRef,
           taskRef: task.ref,
           roleRef: taskRoleRef,
           runRef,
@@ -527,16 +546,26 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
     return finished;
   } catch (error) {
     if (error instanceof RoleRunTimeoutError && !dryRun) {
-      const background: TaskRun = {
+      const errorMessage = error.message;
+      const finishedAt = nowIso();
+      const failed: TaskRun = {
         ...run,
-        status: "running",
+        status: "failed",
         failureKind: "runtime_timeout",
-        errorMessage: `${error.message}; keeping role-run claim in background`,
+        errorMessage,
+        finishedAt,
         outputArtifacts: [],
+        completionSummary: createTaskRunCompletionSummary({
+          run,
+          status: "failed",
+          finishedAt,
+          outputArtifacts: [],
+          summary: errorMessage,
+        }),
       };
-      input.graph.recordRun(background);
-      input.graph.setTaskStatus(task.ref, "running");
-      return background;
+      input.graph.recordRun(failed);
+      input.graph.setTaskStatus(task.ref, "failed");
+      return failed;
     }
     const errorMessage = error instanceof Error ? error.message : String(error);
     const finishedAt = nowIso();
@@ -785,6 +814,7 @@ export interface TaskClaimHeartbeatOptions {
   leaseMs: number;
   intervalMs?: number;
   onHeartbeat?: (graph: TaskGraph) => void | Promise<void>;
+  onError?: (error: unknown) => void;
 }
 
 export function startTaskClaimHeartbeat(options: TaskClaimHeartbeatOptions): () => void {
@@ -802,8 +832,9 @@ export function startTaskClaimHeartbeat(options: TaskClaimHeartbeatOptions): () 
         leaseMs: options.leaseMs,
       });
       await options.onHeartbeat?.(options.graph);
-    } catch {
+    } catch (error) {
       stopped = true;
+      options.onError?.(error);
     } finally {
       inFlight = false;
     }
@@ -859,6 +890,7 @@ export async function runRoleInstructionOnly(
       cwd: options.cwd ?? process.cwd(),
       piCommand: options.piCommand ?? "pi",
       timeoutMs: options.timeoutMs ?? 600_000,
+      signal: options.signal,
       sessionDir: options.sessionDir,
       runName: baseRecord.runName,
       mode: options.mode,
@@ -876,7 +908,7 @@ async function runPiJsonRole(
   role: { ref: RoleRef; systemPrompt: string },
   instruction: RoleInstruction,
   options: Required<Pick<RoleRunnerOptions, "cwd" | "piCommand" | "timeoutMs">> &
-    Pick<RoleRunnerOptions, "sessionDir" | "runName" | "mode" | "forkFromSession">,
+    Pick<RoleRunnerOptions, "signal" | "sessionDir" | "runName" | "mode" | "forkFromSession">,
   runRef: RunRef,
 ): Promise<SparkRoleRunResult> {
   let tracked: TrackedSparkRoleRunProcess | undefined;
@@ -900,6 +932,7 @@ async function runPiJsonRole(
       piCommand: options.piCommand,
       cwd: options.cwd,
       timeoutMs: options.timeoutMs,
+      signal: options.signal,
       onChildProcess(child, startedAt) {
         tracked = trackSparkRoleRunProcess({
           child,
@@ -938,15 +971,8 @@ async function runPiJsonRole(
   }
 }
 
-function normalizeRoleRefCompat(
-  value: RoleRef | `agent:${string}` | undefined,
-): RoleRef | undefined {
-  if (!value) return undefined;
-  return (value.startsWith("agent:") ? `role:${value.slice("agent:".length)}` : value) as RoleRef;
-}
-
-function assignedRoleRefForTask(task: Task): RoleRef {
-  return normalizeRoleRefCompat(task.roleRef) ?? defaultRoleRefForTaskKind(task.kind);
+export function sparkTaskExecutorRoleRef(task: Task, defaultRoleRef?: RoleRef): RoleRef {
+  return task.roleRef ?? defaultRoleRef ?? defaultRoleRefForTaskKind(task.kind);
 }
 
 function defaultRoleRefForTaskKind(kind: Task["kind"]): RoleRef {
@@ -964,8 +990,8 @@ function sparkRoleRunGuidance(): string {
     "- If an ask times out or returns no selection for a decision/approval gate, stop and report the blocked state rather than continuing.",
     "",
     "Spark naming quality policy:",
-    "- Judge whether the active thread title and your task @name/title are placeholder, generic, stale, too broad, or inconsistent with the current instruction.",
-    "- When the improvement is obvious, update Spark display names without asking: use spark_rename_thread for the thread, and spark_claim_task with the existing task ref/name intent to improve your claimed task @name/title/description. Stable refs must remain unchanged.",
+    "- Judge whether the active project title and your task @name/title are placeholder, generic, stale, too broad, or inconsistent with the current instruction.",
+    "- When the improvement is obvious, update Spark display names without asking: use spark_rename_project for the project, and spark_claim_task with the existing task ref/name intent to improve your claimed task @name/title/description. Stable refs must remain unchanged.",
     "- Preserve user-specific intentional names and distinctive project/code names; ask only if multiple plausible names require a real user decision.",
   ].join("\n");
 }

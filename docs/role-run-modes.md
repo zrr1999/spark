@@ -8,7 +8,7 @@ This document defines how Spark and `pi-roles` distinguish reusable role definit
 - **Fresh RoleRun** — a concrete execution that starts a new Pi session from an existing role plus an explicit task instruction and explicit inputs. `fresh` is the default runtime mode for Spark DAG execution.
 - **Forked RoleRun** — a concrete execution that still references an existing role, but launches in `forked` mode from an explicit parent session/context source.
 
-`fresh` and `forked` are runtime launch modes. They are never role sources. `builtin`, `project`, and `user` describe where a reusable role came from. Legacy `managed` and `predefined` terms are accepted only as compatibility aliases in Spark-facing conversion code.
+`fresh` and `forked` are runtime launch modes. They are never role sources. `builtin`, `project`, and `user` describe where a reusable role came from. Legacy `managed` and `predefined` terms are rejected instead of being translated at runtime.
 
 ## When to use each
 
@@ -53,7 +53,7 @@ Attribution in Spark:
 - On non-dry-run scheduling, Spark creates a `TaskClaim` for the concrete run with `kind: "role-run"`.
 - `claim.roleRef` is the reusable role; `claim.runName` is the human-readable concrete run instance; `claim.sessionId` is the launching/owner session; `claim.runRef` is the concrete run; and `claim.claimedBy` is the concrete claimant identity, typically derived from `sessionId + runName`.
 - `TaskRun.roleRef`, `TaskRun.runName`, and `TaskRun.ownerSessionId` repeat the same distinction for run history.
-- Runtime-created artifacts use `kind: "role-run"`, `producer: "task"`, `threadRef`, `taskRef`, `roleRef`, and a note containing the concrete `runName`; the body carries the concrete run record and captured stdout/stderr/events.
+- Runtime-created artifacts use `kind: "role-run"`, `producer: "task"`, `projectRef`, `taskRef`, `roleRef`, and a note containing the concrete `runName`; the body carries the concrete run record and captured stdout/stderr/events.
 - When a task reaches a terminal status, the active claim is cleared and `finishedBy` preserves the owning session and concrete run name for post-completion display.
 
 ### Forked RoleRuns
