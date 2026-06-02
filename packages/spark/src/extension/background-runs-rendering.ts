@@ -88,7 +88,7 @@ export function renderSparkBackgroundRunsText(
       lines.push(
         `  Role: ${child.roleRef ? shortRoleLabel(child.roleRef) : "unknown"}${child.pid ? ` pid=${child.pid}` : ""}${child.startedAt ? ` started=${child.startedAt}` : ""}`,
       );
-    if (child.dagRunRef) lines.push(`  DAG: ${child.dagRunRef}`);
+    if (child.dagRunRef) lines.push(`  Workflow run: ${child.dagRunRef}`);
     if (child.claimKind)
       lines.push(
         `  Claim: ${child.claimKind}${child.ownerSessionId ? ` owner=${child.ownerSessionId}` : ""}`,
@@ -144,7 +144,7 @@ export function renderSparkBackgroundRunsText(
   if (options.includeDetails) {
     for (const run of details.dagRuns) {
       lines.push(
-        `  DAG ${run.runRef}: ${run.status} scheduled=${run.scheduled} completed=${run.completed} incomplete=${run.incompleteTaskRefs.join(",") || "none"}`,
+        `  Workflow run ${run.runRef}: ${run.status} scheduled=${run.scheduled} completed=${run.completed} incomplete=${run.incompleteTaskRefs.join(",") || "none"}`,
       );
       if (run.legacyTimedOut)
         lines.push(

@@ -79,7 +79,7 @@ export function renderSparkActiveSystemPrompt(basePrompt: string, reason: string
   const sparkPrompt = [
     `Spark is active for this workspace (${reason}).`,
     "Use the injected Active Spark context as standing project state; read SPARK.md or the spark skill only when you need full intent or workflow details.",
-    "Follow the active workflow contract: use Spark tools for project/task/TODO/DAG/ask state, claim at most one unfinished session task, ask via Spark ask tools (`spark_ask`) for real blockers or missing decisions, and fix concrete repo behavior feedback in code/docs/tests instead of treating it as memory-only.",
+    "Follow the active workflow contract: use Spark tools for project/task/TODO/workflow-run/ask state, claim at most one unfinished session task, ask via Spark ask tools (`spark_ask`) for real blockers or missing decisions, and fix concrete repo behavior feedback in code/docs/tests instead of treating it as memory-only.",
   ].join(" ");
   return basePrompt ? `${basePrompt}\n\n${sparkPrompt}` : sparkPrompt;
 }

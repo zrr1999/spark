@@ -4,17 +4,16 @@
 
 Commands:
 
-- `/spark <idea>` — initialize or advance the Spark idea-to-task flow. High-confidence prompts route to planning or single-step execution; prompts that ask for continuous/until-done progress ask before entering inferred-strategy `/run`. This is the only command that may materialize root `SPARK.md` during initialization.
+- `/spark <idea>` — initialize or advance the Spark idea-to-task flow. High-confidence prompts route to research, planning, or default execution; prompts that ask for autonomous or workflow-style progress ask before selecting a goal or workflow execute strategy. This is the only command that may materialize root `SPARK.md` during initialization.
+- `/research <focus>` — investigate repository/project context and summarize findings without task graph changes or task claims.
 - `/plan <focus>` — inject a high-priority planning prompt for research, clarification, and task-DAG creation/refinement. It is prompt guidance, not a permission gate; planning mode does not execute tasks and does not create root `SPARK.md`.
-- `/execute <focus>` — enter single-step execution mode. Claim and finish at most one concrete task, then stop; run `/execute` again for one more step.
-- `/run-sequential <focus>` — start or resume the background Spark orchestrator with `maxConcurrency=1`, continuously advancing ready tasks one at a time until done, blocked, failed, cancelled, or needing a decision.
-- `/run-parallel <focus>` — start or resume the existing parallel ready-frontier scheduler for background progress.
-- `/run <focus>` — convenience entry point that infers the strategy from the prompt: parallel/concurrent wording selects parallel; otherwise it uses sequential. Progress is visible through `spark_background_runs status`, `spark_status`, the Spark widget, and notifications rather than synthetic user messages or a second main-agent turn.
+- `/execute <focus>` — enter default execution mode. Claim and finish at most one concrete task; run `/execute` again for one more default step. If the request needs continuous or scripted execution, use `/workflow[:selector]`.
+- `/workflow[:selector] <focus>` — enter workflow execution mode. Builtins are intentionally minimal: `/workflow:goal` and `/workflow:ready`; scripted workflows use `/workflow workspace:<name>` for `.spark/workflows/*.js` and `/workflow user:<name>` for `~/.agents/workflows/*.js`. Empty `/workflow` asks which workflow to use or whether to draft a workspace workflow.
 
 Tools:
 
 - `spark_status` — show Spark project/task status. Defaults to `view: "active"` for unfinished/current-session work, supports `view: "summary"` for counts only, `view: "full"` for done/cancelled history plus read-only `.spark` cache/protected-store summary, optional `limit` for task rows per project, and `format: "json"` for a first-class structured status payload instead of human-formatted text.
-- `spark_state` — inspect or explicitly clean `.spark` session/cache state. `action: "status"` is read-only; `action: "diagnostics"`/`"doctor"` is read-only and reports protected-store candidates (terminal/no-unfinished projects, inactive DAG runs, large artifacts, orphan blobs, notes, and role reports) using bounded compact metadata; `action: "cleanup"` defaults to `dryRun: true`, only targets safe session/cache files, and never deletes protected stores such as `.spark/projects.json`, artifacts, notes, role reports, DAG runs, or review-gate state. `action: "prune"` is the typed DAG-run retention entry point: it defaults to dry-run, only considers old terminal non-active DAG runs, preserves unacknowledged failed/stale/timed_out records, and keeps the configured newest runs globally and per project. `action: "compact-role-run-artifacts"` is the role-run transcript retention entry point: it defaults to dry-run, lists blobs over `thresholdBytes` with provenance and candidate reason, writes a compact summary plus serialized tail and optional `exportDir` path, and only deletes the full transcript blob on `dryRun:false` after replacement metadata has been written.
+- `spark_state` — inspect or explicitly clean `.spark` session/cache state. `action: "status"` is read-only; `action: "diagnostics"`/`"doctor"` is read-only and reports protected-store candidates (terminal/no-unfinished projects, inactive workflow runs, large artifacts, orphan blobs, notes, and role reports) using bounded compact metadata; `action: "cleanup"` defaults to `dryRun: true`, only targets safe session/cache files, and never deletes protected stores such as `.spark/projects.json`, artifacts, notes, role reports, workflow runs, or review-gate state. `action: "prune"` is the typed workflow-run retention entry point: it defaults to dry-run, only considers old terminal non-active workflow runs, preserves unacknowledged failed/stale/timed_out records, and keeps the configured newest runs globally and per project. `action: "compact-role-run-artifacts"` is the role-run transcript retention entry point: it defaults to dry-run, lists blobs over `thresholdBytes` with provenance and candidate reason, writes a compact summary plus serialized tail and optional `exportDir` path, and only deletes the full transcript blob on `dryRun:false` after replacement metadata has been written.
 - `spark_list_projects` — list Spark projects as structured JSON with task counts and a `currentForSession` marker. Supports `status: "active" | "done" | "all"`.
 - `spark_use_project` — set or create this session's current Spark project.
 - `spark_rename_project` — rename or update metadata for an existing Spark project without changing task refs.
@@ -22,10 +21,10 @@ Tools:
 - `spark_claim_task` — claim or update concrete task work for the current session in the active project; tasks render as `@name: title`, and optional `roleRef` values are preferred executor hints for orchestrated runs. Claiming is an execution commitment: agents should read the task's bound plan before creating TODOs or executing.
 - `spark_update_task_todos` — update TODOs attached to a claimed task.
 - `spark_update_todos` — update independent session TODOs that are siblings of the project display.
-- `spark_finish_task` — finish this session's claimed task as `done`, `failed`, or `cancelled` without routing through task planning or auto-claiming the next task. When a done task's plan declares `evidenceRequired` but no output artifacts are attached, the tool reports a completion-evidence warning instead of silently treating process/status success as full evidence. In `/execute`, a successful finish may mention the next ready task, but the next task remains unclaimed until another `/execute`, `/run-sequential`, `/run-parallel`, or inferred `/run`.
-- `spark_run_ready_tasks` — start or preflight the Spark orchestrator for ready tasks; dry-run remains synchronous and read-only by default. Ready-task execution assigns reusable role specs at dispatch time and creates fresh `role-run`s by default. `/run`, `/run-sequential`, and `/run-parallel` use the same orchestrator substrate but persist a session run-mode state with `runRef`, `projectRef`, `focus`, `status`, and policy; `maxConcurrency=1` is sequential, the default parallel policy is `maxConcurrency=4`, and `timeoutMs` is a foreground wait budget, so active background role-runs continue running after that wait expires.
-- `spark_background_runs` — user-facing background work interface with `status`, `list`, `inspect`, `kill`, `reconcile`, and `ack`. It exposes active child role-runs, task claims, pids, run refs, DAG progress, legacy timeout records, compact role-run summaries, transcript refs or bounded tail metadata, and next actions. `inspect`/`list` use the compact `role-run` result body and task-run completion summary by default; full stdout/json event transcripts stay behind artifact/transcript refs and are not expanded unless a caller explicitly reads the artifact. Legacy large role-run artifacts are reported by ref with a safe fallback instead of loading full artifact bodies. `kill` requires `runRef`, `taskRef`, or `all:true` and only targets active child role-run processes; `ack` targets failed/stale/legacy `timed_out` problem records.
-- `spark_dag_manager` — legacy low-level compatibility/debug control for persisted Spark orchestrator state with `status`, `reconcile`, `ack`, `prune`, `clear_inactive`, and `kill_active` actions. Prefer `spark_background_runs status/inspect/kill` for normal background inspection and `spark_state prune` for auditable retention; `kill_active` targets child role-run processes, and `timed_out` records are legacy actionable problem records rather than the expected status for new detached background runs.
+- `spark_finish_task` — finish this session's claimed task as `done`, `failed`, or `cancelled` without routing through task planning or auto-claiming the next task. When a done task's plan declares `evidenceRequired` but no output artifacts are attached, the tool reports a completion-evidence warning instead of silently treating process/status success as full evidence. In `/execute`, a successful finish may mention the next ready task, but the next task remains unclaimed until another `/execute` or an explicit `/workflow:goal` continues it.
+- `spark_run_ready_tasks` — start or preflight the Spark workflow-run scheduler for ready tasks; dry-run remains synchronous and read-only by default. Ready-task execution assigns reusable role specs at dispatch time and creates fresh `role-run`s by default. This is the low-level orchestration tool; the user-facing command surface is `/research`, `/plan`, `/execute`, and `/workflow[:selector]` rather than legacy `/run*` slash commands.
+- `spark_background_runs` — user-facing background work interface with `status`, `list`, `inspect`, `kill`, `reconcile`, and `ack`. It exposes active child role-runs, task claims, pids, run refs, workflow-run progress, legacy timeout records, compact role-run summaries, transcript refs or bounded tail metadata, and next actions. `inspect`/`list` use the compact `role-run` result body and task-run completion summary by default; full stdout/json event transcripts stay behind artifact/transcript refs and are not expanded unless a caller explicitly reads the artifact. Legacy large role-run artifacts are reported by ref with a safe fallback instead of loading full artifact bodies. `kill` requires `runRef`, `taskRef`, or `all:true` and only targets active child role-run processes; `ack` targets failed/stale/legacy `timed_out` problem records.
+- `spark_dag_manager` — legacy low-level compatibility/debug control for persisted Spark workflow-run state with `status`, `reconcile`, `ack`, `prune`, `clear_inactive`, and `kill_active` actions. Prefer `spark_background_runs status/inspect/kill` for normal background inspection and `spark_state prune` for auditable retention; `kill_active` targets child role-run processes, and `timed_out` records are legacy actionable problem records rather than the expected status for new detached background runs.
 - `spark_ask` — run a unified flow-native Spark ask workflow with
   one or more questions and persist the result as an ask artifact.
 - `spark_ask_replay` — replay the latest or a specified Spark ask artifact.
@@ -105,28 +104,32 @@ Automatic behavior:
      a lightweight background interval; stale claims become
      retryable `pending` tasks, while runtime execution timeouts
      are marked as failed runs
-   - Spark orchestrator invocations are persisted outside the task graph
-     in `.spark/dag-runs.json`; `spark_status` includes the
-     orchestrator summary, last/active DAG run, unacknowledged problem
+   - Spark workflow-run scheduler invocations are persisted outside the task graph
+     in `.spark/workflow-runs.json`; `spark_status` includes the
+     workflow-run summary, last/active workflow run, unacknowledged problem
      counts, acknowledged known-failure counts, and timeout/stale
      signals
-   - `/run` / `/run-sequential` / `/run-parallel` mode state is persisted in this session's
+   - execute-mode state is persisted in this session's
      `.spark/sessions/<session>.json` entry alongside the
      selected project. It records `runRef`, `projectRef`, `focus`,
      `status`, policy, and timestamps; `policy.maxConcurrency` is the
      stored strategy knob, and the widget displays it as a Spark run
-     line separate from DAG-run history
+     line separate from workflow-run history
    - before reporting status or starting another background wave,
-     Spark reconciles stale `running` orchestrator records from the
+     Spark reconciles stale `running` workflow-run records from the
      current task graph and active role-run process tracker; runs
      may be marked `succeeded`, `failed`, `timed_out`, or `stale`
-   - completed Spark orchestrator runs persist a concise completion
-     follow-up with summary and next actions; background orchestration
-     completion emits that follow-up to the session. Known
-     terminal problem runs can be acknowledged via
-     `spark_background_runs ack` (or low-level `spark_dag_manager ack`), which records `acknowledgedAt` and
-     `acknowledgedBySession` so status output can stay quiet while
-     preserving history. Old DAG-run history is pruned through typed retention (`spark_state prune` or low-level `spark_dag_manager prune`): dry-run is the default, active/running records and unacknowledged problem records are preserved, and recent terminal windows are retained globally and per project.
+   - completed Spark workflow-run scheduler runs persist a concise completion
+     follow-up with summary and next actions; workflow-run completion emits
+     that follow-up to the session. Known terminal problem runs can be
+     acknowledged via `spark_background_runs ack` (or low-level
+     `spark_dag_manager ack`), which records `acknowledgedAt` and
+     `acknowledgedBySession` so status output can stay quiet while preserving
+     history. Old workflow-run history is pruned through typed retention
+     (`spark_state prune` or low-level `spark_dag_manager prune`): dry-run is
+     the default, active/running records and unacknowledged problem records are
+     preserved, and recent terminal windows are retained globally and per
+     project.
    - completion readiness is distinct from task status: a task can
      be marked done while still surfacing missing completion evidence
      when its plan declares `evidenceRequired` and no output artifact
@@ -194,7 +197,7 @@ Automatic behavior:
      immediate dispatch; no-selection is not approval
    - prefer Spark-native delegation by binding concrete tasks to
      builtin/project/user reusable role `roleRef`s and handing execution to the
-     `spark_run_ready_tasks` orchestrator, `/run-sequential`, `/run-parallel`, or inferred `/run`; this creates concrete
+     `spark_run_ready_tasks` workflow-run scheduler or a Spark workflow; this creates concrete
      fresh role-runs with task claims and run artifacts
      attributed to the task/run, while the `roleRef` remains the
      reusable role identity; do not spawn nested `pi` CLI sessions as
@@ -234,7 +237,7 @@ allow_dirs = [
 - `mode: "forked"` requires explicit `forkFromSession` and shares that parent context;
 - it does not claim Spark tasks, write Spark artifacts, or schedule DAG work.
 
-Use `spark_run_ready_tasks` instead when a Spark task should be claimed, attributed, persisted, and tracked by the Spark orchestrator.
+Use `spark_run_ready_tasks` instead when a Spark task should be claimed, attributed, persisted, and tracked by Spark workflow-run state.
 
 ## `pi-ask`
 
@@ -291,6 +294,8 @@ Resource-oriented tools:
 - `cue_exec` — execute commands and create cue-shell jobs. Tool/API runs use the current Pi session working directory by default and pipe mode (`pty: false`) by default; set `pty: true` only for commands that genuinely need terminal semantics. Foreground stdout/stderr are tailed to 16 KiB per stream by default; pass `tail_bytes: 0` for full output.
 - `cue_run` — run a `.cue` file via cue-shell script mode, mirroring `cue run <file.cue>`. Top-level items execute sequentially and fail fast; per-item stdout/stderr are tailed by default.
 - `cue_script` — run an inline `.cue` script body. Use this when the script content is generated in the Pi session; prefer `cue_run` when a real `.cue` file exists on disk.
+- `script_run` — run a script file with an explicit `language`. First batch supports `cue-shell` and `python`; `cue-shell` delegates to RunScript, while `python` runs `python3` through cue-shell job execution.
+- `script_eval` — run an inline script body with an explicit `language`. Inline Python is written to a temporary file before execution.
 - `cue_jobs` — list, inspect, wait for, and stop jobs via `action`. List output is limited to 20 rows by default; `action=status` / `action=wait` output is tailed by default.
 - `cue_schedule` — add/list/pause/resume/remove scheduled or one-shot jobs. List output is limited to 20 rows by default.
 - `cue_scope` — inspect scopes, HEAD env, or cue-shell config. Scope lists are limited to 20 rows by default and omit env unless requested.

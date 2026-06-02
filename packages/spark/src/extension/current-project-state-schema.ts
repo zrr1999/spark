@@ -212,33 +212,34 @@ function normalizeSparkRunModeStatus(value: unknown, filePath: string): SparkRun
 
 function assertOptionalVersionOne(value: unknown, filePath: string, path: string): void {
   if (value !== undefined && value !== 1) {
-    throw new JsonStoreFormatError(filePath, ` must be 1`);
+    throw new JsonStoreFormatError(filePath, `${path} must be 1`);
   }
 }
 
 function requireRecord(value: unknown, filePath: string, path: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new JsonStoreFormatError(filePath, ` must be an object`);
+    throw new JsonStoreFormatError(filePath, `${path} must be an object`);
   }
   return value as Record<string, unknown>;
 }
 
 function requireString(value: unknown, filePath: string, path: string): string {
   if (typeof value !== "string" || !value.trim()) {
-    throw new JsonStoreFormatError(filePath, ` must be a non-empty string`);
+    throw new JsonStoreFormatError(filePath, `${path} must be a non-empty string`);
   }
   return value;
 }
 
 function optionalTrimmedString(value: unknown, filePath: string, path: string): string | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "string") throw new JsonStoreFormatError(filePath, ` must be a string`);
+  if (typeof value !== "string")
+    throw new JsonStoreFormatError(filePath, `${path} must be a string`);
   return value.trim() || undefined;
 }
 
 function requirePositiveNumber(value: unknown, filePath: string, path: string): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    throw new JsonStoreFormatError(filePath, ` must be a positive number`);
+    throw new JsonStoreFormatError(filePath, `${path} must be a positive number`);
   }
   return value;
 }

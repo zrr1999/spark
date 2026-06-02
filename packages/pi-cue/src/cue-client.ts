@@ -264,6 +264,7 @@ export class CueClient {
   #nextId = 1;
   #pending = new Map<number, PendingRequest>();
   #listeners = new Map<string, Set<(event: EventPayload) => void>>();
+  #recentScriptFinished: ScriptFinishedEvent[] = [];
   #buffer = Buffer.alloc(0);
   #closed = false;
   #closePromise: Promise<void>;
@@ -535,6 +536,7 @@ export class CueClient {
     const allKnownJobIds = new Set<string>();
     const stdoutByJob = new Map<string, string[]>();
     const stderrByJob = new Map<string, string[]>();
+    const unknownJobIds: string[] = [];
 
     const ensureJobBuffers = (jobId: string) => {
       if (!stdoutByJob.has(jobId)) stdoutByJob.set(jobId, []);
@@ -591,6 +593,95 @@ export class CueClient {
             );
             itemResults.push(summary);
           }
+
+          const knownSummaryJobs = new Set<string>();
+          for (const summary of itemResults) {
+            for (const jobId of summary.jobIds) knownSummaryJobs.add(jobId);
+          }
+          const inferredJobIds: string[] = [];
+          const knownNumbers = [...knownSummaryJobs]
+            .map((jobId) => Number(jobId.replace(/^J/, "")))
+            .filter((value) => Number.isFinite(value));
+          if (knownNumbers.length > 0) {
+            const maxKnownNumber = Math.max(...knownNumbers);
+            const inferenceJobs = await this.listJobs().catch(() => [] as JobInfo[]);
+            for (const job of inferenceJobs) {
+              const n = Number(job.id.replace(/^J/, ""));
+              if (Number.isFinite(n) && n > maxKnownNumber && !knownSummaryJobs.has(job.id)) {
+                inferredJobIds.push(job.id);
+              }
+            }
+          }
+          const extraJobIds: string[] = [];
+          for (const jobId of [...unknownJobIds, ...inferredJobIds]) {
+            if (!knownSummaryJobs.has(jobId) && !extraJobIds.includes(jobId))
+              extraJobIds.push(jobId);
+          }
+          if (extraJobIds.length > 0) {
+            const allJobs = await this.listJobs().catch(() => [] as JobInfo[]);
+            const jobsById = new Map(allJobs.map((job) => [job.id, job]));
+            const chainIds: string[] = [];
+            const singleJobIds: string[] = [];
+            for (const jobId of extraJobIds) {
+              const job = jobsById.get(jobId);
+              const chainId = job?.chain_id == null ? undefined : String(job.chain_id);
+              if (chainId) {
+                if (!chainIds.includes(chainId)) chainIds.push(chainId);
+              } else if (!singleJobIds.includes(jobId)) {
+                singleJobIds.push(jobId);
+              }
+            }
+            let nextIndex = itemResults.reduce((max, item) => Math.max(max, item.index), -1) + 1;
+            for (const chainId of chainIds) {
+              const jobs = allJobs
+                .filter((job) => String(job.chain_id ?? "") === chainId)
+                .sort((a, b) => (a.chain_index ?? 0) - (b.chain_index ?? 0));
+              if (jobs.length === 0) continue;
+              const chain = this.#chainInfoFromJobs(
+                chainId,
+                jobs.map((job) => job.pipeline).join(" -> "),
+                jobs.length,
+                jobs,
+              );
+              const item: ScriptItemInfo = {
+                index: nextIndex++,
+                source: chain.pipeline,
+                result: {
+                  kind: "chain",
+                  chain_id: chainId,
+                  job_ids: jobs.map((job) => job.id),
+                  chain,
+                },
+              };
+              itemResults.push(
+                await this.#summarizeScriptItem(
+                  item,
+                  jobs.map((job) => job.id),
+                  stdoutByJob,
+                  stderrByJob,
+                ),
+              );
+              for (const job of jobs) knownSummaryJobs.add(job.id);
+            }
+            for (const jobId of singleJobIds) {
+              if (knownSummaryJobs.has(jobId)) continue;
+              const job = jobsById.get(jobId);
+              const item: ScriptItemInfo = {
+                index: nextIndex++,
+                source: job?.pipeline ?? jobId,
+                result: {
+                  kind: "job",
+                  job_id: jobId,
+                  start_scope: job?.start_scope,
+                  open_hint: "stream",
+                },
+              };
+              itemResults.push(
+                await this.#summarizeScriptItem(item, [jobId], stdoutByJob, stderrByJob),
+              );
+            }
+          }
+
           resolve({
             scriptId: created.script_id,
             source: created.source ?? { kind: "inline" },
@@ -624,7 +715,12 @@ export class CueClient {
         if (!("OutputChunk" in event)) return;
         const chunk = (event as { OutputChunk: OutputChunkEvent }).OutputChunk;
         const buf = chunk.stream === "stdout" ? stdoutByJob : stderrByJob;
-        const list = buf.get(chunk.id);
+        let list = buf.get(chunk.id);
+        if (!list) {
+          ensureJobBuffers(chunk.id);
+          if (!unknownJobIds.includes(chunk.id)) unknownJobIds.push(chunk.id);
+          list = buf.get(chunk.id);
+        }
         if (list) list.push(chunk.data);
       };
 
@@ -635,6 +731,15 @@ export class CueClient {
         unsubs.push(this.onEvent(`output:${jobId}`, onOutput));
       };
       for (const jid of allKnownJobIds) ensureForwarder(jid);
+      unsubs.push(this.onEvent("output:", onOutput));
+
+      const cachedFinished = this.#recentScriptFinished.find(
+        (fin) => fin.script_id === created.script_id,
+      );
+      if (cachedFinished) {
+        finished = cachedFinished;
+        void finalize();
+      }
 
       const onJobs = (event: EventPayload) => {
         if ("ScriptFinished" in event) {
@@ -645,17 +750,30 @@ export class CueClient {
           }
           return;
         }
+        if ("JobCreated" in event) {
+          const job = (event as { JobCreated: JobCreatedEvent }).JobCreated;
+          const jid = job.job_id;
+          if (!allKnownJobIds.has(jid)) {
+            if (!unknownJobIds.includes(jid)) unknownJobIds.push(jid);
+            ensureJobBuffers(jid);
+            void this.subscribe([`output:`]).then(() => ensureForwarder(jid));
+          }
+          return;
+        }
         if ("ChainProgress" in event) {
           const progress = (event as { ChainProgress: { chain: ChainInfo } }).ChainProgress;
           const item = created.items.find(
             (it) => it.result.kind === "chain" && it.result.chain_id === progress.chain.id,
           );
-          if (item) {
-            for (const job of progress.chain.jobs) {
-              const jid = job.job_id;
-              if (jid) {
-                void trackJob(item.index, jid).then(() => ensureForwarder(jid));
-              }
+          for (const job of progress.chain.jobs) {
+            const jid = job.job_id;
+            if (!jid) continue;
+            if (item) {
+              void trackJob(item.index, jid).then(() => ensureForwarder(jid));
+            } else if (!allKnownJobIds.has(jid)) {
+              if (!unknownJobIds.includes(jid)) unknownJobIds.push(jid);
+              ensureJobBuffers(jid);
+              void this.subscribe([`output:`]).then(() => ensureForwarder(jid));
             }
           }
         }
@@ -1141,6 +1259,9 @@ export class CueClient {
     } else if ("ChainFinished" in payload) {
       channel = `jobs`;
     } else if ("ScriptFinished" in payload) {
+      const fin = (payload as { ScriptFinished: ScriptFinishedEvent }).ScriptFinished;
+      this.#recentScriptFinished.push(fin);
+      if (this.#recentScriptFinished.length > 32) this.#recentScriptFinished.shift();
       channel = `jobs`;
     } else if ("JobRemoved" in payload) {
       channel = `jobs`;
@@ -1153,8 +1274,8 @@ export class CueClient {
     }
 
     if (channel) {
-      const listeners = this.#listeners.get(channel);
-      if (listeners) {
+      const notify = (listeners: Set<(event: EventPayload) => void> | undefined) => {
+        if (!listeners) return;
         for (const handler of listeners) {
           try {
             handler(payload);
@@ -1162,7 +1283,9 @@ export class CueClient {
             // swallow listener errors
           }
         }
-      }
+      };
+      notify(this.#listeners.get(channel));
+      if (channel.startsWith("output:")) notify(this.#listeners.get("output:"));
     }
   }
 

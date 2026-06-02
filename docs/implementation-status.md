@@ -57,10 +57,6 @@ but end-to-end local vertical slice.
    - role-ref requirement for every run request
    - role-spec management tools (`list_roles`, `get_role`, `create_role`)
    - minimal task-agnostic `call_role` tool with dry-run, fresh, and explicit forked modes
-- `spark-review`
-   - review gates
-   - gate policies
-   - review artifact body helpers
 - `spark-tasks`
    - project/task DAG
    - cycle detection
@@ -95,7 +91,7 @@ but end-to-end local vertical slice.
    - Spark-specific active role-run tracking for timeout/reconciliation and kill controls
    - persisted expired-claim sweeper and distinct `runtime_timeout` failure marking
 - `spark`
-   - `/spark <idea>`, `/plan <focus>`, `/execute <focus>`, `/run <focus>`, `/run-sequential <focus>`, and `/run-parallel <focus>` commands. `/execute` is single-task execution; `/run-sequential` persists run-mode state with `maxConcurrency=1`; `/run-parallel` keeps the existing parallel DAG-manager progress; `/run` infers between those strategies.
+   - `/spark <idea>`, `/research <focus>`, `/plan <focus>`, `/execute <focus>`, and `/workflow[:selector] <focus>` commands; see [tools.md](./tools.md) for the canonical command-mode wording.
    - `spark_status` tool
    - `spark_claim_task` tool for named model-claimed current work
    - `spark_plan_tasks` writes durable task-plan changes directly after
@@ -125,30 +121,30 @@ but end-to-end local vertical slice.
      questions should be represented with `spark_ask` rather
      than prose
    - `.spark/` state is always created and should stay Git-ignored;
-     root `SPARK.md` is only materialized by `/spark` initialization when `.git` exists in cwd; direct `/plan`/`/execute`/`/run`/`/run-sequential`/`/run-parallel` modes do not create it
+     root `SPARK.md` is only materialized by `/spark` initialization when `.git` exists in cwd; direct `/research`/`/plan`/`/execute`/`/workflow[:selector]` modes do not create it
    - SPARK.md artifact, task graph, role plan artifact,
      review gate, and run trace generation
    - SPARK.md injection into the active turn system prompt as
      persistent project intent
    - default text UI summary for active project task counts,
      session-claimed tasks, task TODOs, independent session
-     TODO siblings, Spark orchestrator state, and run-mode status after Spark initialization and on active Spark turns
+     TODO siblings, Spark workflow-run state, and run-mode status after Spark initialization and on active Spark turns
    - active-session task TODO files live under
      `.spark/todos/<session>.json`; independent TODOs managed by
      `spark_update_todos` live under
      `.spark/session-todos/<session>.json`, with stable display
      numbers in `.spark/todo-display-numbers/<session>.json`
-   - `spark_state` provides explicit `.spark` session/cache status and dry-run-by-default cleanup for safe cache files while protecting project graph, artifacts, notes, DAG runs, and review-gate state
+   - `spark_state` provides explicit `.spark` session/cache status and dry-run-by-default cleanup for safe cache files while protecting project graph, artifacts, notes, workflow runs, and review-gate state
    - invariant repair that clears stale current-task refs
      without creating placeholder tasks
    - ask artifacts linked into the Spark run trace when init clarification runs
    - project role store hydration before ready-task execution
-   - `/run` / `/run-sequential` / `/run-parallel` background orchestration starts/resumes the Spark orchestrator, advances newly unblocked ready work, and records terminal run-mode states (`done`, `blocked`, or `failed`) without queuing a second main-agent turn or synthetic user messages
+   - `/workflow:goal` and other `/workflow[:selector]` commands are workflow strategies layered above Spark tasks/workflows; workflow-run scheduling remains available through lower-level Spark workflow tools rather than legacy `/run*` commands
 
 ## Boundary cleanup status
 
 - `pi-roles` is now the generic role package. It owns reusable role specs and simple single child Pi role runs.
-- Spark packages keep task DAGs, task claims, TODOs, artifacts, asks, review gates, and background orchestration.
+- Spark packages keep task DAGs, task claims, TODOs, artifacts, asks, review gates, and workflow-run scheduling.
 - Deprecated role-shaped fields, aliases, and agent storage paths are rejected at package boundaries. Repair or migrate stale local state explicitly instead of relying on runtime compatibility shims. See [role-boundaries.md](./role-boundaries.md) and [role-run-modes.md](./role-run-modes.md).
 
 ## Deferred by design

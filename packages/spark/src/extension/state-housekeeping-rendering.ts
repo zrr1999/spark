@@ -42,7 +42,7 @@ export function appendSparkStateDiagnosticsLines(
   appendProtectedFileDiagnostics(lines, "notes", diagnostics.notes);
   appendProtectedFileDiagnostics(lines, "role reports", diagnostics.roleReports);
   lines.push(
-    "Protected-store diagnostics are read-only; no project graph, artifact, note, role-report, DAG run, or review-gate files were deleted.",
+    "Protected-store diagnostics are read-only; no project graph, artifact, note, role-report, workflow-run, or review-gate files were deleted.",
   );
 }
 
@@ -126,7 +126,7 @@ function appendInactiveDagRunDiagnostics(
   summary: SparkStateDiagnosticsSummary["inactiveDagRuns"],
 ): void {
   lines.push(
-    `Inactive DAG runs: ${summary.count}${summary.shown < summary.count ? ` (showing ${summary.shown})` : ""}`,
+    `Inactive workflow runs: ${summary.count}${summary.shown < summary.count ? ` (showing ${summary.shown})` : ""}`,
   );
   for (const run of summary.candidates)
     lines.push(
@@ -233,7 +233,7 @@ export function formatSparkProtectedStoreReason(reason: SparkProtectedStoreReaso
     case "review-gate":
       return "review gate";
     case "dag-runs":
-      return "dag runs";
+      return "workflow runs";
   }
 }
 

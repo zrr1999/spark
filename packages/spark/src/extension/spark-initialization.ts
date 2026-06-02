@@ -12,8 +12,8 @@ import {
   type JsonValue,
   type SparkRunTrace,
   type ProjectRef,
+  type ReviewGate,
 } from "spark-core";
-import { createReviewGate } from "spark-review";
 import { defaultTaskGraphStore, TaskGraph, type TaskTodoSummary } from "spark-tasks";
 import { pathExists, readActiveSparkMd, shouldMaterializeSparkMd } from "./spark-activation.ts";
 import {
@@ -91,13 +91,15 @@ export async function initializeSparkIdea(
     },
   });
 
-  const gate = createReviewGate({
+  const gate: ReviewGate = {
+    ref: newRef("review"),
     subject: rolePlanArtifact.ref,
     lens: "artifact",
     policy: "required",
     outcome: "blocked",
     summary: "Initial Spark flow created a review gate; reviewer execution is pending.",
-  });
+    createdAt: nowIso(),
+  };
 
   const trace: SparkRunTrace = {
     ref: newRef("spark"),

@@ -128,7 +128,7 @@ void test("active Spark prompt preserves base prompt and avoids repeated Spark d
   const prompt = renderSparkActiveSystemPrompt("Base prompt", "SPARK.md");
   assert.match(prompt, /^Base prompt\n\nSpark is active for this workspace/);
   assert.match(prompt, /standing project state/);
-  assert.match(prompt, /Spark tools for project\/task\/TODO\/DAG\/ask state/);
+  assert.match(prompt, /Spark tools for project\/task\/TODO\/workflow-run\/ask state/);
   assert.match(prompt, /Spark ask tools \(`spark_ask`\)/);
   assert.match(prompt, /fix concrete repo behavior feedback in code\/docs\/tests/);
   assert.doesNotMatch(prompt, /Do not auto-create placeholder tasks or projects/);

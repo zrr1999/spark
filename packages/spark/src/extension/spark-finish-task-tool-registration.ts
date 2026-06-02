@@ -18,6 +18,10 @@ import { resolveSessionClaimedTask } from "./task-claim-selection.ts";
 import { compactTaskDetail, normalizeOptionalToolString } from "./task-plan-tool.ts";
 import { compactLearningDetail } from "./learning-tools.ts";
 import { truncateInline } from "./tool-rendering.ts";
+import {
+  renderSparkGoalContinuationPrompt,
+  sparkGoalObjectiveForNextTask,
+} from "./spark-goal-continuation.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 
 interface SparkFinishTaskToolDependencies {
@@ -174,16 +178,38 @@ function renderExecutionModeFinishSuffix(
   status: "done" | "failed" | "cancelled",
 ): string {
   if (executionMode?.projectRef !== projectRef || status !== "done") return "";
-  if (executionMode.strategy === "goal") {
+  if (executionMode.strategy === "goal" || executionMode.workflowName === "builtin:goal") {
+    const continuation = renderSparkGoalContinuationPrompt(
+      sparkGoalObjectiveForNextTask({
+        focus: executionMode.focus,
+        nextTaskName: nextReady?.name,
+        nextTaskTitle: nextReady?.title,
+      }),
+    );
+    const modeLabel =
+      executionMode.workflowName === "builtin:goal" ? "Goal workflow" : "Goal execution mode";
     return nextReady
-      ? `\nGoal execution mode continuing. Next ready task: @${nextReady.name}: ${nextReady.title}. Continue now: claim this task with spark_claim_task, execute it, verify evidence, then call spark_finish_task again. Do not stop after this task unless blocked, no ready task remains, a user decision is required, validation fails, or the user interrupts.`
-      : "\nGoal execution mode complete. No ready task remains; inspect blockers or finish the project.";
+      ? "\n" +
+          modeLabel +
+          " continuing. Next ready task: @" +
+          nextReady.name +
+          ": " +
+          nextReady.title +
+          ". Continue now using the Spark goal continuation below: claim this task with spark_claim_task, execute it, verify evidence, then call spark_finish_task again. Do not stop after this task unless blocked, no ready task remains, a user decision is required, validation fails, or the user interrupts.\n\n" +
+          continuation
+      : "\n" +
+          modeLabel +
+          " complete. No ready task remains; inspect blockers or finish the project.\n\n" +
+          continuation;
   }
   return nextReady
-    ? `\nExecution mode stopped after one task. Next ready task: @${nextReady.name}: ${nextReady.title}. Run /execute to take one more step, or /goal to continue autonomously.`
+    ? "\nExecution mode stopped after one task. Next ready task: @" +
+        nextReady.name +
+        ": " +
+        nextReady.title +
+        ". Run /execute to take one more step, or /workflow:goal to continue autonomously."
     : "\nExecution mode stopped after one task. No ready task remains; inspect blockers or finish the project.";
 }
-
 function normalizeSparkFinishStatus(value: unknown): "done" | "failed" | "cancelled" {
   if (value === undefined || value === null) return "done";
   if (value === "done" || value === "failed" || value === "cancelled") return value;

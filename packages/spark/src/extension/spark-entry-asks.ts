@@ -1,12 +1,11 @@
 import type { SparkAskToolParams } from "spark-ask";
-import type { ProjectRef } from "spark-core";
-import type { TaskGraph } from "spark-tasks";
+import type { SparkExecuteStrategy } from "./session-state.ts";
+import type { SparkWorkflowRegistryListing } from "./spark-workflow-registry.ts";
 import type {
-  SparkCommandProjectState,
   SparkEntryModeAnalysis,
   SparkEntryModeChoice,
+  SparkExecuteStrategyAnalysis,
 } from "./spark-entry.ts";
-import type { SparkRunStrategy } from "./session-state.ts";
 import { truncateInline } from "./tool-rendering.ts";
 
 export function sparkModeAsk(analysis: SparkEntryModeAnalysis): SparkAskToolParams {
@@ -24,24 +23,24 @@ export function sparkModeAsk(analysis: SparkEntryModeAnalysis): SparkAskToolPara
     questions: [
       {
         id: "mode",
-        prompt: `For “${truncateInline(title, 80)}”, should this turn organize tasks, execute one task, or run continuously? Recommended: ${analysis.recommendation}.`,
+        prompt: `For “${truncateInline(title, 80)}”, should this turn research, plan tasks, or execute work? Recommended: ${analysis.recommendation}.`,
         type: "single",
         required: true,
         options: [
           {
-            id: "planning",
+            id: "research",
+            label: `Research “${truncateInline(title, 32)}”`,
+            description: `Use research mode now: inspect code, docs, artifacts, and external context without changing tasks, then summarize findings and ask whether to enter plan mode when new task work is needed.`,
+          },
+          {
+            id: "plan",
             label: `Plan “${truncateInline(title, 32)}”`,
             description: `Use planning mode now: inspect the ${analysis.unfinishedTaskCount} unfinished task(s), ask context-specific clarification or decision questions when they change the task plan, and add or refine concrete plan-bound tasks before execution.`,
           },
           {
-            id: "execution",
+            id: "execute",
             label: `Execute “${truncateInline(title, 32)}”`,
             description: `Use execution mode now: inspect the ${analysis.readyTaskCount} execution-ready task(s), then claim and complete at most one concrete task without broad replanning or continuous background progress.`,
-          },
-          {
-            id: "run",
-            label: `Run “${truncateInline(title, 32)}”`,
-            description: `Use sequential run mode now: continuously claim and execute ready tasks one at a time in this session (foreground loop) until done, blocked, or interrupted. Use /run-parallel for background parallel execution.`,
           },
           {
             id: "new_project",
@@ -59,46 +58,124 @@ export function sparkModeFromAskDetails(
 ): SparkEntryModeChoice | undefined {
   const modeAnswer = (details.answers as { mode?: { values?: unknown[] } } | undefined)?.mode;
   const value = modeAnswer?.values?.[0];
-  return value === "new_project" || value === "planning" || value === "execution" || value === "run"
+  return value === "new_project" || value === "research" || value === "plan" || value === "execute"
     ? value
     : undefined;
 }
 
-export function sparkRunStrategyAsk(
-  graph: TaskGraph,
-  projectState: SparkCommandProjectState,
-  prompt: string,
-  selectedProject: { ref: ProjectRef; title: string } | undefined,
+export function sparkExecuteStrategyAsk(
+  analysis: SparkExecuteStrategyAnalysis,
 ): SparkAskToolParams {
-  const title = selectedProject?.title ?? graph.projects()[0]?.title ?? "current Spark workspace";
-  const readyTaskCount = graph.readyTasks(selectedProject?.ref).length;
-  const promptLine = prompt.trim() ? `\nPrompt: ${prompt.trim()}` : "";
+  const title = analysis.currentProjectTitle;
+  const reasonLines = analysis.reasons.map((reason) => "- " + reason);
   return {
     mode: "decision",
-    flow: "spark-run-strategy",
-    title: `Choose run strategy for “${truncateInline(title, 80)}”`,
+    flow: "spark-execute-strategy",
+    title: "Choose execute strategy for “" + truncateInline(title, 80) + "”",
     context: [
-      `Spark run mode can either execute ready tasks one at a time or keep the existing parallel frontier scheduler.`,
-      `Current workspace context: ${projectState.unfinishedTaskCount} unfinished task(s), ${readyTaskCount} execution-ready task(s).${promptLine}`,
+      "/execute defaults to one bounded execution step. The prompt appears to request a broader execute strategy, so Spark needs an explicit decision before changing scope.",
+      "Current execution context: " +
+        analysis.readyTaskCount +
+        " execution-ready task(s), " +
+        analysis.pendingTaskCount +
+        " pending/ready task(s).",
+      ...reasonLines,
     ].join("\n"),
     questions: [
       {
-        id: "strategy",
-        prompt: `How should Spark continuously run “${truncateInline(title, 80)}”?`,
+        id: "executeStrategy",
+        prompt:
+          "For “" +
+          truncateInline(title, 80) +
+          "”, which execute strategy should this /execute turn use? Recommended: " +
+          analysis.recommendation +
+          ".",
         type: "single",
         required: true,
         options: [
           {
-            id: "sequential",
-            label: "Sequential (foreground)",
+            id: "default",
+            label: "Default “" + truncateInline(title, 32) + "”",
             description:
-              "Continuously execute ready tasks one at a time in this session (foreground loop). No background processes; the current session claims and finishes each task before moving to the next.",
+              "Use default execution now: claim and finish at most one concrete ready task, then stop and report the next suggested step.",
           },
           {
-            id: "parallel",
-            label: "Parallel (background)",
+            id: "goal",
+            label: "Goal “" + truncateInline(title, 32) + "”",
             description:
-              "Use the background parallel ready-frontier scheduler (default maxConcurrency=4), continuing until done or blocked. The current session observes; actual task work happens in spawned child role-runs.",
+              "Use goal execution now: continue autonomous, verified progress across ready tasks until complete or blocked by a required decision.",
+          },
+          {
+            id: "workflow",
+            label: "Workflow “" + truncateInline(title, 32) + "”",
+            description:
+              "Use workflow execution now: select or start a Spark workflow such as deep research or adversarial review instead of a single task step.",
+          },
+        ],
+      },
+    ],
+  };
+}
+export function sparkExecuteStrategyFromAskDetails(
+  details: Record<string, unknown>,
+): SparkExecuteStrategy | undefined {
+  const answer = (details.answers as { executeStrategy?: { values?: unknown[] } } | undefined)
+    ?.executeStrategy;
+  const value = answer?.values?.[0];
+  return value === "default" || value === "goal" || value === "workflow" ? value : undefined;
+}
+
+export interface SparkWorkflowSelectorAskInput {
+  currentProjectTitle: string;
+  focus?: string;
+  listing: SparkWorkflowRegistryListing;
+  requestedSelector?: string;
+}
+
+export function sparkWorkflowSelectorAsk(input: SparkWorkflowSelectorAskInput): SparkAskToolParams {
+  const title = truncateInline(input.currentProjectTitle, 80);
+  const focus = input.focus?.trim();
+  const reason = input.requestedSelector
+    ? "The requested workflow selector “" + input.requestedSelector + "” was not found."
+    : "No workflow selector was provided.";
+  const errors = input.listing.errors.map(
+    (error) =>
+      "- " + error.source + " workflow metadata error in " + error.path + ": " + error.error,
+  );
+  return {
+    mode: "decision",
+    flow: "spark-workflow-selector",
+    title: "Choose workflow for “" + title + "”",
+    context: [
+      "/workflow runs a builtin, workspace, or user Spark workflow. Spark needs an explicit selector before starting workflow execution.",
+      reason,
+      focus ? "Workflow focus: " + focus : undefined,
+      ...errors,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    questions: [
+      {
+        id: "workflowSelector",
+        prompt: "Which workflow should Spark use for “" + title + "”?",
+        type: "single",
+        required: true,
+        options: [
+          ...input.listing.workflows.map((workflow) => ({
+            id: workflow.source + ":" + workflow.id,
+            label: workflow.source + ":" + workflow.id + " — " + truncateInline(workflow.title, 40),
+            description:
+              "Use this " +
+              workflow.source +
+              " workflow now: " +
+              workflow.description +
+              (workflow.phases.length ? " Phases: " + workflow.phases.join(", ") + "." : ""),
+          })),
+          {
+            id: "create_workspace",
+            label: "Create workspace workflow",
+            description:
+              "Do not execute a workflow now. Start a new .spark/workflows/*.js workspace workflow draft for this project instead.",
           },
         ],
       },
@@ -106,10 +183,11 @@ export function sparkRunStrategyAsk(
   };
 }
 
-export function sparkRunStrategyFromAskDetails(
+export function sparkWorkflowSelectorFromAskDetails(
   details: Record<string, unknown>,
-): SparkRunStrategy | undefined {
-  const answer = (details.answers as { strategy?: { values?: unknown[] } } | undefined)?.strategy;
+): string | undefined {
+  const answer = (details.answers as { workflowSelector?: { values?: unknown[] } } | undefined)
+    ?.workflowSelector;
   const value = answer?.values?.[0];
-  return value === "sequential" || value === "parallel" ? value : undefined;
+  return typeof value === "string" ? value : undefined;
 }

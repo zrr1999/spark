@@ -43,6 +43,15 @@ void test("normalizeCueStderrForDisplay removes duplicated PTY merge note", () =
     normalizeCueStderrForDisplay("[PTY: stdout and stderr are merged]\nhello\r\n", "hello\r\n"),
     "",
   );
+  assert.equal(
+    normalizeCueStderrForDisplay(
+      ["[PTY: stdout and stderr are merged]", "[PTY: stdout and stderr are merged]", "hello"].join(
+        "\n",
+      ),
+      "hello\n",
+    ),
+    "",
+  );
 });
 
 void test("renderCueScriptResult includes source, timeout, item identity, and status", () => {

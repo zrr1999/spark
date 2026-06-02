@@ -47,7 +47,7 @@ export async function collectSparkProtectedStoreSummaries(
     await summarizeProtectedSparkStore(root, "artifacts", "artifact-history", true),
     await summarizeProtectedSparkStore(root, "notes", "notes", true),
     await summarizeProtectedSparkStore(root, "role-reports", "role-reports", true),
-    await summarizeProtectedSparkStore(root, "dag-runs.json", "dag-runs", false),
+    await summarizeProtectedSparkStore(root, "workflow-runs.json", "dag-runs", false),
     await summarizeProtectedSparkStore(root, "review-gate.json", "review-gate", false),
   ];
 }

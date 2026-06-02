@@ -691,6 +691,31 @@ void test("ready tasks require completed dependencies and execution-ready plan, 
   );
 });
 
+void test("adding unmet dependency moves default-ready task back to pending", () => {
+  const graph = new TaskGraph();
+  const project = graph.createProject({ title: "Demo", description: "demo" });
+  const prerequisite = graph.createTask({
+    projectRef: project.ref,
+    title: "Prerequisite",
+    description: "prerequisite",
+    status: "pending",
+    plan: executionReadyPlan("Complete prerequisite"),
+  });
+  const dependent = graph.createTask({
+    projectRef: project.ref,
+    title: "Dependent",
+    description: "dependent",
+    plan: executionReadyPlan("Complete dependent"),
+  });
+
+  assert.equal(dependent.status, "ready");
+  graph.addDependency(dependent.ref, prerequisite.ref);
+  assert.equal(graph.getTask(dependent.ref).status, "pending");
+  graph.setTaskStatus(prerequisite.ref, "done");
+  graph.enqueueReadyTasks(project.ref);
+  assert.equal(graph.getTask(dependent.ref).status, "ready");
+});
+
 void test("task cancellation is blocked while non-cancelled tasks depend on it", () => {
   const graph = new TaskGraph();
   const project = graph.createProject({ title: "Demo", description: "demo" });
@@ -2242,7 +2267,10 @@ void test("Spark DAG run store persists manager lifecycle and task progress", as
     });
 
     assert.ok(followUp);
-    assert.equal(followUp.summary, `Spark DAG ${dagRun.ref} succeeded: scheduled 1, completed 1.`);
+    assert.equal(
+      followUp.summary,
+      `Spark workflow run: ${dagRun.ref} succeeded: scheduled 1, completed 1.`,
+    );
     assert.deepEqual(followUp.nextActions, [
       "Review task outputs and continue with newly unblocked ready tasks if any.",
     ]);
@@ -2555,7 +2583,10 @@ void test("Spark DAG run store marks finished manager runs failed when child run
     });
 
     assert.ok(followUp);
-    assert.equal(followUp.summary, `Spark DAG ${dagRun.ref} failed: scheduled 1, completed 1.`);
+    assert.equal(
+      followUp.summary,
+      `Spark workflow run: ${dagRun.ref} failed: scheduled 1, completed 1.`,
+    );
     assert.match(followUp.nextActions.join("\n"), /failed: inspect spark_background_runs inspect/);
     assert.match(followUp.nextActions.join("\n"), /rerun ready background work/);
     const status = await store.status();
@@ -3328,7 +3359,7 @@ void test("runReadySparkTasks propagates missing role errors before creating chi
   );
 
   assert.equal(graph.runs(project.ref).length, 0);
-  assert.equal(graph.getTask(task.ref).status, "pending");
+  assert.equal(graph.getTask(task.ref).status, "ready");
   assert.equal(graph.getTask(task.ref).claim, undefined);
 });
 

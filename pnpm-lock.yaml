@@ -40,9 +40,6 @@ importers:
       spark-orchestrator:
         specifier: file:packages/spark-orchestrator
         version: link:packages/spark-orchestrator
-      spark-review:
-        specifier: file:packages/spark-review
-        version: link:packages/spark-review
       spark-runtime:
         specifier: file:packages/spark-runtime
         version: link:packages/spark-runtime
@@ -140,21 +137,24 @@ importers:
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core
+      spark-goal:
+        specifier: file:../spark-goal
+        version: link:../spark-goal
       spark-learnings:
         specifier: file:../spark-learnings
         version: link:../spark-learnings
       spark-orchestrator:
         specifier: file:../spark-orchestrator
         version: link:../spark-orchestrator
-      spark-review:
-        specifier: file:../spark-review
-        version: link:../spark-review
       spark-runtime:
         specifier: file:../spark-runtime
         version: link:../spark-runtime
       spark-tasks:
         specifier: file:../spark-tasks
         version: link:../spark-tasks
+      spark-workflows:
+        specifier: file:../spark-workflows
+        version: link:../spark-workflows
       typebox:
         specifier: ^1.1.38
         version: 1.1.38
@@ -178,6 +178,8 @@ importers:
         version: link:../spark-core
 
   packages/spark-core: {}
+
+  packages/spark-goal: {}
 
   packages/spark-learnings:
     dependencies:
@@ -206,12 +208,6 @@ importers:
         specifier: file:../spark-tasks
         version: link:../spark-tasks
 
-  packages/spark-review:
-    dependencies:
-      spark-core:
-        specifier: file:../spark-core
-        version: link:../spark-core
-
   packages/spark-runtime:
     dependencies:
       pi-roles:
@@ -228,6 +224,12 @@ importers:
         version: link:../spark-tasks
 
   packages/spark-tasks:
+    dependencies:
+      spark-core:
+        specifier: file:../spark-core
+        version: link:../spark-core
+
+  packages/spark-workflows:
     dependencies:
       spark-core:
         specifier: file:../spark-core

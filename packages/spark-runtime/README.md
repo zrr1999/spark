@@ -2,7 +2,7 @@
 
 Spark runtime adapter for executing one Spark task with a registered role.
 
-Runtime resolves reusable `RoleSpec`s from `pi-roles`, calls `runRole()` for concrete child Pi executions, and adapts those `RoleRun`s back into Spark task/run/artifact state. Ready-frontier scheduling and durable background orchestration state live in `spark-orchestrator`.
+Runtime resolves reusable `RoleSpec`s from `pi-roles`, calls `runRole()` for concrete child Pi executions, and adapts those `RoleRun`s back into Spark task/run/artifact state. Ready-frontier scheduling and durable workflow-run state live in `spark-orchestrator`.
 
 Responsibilities:
 
@@ -23,7 +23,7 @@ Non-responsibilities:
 
 - does not own role specs or role storage (`pi-roles`)
 - does not own DAG/TODO/claim data structures (`spark-tasks`)
-- does not schedule ready task waves or own `.spark/dag-runs.json` (`spark-orchestrator`)
+- does not schedule ready task waves or own `.spark/workflow-runs.json` (`spark-orchestrator`)
 - does not provide generic Pi tools (`pi-*` packages)
 
 Default launch mode:

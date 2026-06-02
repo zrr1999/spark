@@ -619,7 +619,7 @@ void test("/spark command detects empty, existing, and initialized project modes
     assert.equal(existingRun.messages.length, 0);
     assert.equal(existingRun.customMessages.length, 1);
     assert.doesNotMatch(existingRun.customMessages[0]?.content ?? "", /Spark initialized/);
-    assert.match(existingRun.customMessages[0]?.content ?? "", /Spark planning mode requested/);
+    assert.match(existingRun.customMessages[0]?.content ?? "", /Spark plan mode requested/);
     const existingMessage = await consumeSparkModeContext(existingRun, existingCtx);
     assert.match(existingMessage, /Enter Spark planning mode/);
     assert.match(existingMessage, /Audit existing project structure/);
@@ -661,10 +661,7 @@ void test("/spark command detects empty, existing, and initialized project modes
     assert.ok(initializedCommand, "missing /spark command");
     initializedCtx.selected = "Plan “Tool persistence”";
     await initializedCommand.handler("", initializedCtx);
-    assert.match(
-      initializedRun.customMessages.at(-1)?.content ?? "",
-      /Spark planning mode requested/,
-    );
+    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /Spark plan mode requested/);
     assert.match(
       await consumeSparkModeContext(initializedRun, initializedCtx),
       /Enter Spark planning mode/,
@@ -674,23 +671,23 @@ void test("/spark command detects empty, existing, and initialized project modes
     await initializedCommand.handler("", initializedCtx);
     assert.match(
       initializedRun.customMessages.at(-1)?.content ?? "",
-      /Spark execution mode requested/,
+      /Spark execute mode requested/,
     );
     assert.match(
       await consumeSparkModeContext(initializedRun, initializedCtx),
       /Enter Spark execution mode/,
     );
 
-    initializedCtx.selected = "Run “Tool persistence”";
-    await initializedCommand.handler("keep running until done", initializedCtx);
+    initializedCtx.selected = "Research “Tool persistence”";
+    await initializedCommand.handler("investigate current context", initializedCtx);
     assert.match(
       initializedRun.customMessages.at(-1)?.content ?? "",
-      /Spark run mode requested \(sequential, foreground loop\)/,
+      /Spark research mode requested/,
     );
     {
-      const runMsg = await consumeSparkModeContext(initializedRun, initializedCtx);
-      assert.match(runMsg, /Enter Spark sequential run mode \(foreground loop in this session\)/);
-      assert.match(runMsg, /Continuously claim and execute ready tasks/);
+      const researchMsg = await consumeSparkModeContext(initializedRun, initializedCtx);
+      assert.match(researchMsg, /Enter Spark research mode/);
+      assert.match(researchMsg, /Do not call spark_plan_tasks/);
     }
 
     initializedCtx.ui.select = async () =>
@@ -698,7 +695,7 @@ void test("/spark command detects empty, existing, and initialized project modes
     await initializedCommand.handler("execute the ready task", initializedCtx);
     assert.match(
       initializedRun.customMessages.at(-1)?.content ?? "",
-      /Spark execution mode requested/,
+      /Spark execute mode requested/,
     );
     assert.match(
       await consumeSparkModeContext(initializedRun, initializedCtx),
@@ -730,7 +727,7 @@ void test("bare /spark in an existing project requires a concrete planning focus
   }
 });
 
-void test("/plan, /execute, and /run enter Spark modes directly", async () => {
+void test("/research, /plan, /execute, and /workflow selector commands enter Spark modes directly", async () => {
   const existingDir = await mkdtemp(join(tmpdir(), "spark-plan-direct-existing-"));
   const initializedDir = await mkdtemp(join(tmpdir(), "spark-execute-direct-initialized-"));
   const emptyDir = await mkdtemp(join(tmpdir(), "spark-execute-direct-empty-"));
@@ -751,7 +748,7 @@ void test("/plan, /execute, and /run enter Spark modes directly", async () => {
       existingRun.customMessages[0]?.content ?? "",
       /Enter Spark planning mode from \/plan/,
     );
-    assert.match(existingRun.customMessages[0]?.content ?? "", /Spark planning mode requested/);
+    assert.match(existingRun.customMessages[0]?.content ?? "", /Spark plan mode requested/);
     assert.match(existingRun.customMessages[0]?.content ?? "", /Audit current task flow/);
     const planMessage = await consumeSparkModeContext(existingRun, existingCtx);
     assert.match(planMessage, /Enter Spark planning mode from \/plan/);
@@ -808,7 +805,7 @@ void test("/plan, /execute, and /run enter Spark modes directly", async () => {
     assert.equal(initializedRun.messages.length, 0);
     assert.match(
       initializedRun.customMessages.at(-1)?.content ?? "",
-      /Spark execution mode requested/,
+      /Spark execute mode requested/,
     );
     assert.match(
       initializedRun.customMessages.at(-1)?.content ?? "",
@@ -819,99 +816,158 @@ void test("/plan, /execute, and /run enter Spark modes directly", async () => {
     assert.match(executeMessage, /Execution focus: Finish the direct execution task/);
     assert.match(executeMessage, /Claim at most one concrete task/);
     assert.match(executeMessage, /Stop after that task finishes/);
-    assert.match(executeMessage, /suggest \/run-sequential/);
+    assert.match(executeMessage, /suggest \/workflow:goal/);
+    assert.match(executeMessage, /suggest \/workflow/);
     assert.match(executeMessage, /missing user decision blocks execution/);
     assert.match(executeMessage, /call spark_ask instead of guessing/);
     assert.doesNotMatch(executeMessage, /continue by auto-claiming/);
     assert.equal(
       initializedCtx.notifications.at(-1)?.message,
-      "Spark execution mode: execute one task, then stop.",
+      "Spark execute mode: default strategy selected.",
     );
 
-    const runCommand = initializedRun.commands.get("run");
-    assert.ok(runCommand, "missing /run command");
-    await runCommand.handler("Finish the queue until done", initializedCtx);
-    assert.match(
-      initializedRun.customMessages.at(-1)?.content ?? "",
-      /Spark run mode requested \(sequential, foreground loop\)/,
-    );
-    assert.match(
-      initializedRun.customMessages.at(-1)?.content ?? "",
-      /Finish the queue until done/,
-    );
-    const sequentialMessage = await consumeSparkModeContext(initializedRun, initializedCtx);
-    assert.match(
-      sequentialMessage,
-      /Enter Spark sequential run mode \(foreground loop in this session\)/,
-    );
-    assert.match(sequentialMessage, /Run focus: Finish the queue until done/);
-    assert.match(sequentialMessage, /Continuously claim and execute ready tasks/);
-    assert.match(sequentialMessage, /Do not call spark_run_ready_tasks/);
-    assert.match(sequentialMessage, /call spark_ask instead of guessing/);
-    assert.match(
-      initializedCtx.notifications.at(-1)?.message ?? "",
-      /Spark sequential run mode: foreground loop starting in this session\./,
-    );
-    // Foreground sequential loop must not write SparkRunModeState.
-    const sequentialProjectStateRaw = await readFile(
-      join(initializedDir, ".spark", "sessions", `${ctxSessionStoreScope(initializedCtx)}.json`),
-      "utf8",
-    );
-    const sequentialProjectState = JSON.parse(sequentialProjectStateRaw) as {
-      executionMode?: { mode?: string; strategy?: string };
-      runMode?: unknown;
+    let strategyAskOptions: string[] = [];
+    initializedCtx.ui.select = async (title, options) => {
+      assert.match(title, /which execute strategy should this \/execute turn use/);
+      strategyAskOptions = options;
+      return options.find((option) => option.startsWith("Goal"));
     };
-    assert.equal(sequentialProjectState.executionMode?.mode, "execute");
-    assert.equal(sequentialProjectState.executionMode?.strategy, "goal");
-    assert.equal(
-      sequentialProjectState.runMode,
-      undefined,
-      "foreground sequential loop must not record runMode",
-    );
-
-    const runParallelCommand = initializedRun.commands.get("run-parallel");
-    const runSequentialCommand = initializedRun.commands.get("run-sequential");
-    assert.ok(runParallelCommand, "missing /run-parallel command");
-    assert.ok(runSequentialCommand, "missing /run-sequential command");
-    await runParallelCommand.handler("Finish the queue in parallel", initializedCtx);
-    const parallelProjectState = JSON.parse(
+    await executeCommand.handler("keep going until done", initializedCtx);
+    assert.ok(strategyAskOptions.some((option) => option.startsWith("Default")));
+    assert.ok(strategyAskOptions.some((option) => option.startsWith("Goal")));
+    assert.ok(strategyAskOptions.some((option) => option.startsWith("Workflow")));
+    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /strategy: goal/);
+    const askedGoalState = JSON.parse(
       await readFile(
         join(initializedDir, ".spark", "sessions", `${ctxSessionStoreScope(initializedCtx)}.json`),
         "utf8",
       ),
-    ) as {
-      runMode?: {
-        runRef?: string;
-        projectRef?: string;
-        focus?: string;
-        status?: string;
-        policy?: { maxConcurrency?: number; timeoutMs?: number };
-      };
-    };
-    assert.match(parallelProjectState.runMode?.runRef ?? "", /^run:/);
-    assert.match(parallelProjectState.runMode?.projectRef ?? "", /^proj:/);
-    assert.equal(parallelProjectState.runMode?.focus, "Finish the queue in parallel");
-    assert.equal(parallelProjectState.runMode?.status, "running");
-    assert.equal(parallelProjectState.runMode?.policy?.maxConcurrency, 4);
-    assert.equal(parallelProjectState.runMode?.policy?.timeoutMs, 3_600_000);
-    await waitFor(async () => {
-      const status = await executeSparkTool(
-        initializedRun.tools,
-        "spark_status",
-        initializedCtx,
-        {},
-      );
-      return /Spark run mode: blocked run:/.test(toolText(status));
-    });
-    const runStatus = await executeSparkTool(
-      initializedRun.tools,
-      "spark_status",
-      initializedCtx,
-      {},
+    ) as { executionMode?: { mode?: string; strategy?: string } };
+    assert.equal(askedGoalState.executionMode?.mode, "execute");
+    assert.equal(askedGoalState.executionMode?.strategy, "goal");
+    await consumeSparkModeContext(initializedRun, initializedCtx);
+    initializedCtx.ui.select = async () =>
+      assert.fail("explicit /workflow selector aliases should not ask for strategy");
+
+    assert.equal(initializedRun.commands.get("goal"), undefined);
+    assert.equal(initializedRun.commands.get("workflow:deep-research"), undefined);
+    assert.equal(initializedRun.commands.get("workflow:adversarial-review"), undefined);
+    const workflowGoalCommand = initializedRun.commands.get("workflow:goal");
+    assert.ok(workflowGoalCommand, "missing /workflow:goal command");
+    await workflowGoalCommand.handler("Finish the queue until done", initializedCtx);
+    assert.match(
+      initializedRun.customMessages.at(-1)?.content ?? "",
+      /Spark execute mode requested/,
     );
-    assert.match(toolText(runStatus), /Spark run mode: blocked run:/);
-    assert.match(toolText(runStatus), /focus=Finish the queue in parallel/);
-    assert.match(toolText(runStatus), /strategy=parallel/);
+    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /strategy: workflow/);
+    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /workflow: builtin:goal/);
+    assert.match(
+      initializedRun.customMessages.at(-1)?.content ?? "",
+      /Finish the queue until done/,
+    );
+    const workflowGoalPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
+    assert.match(workflowGoalPrompt, /Workflow selector: builtin:goal/);
+    const workflowGoalProjectStateRaw = await readFile(
+      join(initializedDir, ".spark", "sessions", `${ctxSessionStoreScope(initializedCtx)}.json`),
+      "utf8",
+    );
+    const workflowGoalProjectState = JSON.parse(workflowGoalProjectStateRaw) as {
+      executionMode?: { mode?: string; strategy?: string; workflowName?: string };
+      runMode?: unknown;
+    };
+    assert.equal(workflowGoalProjectState.executionMode?.mode, "execute");
+    assert.equal(workflowGoalProjectState.executionMode?.strategy, "workflow");
+    assert.equal(workflowGoalProjectState.executionMode?.workflowName, "builtin:goal");
+    assert.equal(workflowGoalProjectState.runMode, undefined);
+
+    const workflowReadyCommand = initializedRun.commands.get("workflow:ready");
+    assert.ok(workflowReadyCommand, "missing /workflow:ready command");
+    await workflowReadyCommand.handler("dispatch ready tasks", initializedCtx);
+    const workflowReadyPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
+    assert.match(workflowReadyPrompt, /Workflow selector: builtin:ready/);
+    assert.match(workflowReadyPrompt, /ready-frontier workflow/);
+    assert.match(workflowReadyPrompt, /spark_run_ready_tasks/);
+    assert.match(workflowReadyPrompt, /task DAG as durable truth/);
+
+    await mkdir(join(initializedDir, ".spark", "workflows"), { recursive: true });
+    await writeFile(
+      join(initializedDir, ".spark", "workflows", "triage.js"),
+      `export const meta = {
+        name: "Triage Workflow",
+        description: "Triage incidents with specialist phases.",
+        phases: [{ title: "Collect" }, { title: "Decide" }],
+      };
+      export default async function workflow() { return "not run during discovery"; }`,
+    );
+    await writeFile(
+      join(initializedDir, ".spark", "workflows", "broken.js"),
+      `export const meta = { name: "Broken" };`,
+    );
+    const workflowCommand = initializedRun.commands.get("workflow");
+    assert.ok(workflowCommand, "missing /workflow command");
+    await workflowCommand.handler("workspace:triage Review with a workflow", initializedCtx);
+    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /strategy: workflow/);
+    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /workflow: workspace:triage/);
+    const workflowPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
+    assert.match(workflowPrompt, /Workflow selector: workspace:triage/);
+    assert.match(workflowPrompt, /Selected saved workflow: workspace:triage/);
+    assert.match(workflowPrompt, /Spark workflow runtime and role-run adapter boundaries/);
+    assert.match(workflowPrompt, /Workflow budget:/);
+    assert.match(workflowPrompt, /Token budget: none/);
+    assert.match(workflowPrompt, /Tokens remaining: unbounded/);
+    assert.match(workflowPrompt, /Saved workflows discovered in \.spark\/workflows\/\*\.js/);
+    assert.match(workflowPrompt, /triage: Triage incidents with specialist phases/);
+    assert.match(workflowPrompt, /Saved workflow validation issues/);
+    assert.match(workflowPrompt, /broken\.js/);
+    assert.match(workflowPrompt, /discovery never executes saved workflow bodies/);
+
+    let workflowAskOptions: string[] = [];
+    initializedCtx.ui.select = async (title, options) => {
+      assert.match(title, /Which workflow should Spark use/);
+      workflowAskOptions = options;
+      return options.find((option) => option.startsWith("builtin:ready"));
+    };
+    await workflowCommand.handler("", initializedCtx);
+    assert.ok(workflowAskOptions.some((option) => option.startsWith("builtin:goal")));
+    assert.ok(workflowAskOptions.some((option) => option.startsWith("builtin:ready")));
+    assert.ok(workflowAskOptions.some((option) => option.startsWith("workspace:triage")));
+    assert.ok(workflowAskOptions.some((option) => option.startsWith("Create workspace workflow")));
+    const askedWorkflowPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
+    assert.match(askedWorkflowPrompt, /Workflow selector: builtin:ready/);
+    initializedCtx.ui.select = async () =>
+      assert.fail("non-empty /workflow focus should not ask for a selector before prompting");
+
+    await workflowCommand.handler(
+      "Run this one-shot workflow:\n\n" +
+        "```js\n" +
+        "export const meta = {\n" +
+        '  name: "Inline Cleanup",\n' +
+        '  description: "Clean up temporary files with a one-shot workflow.",\n' +
+        '  phases: [{ title: "Inspect" }, { title: "Remove" }],\n' +
+        "};\n" +
+        'export default async function workflow() { throw new Error("not run during inline discovery"); }\n' +
+        "```",
+      initializedCtx,
+    );
+    const inlineWorkflowPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
+    assert.match(inlineWorkflowPrompt, /Inline workflow detected in the \/workflow focus/);
+    assert.match(inlineWorkflowPrompt, /Inline Cleanup: Clean up temporary files/);
+    assert.match(inlineWorkflowPrompt, /metadata only; body was not executed or saved/);
+
+    await workflowCommand.handler(
+      "Run broken inline workflow:\n\n" +
+        "```js\n" +
+        'export const meta = { name: "Broken Inline" };\n' +
+        "```",
+      initializedCtx,
+    );
+    const invalidInlinePrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
+    assert.match(invalidInlinePrompt, /Inline workflow validation issue/);
+    assert.match(invalidInlinePrompt, /workflow meta.description must be a non-empty string/);
+
+    assert.equal(initializedRun.commands.get("run"), undefined);
+    assert.equal(initializedRun.commands.get("run-sequential"), undefined);
+    assert.equal(initializedRun.commands.get("run-parallel"), undefined);
 
     const emptyCtx = testSparkContext(emptyDir, "main");
     const emptyRun = registerSparkToolsForTest();
@@ -919,9 +975,10 @@ void test("/plan, /execute, and /run enter Spark modes directly", async () => {
     assert.ok(emptyExecute, "missing /execute command");
     await emptyExecute.handler("", emptyCtx);
     assert.match(emptyCtx.notifications.at(-1)?.message ?? "", /needs initialized Spark state/);
-    const emptyRunCommand = emptyRun.commands.get("run");
-    assert.ok(emptyRunCommand, "missing /run command");
-    await emptyRunCommand.handler("", emptyCtx);
+    assert.equal(emptyRun.commands.get("goal"), undefined);
+    const emptyWorkflowGoalCommand = emptyRun.commands.get("workflow:goal");
+    assert.ok(emptyWorkflowGoalCommand, "missing /workflow:goal command");
+    await emptyWorkflowGoalCommand.handler("", emptyCtx);
     assert.match(emptyCtx.notifications.at(-1)?.message ?? "", /needs initialized Spark state/);
   } finally {
     await rm(existingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
@@ -938,21 +995,22 @@ void test("latest direct Spark mode replaces older pending hidden mode context",
     const run = registerSparkToolsForTest();
     await useOnlySparkProject(run.tools, ctx);
 
-    const runCommand = run.commands.get("run");
+    const workflowGoalCommand = run.commands.get("workflow:goal");
     const executeCommand = run.commands.get("execute");
     const planCommand = run.commands.get("plan");
-    assert.ok(runCommand, "missing /run command");
+    assert.ok(workflowGoalCommand, "missing /workflow:goal command");
+    assert.equal(run.commands.get("goal"), undefined);
     assert.ok(executeCommand, "missing /execute command");
     assert.ok(planCommand, "missing /plan command");
 
-    await runCommand.handler("work through background queue", ctx);
+    await workflowGoalCommand.handler("work through background queue", ctx);
     await executeCommand.handler("take one task", ctx);
     await planCommand.handler("revise the failed task plan", ctx);
 
     const hidden = await consumeSparkModeContext(run, ctx);
     assert.match(hidden, /Enter Spark planning mode from \/plan/);
     assert.match(hidden, /revise the failed task plan/);
-    assert.doesNotMatch(hidden, /Enter Spark run mode/);
+    assert.doesNotMatch(hidden, /Enter Spark research mode/);
     assert.doesNotMatch(hidden, /Enter Spark execution mode/);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -990,7 +1048,7 @@ void test("/plan includes active roadmap item context and matches focus to an ex
     await planCommand.handler("Roadmap assisted planning", ctx);
 
     assert.equal(run.messages.length, 0);
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark planning mode requested/);
+    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark plan mode requested/);
     const message = await consumeSparkModeContext(run, ctx);
     assert.match(message, /Roadmap planning context:/);
     assert.match(message, /Roadmap assisted planning/);
@@ -1338,7 +1396,10 @@ void test("/execute stops after one task and only hints the next ready task", as
     const text = finished.content.map((item) => item.text).join("\n");
     assert.match(text, /Execution mode stopped after one task/);
     assert.match(text, /Next ready task: @second-ready/);
-    assert.match(text, /Run \/execute to take one more step, or \/run to continue automatically/);
+    assert.match(
+      text,
+      /Run \/execute to take one more step, or \/workflow:goal to continue autonomously/,
+    );
     assert.doesNotMatch(text, /auto-claimed next ready task/);
     assert.equal((finished.details as { autoClaimedTask?: unknown }).autoClaimedTask, undefined);
     assert.ok((finished.details as { nextReadyTask?: unknown }).nextReadyTask);
@@ -1353,7 +1414,7 @@ void test("/execute stops after one task and only hints the next ready task", as
   }
 });
 
-void test("/run sequential mode tells finish_task to continue to the next ready task", async () => {
+void test("/workflow:goal tells finish_task to continue to the next ready task", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-run-foreground-continue-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1386,13 +1447,16 @@ void test("/run sequential mode tells finish_task to continue to the next ready 
     });
 
     const run = registerSparkToolsForTest();
-    const runCommand = run.commands.get("run");
-    assert.ok(runCommand, "missing /run command");
-    await runCommand.handler("work through the ready queue", ctx);
-    const runPrompt = await consumeSparkModeContext(run, ctx);
-    assert.match(runPrompt, /Enter Spark sequential run mode/);
-    assert.match(runPrompt, /After finishing a task, immediately move to the next ready task/);
-    assert.match(runPrompt, /call spark_ask instead of guessing/);
+    const workflowGoalCommand = run.commands.get("workflow:goal");
+    assert.ok(workflowGoalCommand, "missing /workflow:goal command");
+    await workflowGoalCommand.handler("work through the ready queue until done", ctx);
+    const goalPrompt = await consumeSparkModeContext(run, ctx);
+    assert.match(goalPrompt, /Enter Spark execution mode/);
+    assert.match(goalPrompt, /Workflow selector: builtin:goal/);
+    assert.match(run.customMessages.at(-1)?.content ?? "", /strategy: workflow/);
+    assert.match(run.customMessages.at(-1)?.content ?? "", /workflow: builtin:goal/);
+    assert.match(goalPrompt, /Run the builtin goal workflow/);
+    assert.match(goalPrompt, /call spark_ask instead of guessing/);
 
     await executeSparkTool(run.tools, "spark_claim_task", ctx, {
       name: "run-first-ready",
@@ -1405,9 +1469,12 @@ void test("/run sequential mode tells finish_task to continue to the next ready 
     });
 
     const text = finished.content.map((item) => item.text).join("\n");
-    assert.match(text, /Sequential run mode continuing/);
+    assert.match(text, /Goal workflow continuing/);
     assert.match(text, /Next ready task: @run-second-ready/);
-    assert.match(text, /Continue now: claim this task with spark_claim_task/);
+    assert.match(text, /Continue now using the Spark goal continuation below/);
+    assert.match(text, /<spark_goal_continuation/);
+    assert.match(text, /get_spark_goal/);
+    assert.match(text, /update_spark_goal/);
     assert.doesNotMatch(text, /Execution mode stopped after one task/);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
@@ -1527,7 +1594,7 @@ void test("spark_plan_tasks rejects invalid explicit kind and status", async () 
             },
           ],
         }),
-      /status must be pending, pending, ready, running, blocked, done, failed, or cancelled/,
+      /status must be pending, ready, running, blocked, done, failed, or cancelled/,
     );
 
     const graph = await defaultTaskGraphStore(dir).load();
@@ -2043,7 +2110,7 @@ void test("spark_claim_task rejects invalid explicit kind and status", async () 
           description: "Invalid status must not become running.",
           status: "waiting",
         }),
-      /status must be pending, pending, ready, running, blocked, done, failed, or cancelled/,
+      /status must be pending, ready, running, blocked, done, failed, or cancelled/,
     );
 
     const graph = await defaultTaskGraphStore(dir).load();
@@ -3059,14 +3126,14 @@ void test("spark_status includes persisted Spark orchestrator status", async () 
     const status = await executeSparkTool(tools, "spark_status", ctx, {});
     const text = toolText(status);
 
-    assert.match(text, /Spark orchestrator: idle actionable=run:/);
+    assert.match(text, /Spark workflow runs: idle actionable=run:/);
     assert.match(text, /actionable=2/);
     assert.doesNotMatch(text, /stale=1/);
     assert.doesNotMatch(text, /timed_out=1/);
     assert.match(
       text,
       new RegExp(
-        `Actionable DAG run: ${staleRun.ref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\[stale\\]`,
+        `Actionable workflow run: ${staleRun.ref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\[stale\\]`,
       ),
     );
     assert.match(text, /Next steps \(stale\):/);
@@ -3159,10 +3226,10 @@ void test("spark_status reconciles DAG runs with current workspace active childr
     assert.match(
       text,
       new RegExp(
-        `Actionable DAG run: ${currentDagRun.ref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\[stale\\]`,
+        `Actionable workflow run: ${currentDagRun.ref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\[stale\\]`,
       ),
     );
-    assert.doesNotMatch(text, new RegExp(`Active DAG run: ${currentDagRun.ref}`));
+    assert.doesNotMatch(text, new RegExp(`Active workflow run: ${currentDagRun.ref}`));
     const dagStatus = await defaultSparkDagRunStore(dir).status();
     assert.equal(dagStatus.running, 0);
     assert.equal(dagStatus.stale, 1);
@@ -3331,7 +3398,7 @@ void test("spark_dag_manager reconciles and clears inactive records", async () =
     assert.match(toolText(acknowledged), /action=ack/);
     assert.match(toolText(acknowledged), /stale=1/);
     assert.match(toolText(acknowledged), /acknowledged=1/);
-    assert.match(toolText(acknowledged), /Acknowledged DAG problem runs: 1 newly/);
+    assert.match(toolText(acknowledged), /Acknowledged workflow problem runs: 1 newly/);
     assert.doesNotMatch(toolText(acknowledged), /Next steps \(stale\):/);
     const acknowledgedDetails = acknowledged.details as {
       acknowledged?: { acknowledged?: string[] };
@@ -3346,14 +3413,14 @@ void test("spark_dag_manager reconciles and clears inactive records", async () =
     );
 
     const compactStatus = await executeSparkTool(tools, "spark_status", ctx, {});
-    assert.doesNotMatch(toolText(compactStatus), /Spark orchestrator:/);
+    assert.doesNotMatch(toolText(compactStatus), /Spark workflow runs:/);
     assert.doesNotMatch(toolText(compactStatus), /stale=1/);
 
     const fullStatus = await executeSparkTool(tools, "spark_status", ctx, { view: "full" });
-    assert.match(toolText(fullStatus), /Spark orchestrator: idle runs=2 recent/);
+    assert.match(toolText(fullStatus), /Spark workflow runs: idle runs=2 recent/);
     assert.match(toolText(fullStatus), /stale=1/);
     assert.match(toolText(fullStatus), /acknowledged=1/);
-    assert.match(toolText(fullStatus), /Recent DAG runs:/);
+    assert.match(toolText(fullStatus), /Recent workflow runs:/);
 
     const cleared = await executeSparkTool(tools, "spark_dag_manager", ctx, {
       action: "clear_inactive",
@@ -3369,7 +3436,7 @@ void test("spark_dag_manager reconciles and clears inactive records", async () =
   }
 });
 
-void test("spark_state prune defaults to dry-run and does not write DAG run store", async () => {
+void test("spark_state prune defaults to dry-run and does not write workflow run store", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-state-prune-dryrun-"));
   try {
     await writeEmptySparkProject(dir);
@@ -3377,7 +3444,7 @@ void test("spark_state prune defaults to dry-run and does not write DAG run stor
     const dagStore = defaultSparkDagRunStore(dir);
     const run = await dagStore.startRun({ dryRun: false, maxConcurrency: 1, timeoutMs: 100 });
     await dagStore.finishRun(run.ref, { scheduled: 0, completed: 0, timedOut: false });
-    const before = await readFile(join(dir, ".spark", "dag-runs.json"), "utf8");
+    const before = await readFile(join(dir, ".spark", "workflow-runs.json"), "utf8");
 
     const { tools } = registerSparkToolsForTest();
     const result = await executeSparkTool(tools, "spark_state", ctx, {
@@ -3387,13 +3454,13 @@ void test("spark_state prune defaults to dry-run and does not write DAG run stor
       keepRecentPerProject: 0,
     });
 
-    assert.match(toolText(result), /Spark DAG run prune dry-run/);
+    assert.match(toolText(result), /Spark workflow-run prune dry-run/);
     assert.match(toolText(result), /Candidates: 1; kept=0/);
     const prune = (result.details as { prune?: { dryRun?: boolean; candidates?: unknown[] } })
       .prune;
     assert.equal(prune?.dryRun, true);
     assert.equal(prune?.candidates?.length, 1);
-    assert.equal(await readFile(join(dir, ".spark", "dag-runs.json"), "utf8"), before);
+    assert.equal(await readFile(join(dir, ".spark", "workflow-runs.json"), "utf8"), before);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -3524,7 +3591,7 @@ void test("spark_background_runs exposes active child runs and refuses broad kil
     await waitFor(async () => (await defaultSparkDagRunStore(dir).status()).running === 0, 5_000);
   } finally {
     await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
-    if (existsSync(join(dir, ".spark", "dag-runs.json"))) {
+    if (existsSync(join(dir, ".spark", "workflow-runs.json"))) {
       await waitFor(async () => {
         const reloaded = await defaultTaskGraphStore(dir).load();
         return !reloaded?.tasks().some((task) => task.status === "running");
@@ -4007,7 +4074,7 @@ void test("spark_background_runs reconciles, acks scoped problems, and renders l
     });
     assert.match(toolText(reconciled), /Reconciled background records changed: 1/);
     assert.match(toolText(reconciled), /Legacy timeout record/);
-    assert.match(toolText(reconciled), /DAG .*stale/);
+    assert.match(toolText(reconciled), /Workflow run .*stale/);
     const reconcileDetails = reconciled.details as {
       background?: { dagRuns?: Array<{ runRef: string; status: string; legacyTimedOut: boolean }> };
     };
@@ -4049,115 +4116,11 @@ void test("spark_background_runs reconciles, acks scoped problems, and renders l
   }
 });
 
-void test("/run-parallel starts the background Spark orchestrator without a second agent turn", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-run-continuous-dag-"));
-  const previousBindingHome = process.env.PI_ROLES_HOME;
-  const previousPath = process.env.PATH;
-  try {
-    process.env.PI_ROLES_HOME = dir;
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    ctx.inputValue = "test/model";
-    const store = defaultTaskGraphStore(dir);
-    const graph = await store.load();
-    assert.ok(graph);
-    const [project] = graph.projects();
-    assert.ok(project);
-    const first = graph.createTask({
-      projectRef: project.ref,
-      name: "run-first",
-      title: "Run first task",
-      description: "First task in continuous run.",
-      kind: "implement",
-      status: "pending",
-      plan: executionReadyPlan("Run first task"),
-    });
-    const second = graph.createTask({
-      projectRef: project.ref,
-      name: "run-second",
-      title: "Run second task",
-      description: "Second task unblocks after the first task succeeds.",
-      kind: "implement",
-      status: "pending",
-      plan: executionReadyPlan("Run second task"),
-    });
-    graph.addDependency(second.ref, first.ref);
-    await store.save(graph);
-    const fakePi = join(dir, "pi");
-    await writeFile(
-      fakePi,
-      "#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({ type: 'done' }) + '\\n');\nprocess.exit(0);\n",
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-    process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
-
-    const extension = registerSparkToolsForTest();
-    const { tools, commands, messages } = extension;
-    await useOnlySparkProject(tools, ctx);
-    const runCommand = commands.get("run-parallel");
-    assert.ok(runCommand, "missing /run-parallel command");
-    await runCommand.handler("run dependent tasks until done", ctx);
-    assert.equal(await tryConsumeSparkModeContext(extension, ctx), undefined);
-
-    await waitFor(async () => {
-      const current = await defaultTaskGraphStore(dir).load();
-      return current?.getTask(second.ref).status === "done";
-    }, 10_000);
-    await waitFor(async () => {
-      const status = await executeSparkTool(tools, "spark_status", ctx, {});
-      return /Spark run mode: done run:/.test(toolText(status));
-    }, 10_000);
-
-    const dagStatus = await defaultSparkDagRunStore(dir).status();
-    assert.equal(dagStatus.succeeded, 1);
-    assert.equal(dagStatus.lastRun?.scheduled, 2);
-    assert.equal(dagStatus.lastRun?.completed, 2);
-    const reloaded = await defaultTaskGraphStore(dir).load();
-    assert.equal(reloaded?.getTask(first.ref).status, "done");
-    assert.equal(reloaded?.getTask(second.ref).status, "done");
-    assert.doesNotMatch(messages.join("\n"), /Spark DAG run:/);
-  } finally {
-    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousBindingHome;
-    process.env.PATH = previousPath;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-void test("/run-parallel marks run mode blocked when no ready task can run", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-run-blocked-"));
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    const store = defaultTaskGraphStore(dir);
-    const graph = await store.load();
-    assert.ok(graph);
-    const [project] = graph.projects();
-    assert.ok(project);
-    graph.createTask({
-      projectRef: project.ref,
-      name: "blocked-no-plan",
-      title: "Blocked no plan",
-      description: "No execution-ready plan is present.",
-      kind: "implement",
-      status: "pending",
-    });
-    await store.save(graph);
-
-    const { tools, commands } = registerSparkToolsForTest();
-    await useOnlySparkProject(tools, ctx);
-    const runCommand = commands.get("run-parallel");
-    assert.ok(runCommand, "missing /run-parallel command");
-    await runCommand.handler("run blocked work", ctx);
-
-    await waitFor(async () => {
-      const status = await executeSparkTool(tools, "spark_status", ctx, {});
-      return /Spark run mode: blocked run:/.test(toolText(status));
-    }, 5_000);
-  } finally {
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
+void test("legacy /run commands are not registered", () => {
+  const { commands } = registerSparkToolsForTest();
+  assert.equal(commands.get("run"), undefined);
+  assert.equal(commands.get("run-sequential"), undefined);
+  assert.equal(commands.get("run-parallel"), undefined);
 });
 
 void test("spark_run_ready_tasks preflights only the current ready frontier", async () => {
@@ -4216,7 +4179,7 @@ void test("spark_run_ready_tasks preflights only the current ready frontier", as
       timeoutMs: 123,
     });
 
-    assert.match(toolText(result), /Spark orchestrator started/);
+    assert.match(toolText(result), /Spark workflow-run scheduler started/);
     assert.deepEqual((result.details as { policy?: unknown }).policy, {
       maxConcurrency: 1,
       timeoutMs: 123,
@@ -4243,7 +4206,7 @@ void test("spark_run_ready_tasks preflights only the current ready frontier", as
   }
 });
 
-void test("spark_run_ready_tasks reports DAG completion without queuing a follow-up user message", async () => {
+void test("spark_run_ready_tasks reports workflow-run completion without queuing a follow-up user message", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-followup-"));
   const previousBindingHome = process.env.PI_ROLES_HOME;
   try {
@@ -4302,7 +4265,7 @@ void test("spark_run_ready_tasks reports DAG completion without queuing a follow
     await useOnlySparkProject(tools, ctx);
     await executeSparkTool(tools, "spark_run_ready_tasks", ctx, { dryRun: false });
     await waitFor(
-      () => ctx.notifications.some((notice) => notice.message.includes("Spark DAG run:")),
+      () => ctx.notifications.some((notice) => notice.message.includes("Spark workflow run:")),
       10_000,
     );
     await waitFor(() => !ctx.notifications.at(-1)?.message.includes("running"), 10_000);
@@ -4312,9 +4275,9 @@ void test("spark_run_ready_tasks reports DAG completion without queuing a follow
     assert.equal(dagStatus.lastRun?.projectRef, project.ref);
     const reloadedGraph = await defaultTaskGraphStore(dir).load();
     assert.equal(reloadedGraph?.getTask(otherTask.ref).status, "pending");
-    assert.doesNotMatch(messages.join("\n"), /Spark DAG run:/);
+    assert.doesNotMatch(messages.join("\n"), /Spark workflow run:/);
     assert.equal(ctx.notifications.at(-1)?.level, "info");
-    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark DAG run:/);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark workflow run:/);
     assert.match(ctx.notifications.at(-1)?.message ?? "", /scheduled 2, completed \d/);
     assert.match(ctx.notifications.at(-1)?.message ?? "", /Digest:/);
     assert.equal(dagStatus.lastRun?.completionDigest.length, 2);
@@ -4431,7 +4394,7 @@ void test("spark_status renders legacy large role-run artifacts by refs without 
   }
 });
 
-void test("spark_run_ready_tasks marks Spark orchestrator failed when child role-run fails", async () => {
+void test("spark_run_ready_tasks marks Spark workflow-run scheduler failed when child role-run fails", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-child-failed-"));
   const previousBindingHome = process.env.PI_ROLES_HOME;
   try {
@@ -4464,7 +4427,7 @@ void test("spark_run_ready_tasks marks Spark orchestrator failed when child role
     await useOnlySparkProject(tools, ctx);
     await executeSparkTool(tools, "spark_run_ready_tasks", ctx, { dryRun: false });
     await waitFor(
-      () => ctx.notifications.some((notice) => notice.message.includes("Spark DAG run:")),
+      () => ctx.notifications.some((notice) => notice.message.includes("Spark workflow run:")),
       3_000,
     );
     await waitFor(() => !ctx.notifications.at(-1)?.message.includes("running"), 3_000);
@@ -4473,11 +4436,14 @@ void test("spark_run_ready_tasks marks Spark orchestrator failed when child role
     assert.equal(dagStatus.succeeded, 0);
     assert.equal(dagStatus.failed, 1);
     assert.equal(dagStatus.lastRun?.status, "failed");
-    assert.doesNotMatch(messages.join("\n"), /Spark DAG .* failed: scheduled 1, completed 1/);
+    assert.doesNotMatch(
+      messages.join("\n"),
+      /Spark workflow run: .* failed: scheduled 1, completed 1/,
+    );
     assert.equal(ctx.notifications.at(-1)?.level, "error");
     assert.match(
       ctx.notifications.at(-1)?.message ?? "",
-      /Spark DAG .* failed: scheduled 1, completed 1/,
+      /Spark workflow run: .* failed: scheduled 1, completed 1/,
     );
     assert.match(
       ctx.notifications.at(-1)?.message ?? "",
@@ -4875,7 +4841,7 @@ void test("spark_state diagnostics reports protected-store candidates without de
     assert.match(text, /Terminal\/no-unfinished projects: 1/);
     assert.match(text, /Completed diagnostics project/);
     assert.doesNotMatch(text, /Active diagnostics project/);
-    assert.match(text, /Inactive DAG runs: 1/);
+    assert.match(text, /Inactive workflow runs: 1/);
     assert.match(text, /run:inactive-diagnostics/);
     assert.match(text, /Large artifacts: 1/);
     assert.match(text, new RegExp(artifact.ref));
@@ -4907,7 +4873,7 @@ void test("spark_state diagnostics reports protected-store candidates without de
     assert.equal(existsSync(orphanBlob), true);
     assert.equal(existsSync(noteFile), true);
     assert.equal(existsSync(roleReportFile), true);
-    assert.equal(existsSync(join(dir, ".spark", "dag-runs.json")), true);
+    assert.equal(existsSync(join(dir, ".spark", "workflow-runs.json")), true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

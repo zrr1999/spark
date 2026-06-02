@@ -346,7 +346,7 @@ export class SparkDagRunStore {
       snapshot.runs = [...snapshot.runs, record];
       created = record;
     });
-    if (!created) throw new Error("failed to start Spark DAG run");
+    if (!created) throw new Error("failed to start Spark workflow run");
     return created;
   }
 
@@ -423,7 +423,7 @@ export class SparkDagRunStore {
           : error
             ? JSON.stringify(error)
             : hasFailedChildren
-              ? `Spark DAG child runs failed: failed=${failedChildren} cancelled=${cancelledChildren}`
+              ? `Spark workflow child runs failed: failed=${failedChildren} cancelled=${cancelledChildren}`
               : undefined;
       record.finishedAt = now;
       record.updatedAt = now;
@@ -526,7 +526,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 export function defaultSparkDagRunStore(cwd: string): SparkDagRunStore {
-  return new SparkDagRunStore(join(cwd, ".spark", "dag-runs.json"));
+  return new SparkDagRunStore(join(cwd, ".spark", "workflow-runs.json"));
 }
 
 export function summarizeSparkDagRuns(

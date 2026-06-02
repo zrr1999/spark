@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import net from "node:net";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -105,8 +106,19 @@ function stringArrayField(value: unknown, field: string): string[] | undefined {
   return fieldValue.every((item) => typeof item === "string") ? fieldValue : undefined;
 }
 
-function workspaceSocketPath(cwd: string): string {
-  return join(cwd, ".graft", "graftd.sock");
+function graftHome(): string {
+  const fromEnv = process.env.GRAFT_HOME?.trim();
+  if (fromEnv) return fromEnv;
+  const home = process.env.HOME?.trim() || homedir();
+  return join(home, ".graft");
+}
+
+function workspaceSocketPath(_cwd: string): string {
+  return join(graftHome(), "run", "daemon.sock");
+}
+
+function workspaceIdForRequest(): string {
+  return process.env.GRAFT_WORKSPACE?.trim() || "ws:default";
 }
 
 function compactError(error: unknown): string {
@@ -143,8 +155,7 @@ function graftdCandidates(): string[] {
 }
 
 async function startGraftd(cwd: string, socketPath: string): Promise<void> {
-  await mkdir(join(cwd, ".graft"), { recursive: true });
-  await rm(socketPath, { force: true });
+  await mkdir(join(graftHome(), "run"), { recursive: true });
 
   let lastError = "no graftd candidate tried";
   for (const graftd of graftdCandidates()) {
@@ -223,7 +234,8 @@ async function requestGraftd(
     const socket = net.createConnection(socketPath);
     let buffer = "";
     socket.once("connect", () => {
-      socket.write(`${JSON.stringify({ id, op, params })}\n`);
+      const requestParams = { workspace_id: workspaceIdForRequest(), cwd, ...params };
+      socket.write(`${JSON.stringify({ id, op, params: requestParams })}\n`);
     });
     socket.on("data", (chunk) => {
       buffer += chunk.toString("utf8");
@@ -322,12 +334,14 @@ function requiredActiveState(state: ActiveGraftScratchState | undefined): Active
 async function validateActiveState(state: ActiveGraftScratchState): Promise<void> {
   try {
     await requestGraftd(state.workspace, "status", {}, { spawnIfMissing: false });
-    await requestGraftd(
-      state.workspace,
-      "scratch_diff",
-      { from: state.rootScratch, to: state.scratch },
-      { spawnIfMissing: false },
-    );
+    if (state.rootScratch !== state.scratch) {
+      await requestGraftd(
+        state.workspace,
+        "scratch_diff",
+        { from: state.rootScratch, to: state.scratch },
+        { spawnIfMissing: false },
+      );
+    }
   } catch (error) {
     throw new Error(
       `E_SCRATCH_LOST: active graft scratch is not reachable; run /graft-open ${state.base} again. Cause: ${compactError(error)}`,
@@ -345,6 +359,15 @@ function formatEnvelope(envelope: JsonRecord): string {
   const candidate =
     typeof envelope.candidate_id === "string" ? `candidate: ${envelope.candidate_id}` : undefined;
   return [message, candidate].filter(Boolean).join("\n") || JSON.stringify(envelope, null, 2);
+}
+
+async function notifyCliExec(
+  ctx: PiGraftCommandContext,
+  argv: string[],
+  fallbackMessage: string,
+): Promise<void> {
+  const envelope = await cliExec(ctx.cwd, argv);
+  ctx.ui?.notify?.(formatEnvelope(envelope) || fallbackMessage, "info");
 }
 
 interface ParsedAnchor {
@@ -468,6 +491,39 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     activeState = restoreState(ctx);
   });
 
+  pi.registerCommand("graft-attach", {
+    description: "Attach cwd to a graft workspace route: /graft-attach [workspace-id|--status]",
+    handler: async (args: string, ctx: PiGraftCommandContext) => {
+      const trimmed = args.trim();
+      const argv = trimmed === "--status" ? ["attach", "--status"] : ["attach"];
+      if (trimmed && trimmed !== "--status") argv.push("--workspace", trimmed);
+      await notifyCliExec(ctx, argv, "Attached graft workspace route.");
+    },
+  });
+
+  pi.registerCommand("graft-detach", {
+    description: "Detach cwd from its graft workspace route: /graft-detach",
+    handler: async (_args: string, ctx: PiGraftCommandContext) => {
+      await notifyCliExec(ctx, ["detach"], "Detached graft workspace route.");
+    },
+  });
+
+  pi.registerCommand("graft-ps", {
+    description: "Show graft global daemon and registry status: /graft-ps",
+    handler: async (_args: string, ctx: PiGraftCommandContext) => {
+      await notifyCliExec(ctx, ["ps"], "Graft ps completed.");
+    },
+  });
+
+  pi.registerCommand("graft-doctor", {
+    description: "Diagnose graft registry state: /graft-doctor [--rebuild-registry]",
+    handler: async (args: string, ctx: PiGraftCommandContext) => {
+      const argv = ["doctor"];
+      if (args.trim().split(/\s+/).includes("--rebuild-registry")) argv.push("--rebuild-registry");
+      await notifyCliExec(ctx, argv, "Graft doctor completed.");
+    },
+  });
+
   pi.registerCommand("graft-open", {
     description: "Open a graft scratch from a tree/candidate/patch base: /graft-open <base>",
     handler: async (args: string, ctx: PiGraftCommandContext) => {
@@ -534,10 +590,10 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   });
 
   pi.registerTool({
-    name: "read",
-    label: "Read (graft)",
+    name: "graft_read",
+    label: "Graft read (experimental)",
     description:
-      "Read a UTF-8 text file from the active graft scratch. Output uses LINE#HASH anchors; run /graft-open <base> first. Supports offset/limit over rendered hashline lines.",
+      "Experimental: read a UTF-8 text file from the active graft scratch. Output uses LINE#HASH anchors; run /graft-open <base> first. Supports offset/limit over rendered hashline lines.",
     parameters: Type.Object({
       path: Type.String({ description: "Path to read from the active graft scratch." }),
       offset: Type.Optional(
@@ -549,7 +605,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const state = requiredActiveState(activeState);
       await validateActiveState(state);
       const path = typeof params.path === "string" ? params.path : undefined;
-      if (!path) throw new Error("read requires path.");
+      if (!path) throw new Error("graft_read requires path.");
       const result = await requestGraftd(
         state.workspace,
         "scratch_read",
@@ -568,10 +624,10 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   });
 
   pi.registerTool({
-    name: "write",
-    label: "Write (graft)",
+    name: "graft_write",
+    label: "Graft write (experimental)",
     description:
-      "Write UTF-8 text content into the active graft scratch and advance the active scratch id. Does not modify the worktree and does not promote automatically.",
+      "Experimental: write UTF-8 text content into the active graft scratch and advance the active scratch id. Does not modify the worktree and does not promote automatically.",
     parameters: Type.Object({
       path: Type.String({ description: "Path to write in the active graft scratch." }),
       content: Type.String({ description: "Complete UTF-8 text content to write." }),
@@ -581,8 +637,8 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       await validateActiveState(state);
       const path = typeof params.path === "string" ? params.path : undefined;
       const content = typeof params.content === "string" ? params.content : undefined;
-      if (!path) throw new Error("write requires path.");
-      if (content === undefined) throw new Error("write requires content.");
+      if (!path) throw new Error("graft_write requires path.");
+      if (content === undefined) throw new Error("graft_write requires content.");
       const result = await requestGraftd(
         state.workspace,
         "scratch_write",
@@ -602,10 +658,10 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   });
 
   pi.registerTool({
-    name: "edit",
-    label: "Edit (graft)",
+    name: "graft_edit",
+    label: "Graft edit (experimental)",
     description:
-      "Apply strict hashline edits to a UTF-8 text file in the active graft scratch. Use anchors from graft read output. Supported ops: replace, append, prepend. Does not accept oldText/newText exact replacement fields.",
+      "Experimental: apply strict hashline edits to a UTF-8 text file in the active graft scratch. Use anchors from graft read output. Supported ops: replace, append, prepend. Does not accept oldText/newText exact replacement fields.",
     parameters: Type.Object({
       path: Type.String({ description: "Path to edit in the active graft scratch." }),
       edits: Type.Array(
@@ -640,13 +696,13 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         "new_text" in params
       ) {
         throw new Error(
-          "pi-graft edit is strict hashline-only; call read first and use edits[].op/pos/lines.",
+          "pi-graft graft_edit is strict hashline-only; call graft_read first and use edits[].op/pos/lines.",
         );
       }
       const state = requiredActiveState(activeState);
       await validateActiveState(state);
       const path = typeof params.path === "string" ? params.path : undefined;
-      if (!path) throw new Error("edit requires path.");
+      if (!path) throw new Error("graft_edit requires path.");
       const edits = convertHashlineEdits(params.edits);
       const result = await requestGraftd(
         state.workspace,

@@ -26,7 +26,7 @@ export class SparkDagRunStoreFormatError extends Error {
   readonly filePath: string;
 
   constructor(filePath: string, message: string) {
-    super(`invalid Spark DAG run store: ${filePath}: ${message}`);
+    super(`invalid Spark workflow-run store: ${filePath}: ${message}`);
     this.name = "SparkDagRunStoreFormatError";
     this.filePath = filePath;
   }
@@ -282,7 +282,7 @@ function normalizeSparkDagRunRecord(raw: Partial<SparkDagRunRecord>): SparkDagRu
           status: raw.completionFollowUp.status ?? status,
           scheduled: raw.completionFollowUp.scheduled ?? scheduled,
           completed: raw.completionFollowUp.completed ?? completed,
-          summary: raw.completionFollowUp.summary ?? "Spark orchestrator run finished.",
+          summary: raw.completionFollowUp.summary ?? "Spark workflow run finished.",
           nextActions: [...(raw.completionFollowUp.nextActions ?? [])],
           completionDigest: normalizeTaskRunCompletionSummaries(
             raw.completionFollowUp.completionDigest ?? raw.completionDigest,

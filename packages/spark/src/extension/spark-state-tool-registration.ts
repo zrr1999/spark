@@ -84,13 +84,13 @@ export function registerSparkStateTool(
     name: "spark_state",
     label: "Spark State",
     description:
-      "Inspect or explicitly clean safe Spark session/cache state. action=status and action=diagnostics/doctor are read-only; action=cleanup defaults to dryRun=true and never deletes protected stores such as project graph, artifacts, notes, role-reports, dag-runs, or review-gate. action=compact-role-run-artifacts previews or applies historical role-run transcript blob replacement and defaults to dry-run.",
+      "Inspect or explicitly clean safe Spark session/cache state. action=status and action=diagnostics/doctor are read-only; action=cleanup defaults to dryRun=true and never deletes protected stores such as project graph, artifacts, notes, role-reports, workflow-runs, or review-gate. action=compact-role-run-artifacts previews or applies historical role-run transcript blob replacement and defaults to dry-run.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({
           default: "status",
           description:
-            "status | diagnostics | doctor | cleanup | prune | compact-role-run-artifacts. status summarizes cache/protected stores; diagnostics/doctor reports protected-store candidates read-only; cleanup previews or deletes safe cache files; prune previews or applies typed DAG-run retention; compact-role-run-artifacts previews/applies role-run transcript blob replacement.",
+            "status | diagnostics | doctor | cleanup | prune | compact-role-run-artifacts. status summarizes cache/protected stores; diagnostics/doctor reports protected-store candidates read-only; cleanup previews or deletes safe cache files; prune previews or applies typed workflow-run retention; compact-role-run-artifacts previews/applies role-run transcript blob replacement.",
         }),
       ),
       dryRun: Type.Optional(
@@ -143,13 +143,14 @@ export function registerSparkStateTool(
       keepRecent: Type.Optional(
         Type.Number({
           default: 10,
-          description: "For action=prune, retain this many newest terminal DAG runs globally.",
+          description: "For action=prune, retain this many newest terminal workflow runs globally.",
         }),
       ),
       keepRecentPerProject: Type.Optional(
         Type.Number({
           default: 10,
-          description: "For action=prune, retain this many newest terminal DAG runs per project.",
+          description:
+            "For action=prune, retain this many newest terminal workflow runs per project.",
         }),
       ),
     }),
@@ -238,7 +239,7 @@ export function registerSparkStateTool(
           keepRecentPerProject,
           activeRunRefs: activeSparkRoleRunProcessesForCwd(cwd).map((process) => process.runRef),
         });
-        const lines = [`Spark DAG run prune ${dryRun ? "dry-run" : "apply"}:`];
+        const lines = [`Spark workflow-run prune ${dryRun ? "dry-run" : "apply"}:`];
         appendSparkDagRunPruneLines(lines, prune);
         return {
           content: [{ type: "text", text: lines.join("\n") }],

@@ -25,7 +25,6 @@
       "pi-ask": ["./packages/pi-ask/src/index.ts"],
       "spark-ask": ["./packages/spark-ask/src/index.ts"],
       "pi-cue": ["./packages/pi-cue/src/index.ts"],
-      "spark-review": ["./packages/spark-review/src/index.ts"],
       "spark-tasks": ["./packages/spark-tasks/src/index.ts"]
     }
   }

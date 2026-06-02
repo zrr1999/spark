@@ -5,7 +5,7 @@ description: Use for turning an initial or ambiguous project intent into SPARK.m
 
 # Spark
 
-Use `/spark <idea>` as the single high-level entry point. Do not expose internal stages as separate user-facing commands.
+Use Spark command modes intentionally: `/spark <idea>` for initialization/autodetection, `/research <focus>` for investigation, `/plan <focus>` for task-DAG refinement, `/execute <focus>` for one default execution step, and `/workflow[:selector] <focus>` for Spark-owned workflows. Builtins are intentionally minimal: `/workflow:goal` and `/workflow:ready`; scripted workflows use `/workflow workspace:<name>` and `/workflow user:<name>`. Do not reintroduce legacy `/run*` or `/goal` command guidance.
 
 Spark primitives:
 
@@ -14,10 +14,11 @@ Spark primitives:
 - `spark-ask`: structured decisions and approvals.
 - `pi-cue`: reusable controlled execution infrastructure.
 - `pi-roles`: reusable `RoleSpec`s plus simple `fresh | forked` child Pi `RoleRun` helpers.
-- `spark-review`: verification gates.
 - `spark-tasks`: project/task DAG and task planning helpers.
 - `spark-runtime`: single Spark task execution adaptation over `pi-roles` runs.
-- `spark-orchestrator`: ready task frontier scheduling and background orchestration state.
+- `spark-orchestrator`: ready task frontier scheduling and workflow-run state persisted in `.spark/workflow-runs.json`.
+- `spark-goal`: vendored Spark-owned goal continuation primitives for `/workflow:goal` and goal strategy prompts.
+- `spark-workflows`: vendored Spark-owned workflow runtime/builtin primitives for `/workflow` strategy prompts and role-run adapter boundaries.
 
 Rules:
 
@@ -38,7 +39,7 @@ Rules:
 15.   After a decision is confirmed and the next action is clear, continue with that action instead of stopping for another permission prompt.
 16.   Show the active project header with task counts plus claimed task / TODO text summaries by default; render independent session TODOs as siblings of the project display. `spark_status` defaults to active unfinished/current-session work; use `view: "summary"` for counts only or `view: "full"` for full history.
 17.   Before launching multiple role-runs or parallel workstreams, ask for approval with `spark_ask` unless the user explicitly requested immediate dispatch. Treat no-selection as blocked, not approval; asks do not support automatic timeout.
-18.   Prefer Spark-native delegation: inspect roles with `list_roles` / `get_role`, bind concrete tasks to builtin/project/user `roleRef`s, and hand execution to the Spark orchestrator. For foreground execution: `/run-sequential` (or `/run`) continuously claims and executes ready tasks one at a time in the current session until done or blocked. For background parallel execution: `/run-parallel` spawns child role-runs through the DAG scheduler (default maxConcurrency=4). Use `spark_run_ready_tasks` to dispatch ready tasks directly from a tool call. Use `call_role` only for one-off direct role calls that should stay outside Spark tasks/DAGs.
+18.   Prefer Spark-native delegation: inspect roles with `list_roles` / `get_role`, bind concrete tasks to builtin/project/user `roleRef`s, and hand execution to Spark workflow-run scheduling. For default foreground execution, `/execute` claims at most one concrete task and stops. For autonomous foreground execution, `/workflow:goal` uses Spark goal continuation prompts and continues verified task progress until done or blocked. For ready-frontier background execution, `/workflow:ready` uses Spark workflow-run scheduling. For scripted/subagent execution, use workspace workflows and user workflows; workflow `agent()` calls must cross the Spark workflow role-run adapter boundary rather than raw Pi subagent spawning. Use `spark_run_ready_tasks` only for low-level ready-frontier dispatch from a tool call. Use `call_role` only for one-off direct role calls that should stay outside Spark tasks/DAGs.
 19.   When using `pi-cue` `run`, prefer direct-exec commands and Pi file tools. Use `/bin/sh -lc` only for real shell features such as redirection, here-docs, variable expansion, or compound conditionals.
 20.   Keep temporary plans, role-run reports, and scratch outputs out of the repo root; use `.spark/notes/`, `.spark/role-reports/`, or typed Spark artifacts unless the user asks for committed docs.
 

@@ -13,7 +13,7 @@ Reusable, Spark-independent pieces live in `pi-roles`; Spark keeps task/DAG/work
 - `packages/spark-core/src/index.ts` owns Spark refs, task/artifact/review contracts, and role refs as branded strings.
 - `packages/spark-tasks/src/index.ts` owns task DAGs, TODOs, dependencies, readiness, claim leases, and run history. It stores `roleRef` strings but does not import or resolve `RoleSpec` objects.
 - `packages/spark-runtime/src/index.ts` owns single-task Spark adaptation: resolving an assigned/task/default `roleRef` through a `RoleRegistry`, creating `role-run` claims, calling `runRole()`, writing artifacts, updating task/run state, and tracking active background child processes.
-- `packages/spark-orchestrator/src/index.ts` owns graph-level orchestration: ready frontier scheduling, dispatch-time executor role assignment, orchestration state, and stale run reconciliation.
+- `packages/spark-orchestrator/src/index.ts` owns graph-level workflow-run scheduling: ready frontier scheduling, dispatch-time executor role assignment, workflow-run state, and stale run reconciliation.
 - `packages/pi-roles/src/extension.ts` exposes role-spec management tools (`list_roles`, `get_role`, `create_role`) plus the one-off direct `call_role` tool.
 - `packages/spark/src/extension/index.ts` exposes Spark workflow tools; Spark task execution uses role refs through `spark_run_ready_tasks`, not direct role wrapper tools.
 
@@ -63,7 +63,7 @@ Storage policy:
 
 - `spark-tasks` owns projects, tasks, dependencies, task TODOs, claim leases, readiness, and run history.
 - `spark-runtime` maps one Spark task to one `pi-roles` `RoleRun` primitive and maps completion back to task status, task claims, and artifacts.
-- `spark-orchestrator` maps ready Spark task frontiers to scheduled `spark-runtime` runs and owns background scheduling/reconciliation state.
+- `spark-orchestrator` maps ready Spark task frontiers to scheduled `spark-runtime` runs and owns workflow-run scheduling/reconciliation state.
 - `spark` extension tools keep Spark workflow semantics and should not reintroduce agent-shaped role aliases.
 
 ## Non-goals

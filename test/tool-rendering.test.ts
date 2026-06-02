@@ -149,6 +149,8 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
     "cue_schedule",
     "cue_scope",
     "cue_script",
+    "script_eval",
+    "script_run",
   ]);
   assert.equal(
     renderCall(cueTools, "cue_jobs", { action: "status", id: "J12", tail_bytes: 4096 }),
@@ -195,6 +197,26 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
       tail_bytes: 4096,
     }),
     "cue_script inline=1line(s) label=inline.cue timeout=30s tail=4096",
+  );
+
+  assert.equal(
+    renderCall(cueTools, "script_run", {
+      language: "python",
+      path: "scripts/smoke.py",
+      timeout: 30,
+      tail_bytes: 4096,
+    }),
+    "script_run lang=python path=scripts/smoke.py timeout=30s tail=4096",
+  );
+  assert.equal(
+    renderCall(cueTools, "script_eval", {
+      language: "python",
+      script: 'print("ok")',
+      pathLabel: "inline.py",
+      timeout: 30,
+      tail_bytes: 4096,
+    }),
+    "script_eval lang=python inline=1line(s) label=inline.py timeout=30s tail=4096",
   );
 
   const longRun = renderCall(

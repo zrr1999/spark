@@ -12,7 +12,7 @@ export function appendCompactSparkDagStatusLines(
   if (!compactRun) return undefined;
   const runKind = compactRun.ref === dagStatus.activeRun?.ref ? "active" : "actionable";
   lines.push(
-    `Spark orchestrator: ${dagStatus.manager.status} ${runKind}=${compactRun.ref} | running=${dagStatus.running} actionable=${dagStatus.actionable}`,
+    `Spark workflow runs: ${dagStatus.manager.status} ${runKind}=${compactRun.ref} | running=${dagStatus.running} actionable=${dagStatus.actionable}`,
   );
   return compactRun;
 }
@@ -22,18 +22,18 @@ export function appendSparkDagStatusLines(lines: string[], dagStatus: SparkDagSt
     ? ` active=${dagStatus.manager.activeRunRef}`
     : "";
   lines.push(
-    `Spark orchestrator: ${dagStatus.manager.status}${managerSuffix} runs=${dagStatus.recentRuns.length} recent | running=${dagStatus.running} succeeded=${dagStatus.succeeded} failed=${dagStatus.failed} stale=${dagStatus.stale} timed_out=${dagStatus.timedOut} acknowledged=${dagStatus.acknowledged}`,
+    `Spark workflow runs: ${dagStatus.manager.status}${managerSuffix} runs=${dagStatus.recentRuns.length} recent | running=${dagStatus.running} succeeded=${dagStatus.succeeded} failed=${dagStatus.failed} stale=${dagStatus.stale} timed_out=${dagStatus.timedOut} acknowledged=${dagStatus.acknowledged}`,
   );
   if (dagStatus.lastRun) {
-    lines.push(`  Last DAG run: ${formatSparkDagRun(dagStatus.lastRun)}`);
+    lines.push(`  Last workflow run: ${formatSparkDagRun(dagStatus.lastRun)}`);
     appendSparkDagRunNextStepLines(lines, dagStatus.lastRun, "  ");
   }
   if (dagStatus.activeRun && dagStatus.activeRun.ref !== dagStatus.lastRun?.ref) {
-    lines.push(`  Active DAG run: ${formatSparkDagRun(dagStatus.activeRun)}`);
+    lines.push(`  Active workflow run: ${formatSparkDagRun(dagStatus.activeRun)}`);
     appendSparkDagRunNextStepLines(lines, dagStatus.activeRun, "  ");
   }
   if (dagStatus.recentRuns.length > 0) {
-    lines.push("  Recent DAG runs:");
+    lines.push("  Recent workflow runs:");
     for (const run of dagStatus.recentRuns) lines.push(`    - ${formatSparkDagRun(run)}`);
   }
 }

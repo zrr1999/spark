@@ -1,12 +1,14 @@
 {
-  "name": "spark-review",
+  "name": "spark-goal",
   "version": "0.1.0",
-  "description": "Verification gates and review artifacts for Spark.",
+  "private": true,
+  "description": "Spark-owned goal execution primitives vendored from pi-codex-goal.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [
     "src/**/*.ts",
-    "README.md"
+    "README.md",
+    "VENDOR.md"
   ],
   "type": "module",
   "exports": {
@@ -14,8 +16,5 @@
   },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
-  },
-  "dependencies": {
-    "spark-core": "file:../spark-core"
   }
 }

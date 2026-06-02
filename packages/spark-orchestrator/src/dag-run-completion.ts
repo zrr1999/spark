@@ -19,7 +19,7 @@ export function createSparkDagCompletionFollowUp(
     status: run.status,
     scheduled: run.scheduled,
     completed: run.completed,
-    summary: `Spark DAG ${run.ref} ${run.status}: scheduled ${run.scheduled}, completed ${run.completed}.${digestSuffix}`,
+    summary: `Spark workflow run: ${run.ref} ${run.status}: scheduled ${run.scheduled}, completed ${run.completed}.${digestSuffix}`,
     nextActions: sparkDagRunNextActions(run),
     completionDigest: digest.map(cloneTaskRunCompletionSummary),
   };
@@ -58,7 +58,7 @@ export function sparkDagRunNextSteps(run: SparkDagRunRecord): SparkDagRunNextSte
   return {
     runRef: run.ref,
     status: run.status,
-    summary: `Next steps for ${run.status} Spark DAG ${run.ref}`,
+    summary: `Next steps for ${run.status} Spark workflow run ${run.ref}`,
     nextActions: sparkDagRunNextActions(run),
   };
 }
@@ -105,7 +105,7 @@ function sparkDagRunNextActions(run: SparkDagRunRecord): string[] {
     );
   if (run.completed < run.scheduled)
     nextActions.push(
-      "Review incomplete scheduled task runs in spark_status view=full before launching another DAG wave.",
+      "Review incomplete scheduled task runs in spark_status view=full before launching another workflow wave.",
     );
   if (nextActions.length === 0)
     nextActions.push("Review task outputs and continue with newly unblocked ready tasks if any.");

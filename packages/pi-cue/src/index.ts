@@ -7,6 +7,8 @@
  *     cue_exec     — execute a command and create a job
  *     cue_run      — run a `.cue` file-script (sequential, fail-fast)
  *     cue_script   — run an inline `.cue` script body (sequential, fail-fast)
+ *     script_run   — run a script file with an explicit language
+ *     script_eval  — run an inline script with an explicit language
  *
  *   Jobs:
  *     cue_jobs     — list, inspect, wait for, or stop jobs
@@ -226,6 +228,8 @@ const CUE_SCHEDULE_STATUS_FILTERS = [
   "active",
 ] as const;
 const CUE_SCOPE_ACTIONS = ["list", "env", "config"] as const;
+const SCRIPT_LANGUAGES = ["cue-shell", "python"] as const;
+type ScriptLanguage = (typeof SCRIPT_LANGUAGES)[number];
 
 function isFileOp(command: string): boolean {
   const firstWord = command.trim().split(/\s+/)[0];
@@ -395,10 +399,12 @@ const PTY_MERGED_STDOUT_STDERR_LINE = "[PTY: stdout and stderr are merged]";
 
 export function normalizeCueStderrForDisplay(stderr: string, stdout = ""): string {
   const normalizedStderr = normalizeCueTerminalOutput(stderr);
-  if (!normalizedStderr.startsWith(PTY_MERGED_STDOUT_STDERR_LINE)) return normalizedStderr;
+  if (!normalizedStderr.includes(PTY_MERGED_STDOUT_STDERR_LINE)) return normalizedStderr;
 
   const mergedOutput = normalizedStderr
-    .slice(PTY_MERGED_STDOUT_STDERR_LINE.length)
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== PTY_MERGED_STDOUT_STDERR_LINE)
+    .join("\n")
     .replace(/^\r?\n/, "");
   const normalizedStdout = normalizeCueTerminalOutput(stdout);
   if (!mergedOutput.trim()) return "";
@@ -548,6 +554,65 @@ function normalizeOptionalCueString(value: unknown, field: string): string | und
     throw new Error(`${field} must be a non-empty string`);
   }
   return value.trim();
+}
+
+function quoteCueWord(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return JSON.stringify(value);
+}
+
+async function writeInlineScriptTemp(language: ScriptLanguage, body: string): Promise<string> {
+  const { createHash } = await import("node:crypto");
+  const { tmpdir } = await import("node:os");
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const ext = language === "python" ? "py" : "cue";
+  const hash = createHash("sha256").update(body).digest("hex").slice(0, 16);
+  const dir = join(tmpdir(), "pi-cue-script-runner");
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, "inline-" + hash + "." + ext);
+  await writeFile(file, body, "utf-8");
+  return file;
+}
+
+async function runPythonScriptJob(
+  cued: CueClient,
+  options: { path: string; timeout: number; tailBytes: number; cwd: string },
+) {
+  const result = await cued.runJob(`python3 ${quoteCueWord(options.path)}`, {
+    timeout: options.timeout,
+    cwd: options.cwd,
+  });
+  const stdout = normalizeCueTerminalOutput(result.stdout);
+  const stderr = normalizeCueStderrForDisplay(result.stderr, stdout);
+  const lines = [`Script job ${result.jobId}: ${result.status}`];
+  if (result.exitCode !== null) lines[0] += ` (exit ${result.exitCode})`;
+  if (result.timedOut) lines[0] += ` — timed out after ${options.timeout}s`;
+  if (stdout.trim()) {
+    const out = tailStr(stdout, options.tailBytes);
+    lines.push("", out.text.trimEnd());
+    if (out.truncated) lines.push(truncationLine("stdout", result.jobId));
+  }
+  if (stderr.trim()) {
+    const err = tailStr(stderr, options.tailBytes);
+    lines.push("", "[stderr]", err.text.trimEnd());
+    if (err.truncated) lines.push(truncationLine("stderr", result.jobId));
+  }
+  const details = {
+    language: "python",
+    path: options.path,
+    jobId: result.jobId,
+    status: result.status,
+    exitCode: result.exitCode,
+    timedOut: result.timedOut,
+    warnings: result.warnings,
+  };
+  if (result.status === "Failed" && !result.timedOut) {
+    const err = new Error(lines.join("\n"));
+    (err as unknown as { details?: unknown }).details = details;
+    throw err;
+  }
+  return { content: [{ type: "text" as const, text: lines.join("\n") }], details };
 }
 
 function rejectDeprecatedCueParam(
@@ -829,7 +894,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       pathLabel: string;
       timeout: number;
       tailBytes: number;
-      toolName: "cue_run" | "cue_script";
+      toolName: "cue_run" | "cue_script" | "script_run" | "script_eval";
     },
     ctx: PiCueToolContext,
   ) {
@@ -1022,6 +1087,189 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         },
         ctx,
       );
+    },
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  script_run / script_eval — generic script runners
+  // ═══════════════════════════════════════════════════════════════════
+
+  pi.registerTool({
+    name: "script_run",
+    label: "Run Script File",
+    description:
+      "Run a script file with an explicit language runner. " +
+      "Supported languages in this version: cue-shell and python. " +
+      "For cue-shell this delegates to RunScript and mirrors cue_run; for python it runs python3 through cue-shell job execution.",
+    parameters: Type.Object({
+      path: Type.String({ description: "Path to the script file to run." }),
+      language: Type.String({ description: "Script language. Required: cue-shell or python." }),
+      timeout: Type.Optional(
+        Type.Number({
+          description: "Foreground wait budget in seconds. Default: 300.",
+          default: 300,
+        }),
+      ),
+      tail_bytes: Type.Optional(
+        Type.Number({
+          description:
+            "Limit stdout/stderr to the last N bytes. Default: 16384. Pass 0 for full output.",
+        }),
+      ),
+    }),
+    renderCall(args, theme) {
+      return renderToolCall(
+        "script_run",
+        [
+          formatStringArg(args.language, { prefix: "lang=" }),
+          formatStringArg(args.path, { prefix: "path=", maxLength: 60 }),
+          formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
+          formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
+        ],
+        theme,
+      );
+    },
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal: AbortSignal,
+      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
+      ctx: PiCueToolContext,
+    ) {
+      const language = normalizeCueEnum(
+        params.language,
+        undefined,
+        SCRIPT_LANGUAGES,
+        "script_run language",
+      );
+      const pathParam = normalizeRequiredCueString(params.path, "script_run path");
+      const timeout = normalizeCueTimeoutSeconds(params.timeout, 300, "script_run timeout");
+      const tailBytes = normalizeCueTailBytes(
+        params.tail_bytes,
+        DEFAULT_CUE_TAIL_BYTES,
+        "script_run tail_bytes",
+      );
+      const baseCwd = ctx.cwd ?? process.cwd();
+      const { isAbsolute, resolve } = await import("node:path");
+      const resolvedPath = isAbsolute(pathParam) ? pathParam : resolve(baseCwd, pathParam);
+      const cued = await getClient(ctx);
+
+      if (language === "cue-shell") {
+        if (!resolvedPath.endsWith(".cue")) {
+          throw new Error(`script_run language=cue-shell path must end in .cue (got )`);
+        }
+        const { readFile } = await import("node:fs/promises");
+        let body: string;
+        try {
+          body = await readFile(resolvedPath, "utf-8");
+        } catch (err) {
+          throw new Error(`script_run failed to read : ${(err as Error).message}`);
+        }
+        return runCueScript(
+          {
+            resolvedPath,
+            body,
+            pathLabel: resolvedPath,
+            timeout,
+            tailBytes,
+            toolName: "script_run",
+          },
+          ctx,
+        );
+      }
+
+      return runPythonScriptJob(cued, { path: resolvedPath, timeout, tailBytes, cwd: baseCwd });
+    },
+  });
+
+  pi.registerTool({
+    name: "script_eval",
+    label: "Evaluate Script",
+    description:
+      "Run an inline script body with an explicit language runner. " +
+      "Supported languages in this version: cue-shell and python. " +
+      "Inline python is written to a temporary file and executed with python3 through cue-shell.",
+    parameters: Type.Object({
+      script: Type.String({ description: "Inline script body to run." }),
+      language: Type.String({ description: "Script language. Required: cue-shell or python." }),
+      pathLabel: Type.Optional(
+        Type.String({ description: "Display label for inline scripts. Default: <inline>." }),
+      ),
+      timeout: Type.Optional(
+        Type.Number({
+          description: "Foreground wait budget in seconds. Default: 300.",
+          default: 300,
+        }),
+      ),
+      tail_bytes: Type.Optional(
+        Type.Number({
+          description:
+            "Limit stdout/stderr to the last N bytes. Default: 16384. Pass 0 for full output.",
+        }),
+      ),
+    }),
+    renderCall(args, theme) {
+      const scriptArg =
+        typeof args.script === "string" && args.script.trim()
+          ? `inline=${(args.script as string).split(/\r?\n/).filter((line) => line.trim()).length}line(s)`
+          : undefined;
+      return renderToolCall(
+        "script_eval",
+        [
+          formatStringArg(args.language, { prefix: "lang=" }),
+          scriptArg,
+          formatStringArg(args.pathLabel, { prefix: "label=", maxLength: 40 }),
+          formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
+          formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
+        ],
+        theme,
+      );
+    },
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal: AbortSignal,
+      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
+      ctx: PiCueToolContext,
+    ) {
+      const language = normalizeCueEnum(
+        params.language,
+        undefined,
+        SCRIPT_LANGUAGES,
+        "script_eval language",
+      );
+      const script = normalizeRequiredCueString(params.script, "script_eval script");
+      const pathLabel =
+        normalizeOptionalCueString(params.pathLabel, "script_eval pathLabel") ?? "<inline>";
+      const timeout = normalizeCueTimeoutSeconds(params.timeout, 300, "script_eval timeout");
+      const tailBytes = normalizeCueTailBytes(
+        params.tail_bytes,
+        DEFAULT_CUE_TAIL_BYTES,
+        "script_eval tail_bytes",
+      );
+      const cued = await getClient(ctx);
+
+      if (language === "cue-shell") {
+        return runCueScript(
+          {
+            resolvedPath: pathLabel,
+            body: script,
+            pathLabel,
+            timeout,
+            tailBytes,
+            toolName: "script_eval",
+          },
+          ctx,
+        );
+      }
+
+      const tempPath = await writeInlineScriptTemp(language, script);
+      return runPythonScriptJob(cued, {
+        path: tempPath,
+        timeout,
+        tailBytes,
+        cwd: ctx.cwd ?? process.cwd(),
+      });
     },
   });
 

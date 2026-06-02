@@ -1,6 +1,6 @@
 import type { ProjectRef } from "spark-core";
 import type { TaskGraph } from "spark-tasks";
-import type { SparkPlanningModeSource, SparkRunStrategy } from "./session-state.ts";
+import type { SparkExecuteStrategy, SparkPlanningModeSource } from "./session-state.ts";
 
 export type SparkCommandProjectStateKind = "empty_project" | "existing_project" | "initialized";
 
@@ -10,7 +10,7 @@ export interface SparkCommandProjectState {
   unfinishedTaskCount: number;
 }
 
-export type SparkEntryMode = "planning" | "execution" | "run";
+export type SparkEntryMode = "research" | "plan" | "execute";
 export type SparkEntryModeChoice = SparkEntryMode | "new_project";
 export type SparkEntryConfidence = "high" | "ambiguous" | "conflicting";
 
@@ -26,10 +26,25 @@ export interface SparkEntryModeAnalysis {
   pendingTaskCount: number;
 }
 
+export interface SparkExecuteStrategyAnalysis {
+  recommendation: SparkExecuteStrategy;
+  confidence: SparkEntryConfidence;
+  reasons: string[];
+  prompt: string;
+  currentProjectTitle: string;
+  readyTaskCount: number;
+  pendingTaskCount: number;
+}
+
 export type SparkEntryIntent =
   | { kind: "auto"; prompt: string }
-  | { kind: "run_auto"; prompt: string }
-  | { kind: "direct"; mode: SparkEntryMode; prompt: string; runStrategy?: SparkRunStrategy };
+  | {
+      kind: "direct";
+      mode: SparkEntryMode;
+      prompt: string;
+      executeStrategy?: SparkExecuteStrategy;
+      workflowSelector?: string;
+    };
 
 export type SparkEntryResolution =
   | {
@@ -44,7 +59,8 @@ export type SparkEntryResolution =
       mode: SparkEntryMode;
       focus?: string;
       planningSource?: SparkPlanningModeSource;
-      runStrategy?: SparkRunStrategy;
+      executeStrategy?: SparkExecuteStrategy;
+      workflowSelector?: string;
     }
   | { action: "blocked"; message: string }
   | { action: "none" };
@@ -97,11 +113,11 @@ export function analyzeSparkEntryMode(
     };
   if (hasRunSignal)
     return {
-      recommendation: "run",
+      recommendation: "execute",
       confidence: "conflicting",
       reasons: [
         ...reasons,
-        "The prompt asks for continuous or until-done progress, so Spark should ask before starting background run mode.",
+        "The prompt asks for continuous or until-done progress, so Spark should ask before choosing goal or workflow execution.",
       ],
       prompt: normalizedPrompt,
       currentProjectTitle,
@@ -112,7 +128,7 @@ export function analyzeSparkEntryMode(
     };
   if (hasPlanningSignal && hasExecutionSignal)
     return {
-      recommendation: readyTaskCount > 0 ? "execution" : "planning",
+      recommendation: readyTaskCount > 0 ? "execute" : "plan",
       confidence: "conflicting",
       reasons: [
         ...reasons,
@@ -127,7 +143,7 @@ export function analyzeSparkEntryMode(
     };
   if (hasExecutionSignal)
     return {
-      recommendation: "execution",
+      recommendation: "execute",
       confidence: "high",
       reasons: [...reasons, "The prompt asks to execute, claim, dispatch, run, or finish work."],
       prompt: normalizedPrompt,
@@ -139,7 +155,7 @@ export function analyzeSparkEntryMode(
     };
   if (hasPlanningSignal)
     return {
-      recommendation: "planning",
+      recommendation: "plan",
       confidence: "high",
       reasons: [
         ...reasons,
@@ -154,7 +170,7 @@ export function analyzeSparkEntryMode(
     };
   if (!projectState.hasCurrentProject || projectState.unfinishedTaskCount === 0)
     return {
-      recommendation: "planning",
+      recommendation: "plan",
       confidence: "high",
       reasons: [...reasons, "No active unfinished current project work needs execution."],
       prompt: normalizedPrompt,
@@ -165,7 +181,7 @@ export function analyzeSparkEntryMode(
       pendingTaskCount,
     };
   return {
-    recommendation: readyTaskCount > 0 ? "execution" : "planning",
+    recommendation: readyTaskCount > 0 ? "execute" : "plan",
     confidence: "ambiguous",
     reasons: [
       ...reasons,
@@ -182,17 +198,89 @@ export function analyzeSparkEntryMode(
   };
 }
 
-export function inferSparkRunStrategy(prompt: string): SparkRunStrategy | undefined {
+export function analyzeSparkExecuteStrategy(
+  graph: TaskGraph,
+  prompt: string,
+  selectedProject: { ref: ProjectRef; title: string } | undefined,
+): SparkExecuteStrategyAnalysis {
+  const currentProjectTitle =
+    selectedProject?.title ?? graph.projects()[0]?.title ?? "current Spark workspace";
+  const tasks = graph.tasks(selectedProject?.ref);
+  const pendingTaskCount = tasks.filter(
+    (task) => task.status === "pending" || task.status === "ready",
+  ).length;
+  const readyTaskCount = graph.readyTasks(selectedProject?.ref).length;
   const normalizedPrompt = prompt.trim();
-  const hasParallelSignal =
-    /(并行|同时|多任务|并发|parallel|concurrent|concurrency|at once|in parallel)/i.test(
+  const hasWorkflowSignal =
+    /(workflow|工作流|deep research|深度调研|adversarial review|对抗审查|review workflow|pipeline|phase)/i.test(
       normalizedPrompt,
     );
-  const hasSequentialSignal =
-    /(顺序|串行|一个个|一个一个|逐个|依次|sequential|serial|one by one|one at a time)/i.test(
+  const hasGoalSignal =
+    /(goal|目标模式|持续|连续|自动推进|一直做|跑完|直到完成|keep going|until done|continue until|work through|finish all|run through|autonomous)/i.test(
       normalizedPrompt,
     );
-  if (hasParallelSignal && hasSequentialSignal) return undefined;
-  if (hasParallelSignal) return "parallel";
-  return "sequential";
+  const reasons = [
+    "Current project “" +
+      currentProjectTitle +
+      "” has " +
+      readyTaskCount +
+      " execution-ready task(s).",
+    "Ready frontier has " +
+      readyTaskCount +
+      " execution-ready task(s) out of " +
+      pendingTaskCount +
+      " pending/ready task(s).",
+  ];
+  if (normalizedPrompt) reasons.push("Prompt: " + normalizedPrompt);
+  if (hasWorkflowSignal && hasGoalSignal)
+    return {
+      recommendation: "workflow",
+      confidence: "conflicting",
+      reasons: [
+        ...reasons,
+        "The prompt asks for workflow-style execution and autonomous/until-done progress, so Spark must ask before broadening beyond default execution.",
+      ],
+      prompt: normalizedPrompt,
+      currentProjectTitle,
+      readyTaskCount,
+      pendingTaskCount,
+    };
+  if (hasWorkflowSignal)
+    return {
+      recommendation: "workflow",
+      confidence: "conflicting",
+      reasons: [
+        ...reasons,
+        "The prompt appears to request a workflow strategy, so Spark must ask before entering workflow execution from /execute.",
+      ],
+      prompt: normalizedPrompt,
+      currentProjectTitle,
+      readyTaskCount,
+      pendingTaskCount,
+    };
+  if (hasGoalSignal)
+    return {
+      recommendation: "goal",
+      confidence: "conflicting",
+      reasons: [
+        ...reasons,
+        "The prompt appears to request autonomous or until-done progress, so Spark must ask before entering goal execution from /execute.",
+      ],
+      prompt: normalizedPrompt,
+      currentProjectTitle,
+      readyTaskCount,
+      pendingTaskCount,
+    };
+  return {
+    recommendation: "default",
+    confidence: "high",
+    reasons: [
+      ...reasons,
+      "No autonomous goal or workflow signal was detected, so default execution is safest.",
+    ],
+    prompt: normalizedPrompt,
+    currentProjectTitle,
+    readyTaskCount,
+    pendingTaskCount,
+  };
 }

@@ -14,7 +14,7 @@ import {
   dispatchSparkAgentInstruction,
   enterSparkExecutionMode,
   enterSparkPlanningMode,
-  enterSparkRunMode,
+  enterSparkResearchMode,
   type SparkModeEntryDeps,
   type SparkModeMessageApi,
 } from "./spark-mode-entry.ts";
@@ -48,7 +48,9 @@ export async function applySparkEntryResolution(
         ctx.ui?.notify?.("Spark mode needs initialized Spark state.", "warning");
         return;
       }
-      if (resolution.mode === "planning")
+      if (resolution.mode === "research")
+        await enterSparkResearchMode(piApi, deps, ctx, graph, resolution.focus);
+      else if (resolution.mode === "plan")
         await enterSparkPlanningMode(
           piApi,
           deps,
@@ -57,16 +59,15 @@ export async function applySparkEntryResolution(
           resolution.focus,
           resolution.planningSource,
         );
-      else if (resolution.mode === "execution")
-        await enterSparkExecutionMode(piApi, deps, ctx, graph, resolution.focus);
       else
-        await enterSparkRunMode(
+        await enterSparkExecutionMode(
           piApi,
           deps,
           ctx,
           graph,
           resolution.focus,
-          resolution.runStrategy ?? "sequential",
+          resolution.executeStrategy,
+          resolution.workflowSelector,
         );
       return;
     case "blocked":

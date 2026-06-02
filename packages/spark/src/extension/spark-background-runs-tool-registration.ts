@@ -50,7 +50,9 @@ export function registerSparkBackgroundRunsTool(registerSparkTool: SparkToolRegi
         }),
       ),
       runRef: Type.Optional(
-        Type.String({ description: "DAG run ref or child role-run ref to inspect, kill, or ack." }),
+        Type.String({
+          description: "Workflow run ref or child role-run ref to inspect, kill, or ack.",
+        }),
       ),
       taskRef: Type.Optional(
         Type.String({

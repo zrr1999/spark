@@ -138,18 +138,18 @@ export function registerSparkRunReadyTasksTool(
         );
         deps.ensureDagManager(cwd, ctx);
         ctx.ui?.notify?.(
-          `Spark orchestrator started for “${project.title}”. Progress appears in the Spark widget; inspect with spark_background_runs status.`,
+          `Spark workflow-run scheduler started for “${project.title}”. Progress appears in the Spark widget; inspect with spark_background_runs status.`,
           "info",
         );
         return {
           content: [
             {
               type: "text",
-              text: `Spark orchestrator started for current project “${project.title}”. Progress appears in the Spark widget; inspect with spark_background_runs status, or stop explicit stuck child role-runs with spark_background_runs kill.`,
+              text: `Spark workflow-run scheduler started for current project “${project.title}”. Progress appears in the Spark widget; inspect with spark_background_runs status, or stop explicit stuck child role-runs with spark_background_runs kill.`,
             },
           ],
           details: {
-            orchestrator: "started",
+            workflowRunScheduler: "started",
             dryRun: false,
             projectRef: project.ref,
             runModeRef: runMode.runRef,

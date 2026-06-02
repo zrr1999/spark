@@ -82,7 +82,7 @@ const SPARK_TOOL_OPERATIONAL_NOTES: Record<string, SparkToolOperationalNotes> = 
     ],
   },
   spark_run_ready_tasks: {
-    atomic: "no; starts or previews DAG scheduling and real runs complete asynchronously",
+    atomic: "no; starts or previews workflow-run scheduling and real runs complete asynchronously",
     idempotent:
       "dryRun=true is safe; dryRun=false can launch role-runs and should not be repeated blindly",
     prerequisites: [
@@ -93,7 +93,7 @@ const SPARK_TOOL_OPERATIONAL_NOTES: Record<string, SparkToolOperationalNotes> = 
   },
   spark_background_runs: {
     atomic:
-      "action-dependent; status/list/inspect are read-only except reconcile refresh, kill/ack/reconcile mutate runtime or DAG records",
+      "action-dependent; status/list/inspect are read-only except reconcile refresh, kill/ack/reconcile mutate runtime or workflow-run records",
     idempotent:
       "status/list/inspect/reconcile are safe to repeat; ack is safe for the same problem records; kill is state-changing",
     prerequisites: [
@@ -105,7 +105,7 @@ const SPARK_TOOL_OPERATIONAL_NOTES: Record<string, SparkToolOperationalNotes> = 
     atomic:
       "action-dependent; status is read-only; reconcile/ack/clear/kill mutate run records or processes",
     idempotent: "status, reconcile, and repeat ack are safe; clear/kill actions are state-changing",
-    prerequisites: ["Spark DAG run store exists for this workspace."],
+    prerequisites: ["Spark workflow-run store exists for this workspace."],
   },
   spark_ask: {
     atomic: "yes; creates one ask artifact and waits for one answer artifact",

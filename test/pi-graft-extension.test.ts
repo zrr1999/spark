@@ -74,10 +74,21 @@ void test("pi-graft registers the expected local scratch controls", () => {
   registerPiGraftExtension(pi);
 
   assert.deepEqual([...handlers.keys()], ["session_start"]);
-  assert.deepEqual([...commands.keys()], ["graft-open", "graft-close"]);
+  assert.deepEqual(
+    [...commands.keys()],
+    ["graft-attach", "graft-detach", "graft-ps", "graft-doctor", "graft-open", "graft-close"],
+  );
   assert.deepEqual(
     [...tools.keys()],
-    ["read", "write", "edit", "graft_status", "graft_promote", "graft_validate", "graft_admit"],
+    [
+      "graft_read",
+      "graft_write",
+      "graft_edit",
+      "graft_status",
+      "graft_promote",
+      "graft_validate",
+      "graft_admit",
+    ],
   );
 });
 
@@ -93,9 +104,12 @@ void test("pi-graft controls real graftd scratch lifecycle", async (t) => {
 
   const dir = await mkdtemp(join(tmpdir(), "pi-graft-e2e-"));
   const project = join(dir, "project");
-  const socket = join(project, ".graft/graftd.sock");
+  const graftHome = join(dir, "graft-home");
+  const socket = join(graftHome, "run", "daemon.sock");
   const previousDaemonBin = process.env.GRAFT_DAEMON_BIN;
+  const previousGraftHome = process.env.GRAFT_HOME;
   process.env.GRAFT_DAEMON_BIN = graftdBin;
+  process.env.GRAFT_HOME = graftHome;
   await writeFile(join(dir, "placeholder"), "");
   await rm(project, { force: true, recursive: true });
   await execFileAsync("mkdir", ["-p", project]);
@@ -108,6 +122,7 @@ void test("pi-graft controls real graftd scratch lifecycle", async (t) => {
       graftTomlPath,
       graftToml.replace('base_properties = ["ValidPatch"]', "base_properties = []"),
     );
+    await writeFile(join(project, "seed.txt"), "seed\n");
     const created = await execFileAsync(
       graftBin,
       ["create", "--from", "graft:empty", "--expect", "ValidPatch", "--message", "pi-graft-base"],
@@ -126,16 +141,16 @@ void test("pi-graft controls real graftd scratch lifecycle", async (t) => {
     await commands.get("graft-open")!.handler(candidate, ctx);
     assert.ok(entries.length > 0, "opening a scratch persists session state");
 
-    await tools.get("write")!.execute("write", {
+    await tools.get("graft_write")!.execute("graft_write", {
       path: "greeting.txt",
       content: "hello\nworld\n",
     });
-    const read = await tools.get("read")!.execute("read", { path: "greeting.txt" });
+    const read = await tools.get("graft_read")!.execute("graft_read", { path: "greeting.txt" });
     const readText = read.content[0].text as string;
     const anchor = /^2#[^:]+:world/m.exec(readText)?.[0];
     assert.ok(anchor, `expected hashline anchor for line 2 in ${readText}`);
 
-    const edit = await tools.get("edit")!.execute("edit", {
+    const edit = await tools.get("graft_edit")!.execute("graft_edit", {
       path: "greeting.txt",
       edits: [{ op: "replace", pos: anchor, lines: ["graft"] }],
     });
@@ -170,6 +185,8 @@ void test("pi-graft controls real graftd scratch lifecycle", async (t) => {
     );
     if (previousDaemonBin === undefined) delete process.env.GRAFT_DAEMON_BIN;
     else process.env.GRAFT_DAEMON_BIN = previousDaemonBin;
+    if (previousGraftHome === undefined) delete process.env.GRAFT_HOME;
+    else process.env.GRAFT_HOME = previousGraftHome;
     await rm(dir, { force: true, recursive: true });
   }
 });

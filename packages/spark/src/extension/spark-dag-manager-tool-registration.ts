@@ -76,9 +76,9 @@ export function normalizeSparkDagManagerNonNegativeInteger(
 export function registerSparkDagManagerTool(registerSparkTool: SparkToolRegistrar): void {
   registerSparkTool({
     name: "spark_dag_manager",
-    label: "Spark Orchestrator Debug",
+    label: "Spark Workflow Run Debug",
     description:
-      "Low-level persisted Spark orchestrator compatibility/debug surface. Prefer spark_background_runs status/inspect/kill and spark_state prune for normal user-facing background work; kill_active targets child role-run processes, and timed_out is a legacy problem record.",
+      "Low-level persisted Spark workflow-run compatibility/debug surface. Prefer spark_background_runs status/inspect/kill and spark_state prune for normal user-facing background work; kill_active targets child role-run processes, and timed_out is a legacy problem record.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({
@@ -89,7 +89,8 @@ export function registerSparkDagManagerTool(registerSparkTool: SparkToolRegistra
       ),
       runRef: Type.Optional(
         Type.String({
-          description: "Optional DAG run ref for ack, or child run ref filter for kill_active.",
+          description:
+            "Optional workflow run ref for ack, or child run ref filter for kill_active.",
         }),
       ),
       dryRun: Type.Optional(
@@ -102,19 +103,20 @@ export function registerSparkDagManagerTool(registerSparkTool: SparkToolRegistra
         Type.Number({
           default: 30,
           description:
-            "For action=prune, only old terminal DAG runs older than this age are candidates.",
+            "For action=prune, only old terminal workflow runs older than this age are candidates.",
         }),
       ),
       keepRecent: Type.Optional(
         Type.Number({
           default: 10,
-          description: "For action=prune, retain this many newest terminal DAG runs globally.",
+          description: "For action=prune, retain this many newest terminal workflow runs globally.",
         }),
       ),
       keepRecentPerProject: Type.Optional(
         Type.Number({
           default: 10,
-          description: "For action=prune, retain this many newest terminal DAG runs per project.",
+          description:
+            "For action=prune, retain this many newest terminal workflow runs per project.",
         }),
       ),
     }),
@@ -185,13 +187,13 @@ export function registerSparkDagManagerTool(registerSparkTool: SparkToolRegistra
       if (action === "clear_inactive") await dagRunStore.clearInactiveRuns();
       const status = await dagRunStore.status({ limit: 10 });
       const lines = [
-        `Spark orchestrator debug action=${action}`,
+        `Spark workflow-run debug action=${action}`,
         "Low-level compatibility tool; prefer spark_background_runs status/inspect/kill for user-facing background work.",
       ];
       appendSparkDagStatusLines(lines, status);
       if (action === "ack" && acknowledged) {
         lines.push(
-          `Acknowledged DAG problem runs: ${acknowledged.acknowledged.length} newly, ${acknowledged.alreadyAcknowledged.length} already, ${acknowledged.skipped.length} skipped, ${acknowledged.missing.length} missing`,
+          `Acknowledged workflow problem runs: ${acknowledged.acknowledged.length} newly, ${acknowledged.alreadyAcknowledged.length} already, ${acknowledged.skipped.length} skipped, ${acknowledged.missing.length} missing`,
         );
       }
       if (action === "prune" && prune) appendSparkDagRunPruneLines(lines, prune);

@@ -5,7 +5,11 @@ import {
   type RoadmapPlanningContext,
 } from "../flows/roadmap-flow.ts";
 import type { SparkEntryMode } from "./spark-entry.ts";
-import type { SparkPlanningModeSource, SparkRunStrategy } from "./session-state.ts";
+import type { SparkExecuteStrategy, SparkPlanningModeSource } from "./session-state.ts";
+import {
+  renderSparkWorkflowBuiltinGuidance,
+  type SparkSavedWorkflowDiscovery,
+} from "./spark-workflow-builtins.ts";
 
 const PLANNING_AFFECTING_CHOICES =
   "scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order";
@@ -13,6 +17,26 @@ const PLANNING_AFFECTING_CHOICES =
 const SPARK_ASK_PLANNING_REMINDER = `Reminder for planning mode: if a user-facing open question or decision would change ${PLANNING_AFFECTING_CHOICES}, call spark_ask with context-specific questions before spark_plan_tasks; do not leave those questions as prose or plan.openQuestions.`;
 
 const SPARK_ASK_EXECUTION_REMINDER = `Reminder: if a missing user decision blocks execution or would change ${PLANNING_AFFECTING_CHOICES}, stop and call spark_ask instead of guessing, inventing scope, or finishing the task.`;
+
+export function renderSparkResearchModePrompt(
+  graph: TaskGraph,
+  selectedProjectRef: ProjectRef | undefined,
+  focus: string | undefined,
+): string {
+  const summary = renderExistingSparkSummary(graph, selectedProjectRef);
+  const focusLine = focus?.trim() ? "\n\nResearch focus: " + focus.trim() : "";
+  const action = selectedProjectRef
+    ? "Investigate the repository, current project, task graph, artifacts, and external references needed to answer the focus. Do not call spark_plan_tasks, spark_claim_task, or spark_finish_task in research mode. When research changes task scope or suggests new work, summarize findings and ask whether to enter /plan."
+    : "Select a current project with spark_use_project before project-scoped research; use spark_status view=summary/full to inspect available projects first if needed.";
+  return (
+    summary +
+    focusLine +
+    "\n\nEnter Spark research mode. " +
+    action +
+    " " +
+    SPARK_ASK_EXECUTION_REMINDER
+  );
+}
 
 export function renderSparkPlanningModePrompt(
   graph: TaskGraph,
@@ -34,51 +58,72 @@ export function renderSparkExecutionModePrompt(
   graph: TaskGraph,
   selectedProjectRef: ProjectRef | undefined,
   focus: string | undefined,
+  strategy: SparkExecuteStrategy = "default",
+  savedWorkflows: SparkSavedWorkflowDiscovery = { workflows: [], errors: [] },
+  workflowSelector?: string,
 ): string {
   const summary = renderExistingSparkSummary(graph, selectedProjectRef);
   const focusLine = focus?.trim()
     ? `\n\nExecution focus: ${focus.trim()}\nUse this focus to filter ready tasks and pre-flight questions; do not auto-dispatch solely because a focus was provided.`
     : "";
+  const strategyLine = "Execution strategy: " + strategy + ".";
+  const workflowSelectorLine =
+    strategy === "workflow" && workflowSelector
+      ? "\n\nWorkflow selector: " + workflowSelector + "."
+      : "";
+  const workflowGuidance =
+    selectedProjectRef && strategy === "workflow"
+      ? "\n\n" + renderSparkWorkflowBuiltinGuidance(focus, savedWorkflows, workflowSelector)
+      : "";
   const action = selectedProjectRef
-    ? "Read the current project/task plan and inspect ready tasks with spark_status. Claim at most one concrete task with spark_claim_task, execute it, verify the required evidence, then call spark_finish_task. Stop after that task finishes; do not auto-claim another task or dispatch a continuous DAG run from /execute. If the user wants continuous foreground progress through multiple tasks, suggest /run-sequential (or /run for inferred strategy). If the user wants background parallel progress, suggest /run-parallel."
+    ? strategy === "goal" || workflowSelector === "builtin:goal"
+      ? "Run the builtin goal workflow: read the current project/task plan and inspect ready tasks with spark_status. Work toward the requested goal by claiming one ready concrete task at a time with spark_claim_task, executing it, verifying required evidence, and calling spark_finish_task. Continue to the next ready task after each successful finish until the goal is complete, no ready task remains, validation fails, or a required user decision blocks progress."
+      : strategy === "workflow"
+        ? renderWorkflowBackendAction(workflowSelector)
+        : "Read the current project/task plan and inspect ready tasks with spark_status. Claim at most one concrete task with spark_claim_task, execute it, verify the required evidence, then call spark_finish_task. Stop after that task finishes; do not auto-claim another task or dispatch continuous work from /execute. If the user wants autonomous completion of all ready work, suggest /workflow:goal. If the user wants a scripted fan-out/subagent process, suggest /workflow."
     : "Select a current project with spark_use_project before claiming project-bound work; use spark_status view=summary/full to inspect available projects first if needed.";
-  return `${summary}${focusLine}\n\nEnter Spark execution mode. ${action} ${SPARK_ASK_EXECUTION_REMINDER}`;
+  return (
+    summary +
+    focusLine +
+    workflowSelectorLine +
+    "\n\nEnter Spark execution mode. " +
+    strategyLine +
+    " " +
+    action +
+    " " +
+    SPARK_ASK_EXECUTION_REMINDER +
+    workflowGuidance
+  );
 }
 
-export function renderSparkRunSequentialModePrompt(
-  graph: TaskGraph,
-  selectedProjectRef: ProjectRef | undefined,
-  focus: string | undefined,
-): string {
-  const summary = renderExistingSparkSummary(graph, selectedProjectRef);
-  const focusLine = focus?.trim()
-    ? `\n\nRun focus: ${focus.trim()}\nUse this focus to filter and prioritize which ready tasks to execute next.`
-    : "";
-  const action = selectedProjectRef
-    ? "Continuously claim and execute ready tasks in the current project one at a time, in this same session (foreground loop). For each iteration: inspect ready tasks with spark_status, claim the next ready task with spark_claim_task, execute it fully, verify the required evidence, then call spark_finish_task. After finishing a task, immediately move to the next ready task without waiting for an extra user prompt. Stop the loop and report clearly when any of the following happens: no ready tasks remain, a task becomes blocked, a context-specific spark_ask requires a user decision, validation fails, or the user interrupts. Do not call spark_run_ready_tasks and do not start a background DAG run; execute everything in this session. /run-sequential is a foreground loop, not a background process."
-    : "Select a current project with spark_use_project before running; use spark_status view=summary/full to inspect available projects first if needed.";
-  return `${summary}${focusLine}\n\nEnter Spark sequential run mode (foreground loop in this session). ${action} ${SPARK_ASK_EXECUTION_REMINDER}`;
+function renderWorkflowBackendAction(workflowSelector: string | undefined): string {
+  if (workflowSelector === "builtin:ready") {
+    return "Run the builtin ready-frontier workflow: inspect ready tasks with spark_status, then use spark_run_ready_tasks as the Spark-owned background scheduler when dispatch is appropriate. Keep the task DAG as durable truth, use workflow-run history for scheduling progress only, and stop for spark_ask when approval, scope, role model bindings, or validation decisions are required.";
+  }
+  if (workflowSelector?.startsWith("workspace:") || workflowSelector?.startsWith("user:")) {
+    return "Run the selected saved scripted workflow through Spark workflow runtime boundaries: use Spark-owned workflow script metadata, route agent steps through the Spark workflow role-run adapter, preserve project attribution and evidence, and do not bypass the task DAG for durable task truth.";
+  }
+  return "Select or start the appropriate Spark workflow for the focus. Use workflow-owned steps and child role-runs only through Spark workflow/runtime plumbing, keep artifacts attributed to the project, and stop for spark_ask whenever workflow selection, scope, or approval is required.";
 }
 
 export function renderSparkModeVisibleMessage(
   mode: SparkEntryMode,
   projectTitle: string | undefined,
   focus: string | undefined,
-  runStrategy?: SparkRunStrategy,
+  executeStrategy?: SparkExecuteStrategy,
+  workflowSelector?: string,
 ): string {
   const title =
-    mode === "planning"
-      ? "Spark planning mode requested"
-      : mode === "execution"
-        ? "Spark execution mode requested"
-        : runStrategy === "sequential"
-          ? "Spark run mode requested (sequential, foreground loop)"
-          : runStrategy === "parallel"
-            ? "Spark run mode requested (parallel, background)"
-            : "Spark run mode requested";
+    mode === "research"
+      ? "Spark research mode requested"
+      : mode === "plan"
+        ? "Spark plan mode requested"
+        : "Spark execute mode requested";
   const parts = [title];
   if (projectTitle?.trim()) parts.push(`project: ${projectTitle.trim()}`);
-  if (mode === "run" && runStrategy) parts.push(`strategy: ${runStrategy}`);
+  if (mode === "execute" && executeStrategy) parts.push("strategy: " + executeStrategy);
+  if (mode === "execute" && executeStrategy === "workflow" && workflowSelector)
+    parts.push("workflow: " + workflowSelector);
   if (focus?.trim()) parts.push(`focus: ${focus.trim()}`);
   return parts.join(" · ");
 }

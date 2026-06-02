@@ -63,7 +63,7 @@ function reconcileStaleDagRun(
     record.status = "succeeded";
   else if (taskRuns.some((run) => run.status === "cancelled")) record.status = "failed";
   else record.status = "stale";
-  record.errorMessage ??= `Spark orchestrator run was reconciled as ${record.status} after no active child process was found.`;
+  record.errorMessage ??= `Spark workflow run was reconciled as ${record.status} after no active child process was found.`;
   record.finishedAt ??= now;
   record.updatedAt = now;
   if (record.completionDigest.length === 0)

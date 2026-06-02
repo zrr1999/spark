@@ -97,7 +97,7 @@ function appendDagStatusLines(
     const compactDagRun = appendCompactSparkDagStatusLines(lines, dagStatus);
     if (compactDagRun) {
       const label = compactDagRun.ref === dagStatus.activeRun?.ref ? "Active" : "Actionable";
-      lines.push(`  ${label} DAG run: ${formatSparkDagRun(compactDagRun)}`);
+      lines.push(`  ${label} workflow run: ${formatSparkDagRun(compactDagRun)}`);
       appendSparkDagRunNextStepLines(lines, compactDagRun, "  ");
     }
   } else if (view === "summary") {
@@ -289,5 +289,19 @@ function appendIndependentTodoStatusLines(
 function sparkRunModeStatusLine(runMode: SparkRunModeState): string {
   const focusSuffix = runMode.focus ? ` focus=${runMode.focus}` : "";
   const strategy = sparkRunStrategyForMaxConcurrency(runMode.policy.maxConcurrency);
-  return `Spark run mode: ${runMode.status} ${runMode.runRef} project=${runMode.projectRef}${focusSuffix} strategy=${strategy} maxConcurrency=${runMode.policy.maxConcurrency} timeoutMs=${runMode.policy.timeoutMs}`;
+  return (
+    "Spark workflow mode: " +
+    runMode.status +
+    " " +
+    runMode.runRef +
+    " project=" +
+    runMode.projectRef +
+    focusSuffix +
+    " strategy=" +
+    strategy +
+    " maxConcurrency=" +
+    runMode.policy.maxConcurrency +
+    " timeoutMs=" +
+    runMode.policy.timeoutMs
+  );
 }

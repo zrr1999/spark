@@ -45,67 +45,90 @@ export function registerSparkCommands(
     },
   });
 
-  pi.registerCommand("plan", {
-    description:
-      "Enter Spark planning mode directly, or initialize an existing non-empty project into planning mode.",
+  pi.registerCommand("research", {
+    description: "Enter Spark research mode: investigate and report without changing tasks.",
     async handler(args, ctx) {
       await handleSparkEntryCommand(pi, ctx, {
         kind: "direct",
-        mode: "planning",
+        mode: "research",
+        prompt: args.trim(),
+      });
+    },
+  });
+
+  pi.registerCommand("plan", {
+    description:
+      "Enter Spark plan mode directly, or initialize an existing non-empty project into plan mode.",
+    async handler(args, ctx) {
+      await handleSparkEntryCommand(pi, ctx, {
+        kind: "direct",
+        mode: "plan",
         prompt: args.trim(),
       });
     },
   });
 
   pi.registerCommand("execute", {
-    description: "Enter Spark execution mode directly to execute one task, then stop.",
+    description:
+      "Enter Spark execute mode; Spark asks for default, goal, or workflow strategy when needed.",
     async handler(args, ctx) {
       await handleSparkEntryCommand(pi, ctx, {
         kind: "direct",
-        mode: "execution",
+        mode: "execute",
         prompt: args.trim(),
+        executeStrategy: "default",
       });
     },
   });
 
-  pi.registerCommand("run", {
+  registerBuiltinWorkflowCommand("goal", "Foreground autonomous goal workflow.");
+  registerBuiltinWorkflowCommand("ready", "Background ready-frontier workflow.");
+
+  pi.registerCommand("workflow", {
     description:
-      "Start Spark sequential run mode (foreground loop); use /run-parallel for background parallel execution.",
+      "Enter Spark workflow execution mode; accepts optional selector like builtin:goal, workspace:foo, or user:foo.",
     async handler(args, ctx) {
+      const parsed = parseWorkflowCommandArgs(args);
       await handleSparkEntryCommand(pi, ctx, {
         kind: "direct",
-        mode: "run",
-        prompt: args.trim(),
-        runStrategy: "sequential",
+        mode: "execute",
+        prompt: parsed.focus,
+        executeStrategy: "workflow",
+        workflowSelector: parsed.selector,
       });
     },
   });
 
-  pi.registerCommand("run-sequential", {
-    description:
-      "Start Spark run mode to continuously execute ready tasks one at a time until done or blocked.",
-    async handler(args, ctx) {
-      await handleSparkEntryCommand(pi, ctx, {
-        kind: "direct",
-        mode: "run",
-        prompt: args.trim(),
-        runStrategy: "sequential",
-      });
-    },
-  });
+  function registerBuiltinWorkflowCommand(selector: string, description: string): void {
+    pi.registerCommand("workflow:" + selector, {
+      description,
+      async handler(args, ctx) {
+        await handleSparkEntryCommand(pi, ctx, {
+          kind: "direct",
+          mode: "execute",
+          prompt: args.trim(),
+          executeStrategy: "workflow",
+          workflowSelector: "builtin:" + selector,
+        });
+      },
+    });
+  }
 
-  pi.registerCommand("run-parallel", {
-    description:
-      "Start Spark run mode to continuously execute ready tasks in parallel until done or blocked.",
-    async handler(args, ctx) {
-      await handleSparkEntryCommand(pi, ctx, {
-        kind: "direct",
-        mode: "run",
-        prompt: args.trim(),
-        runStrategy: "parallel",
-      });
-    },
-  });
+  function parseWorkflowCommandArgs(args: string): { selector?: string; focus: string } {
+    const trimmed = args.trim();
+    if (!trimmed) return { focus: "" };
+    if (trimmed === ":") return { selector: "builtin:", focus: "" };
+    if (trimmed.startsWith(": ")) return { selector: "builtin:", focus: trimmed.slice(2).trim() };
+    const match = /^(?:(builtin|workspace|user):)?([a-z0-9][a-z0-9-]*)(?:\s+([\s\S]*))?$/u.exec(
+      trimmed,
+    );
+    if (!match) return { focus: trimmed };
+    const source = match[1];
+    const id = match[2];
+    const rest = match[3]?.trim() ?? "";
+    if (source) return { selector: source + ":" + id, focus: rest };
+    return { focus: trimmed };
+  }
 
   async function handleSparkEntryCommand(
     piApi: SparkCommandApi,

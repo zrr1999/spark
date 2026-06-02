@@ -4,11 +4,11 @@ Spark ready-frontier orchestration and durable background state.
 
 Responsibilities:
 
-- persist orchestrator invocation records in `.spark/dag-runs.json` via `SparkDagRunStore`
+- persist workflow-run invocation records in `.spark/workflow-runs.json` via `SparkDagRunStore`
 - schedule execution-ready tasks from `TaskGraph.readyTasks()` in concurrency-limited waves
-- coordinate ready-wave progress hooks with durable DAG run records
-- reconcile stale orchestrator state from task graph and active role-run process state supplied by the Spark extension/runtime
-- summarize orchestrator status for `spark_status`, `spark_background_runs`, and low-level `spark_dag_manager`
+- coordinate ready-wave progress hooks with durable workflow-run records
+- reconcile stale workflow-run state from task graph and active role-run process state supplied by the Spark extension/runtime
+- summarize workflow-run status for `spark_status`, `spark_background_runs`, and low-level `spark_dag_manager`
 
 Non-responsibilities:
 

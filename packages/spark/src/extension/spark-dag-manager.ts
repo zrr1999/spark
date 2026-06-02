@@ -231,7 +231,7 @@ function sparkDagCompletionNotificationLevel(
 
 function reportSparkDagManagerError(error: unknown): void {
   console.warn(
-    `Spark DAG manager failed: ${error instanceof Error ? error.message : String(error)}`,
+    `Spark workflow-run manager failed: ${error instanceof Error ? error.message : String(error)}`,
   );
 }
 
