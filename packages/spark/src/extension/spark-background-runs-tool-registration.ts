@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { type RunRef } from "spark-core";
-import { defaultSparkDagRunStore } from "spark-orchestrator";
+import { defaultSparkDagRunStore } from "spark-workflows";
 import { killActiveSparkRoleRunProcesses } from "spark-runtime";
 import {
   acknowledgeBackgroundDagRuns,

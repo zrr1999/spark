@@ -17,7 +17,6 @@
   },
   "dependencies": {
     "pi-roles": "file:../pi-roles",
-    "spark-artifacts": "file:../spark-artifacts",
     "spark-core": "file:../spark-core",
     "spark-tasks": "file:../spark-tasks"
   }

@@ -2,7 +2,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import { Type } from "typebox";
-import { defaultArtifactStore } from "spark-artifacts";
+import { defaultArtifactStore } from "spark-core";
 import {
   defaultLearningStore,
   renderLearningExportMarkdown,

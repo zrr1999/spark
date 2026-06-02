@@ -1,6 +1,15 @@
 # pi-spark
 
-`pi-spark` is the Spark suite for Pi: a controlled agentic development system where the user-facing entry point is `/spark`, and lower-level capabilities are kept as Spark primitives.
+`pi-spark` is the Spark suite for Pi: a controlled agentic development system where the Pi extension entry point is `/spark`, and lower-level capabilities are kept as Spark primitives.
+
+The repository also contains an MVP standalone Spark-first TUI host:
+
+```text
+spark
+spark <initial goal>
+```
+
+The standalone `spark` command is built on the Pi SDK `InteractiveMode`. It disables normal Pi extension/skill discovery, bundles Spark-related extensions as built-in capabilities, loads Spark skills explicitly, and routes ordinary TUI input through Spark mode by default. This MVP is intentionally TUI-only: it does not provide `--print`, JSON/RPC, or standalone subcommands yet. Child/background role-runs still use the existing `pi --print --mode json` runner, so `pi` must remain installed and authenticated for workflow execution.
 
 ## User-facing entry point
 
@@ -37,16 +46,14 @@ A root `SPARK.md` is only materialized by `/spark` initialization, and only when
 ## Packages
 
 - `spark` — high-level `/spark`, `/research`, `/plan`, `/execute`, and `/workflow[:selector]` facade plus Spark status/workflow tools.
-- `spark-core` — internal shared refs, schemas, errors, and contracts.
+- `spark-cli` — standalone Spark-first TUI host built on the Pi SDK; starts directly with `spark` and bundles Spark/pi-\* extensions as built-ins.
+- `spark-core` — internal shared refs, schemas, errors, artifact store, durable artifact metadata/blobs, and contracts.
 - `pi-cue` — reusable Pi/cue-shell execution substrate; absorbs `pi-cue-shell` code without a compatibility package and does not depend on `spark-core`.
 - `pi-ask` — minimal `ask_user` plus reusable `ask_flow` protocol/state/renderer with direct custom input handling.
 - `pi-roles` — reusable `RoleSpec` definitions, builtin/project/user role discovery, Markdown stores, role-spec management tools (`list_roles` / `get_role` / `create_role`), and one task-agnostic direct-call tool (`call_role`). It owns fresh/forked CLI launch, timeout/cancel, stdout/stderr capture, and tolerant JSONL parsing; it does not own Spark task DAGs, asks, artifacts, or review gates.
 - `spark-tasks` — durable project/task DAG, task names/titles/descriptions, TODOs, dependencies, readiness, runs, and unified claim/lease state. Optional task `roleRef` values are preferred executor hints, not readiness requirements.
 - `spark-runtime` — Spark single-task runtime adapter that executes one task through `pi-roles`, writes artifacts, and owns task/run/timeout mapping above `RoleRun`.
-- `spark-orchestrator` — Spark workflow-run control plane that schedules ready frontiers, assigns executor roles at dispatch, and owns background workflow-run state in `.spark/workflow-runs.json`.
-- `spark-goal` — private vendored Spark-owned goal continuation primitives used by `/workflow:goal` and goal strategy prompts.
-- `spark-workflows` — private vendored Spark-owned workflow runtime, example workflow script factories, and role-run adapter boundary for `/workflow[:selector]`.
-- `spark-artifacts` — typed durable artifacts with hashes, blobs, provenance, and lineage links.
+- `spark-workflows` — private Spark-owned workflow runtime, example workflow script factories, `/workflow:goal` goal continuation, `/workflow:ready` ready-frontier orchestration, workflow-run state in `.spark/workflow-runs.json`, and the role-run adapter boundary for `/workflow[:selector]`.
 - `spark-learnings` — evidence-backed reusable learning records, lifecycle state, search, explicit export/import, and legacy `compound-learnings` migration helpers.
 - `spark-ask` — Spark-specific ask artifact persistence/replay and tool helpers built on top of `pi-ask`; callers provide context-specific questions instead of canned presets.
 
@@ -57,6 +64,7 @@ No compatibility packages are planned. `spark-github` is intentionally deferred.
 ```text
 pnpm install
 pnpm run verify
+packages/spark-cli/bin/spark --help
 ```
 
 Tooling (pnpm, Vite+ / `vp`, prek hooks, CI) matches the stack documented in [`AGENTS.md`](./AGENTS.md).

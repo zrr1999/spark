@@ -3,7 +3,6 @@ import { mkdir } from "node:fs/promises";
 import net from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 const STATE_ENTRY = "pi-graft-state";
@@ -14,6 +13,7 @@ type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string
 type JsonRecord = Record<string, JsonValue>;
 
 export interface PiGraftSessionContext {
+  cwd?: string;
   sessionManager?: { getBranch?: () => unknown[]; getEntries?: () => unknown[] };
 }
 
@@ -22,6 +22,10 @@ export interface PiGraftCommandContext extends PiGraftSessionContext {
   ui?: {
     notify?: (message: string, level?: "info" | "warning" | "error") => void;
   };
+}
+
+export interface PiGraftToolContext extends PiGraftSessionContext {
+  cwd: string;
 }
 
 export interface PiGraftCommand {
@@ -39,7 +43,13 @@ export interface PiGraftToolDefinition {
   label: string;
   description: string;
   parameters: unknown;
-  execute: (toolCallId: string, params: Record<string, unknown>) => Promise<PiGraftToolResult>;
+  execute: (
+    toolCallId: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+    onUpdate?: unknown,
+    ctx?: PiGraftToolContext,
+  ) => Promise<PiGraftToolResult>;
 }
 
 export interface PiGraftExtensionApi {
@@ -54,11 +64,8 @@ export interface PiGraftExtensionApi {
 
 export interface ActiveGraftScratchState {
   workspace: string;
-  base: string;
-  rootScratch: string;
-  scratch: string;
-  lease?: string;
-  openedAt: string;
+  base?: string;
+  lastScratch?: string;
   updatedAt: string;
   lastCandidate?: string;
   lastPatch?: string;
@@ -97,6 +104,13 @@ function stringField(value: unknown, field: string): string | undefined {
   if (!isRecord(value)) return undefined;
   const fieldValue = value[field];
   return typeof fieldValue === "string" ? fieldValue : undefined;
+}
+
+function optionalStringParam(params: Record<string, unknown>, field: string): string | undefined {
+  const value = params[field];
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function stringArrayField(value: unknown, field: string): string[] | undefined {
@@ -286,20 +300,13 @@ function restoreState(ctx: PiGraftSessionContext): ActiveGraftScratchState | und
     }
     if (!isRecord(nextState)) continue;
     const workspace = stringField(nextState, "workspace");
-    const base = stringField(nextState, "base");
-    const rootScratch = stringField(nextState, "rootScratch");
-    const scratch = stringField(nextState, "scratch");
-    const openedAt = stringField(nextState, "openedAt");
     const updatedAt = stringField(nextState, "updatedAt");
-    if (!workspace || !base || !rootScratch || !scratch || !openedAt || !updatedAt) continue;
+    if (!workspace || !updatedAt) continue;
     state = {
       workspace,
-      base,
-      rootScratch,
-      scratch,
-      openedAt,
       updatedAt,
-      lease: stringField(nextState, "lease"),
+      base: stringField(nextState, "base"),
+      lastScratch: stringField(nextState, "lastScratch"),
       lastCandidate: stringField(nextState, "lastCandidate"),
       lastPatch: stringField(nextState, "lastPatch"),
     };
@@ -308,15 +315,16 @@ function restoreState(ctx: PiGraftSessionContext): ActiveGraftScratchState | und
 }
 
 function stateSummary(state: ActiveGraftScratchState | undefined): string {
-  if (!state) return "No active graft scratch. Run /graft-open <base> first.";
+  if (!state) {
+    return "No pi-graft convenience state. Start scratch tools with base, or continue a returned scratch with from.";
+  }
   return [
     `workspace: ${state.workspace}`,
-    `base: ${state.base}`,
-    `rootScratch: ${state.rootScratch}`,
-    `scratch: ${state.scratch}`,
-    `lease: ${state.lease ?? "none"}`,
+    `base: ${state.base ?? "none"}`,
+    `lastScratch: ${state.lastScratch ?? "none"}`,
     `lastCandidate: ${state.lastCandidate ?? "none"}`,
     `lastPatch: ${state.lastPatch ?? "none"}`,
+    `updatedAt: ${state.updatedAt}`,
   ].join("\n");
 }
 
@@ -324,34 +332,13 @@ function registerState(pi: PiGraftExtensionApi, state: ActiveGraftScratchState |
   pi.appendEntry?.(STATE_ENTRY, { state: state ?? null });
 }
 
-function requiredActiveState(state: ActiveGraftScratchState | undefined): ActiveGraftScratchState {
-  if (!state) {
-    throw new Error("E_NO_ACTIVE_SCRATCH: no active graft scratch. Run /graft-open <base> first.");
-  }
-  return state;
-}
-
-async function validateActiveState(state: ActiveGraftScratchState): Promise<void> {
-  try {
-    await requestGraftd(state.workspace, "status", {}, { spawnIfMissing: false });
-    if (state.rootScratch !== state.scratch) {
-      await requestGraftd(
-        state.workspace,
-        "scratch_diff",
-        { from: state.rootScratch, to: state.scratch },
-        { spawnIfMissing: false },
-      );
-    }
-  } catch (error) {
-    throw new Error(
-      `E_SCRATCH_LOST: active graft scratch is not reachable; run /graft-open ${state.base} again. Cause: ${compactError(error)}`,
-    );
-  }
-}
-
 function normalizeStringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  return value.flatMap((item) => {
+    if (typeof item !== "string") return [];
+    const trimmed = item.trim();
+    return trimmed ? [trimmed] : [];
+  });
 }
 
 function formatEnvelope(envelope: JsonRecord): string {
@@ -484,10 +471,107 @@ function renderHashlineSlice(
   return { text: `${selected.join("\n")}${suffix}`, nextOffset };
 }
 
+interface ScratchSourceSelection {
+  params: JsonRecord;
+  base?: string;
+  from?: string;
+  usedLastScratch: boolean;
+}
+
+function stateForCwd(
+  state: ActiveGraftScratchState | undefined,
+  cwd: string,
+): ActiveGraftScratchState | undefined {
+  return state?.workspace === cwd ? state : undefined;
+}
+
+function toolCwd(
+  ctx: PiGraftToolContext | undefined,
+  state: ActiveGraftScratchState | undefined,
+  fallbackCwd: string | undefined,
+): string {
+  const cwd = ctx?.cwd ?? state?.workspace ?? fallbackCwd;
+  if (!cwd) throw new Error("pi-graft tools require a cwd context or restored session state.");
+  return cwd;
+}
+
+function scratchSourceSelection(
+  params: Record<string, unknown>,
+  state: ActiveGraftScratchState | undefined,
+): ScratchSourceSelection {
+  const base = optionalStringParam(params, "base");
+  const from = optionalStringParam(params, "from");
+  if (base && from) throw new Error("base and from are mutually exclusive.");
+  if (base) return { params: { base }, base, usedLastScratch: false };
+  if (from) return { params: { from }, from, usedLastScratch: false };
+  if (state?.lastScratch) {
+    return { params: { from: state.lastScratch }, from: state.lastScratch, usedLastScratch: true };
+  }
+  throw new Error(
+    "scratch operation requires base or from; pass base for the first operation or from to continue a returned scratch.",
+  );
+}
+
+type StateUpdates = Partial<Omit<ActiveGraftScratchState, "workspace" | "updatedAt" | "base">> & {
+  base?: string | null;
+};
+
+function mergeState(
+  previous: ActiveGraftScratchState | undefined,
+  cwd: string,
+  updates: StateUpdates,
+): ActiveGraftScratchState {
+  const sameWorkspace = previous?.workspace === cwd ? previous : undefined;
+  const base = updates.base === null ? undefined : (updates.base ?? sameWorkspace?.base);
+  return {
+    workspace: cwd,
+    base,
+    lastScratch: updates.lastScratch ?? sameWorkspace?.lastScratch,
+    lastCandidate: updates.lastCandidate ?? sameWorkspace?.lastCandidate,
+    lastPatch: updates.lastPatch ?? sameWorkspace?.lastPatch,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function sourceBaseUpdate(
+  source: ScratchSourceSelection,
+  previous: ActiveGraftScratchState | undefined,
+): string | null | undefined {
+  if (source.base) return source.base;
+  if (source.usedLastScratch || source.from === previous?.lastScratch) return undefined;
+  return null;
+}
+
+function sourceDescription(source: ScratchSourceSelection): string {
+  if (source.base) return `base ${source.base}`;
+  if (source.usedLastScratch) return `last scratch ${source.from}`;
+  return `scratch ${source.from}`;
+}
+
+function scratchSourceSchema(): Record<string, unknown> {
+  return {
+    base: Type.Optional(
+      Type.String({
+        description:
+          "Base ref for the first scratch operation: graft:empty, tree:<id>, candidate:<id>, or patch:<id>.",
+      }),
+    ),
+    from: Type.Optional(Type.String({ description: "Scratch id to continue editing." })),
+  };
+}
+
 export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   let activeState: ActiveGraftScratchState | undefined;
+  let lastCwd: string | undefined;
+
+  function rememberState(cwd: string, updates: StateUpdates): ActiveGraftScratchState {
+    activeState = mergeState(activeState, cwd, updates);
+    registerState(pi, activeState);
+    return activeState;
+  }
 
   pi.on("session_start", (_event: unknown, ctx: PiGraftSessionContext) => {
+    lastCwd = ctx.cwd;
     activeState = restoreState(ctx);
   });
 
@@ -519,72 +603,28 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     description: "Diagnose graft registry state: /graft-doctor [--rebuild-registry]",
     handler: async (args: string, ctx: PiGraftCommandContext) => {
       const argv = ["doctor"];
-      if (args.trim().split(/\s+/).includes("--rebuild-registry")) argv.push("--rebuild-registry");
+      const flags = args.trim() ? args.trim().split(/\s+/) : [];
+      for (const flag of flags) {
+        if (flag !== "--rebuild-registry") {
+          throw new Error(`unknown graft-doctor argument: ${flag}`);
+        }
+      }
+      if (flags.includes("--rebuild-registry")) argv.push("--rebuild-registry");
       await notifyCliExec(ctx, argv, "Graft doctor completed.");
     },
   });
 
-  pi.registerCommand("graft-open", {
-    description: "Open a graft scratch from a tree/candidate/patch base: /graft-open <base>",
-    handler: async (args: string, ctx: PiGraftCommandContext) => {
-      const base = args.trim();
-      if (!base) {
-        ctx.ui?.notify?.("Usage: /graft-open <tree|candidate|patch base>", "warning");
-        return;
-      }
-      const cwd = ctx.cwd;
-      const open = await requestGraftd(cwd, "scratch_open", { base });
-      const scratch = stringField(open, "scratch");
-      if (!scratch)
-        throw new Error(`graftd scratch_open did not return scratch: ${JSON.stringify(open)}`);
-      const pin = await requestGraftd(cwd, "scratch_pin", { scratch });
-      const lease = stringField(pin, "lease");
-      const now = new Date().toISOString();
-      activeState = {
-        workspace: cwd,
-        base,
-        rootScratch: scratch,
-        scratch,
-        lease,
-        openedAt: now,
-        updatedAt: now,
-      };
-      registerState(pi, activeState);
-      ctx.ui?.notify?.(
-        `Opened graft scratch ${scratch}${lease ? ` (lease ${lease})` : ""}`,
-        "info",
-      );
-    },
-  });
-
   pi.registerCommand("graft-close", {
-    description: "Release the active graft scratch lease and clear pi-graft state",
+    description: "Clear pi-graft convenience state for the current session: /graft-close",
     handler: async (_args: string, ctx: PiGraftCommandContext) => {
-      const state = activeState;
-      if (!state) {
-        ctx.ui?.notify?.("No active graft scratch.", "info");
-        return;
-      }
-      const errors: string[] = [];
-      if (state.lease) {
-        await requestGraftd(state.workspace, "scratch_unpin", { lease: state.lease }).catch(
-          (error) => {
-            errors.push(`unpin: ${compactError(error)}`);
-          },
-        );
-      }
-      await requestGraftd(state.workspace, "scratch_drop", { scratch: state.scratch }).catch(
-        (error) => {
-          errors.push(`drop: ${compactError(error)}`);
-        },
-      );
+      const hadState = activeState !== undefined;
       activeState = undefined;
       registerState(pi, undefined);
       ctx.ui?.notify?.(
-        errors.length
-          ? `Cleared graft scratch state with warnings: ${errors.join("; ")}`
-          : "Closed graft scratch.",
-        errors.length ? "warning" : "info",
+        hadState
+          ? "Cleared pi-graft convenience state. Returned scratch ids can still be passed explicitly as from while graftd keeps them."
+          : "No pi-graft convenience state.",
+        "info",
       );
     },
   });
@@ -593,32 +633,46 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     name: "graft_read",
     label: "Graft read (experimental)",
     description:
-      "Experimental: read a UTF-8 text file from the active graft scratch. Output uses LINE#HASH anchors; run /graft-open <base> first. Supports offset/limit over rendered hashline lines.",
+      "Experimental: read a UTF-8 text file through graftd scratch_read. Pass base for the first operation or from to continue a returned scratch. Output uses LINE#HASH anchors and details.result.scratch returns the scratch id.",
     parameters: Type.Object({
-      path: Type.String({ description: "Path to read from the active graft scratch." }),
+      ...scratchSourceSchema(),
+      path: Type.String({ description: "Path to read from the graft scratch source." }),
       offset: Type.Optional(
         Type.Number({ description: "Line number to start reading from (1-indexed)." }),
       ),
       limit: Type.Optional(Type.Number({ description: "Maximum number of lines to return." })),
     }),
-    async execute(_toolCallId: string, params: Record<string, unknown>) {
-      const state = requiredActiveState(activeState);
-      await validateActiveState(state);
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const previousState = stateForCwd(activeState, cwd);
+      const source = scratchSourceSelection(params, previousState);
       const path = typeof params.path === "string" ? params.path : undefined;
       if (!path) throw new Error("graft_read requires path.");
-      const result = await requestGraftd(
-        state.workspace,
-        "scratch_read",
-        { scratch: state.scratch, path, mode: "hashlines" },
-        { spawnIfMissing: false },
-      );
+      const result = await requestGraftd(cwd, "scratch_read", {
+        ...source.params,
+        path,
+        mode: "hashlines",
+      });
       const content = stringField(result, "content");
-      if (content === undefined)
-        throw new Error(`graftd scratch_read did not return content: ${JSON.stringify(result)}`);
+      const scratch = stringField(result, "scratch");
+      if (content === undefined || !scratch)
+        throw new Error(
+          `graftd scratch_read did not return content and scratch: ${JSON.stringify(result)}`,
+        );
+      const nextState = rememberState(cwd, {
+        base: sourceBaseUpdate(source, previousState),
+        lastScratch: scratch,
+      });
       const rendered = renderHashlineSlice(content, params.offset, params.limit);
       return {
         content: [{ type: "text", text: rendered.text }],
-        details: { result, state, nextOffset: rendered.nextOffset },
+        details: { result, state: nextState, source, nextOffset: rendered.nextOffset },
       };
     },
   });
@@ -627,32 +681,42 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     name: "graft_write",
     label: "Graft write (experimental)",
     description:
-      "Experimental: write UTF-8 text content into the active graft scratch and advance the active scratch id. Does not modify the worktree and does not promote automatically.",
+      "Experimental: write UTF-8 text content through graftd scratch_write. Pass base for the first operation or from to continue a returned scratch. Does not modify the worktree or create a candidate.",
     parameters: Type.Object({
-      path: Type.String({ description: "Path to write in the active graft scratch." }),
+      ...scratchSourceSchema(),
+      path: Type.String({ description: "Path to write in the graft scratch source." }),
       content: Type.String({ description: "Complete UTF-8 text content to write." }),
     }),
-    async execute(_toolCallId: string, params: Record<string, unknown>) {
-      const state = requiredActiveState(activeState);
-      await validateActiveState(state);
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const previousState = stateForCwd(activeState, cwd);
+      const source = scratchSourceSelection(params, previousState);
       const path = typeof params.path === "string" ? params.path : undefined;
       const content = typeof params.content === "string" ? params.content : undefined;
       if (!path) throw new Error("graft_write requires path.");
       if (content === undefined) throw new Error("graft_write requires content.");
-      const result = await requestGraftd(
-        state.workspace,
-        "scratch_write",
-        { scratch: state.scratch, path, content },
-        { spawnIfMissing: false },
-      );
+      const result = await requestGraftd(cwd, "scratch_write", { ...source.params, path, content });
       const scratch = stringField(result, "scratch");
       if (!scratch)
         throw new Error(`graftd scratch_write did not return scratch: ${JSON.stringify(result)}`);
-      activeState = { ...state, scratch, updatedAt: new Date().toISOString() };
-      registerState(pi, activeState);
+      const nextState = rememberState(cwd, {
+        base: sourceBaseUpdate(source, previousState),
+        lastScratch: scratch,
+      });
       return {
-        content: [{ type: "text", text: `Wrote ${path} in graft scratch ${scratch}.` }],
-        details: { result, state: activeState },
+        content: [
+          {
+            type: "text",
+            text: `Wrote ${path} from ${sourceDescription(source)} into graft scratch ${scratch}.`,
+          },
+        ],
+        details: { result, state: nextState, source },
       };
     },
   });
@@ -661,9 +725,10 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     name: "graft_edit",
     label: "Graft edit (experimental)",
     description:
-      "Experimental: apply strict hashline edits to a UTF-8 text file in the active graft scratch. Use anchors from graft read output. Supported ops: replace, append, prepend. Does not accept oldText/newText exact replacement fields.",
+      "Experimental: apply strict hashline edits through graftd scratch_edit. Pass base for the first operation or from to continue a returned scratch. Supported ops: replace, append, prepend. Does not accept oldText/newText exact replacement fields.",
     parameters: Type.Object({
-      path: Type.String({ description: "Path to edit in the active graft scratch." }),
+      ...scratchSourceSchema(),
+      path: Type.String({ description: "Path to edit in the graft scratch source." }),
       edits: Type.Array(
         Type.Object({
           op: Type.String({ description: "replace, append, or prepend" }),
@@ -688,7 +753,13 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         }),
       ),
     }),
-    async execute(_toolCallId: string, params: Record<string, unknown>) {
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
       if (
         "oldText" in params ||
         "newText" in params ||
@@ -699,31 +770,71 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
           "pi-graft graft_edit is strict hashline-only; call graft_read first and use edits[].op/pos/lines.",
         );
       }
-      const state = requiredActiveState(activeState);
-      await validateActiveState(state);
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const previousState = stateForCwd(activeState, cwd);
+      const source = scratchSourceSelection(params, previousState);
       const path = typeof params.path === "string" ? params.path : undefined;
       if (!path) throw new Error("graft_edit requires path.");
       const edits = convertHashlineEdits(params.edits);
-      const result = await requestGraftd(
-        state.workspace,
-        "scratch_edit",
-        { scratch: state.scratch, path, edits },
-        { spawnIfMissing: false },
-      );
+      const result = await requestGraftd(cwd, "scratch_edit", { ...source.params, path, edits });
       const scratch = stringField(result, "scratch");
       const updatedAnchors = stringField(result, "updated_anchors");
       if (!scratch)
         throw new Error(`graftd scratch_edit did not return scratch: ${JSON.stringify(result)}`);
-      activeState = { ...state, scratch, updatedAt: new Date().toISOString() };
-      registerState(pi, activeState);
+      const nextState = rememberState(cwd, {
+        base: sourceBaseUpdate(source, previousState),
+        lastScratch: scratch,
+      });
       return {
         content: [
           {
             type: "text",
-            text: `Edited ${path} in graft scratch ${scratch}.${updatedAnchors ? `\n\n--- Updated anchors ---\n${updatedAnchors}` : ""}`,
+            text: `Edited ${path} from ${sourceDescription(source)} into graft scratch ${scratch}.${updatedAnchors ? `\n\n--- Updated anchors ---\n${updatedAnchors}` : ""}`,
           },
         ],
-        details: { result, state: activeState },
+        details: { result, state: nextState, source },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "graft_delete",
+    label: "Graft delete (experimental)",
+    description:
+      "Experimental: delete a file through graftd scratch_delete. Pass base for the first operation or from to continue a returned scratch. Does not modify the worktree or create a candidate.",
+    parameters: Type.Object({
+      ...scratchSourceSchema(),
+      path: Type.String({ description: "Path to delete in the graft scratch source." }),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const previousState = stateForCwd(activeState, cwd);
+      const source = scratchSourceSelection(params, previousState);
+      const path = typeof params.path === "string" ? params.path : undefined;
+      if (!path) throw new Error("graft_delete requires path.");
+      const result = await requestGraftd(cwd, "scratch_delete", { ...source.params, path });
+      const scratch = stringField(result, "scratch");
+      if (!scratch)
+        throw new Error(`graftd scratch_delete did not return scratch: ${JSON.stringify(result)}`);
+      const changedPaths = stringArrayField(result, "changed_paths") ?? [];
+      const nextState = rememberState(cwd, {
+        base: sourceBaseUpdate(source, previousState),
+        lastScratch: scratch,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Deleted ${path} from ${sourceDescription(source)} into graft scratch ${scratch}. Changed paths: ${changedPaths.length ? changedPaths.join(", ") : "none"}`,
+          },
+        ],
+        details: { result, state: nextState, source },
       };
     },
   });
@@ -731,42 +842,43 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   pi.registerTool({
     name: "graft_status",
     label: "Graft Status",
-    description: "Inspect the active pi-graft scratch, lease, changed paths, and graftd status.",
+    description: "Inspect pi-graft convenience state and graftd status.",
     parameters: Type.Object({}),
-    async execute() {
-      const state = activeState;
-      if (!state)
-        return {
-          content: [{ type: "text", text: stateSummary(undefined) }],
-          details: { active: false },
-        };
-      await validateActiveState(state);
-      const daemon = await requestGraftd(state.workspace, "status", {}, { spawnIfMissing: false });
-      const diff = await requestGraftd(
-        state.workspace,
-        "scratch_diff",
-        { from: state.rootScratch, to: state.scratch },
-        { spawnIfMissing: false },
-      );
-      const changedPaths = stringArrayField(diff, "changed_paths") ?? [];
+    async execute(
+      _toolCallId: string,
+      _params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const state = stateForCwd(activeState, cwd);
+      let daemon: JsonValue | undefined;
+      let daemonText = "graftd: unavailable";
+      try {
+        daemon = await requestGraftd(cwd, "status");
+        daemonText = `graftd: ${stringField(daemon, "status") ?? "ok"}`;
+      } catch (error) {
+        daemonText = `graftd: unavailable (${compactError(error)})`;
+      }
       return {
-        content: [
-          {
-            type: "text",
-            text: `${stateSummary(state)}\nchangedPaths: ${changedPaths.length ? changedPaths.join(", ") : "none"}`,
-          },
-        ],
-        details: { active: true, state, daemon, changedPaths },
+        content: [{ type: "text", text: `${stateSummary(state)}\n${daemonText}` }],
+        details: { active: Boolean(state), state, daemon },
       };
     },
   });
 
   pi.registerTool({
-    name: "graft_promote",
-    label: "Graft Promote",
+    name: "graft_candidate_from_scratch",
+    label: "Graft candidate from scratch",
     description:
-      "Promote the active graft scratch to a candidate. Does not validate or admit automatically.",
+      "Create a candidate from a scratch id through graftd candidate_from_scratch. Pass scratch explicitly, or omit it to use the last scratch returned by a pi-graft scratch tool in this workspace.",
     parameters: Type.Object({
+      scratch: Type.Optional(
+        Type.String({
+          description: "Scratch id to turn into a candidate. Defaults to lastScratch.",
+        }),
+      ),
       expected: Type.Optional(
         Type.Array(Type.String({ description: "Expected property, e.g. ValidPatch" })),
       ),
@@ -775,30 +887,45 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ),
       message: Type.Optional(Type.String({ description: "Candidate message." })),
     }),
-    async execute(_toolCallId: string, params: Record<string, unknown>) {
-      const state = requiredActiveState(activeState);
-      await validateActiveState(state);
-      const result = await requestGraftd(state.workspace, "scratch_promote", {
-        scratch: state.scratch,
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const previousState = stateForCwd(activeState, cwd);
+      const scratch = optionalStringParam(params, "scratch") ?? previousState?.lastScratch;
+      if (!scratch)
+        throw new Error(
+          "graft_candidate_from_scratch requires scratch or a previous scratch tool result in this workspace.",
+        );
+      const result = await requestGraftd(cwd, "candidate_from_scratch", {
+        scratch,
         expected: normalizeStringList(params.expected) as JsonValue[],
         producer:
           typeof params.producer === "string" && params.producer ? params.producer : "pi-graft",
         message: typeof params.message === "string" ? params.message : null,
       });
       const candidate = stringField(result, "candidate");
-      if (candidate) {
-        activeState = { ...state, lastCandidate: candidate, updatedAt: new Date().toISOString() };
-        registerState(pi, activeState);
-      }
+      if (!candidate)
+        throw new Error(
+          `graftd candidate_from_scratch did not return candidate: ${JSON.stringify(result)}`,
+        );
       const changedPaths = stringArrayField(result, "changed_paths") ?? [];
+      const nextState = rememberState(cwd, {
+        lastScratch: stringField(result, "scratch") ?? scratch,
+        lastCandidate: candidate,
+      });
       return {
         content: [
           {
             type: "text",
-            text: `Promoted ${state.scratch} to ${candidate ?? "candidate"}. Changed paths: ${changedPaths.length ? changedPaths.join(", ") : "none"}`,
+            text: `Created candidate ${candidate} from scratch ${scratch}. Changed paths: ${changedPaths.length ? changedPaths.join(", ") : "none"}`,
           },
         ],
-        details: { result, state: activeState ?? state },
+        details: { result, state: nextState },
       };
     },
   });
@@ -809,21 +936,32 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     description: "Run graft validation for a candidate or patch through graftd cli_exec.",
     parameters: Type.Object({
       target: Type.Optional(
-        Type.String({ description: "Candidate or patch id. Defaults to last promoted candidate." }),
+        Type.String({
+          description:
+            "Candidate or patch id. Defaults to the last graft_candidate_from_scratch candidate.",
+        }),
       ),
       expected: Type.Optional(
         Type.Array(Type.String({ description: "Additional expected property." })),
       ),
     }),
-    async execute(_toolCallId: string, params: Record<string, unknown>) {
-      const state = requiredActiveState(activeState);
-      const target =
-        typeof params.target === "string" && params.target ? params.target : state.lastCandidate;
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const state = stateForCwd(activeState, cwd);
+      const target = optionalStringParam(params, "target") ?? state?.lastCandidate;
       if (!target)
-        throw new Error("graft_validate requires target or a previous graft_promote candidate.");
+        throw new Error(
+          "graft_validate requires target or a previous graft_candidate_from_scratch candidate.",
+        );
       const argv = ["validate", target];
       for (const expected of normalizeStringList(params.expected)) argv.push("--expect", expected);
-      const envelope = await cliExec(state.workspace, argv);
+      const envelope = await cliExec(cwd, argv);
       return { content: [{ type: "text", text: formatEnvelope(envelope) }], details: { envelope } };
     },
   });
@@ -834,37 +972,45 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     description: "Admit a validated candidate to the graft patch registry through graftd cli_exec.",
     parameters: Type.Object({
       candidate: Type.Optional(
-        Type.String({ description: "Candidate id. Defaults to last promoted candidate." }),
+        Type.String({
+          description: "Candidate id. Defaults to the last graft_candidate_from_scratch candidate.",
+        }),
       ),
       required: Type.Optional(
         Type.Array(Type.String({ description: "Required passed property." })),
       ),
     }),
-    async execute(_toolCallId: string, params: Record<string, unknown>) {
-      const state = requiredActiveState(activeState);
-      const candidate =
-        typeof params.candidate === "string" && params.candidate
-          ? params.candidate
-          : state.lastCandidate;
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const state = stateForCwd(activeState, cwd);
+      const candidate = optionalStringParam(params, "candidate") ?? state?.lastCandidate;
       if (!candidate)
-        throw new Error("graft_admit requires candidate or a previous graft_promote candidate.");
+        throw new Error(
+          "graft_admit requires candidate or a previous graft_candidate_from_scratch candidate.",
+        );
       const argv = ["admit", candidate];
       for (const required of normalizeStringList(params.required)) argv.push("--require", required);
-      const envelope = await cliExec(state.workspace, argv);
+      const envelope = await cliExec(cwd, argv);
       const patch =
         typeof envelope.patch_id === "string" ? envelope.patch_id : stringField(envelope, "patch");
+      let nextState = state;
       if (patch) {
-        activeState = { ...state, lastPatch: patch, updatedAt: new Date().toISOString() };
-        registerState(pi, activeState);
+        nextState = rememberState(cwd, { lastPatch: patch });
       }
       return {
         content: [{ type: "text", text: formatEnvelope(envelope) }],
-        details: { envelope, state: activeState ?? state },
+        details: { envelope, state: nextState },
       };
     },
   });
 }
 
-export default function piGraftExtension(pi: ExtensionAPI): void {
-  registerPiGraftExtension(pi as unknown as PiGraftExtensionApi);
+export default function piGraftExtension(pi: PiGraftExtensionApi): void {
+  registerPiGraftExtension(pi);
 }

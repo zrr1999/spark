@@ -2,7 +2,7 @@ import { access, readFile, readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
-import { defaultArtifactStore } from "spark-artifacts";
+import { defaultArtifactStore } from "spark-core";
 
 export type SparkNaturalIntent = "new_idea" | "maybe_idea" | "normal_task";
 

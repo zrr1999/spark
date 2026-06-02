@@ -1,5 +1,5 @@
 import type { RunRef, TaskRef, ProjectRef } from "spark-core";
-import type { SparkDagRunRecord } from "spark-orchestrator";
+import type { SparkDagRunRecord } from "spark-workflows";
 import { readRoleRunArtifactPreview, type ActiveSparkRoleRunProcess } from "spark-runtime";
 import type { TaskGraph } from "spark-tasks";
 import type { SparkBackgroundChildRunView, SparkBackgroundChildStatus } from "./background-runs.ts";

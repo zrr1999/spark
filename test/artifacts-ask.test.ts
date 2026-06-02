@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { ArtifactStore, ArtifactStoreFormatError } from "spark-artifacts";
+import { ArtifactStore, ArtifactStoreFormatError } from "spark-core";
 import {
   AskConfigStoreFormatError,
   askUser,
@@ -17,6 +17,7 @@ import {
   getDefaultConfig,
   PiAskFlowPayloadStore,
   PiAskFlowPayloadStoreFormatError,
+  registerPiAskFlowTool,
   registerPiAskTools,
   runPiAskFlow,
   summarizeAskResult,
@@ -26,7 +27,7 @@ import {
 import { newRef, type JsonValue } from "spark-core";
 
 void test("artifact store writes hashes, blobs, and lineage links", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-artifacts-"));
+  const dir = await mkdtemp(join(tmpdir(), "spark-core-artifacts-"));
   try {
     const store = new ArtifactStore({ rootDir: dir });
     const projectRef = newRef("proj", "demo-project");
@@ -62,7 +63,7 @@ void test("artifact store writes hashes, blobs, and lineage links", async () => 
 });
 
 void test("artifact store compacts large metadata while hydrating full bodies", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-artifacts-compact-"));
+  const dir = await mkdtemp(join(tmpdir(), "spark-core-artifacts-compact-"));
   try {
     const store = new ArtifactStore({
       rootDir: dir,
@@ -95,7 +96,7 @@ void test("artifact store compacts large metadata while hydrating full bodies", 
 });
 
 void test("artifact store rejects malformed persisted metadata with file context", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-artifacts-malformed-metadata-"));
+  const dir = await mkdtemp(join(tmpdir(), "spark-core-artifacts-malformed-metadata-"));
   try {
     const store = new ArtifactStore({ rootDir: dir });
     const invalidPath = join(dir, "not-an-artifact.json");
@@ -138,7 +139,7 @@ void test("artifact store rejects malformed persisted metadata with file context
 });
 
 void test("artifact store rejects invalid bodies before writing blobs or metadata", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-artifacts-invalid-body-"));
+  const dir = await mkdtemp(join(tmpdir(), "spark-core-artifacts-invalid-body-"));
   try {
     const store = new ArtifactStore({ rootDir: dir });
     const ref = newRef("artifact", "invalid-body");
@@ -163,7 +164,7 @@ void test("artifact store rejects invalid bodies before writing blobs or metadat
 });
 
 void test("artifact metadata compaction dry-runs and rewrites legacy inline bodies", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-artifacts-legacy-compact-"));
+  const dir = await mkdtemp(join(tmpdir(), "spark-core-artifacts-legacy-compact-"));
   try {
     const legacyStore = new ArtifactStore({
       rootDir: dir,
@@ -206,7 +207,7 @@ void test("artifact metadata compaction dry-runs and rewrites legacy inline bodi
 });
 
 void test("artifact store refuses metadata blob paths outside the artifact root", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-artifacts-blob-boundary-"));
+  const dir = await mkdtemp(join(tmpdir(), "spark-core-artifacts-blob-boundary-"));
   try {
     const legacyStore = new ArtifactStore({
       rootDir: dir,
@@ -472,7 +473,7 @@ void test("ask_user decision without UI blocks instead of implicitly approving",
   assert.equal(answer.answers.decision, undefined);
 });
 
-void test("ask_user select options include a first-class custom affordance", async () => {
+void test("ask_user plain select receives only business options", async () => {
   const request = createAskUserRequest({
     title: "Audience",
     questions: [
@@ -495,40 +496,11 @@ void test("ask_user select options include a first-class custom affordance", asy
       return "My team";
     },
   });
-  assert.deepEqual(seenOptions[0], ["Myself", "My team", "Type your own"]);
+  assert.deepEqual(seenOptions[0], ["Myself", "My team"]);
   assert.equal(result.status, "answered");
   assert.deepEqual(result.answers["target-user"], {
     values: ["team"],
     labels: ["My team"],
-  });
-});
-
-void test("ask_user accepts custom text through the default custom affordance", async () => {
-  const request = createAskUserRequest({
-    title: "Audience",
-    questions: [
-      {
-        id: "target-user",
-        prompt: "Who is this for?",
-        type: "single",
-        options: [
-          { value: "self", label: "Myself" },
-          { value: "team", label: "My team" },
-        ],
-        required: true,
-      },
-    ],
-  });
-  const result = await askUser(request, {
-    select: async () => "Type your own",
-    input: async () => "Language tooling engineers",
-  });
-  assert.equal(result.cancelled, false);
-  assert.equal(result.status, "answered");
-  assert.deepEqual(result.answers["target-user"], {
-    values: [],
-    labels: [],
-    customText: "Language tooling engineers",
   });
 });
 
@@ -646,6 +618,39 @@ void test("ask_user tool summary uses option labels rather than raw ids", async 
   const text = result.content.map((part: { text: string }) => part.text).join("\n");
   assert.match(text, /mode=Safe path/);
   assert.doesNotMatch(text, /safe_mode/);
+});
+
+void test("ask_flow fullscreen requires explicit cwd for persisted payloads", async () => {
+  const tools = new Map<string, { execute: Function }>();
+  registerPiAskFlowTool({ registerTool: (config) => tools.set(config.name, config) });
+  const tool = tools.get("ask_flow");
+  assert.ok(tool);
+
+  await assert.rejects(
+    () =>
+      tool.execute(
+        "ask-flow-test",
+        {
+          title: "Choose mode",
+          mode: "clarification",
+          questions: [
+            {
+              id: "mode",
+              prompt: "Which mode?",
+              type: "single",
+              options: [
+                { value: "safe_mode", label: "Safe path" },
+                { value: "fast_mode", label: "Fast path" },
+              ],
+            },
+          ],
+        },
+        new AbortController().signal,
+        () => undefined,
+        { ui: { custom() {} } },
+      ),
+    /ask_flow fullscreen requires ctx\.cwd/,
+  );
 });
 
 void test("ask_user and ask_flow share UX result matrix semantics", async () => {

@@ -1,4 +1,4 @@
-# spark-goal vendoring notes
+# Spark goal vendoring notes
 
 ## Upstream
 
@@ -29,4 +29,4 @@ The vendored source is derived from MIT-licensed pi-codex-goal. Preserve this at
 
 ## Local ownership
 
-After this vendoring step, packages/spark-goal is treated as Spark-owned code. Future API names, file layout, and behavior should follow Spark project semantics rather than upstream compatibility.
+After the workflow package unification, the goal continuation code lives under `packages/spark-workflows/src/goal` and is treated as Spark-owned workflow code. Future API names, file layout, and behavior should follow Spark project semantics rather than upstream compatibility.

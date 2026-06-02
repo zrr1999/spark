@@ -1,4 +1,4 @@
-import type { SparkDagRunPruneResult } from "spark-orchestrator";
+import type { SparkDagRunPruneResult } from "spark-workflows";
 import type { RoleRunArtifactRetentionPlan } from "spark-runtime";
 import type {
   SparkProtectedStoreReason,

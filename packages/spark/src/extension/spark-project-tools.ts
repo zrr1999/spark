@@ -1,4 +1,4 @@
-import { defaultArtifactStore } from "spark-artifacts";
+import { defaultArtifactStore } from "spark-core";
 import { type ArtifactRef, type JsonValue, type ProjectRef } from "spark-core";
 import type { TaskGraph } from "spark-tasks";
 import type { clarifyProjectIntentIfNeeded } from "../flows/project-intent-flow.ts";

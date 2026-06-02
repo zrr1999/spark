@@ -1,5 +1,5 @@
 import { PiAskFlowController, createAskArtifactBody, summarizeAskResult } from "pi-ask";
-import { defaultArtifactStore } from "spark-artifacts";
+import { defaultArtifactStore } from "spark-core";
 import type { ArtifactRef, JsonValue } from "spark-core";
 
 import {

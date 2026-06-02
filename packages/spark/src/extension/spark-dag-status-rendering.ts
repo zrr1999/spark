@@ -2,7 +2,7 @@ import {
   sparkDagRunNextSteps,
   type SparkDagRunRecord,
   type SparkDagStatusSummary,
-} from "spark-orchestrator";
+} from "spark-workflows";
 
 export function appendCompactSparkDagStatusLines(
   lines: string[],

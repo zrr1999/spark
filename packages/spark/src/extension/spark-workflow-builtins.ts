@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { formatSparkBudgetLines } from "spark-goal";
+import { formatSparkBudgetLines } from "spark-workflows";
 import { goalWorkflowScript, parseSparkWorkflowScript, readyWorkflowScript } from "spark-workflows";
 
 export type SparkWorkflowBuiltinName = "goal" | "ready";

@@ -12,7 +12,7 @@ import {
   nowIso,
   stableId,
 } from "spark-core";
-import { defaultArtifactStore } from "spark-artifacts";
+import { defaultArtifactStore } from "spark-core";
 
 export type LearningCategory = "pattern" | "gotcha" | "decision" | "workflow" | "tool" | "project";
 export type LearningScope = "global" | "workspace" | "project" | "task";

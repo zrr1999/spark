@@ -54,6 +54,24 @@ interface PiExtensionAPI {
   ): void;
 }
 
+interface PiAskFlowToolContext {
+  cwd?: string;
+  ui?: {
+    custom?: (
+      componentName: string,
+      renderer: PiAskFlowCustomRenderer,
+      options: { placement: "fullScreen" },
+    ) => unknown;
+  };
+}
+
+type PiAskFlowCustomRenderer = (
+  tui: unknown,
+  theme: unknown,
+  keybindings: unknown,
+  done: () => void,
+) => unknown;
+
 export interface PiAskFlowElaborationNote {
   questionId: string;
   note: string;
@@ -259,9 +277,8 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
 
     async execute(_toolCallId, rawParams, _signal, _onUpdate, ctx) {
       const request = createPiAskFlowRequest(rawParams as PiAskFlowRequest);
-      const ui = (ctx as Record<string, unknown>).ui as
-        | { custom?: (...args: unknown[]) => unknown }
-        | undefined;
+      const context = decodePiAskFlowToolContext(ctx);
+      const ui = context.ui;
 
       if (!ui?.custom) {
         const result = createPiAskFlowResult({
@@ -277,14 +294,12 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
         };
       }
 
-      const cwd =
-        typeof (ctx as Record<string, unknown>).cwd === "string"
-          ? (ctx as { cwd: string }).cwd
-          : process.cwd();
+      const custom = ui.custom;
+      const cwd = requiredPiAskFlowCwd(context);
 
       const result = await new Promise<PiAskFlowResult>((resolve) => {
         const controller = new PiAskFlowController({ request, language: "en" });
-        const cb = (tui: unknown, theme: unknown, _keybindings: unknown, done: () => void) => {
+        const cb: PiAskFlowCustomRenderer = (tui, theme, _keybindings, done) => {
           const view = controller.run(
             tui as Parameters<typeof controller.run>[0],
             theme as Parameters<typeof controller.run>[1],
@@ -295,7 +310,7 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
           );
           return view;
         };
-        (ui.custom as Function)("pi-ask-flow", cb, { placement: "fullScreen" });
+        custom("pi-ask-flow", cb, { placement: "fullScreen" });
       });
 
       const normalizedResult = normalizePiAskFlowResult(result, request);
@@ -304,7 +319,7 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
       return {
         content: [{ type: "text" as const, text: summarizeFlowResult(normalizedResult, request) }],
         details: {
-          result: normalizedResult as unknown as Record<string, unknown>,
+          result: normalizedResult,
           status: normalizedResult.status,
           cancelled: normalizedResult.cancelled,
           mode: normalizedResult.mode,
@@ -312,6 +327,15 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
       };
     },
   });
+}
+
+function decodePiAskFlowToolContext(ctx: unknown): PiAskFlowToolContext {
+  return ctx && typeof ctx === "object" ? (ctx as PiAskFlowToolContext) : {};
+}
+
+function requiredPiAskFlowCwd(ctx: PiAskFlowToolContext): string {
+  if (typeof ctx.cwd === "string" && ctx.cwd.trim()) return ctx.cwd;
+  throw new Error("ask_flow fullscreen requires ctx.cwd to persist the latest ask payload.");
 }
 
 export function createPiAskFlowResult(

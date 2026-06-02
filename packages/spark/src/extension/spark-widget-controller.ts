@@ -1,5 +1,5 @@
 import type { Task, ProjectRef } from "spark-core";
-import { type SparkDagStatusSummary, defaultSparkDagRunStore } from "spark-orchestrator";
+import { type SparkDagStatusSummary, defaultSparkDagRunStore } from "spark-workflows";
 import { defaultTaskGraphStore } from "spark-tasks";
 import { independentTodoDisplayKey, isActiveSessionTodo, type SessionTodoEntry } from "spark-tasks";
 import { SparkWidget, type SparkWidgetState, type TaskEntry } from "../ui/spark-widget.ts";

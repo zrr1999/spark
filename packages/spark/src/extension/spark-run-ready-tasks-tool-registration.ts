@@ -1,11 +1,11 @@
 import { Type } from "typebox";
-import { defaultArtifactStore } from "spark-artifacts";
+import { defaultArtifactStore } from "spark-core";
 import { RoleRegistry, defaultProjectRoleStore } from "pi-roles";
 import {
   DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
   DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
 } from "spark-core";
-import { runReadySparkTasks } from "spark-orchestrator";
+import { runReadySparkTasks } from "spark-workflows";
 import { defaultTaskGraphStore } from "spark-tasks";
 import { ensureRoleModelBindingsForProject } from "./role-model-bindings.ts";
 import {

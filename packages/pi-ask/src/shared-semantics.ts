@@ -69,12 +69,8 @@ export async function selectOptionWithCustom(
     return selected;
   }
 
-  const selected = await ui.select?.(title, [...labels, SENTINEL_LABELS.other]);
+  const selected = await ui.select?.(title, labels);
   if (!selected) return undefined;
-  if (selected === SENTINEL_LABELS.other) {
-    const customText = await ui.input?.(title, "");
-    return customText ? { customText } : undefined;
-  }
   return { value: selected };
 }
 

@@ -9,7 +9,7 @@ import {
   type RoleRegistry,
   type RoleRunMode,
 } from "pi-roles";
-import type { ArtifactStore } from "spark-artifacts";
+import type { ArtifactStore } from "spark-core";
 import {
   DependencyError,
   type ArtifactRef,

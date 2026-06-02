@@ -10,11 +10,7 @@ but end-to-end local vertical slice.
    - runtime validation helpers
    - Spark error classes
    - core contracts for roles, tasks, artifacts, ask, review, cue, and traces
-- `spark-artifacts`
-   - typed JSON artifact metadata
-   - content hashes and blob files
-   - provenance and lineage links
-   - list/query/diff helpers
+   - typed JSON artifact metadata, content hashes, blob files, provenance, lineage, and list/query/diff helpers
 - `spark-learnings`
    - typed evidence-backed `learning` / `learning-candidate` / `learning-export` records
    - active/candidate/stale/superseded/rejected lifecycle helpers

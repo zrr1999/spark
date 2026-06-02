@@ -1,4 +1,4 @@
-import { defaultArtifactStore } from "spark-artifacts";
+import { defaultArtifactStore } from "spark-core";
 import { RoleRegistry, defaultProjectRoleStore } from "pi-roles";
 import { newRef, nowIso } from "spark-core";
 import {

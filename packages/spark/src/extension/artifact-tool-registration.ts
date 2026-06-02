@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defaultArtifactStore } from "spark-artifacts";
+import { defaultArtifactStore } from "spark-core";
 import {
   compactArtifactDetail,
   normalizeArtifactBoolean,

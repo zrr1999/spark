@@ -2,7 +2,7 @@
   "name": "spark-workflows",
   "version": "0.1.0",
   "private": true,
-  "description": "Spark-owned workflow runtime primitives vendored from pi-dynamic-workflows.",
+  "description": "Spark-owned workflow runtime, goal, and ready-frontier orchestration primitives.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [
@@ -18,6 +18,9 @@
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
-    "spark-core": "file:../spark-core"
+    "pi-roles": "file:../pi-roles",
+    "spark-core": "file:../spark-core",
+    "spark-runtime": "file:../spark-runtime",
+    "spark-tasks": "file:../spark-tasks"
   }
 }

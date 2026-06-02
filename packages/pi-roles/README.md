@@ -28,7 +28,7 @@ local state explicitly before loading it; new writes use Markdown role files.
 `runRole()` launches a single Pi child process with `fresh | forked` mode,
 timeout/cancel handling, stdout/stderr capture, and tolerant JSONL parsing. Spark
 uses these primitives from `spark-runtime` and keeps graph-level task orchestration
-in `spark-orchestrator` above this package.
+in `spark-workflows` above this package.
 
 ## Tool surface
 

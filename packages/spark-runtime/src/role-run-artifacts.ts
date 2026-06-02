@@ -2,7 +2,7 @@ import { copyFile, mkdir, open, readFile, readdir, rm, stat } from "node:fs/prom
 import { basename, dirname, join, relative, resolve } from "node:path";
 
 import type { RoleRunRecord, RoleRunStatus } from "pi-roles";
-import { resolveArtifactBlobPath } from "spark-artifacts";
+import { resolveArtifactBlobPath } from "spark-core";
 import {
   contentHash,
   type ArtifactRef,

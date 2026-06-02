@@ -6,6 +6,8 @@ import test from "node:test";
 
 import { registerPiRolesTools } from "../packages/pi-roles/src/extension.ts";
 
+const DEFAULT_TEST_CWD = "/tmp/pi-roles-tool-default-cwd";
+
 interface ToolConfig {
   name: string;
   execute: (
@@ -166,6 +168,43 @@ void test("call_role rejects unknown run modes instead of falling back to fresh"
   );
 });
 
+void test("pi-roles tools require ctx cwd unless call_role cwd is explicit", async () => {
+  const tools = registerRoleToolsForTest();
+
+  await assert.rejects(
+    executeRoleToolWithoutCwd(tools, "list_roles", {}),
+    /list_roles requires ctx\.cwd/,
+  );
+  await assert.rejects(
+    executeRoleToolWithoutCwd(tools, "get_role", { role: "worker" }),
+    /get_role requires ctx\.cwd/,
+  );
+  await assert.rejects(
+    executeRoleToolWithoutCwd(tools, "create_role", {
+      id: "missing-cwd",
+      description: "Should not write without a workspace.",
+      systemPrompt: "Do not write this role.",
+      rationale: "Project role writes require explicit workspace context.",
+      expectedUses: ["validation"],
+    }),
+    /create_role requires ctx\.cwd/,
+  );
+  await assert.rejects(
+    executeRoleToolWithoutCwd(tools, "call_role", {
+      role: "worker",
+      instruction: "Run without cwd.",
+    }),
+    /call_role requires ctx\.cwd/,
+  );
+
+  const explicit = await executeRoleToolWithoutCwd(tools, "call_role", {
+    role: "worker",
+    instruction: "Run with explicit cwd.",
+    cwd: DEFAULT_TEST_CWD,
+  });
+  assert.match(explicit.content[0]?.text ?? "", /cwd: \/tmp\/pi-roles-tool-default-cwd/);
+});
+
 void test("pi-roles tools reject invalid explicit parameters instead of using defaults", async () => {
   const tools = registerRoleToolsForTest();
 
@@ -313,7 +352,7 @@ function registerRoleToolsForTest(): Map<string, ToolConfig> {
 function executeCallRole(
   tools: Map<string, ToolConfig>,
   params: Record<string, unknown>,
-  cwd = process.cwd(),
+  cwd = DEFAULT_TEST_CWD,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }> {
   return executeRoleTool(tools, "call_role", params, cwd);
 }
@@ -322,9 +361,19 @@ function executeRoleTool(
   tools: Map<string, ToolConfig>,
   name: string,
   params: Record<string, unknown>,
-  cwd = process.cwd(),
+  cwd = DEFAULT_TEST_CWD,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }> {
   const tool = tools.get(name);
   assert.ok(tool, `missing ${name} tool`);
   return tool.execute("tool-call", params, new AbortController().signal, () => undefined, { cwd });
+}
+
+function executeRoleToolWithoutCwd(
+  tools: Map<string, ToolConfig>,
+  name: string,
+  params: Record<string, unknown>,
+): Promise<{ content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }> {
+  const tool = tools.get(name);
+  assert.ok(tool, `missing ${name} tool`);
+  return tool.execute("tool-call", params, new AbortController().signal, () => undefined, {});
 }

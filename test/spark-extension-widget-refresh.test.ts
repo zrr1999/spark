@@ -7,7 +7,7 @@ import test from "node:test";
 import sparkExtension from "../packages/spark/src/extension/index.ts";
 import type { SparkWidgetTheme, SparkWidgetTui } from "../packages/spark/src/ui/spark-widget.ts";
 import { RoleRegistry, builtinRoleRef } from "pi-roles";
-import { defaultSparkDagRunStore } from "spark-orchestrator";
+import { defaultSparkDagRunStore } from "../packages/spark-workflows/src/index.ts";
 import {
   killActiveSparkRoleRunProcesses,
   listActiveSparkRoleRunProcesses,

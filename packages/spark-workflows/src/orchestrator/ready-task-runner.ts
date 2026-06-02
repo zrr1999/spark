@@ -1,5 +1,5 @@
 import type { RoleRegistry, RoleRunMode } from "pi-roles";
-import type { ArtifactStore } from "spark-artifacts";
+import type { ArtifactStore } from "spark-core";
 import {
   DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
   DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,

@@ -15,9 +15,9 @@ import {
   type TaskRef,
   type ProjectRef,
 } from "spark-core";
-import { defaultArtifactStore } from "spark-artifacts";
+import { defaultArtifactStore } from "spark-core";
 import { defaultLearningStore, LearningExportFormatError } from "spark-learnings";
-import { defaultSparkDagRunStore } from "spark-orchestrator";
+import { defaultSparkDagRunStore } from "../packages/spark-workflows/src/index.ts";
 import {
   killActiveSparkRoleRunProcesses,
   listActiveSparkRoleRunProcesses,

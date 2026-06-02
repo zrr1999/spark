@@ -38,9 +38,8 @@ Both tools follow these rules:
    normal single-select option.
 4. **Custom affordances are UI metadata, not business options.** Hosts that
    support `selectWithCustom` receive business option labels separately from the
-   custom label. Plain `select` adapters may receive the custom row as an
-   adapter-level sentinel for compatibility, but that sentinel is never returned
-   as a business option id.
+   custom label. Plain `select` adapters receive only business option labels;
+   they do not get a synthetic custom row.
 5. **Result status is explicit.** `answered` means the user submitted an option,
    custom text, elaboration result, or other answer payload; `cancelled` means
    the user cancelled; `no_selection` means the UI returned without a selection.

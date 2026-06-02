@@ -1,6 +1,6 @@
 import { basename, join, relative, resolve } from "node:path";
 
-import { resolveArtifactBlobPath } from "spark-artifacts";
+import { resolveArtifactBlobPath } from "spark-core";
 import {
   nowIso,
   type ArtifactKind,
@@ -8,7 +8,7 @@ import {
   type RunRef,
   type ProjectRef,
 } from "spark-core";
-import { defaultSparkDagRunStore, type SparkDagRunStatus } from "spark-orchestrator";
+import { defaultSparkDagRunStore, type SparkDagRunStatus } from "spark-workflows";
 import { isUnfinishedTaskStatus, type TaskGraph } from "spark-tasks";
 import { listSparkStateFiles, readJsonObject, statIfPresent } from "./state-housekeeping-files.ts";
 

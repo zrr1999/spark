@@ -10,7 +10,7 @@ import {
   defaultSparkDagRunStore,
   type SparkDagRunAcknowledgeResult,
   type SparkDagRunStatus,
-} from "spark-orchestrator";
+} from "spark-workflows";
 import {
   listActiveSparkRoleRunProcesses,
   type KillSparkRoleRunProcessResult,

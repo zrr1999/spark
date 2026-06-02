@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defaultSparkDagRunStore } from "spark-orchestrator";
+import { defaultSparkDagRunStore } from "spark-workflows";
 import { defaultTaskGraphStore } from "spark-tasks";
 import { reconcileSparkDagRunsWithActiveProcesses } from "./background-runs.ts";
 import { collectRecentRoleRunCompletions } from "./role-run-completions.ts";

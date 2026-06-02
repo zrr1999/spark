@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { ArtifactStore } from "spark-artifacts";
+import { ArtifactStore } from "spark-core";
 import {
   defaultLearningStore,
   LearningExportFormatError,

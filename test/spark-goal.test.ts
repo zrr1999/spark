@@ -8,9 +8,9 @@ import {
   formatSparkBudgetLines,
   goalToolResponse,
   validateObjective,
-} from "../packages/spark-goal/src/index.ts";
+} from "../packages/spark-workflows/src/index.ts";
 
-void test("spark-goal creates Spark-owned goals and continuation prompts", () => {
+void test("spark-workflows goal helpers create Spark-owned goals and continuation prompts", () => {
   assert.equal(validateObjective("  ship feature  "), null);
   const goal = createSparkGoal("  ship feature  ", 1000, 123);
   assert.equal(goal.objective, "ship feature");

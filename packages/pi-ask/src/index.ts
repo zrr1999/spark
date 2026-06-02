@@ -232,8 +232,8 @@ export function registerPiAskTools(pi: PiAskExtensionApi): void {
       return {
         content: [{ type: "text", text: summarizeResult(request, result) }],
         details: {
-          request: request as unknown as Record<string, unknown>,
-          result: result as unknown as Record<string, unknown>,
+          request,
+          result,
         },
       };
     },

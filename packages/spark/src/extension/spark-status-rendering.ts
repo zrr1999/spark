@@ -1,7 +1,7 @@
 import type { TaskGraph, SessionTodoEntry } from "spark-tasks";
 import { isUnfinishedTaskStatus } from "spark-tasks";
 import type { TaskRunCompletionSummary } from "spark-core";
-import type { SparkDagStatusSummary } from "spark-orchestrator";
+import type { SparkDagStatusSummary } from "spark-workflows";
 import type { SparkRunModeState } from "./current-project-state.ts";
 import { appendRecentRoleRunCompletionLines } from "./role-run-completions.ts";
 import { sparkRunStrategyForMaxConcurrency } from "./session-state.ts";

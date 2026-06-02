@@ -3,7 +3,7 @@
 Spark artifact-aware ask adapter built on top of `pi-ask`.
 
 `spark-ask` runs Spark asks through the generic `pi-ask` engine and
-persists/replays `ask-answer` artifacts via `spark-artifacts`. It intentionally
+persists/replays `ask-answer` artifacts via `spark-core`. It intentionally
 **does not provide canned question presets**. Workflow code must construct ask
 questions from the concrete task, blocker, review, or decision context it just
 observed.

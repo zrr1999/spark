@@ -115,7 +115,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       );
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const cwd = ctx.cwd ?? process.cwd();
+      const cwd = requiredPiRolesCwd(ctx, "list_roles");
       const includeUser = normalizeOptionalBoolean(
         params.includeUser,
         false,
@@ -171,7 +171,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       );
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const cwd = ctx.cwd ?? process.cwd();
+      const cwd = requiredPiRolesCwd(ctx, "get_role");
       const registry = new RoleRegistry();
       const includeUser = normalizeOptionalBoolean(
         params.includeUser,
@@ -233,7 +233,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       );
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const cwd = ctx.cwd ?? process.cwd();
+      const cwd = requiredPiRolesCwd(ctx, "create_role");
       const source = normalizeWritableRoleSource(params.source);
       const proposal: RoleSpecProposal = {
         id: normalizeRequiredString(params.id, "create_role id"),
@@ -317,7 +317,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     },
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const p = normalizeCallRoleToolParams(params);
-      const cwd = p.cwd ?? ctx.cwd ?? process.cwd();
+      const cwd = p.cwd ?? requiredPiRolesCwd(ctx, "call_role");
       const registry = new RoleRegistry();
       await hydrateDefaultRoleRegistry(registry, cwd, { includeUser: p.includeUser });
       const role = registry.select(p.role);
@@ -397,7 +397,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
           runRef,
           cwd,
           model,
-          record: result.record as unknown as Record<string, unknown>,
+          record: result.record,
           jsonEventCount: result.jsonEvents.length,
           stdoutTail,
           stderrTail,
@@ -405,6 +405,11 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       };
     },
   });
+}
+
+function requiredPiRolesCwd(ctx: { cwd?: string }, toolName: string): string {
+  if (typeof ctx.cwd === "string" && ctx.cwd.trim()) return ctx.cwd;
+  throw new Error(`${toolName} requires ctx.cwd or an explicit cwd parameter.`);
 }
 
 async function resolveRoleModelForCall(input: {

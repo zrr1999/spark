@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { RoleRegistry, builtinRoleRef, defaultUserRoleModelBindingStore } from "pi-roles";
-import { ArtifactStore } from "spark-artifacts";
+import { ArtifactStore } from "spark-core";
 import {
   DependencyError,
   newRef,
@@ -20,7 +20,7 @@ import {
   defaultSparkDagRunStore,
   runReadySparkTasks,
   type SparkDagRunRecord,
-} from "spark-orchestrator";
+} from "../packages/spark-workflows/src/index.ts";
 import {
   buildRoleRunArgs,
   createRoleRunName,

@@ -1,4 +1,4 @@
-import { defaultArtifactStore } from "spark-artifacts";
+import { defaultArtifactStore } from "spark-core";
 import { defaultProjectRoleStore, RoleRegistry } from "pi-roles";
 import {
   DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
@@ -11,7 +11,7 @@ import {
   type SparkDagRunStatus,
   defaultSparkDagRunStore,
   runReadySparkTasks,
-} from "spark-orchestrator";
+} from "spark-workflows";
 import { defaultTaskGraphStore, isUnfinishedTaskStatus, type TaskGraph } from "spark-tasks";
 import { reconcileSparkDagRunsWithActiveProcesses } from "./background-runs.ts";
 import { ensureRoleModelBindingsForProject } from "./role-model-bindings.ts";

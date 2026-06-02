@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defaultSparkDagRunStore } from "spark-orchestrator";
+import { defaultSparkDagRunStore } from "spark-workflows";
 import { killActiveSparkRoleRunProcesses } from "spark-runtime";
 import type { RunRef } from "spark-core";
 import { loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";

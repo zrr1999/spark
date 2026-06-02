@@ -17,7 +17,6 @@
   },
   "dependencies": {
     "pi-ask": "file:../pi-ask",
-    "spark-artifacts": "file:../spark-artifacts",
     "spark-core": "file:../spark-core"
   }
 }

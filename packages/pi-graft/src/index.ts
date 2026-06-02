@@ -4,6 +4,7 @@ export type {
   PiGraftCommandContext,
   PiGraftExtensionApi,
   PiGraftSessionContext,
+  PiGraftToolContext,
   PiGraftToolDefinition,
   PiGraftToolResult,
 } from "./extension.ts";

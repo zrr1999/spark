@@ -10,6 +10,9 @@
     "README.md"
   ],
   "type": "module",
+  "exports": {
+    "./extension": "./src/extension/index.ts"
+  },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
@@ -17,12 +20,9 @@
     "@earendil-works/pi-tui": "^0.74.1",
     "pi-cue": "file:../pi-cue",
     "pi-roles": "file:../pi-roles",
-    "spark-artifacts": "file:../spark-artifacts",
     "spark-ask": "file:../spark-ask",
     "spark-core": "file:../spark-core",
-    "spark-goal": "file:../spark-goal",
     "spark-learnings": "file:../spark-learnings",
-    "spark-orchestrator": "file:../spark-orchestrator",
     "spark-runtime": "file:../spark-runtime",
     "spark-tasks": "file:../spark-tasks",
     "spark-workflows": "file:../spark-workflows",
@@ -35,13 +35,5 @@
     "@earendil-works/pi-coding-agent": {
       "optional": true
     }
-  },
-  "pi": {
-    "extensions": [
-      "./src/extension/index.ts"
-    ],
-    "skills": [
-      "./skills"
-    ]
   }
 }

@@ -25,9 +25,6 @@ importers:
       pi-roles:
         specifier: file:packages/pi-roles
         version: link:packages/pi-roles
-      spark-artifacts:
-        specifier: file:packages/spark-artifacts
-        version: link:packages/spark-artifacts
       spark-ask:
         specifier: file:packages/spark-ask
         version: link:packages/spark-ask
@@ -37,15 +34,15 @@ importers:
       spark-learnings:
         specifier: file:packages/spark-learnings
         version: link:packages/spark-learnings
-      spark-orchestrator:
-        specifier: file:packages/spark-orchestrator
-        version: link:packages/spark-orchestrator
       spark-runtime:
         specifier: file:packages/spark-runtime
         version: link:packages/spark-runtime
       spark-tasks:
         specifier: file:packages/spark-tasks
         version: link:packages/spark-tasks
+      spark-workflows:
+        specifier: file:packages/spark-workflows
+        version: link:packages/spark-workflows
       typebox:
         specifier: ^1.1.38
         version: 1.1.38
@@ -128,24 +125,15 @@ importers:
       pi-roles:
         specifier: file:../pi-roles
         version: link:../pi-roles
-      spark-artifacts:
-        specifier: file:../spark-artifacts
-        version: link:../spark-artifacts
       spark-ask:
         specifier: file:../spark-ask
         version: link:../spark-ask
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core
-      spark-goal:
-        specifier: file:../spark-goal
-        version: link:../spark-goal
       spark-learnings:
         specifier: file:../spark-learnings
         version: link:../spark-learnings
-      spark-orchestrator:
-        specifier: file:../spark-orchestrator
-        version: link:../spark-orchestrator
       spark-runtime:
         specifier: file:../spark-runtime
         version: link:../spark-runtime
@@ -159,63 +147,46 @@ importers:
         specifier: ^1.1.38
         version: 1.1.38
 
-  packages/spark-artifacts:
-    dependencies:
-      spark-core:
-        specifier: file:../spark-core
-        version: link:../spark-core
-
   packages/spark-ask:
     dependencies:
       pi-ask:
         specifier: file:../pi-ask
         version: link:../pi-ask
-      spark-artifacts:
-        specifier: file:../spark-artifacts
-        version: link:../spark-artifacts
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core
+
+  packages/spark-cli:
+    dependencies:
+      '@earendil-works/pi-ai':
+        specifier: ^0.74.1
+        version: 0.74.1(ws@8.20.1)(zod@4.4.3)
+      '@earendil-works/pi-coding-agent':
+        specifier: ^0.74.1
+        version: 0.74.1(ws@8.20.1)(zod@4.4.3)
+      pi-graft:
+        specifier: file:../pi-graft
+        version: file:packages/pi-graft(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3))
+      pi-roles:
+        specifier: file:../pi-roles
+        version: file:packages/pi-roles(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3))
+      spark:
+        specifier: file:../spark
+        version: file:packages/spark(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3))
 
   packages/spark-core: {}
 
-  packages/spark-goal: {}
-
   packages/spark-learnings:
     dependencies:
-      spark-artifacts:
-        specifier: file:../spark-artifacts
-        version: link:../spark-artifacts
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core
-
-  packages/spark-orchestrator:
-    dependencies:
-      pi-roles:
-        specifier: file:../pi-roles
-        version: link:../pi-roles
-      spark-artifacts:
-        specifier: file:../spark-artifacts
-        version: link:../spark-artifacts
-      spark-core:
-        specifier: file:../spark-core
-        version: link:../spark-core
-      spark-runtime:
-        specifier: file:../spark-runtime
-        version: link:../spark-runtime
-      spark-tasks:
-        specifier: file:../spark-tasks
-        version: link:../spark-tasks
 
   packages/spark-runtime:
     dependencies:
       pi-roles:
         specifier: file:../pi-roles
         version: link:../pi-roles
-      spark-artifacts:
-        specifier: file:../spark-artifacts
-        version: link:../spark-artifacts
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core
@@ -231,9 +202,18 @@ importers:
 
   packages/spark-workflows:
     dependencies:
+      pi-roles:
+        specifier: file:../pi-roles
+        version: link:../pi-roles
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core
+      spark-runtime:
+        specifier: file:../spark-runtime
+        version: link:../spark-runtime
+      spark-tasks:
+        specifier: file:../spark-tasks
+        version: link:../spark-tasks
 
 packages:
 
@@ -1412,6 +1392,38 @@ packages:
     resolution: {integrity: sha512-3O/iVVsJAPsOnpwWIeD+d6z/7PmqApyQePUtCndjatj/9I5LylHvt5qluFaBT3I5h3r1ejfR056c+FCv+NnNXg==}
     engines: {node: 18 || 20 || >=22}
 
+  pi-ask@file:packages/pi-ask:
+    resolution: {directory: packages/pi-ask, type: directory}
+    peerDependencies:
+      '@earendil-works/pi-coding-agent': '*'
+    peerDependenciesMeta:
+      '@earendil-works/pi-coding-agent':
+        optional: true
+
+  pi-cue@file:packages/pi-cue:
+    resolution: {directory: packages/pi-cue, type: directory}
+    peerDependencies:
+      '@earendil-works/pi-coding-agent': '*'
+    peerDependenciesMeta:
+      '@earendil-works/pi-coding-agent':
+        optional: true
+
+  pi-graft@file:packages/pi-graft:
+    resolution: {directory: packages/pi-graft, type: directory}
+    peerDependencies:
+      '@earendil-works/pi-coding-agent': '*'
+    peerDependenciesMeta:
+      '@earendil-works/pi-coding-agent':
+        optional: true
+
+  pi-roles@file:packages/pi-roles:
+    resolution: {directory: packages/pi-roles, type: directory}
+    peerDependencies:
+      '@earendil-works/pi-coding-agent': '*'
+    peerDependenciesMeta:
+      '@earendil-works/pi-coding-agent':
+        optional: true
+
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
@@ -1459,6 +1471,32 @@ packages:
   source-map-js@1.2.1:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
     engines: {node: '>=0.10.0'}
+
+  spark-ask@file:packages/spark-ask:
+    resolution: {directory: packages/spark-ask, type: directory}
+
+  spark-core@file:packages/spark-core:
+    resolution: {directory: packages/spark-core, type: directory}
+
+  spark-learnings@file:packages/spark-learnings:
+    resolution: {directory: packages/spark-learnings, type: directory}
+
+  spark-runtime@file:packages/spark-runtime:
+    resolution: {directory: packages/spark-runtime, type: directory}
+
+  spark-tasks@file:packages/spark-tasks:
+    resolution: {directory: packages/spark-tasks, type: directory}
+
+  spark-workflows@file:packages/spark-workflows:
+    resolution: {directory: packages/spark-workflows, type: directory}
+
+  spark@file:packages/spark:
+    resolution: {directory: packages/spark, type: directory}
+    peerDependencies:
+      '@earendil-works/pi-coding-agent': '*'
+    peerDependenciesMeta:
+      '@earendil-works/pi-coding-agent':
+        optional: true
 
   std-env@4.1.0:
     resolution: {integrity: sha512-Rq7ybcX2RuC55r9oaPVEW7/xu3tj8u4GeBYHBWCychFtzMIr86A7e3PPEBPT37sHStKX3+TiX/Fr/ACmJLVlLQ==}
@@ -2589,6 +2627,33 @@ snapshots:
       lru-cache: 11.3.6
       minipass: 7.1.3
 
+  pi-ask@file:packages/pi-ask(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3)):
+    dependencies:
+      '@earendil-works/pi-tui': 0.74.1
+      typebox: 1.1.38
+    optionalDependencies:
+      '@earendil-works/pi-coding-agent': 0.74.1(ws@8.20.1)(zod@4.4.3)
+
+  pi-cue@file:packages/pi-cue(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3)):
+    dependencies:
+      '@earendil-works/pi-tui': 0.74.1
+      typebox: 1.1.38
+    optionalDependencies:
+      '@earendil-works/pi-coding-agent': 0.74.1(ws@8.20.1)(zod@4.4.3)
+
+  pi-graft@file:packages/pi-graft(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3)):
+    dependencies:
+      typebox: 1.1.38
+    optionalDependencies:
+      '@earendil-works/pi-coding-agent': 0.74.1(ws@8.20.1)(zod@4.4.3)
+
+  pi-roles@file:packages/pi-roles(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3)):
+    dependencies:
+      '@earendil-works/pi-tui': 0.74.1
+      typebox: 1.1.38
+    optionalDependencies:
+      '@earendil-works/pi-coding-agent': 0.74.1(ws@8.20.1)(zod@4.4.3)
+
   picocolors@1.1.1: {}
 
   picomatch@4.0.4: {}
@@ -2641,6 +2706,55 @@ snapshots:
       totalist: 3.0.1
 
   source-map-js@1.2.1: {}
+
+  spark-ask@file:packages/spark-ask(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3)):
+    dependencies:
+      pi-ask: file:packages/pi-ask(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3))
+      spark-core: file:packages/spark-core
+    transitivePeerDependencies:
+      - '@earendil-works/pi-coding-agent'
+
+  spark-core@file:packages/spark-core: {}
+
+  spark-learnings@file:packages/spark-learnings:
+    dependencies:
+      spark-core: file:packages/spark-core
+
+  spark-runtime@file:packages/spark-runtime(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3)):
+    dependencies:
+      pi-roles: file:packages/pi-roles(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3))
+      spark-core: file:packages/spark-core
+      spark-tasks: file:packages/spark-tasks
+    transitivePeerDependencies:
+      - '@earendil-works/pi-coding-agent'
+
+  spark-tasks@file:packages/spark-tasks:
+    dependencies:
+      spark-core: file:packages/spark-core
+
+  spark-workflows@file:packages/spark-workflows(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3)):
+    dependencies:
+      pi-roles: file:packages/pi-roles(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3))
+      spark-core: file:packages/spark-core
+      spark-runtime: file:packages/spark-runtime(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3))
+      spark-tasks: file:packages/spark-tasks
+    transitivePeerDependencies:
+      - '@earendil-works/pi-coding-agent'
+
+  spark@file:packages/spark(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3)):
+    dependencies:
+      '@earendil-works/pi-tui': 0.74.1
+      pi-cue: file:packages/pi-cue(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3))
+      pi-roles: file:packages/pi-roles(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3))
+      spark-ask: file:packages/spark-ask(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3))
+      spark-core: file:packages/spark-core
+      spark-learnings: file:packages/spark-learnings
+      spark-runtime: file:packages/spark-runtime(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3))
+      spark-tasks: file:packages/spark-tasks
+      spark-workflows: file:packages/spark-workflows(@earendil-works/pi-coding-agent@0.74.1(ws@8.20.1)(zod@4.4.3))
+      typebox: 1.1.38
+    optionalDependencies:
+      '@earendil-works/pi-coding-agent': 0.74.1(ws@8.20.1)(zod@4.4.3)
 
   std-env@4.1.0: {}
 

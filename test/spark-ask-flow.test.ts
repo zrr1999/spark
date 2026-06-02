@@ -307,7 +307,7 @@ void test("ask flow rejects invalid defaultValues", () => {
   );
 });
 
-void test("spark ask select path exposes default custom affordance", async () => {
+void test("spark ask plain select path receives only business options", async () => {
   const request = createSparkAskRequest({
     flow: "custom",
     mode: "clarification",
@@ -332,7 +332,7 @@ void test("spark ask select path exposes default custom affordance", async () =>
       return "My team";
     },
   });
-  assert.deepEqual(seenOptions[0], ["Myself", "My team", "Type your own"]);
+  assert.deepEqual(seenOptions[0], ["Myself", "My team"]);
   assert.equal(result.status, "answered");
   assert.equal(result.nextAction, "resume");
   assert.deepEqual(result.answers["target-user"], {

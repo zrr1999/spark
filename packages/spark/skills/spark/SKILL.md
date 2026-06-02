@@ -9,16 +9,13 @@ Use Spark command modes intentionally: `/spark <idea>` for initialization/autode
 
 Spark primitives:
 
-- `spark-core`: shared refs and schemas.
-- `spark-artifacts`: typed artifacts with provenance.
+- `spark-core`: shared refs, schemas, and typed artifact storage/provenance.
 - `spark-ask`: structured decisions and approvals.
 - `pi-cue`: reusable controlled execution infrastructure.
 - `pi-roles`: reusable `RoleSpec`s plus simple `fresh | forked` child Pi `RoleRun` helpers.
 - `spark-tasks`: project/task DAG and task planning helpers.
 - `spark-runtime`: single Spark task execution adaptation over `pi-roles` runs.
-- `spark-orchestrator`: ready task frontier scheduling and workflow-run state persisted in `.spark/workflow-runs.json`.
-- `spark-goal`: vendored Spark-owned goal continuation primitives for `/workflow:goal` and goal strategy prompts.
-- `spark-workflows`: vendored Spark-owned workflow runtime/builtin primitives for `/workflow` strategy prompts and role-run adapter boundaries.
+- `spark-workflows`: Spark-owned workflow runtime/builtin primitives, `/workflow:goal` continuation, `/workflow:ready` frontier scheduling, workflow-run state persisted in `.spark/workflow-runs.json`, and role-run adapter boundaries.
 
 Rules:
 

@@ -2,7 +2,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { Type } from "typebox";
-import { defaultSparkDagRunStore } from "spark-orchestrator";
+import { defaultSparkDagRunStore } from "spark-workflows";
 import {
   SPARK_ROLE_RUN_RETENTION_TAIL_BYTES,
   collectRoleRunArtifactRetentionPlan,

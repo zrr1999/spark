@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { defaultArtifactStore } from "spark-artifacts";
+import { defaultArtifactStore } from "spark-core";
 import { detectCopyLanguage, type SparkCopyLanguage } from "spark-ask";
 import { builtinRoleRef } from "pi-roles";
 import {

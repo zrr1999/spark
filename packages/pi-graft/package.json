@@ -1,7 +1,7 @@
 {
   "name": "pi-graft",
   "version": "0.1.0",
-  "description": "Pi extension scaffold for future graft tool behavior integration.",
+  "description": "Pi extension package for graft daemon scratch and candidate workflows.",
   "keywords": [
     "graft",
     "pi-extension",
