@@ -400,7 +400,9 @@ function appendSideBySidePreview(
   listWidth: number,
   previewWidth: number,
 ): void {
-  const pane = renderPreviewPane(preview, theme, previewWidth);
+  const pane = renderPreviewPane(preview, theme, previewWidth, {
+    maxRows: Math.max(DEFAULT_PREVIEW_PANE_ROWS, optionLines.length + PREVIEW_PANE_EXTRA_ROWS),
+  });
   const rows = Math.max(optionLines.length, pane.length);
   for (let i = 0; i < rows; i++) {
     const left = padVisible(optionLines[i] ?? "", listWidth);
@@ -409,18 +411,31 @@ function appendSideBySidePreview(
   }
 }
 
-function renderPreviewPane(preview: string, theme: RenderTheme, width: number): string[] {
+const DEFAULT_PREVIEW_PANE_ROWS = 13;
+const PREVIEW_PANE_EXTRA_ROWS = 2;
+
+function renderPreviewPane(
+  preview: string,
+  theme: RenderTheme,
+  width: number,
+  options: { maxRows?: number } = {},
+): string[] {
   const innerWidth = Math.max(12, width - 4);
   const previewLines = preview.split(/\r?\n/).flatMap((line) => wrapTextWithAnsi(line, innerWidth));
-  const maxPreviewLines = 10;
+  const maxRows = Math.max(3, Math.trunc(options.maxRows ?? DEFAULT_PREVIEW_PANE_ROWS));
+  const contentCapacity = Math.max(1, maxRows - 2);
+  const needsOverflow = previewLines.length > contentCapacity;
+  const visibleContentLines = needsOverflow
+    ? Math.max(0, contentCapacity - 1)
+    : Math.min(previewLines.length, contentCapacity);
   const lines = [theme.dim(`┌─ Preview ${"─".repeat(Math.max(0, innerWidth - 10))}`)];
-  for (let i = 0; i < Math.min(previewLines.length, maxPreviewLines); i++) {
+  for (let i = 0; i < visibleContentLines; i++) {
     const line = previewLines[i] ?? "";
     const truncated = truncateToWidth(line, innerWidth);
     lines.push(theme.dim(`│ ${truncated}`));
   }
-  if (previewLines.length > maxPreviewLines) {
-    lines.push(theme.dim(`│ … ${previewLines.length - maxPreviewLines} more lines`));
+  if (needsOverflow) {
+    lines.push(theme.dim(`│ … ${previewLines.length - visibleContentLines} more lines`));
   }
   lines.push(theme.dim(`└${"─".repeat(Math.max(0, innerWidth + 2))}`));
   return lines;

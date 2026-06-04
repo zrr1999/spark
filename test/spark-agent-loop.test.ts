@@ -11,10 +11,10 @@ import {
 type AssistantMessage = any;
 type AssistantMessageEvent = any;
 type Context = any;
-type Model<T = string> = any;
+type Model = any;
 type ToolCall = any;
 
-const TEST_MODEL: Model<string> = {
+const TEST_MODEL: Model = {
   id: "test-model",
   name: "Test Model",
   api: "openai-completions",
@@ -58,7 +58,7 @@ function buildAssistant(
 
 function makeFakeStream(plan: FakeStreamPlan): SparkAgentStreamFunction {
   let round = 0;
-  const fake: SparkAgentStreamFunction = (_model: Model<string>, _context: Context) => {
+  const fake: SparkAgentStreamFunction = (_model: Model, _context: Context) => {
     const events = plan.rounds[round] ?? [];
     round += 1;
     let resolveResult: (value: AssistantMessage) => void = () => undefined;

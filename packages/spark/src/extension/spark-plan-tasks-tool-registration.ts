@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { RoleRegistry, defaultProjectRoleStore } from "pi-roles";
+import type { RoleRegistry } from "pi-roles";
 import { DependencyError } from "spark-core";
 import {
   collectNonConcreteTaskIssues,
@@ -16,7 +16,8 @@ import {
   attachRoadmapPlanningRefs,
   roadmapPlanningContext,
 } from "../flows/roadmap-flow.ts";
-import { currentSparkProject, loadSparkGraph, sparkTodoStore } from "./session-state.ts";
+import { currentSparkProject, loadSparkGraph, saveSparkGraphAndTodos } from "./session-state.ts";
+import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 import {
   compactTaskDetail,
@@ -125,8 +126,7 @@ export function registerSparkPlanTasksTool(
           content: [{ type: "text", text: "No Spark project found." }],
           details: { found: false },
         };
-      const registry = new RoleRegistry();
-      await defaultProjectRoleStore(cwd).hydrate(registry);
+      const registry = await createSparkRoleRegistry(cwd);
       const normalizedTasks = normalizeSparkPlanTaskInputs(params, registry);
       if (!normalizedTasks)
         return {
@@ -187,8 +187,7 @@ export function registerSparkPlanTasksTool(
         project.ref,
         changedRefs,
       );
-      await store.save(graph);
-      await sparkTodoStore(cwd, ctx).save(graph);
+      await saveSparkGraphAndTodos(cwd, graph, ctx, store);
       await deps.refreshSparkWidget(cwd, ctx);
       const changed = [
         ...result.created.map((task) => ({ action: "created" as const, task })),

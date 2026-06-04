@@ -26,15 +26,16 @@ export interface RegisteredCommand {
   getArgumentCompletions?: (prefix: string) => unknown;
 }
 
-export type EventName =
+export type BuiltinEventName =
   | "session_start"
   | "turn_start"
   | "turn_end"
   | "tool_call"
   | "tool_result"
   | "user_message"
-  | "assistant_message"
-  | string;
+  | "assistant_message";
+
+export type EventName = BuiltinEventName | (string & {});
 
 export type EventListener = (event: unknown, ctx: ExtensionContext) => unknown;
 

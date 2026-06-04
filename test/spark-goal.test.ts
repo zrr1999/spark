@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readdir, readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 import {
@@ -8,9 +9,27 @@ import {
   formatSparkBudgetLines,
   goalToolResponse,
   validateObjective,
-} from "../packages/spark-workflows/src/index.ts";
+} from "spark-goal";
 
-void test("spark-workflows goal helpers create Spark-owned goals and continuation prompts", () => {
+void test("spark-goal package stays isolated from workflow packages", async () => {
+  const pkg = JSON.parse(await readFile("packages/spark-goal/package.json", "utf8")) as {
+    dependencies?: Record<string, string>;
+  };
+
+  assert.equal(pkg.dependencies?.["spark-workflows"], undefined);
+
+  const sourceFiles = await listTypeScriptFiles("packages/spark-goal/src");
+  for (const file of sourceFiles) {
+    const source = await readFile(file, "utf8");
+    assert.doesNotMatch(
+      source,
+      /(?:from\s+["']|import\(["'])spark-workflows["']/u,
+      `${file} must not import workflow packages`,
+    );
+  }
+});
+
+void test("spark-goal helpers create Spark-owned goals and continuation prompts", () => {
   assert.equal(validateObjective("  ship feature  "), null);
   const goal = createSparkGoal("  ship feature  ", 1000, 123);
   assert.equal(goal.objective, "ship feature");
@@ -37,3 +56,14 @@ void test("spark-workflows goal helpers create Spark-owned goals and continuatio
     ],
   );
 });
+
+async function listTypeScriptFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const path = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) files.push(...(await listTypeScriptFiles(path)));
+    else if (entry.isFile() && path.endsWith(".ts")) files.push(path);
+  }
+  return files;
+}

@@ -147,7 +147,7 @@ export function sparkWorkflowSelectorAsk(input: SparkWorkflowSelectorAskInput): 
     flow: "spark-workflow-selector",
     title: "Choose workflow for “" + title + "”",
     context: [
-      "/workflow runs a builtin, workspace, or user Spark workflow. Spark needs an explicit selector before starting workflow execution.",
+      "/workflow runs a workspace or user Spark workflow. Spark needs an explicit selector before starting workflow execution.",
       reason,
       focus ? "Workflow focus: " + focus : undefined,
       ...errors,

@@ -57,6 +57,14 @@ void test("artifact store writes hashes, blobs, and lineage links", async () => 
       [second.ref],
     );
     assert.equal((await store.diff(first.ref, second.ref)).same, false);
+    assert.deepEqual(
+      (await readdir(dir)).filter((entry) => entry.endsWith(".tmp")),
+      [],
+    );
+    assert.deepEqual(
+      (await readdir(join(dir, "blobs"))).filter((entry) => entry.endsWith(".tmp")),
+      [],
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -201,6 +209,10 @@ void test("artifact metadata compaction dry-runs and rewrites legacy inline bodi
     assert.match(after, /"bodyTruncated": true/);
     assert.doesNotMatch(after, /legacy-body-legacy-body-/);
     assert.deepEqual((await compactingStore.get<typeof body>(artifact.ref)).body, body);
+    assert.deepEqual(
+      (await readdir(dir)).filter((entry) => entry.endsWith(".tmp")),
+      [],
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -27,6 +27,7 @@
       "pi-cue": ["./packages/pi-cue/src/index.ts"],
       "pi-cue/extension": ["./packages/pi-cue/src/extension/index.ts"],
       "spark/extension": ["./packages/spark/src/extension/index.ts"],
+      "spark-goal": ["./packages/spark-goal/src/index.ts"],
       "spark-tasks": ["./packages/spark-tasks/src/index.ts"],
       "spark-workflows": ["./packages/spark-workflows/src/index.ts"]
     }

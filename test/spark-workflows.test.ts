@@ -1,15 +1,34 @@
 import assert from "node:assert/strict";
+import { readdir, readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 import {
   adversarialReviewWorkflowScript,
   createSparkWorkflowRoleRunAdapter,
   deepResearchWorkflowScript,
-  goalWorkflowScript,
   parseSparkWorkflowScript,
-  readyWorkflowScript,
   runSparkWorkflowScript,
 } from "../packages/spark-workflows/src/index.ts";
+
+void test("spark-workflows package stays isolated from runtime execution packages", async () => {
+  const pkg = JSON.parse(await readFile("packages/spark-workflows/package.json", "utf8")) as {
+    dependencies?: Record<string, string>;
+  };
+
+  assert.equal(pkg.dependencies?.["spark-runtime"], undefined);
+  assert.equal(pkg.dependencies?.["pi-roles"], undefined);
+  assert.equal(pkg.dependencies?.["spark-goal"], undefined);
+
+  const sourceFiles = await listTypeScriptFiles("packages/spark-workflows/src");
+  for (const file of sourceFiles) {
+    const source = await readFile(file, "utf8");
+    assert.doesNotMatch(
+      source,
+      /(?:from\s+["']|import\(["'])(?:spark-runtime|pi-roles|spark-goal)["']/u,
+      `${file} must not import runtime execution or goal packages`,
+    );
+  }
+});
 
 void test("spark-workflows parses metadata and runs sandbox primitives with journal", async () => {
   const script = `export const meta = {
@@ -66,31 +85,7 @@ return { scan, a, b }`;
   );
 });
 
-void test("spark-workflows exposes and runs builtin workflow script factories", async () => {
-  const goal = await runSparkWorkflowScript(goalWorkflowScript(), {
-    agent: async () => "unused",
-  });
-  assert.equal(goal.meta.name, "goal");
-  assert.deepEqual(goal.phases, ["Inspect"]);
-  assert.equal(goal.agentCount, 0);
-  assert.deepEqual(JSON.parse(JSON.stringify(goal.result)), {
-    backend: "goal",
-    contract:
-      "Inspect the current Spark project/task plan, claim one ready task at a time, finish it with evidence, and continue until complete or blocked.",
-  });
-
-  const ready = await runSparkWorkflowScript(readyWorkflowScript(), {
-    agent: async () => "unused",
-  });
-  assert.equal(ready.meta.name, "ready");
-  assert.deepEqual(ready.phases, ["Preflight"]);
-  assert.equal(ready.agentCount, 0);
-  assert.deepEqual(JSON.parse(JSON.stringify(ready.result)), {
-    backend: "ready-frontier",
-    contract:
-      "Preflight ready tasks, then dispatch with spark_run_ready_tasks when approved and reconcile workflow-run state afterward.",
-  });
-
+void test("spark-workflows exposes and runs workflow script factories", async () => {
   const deep = parseSparkWorkflowScript(deepResearchWorkflowScript());
   assert.equal(deep.meta.name, "deep_research");
   assert.deepEqual(
@@ -195,3 +190,14 @@ await agent('check isolation', { isolation: 'container' })`;
     /Spark workflow agent isolation must be 'worktree'/,
   );
 });
+
+async function listTypeScriptFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const path = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) files.push(...(await listTypeScriptFiles(path)));
+    else if (entry.isFile() && path.endsWith(".ts")) files.push(path);
+  }
+  return files;
+}

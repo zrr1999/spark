@@ -20,6 +20,7 @@
     "@earendil-works/pi-tui": "^0.74.1",
     "pi-roles": "file:../pi-roles",
     "spark-core": "file:../spark-core",
+    "spark-goal": "file:../spark-goal",
     "spark-learnings": "file:../spark-learnings",
     "spark-runtime": "file:../spark-runtime",
     "spark-tasks": "file:../spark-tasks",

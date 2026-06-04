@@ -29,4 +29,4 @@ The vendored source is derived from MIT-licensed pi-codex-goal. Preserve this at
 
 ## Local ownership
 
-After the workflow package unification, the goal continuation code lives under `packages/spark-workflows/src/goal` and is treated as Spark-owned workflow code. Future API names, file layout, and behavior should follow Spark project semantics rather than upstream compatibility.
+Goal continuation code lives under `packages/spark-goal` and is treated as Spark-owned goal code, separate from workflow script parsing and workflow-run scheduling. Future API names, file layout, and behavior should follow Spark project semantics rather than upstream compatibility.

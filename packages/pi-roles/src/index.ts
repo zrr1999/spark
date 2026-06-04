@@ -122,6 +122,14 @@ export interface ActiveRoleRun {
 
 export const builtinRoleIds = ["scout", "planner", "worker", "reviewer", "oracle"] as const;
 export type BuiltinRoleId = (typeof builtinRoleIds)[number];
+export type BuiltinRoleProvider = (now: string) => readonly RoleSpec[];
+
+export interface DefaultRoleRegistryOptions {
+  now?: string;
+  extraRoles?: readonly RoleSpec[];
+}
+
+const builtinRoleProviders = new Map<string, BuiltinRoleProvider>();
 
 const ROLE_FRONTMATTER_KEYS = new Set([
   "id",
@@ -202,6 +210,38 @@ export function createBuiltinRoles(now = nowIso()): RoleSpec[] {
       now,
     ),
   ];
+}
+
+export function registerBuiltinRoleProvider(id: string, provider: BuiltinRoleProvider): void {
+  assertNonEmpty(id, "builtin role provider id");
+  builtinRoleProviders.set(id, provider);
+}
+
+export function unregisterBuiltinRoleProvider(id: string): boolean {
+  return builtinRoleProviders.delete(id);
+}
+
+export function createRegisteredBuiltinRoles(now = nowIso()): RoleSpec[] {
+  const roles: RoleSpec[] = [];
+  for (const [id, provider] of [...builtinRoleProviders.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    for (const role of provider(now)) {
+      if (role.source !== "builtin")
+        throw new Error(`builtin role provider ${id} returned non-builtin role: ${role.id}`);
+      roles.push(role);
+    }
+  }
+  return roles;
+}
+
+export function createDefaultRoleRegistry(options: DefaultRoleRegistryOptions = {}): RoleRegistry {
+  const now = options.now ?? nowIso();
+  return new RoleRegistry([
+    ...createBuiltinRoles(now),
+    ...createRegisteredBuiltinRoles(now),
+    ...(options.extraRoles ?? []),
+  ]);
 }
 
 function builtin(

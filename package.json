@@ -36,6 +36,7 @@
     "pi-graft": "file:packages/pi-graft",
     "pi-roles": "file:packages/pi-roles",
     "spark-core": "file:packages/spark-core",
+    "spark-goal": "file:packages/spark-goal",
     "spark-learnings": "file:packages/spark-learnings",
     "spark-runtime": "file:packages/spark-runtime",
     "spark-tasks": "file:packages/spark-tasks",

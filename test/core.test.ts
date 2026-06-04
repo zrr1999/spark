@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -13,6 +13,7 @@ import {
   isRef,
   validateArtifact,
   writeJsonFileAtomic,
+  writeTextFileAtomic,
   type TaskPlan,
 } from "spark-core";
 import { builtinRoleRef, createBuiltinRoles } from "pi-roles";
@@ -91,7 +92,7 @@ void test("artifact contract validates persisted metadata shape", () => {
   );
 });
 
-void test("JSON file helpers keep optional read, formatting, and parse error semantics", async () => {
+void test("JSON and text file helpers keep optional read, formatting, and parse error semantics", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-core-json-"));
   try {
     const filePath = join(dir, "nested", "state.json");
@@ -105,6 +106,14 @@ void test("JSON file helpers keep optional read, formatting, and parse error sem
       version: 1,
       enabled: true,
     });
+
+    const textPath = join(dir, "nested", "note.txt");
+    await writeTextFileAtomic(textPath, "hello\n");
+    assert.equal(await readFile(textPath, "utf8"), "hello\n");
+    assert.deepEqual(
+      (await readdir(join(dir, "nested"))).filter((entry) => entry.endsWith(".tmp")),
+      [],
+    );
 
     await writeFile(filePath, "{not-json", "utf8");
     await assert.rejects(

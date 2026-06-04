@@ -12,10 +12,14 @@ function fakeTui(): TUI {
   return { requestRender: () => undefined, terminal: { rows: 30, cols: 100 } } as unknown as TUI;
 }
 
+function renderMessageContent(content: Parameters<SparkHostMessageRenderer>[0]["content"]): string {
+  return typeof content === "string" ? content : JSON.stringify(content);
+}
+
 void test("SparkHostRuntime registers and exposes custom message renderers", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-rendering" });
   const renderer: SparkHostMessageRenderer = (message) => ({
-    render: () => [`rendered:${message.customType}:${message.content}`],
+    render: () => [`rendered:${message.customType}:${renderMessageContent(message.content)}`],
   });
 
   host.registerMessageRenderer("status-update", renderer);
@@ -75,7 +79,9 @@ void test("SparkNativeTuiApp uses custom message renderers and skips display=fal
     [
       "status-update",
       (message, options) => ({
-        render: () => [`custom-render:${message.content}:expanded=${String(options.expanded)}`],
+        render: () => [
+          `custom-render:${renderMessageContent(message.content)}:expanded=${String(options.expanded)}`,
+        ],
       }),
     ],
   ]);

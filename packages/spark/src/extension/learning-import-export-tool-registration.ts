@@ -1,5 +1,5 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { Type } from "typebox";
 import { defaultArtifactStore } from "spark-core";
@@ -171,7 +171,11 @@ export function registerSparkLearningImportExportTools(
           await mkdir(dirname(verificationExportPath), { recursive: true });
           await writeFile(verificationExportPath, markdown, "utf8");
         }
-        await rm(inputPath, { recursive: true, force: false });
+        if (learningStoreRoot(store) === resolve(inputPath)) {
+          await removeLegacyCompoundLearningContents(inputPath);
+        } else {
+          await rm(inputPath, { recursive: true, force: false });
+        }
       }
       const action = apply ? "Imported" : "Dry-run parsed";
       const deletionSuffix = deleteLegacyAfterVerifiedExport
@@ -211,4 +215,16 @@ export function registerSparkLearningImportExportTools(
       };
     },
   });
+}
+
+function learningStoreRoot(store: ReturnType<typeof defaultLearningStore>): string | undefined {
+  const { artifactStore } = store;
+  if ("rootDir" in artifactStore && typeof artifactStore.rootDir === "string")
+    return resolve(artifactStore.rootDir);
+  return undefined;
+}
+
+async function removeLegacyCompoundLearningContents(rootDir: string): Promise<void> {
+  for (const entry of ["patterns", "gotchas", "decisions", "README.md"])
+    await rm(join(rootDir, entry), { recursive: true, force: true });
 }

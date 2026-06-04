@@ -24,14 +24,14 @@ async function withTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
-test("loadSparkMode defaults to auto with no persisted state", async () => {
+void test("loadSparkMode defaults to auto with no persisted state", async () => {
   await withTempDir(async (dir) => {
     const state = await loadSparkMode(dir, undefined);
     assert.deepEqual(state, { mode: "auto" });
   });
 });
 
-test("saveSparkMode round-trips research mode", async () => {
+void test("saveSparkMode round-trips research mode", async () => {
   await withTempDir(async (dir) => {
     const projectRef = "proj:test-research" as ProjectRef;
     await saveSparkMode(dir, undefined, { mode: "research", projectRef, focus: "audit" });
@@ -44,7 +44,7 @@ test("saveSparkMode round-trips research mode", async () => {
   });
 });
 
-test("saveSparkMode round-trips plan mode and records planningSource", async () => {
+void test("saveSparkMode round-trips plan mode and records planningSource", async () => {
   await withTempDir(async (dir) => {
     const projectRef = "proj:test-plan" as ProjectRef;
     await saveSparkMode(dir, undefined, {
@@ -61,25 +61,25 @@ test("saveSparkMode round-trips plan mode and records planningSource", async () 
   });
 });
 
-test("saveSparkMode round-trips execute(workflow) with selector", async () => {
+void test("saveSparkMode round-trips execute(workflow) with selector", async () => {
   await withTempDir(async (dir) => {
     const projectRef = "proj:test-execute" as ProjectRef;
     await saveSparkMode(dir, undefined, {
       mode: "execute",
       projectRef,
       executeStrategy: "workflow",
-      workflowSelector: "builtin:goal",
+      workflowSelector: "workspace:release-check",
       focus: "ship feature",
     });
     const state = await loadSparkMode(dir, undefined);
     assert.equal(state.mode, "execute");
     assert.equal(state.executeStrategy, "workflow");
-    assert.equal(state.workflowSelector, "builtin:goal");
+    assert.equal(state.workflowSelector, "workspace:release-check");
     assert.equal(state.focus, "ship feature");
   });
 });
 
-test("legacy saveSparkExecutionMode is readable via loadSparkMode", async () => {
+void test("legacy saveSparkExecutionMode is readable via loadSparkMode", async () => {
   await withTempDir(async (dir) => {
     const projectRef = "proj:test-legacy-exec" as ProjectRef;
     await saveSparkExecutionMode(dir, undefined, projectRef, "do it", "execute", "goal");
@@ -91,7 +91,7 @@ test("legacy saveSparkExecutionMode is readable via loadSparkMode", async () => 
   });
 });
 
-test("legacy saveSparkPlanningMode is readable via loadSparkMode", async () => {
+void test("legacy saveSparkPlanningMode is readable via loadSparkMode", async () => {
   await withTempDir(async (dir) => {
     const projectRef = "proj:test-legacy-plan" as ProjectRef;
     await saveSparkPlanningMode(dir, undefined, projectRef, "plan it", "auto");
@@ -102,7 +102,7 @@ test("legacy saveSparkPlanningMode is readable via loadSparkMode", async () => {
   });
 });
 
-test("clearSparkMode preserves projectRef but resets to auto", async () => {
+void test("clearSparkMode preserves projectRef but resets to auto", async () => {
   await withTempDir(async (dir) => {
     const projectRef = "proj:test-clear" as ProjectRef;
     await saveSparkMode(dir, undefined, { mode: "plan", projectRef });
@@ -113,7 +113,7 @@ test("clearSparkMode preserves projectRef but resets to auto", async () => {
   });
 });
 
-test("saveSparkMode rejects non-auto mode without projectRef", async () => {
+void test("saveSparkMode rejects non-auto mode without projectRef", async () => {
   await withTempDir(async (dir) => {
     await assert.rejects(
       () => saveSparkMode(dir, undefined, { mode: "plan" }),
@@ -122,7 +122,7 @@ test("saveSparkMode rejects non-auto mode without projectRef", async () => {
   });
 });
 
-test("nextSparkSessionMode walks the canonical cycle", () => {
+void test("nextSparkSessionMode walks the canonical cycle", () => {
   assert.deepEqual(SPARK_SESSION_MODE_CYCLE, ["auto", "research", "plan", "execute"]);
   assert.equal(nextSparkSessionMode("auto"), "research");
   assert.equal(nextSparkSessionMode("research"), "plan");

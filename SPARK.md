@@ -39,7 +39,8 @@ Spark 现在支持两个 host target：Pi 中的 `packages/spark/src/extension/`
 - `packages/spark-core`：共享 ref、schema、错误、ArtifactStore/hash/blob/provenance/lineage、TaskPlan/Role/Artifact/Ask/Review/Cue/Trace 等核心契约。
 - `packages/spark-tasks`：project/task DAG、依赖、claim/lease、TODO、TaskPlan readiness、run/task 状态存储。
 - `packages/spark-runtime`：单个 Spark task/role-run 执行适配，负责调用 `pi-roles` 并回写 artifacts/runs/status。
-- `packages/spark-workflows`：Spark-owned workflow runtime、最小 builtin workflow script contract、示例 workflow factories、`/workflow:goal` hidden-continuation、`/workflow:ready` ready task frontier 调度、workflow-run 状态/reconciliation 与 role-run adapter 边界。
+- `packages/spark-goal`：Spark-owned goal state、usage accounting 与 `/goal` hidden-continuation。
+- `packages/spark-workflows`：Spark-owned workflow runtime、workflow script contract、示例 workflow factories、workflow-run 状态/reconciliation 与 role-run adapter 边界。
 - `packages/pi-ask`：通用 ask_user / ask_flow 协议、状态机、TUI 渲染、result semantics；同时也是 Spark ask artifact persistence/replay 的事实归宿。`spark_ask` 工具体（持久化、replay、tool wiring）直接落在 `packages/spark/src/extension/spark-ask-tool.ts`，内部使用 pi-ask 原名而不是别名转发；具体 ask 问题由调用处基于实际上下文生成，不提供制式表单。
 - `packages/pi-roles`：`RoleSpec`、project/user/builtin role store、`RoleRun` fresh/forked child Pi 执行、role tools；不拥有 Spark task DAG。
 - `packages/pi-cue`：cue-shell IPC/tool adapter；不依赖 Spark 状态。

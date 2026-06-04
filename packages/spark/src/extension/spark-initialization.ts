@@ -23,7 +23,8 @@ import {
   type SparkInitClarificationData,
 } from "./spark-md-rendering.ts";
 import { renderRolePlan, type SparkInitResult } from "./spark-init-rendering.ts";
-import { sparkTodoStore, writeJsonFileAtomic } from "./session-state.ts";
+import { defaultReviewGateStore } from "./review-gate-store.ts";
+import { saveSparkGraphAndTodos } from "./session-state.ts";
 
 export interface SparkInitOptions {
   projectTitle?: string;
@@ -124,9 +125,8 @@ export async function initializeSparkIdea(
       parentArtifactRefs: [sparkMdArtifact.ref, rolePlanArtifact.ref],
     },
   });
-  await defaultTaskGraphStore(cwd).save(graph);
-  await sparkTodoStore(cwd, undefined).save(graph);
-  await writeJsonFileAtomic(join(sparkDir, "review-gate.json"), gate);
+  await saveSparkGraphAndTodos(cwd, graph, undefined, defaultTaskGraphStore(cwd));
+  await defaultReviewGateStore(cwd).save(gate);
 
   const currentTask = graph.currentTask(project.ref);
   const todoSummary = currentTask ? graph.todoSummary(currentTask.ref) : emptyTodoSummary();

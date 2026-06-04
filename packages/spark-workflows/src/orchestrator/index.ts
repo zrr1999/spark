@@ -49,6 +49,10 @@ export type {
 } from "./dag-run-retention.ts";
 export {
   runReadySparkTasks,
+  type SparkReadyTaskRun,
+  type SparkReadyTaskRunInput,
+  type SparkReadyTaskRunKiller,
+  type SparkReadyTaskRunKillerInput,
   type SparkReadyTaskRunnerOptions,
   type SparkReadyTaskRunnerProgress,
   type SparkReadyTaskRunnerResult,

@@ -1,27 +1,40 @@
-import type { RoleRegistry, RoleRunMode } from "pi-roles";
-import type { ArtifactStore } from "spark-core";
 import {
   DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
   DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
-  type RoleRef,
   type RunRef,
   type Task,
   type TaskRef,
   type TaskRun,
   type ProjectRef,
 } from "spark-core";
-import { killActiveSparkRoleRunProcesses, runSparkTask } from "spark-runtime";
 import type { TaskGraph } from "spark-tasks";
+
+export interface SparkReadyTaskRunInput {
+  graph: TaskGraph;
+  taskRef: TaskRef;
+  dryRun: boolean;
+  timeoutMs: number;
+  signal: AbortSignal;
+  claim?: {
+    sessionId?: string;
+    leaseMs?: number;
+  };
+}
+
+export type SparkReadyTaskRun = (input: SparkReadyTaskRunInput) => Promise<TaskRun>;
+
+export interface SparkReadyTaskRunKillerInput {
+  runRefs: RunRef[];
+  reason: string;
+}
+
+export type SparkReadyTaskRunKiller = (input: SparkReadyTaskRunKillerInput) => Promise<unknown>;
 
 export interface SparkReadyTaskRunnerOptions {
   graph: TaskGraph;
-  registry: RoleRegistry;
-  /** Role assigned when a ready task has no task-level role hint. Defaults by task kind, then worker. */
-  defaultRoleRef?: RoleRef;
-  artifactStore?: ArtifactStore;
+  runTask: SparkReadyTaskRun;
+  killRuns?: SparkReadyTaskRunKiller;
   projectRef?: ProjectRef;
-  cwd?: string;
-  piCommand?: string;
   dryRun?: boolean;
   /** Maximum number of role runs running at the same time. Default: 4. */
   maxConcurrency?: number;
@@ -29,11 +42,6 @@ export interface SparkReadyTaskRunnerOptions {
   timeoutMs?: number;
   /** Per-role-run timeout. Defaults to no per-task timeout; use only when deliberately bounding each child. */
   taskTimeoutMs?: number;
-  sessionDir?: string;
-  mode?: RoleRunMode;
-  forkFromSession?: string;
-  heartbeatIntervalMs?: number;
-  onHeartbeat?: (graph: TaskGraph) => void | Promise<void>;
   onSchedule?: (result: SparkReadyTaskRunnerSchedule) => void | Promise<void>;
   onProgress?: (result: SparkReadyTaskRunnerProgress) => void | Promise<void>;
   claim?: {
@@ -90,29 +98,20 @@ export async function runReadySparkTasks(
   const schedule = async (task: Task): Promise<void> => {
     scheduled.add(task.ref);
     const preexistingRunRefs = new Set(input.graph.runs(task.projectRef).map((run) => run.ref));
-    const runPromise = runSparkTask({
-      graph: input.graph,
-      taskRef: task.ref,
-      registry: input.registry,
-      defaultRoleRef: input.defaultRoleRef,
-      artifactStore: input.artifactStore,
-      cwd: input.cwd,
-      piCommand: input.piCommand,
-      dryRun,
-      timeoutMs: taskTimeoutMs ?? 0,
-      sessionDir: input.sessionDir,
-      mode: input.mode,
-      forkFromSession: input.forkFromSession,
-      heartbeatIntervalMs: input.heartbeatIntervalMs,
-      onHeartbeat: input.onHeartbeat,
-      signal: schedulerAbort.signal,
-      claim: dryRun
-        ? undefined
-        : {
-            sessionId: input.claim?.sessionId,
-            leaseMs: input.claim?.leaseMs ?? timeoutMs,
-          },
-    })
+    const runPromise = input
+      .runTask({
+        graph: input.graph,
+        taskRef: task.ref,
+        dryRun,
+        timeoutMs: taskTimeoutMs ?? 0,
+        signal: schedulerAbort.signal,
+        claim: dryRun
+          ? undefined
+          : {
+              sessionId: input.claim?.sessionId,
+              leaseMs: input.claim?.leaseMs ?? timeoutMs,
+            },
+      })
       .catch((error: unknown) => taskRunRecordedForTaskError(input.graph, task, error))
       .then(async (run) => {
         runs.push(run);
@@ -177,6 +176,7 @@ export async function runReadySparkTasks(
       promiseRunRefs,
       schedulerAbort,
       reason: `Spark ready task scheduler aborted: ${unknownErrorMessage(error)}`,
+      killRuns: input.killRuns,
     });
     throw error;
   }
@@ -213,17 +213,15 @@ async function abortRunningReadyTaskRuns(input: {
   promiseRunRefs: Map<Promise<TaskRun>, RunRef>;
   schedulerAbort: AbortController;
   reason: string;
+  killRuns?: SparkReadyTaskRunKiller;
 }): Promise<void> {
   if (input.running.size === 0) return;
   input.schedulerAbort.abort(input.reason);
   const runRefs = [
     ...new Set([...input.running].flatMap((run) => input.promiseRunRefs.get(run) ?? [])),
   ];
-  if (runRefs.length > 0) {
-    await killActiveSparkRoleRunProcesses({
-      runRefs,
-      reason: input.reason,
-    });
+  if (runRefs.length > 0 && input.killRuns) {
+    await input.killRuns({ runRefs, reason: input.reason });
   }
   await Promise.allSettled(input.running);
 }

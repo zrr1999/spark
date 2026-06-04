@@ -536,11 +536,37 @@ export class CueClient {
     const allKnownJobIds = new Set<string>();
     const stdoutByJob = new Map<string, string[]>();
     const stderrByJob = new Map<string, string[]>();
+    const stdoutLenByJob = new Map<string, number>();
+    const stderrLenByJob = new Map<string, number>();
     const unknownJobIds: string[] = [];
 
     const ensureJobBuffers = (jobId: string) => {
-      if (!stdoutByJob.has(jobId)) stdoutByJob.set(jobId, []);
-      if (!stderrByJob.has(jobId)) stderrByJob.set(jobId, []);
+      if (!stdoutByJob.has(jobId)) {
+        stdoutByJob.set(jobId, []);
+        stdoutLenByJob.set(jobId, 0);
+      }
+      if (!stderrByJob.has(jobId)) {
+        stderrByJob.set(jobId, []);
+        stderrLenByJob.set(jobId, 0);
+      }
+    };
+
+    const appendCappedOutput = (
+      buffers: Map<string, string[]>,
+      lengths: Map<string, number>,
+      jobId: string,
+      data: string,
+    ) => {
+      ensureJobBuffers(jobId);
+      const list = buffers.get(jobId);
+      if (!list) return;
+      const current = lengths.get(jobId) ?? 0;
+      if (current >= MAX_OUTPUT_BUFFER) return;
+      const remaining = MAX_OUTPUT_BUFFER - current;
+      const chunk = data.length > remaining ? data.slice(0, remaining) : data;
+      if (!chunk) return;
+      list.push(chunk);
+      lengths.set(jobId, current + chunk.length);
     };
 
     const trackJob = async (itemIndex: number, jobId: string) => {
@@ -714,14 +740,14 @@ export class CueClient {
       const onOutput = (event: EventPayload) => {
         if (!("OutputChunk" in event)) return;
         const chunk = (event as { OutputChunk: OutputChunkEvent }).OutputChunk;
-        const buf = chunk.stream === "stdout" ? stdoutByJob : stderrByJob;
-        let list = buf.get(chunk.id);
-        if (!list) {
-          ensureJobBuffers(chunk.id);
-          if (!unknownJobIds.includes(chunk.id)) unknownJobIds.push(chunk.id);
-          list = buf.get(chunk.id);
+        if (!allKnownJobIds.has(chunk.id) && !unknownJobIds.includes(chunk.id)) {
+          unknownJobIds.push(chunk.id);
         }
-        if (list) list.push(chunk.data);
+        if (chunk.stream === "stdout") {
+          appendCappedOutput(stdoutByJob, stdoutLenByJob, chunk.id, chunk.data);
+        } else {
+          appendCappedOutput(stderrByJob, stderrLenByJob, chunk.id, chunk.data);
+        }
       };
 
       const installedForwarders = new Set<string>();
@@ -731,7 +757,6 @@ export class CueClient {
         unsubs.push(this.onEvent(`output:${jobId}`, onOutput));
       };
       for (const jid of allKnownJobIds) ensureForwarder(jid);
-      unsubs.push(this.onEvent("output:", onOutput));
 
       const cachedFinished = this.#recentScriptFinished.find(
         (fin) => fin.script_id === created.script_id,
@@ -756,7 +781,7 @@ export class CueClient {
           if (!allKnownJobIds.has(jid)) {
             if (!unknownJobIds.includes(jid)) unknownJobIds.push(jid);
             ensureJobBuffers(jid);
-            void this.subscribe([`output:`]).then(() => ensureForwarder(jid));
+            void this.subscribe([`output:${jid}`]).then(() => ensureForwarder(jid));
           }
           return;
         }
@@ -773,7 +798,7 @@ export class CueClient {
             } else if (!allKnownJobIds.has(jid)) {
               if (!unknownJobIds.includes(jid)) unknownJobIds.push(jid);
               ensureJobBuffers(jid);
-              void this.subscribe([`output:`]).then(() => ensureForwarder(jid));
+              void this.subscribe([`output:${jid}`]).then(() => ensureForwarder(jid));
             }
           }
         }

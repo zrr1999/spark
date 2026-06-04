@@ -786,6 +786,47 @@ void test("ask flow focused preview renders in a right-side pane without excessi
   assert.ok(gap > 0 && gap < 48, lines[optionLineIndex]);
 });
 
+void test("ask flow focused preview uses available side-by-side height before truncating", () => {
+  const longDescription =
+    "This option description is intentionally long enough to wrap in the left column and create vertical space for the preview pane.";
+  const question = {
+    id: "route",
+    prompt: "Which route?",
+    type: "single" as const,
+    options: [
+      {
+        value: "exact",
+        label: "Exact",
+        description: longDescription,
+        preview: Array.from({ length: 12 }, (_, index) => `preview line ${index + 1}`).join("\n"),
+      },
+      { value: "glob", label: "Glob patterns", description: longDescription },
+      { value: "regex", label: "Regex patterns", description: longDescription },
+      { value: "substring", label: "Substring matching", description: longDescription },
+    ],
+  };
+  const lines = renderAskScreen({
+    state: createInitialState({ questions: [question] }),
+    questions: [question],
+    optionsByTab: [buildExtendedOptions(question, new Map())],
+    theme: {
+      fg: (_color, text) => text,
+      bold: (text) => text,
+      strikethrough: (text) => text,
+      dim: (text) => text,
+    },
+    width: 120,
+    language: "en",
+    title: "Route ask",
+  });
+
+  assert.ok(
+    lines.some((line) => line.includes("preview line 12")),
+    lines.join("\n"),
+  );
+  assert.ok(!lines.some((line) => line.includes("more lines")), lines.join("\n"));
+});
+
 void test("ask flow UI answer summaries use labels while structured answers keep ids", () => {
   const question = {
     id: "route",

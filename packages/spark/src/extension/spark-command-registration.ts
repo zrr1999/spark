@@ -81,12 +81,22 @@ export function registerSparkCommands(
     },
   });
 
-  registerBuiltinWorkflowCommand("goal", "Foreground autonomous goal workflow.");
-  registerBuiltinWorkflowCommand("ready", "Background ready-frontier workflow.");
+  pi.registerCommand("goal", {
+    description:
+      "Enter Spark goal mode; continue autonomous verified progress until done or blocked.",
+    async handler(args, ctx) {
+      await handleSparkEntryCommand(pi, ctx, {
+        kind: "direct",
+        mode: "execute",
+        prompt: args.trim(),
+        executeStrategy: "goal",
+      });
+    },
+  });
 
   pi.registerCommand("workflow", {
     description:
-      "Enter Spark workflow execution mode; accepts optional selector like builtin:goal, workspace:foo, or user:foo.",
+      "Enter Spark workflow execution mode; accepts optional selector like workspace:foo or user:foo.",
     async handler(args, ctx) {
       const parsed = parseWorkflowCommandArgs(args);
       await handleSparkEntryCommand(pi, ctx, {
@@ -99,29 +109,10 @@ export function registerSparkCommands(
     },
   });
 
-  function registerBuiltinWorkflowCommand(selector: string, description: string): void {
-    pi.registerCommand("workflow:" + selector, {
-      description,
-      async handler(args, ctx) {
-        await handleSparkEntryCommand(pi, ctx, {
-          kind: "direct",
-          mode: "execute",
-          prompt: args.trim(),
-          executeStrategy: "workflow",
-          workflowSelector: "builtin:" + selector,
-        });
-      },
-    });
-  }
-
   function parseWorkflowCommandArgs(args: string): { selector?: string; focus: string } {
     const trimmed = args.trim();
     if (!trimmed) return { focus: "" };
-    if (trimmed === ":") return { selector: "builtin:", focus: "" };
-    if (trimmed.startsWith(": ")) return { selector: "builtin:", focus: trimmed.slice(2).trim() };
-    const match = /^(?:(builtin|workspace|user):)?([a-z0-9][a-z0-9-]*)(?:\s+([\s\S]*))?$/u.exec(
-      trimmed,
-    );
+    const match = /^(?:(workspace|user):)?([a-z0-9][a-z0-9-]*)(?:\s+([\s\S]*))?$/u.exec(trimmed);
     if (!match) return { focus: trimmed };
     const source = match[1];
     const id = match[2];

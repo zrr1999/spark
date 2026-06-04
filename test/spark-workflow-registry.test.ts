@@ -5,14 +5,13 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import {
-  builtinSparkWorkflowDescriptors,
   listSparkWorkflowRegistry,
   sparkWorkflowRef,
   userWorkflowDir,
   workspaceWorkflowDir,
 } from "../packages/spark/src/extension/spark-workflow-registry.ts";
 
-void test("Spark workflow registry lists builtin, workspace, and user workflows", async () => {
+void test("Spark workflow registry lists workspace and user workflows", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "spark-workflow-registry-"));
   const userDir = await mkdtemp(join(tmpdir(), "spark-user-workflows-"));
   await mkdir(workspaceWorkflowDir(cwd), { recursive: true });
@@ -40,8 +39,7 @@ void test("Spark workflow registry lists builtin, workspace, and user workflows"
   const listing = await listSparkWorkflowRegistry(cwd, { userWorkflowDir: userDir });
   const refs = listing.workflows.map((workflow) => workflow.ref);
 
-  assert.ok(refs.includes("workflow:builtin-goal"));
-  assert.ok(refs.includes("workflow:builtin-ready"));
+  assert.ok(!refs.some((ref) => ref.startsWith("workflow:builtin-")));
   assert.ok(refs.includes("workflow:workspace-release-check"));
   assert.ok(refs.includes("workflow:user-oss-review"));
   assert.equal(listing.errors.length, 1);
@@ -51,23 +49,12 @@ void test("Spark workflow registry lists builtin, workspace, and user workflows"
   const workspace = listing.workflows.find(
     (workflow) => workflow.ref === "workflow:workspace-release-check",
   );
-  assert.equal(workspace?.backend, "scripted");
+  assert.equal(workspace?.source, "workspace");
   assert.deepEqual(workspace?.phases, ["Inspect", "Verify"]);
 });
 
 void test("Spark workflow registry exposes stable source/ref helpers", () => {
   assert.equal(sparkWorkflowRef("workspace", "deep_research"), "workflow:workspace-deep-research");
   assert.match(userWorkflowDir(), /\.agents\/workflows$/);
-  assert.deepEqual(
-    builtinSparkWorkflowDescriptors().map((workflow) => [
-      workflow.id,
-      workflow.source,
-      workflow.backend,
-    ]),
-    [
-      ["goal", "builtin", "goal"],
-      ["ready", "builtin", "ready-frontier"],
-    ],
-  );
   assert.throws(() => sparkWorkflowRef("workspace", "Bad Name"), /workflow id/);
 });

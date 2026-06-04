@@ -1,5 +1,4 @@
 import { defaultArtifactStore } from "spark-core";
-import { RoleRegistry, defaultProjectRoleStore } from "pi-roles";
 import { newRef, nowIso } from "spark-core";
 import {
   createRoleRunClaimId,
@@ -8,7 +7,13 @@ import {
   runSparkTask,
 } from "spark-runtime";
 import { defaultTaskGraphStore } from "spark-tasks";
-import { loadSparkGraph, sparkSessionOwnerKey, sparkTodoStore } from "./session-state.ts";
+import {
+  loadSparkGraph,
+  saveSparkGraphAndTodos,
+  sparkSessionOwnerKey,
+  sparkTodoStore,
+} from "./session-state.ts";
+import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 import { mergeTaskProgressIntoStore } from "./task-progress-store.ts";
 
@@ -66,8 +71,7 @@ export async function cleanupOwnedBackgroundSubroles(
     changed = true;
   }
   if (changed) {
-    await store.save(graph);
-    await sparkTodoStore(cwd, ctx).save(graph);
+    await saveSparkGraphAndTodos(cwd, graph, ctx, store);
     await options.refreshSparkWidget?.(cwd, ctx);
   }
   return killed.length;
@@ -84,8 +88,7 @@ export async function resumeOwnedBackgroundSubroles(
   const ownerSessionId = sparkSessionOwnerKey(ctx);
   const resumable = findResumableBackgroundRoleRunTasks(graph, ownerSessionId);
   if (resumable.length === 0) return 0;
-  const registry = new RoleRegistry();
-  await defaultProjectRoleStore(cwd).hydrate(registry);
+  const registry = await createSparkRoleRegistry(cwd);
   const artifactStore = defaultArtifactStore(cwd);
   let resumed = 0;
   for (const task of resumable) {
@@ -138,8 +141,10 @@ export async function resumeOwnedBackgroundSubroles(
       });
       graph.setTaskStatus(task.ref, "failed");
     }
-    await mergeTaskProgressIntoStore(store, graph, [task.ref]);
-    await sparkTodoStore(cwd, ctx).save(graph);
+    await mergeTaskProgressIntoStore(store, graph, [task.ref], async (current) => {
+      await sparkTodoStore(cwd, ctx).hydrate(current);
+      await sparkTodoStore(cwd, ctx).save(current);
+    });
   }
   return resumed;
 }

@@ -1,8 +1,8 @@
 {
-  "name": "spark-workflows",
+  "name": "spark-goal",
   "version": "0.1.0",
   "private": true,
-  "description": "Spark-owned workflow scripts and injected-runner DAG scheduling primitives.",
+  "description": "Spark-owned goal state, usage accounting, and continuation prompt primitives.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [
@@ -16,9 +16,5 @@
   },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
-  },
-  "dependencies": {
-    "spark-core": "file:../spark-core",
-    "spark-tasks": "file:../spark-tasks"
   }
 }

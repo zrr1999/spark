@@ -34,7 +34,7 @@ Allowed high-level usage:
 - `spark` may orchestrate every Spark primitive and may use `pi-cue`, `pi-roles`, and Spark packages. It is no longer exposed as a package-level Pi extension; Spark CLI is a Spark-owned native `pi-tui` host rather than a Pi SDK `InteractiveMode` wrapper.
 - `spark-core` owns shared refs, schemas, contracts, and the physical artifact store (`ArtifactStore`, `defaultArtifactStore`, metadata/blob compaction helpers).
 - `spark-runtime` may combine `spark-tasks`, `pi-roles`, and `spark-core` artifacts to run one claimed task. It maps a Spark task into a `RoleRun` request and maps completion back into task status, claims, and artifacts.
-- `spark-workflows` owns Spark workflow script/runtime primitives plus Spark-owned goal continuation and ready-frontier workflow-run orchestration.
+- `spark-workflows` owns Spark workflow script/runtime primitives plus Spark-owned goal continuation and workflow-run orchestration.
 - `spark-learnings` may combine `spark-core` artifact storage with learning-specific lifecycle/search/export helpers, but it must not own task scheduling or prompt injection.
 - `spark-tasks` owns DAGs, TODOs, scheduling state, task names, role refs as optional plain-string executor hints, and claim leases. It must not run roles or import `pi-roles`.
 - The Spark-specific ask wiring lives in `packages/spark/src/extension/spark-ask-tool.ts` and depends on `pi-ask`, but it must not provide canned question presets; Spark asks are constructed by the caller from the concrete task, blocker, review, or decision context.
@@ -59,7 +59,7 @@ pi-* -> spark-*
 - Users know `/spark`.
 - Reusable roles are `RoleSpec`s from `pi-roles` (`builtin`, `project`, or `user`).
 - Long-lived work and claim scheduling are `spark-tasks`.
-- Role execution/runtime workflow scheduling is split: generic single-run launch/control/JSONL helpers live in `pi-roles`; Spark single-task adaptation lives in `spark-runtime`; graph-level workflow and ready-frontier orchestration lives in `spark-workflows`.
+- Role execution/runtime workflow scheduling is split: generic single-run launch/control/JSONL helpers live in `pi-roles`; Spark single-task adaptation lives in `spark-runtime`; graph-level workflow orchestration lives in `spark-workflows`.
 - Durable context and artifact blobs are stored through `spark-core`'s artifact store.
 - Evidence-backed reusable learning is `spark-learnings`.
 - Execution is `pi-cue`.

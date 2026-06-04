@@ -19,7 +19,7 @@ This package rewrites the selected workflow core as Spark-owned primitives:
 
 - metadata.ts: literal workflow metadata parsing and validation inspired by upstream parseWorkflowScript/meta handling.
 - runtime.ts: sandboxed script execution with phase, agent, parallel, pipeline, journal hash, and resume-journal primitives.
-- builtins.ts: Spark-owned minimal goal/ready script contracts plus deep_research and adversarial_review example factories based on upstream workflow shapes.
+- builtins.ts: Spark-owned deep_research and adversarial_review example factories based on upstream workflow shapes.
 - types.ts: SparkWorkflow\* data contracts for future Spark role-run adapter wiring.
 
 ## Omitted upstream features

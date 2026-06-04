@@ -3,7 +3,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import {
-  RoleRegistry,
+  createDefaultRoleRegistry,
   createRoleSpec,
   defaultProjectRoleStore,
   defaultUserRoleModelBindingStore,
@@ -121,7 +121,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       );
       const source = normalizeRoleSource(params.source, "list_roles source");
       const limit = normalizeLimit(params.limit, 50, "list_roles limit");
-      const registry = new RoleRegistry();
+      const registry = createDefaultRoleRegistry();
       await hydrateDefaultRoleRegistry(registry, cwd, { includeUser });
       const roles = registry.list(source ? { source } : {}).slice(0, limit);
       const allCount = registry.list(source ? { source } : {}).length;
@@ -170,7 +170,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = requiredPiRolesCwd(ctx, "get_role");
-      const registry = new RoleRegistry();
+      const registry = createDefaultRoleRegistry();
       const includeUser = normalizeOptionalBoolean(
         params.includeUser,
         false,
@@ -310,7 +310,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const p = normalizeCallRoleToolParams(params);
       const cwd = p.cwd ?? requiredPiRolesCwd(ctx, "call_role");
-      const registry = new RoleRegistry();
+      const registry = createDefaultRoleRegistry();
       await hydrateDefaultRoleRegistry(registry, cwd, { includeUser: p.includeUser });
       const role = registry.select(p.role);
       const mode = p.mode ?? "fresh";

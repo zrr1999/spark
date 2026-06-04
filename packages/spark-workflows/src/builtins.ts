@@ -1,35 +1,3 @@
-export function goalWorkflowScript(): string {
-  return `export const meta = {
-  name: 'goal',
-  description: 'Foreground continuous verified progress across ready Spark tasks until complete or blocked',
-  whenToUse: 'Use when the user wants autonomous verified project progress over the Spark task DAG.',
-  phases: [{ title: 'Inspect' }, { title: 'Execute' }, { title: 'Continue' }],
-}
-
-phase('Inspect')
-return {
-  backend: 'goal',
-  contract: 'Inspect the current Spark project/task plan, claim one ready task at a time, finish it with evidence, and continue until complete or blocked.',
-}
-`;
-}
-
-export function readyWorkflowScript(): string {
-  return `export const meta = {
-  name: 'ready',
-  description: 'Background ready-task frontier scheduler backed by Spark task graph claims and workflow-run history',
-  whenToUse: 'Use when the user wants to dispatch the current ready frontier through Spark workflow-run scheduling.',
-  phases: [{ title: 'Preflight' }, { title: 'Dispatch' }, { title: 'Reconcile' }],
-}
-
-phase('Preflight')
-return {
-  backend: 'ready-frontier',
-  contract: 'Preflight ready tasks, then dispatch with spark_run_ready_tasks when approved and reconcile workflow-run state afterward.',
-}
-`;
-}
-
 export function deepResearchWorkflowScript(): string {
   return `export const meta = {
   name: 'deep_research',

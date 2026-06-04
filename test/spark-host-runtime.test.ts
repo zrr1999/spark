@@ -65,7 +65,7 @@ void test("SparkHostRuntime setActiveTools toggles getAllTools view", () => {
   assert.equal(host.listTools().length, 2, "all tools remain registered, only active flag flips");
 });
 
-void test("SparkHostRuntime registerCommand adds numeric suffix for duplicate names", () => {
+void test("SparkHostRuntime registerCommand adds numeric suffix for duplicate names", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   let aCalled = 0;
   let bCalled = 0;
@@ -85,8 +85,8 @@ void test("SparkHostRuntime registerCommand adds numeric suffix for duplicate na
     .sort();
   assert.deepEqual(commands, ["review", "review:1", "review:2"]);
 
-  host.getCommand("review")!.handler("", host.makeContext());
-  host.getCommand("review:1")!.handler("", host.makeContext());
+  await host.getCommand("review")!.handler("", host.makeContext());
+  await host.getCommand("review:1")!.handler("", host.makeContext());
   assert.equal(aCalled, 1);
   assert.equal(bCalled, 1);
 });

@@ -135,7 +135,7 @@ but end-to-end local vertical slice.
      without creating placeholder tasks
    - ask artifacts linked into the Spark run trace when init clarification runs
    - project role store hydration before ready-task execution
-   - `/workflow:goal` and other `/workflow[:selector]` commands are workflow strategies layered above Spark tasks/workflows; workflow-run scheduling remains available through lower-level Spark workflow tools rather than legacy `/run*` commands
+   - `/goal` and `/workflow[:selector]` commands are strategies layered above Spark tasks/workflows; workflow-run scheduling remains available through lower-level Spark workflow tools rather than legacy `/run*` commands
 
 ## Boundary cleanup status
 

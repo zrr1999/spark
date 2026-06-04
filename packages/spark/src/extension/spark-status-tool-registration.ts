@@ -7,8 +7,8 @@ import {
   currentSparkProject,
   loadSparkGraph,
   loadSparkRunMode,
+  saveSparkGraphAndTodos,
   sparkSessionKey,
-  sparkTodoStore,
 } from "./session-state.ts";
 import { loadIndependentTodos } from "./session-todos.ts";
 import {
@@ -87,10 +87,7 @@ export function registerSparkStatusTool(
           details,
         };
       }
-      if (ensureSparkGraphInvariants(graph)) {
-        await store.save(graph);
-        await sparkTodoStore(cwd, ctx).save(graph);
-      }
+      if (ensureSparkGraphInvariants(graph)) await saveSparkGraphAndTodos(cwd, graph, ctx, store);
       const view = normalizeSparkStatusShowFinished(params)
         ? "full"
         : normalizeSparkStatusView(params);

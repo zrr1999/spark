@@ -60,6 +60,18 @@ export async function loadSparkGraph(
   return graph;
 }
 
+export async function saveSparkGraphAndTodos(
+  cwd: string,
+  graph: TaskGraph,
+  ctx?: SparkSessionContext,
+  store = defaultTaskGraphStore(cwd),
+): Promise<void> {
+  await store.withLock(async () => {
+    await store.save(graph);
+    await sparkTodoStore(cwd, ctx).save(graph);
+  });
+}
+
 export function sparkTodoStore(
   cwd: string,
   ctx?: SparkSessionContext,

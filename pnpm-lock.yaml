@@ -31,6 +31,9 @@ importers:
       spark-core:
         specifier: file:packages/spark-core
         version: link:packages/spark-core
+      spark-goal:
+        specifier: file:packages/spark-goal
+        version: link:packages/spark-goal
       spark-learnings:
         specifier: file:packages/spark-learnings
         version: link:packages/spark-learnings
@@ -118,6 +121,9 @@ importers:
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core
+      spark-goal:
+        specifier: file:../spark-goal
+        version: link:../spark-goal
       spark-learnings:
         specifier: file:../spark-learnings
         version: link:../spark-learnings
@@ -148,6 +154,8 @@ importers:
 
   packages/spark-core: {}
 
+  packages/spark-goal: {}
+
   packages/spark-learnings:
     dependencies:
       spark-core:
@@ -174,15 +182,9 @@ importers:
 
   packages/spark-workflows:
     dependencies:
-      pi-roles:
-        specifier: file:../pi-roles
-        version: link:../pi-roles
       spark-core:
         specifier: file:../spark-core
         version: link:../spark-core
-      spark-runtime:
-        specifier: file:../spark-runtime
-        version: link:../spark-runtime
       spark-tasks:
         specifier: file:../spark-tasks
         version: link:../spark-tasks

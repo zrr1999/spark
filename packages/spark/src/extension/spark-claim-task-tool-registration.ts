@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { RoleRegistry, defaultProjectRoleStore } from "pi-roles";
+import type { RoleRegistry } from "pi-roles";
 import { stableId, type RoleRef, type Task, type TaskPlan, type ProjectRef } from "spark-core";
 import {
   defaultTaskGraphStore,
@@ -22,6 +22,7 @@ import { isGenericInitialTaskTitle } from "./spark-graph-invariants.ts";
 import { findActiveSessionClaim, resolveSessionClaimedTask } from "./task-claim-selection.ts";
 import { taskClaimSummary } from "./task-display.ts";
 import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
+import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 
 const MAIN_TASK_CLAIM_LEASE_MS = 10 * 60 * 1_000;
@@ -96,8 +97,7 @@ export function registerSparkClaimTaskTool(
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd;
-      const registry = new RoleRegistry();
-      await defaultProjectRoleStore(cwd).hydrate(registry);
+      const registry = await createSparkRoleRegistry(cwd);
       const input = normalizeSparkClaimTaskInput(params, registry);
       if (input.requestedStatus && !isUnfinishedTaskStatus(input.requestedStatus))
         return {

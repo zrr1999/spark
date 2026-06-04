@@ -89,12 +89,12 @@ export function estimateSparkTokens(message: SparkSessionMessage): number {
       break;
     }
     case "bashExecution": {
-      chars = String(message.command ?? "").length + String(message.output ?? "").length;
+      chars = estimateScalarChars(message.command) + estimateScalarChars(message.output);
       break;
     }
     case "branchSummary":
     case "compactionSummary": {
-      chars = String(message.summary ?? "").length;
+      chars = estimateScalarChars(message.summary);
       break;
     }
     default:
@@ -286,6 +286,20 @@ function findValidCutPoints(
     }
   }
   return cutPoints;
+}
+
+function estimateScalarChars(value: unknown): number {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === "string") return value.length;
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value).length;
+  }
+  if (typeof value === "symbol") return value.description?.length ?? 0;
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    return 0;
+  }
 }
 
 function estimateContentChars(content: unknown): number {

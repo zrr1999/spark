@@ -1,5 +1,15 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -59,6 +69,7 @@ import {
   resumeOwnedBackgroundSubroles,
 } from "../packages/spark/src/extension/spark-background-subrole-lifecycle.ts";
 import { SparkDagManagerController } from "../packages/spark/src/extension/spark-dag-manager.ts";
+import { createSparkRuntimeReadyTaskRunner } from "../packages/spark/src/extension/spark-ready-task-runtime.ts";
 import {
   saveCurrentProjectRef,
   sparkSessionOwnerKey,
@@ -164,6 +175,10 @@ void test("task graph store keeps TODOs out of projects.json and todo store rest
     assert.equal(loaded.todoSummary(task.ref).inProgress, 1);
     assert.doesNotMatch(await readFile(file, "utf8"), /"todos"/);
     assert.match(await readFile(todoFile, "utf8"), /"Read inputs"/);
+    assert.deepEqual(
+      (await readdir(dir)).filter((entry) => entry.endsWith(".tmp")),
+      [],
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -2307,6 +2322,52 @@ void test("Spark DAG run store persists manager lifecycle and task progress", as
   }
 });
 
+void test("Spark DAG run store serializes concurrent task progress updates", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-rmw-lock-"));
+  try {
+    const store = defaultSparkDagRunStore(dir);
+    const projectRef = newRef("proj");
+    const dagRun = await store.startRun({
+      projectRef,
+      ownerSessionId: "session:parent",
+      dryRun: false,
+      maxConcurrency: 2,
+      timeoutMs: 1_000,
+    });
+    const firstTaskRef = newRef("task");
+    const secondTaskRef = newRef("task");
+    const firstRunRef = newRef("run");
+    const secondRunRef = newRef("run");
+
+    await Promise.all([
+      store.recordSchedule(dagRun.ref, {
+        taskRef: firstTaskRef,
+        runRef: firstRunRef,
+        scheduled: 1,
+      }),
+      store.recordSchedule(dagRun.ref, {
+        taskRef: secondTaskRef,
+        runRef: secondRunRef,
+        scheduled: 1,
+      }),
+    ]);
+
+    const snapshot = await store.load();
+    const [record] = snapshot.runs;
+    assert.ok(record);
+    assert.equal(record.ref, dagRun.ref);
+    assert.equal(record.scheduled, 2);
+    assert.deepEqual(new Set(record.scheduledTaskRefs), new Set([firstTaskRef, secondTaskRef]));
+    assert.deepEqual(new Set(record.taskRunRefs), new Set([firstRunRef, secondRunRef]));
+    assert.deepEqual(
+      (await readdir(join(dir, ".spark"))).filter((entry) => entry.endsWith(".tmp")),
+      [],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("Spark DAG run store rejects malformed persisted snapshots", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-store-invalid-"));
   try {
@@ -3093,10 +3154,12 @@ void test("runReadySparkTasks assigns default roles and schedules DAG waves with
     > = [];
     const result = await runReadySparkTasks({
       graph,
-      registry: new RoleRegistry(),
-      cwd: dir,
+      ...createSparkRuntimeReadyTaskRunner({
+        registry: new RoleRegistry(),
+        cwd: dir,
+        piCommand: fakePi,
+      }),
       dryRun: false,
-      piCommand: fakePi,
       maxConcurrency: 4,
       timeoutMs: 5_000,
       claim: { sessionId: "session:parent" },
@@ -3166,7 +3229,7 @@ void test("runReadySparkTasks propagates schedule hook failures", async () => {
     () =>
       runReadySparkTasks({
         graph,
-        registry: new RoleRegistry(),
+        ...createSparkRuntimeReadyTaskRunner({ registry: new RoleRegistry() }),
         dryRun: true,
         onSchedule: () => {
           throw new Error("schedule persistence failed");
@@ -3200,10 +3263,12 @@ void test("runReadySparkTasks aborts launched child work when schedule hook fail
       () =>
         runReadySparkTasks({
           graph,
-          registry: new RoleRegistry(),
-          cwd: dir,
+          ...createSparkRuntimeReadyTaskRunner({
+            registry: new RoleRegistry(),
+            cwd: dir,
+            piCommand: fakePi,
+          }),
           dryRun: false,
-          piCommand: fakePi,
           timeoutMs: 5_000,
           claim: { sessionId: "session:parent" },
           onSchedule: () => {
@@ -3250,7 +3315,7 @@ void test("runReadySparkTasks limits ready frontier to the requested project", a
 
   const result = await runReadySparkTasks({
     graph,
-    registry: new RoleRegistry(),
+    ...createSparkRuntimeReadyTaskRunner({ registry: new RoleRegistry() }),
     dryRun: true,
     projectRef: selected.ref,
   });
@@ -3279,10 +3344,12 @@ void test("runReadySparkTasks reports failed child runs in aggregate result", as
 
     const result = await runReadySparkTasks({
       graph,
-      registry: new RoleRegistry(),
-      cwd: dir,
+      ...createSparkRuntimeReadyTaskRunner({
+        registry: new RoleRegistry(),
+        cwd: dir,
+        piCommand: fakePi,
+      }),
       dryRun: false,
-      piCommand: fakePi,
       timeoutMs: 5_000,
       claim: { sessionId: "session:parent" },
     });
@@ -3314,10 +3381,12 @@ void test("runReadySparkTasks returns the recorded failed run when child launch 
 
     const result = await runReadySparkTasks({
       graph,
-      registry: new RoleRegistry(),
-      cwd: dir,
+      ...createSparkRuntimeReadyTaskRunner({
+        registry: new RoleRegistry(),
+        cwd: dir,
+        piCommand: join(dir, "missing-pi"),
+      }),
       dryRun: false,
-      piCommand: join(dir, "missing-pi"),
       timeoutMs: 5_000,
       claim: { sessionId: "session:parent" },
     });
@@ -3350,7 +3419,7 @@ void test("runReadySparkTasks propagates missing role errors before creating chi
     () =>
       runReadySparkTasks({
         graph,
-        registry: new RoleRegistry(),
+        ...createSparkRuntimeReadyTaskRunner({ registry: new RoleRegistry() }),
         dryRun: false,
         timeoutMs: 5_000,
         claim: { sessionId: "session:parent" },
@@ -3392,10 +3461,12 @@ void test("runReadySparkTasks treats timeoutMs as a foreground wait budget", asy
 
     const result = await runReadySparkTasks({
       graph,
-      registry: new RoleRegistry(),
-      cwd: dir,
+      ...createSparkRuntimeReadyTaskRunner({
+        registry: new RoleRegistry(),
+        cwd: dir,
+        piCommand: fakePi,
+      }),
       dryRun: false,
-      piCommand: fakePi,
       maxConcurrency: 4,
       timeoutMs: 20,
       claim: { sessionId: "session:parent" },
@@ -3812,10 +3883,12 @@ void test("task timeout fails the task while leaving only the stuck child proces
 
     const result = await runReadySparkTasks({
       graph,
-      registry: new RoleRegistry(),
-      cwd: dir,
+      ...createSparkRuntimeReadyTaskRunner({
+        registry: new RoleRegistry(),
+        cwd: dir,
+        piCommand: fakePi,
+      }),
       dryRun: false,
-      piCommand: fakePi,
       maxConcurrency: 2,
       taskTimeoutMs: 500,
       timeoutMs: 5_000,

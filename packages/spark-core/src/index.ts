@@ -176,11 +176,15 @@ export function formatJsonFile(value: unknown): string {
 }
 
 export async function writeJsonFileAtomic(filePath: string, value: unknown): Promise<void> {
+  await writeTextFileAtomic(filePath, formatJsonFile(value));
+}
+
+export async function writeTextFileAtomic(filePath: string, text: string): Promise<void> {
   const dir = dirname(filePath);
   await mkdir(dir, { recursive: true });
   const tempPath = join(dir, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
   try {
-    await writeFile(tempPath, formatJsonFile(value), "utf8");
+    await writeFile(tempPath, text, "utf8");
     await rename(tempPath, filePath);
   } catch (error) {
     await cleanupAtomicWriteTempFile(tempPath, error);
@@ -897,8 +901,8 @@ export class ArtifactStore {
       previewChars: this.bodyPreviewChars,
     });
     validateArtifact(storedArtifact);
-    await writeFile(join(this.rootDir, blobPath), serializedBody, "utf8");
-    await writeFile(this.pathFor(ref), `${JSON.stringify(storedArtifact, null, 2)}\n`, "utf8");
+    await writeTextFileAtomic(join(this.rootDir, blobPath), serializedBody);
+    await writeJsonFileAtomic(this.pathFor(ref), storedArtifact);
     return { ...storedArtifact, body: input.body };
   }
 
@@ -1140,9 +1144,7 @@ export async function compactArtifactMetadata(
     result.metadataBytesAfter += metadataBytesAfter;
     result.reclaimableBytes += candidate.reclaimableBytes;
     if (!dryRun) {
-      const tmpPath = `${path}.${process.pid}.tmp`;
-      await writeFile(tmpPath, compactedText, "utf8");
-      await rename(tmpPath, path);
+      await writeTextFileAtomic(path, compactedText);
       result.compacted += 1;
     }
   }

@@ -178,7 +178,7 @@ function renderExecutionModeFinishSuffix(
   status: "done" | "failed" | "cancelled",
 ): string {
   if (executionMode?.projectRef !== projectRef || status !== "done") return "";
-  if (executionMode.strategy === "goal" || executionMode.workflowName === "builtin:goal") {
+  if (executionMode.strategy === "goal") {
     const continuation = renderSparkGoalContinuationPrompt(
       sparkGoalObjectiveForNextTask({
         focus: executionMode.focus,
@@ -186,8 +186,7 @@ function renderExecutionModeFinishSuffix(
         nextTaskTitle: nextReady?.title,
       }),
     );
-    const modeLabel =
-      executionMode.workflowName === "builtin:goal" ? "Goal workflow" : "Goal execution mode";
+    const modeLabel = "Goal execution mode";
     return nextReady
       ? "\n" +
           modeLabel +
@@ -207,7 +206,7 @@ function renderExecutionModeFinishSuffix(
         nextReady.name +
         ": " +
         nextReady.title +
-        ". Run /execute to take one more step, or /workflow:goal to continue autonomously."
+        ". Run /execute to take one more step, or /goal to continue autonomously."
     : "\nExecution mode stopped after one task. No ready task remains; inspect blockers or finish the project.";
 }
 function normalizeSparkFinishStatus(value: unknown): "done" | "failed" | "cancelled" {

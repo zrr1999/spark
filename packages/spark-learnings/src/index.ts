@@ -409,18 +409,18 @@ export function resolveLearningStoreTarget(
   if (requestedLocation === "user") return { rootDir: defaultUserLearningRoot(), location: "user" };
   if (requestedLocation === "repo") {
     return {
-      rootDir: join(gitRoot ?? cwd, ".learning"),
+      rootDir: join(gitRoot ?? cwd, ".learnings"),
       location: gitRoot ? "repo" : "workspace",
     };
   }
   if (requestedLocation === "workspace") {
     return {
-      rootDir: join(gitRoot ?? cwd, ".learning"),
+      rootDir: join(gitRoot ?? cwd, ".learnings"),
       location: gitRoot ? "repo" : "workspace",
     };
   }
   return {
-    rootDir: join(gitRoot ?? cwd, ".learning"),
+    rootDir: join(gitRoot ?? cwd, ".learnings"),
     location: gitRoot ? "repo" : "workspace",
   };
 }

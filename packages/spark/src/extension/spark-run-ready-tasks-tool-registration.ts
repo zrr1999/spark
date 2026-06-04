@@ -1,6 +1,5 @@
 import { Type } from "typebox";
 import { defaultArtifactStore } from "spark-core";
-import { RoleRegistry, defaultProjectRoleStore } from "pi-roles";
 import {
   DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
   DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
@@ -12,11 +11,13 @@ import {
   currentSparkProject,
   loadSparkGraph,
   loadSparkRunMode,
+  saveSparkGraphAndTodos,
   saveSparkRunMode,
   sparkRunStrategyForMaxConcurrency,
-  sparkTodoStore,
 } from "./session-state.ts";
 import { ensureSparkGraphInvariants } from "./spark-graph-invariants.ts";
+import { createSparkRuntimeReadyTaskRunner } from "./spark-ready-task-runtime.ts";
+import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 
 interface SparkRunReadyTasksToolDeps {
@@ -94,10 +95,7 @@ export function registerSparkRunReadyTasksTool(
           content: [{ type: "text", text: "No Spark project found." }],
           details: { found: false },
         };
-      if (ensureSparkGraphInvariants(graph)) {
-        await store.save(graph);
-        await sparkTodoStore(cwd, ctx).save(graph);
-      }
+      if (ensureSparkGraphInvariants(graph)) await saveSparkGraphAndTodos(cwd, graph, ctx, store);
       const project = await currentSparkProject(cwd, ctx, graph);
       if (!project)
         return {
@@ -109,8 +107,7 @@ export function registerSparkRunReadyTasksTool(
           ],
           details: { found: false, error: "no_current_project" },
         };
-      const registry = new RoleRegistry();
-      await defaultProjectRoleStore(cwd).hydrate(registry);
+      const registry = await createSparkRoleRegistry(cwd);
       if (!dryRun) {
         const bindingResult = await ensureRoleModelBindingsForProject({
           graph,
@@ -159,11 +156,14 @@ export function registerSparkRunReadyTasksTool(
       }
 
       const artifactStore = defaultArtifactStore(cwd);
-      const result = await runReadySparkTasks({
-        graph,
+      const runtimeRunner = createSparkRuntimeReadyTaskRunner({
         registry,
         artifactStore,
         cwd,
+      });
+      const result = await runReadySparkTasks({
+        graph,
+        ...runtimeRunner,
         projectRef: project.ref,
         dryRun: true,
         maxConcurrency,

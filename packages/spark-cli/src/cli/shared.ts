@@ -96,7 +96,11 @@ export function printSparkCliResult(
 export function formatSparkCliHuman(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "string") return value;
-  if (typeof value !== "object") return String(value);
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (typeof value === "symbol") return value.description ?? "";
+  if (typeof value === "function") return value.name ? `[function ${value.name}]` : "[function]";
   if (Array.isArray(value)) return value.map(formatSparkCliHuman).join("\n");
   const lines: string[] = [];
   for (const [key, entry] of Object.entries(value)) {
@@ -104,7 +108,7 @@ export function formatSparkCliHuman(value: unknown): string {
     if (typeof entry === "object" && entry !== null) {
       lines.push(`${key}: ${JSON.stringify(entry)}`);
     } else {
-      lines.push(`${key}: ${String(entry)}`);
+      lines.push(`${key}: ${formatSparkCliHuman(entry)}`);
     }
   }
   return lines.join("\n");

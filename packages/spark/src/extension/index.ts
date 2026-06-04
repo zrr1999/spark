@@ -17,6 +17,7 @@ import { ensureSparkStateForActiveWorkspace } from "./spark-active-injection.ts"
 import { registerSparkExtensionEvents } from "./spark-extension-events.ts";
 import { withSparkToolOperationalNotes } from "./spark-tool-operational-notes.ts";
 import { SparkDagManagerController } from "./spark-dag-manager.ts";
+import { registerSparkPredefinedRoles } from "./spark-role-registry.ts";
 import type { SparkRegisteredToolConfig, SparkToolContext } from "./spark-tool-registration.ts";
 import { SparkWidgetController } from "./spark-widget-controller.ts";
 
@@ -26,6 +27,8 @@ interface SparkExtensionAPI extends SparkCommandApi {
 }
 
 export default function sparkExtension(pi: SparkExtensionAPI) {
+  registerSparkPredefinedRoles();
+
   const widgetController = new SparkWidgetController();
 
   async function refreshSparkWidget(cwd: string, ctx?: SparkToolContext): Promise<void> {

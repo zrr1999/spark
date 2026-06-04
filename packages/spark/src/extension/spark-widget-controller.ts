@@ -8,9 +8,9 @@ import {
   currentSparkProject,
   loadCurrentProjectState,
   loadSparkGraph,
+  saveSparkGraphAndTodos,
   sparkSessionKey,
   sparkSessionOwnerKey,
-  sparkTodoStore,
   type SparkSessionContext,
   type SparkRunModeState,
 } from "./session-state.ts";
@@ -59,10 +59,7 @@ export class SparkWidgetController {
       this.widget.update();
       return;
     }
-    if (ensureSparkGraphInvariants(graph)) {
-      await store.save(graph);
-      await sparkTodoStore(cwd, ctx).save(graph);
-    }
+    if (ensureSparkGraphInvariants(graph)) await saveSparkGraphAndTodos(cwd, graph, ctx, store);
     const sessionKey = sparkSessionKey(ctx);
     const ownerSessionKey = sparkSessionOwnerKey(ctx);
     const activeProcesses = activeSparkRoleRunProcessesForCwd(cwd);

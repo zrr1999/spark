@@ -12,8 +12,8 @@ import {
   currentSparkProject,
   loadSparkGraph,
   loadSparkMode,
+  saveSparkGraphAndTodos,
   sparkSessionKey,
-  sparkTodoStore,
   type SparkSessionContext,
   type SparkSessionMode,
 } from "./session-state.ts";
@@ -60,10 +60,7 @@ export async function renderActiveSparkContextSummary(
   const store = defaultTaskGraphStore(cwd);
   const graph = await loadSparkGraph(cwd, ctx);
   if (!graph) return undefined;
-  if (ensureSparkGraphInvariants(graph)) {
-    await store.save(graph);
-    await sparkTodoStore(cwd, ctx).save(graph);
-  }
+  if (ensureSparkGraphInvariants(graph)) await saveSparkGraphAndTodos(cwd, graph, ctx, store);
   const sparkMd = await readActiveSparkMd(cwd);
   const project = await currentSparkProject(cwd, ctx, graph);
   const sessionKey = sparkSessionKey(ctx);

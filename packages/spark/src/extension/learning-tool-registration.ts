@@ -23,7 +23,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
     name: "spark_learning_record",
     label: "Spark Learning Record",
     description:
-      "Record one evidence-backed reusable learning under .learning/ or the user learning directory. Use export tools for sharing.",
+      "Record one evidence-backed reusable learning under local .learnings/ or the user learning directory. Use export tools for sharing.",
     parameters: Type.Object({
       id: Type.Optional(
         Type.String({ description: "Stable learning id. Defaults to a content hash." }),

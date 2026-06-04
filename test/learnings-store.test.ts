@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -22,7 +22,8 @@ void test("learning store records active learnings and searches by content", asy
     const evidenceRef = newRef("artifact", "evidence-plan");
     const recorded = await store.record({
       title: "Prefer explicit export for shared knowledge",
-      statement: "Spark learnings live in .learning and can be shared explicitly when repo-owned.",
+      statement:
+        "Spark learnings live in .learnings locally and can be shared through explicit exports.",
       category: "decision",
       applicability: "When persisting Spark learning artifacts for a repository.",
       evidenceRefs: [evidenceRef],
@@ -229,7 +230,12 @@ void test("learning store keeps candidates out of default active recall", async 
   }
 });
 
-void test("default learning store writes to .learning outside git workspaces", async () => {
+void test("repository gitignore keeps local .learnings stores untracked", async () => {
+  const gitignore = await readFile(join(process.cwd(), ".gitignore"), "utf8");
+  assert.match(gitignore, /^\.learnings\/$/m);
+});
+
+void test("default learning store writes to .learnings outside git workspaces", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-learnings-location-"));
   try {
     const store = defaultLearningStore(dir);
@@ -239,7 +245,7 @@ void test("default learning store writes to .learning outside git workspaces", a
       title: "Location-derived learning store",
       statement: "Learning storage location is derived from the store path.",
     });
-    assert.ok((await stat(join(dir, ".learning", "learning-location-path.json"))).isFile());
+    assert.ok((await stat(join(dir, ".learnings", "learning-location-path.json"))).isFile());
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -256,17 +262,17 @@ void test("default learning store treats git workspaces as repo learnings", asyn
       title: "Repo learning store",
       statement: "Git workspace learnings are repo learnings.",
     });
-    assert.ok((await stat(join(dir, ".learning", "learning-repo-location-path.json"))).isFile());
+    assert.ok((await stat(join(dir, ".learnings", "learning-repo-location-path.json"))).isFile());
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-void test("default learning store uses child repo .learning over parent workspace .learning", async () => {
+void test("default learning store uses child repo .learnings over parent workspace .learnings", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "spark-learnings-parent-workspace-"));
   const repo = join(workspace, "child-repo");
   try {
-    await mkdir(join(workspace, ".learning"));
+    await mkdir(join(workspace, ".learnings"));
     await mkdir(join(repo, ".git"), { recursive: true });
     const store = defaultLearningStore(join(repo, "src"));
     assert.equal(store.location, "repo");
@@ -276,10 +282,10 @@ void test("default learning store uses child repo .learning over parent workspac
       statement: "Nested Git repos use their own repo learning store.",
     });
     assert.ok(
-      (await stat(join(repo, ".learning", "learning-child-repo-location-path.json"))).isFile(),
+      (await stat(join(repo, ".learnings", "learning-child-repo-location-path.json"))).isFile(),
     );
     await assert.rejects(
-      stat(join(workspace, ".learning", "learning-child-repo-location-path.json")),
+      stat(join(workspace, ".learnings", "learning-child-repo-location-path.json")),
     );
   } finally {
     await rm(workspace, { recursive: true, force: true });

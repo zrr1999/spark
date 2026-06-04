@@ -1,5 +1,4 @@
 import { defaultArtifactStore } from "spark-core";
-import { defaultProjectRoleStore, RoleRegistry } from "pi-roles";
 import {
   DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
   DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
@@ -26,6 +25,8 @@ import {
   type SparkRunModeStatus,
 } from "./session-state.ts";
 import { mergeTaskProgressIntoStore } from "./task-progress-store.ts";
+import { createSparkRuntimeReadyTaskRunner } from "./spark-ready-task-runtime.ts";
+import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
 const DAG_MANAGER_POLL_INTERVAL_MS = 1_000;
@@ -72,8 +73,7 @@ export class SparkDagManagerController {
     const store = defaultTaskGraphStore(cwd);
     const graph = await loadSparkGraph(cwd, ctx);
     if (!graph) return { continuePolling: false };
-    const registry = new RoleRegistry();
-    await defaultProjectRoleStore(cwd).hydrate(registry);
+    const registry = await createSparkRoleRegistry(cwd);
     const artifactStore = defaultArtifactStore(cwd);
     const touched = new Set<TaskRef>();
     const dagRunStore = defaultSparkDagRunStore(cwd);
@@ -124,6 +124,11 @@ export class SparkDagManagerController {
     const maxConcurrency =
       runMode?.policy.maxConcurrency ?? DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY;
     const timeoutMs = runMode?.policy.timeoutMs ?? DEFAULT_SPARK_READY_TASK_TIMEOUT_MS;
+    const runtimeRunner = createSparkRuntimeReadyTaskRunner({
+      registry,
+      artifactStore,
+      cwd,
+    });
     const dagRun = await dagRunStore.startRun({
       projectRef: currentProject.ref,
       dryRun: false,
@@ -131,13 +136,15 @@ export class SparkDagManagerController {
       timeoutMs,
       ownerSessionId,
     });
+    const saveTaskTodosAfterMerge = async (current: TaskGraph) => {
+      await sparkTodoStore(cwd, ctx).hydrate(current);
+      await sparkTodoStore(cwd, ctx).save(current);
+    };
     let result: Awaited<ReturnType<typeof runReadySparkTasks>>;
     try {
       result = await runReadySparkTasks({
         graph,
-        registry,
-        artifactStore,
-        cwd,
+        ...runtimeRunner,
         dryRun: false,
         maxConcurrency,
         timeoutMs,
@@ -146,21 +153,28 @@ export class SparkDagManagerController {
         onSchedule: async (progress) => {
           touched.add(progress.taskRef);
           await dagRunStore.recordSchedule(dagRun.ref, progress);
-          await mergeTaskProgressIntoStore(store, graph, [progress.taskRef]);
-          await sparkTodoStore(cwd, ctx).save(graph);
+          await mergeTaskProgressIntoStore(
+            store,
+            graph,
+            [progress.taskRef],
+            saveTaskTodosAfterMerge,
+          );
           await this.refreshSparkWidget(cwd, ctx);
         },
         onProgress: async (progress) => {
           touched.add(progress.taskRef);
           await dagRunStore.recordProgress(dagRun.ref, progress);
-          await mergeTaskProgressIntoStore(store, graph, [progress.taskRef]);
-          await sparkTodoStore(cwd, ctx).save(graph);
+          await mergeTaskProgressIntoStore(
+            store,
+            graph,
+            [progress.taskRef],
+            saveTaskTodosAfterMerge,
+          );
           await this.refreshSparkWidget(cwd, ctx);
         },
       });
       if (touched.size > 0) {
-        await mergeTaskProgressIntoStore(store, graph, [...touched]);
-        await sparkTodoStore(cwd, ctx).save(graph);
+        await mergeTaskProgressIntoStore(store, graph, [...touched], saveTaskTodosAfterMerge);
         await this.refreshSparkWidget(cwd, ctx);
       }
       const followUp = await dagRunStore.finishRun(dagRun.ref, result);

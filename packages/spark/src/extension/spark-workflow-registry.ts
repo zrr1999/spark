@@ -2,27 +2,22 @@ import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { goalWorkflowScript, parseSparkWorkflowScript, readyWorkflowScript } from "spark-workflows";
+import { parseSparkWorkflowScript } from "spark-workflows";
 
-export type SparkWorkflowSource = "builtin" | "workspace" | "user";
+export type SparkWorkflowSource = "workspace" | "user";
 export type SparkWorkflowRef = `workflow:${SparkWorkflowSource}-${string}`;
-export type SparkWorkflowKind = "script";
-export type SparkWorkflowBackend = "goal" | "ready-frontier" | "scripted";
-
 export interface SparkWorkflowDescriptor {
   ref: SparkWorkflowRef;
   id: string;
   source: SparkWorkflowSource;
   title: string;
   description: string;
-  kind: SparkWorkflowKind;
-  backend: SparkWorkflowBackend;
-  path?: string;
+  path: string;
   phases: string[];
 }
 
 export interface SparkWorkflowRegistryError {
-  source: Exclude<SparkWorkflowSource, "builtin">;
+  source: SparkWorkflowSource;
   path: string;
   error: string;
 }
@@ -49,31 +44,6 @@ export function normalizeSparkWorkflowId(id: string): string {
   return normalized;
 }
 
-export function builtinSparkWorkflowDescriptors(): SparkWorkflowDescriptor[] {
-  return [
-    builtinSparkWorkflowDescriptor("goal", "goal", goalWorkflowScript()),
-    builtinSparkWorkflowDescriptor("ready", "ready-frontier", readyWorkflowScript()),
-  ];
-}
-
-function builtinSparkWorkflowDescriptor(
-  id: string,
-  backend: SparkWorkflowBackend,
-  script: string,
-): SparkWorkflowDescriptor {
-  const meta = parseSparkWorkflowScript(script).meta;
-  return {
-    ref: sparkWorkflowRef("builtin", id),
-    id,
-    source: "builtin",
-    title: meta.name,
-    description: meta.description,
-    kind: "script",
-    backend,
-    phases: meta.phases?.map((phase) => phase.title) ?? [],
-  };
-}
-
 export async function listSparkWorkflowRegistry(
   cwd: string,
   options: SparkWorkflowRegistryOptions = {},
@@ -84,7 +54,7 @@ export async function listSparkWorkflowRegistry(
     ? await discoverScriptWorkflowDir("user", options.userWorkflowDir ?? userWorkflowDir())
     : { workflows: [], errors: [] };
   return {
-    workflows: [...builtinSparkWorkflowDescriptors(), ...workspace.workflows, ...user.workflows],
+    workflows: [...workspace.workflows, ...user.workflows],
     errors: [...workspace.errors, ...user.errors],
   };
 }
@@ -98,7 +68,7 @@ export function userWorkflowDir(): string {
 }
 
 async function discoverScriptWorkflowDir(
-  source: Exclude<SparkWorkflowSource, "builtin">,
+  source: SparkWorkflowSource,
   dir: string,
 ): Promise<SparkWorkflowRegistryListing> {
   let entries: string[];
@@ -122,8 +92,6 @@ async function discoverScriptWorkflowDir(
         source,
         title: meta.name,
         description: meta.description,
-        kind: "script",
-        backend: "scripted",
         path,
         phases: meta.phases?.map((phase) => phase.title) ?? [],
       });

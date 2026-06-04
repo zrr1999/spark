@@ -1,4 +1,4 @@
-import { compactContinuationPrompt, createSparkGoal } from "spark-workflows";
+import { compactContinuationPrompt, createSparkGoal } from "spark-goal";
 
 export function renderSparkGoalContinuationPrompt(objective: string): string {
   const trimmed = objective.trim() || "Continue Spark goal execution.";

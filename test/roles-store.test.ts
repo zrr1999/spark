@@ -4,7 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { RoleRegistry, MarkdownRoleStore, createRoleSpec, createBuiltinRoles } from "pi-roles";
+import {
+  RoleRegistry,
+  MarkdownRoleStore,
+  createDefaultRoleRegistry,
+  createRoleRef,
+  createRoleSpec,
+  createBuiltinRoles,
+  registerBuiltinRoleProvider,
+  unregisterBuiltinRoleProvider,
+  type RoleSpec,
+} from "pi-roles";
 
 void test("builtin Spark roles are instructed to implement concrete repo behavior feedback", () => {
   const roles = createBuiltinRoles();
@@ -39,5 +49,30 @@ void test("project role spec store persists and hydrates registry", async () => 
     assert.match(loaded.ref, /^role:project-/);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("registered builtin role providers participate in default role registries", () => {
+  const providerId = "roles-store-test";
+  const now = "2026-06-04T00:00:00.000Z";
+  const role: RoleSpec = {
+    ref: createRoleRef("builtin", "provider-test"),
+    id: "provider-test",
+    source: "builtin",
+    description: "Test-provided builtin role.",
+    systemPrompt: "You are a test-provided builtin role.",
+    origin: { kind: "builtin", note: "test provider" },
+    createdAt: now,
+    updatedAt: now,
+  };
+  registerBuiltinRoleProvider(providerId, () => [role]);
+  try {
+    const registry = createDefaultRoleRegistry({ now });
+    const loaded = registry.select("provider-test");
+
+    assert.equal(loaded.ref, "role:builtin-provider-test");
+    assert.equal(loaded.origin?.note, "test provider");
+  } finally {
+    unregisterBuiltinRoleProvider(providerId);
   }
 });

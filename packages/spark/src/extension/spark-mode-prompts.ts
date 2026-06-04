@@ -7,7 +7,7 @@ import {
 import type { SparkEntryMode } from "./spark-entry.ts";
 import type { SparkExecuteStrategy, SparkPlanningModeSource } from "./session-state.ts";
 import {
-  renderSparkWorkflowBuiltinGuidance,
+  renderSparkWorkflowGuidance,
   type SparkSavedWorkflowDiscovery,
 } from "./spark-workflow-builtins.ts";
 
@@ -63,9 +63,7 @@ export function renderSparkExecutionModePrompt(
   workflowSelector?: string,
 ): string {
   const summary = renderExistingSparkSummary(graph, selectedProjectRef);
-  const focusLine = focus?.trim()
-    ? `\n\nExecution focus: ${focus.trim()}\nUse this focus to filter ready tasks and pre-flight questions; do not auto-dispatch solely because a focus was provided.`
-    : "";
+  const focusLine = renderExecutionFocusLine(strategy, focus);
   const strategyLine = "Execution strategy: " + strategy + ".";
   const workflowSelectorLine =
     strategy === "workflow" && workflowSelector
@@ -73,15 +71,17 @@ export function renderSparkExecutionModePrompt(
       : "";
   const workflowGuidance =
     selectedProjectRef && strategy === "workflow"
-      ? "\n\n" + renderSparkWorkflowBuiltinGuidance(focus, savedWorkflows, workflowSelector)
+      ? "\n\n" + renderSparkWorkflowGuidance(focus, savedWorkflows, workflowSelector)
       : "";
   const action = selectedProjectRef
-    ? strategy === "goal" || workflowSelector === "builtin:goal"
-      ? "Run the builtin goal workflow: read the current project/task plan and inspect ready tasks with spark_status. Work toward the requested goal by claiming one ready concrete task at a time with spark_claim_task, executing it, verifying required evidence, and calling spark_finish_task. Continue to the next ready task after each successful finish until the goal is complete, no ready task remains, validation fails, or a required user decision blocks progress."
+    ? strategy === "goal"
+      ? renderGoalAction(Boolean(focus?.trim()))
       : strategy === "workflow"
-        ? renderWorkflowBackendAction(workflowSelector)
-        : "Read the current project/task plan and inspect ready tasks with spark_status. Claim at most one concrete task with spark_claim_task, execute it, verify the required evidence, then call spark_finish_task. Stop after that task finishes; do not auto-claim another task or dispatch continuous work from /execute. If the user wants autonomous completion of all ready work, suggest /workflow:goal. If the user wants a scripted fan-out/subagent process, suggest /workflow."
-    : "Select a current project with spark_use_project before claiming project-bound work; use spark_status view=summary/full to inspect available projects first if needed.";
+        ? renderWorkflowAction(workflowSelector)
+        : "Read the current project/task plan and inspect ready tasks with spark_status. Claim at most one concrete task with spark_claim_task, execute it, verify the required evidence, then call spark_finish_task. Stop after that task finishes; do not auto-claim another task or dispatch continuous work from /execute. If the user wants autonomous completion of all ready work, suggest /goal. If the user wants a scripted fan-out/subagent process, suggest /workflow."
+    : strategy === "goal"
+      ? "No current project is selected for goal mode. Inspect Spark projects with spark_status, select the obvious active project with spark_use_project when the state is unambiguous, or ask with spark_ask when multiple active projects or scopes could be the intended goal. Do not claim project-bound work until a current project is selected."
+      : "Select a current project with spark_use_project before claiming project-bound work; use spark_status view=summary/full to inspect available projects first if needed.";
   return (
     summary +
     focusLine +
@@ -96,10 +96,35 @@ export function renderSparkExecutionModePrompt(
   );
 }
 
-function renderWorkflowBackendAction(workflowSelector: string | undefined): string {
-  if (workflowSelector === "builtin:ready") {
-    return "Run the builtin ready-frontier workflow: inspect ready tasks with spark_status, then use spark_run_ready_tasks as the Spark-owned background scheduler when dispatch is appropriate. Keep the task DAG as durable truth, use workflow-run history for scheduling progress only, and stop for spark_ask when approval, scope, role model bindings, or validation decisions are required.";
+function renderExecutionFocusLine(
+  strategy: SparkExecuteStrategy,
+  focus: string | undefined,
+): string {
+  const trimmed = focus?.trim();
+  if (trimmed) {
+    if (strategy === "goal") {
+      return `\n\nGoal focus: ${trimmed}\nUse this as the user-provided goal to verify and pursue across ready tasks.`;
+    }
+    return `\n\nExecution focus: ${trimmed}\nUse this focus to filter ready tasks and pre-flight questions; do not auto-dispatch solely because a focus was provided.`;
   }
+  if (strategy === "goal") {
+    return "\n\nGoal focus: none provided. Derive the concrete goal from the current Spark project/task state before claiming work; ask with spark_ask if the goal, project, or scope is ambiguous.";
+  }
+  return "";
+}
+
+function renderGoalAction(hasExplicitGoal: boolean): string {
+  const goalSource = hasExplicitGoal
+    ? "Use the explicit goal focus as the target objective."
+    : "Infer the target objective from the active project title, unfinished task DAG, ready tasks, task plans, required evidence, recent artifacts, and blockers.";
+  return (
+    "Run Spark goal mode: read the current project/task plan and inspect ready tasks with spark_status. " +
+    goalSource +
+    " If a single next goal is obvious, state that derived goal briefly and work toward it by claiming one ready concrete task at a time with spark_claim_task, executing it, verifying required evidence, and calling spark_finish_task. If multiple plausible goals, missing scope, conflicting priorities, no selected project, no ready path, or a user-facing decision would change the goal or execution order, stop and ask with spark_ask instead of inventing the goal. Continue to the next ready task after each successful finish until the goal is complete, no ready task remains, validation fails, or a required user decision blocks progress."
+  );
+}
+
+function renderWorkflowAction(workflowSelector: string | undefined): string {
   if (workflowSelector?.startsWith("workspace:") || workflowSelector?.startsWith("user:")) {
     return "Run the selected saved scripted workflow through Spark workflow runtime boundaries: use Spark-owned workflow script metadata, route agent steps through the Spark workflow role-run adapter, preserve project attribution and evidence, and do not bypass the task DAG for durable task truth.";
   }

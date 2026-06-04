@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { chmod } from "node:fs/promises";
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { RoleRegistry } from "pi-roles";
 import {
+  newRef,
   stableId,
   type RoleRef,
   type RunRef,
@@ -35,10 +36,14 @@ import {
   loadCurrentProjectState,
   loadHiddenRoleRunInboxState,
   loadSparkRunMode,
+  saveCurrentProjectRef,
 } from "../packages/spark/src/extension/session-state.ts";
 import {
+  assignTodoDisplayNumber,
   loadIndependentTodos,
   loadTodoDisplayNumberState,
+  saveIndependentTodos,
+  saveTodoDisplayNumberState,
 } from "../packages/spark/src/extension/session-todos.ts";
 import {
   normalizeSparkProjectListStatus,
@@ -728,7 +733,7 @@ void test("bare /spark in an existing project requires a concrete planning focus
   }
 });
 
-void test("/research, /plan, /execute, and /workflow selector commands enter Spark modes directly", async () => {
+void test("/research, /plan, /execute, /goal, and /workflow selector commands enter Spark modes directly", async () => {
   const existingDir = await mkdtemp(join(tmpdir(), "spark-plan-direct-existing-"));
   const initializedDir = await mkdtemp(join(tmpdir(), "spark-execute-direct-initialized-"));
   const emptyDir = await mkdtemp(join(tmpdir(), "spark-execute-direct-empty-"));
@@ -817,7 +822,7 @@ void test("/research, /plan, /execute, and /workflow selector commands enter Spa
     assert.match(executeMessage, /Execution focus: Finish the direct execution task/);
     assert.match(executeMessage, /Claim at most one concrete task/);
     assert.match(executeMessage, /Stop after that task finishes/);
-    assert.match(executeMessage, /suggest \/workflow:goal/);
+    assert.match(executeMessage, /suggest \/goal/);
     assert.match(executeMessage, /suggest \/workflow/);
     assert.match(executeMessage, /missing user decision blocks execution/);
     assert.match(executeMessage, /call spark_ask instead of guessing/);
@@ -850,45 +855,47 @@ void test("/research, /plan, /execute, and /workflow selector commands enter Spa
     initializedCtx.ui.select = async () =>
       assert.fail("explicit /workflow selector aliases should not ask for strategy");
 
-    assert.equal(initializedRun.commands.get("goal"), undefined);
+    const goalCommand = initializedRun.commands.get("goal");
+    assert.ok(goalCommand, "missing /goal command");
+    assert.equal(initializedRun.commands.get("workflow:goal"), undefined);
     assert.equal(initializedRun.commands.get("workflow:deep-research"), undefined);
     assert.equal(initializedRun.commands.get("workflow:adversarial-review"), undefined);
-    const workflowGoalCommand = initializedRun.commands.get("workflow:goal");
-    assert.ok(workflowGoalCommand, "missing /workflow:goal command");
-    await workflowGoalCommand.handler("Finish the queue until done", initializedCtx);
+    await goalCommand.handler("Finish the queue until done", initializedCtx);
     assert.match(
       initializedRun.customMessages.at(-1)?.content ?? "",
       /Spark execute mode requested/,
     );
-    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /strategy: workflow/);
-    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /workflow: builtin:goal/);
+    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /strategy: goal/);
+    assert.doesNotMatch(
+      initializedRun.customMessages.at(-1)?.content ?? "",
+      /workflow: builtin:goal/,
+    );
     assert.match(
       initializedRun.customMessages.at(-1)?.content ?? "",
       /Finish the queue until done/,
     );
-    const workflowGoalPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
-    assert.match(workflowGoalPrompt, /Workflow selector: builtin:goal/);
-    const workflowGoalProjectStateRaw = await readFile(
+    const goalPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
+    assert.doesNotMatch(goalPrompt, /Workflow selector: builtin:goal/);
+    const goalProjectStateRaw = await readFile(
       join(initializedDir, ".spark", "sessions", `${ctxSessionStoreScope(initializedCtx)}.json`),
       "utf8",
     );
-    const workflowGoalProjectState = JSON.parse(workflowGoalProjectStateRaw) as {
+    const goalProjectState = JSON.parse(goalProjectStateRaw) as {
       executionMode?: { mode?: string; strategy?: string; workflowName?: string };
       runMode?: unknown;
     };
-    assert.equal(workflowGoalProjectState.executionMode?.mode, "execute");
-    assert.equal(workflowGoalProjectState.executionMode?.strategy, "workflow");
-    assert.equal(workflowGoalProjectState.executionMode?.workflowName, "builtin:goal");
-    assert.equal(workflowGoalProjectState.runMode, undefined);
+    assert.equal(goalProjectState.executionMode?.mode, "execute");
+    assert.equal(goalProjectState.executionMode?.strategy, "goal");
+    assert.equal(goalProjectState.executionMode?.workflowName, undefined);
+    assert.equal(goalProjectState.runMode, undefined);
 
-    const workflowReadyCommand = initializedRun.commands.get("workflow:ready");
-    assert.ok(workflowReadyCommand, "missing /workflow:ready command");
-    await workflowReadyCommand.handler("dispatch ready tasks", initializedCtx);
-    const workflowReadyPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
-    assert.match(workflowReadyPrompt, /Workflow selector: builtin:ready/);
-    assert.match(workflowReadyPrompt, /ready-frontier workflow/);
-    assert.match(workflowReadyPrompt, /spark_run_ready_tasks/);
-    assert.match(workflowReadyPrompt, /task DAG as durable truth/);
+    await goalCommand.handler("", initializedCtx);
+    const inferredGoalPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
+    assert.match(inferredGoalPrompt, /Goal focus: none provided/);
+    assert.match(inferredGoalPrompt, /Infer the target objective from the active project title/);
+    assert.match(inferredGoalPrompt, /ask with spark_ask instead of inventing the goal/);
+
+    assert.equal(initializedRun.commands.get("workflow:ready"), undefined);
 
     await mkdir(join(initializedDir, ".spark", "workflows"), { recursive: true });
     await writeFile(
@@ -926,15 +933,14 @@ void test("/research, /plan, /execute, and /workflow selector commands enter Spa
     initializedCtx.ui.select = async (title, options) => {
       assert.match(title, /Which workflow should Spark use/);
       workflowAskOptions = options;
-      return options.find((option) => option.startsWith("builtin:ready"));
+      return options.find((option) => option.startsWith("workspace:triage"));
     };
     await workflowCommand.handler("", initializedCtx);
-    assert.ok(workflowAskOptions.some((option) => option.startsWith("builtin:goal")));
-    assert.ok(workflowAskOptions.some((option) => option.startsWith("builtin:ready")));
+    assert.ok(!workflowAskOptions.some((option) => option.startsWith("builtin:")));
     assert.ok(workflowAskOptions.some((option) => option.startsWith("workspace:triage")));
     assert.ok(workflowAskOptions.some((option) => option.startsWith("Create workspace workflow")));
     const askedWorkflowPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
-    assert.match(askedWorkflowPrompt, /Workflow selector: builtin:ready/);
+    assert.match(askedWorkflowPrompt, /Workflow selector: workspace:triage/);
     initializedCtx.ui.select = async () =>
       assert.fail("non-empty /workflow focus should not ask for a selector before prompting");
 
@@ -976,10 +982,10 @@ void test("/research, /plan, /execute, and /workflow selector commands enter Spa
     assert.ok(emptyExecute, "missing /execute command");
     await emptyExecute.handler("", emptyCtx);
     assert.match(emptyCtx.notifications.at(-1)?.message ?? "", /needs initialized Spark state/);
-    assert.equal(emptyRun.commands.get("goal"), undefined);
-    const emptyWorkflowGoalCommand = emptyRun.commands.get("workflow:goal");
-    assert.ok(emptyWorkflowGoalCommand, "missing /workflow:goal command");
-    await emptyWorkflowGoalCommand.handler("", emptyCtx);
+    const emptyGoalCommand = emptyRun.commands.get("goal");
+    assert.ok(emptyGoalCommand, "missing /goal command");
+    assert.equal(emptyRun.commands.get("workflow:goal"), undefined);
+    await emptyGoalCommand.handler("", emptyCtx);
     assert.match(emptyCtx.notifications.at(-1)?.message ?? "", /needs initialized Spark state/);
   } finally {
     await rm(existingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
@@ -996,15 +1002,15 @@ void test("latest direct Spark mode replaces older pending hidden mode context",
     const run = registerSparkToolsForTest();
     await useOnlySparkProject(run.tools, ctx);
 
-    const workflowGoalCommand = run.commands.get("workflow:goal");
+    const goalCommand = run.commands.get("goal");
     const executeCommand = run.commands.get("execute");
     const planCommand = run.commands.get("plan");
-    assert.ok(workflowGoalCommand, "missing /workflow:goal command");
-    assert.equal(run.commands.get("goal"), undefined);
+    assert.ok(goalCommand, "missing /goal command");
+    assert.equal(run.commands.get("workflow:goal"), undefined);
     assert.ok(executeCommand, "missing /execute command");
     assert.ok(planCommand, "missing /plan command");
 
-    await workflowGoalCommand.handler("work through background queue", ctx);
+    await goalCommand.handler("work through background queue", ctx);
     await executeCommand.handler("take one task", ctx);
     await planCommand.handler("revise the failed task plan", ctx);
 
@@ -1397,10 +1403,7 @@ void test("/execute stops after one task and only hints the next ready task", as
     const text = finished.content.map((item) => item.text).join("\n");
     assert.match(text, /Execution mode stopped after one task/);
     assert.match(text, /Next ready task: @second-ready/);
-    assert.match(
-      text,
-      /Run \/execute to take one more step, or \/workflow:goal to continue autonomously/,
-    );
+    assert.match(text, /Run \/execute to take one more step, or \/goal to continue autonomously/);
     assert.doesNotMatch(text, /auto-claimed next ready task/);
     assert.equal((finished.details as { autoClaimedTask?: unknown }).autoClaimedTask, undefined);
     assert.ok((finished.details as { nextReadyTask?: unknown }).nextReadyTask);
@@ -1415,7 +1418,7 @@ void test("/execute stops after one task and only hints the next ready task", as
   }
 });
 
-void test("/workflow:goal tells finish_task to continue to the next ready task", async () => {
+void test("/goal tells finish_task to continue to the next ready task", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-run-foreground-continue-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1448,15 +1451,16 @@ void test("/workflow:goal tells finish_task to continue to the next ready task",
     });
 
     const run = registerSparkToolsForTest();
-    const workflowGoalCommand = run.commands.get("workflow:goal");
-    assert.ok(workflowGoalCommand, "missing /workflow:goal command");
-    await workflowGoalCommand.handler("work through the ready queue until done", ctx);
+    const goalCommand = run.commands.get("goal");
+    assert.ok(goalCommand, "missing /goal command");
+    assert.equal(run.commands.get("workflow:goal"), undefined);
+    await goalCommand.handler("work through the ready queue until done", ctx);
     const goalPrompt = await consumeSparkModeContext(run, ctx);
     assert.match(goalPrompt, /Enter Spark execution mode/);
-    assert.match(goalPrompt, /Workflow selector: builtin:goal/);
-    assert.match(run.customMessages.at(-1)?.content ?? "", /strategy: workflow/);
-    assert.match(run.customMessages.at(-1)?.content ?? "", /workflow: builtin:goal/);
-    assert.match(goalPrompt, /Run the builtin goal workflow/);
+    assert.doesNotMatch(goalPrompt, /Workflow selector: builtin:goal/);
+    assert.match(run.customMessages.at(-1)?.content ?? "", /strategy: goal/);
+    assert.doesNotMatch(run.customMessages.at(-1)?.content ?? "", /workflow: builtin:goal/);
+    assert.match(goalPrompt, /Run Spark goal mode/);
     assert.match(goalPrompt, /call spark_ask instead of guessing/);
 
     await executeSparkTool(run.tools, "spark_claim_task", ctx, {
@@ -1470,7 +1474,7 @@ void test("/workflow:goal tells finish_task to continue to the next ready task",
     });
 
     const text = finished.content.map((item) => item.text).join("\n");
-    assert.match(text, /Goal workflow continuing/);
+    assert.match(text, /Goal execution mode continuing/);
     assert.match(text, /Next ready task: @run-second-ready/);
     assert.match(text, /Continue now using the Spark goal continuation below/);
     assert.match(text, /<spark_goal_continuation/);
@@ -2401,7 +2405,7 @@ void test("spark learning tools record, search, export, and import learnings", a
       id: "learning-explicit-export",
       title: "Export shared learnings explicitly",
       statement:
-        "Spark learnings live in .learning and can be shared through repo-owned files or explicit Markdown exports.",
+        "Spark learnings live in .learnings locally and can be shared through explicit Markdown exports.",
       category: "decision",
       evidenceRefs: ["artifact:decision-gate"],
       tags: ["nyakore", "spark"],
@@ -2417,7 +2421,7 @@ void test("spark learning tools record, search, export, and import learnings", a
     const read = await executeSparkTool(tools, "spark_learning_read", ctx, {
       ref: "artifact:learning-explicit-export",
     });
-    assert.match(toolText(read), /\.learning/);
+    assert.match(toolText(read), /\.learnings/);
 
     const exportPath = join("exports", "learnings.md");
     const exported = await executeSparkTool(tools, "spark_learning_export_markdown", ctx, {
@@ -2628,7 +2632,8 @@ Stripe webhook 签名验证要求使用原始请求体（raw body），但 FastA
       verificationExportPath: "exports/verified-learnings.md",
     });
     assert.match(toolText(deleted), /deleted legacy source/);
-    assert.equal(existsSync(join(dir, ".learnings")), false);
+    assert.equal(existsSync(join(dir, ".learnings")), true);
+    assert.equal(existsSync(join(dir, ".learnings", "gotchas")), false);
     assert.equal(existsSync(join(dir, "exports", "verified-learnings.md")), true);
     assert.equal((await defaultLearningStore(dir).list()).length, 1);
   } finally {
@@ -2959,6 +2964,39 @@ void test("spark_status rejects non-object current project state", async () => {
         error instanceof JsonStoreFormatError &&
         /JSON root must be an object/.test(error.message) &&
         /sessions/.test(error.filePath),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("session cache stores write JSON atomically without tmp leftovers", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-session-cache-atomic-"));
+  try {
+    const ctx = testSparkContext(dir, "cache-atomic");
+    await saveCurrentProjectRef(dir, ctx, newRef("proj", "cache-atomic-project"));
+    await saveIndependentTodos(dir, ctx, [
+      { id: "todo-one", content: "One", status: "in_progress" },
+    ]);
+    const displayNumbers = await loadTodoDisplayNumberState(dir, ctx);
+    assert.equal(assignTodoDisplayNumber(displayNumbers, "todo:one"), 1);
+    await saveTodoDisplayNumberState(dir, ctx, displayNumbers);
+
+    assert.deepEqual(
+      (await readdir(join(dir, ".spark", "sessions"))).filter((entry) => entry.endsWith(".tmp")),
+      [],
+    );
+    assert.deepEqual(
+      (await readdir(join(dir, ".spark", "session-todos"))).filter((entry) =>
+        entry.endsWith(".tmp"),
+      ),
+      [],
+    );
+    assert.deepEqual(
+      (await readdir(join(dir, ".spark", "todo-display-numbers"))).filter((entry) =>
+        entry.endsWith(".tmp"),
+      ),
+      [],
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -4649,11 +4687,15 @@ void test("spark_state cleanup previews and deletes only safe cache files", asyn
     const sessionTodoDir = join(dir, ".spark", "session-todos");
     const displayNumberDir = join(dir, ".spark", "todo-display-numbers");
     const artifactsDir = join(dir, ".spark", "artifacts");
+    const notesDir = join(dir, ".spark", "notes");
+    const roleReportsDir = join(dir, ".spark", "role-reports");
     await mkdir(currentProjectDir, { recursive: true });
     await mkdir(taskTodoDir, { recursive: true });
     await mkdir(sessionTodoDir, { recursive: true });
     await mkdir(displayNumberDir, { recursive: true });
     await mkdir(artifactsDir, { recursive: true });
+    await mkdir(notesDir, { recursive: true });
+    await mkdir(roleReportsDir, { recursive: true });
 
     const missingProjectFile = join(currentProjectDir, "old-owner.json");
     const emptyOtherTaskTodos = join(taskTodoDir, "other-session.json");
@@ -4661,6 +4703,10 @@ void test("spark_state cleanup previews and deletes only safe cache files", asyn
     const terminalOtherSessionTodos = join(sessionTodoDir, "other-session.json");
     const staleDisplayNumbers = join(displayNumberDir, "other-session.json");
     const protectedArtifact = join(artifactsDir, "keep.txt");
+    const protectedWorkflowRuns = join(dir, ".spark", "workflow-runs.json");
+    const protectedReviewGate = join(dir, ".spark", "review-gate.json");
+    const protectedNote = join(notesDir, "keep.md");
+    const protectedRoleReport = join(roleReportsDir, "keep.md");
 
     await writeFile(missingProjectFile, JSON.stringify({ projectRef: "proj:missing" }), "utf8");
     await writeFile(emptyOtherTaskTodos, JSON.stringify({ version: 1, todos: [] }), "utf8");
@@ -4672,6 +4718,18 @@ void test("spark_state cleanup previews and deletes only safe cache files", asyn
     );
     await writeFile(staleDisplayNumbers, JSON.stringify({ version: 1, entries: [] }), "utf8");
     await writeFile(protectedArtifact, "keep", "utf8");
+    await writeFile(
+      protectedWorkflowRuns,
+      JSON.stringify({
+        version: 1,
+        manager: { status: "idle", updatedAt: new Date().toISOString() },
+        runs: [],
+      }),
+      "utf8",
+    );
+    await writeFile(protectedReviewGate, JSON.stringify({ ref: "review:keep" }), "utf8");
+    await writeFile(protectedNote, "keep", "utf8");
+    await writeFile(protectedRoleReport, "keep", "utf8");
     await utimes(terminalOtherSessionTodos, oldDate, oldDate);
     await utimes(staleDisplayNumbers, oldDate, oldDate);
 
@@ -4701,6 +4759,10 @@ void test("spark_state cleanup previews and deletes only safe cache files", asyn
     assert.equal(existsSync(currentTaskTodos), true);
     assert.equal(existsSync(join(dir, ".spark", "projects.json")), true);
     assert.equal(existsSync(protectedArtifact), true);
+    assert.equal(existsSync(protectedWorkflowRuns), true);
+    assert.equal(existsSync(protectedReviewGate), true);
+    assert.equal(existsSync(protectedNote), true);
+    assert.equal(existsSync(protectedRoleReport), true);
 
     const status = await executeSparkTool(tools, "spark_state", ctx, { action: "status" });
     assert.match(toolText(status), /Spark state status:/);
@@ -4824,12 +4886,14 @@ void test("spark_state diagnostics reports protected-store candidates without de
     const orphanBlob = join(dir, ".spark", "artifacts", "blobs", "orphan-diagnostics.txt");
     const noteFile = join(dir, ".spark", "notes", "diagnostics-note.md");
     const roleReportFile = join(dir, ".spark", "role-reports", "diagnostics-report.md");
+    const reviewGateFile = join(dir, ".spark", "review-gate.json");
     await mkdir(join(dir, ".spark", "artifacts", "blobs"), { recursive: true });
     await mkdir(join(dir, ".spark", "notes"), { recursive: true });
     await mkdir(join(dir, ".spark", "role-reports"), { recursive: true });
     await writeFile(orphanBlob, "orphan", "utf8");
     await writeFile(noteFile, "note", "utf8");
     await writeFile(roleReportFile, "role report", "utf8");
+    await writeFile(reviewGateFile, JSON.stringify({ ref: "review:diagnostics" }), "utf8");
 
     const ctx = testSparkContext(dir, "main");
     const { tools } = registerSparkToolsForTest();
@@ -4873,6 +4937,7 @@ void test("spark_state diagnostics reports protected-store candidates without de
     assert.equal(existsSync(orphanBlob), true);
     assert.equal(existsSync(noteFile), true);
     assert.equal(existsSync(roleReportFile), true);
+    assert.equal(existsSync(reviewGateFile), true);
     assert.equal(existsSync(join(dir, ".spark", "workflow-runs.json")), true);
   } finally {
     await rm(dir, { recursive: true, force: true });

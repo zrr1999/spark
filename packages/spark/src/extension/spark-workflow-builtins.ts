@@ -1,46 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { formatSparkBudgetLines } from "spark-workflows";
-import { goalWorkflowScript, parseSparkWorkflowScript, readyWorkflowScript } from "spark-workflows";
-
-export type SparkWorkflowBuiltinName = "goal" | "ready";
-
-export interface SparkWorkflowBuiltinDescriptor {
-  name: SparkWorkflowBuiltinName;
-  title: string;
-  description: string;
-  script: string;
-  phases: string[];
-}
-
-export function listSparkWorkflowBuiltins(): SparkWorkflowBuiltinDescriptor[] {
-  return [describeSparkWorkflowBuiltin("goal"), describeSparkWorkflowBuiltin("ready")];
-}
-
-export function describeSparkWorkflowBuiltin(
-  name: SparkWorkflowBuiltinName,
-): SparkWorkflowBuiltinDescriptor {
-  const script = name === "goal" ? goalWorkflowScript() : readyWorkflowScript();
-  const meta = parseSparkWorkflowScript(script).meta;
-  return {
-    name,
-    title: meta.name,
-    description: meta.description,
-    script,
-    phases: meta.phases?.map((phase) => phase.title) ?? [],
-  };
-}
-
-export function resolveSparkWorkflowBuiltin(
-  focus: string | undefined,
-): SparkWorkflowBuiltinName | undefined {
-  const text = focus?.trim() ?? "";
-  if (!text) return undefined;
-  if (/(ready|frontier|background|parallel|dispatch|queue|后台|并行|调度|队列)/i.test(text))
-    return "ready";
-  if (/(goal|autonomous|continue|until done|完成所有|持续|自主|继续)/i.test(text)) return "goal";
-  return undefined;
-}
+import { parseSparkWorkflowScript } from "spark-workflows";
 
 export interface SparkSavedWorkflowDescriptor {
   name: string;
@@ -134,7 +94,7 @@ export async function discoverSparkSavedWorkflows(
   return { workflows, errors };
 }
 
-export function renderSparkWorkflowBuiltinGuidance(
+export function renderSparkWorkflowGuidance(
   focus: string | undefined,
   saved: SparkSavedWorkflowDiscovery = { workflows: [], errors: [] },
   workflowSelector?: string,
@@ -142,19 +102,6 @@ export function renderSparkWorkflowBuiltinGuidance(
   const budgetCatalog = renderWorkflowBudgetCatalog();
   const savedCatalog = renderSavedWorkflowCatalog(saved);
   const inlineCatalog = renderInlineWorkflowCatalog(discoverSparkInlineWorkflow(focus));
-  if (workflowSelector === "builtin:goal" || workflowSelector === "builtin:ready") {
-    const descriptor = describeSparkWorkflowBuiltin(
-      workflowSelector === "builtin:goal" ? "goal" : "ready",
-    );
-    return (
-      "Selected builtin workflow: " +
-      descriptor.name +
-      ". This builtin is represented as Spark workflow script metadata and uses its backend contract through Spark workflow plumbing. Phases: " +
-      descriptor.phases.join(", ") +
-      "." +
-      budgetCatalog
-    );
-  }
   if (workflowSelector?.startsWith("workspace:") || workflowSelector?.startsWith("user:")) {
     return (
       "Selected saved workflow: " +
@@ -165,13 +112,15 @@ export function renderSparkWorkflowBuiltinGuidance(
       inlineCatalog
     );
   }
-  const recommended = resolveSparkWorkflowBuiltin(focus);
-  const recommendation = recommended
-    ? "Recommended builtin workflow from the focus: " + recommended + "."
-    : "No builtin workflow was selected confidently from the focus.";
+  const goalFocus = /(goal|autonomous|continue|until done|完成所有|持续|自主|继续)/i.test(
+    focus?.trim() ?? "",
+  );
+  const recommendation = goalFocus
+    ? "Use /goal for autonomous foreground goal progress; /workflow is for saved workflow scripts."
+    : "No saved workflow was selected confidently from the focus.";
   return (
     recommendation +
-    " Empty /workflow should ask for an explicit builtin/workspace/user selector before execution. Builtins are intentionally minimal: goal and ready." +
+    " Empty /workflow should ask for an explicit workspace/user selector before execution." +
     budgetCatalog +
     savedCatalog +
     inlineCatalog
@@ -234,8 +183,12 @@ function renderInlineWorkflowCatalog(inline: SparkInlineWorkflowDiscovery): stri
 }
 
 function renderWorkflowBudgetCatalog(): string {
-  return (
-    "\n\nWorkflow budget:\n" +
-    formatSparkBudgetLines({ timeSpentSeconds: 0, tokensUsed: 0, tokenBudget: null }).join("\n")
-  );
+  return [
+    "",
+    "Workflow budget:",
+    "- Time spent in workflow: 0s",
+    "- Tokens used: 0",
+    "- Token budget: none",
+    "- Tokens remaining: unbounded",
+  ].join("\n");
 }

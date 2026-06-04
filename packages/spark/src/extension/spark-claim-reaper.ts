@@ -1,7 +1,7 @@
 import { nowIso } from "spark-core";
 import { sweepExpiredTaskClaims } from "spark-runtime";
 import { defaultTaskGraphStore, TaskGraphStoreLockTimeoutError } from "spark-tasks";
-import { sparkTodoStore, type SparkSessionContext } from "./session-state.ts";
+import { saveSparkGraphAndTodos, type SparkSessionContext } from "./session-state.ts";
 
 const CLAIM_SWEEP_INTERVAL_MS = 30_000;
 const claimReaperTimers = new Map<string, ReturnType<typeof setInterval>>();
@@ -29,7 +29,7 @@ export async function sweepExpiredSparkClaims(
   const store = defaultTaskGraphStore(cwd);
   try {
     const result = await sweepExpiredTaskClaims(store, nowIso(), { timeoutMs: 250 });
-    if (result.saved && result.graph) await sparkTodoStore(cwd, ctx).save(result.graph);
+    if (result.saved && result.graph) await saveSparkGraphAndTodos(cwd, result.graph, ctx, store);
   } catch (error) {
     if (error instanceof TaskGraphStoreLockTimeoutError) return;
     throw error;

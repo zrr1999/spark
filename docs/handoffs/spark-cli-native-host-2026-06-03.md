@@ -345,7 +345,7 @@ spark_finish_task status=done summary="..."
 - [ ] Confirm `spark_status` matches §2 (17 tasks, 6 done, 11 pending).
 - [ ] Run the host-suite test command from §10 — must report ~95 pass / 0 fail.
 - [ ] Decide whether to address spark-learnings (§7) before or after `@verify-cli-mvp`.
-- [ ] Pick exactly one task from §5; do not auto-batch unless using `/workflow:goal`.
+- [ ] Pick exactly one task from §5; do not auto-batch unless using `/goal`.
 - [ ] When in doubt about scope/architecture/dependency — `spark_ask`, not silent default.
 
 Good luck. The foundation is built; the rest is rendering, persistence, and wiring.

@@ -8,6 +8,7 @@ asks, scheduler policy, capabilities, or delegation topology.
 ## Concepts
 
 - `RoleSpec` — reusable coding role/persona definition.
+- `BuiltinRoleProvider` — package-owned predefined role contribution hook.
 - `RoleRun` — one concrete child Pi execution using a role.
 - `RoleSource` — storage/provenance scope: `builtin`, `project`, or `user`.
 - `RoleOrigin` — optional metadata such as `manual`, `generated`, or `builtin`.
@@ -38,6 +39,10 @@ in `spark-workflows` above this package.
 - `get_role` — inspect one role; full `systemPrompt` is opt-in with `includePrompt: true`.
 - `create_role` — persist a project role by default, or a user role when `source: "user"` is explicit.
 - `call_role` — resolve a builtin/project/user role and call it once with an explicit instruction.
+
+Package-specific extensions can register predefined roles through the builtin
+role provider hook. `pi-roles` owns the registry mechanism; the contributing
+package owns any domain semantics in those role prompts.
 
 `call_role` modes:
 

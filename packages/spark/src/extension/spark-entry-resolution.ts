@@ -151,7 +151,7 @@ async function resolveWorkflowSelector(
 
 function normalizeWorkflowSelector(selector: string | undefined): string | undefined {
   if (!selector) return undefined;
-  const match = /^(builtin|workspace|user):(.+)$/u.exec(selector.trim());
+  const match = /^(workspace|user):(.+)$/u.exec(selector.trim());
   if (!match) return undefined;
   try {
     return match[1] + ":" + normalizeSparkWorkflowId(match[2]);

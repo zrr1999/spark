@@ -2,7 +2,7 @@
 
 Spark runtime adapter for executing one Spark task with a registered role.
 
-Runtime resolves reusable `RoleSpec`s from `pi-roles`, calls `runRole()` for concrete child Pi executions, and adapts those `RoleRun`s back into Spark task/run/artifact state. Ready-frontier scheduling and durable workflow-run state live in `spark-workflows` as `/workflow:ready` orchestration.
+Runtime resolves reusable `RoleSpec`s from `pi-roles`, calls `runRole()` for concrete child Pi executions, and adapts those `RoleRun`s back into Spark task/run/artifact state. Ready-task scheduling and durable workflow-run state live in `spark-workflows`.
 
 Responsibilities:
 

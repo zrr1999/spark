@@ -11,7 +11,7 @@ import {
 import { ensureSparkClaimReaper, sweepExpiredSparkClaims } from "./spark-claim-reaper.ts";
 import { ensureSparkGraphInvariants } from "./spark-graph-invariants.ts";
 import { hasLocalSparkDirectory } from "./spark-activation.ts";
-import { loadSparkGraph, sparkSessionOwnerKey, sparkTodoStore } from "./session-state.ts";
+import { loadSparkGraph, saveSparkGraphAndTodos, sparkSessionOwnerKey } from "./session-state.ts";
 import {
   collectUnreadHiddenRoleRunInbox,
   formatHiddenRoleRunInbox,
@@ -102,10 +102,7 @@ export function registerSparkExtensionEvents(
     const store = defaultTaskGraphStore(ctx.cwd);
     const graph = await loadSparkGraph(ctx.cwd, ctx);
     if (!graph) return;
-    if (ensureSparkGraphInvariants(graph)) {
-      await store.save(graph);
-      await sparkTodoStore(ctx.cwd, ctx).save(graph);
-    }
+    if (ensureSparkGraphInvariants(graph)) await saveSparkGraphAndTodos(ctx.cwd, graph, ctx, store);
     await deps.refreshSparkWidget(ctx.cwd, ctx);
   });
 

@@ -72,6 +72,12 @@ void test("workspace-like cwd keeps Spark state under .spark without root SPARK.
     assert.doesNotMatch(projectJson, /do not start with a generic intake template/);
     assert.doesNotMatch(projectJson, /"currentTaskRef"/);
     assert.doesNotMatch(projectJson, /"todos"/);
+    const reviewGateJson = await readFile(join(dir, ".spark", "review-gate.json"), "utf8");
+    assert.match(reviewGateJson, /"outcome": "blocked"/);
+    assert.deepEqual(
+      (await readdir(join(dir, ".spark"))).filter((entry) => entry.endsWith(".tmp")),
+      [],
+    );
     await assert.rejects(() => readFile(join(dir, ".spark", "todos.json"), "utf8"));
     await assert.rejects(() => readFile(join(dir, "SPARK.md"), "utf8"));
   } finally {
