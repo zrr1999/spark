@@ -79,7 +79,7 @@ import {
   normalizeLearningCategory,
   normalizeLearningConfidence,
   normalizeLearningInput,
-  normalizeLearningScope,
+  normalizeLearningLocation,
   normalizeLearningStatusFilter,
   normalizeStringArray,
 } from "../packages/spark/src/extension/learning-tools.ts";
@@ -284,8 +284,9 @@ void test("Spark learning normalizers reject invalid explicit parameters", () =>
   assert.throws(() => normalizeLearningStatusFilter("archived"), /status must be candidate/);
   assert.throws(() => normalizeLearningStatusFilter(["active", "archived"]), /status must be/);
 
-  assert.equal(normalizeLearningScope("workspace"), "workspace");
-  assert.throws(() => normalizeLearningScope("thread"), /scope must be global/);
+  assert.equal(normalizeLearningLocation("workspace"), "workspace");
+  assert.equal(normalizeLearningLocation("repo"), "repo");
+  assert.throws(() => normalizeLearningLocation("thread"), /location must be user/);
   assert.equal(normalizeLearningCategory("decision"), "decision");
   assert.throws(() => normalizeLearningCategory("lesson"), /category must be pattern/);
 
@@ -2400,9 +2401,8 @@ void test("spark learning tools record, search, export, and import learnings", a
       id: "learning-explicit-export",
       title: "Export shared learnings explicitly",
       statement:
-        ".spark is local runtime state; share learnings through explicit Markdown exports.",
+        "Spark learnings live in .learning and can be shared through repo-owned files or explicit Markdown exports.",
       category: "decision",
-      scope: "project",
       evidenceRefs: ["artifact:decision-gate"],
       tags: ["nyakore", "spark"],
       confidence: 0.9,
@@ -2417,7 +2417,7 @@ void test("spark learning tools record, search, export, and import learnings", a
     const read = await executeSparkTool(tools, "spark_learning_read", ctx, {
       ref: "artifact:learning-explicit-export",
     });
-    assert.match(toolText(read), /local runtime state/);
+    assert.match(toolText(read), /\.learning/);
 
     const exportPath = join("exports", "learnings.md");
     const exported = await executeSparkTool(tools, "spark_learning_export_markdown", ctx, {

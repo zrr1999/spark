@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defaultLearningStore } from "spark-learnings";
+import { defaultLearningStore, type LearningLocation, type LearningStore } from "spark-learnings";
 import { normalizeArtifactLimit, truncateBlock } from "./artifact-tools.ts";
 import { registerSparkLearningImportExportTools } from "./learning-import-export-tool-registration.ts";
 import {
@@ -11,7 +11,7 @@ import {
   normalizeLearningBoolean,
   normalizeLearningCategory,
   normalizeLearningInput,
-  normalizeLearningScope,
+  normalizeLearningLocation,
   normalizeLearningStatusFilter,
   normalizeLearningString,
   normalizeStringArray,
@@ -23,7 +23,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
     name: "spark_learning_record",
     label: "Spark Learning Record",
     description:
-      "Record one evidence-backed reusable learning as a local Spark artifact. Use export tools for sharing.",
+      "Record one evidence-backed reusable learning under .learning/ or the user learning directory. Use export tools for sharing.",
     parameters: Type.Object({
       id: Type.Optional(
         Type.String({ description: "Stable learning id. Defaults to a content hash." }),
@@ -33,7 +33,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
       category: Type.Optional(
         Type.String({ description: "pattern | gotcha | decision | workflow | tool | project" }),
       ),
-      scope: Type.Optional(Type.String({ description: "global | project | project | task" })),
+      location: Type.Optional(Type.String({ description: "user | workspace | repo" })),
       status: Type.Optional(
         Type.String({ description: "candidate | active | stale | superseded | rejected" }),
       ),
@@ -63,7 +63,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
       confidence: Type.Optional(Type.Number({ description: "Evidence confidence from 0 to 1." })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const store = defaultLearningStore(ctx.cwd);
+      const store = defaultLearningStore(ctx.cwd, normalizeLearningLocation(params.location));
       const artifact = await store.record(normalizeLearningInput(params));
       return {
         content: [
@@ -72,7 +72,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
             text: `Recorded learning ${artifact.ref} [${artifact.body.status}] ${artifact.body.title}`,
           },
         ],
-        details: { learning: compactLearningDetail(artifact) },
+        details: { learning: compactLearningDetail(artifact, store.location) },
       };
     },
   });
@@ -90,7 +90,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
           Type.Array(Type.String({ description: "Learning status." })),
         ]),
       ),
-      scope: Type.Optional(Type.String({ description: "global | project | project | task" })),
+      location: Type.Optional(Type.String({ description: "user | workspace | repo" })),
       category: Type.Optional(
         Type.String({ description: "pattern | gotcha | decision | workflow | tool | project" }),
       ),
@@ -100,12 +100,11 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
       limit: Type.Optional(Type.Number({ description: "Maximum results. Default: 10." })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const store = defaultLearningStore(ctx.cwd);
+      const stores = learningStoresForQuery(ctx.cwd, normalizeLearningLocation(params.location));
       const limit = normalizeArtifactLimit(params.limit, 10, "limit");
-      const results = await store.search({
+      const query = {
         query: normalizeLearningString(params.query, "query", { required: true }) ?? "",
         status: normalizeLearningStatusFilter(params.status),
-        scope: normalizeLearningScope(params.scope),
         category: normalizeLearningCategory(params.category),
         tag: normalizeLearningString(params.tag, "tag"),
         includeCandidates: normalizeLearningBoolean(
@@ -115,7 +114,14 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
         ),
         includeInactive: normalizeLearningBoolean(params.includeInactive, false, "includeInactive"),
         limit,
-      });
+      };
+      const results = (await Promise.all(stores.map((store) => store.search(query))))
+        .flat()
+        .sort((left, right) => {
+          if (right.score !== left.score) return right.score - left.score;
+          return right.record.updatedAt.localeCompare(left.record.updatedAt);
+        })
+        .slice(0, limit);
       const lines = [
         `Spark learnings: ${results.length} result(s)`,
         ...results.map(formatLearningSearchLine),
@@ -139,7 +145,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
           Type.Array(Type.String({ description: "Learning status." })),
         ]),
       ),
-      scope: Type.Optional(Type.String({ description: "global | project | project | task" })),
+      location: Type.Optional(Type.String({ description: "user | workspace | repo" })),
       category: Type.Optional(
         Type.String({ description: "pattern | gotcha | decision | workflow | tool | project" }),
       ),
@@ -149,11 +155,10 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
       limit: Type.Optional(Type.Number({ description: "Maximum rows. Default: 20." })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const store = defaultLearningStore(ctx.cwd);
+      const stores = learningStoresForQuery(ctx.cwd, normalizeLearningLocation(params.location));
       const limit = normalizeArtifactLimit(params.limit, 20, "limit");
-      const artifacts = await store.list({
+      const filter = {
         status: normalizeLearningStatusFilter(params.status),
-        scope: normalizeLearningScope(params.scope),
         category: normalizeLearningCategory(params.category),
         tag: normalizeLearningString(params.tag, "tag"),
         includeCandidates: normalizeLearningBoolean(
@@ -162,11 +167,20 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
           "includeCandidates",
         ),
         includeInactive: normalizeLearningBoolean(params.includeInactive, false, "includeInactive"),
-      });
+      };
+      const artifacts = (
+        await Promise.all(
+          stores.map(async (store) =>
+            (await store.list(filter)).map((artifact) => ({ artifact, location: store.location })),
+          ),
+        )
+      )
+        .flat()
+        .sort((left, right) => right.artifact.updatedAt.localeCompare(left.artifact.updatedAt));
       const visible = artifacts.slice(0, limit);
       const lines = [
         `Spark learnings: ${artifacts.length}${visible.length < artifacts.length ? ` (showing ${visible.length})` : ""}`,
-        ...visible.map(formatLearningLine),
+        ...visible.map(({ artifact, location }) => formatLearningLine(artifact, location)),
       ];
       if (visible.length === 0) lines.push("- No learnings.");
       if (visible.length < artifacts.length)
@@ -176,7 +190,9 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
         details: {
           count: artifacts.length,
           shown: visible.length,
-          learnings: visible.map(compactLearningDetail),
+          learnings: visible.map(({ artifact, location }) =>
+            compactLearningDetail(artifact, location),
+          ),
         },
       };
     },
@@ -189,12 +205,13 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
     parameters: Type.Object({
       ref: Type.String({ description: "Learning artifact ref or stable id." }),
       full: Type.Optional(Type.Boolean({ default: false })),
+      location: Type.Optional(Type.String({ description: "user | workspace | repo" })),
       maxChars: Type.Optional(
         Type.Number({ description: "Maximum JSON chars when full=false. Default: 4000." }),
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const store = defaultLearningStore(ctx.cwd);
+      const store = defaultLearningStore(ctx.cwd, normalizeLearningLocation(params.location));
       const full = normalizeLearningBoolean(params.full, false, "full");
       const maxChars = normalizeArtifactLimit(params.maxChars, 4_000, "maxChars");
       const artifact = await store.get(normalizeLearningArtifactRef(params.ref));
@@ -202,7 +219,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
       const renderedBody = full ? body : truncateBlock(body, maxChars);
       const truncated = !full && renderedBody.length < body.length;
       const lines = [
-        `${artifact.ref} [${artifact.body.status}/${artifact.body.category}/${artifact.body.scope}] ${artifact.body.title}`,
+        `${artifact.ref} [${artifact.body.status}/${artifact.body.category}/${store.location}] ${artifact.body.title}`,
         `updated=${artifact.updatedAt} evidence=${artifact.body.evidenceRefs.length}`,
         "",
         renderedBody,
@@ -215,7 +232,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
       return {
         content: [{ type: "text", text: lines.join("\n") }],
         details: {
-          learning: compactLearningDetail(artifact),
+          learning: compactLearningDetail(artifact, store.location),
           bodyChars: body.length,
           shownChars: renderedBody.length,
           truncated,
@@ -231,16 +248,17 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
     parameters: Type.Object({
       ref: Type.String({ description: "Learning artifact ref or stable id." }),
       reason: Type.String({ description: "Why this learning is stale." }),
+      location: Type.Optional(Type.String({ description: "user | workspace | repo" })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const store = defaultLearningStore(ctx.cwd);
+      const store = defaultLearningStore(ctx.cwd, normalizeLearningLocation(params.location));
       const artifact = await store.markStale(
         normalizeLearningArtifactRef(params.ref),
         normalizeLearningString(params.reason, "reason", { required: true }) ?? "",
       );
       return {
         content: [{ type: "text", text: `Marked stale ${artifact.ref}: ${artifact.body.title}` }],
-        details: { learning: compactLearningDetail(artifact) },
+        details: { learning: compactLearningDetail(artifact, store.location) },
       };
     },
   });
@@ -253,9 +271,10 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
       ref: Type.String({ description: "Learning artifact ref or stable id to supersede." }),
       supersededBy: Type.Array(Type.String({ description: "Replacement learning ref." })),
       reason: Type.Optional(Type.String({ description: "Why it was superseded." })),
+      location: Type.Optional(Type.String({ description: "user | workspace | repo" })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const store = defaultLearningStore(ctx.cwd);
+      const store = defaultLearningStore(ctx.cwd, normalizeLearningLocation(params.location));
       const artifact = await store.markSuperseded(
         normalizeLearningArtifactRef(params.ref),
         normalizeStringArray(params.supersededBy, "supersededBy") ?? [],
@@ -265,7 +284,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
         content: [
           { type: "text", text: `Marked superseded ${artifact.ref}: ${artifact.body.title}` },
         ],
-        details: { learning: compactLearningDetail(artifact) },
+        details: { learning: compactLearningDetail(artifact, store.location) },
       };
     },
   });
@@ -277,9 +296,10 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
     parameters: Type.Object({
       ref: Type.String({ description: "Learning candidate artifact ref or stable id." }),
       reason: Type.String({ description: "Why this candidate is rejected." }),
+      location: Type.Optional(Type.String({ description: "user | workspace | repo" })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const store = defaultLearningStore(ctx.cwd);
+      const store = defaultLearningStore(ctx.cwd, normalizeLearningLocation(params.location));
       const artifact = await store.rejectCandidate(
         normalizeLearningArtifactRef(params.ref),
         normalizeLearningString(params.reason, "reason", { required: true }) ?? "",
@@ -291,10 +311,20 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
             text: `Rejected learning candidate ${artifact.ref}: ${artifact.body.title}`,
           },
         ],
-        details: { learning: compactLearningDetail(artifact) },
+        details: { learning: compactLearningDetail(artifact, store.location) },
       };
     },
   });
 
   registerSparkLearningImportExportTools(registerSparkTool);
+}
+
+function learningStoresForQuery(
+  cwd: string,
+  location: LearningLocation | undefined,
+): LearningStore[] {
+  if (location) return [defaultLearningStore(cwd, location)];
+  const current = defaultLearningStore(cwd);
+  if (current.location === "user") return [current];
+  return [current, defaultLearningStore(cwd, "user")];
 }

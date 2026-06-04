@@ -5,15 +5,17 @@ import test from "node:test";
 import {
   buildExtendedOptions,
   createInitialState,
+  createPiAskFlowRequest,
+  isPiAskFlowGateBlocked,
   PiAskFlowController,
   reduce,
   renderAskScreen,
+  runPiAskFlow,
   SENTINEL_LABELS,
   validatePiAskFlowRequest,
   normalizeAskKey,
   printableAskText,
 } from "pi-ask";
-import { createSparkAskRequest, isSparkAskGateBlocked, runSparkAsk } from "spark-ask";
 
 void test("spark ask fullscreen option model includes only the direct custom input sentinel", () => {
   const options = buildExtendedOptions(
@@ -308,7 +310,7 @@ void test("ask flow rejects invalid defaultValues", () => {
 });
 
 void test("spark ask plain select path receives only business options", async () => {
-  const request = createSparkAskRequest({
+  const request = createPiAskFlowRequest({
     flow: "custom",
     mode: "clarification",
     title: "Audience",
@@ -326,7 +328,7 @@ void test("spark ask plain select path receives only business options", async ()
     ],
   });
   const seenOptions: string[][] = [];
-  const result = await runSparkAsk(request, {
+  const result = await runPiAskFlow(request, {
     select: async (_title: string, options: string[]) => {
       seenOptions.push(options);
       return "My team";
@@ -344,7 +346,7 @@ void test("spark ask plain select path receives only business options", async ()
 });
 
 void test("single-question ask_flow submit preserves custom answers but blocks decision gates", () => {
-  const request = createSparkAskRequest({
+  const request = createPiAskFlowRequest({
     flow: "custom",
     mode: "decision",
     title: "Dispatch roles?",
@@ -362,7 +364,7 @@ void test("single-question ask_flow submit preserves custom answers but blocks d
     ],
   });
   const controller = new PiAskFlowController({ request, language: "en" });
-  let result: Awaited<ReturnType<typeof runSparkAsk>> | undefined;
+  let result: Awaited<ReturnType<typeof runPiAskFlow>> | undefined;
   controller.run(
     { terminal: { columns: 100 }, requestRender() {} },
     {
@@ -450,7 +452,7 @@ void test("ask flow Enter advances across questions and allows returning to edit
     },
   ];
   const controller = new PiAskFlowController({
-    request: createSparkAskRequest({ flow: "custom", mode: "clarification", questions }),
+    request: createPiAskFlowRequest({ flow: "custom", mode: "clarification", questions }),
     language: "en",
   });
   const component = controller.run(
@@ -475,9 +477,9 @@ void test("ask flow Enter advances across questions and allows returning to edit
   assert.equal(controller.handleKey("enter", {}), true);
   assert.equal(controller.handleKey("ctrl+s", {}), true);
 
-  let result: Awaited<ReturnType<typeof runSparkAsk>> | undefined;
+  let result: Awaited<ReturnType<typeof runPiAskFlow>> | undefined;
   const submitting = new PiAskFlowController({
-    request: createSparkAskRequest({ flow: "custom", mode: "clarification", questions }),
+    request: createPiAskFlowRequest({ flow: "custom", mode: "clarification", questions }),
     language: "en",
   });
   submitting.run(
@@ -524,9 +526,9 @@ void test("ask flow focused custom fallback accepts direct typing", () => {
       { value: "safe", label: "Safe" },
     ],
   };
-  let result: Awaited<ReturnType<typeof runSparkAsk>> | undefined;
+  let result: Awaited<ReturnType<typeof runPiAskFlow>> | undefined;
   const controller = new PiAskFlowController({
-    request: createSparkAskRequest({
+    request: createPiAskFlowRequest({
       flow: "custom",
       mode: "clarification",
       questions: [question],
@@ -582,9 +584,9 @@ void test("ask flow focused custom fallback can navigate after direct typing", (
       ],
     },
   ];
-  let result: Awaited<ReturnType<typeof runSparkAsk>> | undefined;
+  let result: Awaited<ReturnType<typeof runPiAskFlow>> | undefined;
   const controller = new PiAskFlowController({
-    request: createSparkAskRequest({ flow: "custom", mode: "clarification", questions }),
+    request: createPiAskFlowRequest({ flow: "custom", mode: "clarification", questions }),
     language: "en",
   });
   const component = controller.run(
@@ -634,9 +636,9 @@ void test("ask flow custom draft commits with one Enter after returning to the r
       { value: "safe", label: "Safe" },
     ],
   };
-  let result: Awaited<ReturnType<typeof runSparkAsk>> | undefined;
+  let result: Awaited<ReturnType<typeof runPiAskFlow>> | undefined;
   const controller = new PiAskFlowController({
-    request: createSparkAskRequest({
+    request: createPiAskFlowRequest({
       flow: "custom",
       mode: "clarification",
       questions: [question],
@@ -695,9 +697,9 @@ void test("ask flow optional freeform can be left blank and advances", () => {
       ],
     },
   ];
-  let result: Awaited<ReturnType<typeof runSparkAsk>> | undefined;
+  let result: Awaited<ReturnType<typeof runPiAskFlow>> | undefined;
   const controller = new PiAskFlowController({
-    request: createSparkAskRequest({ flow: "custom", mode: "clarification", questions }),
+    request: createPiAskFlowRequest({ flow: "custom", mode: "clarification", questions }),
     language: "en",
   });
   const component = controller.run(
@@ -839,7 +841,7 @@ void test("ask flow UI answer summaries use labels while structured answers keep
 });
 
 void test("spark ask selectWithCustom keeps custom affordance out of business options", async () => {
-  const request = createSparkAskRequest({
+  const request = createPiAskFlowRequest({
     flow: "custom",
     mode: "clarification",
     title: "Audience",
@@ -857,7 +859,7 @@ void test("spark ask selectWithCustom keeps custom affordance out of business op
     ],
   });
   const seen: Array<{ options: string[]; customLabel: string }> = [];
-  const result = await runSparkAsk(request, {
+  const result = await runPiAskFlow(request, {
     selectWithCustom: async (_title: string, input: { options: string[]; customLabel: string }) => {
       seen.push(input);
       return { customText: "Language tooling engineers" };
@@ -874,7 +876,7 @@ void test("spark ask selectWithCustom keeps custom affordance out of business op
 });
 
 void test("decision gates preserve unmatched custom text as answered but blocked", async () => {
-  const request = createSparkAskRequest({
+  const request = createPiAskFlowRequest({
     flow: "custom",
     mode: "decision",
     title: "Dispatch roles?",
@@ -891,7 +893,7 @@ void test("decision gates preserve unmatched custom text as answered but blocked
       },
     ],
   });
-  const result = await runSparkAsk(request, { select: async () => "maybe later" });
+  const result = await runPiAskFlow(request, { select: async () => "maybe later" });
   assert.equal(result.status, "answered");
   assert.equal(result.nextAction, "block");
   assert.deepEqual(result.answers.answer, {
@@ -900,11 +902,11 @@ void test("decision gates preserve unmatched custom text as answered but blocked
     values: [],
     customText: "maybe later",
   });
-  assert.equal(isSparkAskGateBlocked(result, request), true);
+  assert.equal(isPiAskFlowGateBlocked(result, request), true);
 });
 
 void test("multi-select decision select path blocks empty selections", async () => {
-  const request = createSparkAskRequest({
+  const request = createPiAskFlowRequest({
     flow: "custom",
     mode: "decision",
     title: "Choose workstreams",
@@ -921,9 +923,9 @@ void test("multi-select decision select path blocks empty selections", async () 
       },
     ],
   });
-  const result = await runSparkAsk(request, { select: async () => "" });
+  const result = await runPiAskFlow(request, { select: async () => "" });
   assert.equal(result.status, "no_selection");
   assert.equal(result.nextAction, "block");
   assert.equal(result.answers.streams, undefined);
-  assert.equal(isSparkAskGateBlocked(result, request), true);
+  assert.equal(isPiAskFlowGateBlocked(result, request), true);
 });

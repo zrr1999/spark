@@ -1,5 +1,9 @@
 import { type ArtifactRef } from "spark-core";
-import { runSparkAskTool, type SparkAskToolParams, type SparkAskToolUi } from "spark-ask";
+import {
+  runSparkAskTool,
+  type SparkAskToolParams,
+  type SparkAskToolUi,
+} from "../extension/spark-ask-tool.ts";
 
 export interface ProjectIntentClarificationResult {
   asked: boolean;

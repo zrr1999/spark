@@ -1,3 +1,4 @@
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import { PiAskFlowController } from "./ui/controller.ts";
@@ -34,6 +35,11 @@ interface PiExtensionAPI {
     description: string;
     promptGuidelines?: string[];
     parameters: unknown;
+    renderCall?: (
+      args: Record<string, unknown>,
+      theme: { bold?: (text: string) => string },
+      context: unknown,
+    ) => { render(width: number): string[] };
     execute: (
       toolCallId: unknown,
       params: unknown,
@@ -275,6 +281,19 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
       ),
     }),
 
+    renderCall(args, theme) {
+      const questionCount = Array.isArray(args.questions) ? args.questions.length : undefined;
+      return renderAskFlowToolCall(
+        "ask_flow",
+        [
+          formatStringArg(args.title, { prefix: "title=" }),
+          formatStringArg(args.mode, { fallback: "clarification" }),
+          questionCount === undefined ? undefined : `${questionCount}q`,
+        ],
+        theme,
+      );
+    },
+
     async execute(_toolCallId, rawParams, _signal, _onUpdate, ctx) {
       const request = createPiAskFlowRequest(rawParams as PiAskFlowRequest);
       const context = decodePiAskFlowToolContext(ctx);
@@ -327,6 +346,36 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
       };
     },
   });
+}
+
+function renderAskFlowToolCall(
+  name: string,
+  parts: Array<string | undefined>,
+  theme: { bold?: (text: string) => string },
+): { render(width: number): string[] } {
+  const label = theme.bold ? theme.bold(name) : name;
+  const text = [label, ...parts.filter((part): part is string => Boolean(part))].join(" ");
+  return {
+    render(width: number): string[] {
+      return [truncateToWidth(text, Math.max(1, width), "…")];
+    },
+  };
+}
+
+function formatStringArg(
+  value: unknown,
+  options: { prefix?: string; fallback?: string; maxLength?: number } = {},
+): string | undefined {
+  const text = typeof value === "string" && value.trim() ? value.trim() : options.fallback;
+  if (!text) return undefined;
+  const rendered = /\s|["'`]/.test(text) ? JSON.stringify(text) : text;
+  const normalized = rendered.replaceAll(/\s+/g, " ");
+  const maxLength = options.maxLength ?? 80;
+  const truncated =
+    normalized.length <= maxLength
+      ? normalized
+      : `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
+  return `${options.prefix ?? ""}${truncated}`;
 }
 
 function decodePiAskFlowToolContext(ctx: unknown): PiAskFlowToolContext {

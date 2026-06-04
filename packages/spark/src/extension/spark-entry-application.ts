@@ -1,4 +1,4 @@
-import { detectCopyLanguage, type SparkCopyLanguage } from "spark-ask";
+import { detectCopyLanguage, type CopyLanguage } from "spark-core";
 import type { ProjectRef } from "spark-core";
 import type { TaskGraph } from "spark-tasks";
 import type { SparkEntryResolution } from "./spark-entry.ts";
@@ -101,7 +101,7 @@ async function startSparkNewProject(
 
   const language = detectCopyLanguage(idea);
   const workingTitle = titleFromIdea(idea);
-  const outputLanguage: SparkCopyLanguage = language;
+  const outputLanguage: CopyLanguage = language;
   const clarification = {
     workingTitle,
     outputLanguage,

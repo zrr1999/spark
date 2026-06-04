@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -80,7 +80,14 @@ function createFakePi() {
   return { pi, commands, tools, entries, handlers };
 }
 
-void test("pi-graft registers CLI-protocol scratch and candidate controls", () => {
+async function writeMockGraft(dir: string, scriptBody: string): Promise<string> {
+  const path = join(dir, "graft-mock");
+  await writeFile(path, `#!/bin/sh\n${scriptBody}\n`);
+  await chmod(path, 0o755);
+  return path;
+}
+
+void test("pi-graft registers the final high-frequency direct tool set", () => {
   const { pi, commands, tools, handlers } = createFakePi();
   registerPiGraftExtension(pi);
 
@@ -92,16 +99,159 @@ void test("pi-graft registers CLI-protocol scratch and candidate controls", () =
   assert.deepEqual(
     [...tools.keys()],
     [
+      "graft_help",
+      "graft_init",
+      "graft_status",
+      "graft_ps",
+      "graft_doctor",
       "graft_read",
       "graft_write",
       "graft_edit",
       "graft_delete",
-      "graft_status",
       "graft_candidate_from_scratch",
       "graft_validate",
       "graft_admit",
+      "graft_show",
+      "graft_evidence",
+      "graft_candidates",
+      "graft_search",
+      "graft_materialize",
+      "graft_cli_exec",
     ],
   );
+});
+
+void test("graft_help defaults to the maintained agent workflow topic", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graft-help-"));
+  const argvFile = join(dir, "argv.txt");
+  const previousGraftBin = process.env.GRAFT_BIN;
+  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
+  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
+  process.env.GRAFT_BIN = await writeMockGraft(
+    dir,
+    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\necho 'Recommended workflow for agents and pi-graft tools'`,
+  );
+
+  try {
+    const { pi, tools } = createFakePi();
+    registerPiGraftExtension(pi);
+    const result = await executeTool(tools.get("graft_help"), "graft_help", {}, { cwd: dir });
+    assert.match(result.content[0].text, /Recommended workflow for agents and pi-graft tools/);
+    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
+      "--cwd",
+      dir,
+      "explain",
+      "agent-workflow",
+    ]);
+  } finally {
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
+    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
+    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+void test("graft_cli_exec validates argv before daemon work", async () => {
+  const { pi, tools } = createFakePi();
+  registerPiGraftExtension(pi);
+  const cliExec = tools.get("graft_cli_exec");
+  await assert.rejects(
+    () => executeTool(cliExec, "graft_cli_exec", { argv: [] }, { cwd: "/tmp/pi-graft-no-daemon" }),
+    /argv must be a non-empty string array/,
+  );
+  await assert.rejects(
+    () =>
+      executeTool(
+        cliExec,
+        "graft_cli_exec",
+        { argv: "status" },
+        { cwd: "/tmp/pi-graft-no-daemon" },
+      ),
+    /argv must be a string array/,
+  );
+  await assert.rejects(
+    () =>
+      executeTool(
+        cliExec,
+        "graft_cli_exec",
+        { argv: ["status", 1] },
+        { cwd: "/tmp/pi-graft-no-daemon" },
+      ),
+    /argv\[1] must be a string/,
+  );
+});
+
+void test("graft-ps command uses the direct CLI route", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graft-ps-"));
+  const argvFile = join(dir, "argv.txt");
+  const previousGraftBin = process.env.GRAFT_BIN;
+  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
+  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
+  process.env.GRAFT_BIN = await writeMockGraft(
+    dir,
+    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\nprintf '{"message":"ps direct"}\\n'`,
+  );
+
+  try {
+    const { pi, commands } = createFakePi();
+    registerPiGraftExtension(pi);
+    const ps = commands.get("graft-ps");
+    assert.ok(ps, "expected graft-ps command to be registered");
+    const notifications: string[] = [];
+    await ps.handler("", {
+      cwd: dir,
+      ui: {
+        notify(message) {
+          notifications.push(message);
+        },
+      },
+    });
+    assert.deepEqual(notifications, ["ps direct"]);
+    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), ["--cwd", dir, "ps"]);
+  } finally {
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
+    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
+    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+void test("graft_init uses direct CLI bootstrap path", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graft-init-"));
+  const project = join(dir, "project");
+  const argvFile = join(dir, "argv.txt");
+  const previousGraftBin = process.env.GRAFT_BIN;
+  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
+  await mkdir(project, { recursive: true });
+  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
+  process.env.GRAFT_BIN = await writeMockGraft(
+    dir,
+    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\nprintf '{"status":"ok","message":"initialized mock"}\\n'`,
+  );
+
+  try {
+    const { pi, tools } = createFakePi();
+    registerPiGraftExtension(pi);
+    const init = tools.get("graft_init");
+    assert.ok(init, "expected graft_init to be registered");
+    const result = await init.execute("graft_init", { cwd: project });
+    assert.match(result.content[0].text, /initialized mock/);
+    assert.deepEqual(result.details?.envelope, { status: "ok", message: "initialized mock" });
+    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
+      "--cwd",
+      project,
+      "--json",
+      "init",
+    ]);
+  } finally {
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
+    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
+    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
+    await rm(dir, { force: true, recursive: true });
+  }
 });
 
 void test("pi-graft rejects unknown doctor arguments before daemon work", async () => {
@@ -143,14 +293,14 @@ void test("pi-graft controls real graftd scratch lifecycle through canonical pro
   const graftHome = join(dir, "graft-home");
   const socket = join(graftHome, "run", "daemon.sock");
   const previousDaemonBin = process.env.GRAFT_DAEMON_BIN;
+  const previousGraftBin = process.env.GRAFT_BIN;
   const previousGraftHome = process.env.GRAFT_HOME;
   process.env.GRAFT_DAEMON_BIN = graftdBin;
+  process.env.GRAFT_BIN = graftBin;
   process.env.GRAFT_HOME = graftHome;
   await mkdir(project, { recursive: true });
 
   try {
-    await execFileAsync(graftBin, ["init"], { cwd: project, timeout: 10_000 });
-
     const { pi, commands, tools, entries, handlers } = createFakePi();
     registerPiGraftExtension(pi);
     const toolCtx: PiGraftToolContext = {
@@ -161,6 +311,12 @@ void test("pi-graft controls real graftd scratch lifecycle through canonical pro
       await handler({}, toolCtx);
     }
     const commandCtx: PiGraftCommandContext = { cwd: project, ui: { notify() {} } };
+
+    const help = await executeTool(tools.get("graft_help"), "graft_help", {}, toolCtx);
+    assert.match(help.content[0].text, /Recommended workflow for agents and pi-graft tools/);
+
+    const init = await executeTool(tools.get("graft_init"), "graft_init", {}, toolCtx);
+    assert.match(init.content[0].text, /initialized|already initialized/);
 
     const seedNote = await executeTool(
       tools.get("graft_write"),
@@ -281,6 +437,42 @@ void test("pi-graft controls real graftd scratch lifecycle through canonical pro
       toolCtx,
     );
     assert.match(admit.content[0].text, /admitted|patch/i);
+    const admitEnvelope = admit.details?.envelope;
+    assert.ok(isRecord(admitEnvelope), "expected admit envelope");
+    const patch = requiredString(admitEnvelope.patch_id, "expected admitted patch id");
+
+    const show = await executeTool(
+      tools.get("graft_show"),
+      "graft_show",
+      { target: patch, evidence: true, change: true },
+      toolCtx,
+    );
+    assert.match(show.content[0].text, /patch/i);
+
+    const evidence = await executeTool(
+      tools.get("graft_evidence"),
+      "graft_evidence",
+      { subject: patch },
+      toolCtx,
+    );
+    assert.ok(isRecord(evidence.details?.envelope), "expected evidence envelope");
+    assert.match(evidence.content[0].text, /evidence|ValidPatch|property:/i);
+
+    const materialize = await executeTool(
+      tools.get("graft_materialize"),
+      "graft_materialize",
+      { patch, dryRun: true },
+      toolCtx,
+    );
+    assert.match(materialize.content[0].text, /materialization dry-run/);
+
+    const exported = await executeTool(
+      tools.get("graft_cli_exec"),
+      "graft_cli_exec",
+      { argv: ["registry", "export", join(dir, "registry.json")] },
+      toolCtx,
+    );
+    assert.match(exported.content[0].text, /exported registry/);
 
     await commands.get("graft-close")!.handler("", commandCtx);
   } finally {
@@ -289,6 +481,8 @@ void test("pi-graft controls real graftd scratch lifecycle through canonical pro
     );
     if (previousDaemonBin === undefined) delete process.env.GRAFT_DAEMON_BIN;
     else process.env.GRAFT_DAEMON_BIN = previousDaemonBin;
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
     if (previousGraftHome === undefined) delete process.env.GRAFT_HOME;
     else process.env.GRAFT_HOME = previousGraftHome;
     await rm(dir, { force: true, recursive: true });

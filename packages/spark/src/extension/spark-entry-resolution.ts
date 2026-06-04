@@ -1,4 +1,4 @@
-import { runSparkAskTool } from "spark-ask";
+import { runSparkAskTool } from "./spark-ask-tool.ts";
 import { isUnfinishedTaskStatus, type TaskGraph } from "spark-tasks";
 import { hasNonSparkProjectFiles } from "./spark-activation.ts";
 import { sparkAskUi } from "./spark-ask-ui.ts";

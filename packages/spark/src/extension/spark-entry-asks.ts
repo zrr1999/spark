@@ -1,4 +1,4 @@
-import type { SparkAskToolParams } from "spark-ask";
+import type { SparkAskToolParams } from "./spark-ask-tool.ts";
 import type { SparkExecuteStrategy } from "./session-state.ts";
 import type { SparkWorkflowRegistryListing } from "./spark-workflow-registry.ts";
 import type {

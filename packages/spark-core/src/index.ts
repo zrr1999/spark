@@ -2,6 +2,9 @@ import { randomUUID, createHash } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
+export { detectCopyLanguage } from "./copy.ts";
+export type { CopyLanguage } from "./copy.ts";
+
 export type RefKind =
   | "spark"
   | "proj"

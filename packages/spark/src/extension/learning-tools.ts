@@ -4,8 +4,8 @@ import { dirname, join, relative } from "node:path";
 import {
   type LearningCategory,
   type LearningRecord,
+  type LearningLocation,
   type LearningRecordInput,
-  type LearningScope,
   type LearningSearchResult,
   type LearningStatus,
   parseLearningExportMarkdown,
@@ -14,7 +14,7 @@ import {
 import type { Artifact } from "spark-core";
 
 const LEARNING_STATUSES = ["candidate", "active", "stale", "superseded", "rejected"] as const;
-const LEARNING_SCOPES = ["global", "workspace", "project", "task"] as const;
+const LEARNING_LOCATIONS = ["user", "workspace", "repo"] as const;
 const LEARNING_CATEGORIES = [
   "pattern",
   "gotcha",
@@ -47,10 +47,10 @@ export function normalizeLearningStatusFilter(
   return normalizeLearningStatus(value);
 }
 
-export function normalizeLearningScope(value: unknown): LearningScope | undefined {
+export function normalizeLearningLocation(value: unknown): LearningLocation | undefined {
   if (value === undefined || value === null) return undefined;
-  if (LEARNING_SCOPES.includes(value as LearningScope)) return value as LearningScope;
-  throw new Error("scope must be global, workspace, project, or task");
+  if (LEARNING_LOCATIONS.includes(value as LearningLocation)) return value as LearningLocation;
+  throw new Error("location must be user, workspace, or repo");
 }
 
 export function normalizeLearningCategory(value: unknown): LearningCategory | undefined {
@@ -110,7 +110,6 @@ export function normalizeLearningInput(params: Record<string, unknown>): Learnin
     statement: normalizeLearningString(params.statement, "statement", { required: true }) ?? "",
     id: normalizeLearningString(params.id, "id"),
     category: normalizeLearningCategory(params.category),
-    scope: normalizeLearningScope(params.scope),
     status: normalizeLearningStatus(params.status),
     applicability: normalizeLearningString(params.applicability, "applicability"),
     nonApplicability: normalizeLearningString(params.nonApplicability, "nonApplicability"),
@@ -128,14 +127,17 @@ export function normalizeLearningInput(params: Record<string, unknown>): Learnin
   };
 }
 
-export function compactLearningDetail(artifact: Artifact<LearningRecord>) {
+export function compactLearningDetail(
+  artifact: Artifact<LearningRecord>,
+  location = inferLearningArtifactLocation(artifact),
+) {
   return {
     ref: artifact.ref,
     kind: artifact.kind,
     title: artifact.body.title,
     status: artifact.body.status,
     category: artifact.body.category,
-    scope: artifact.body.scope,
+    location,
     tags: artifact.body.tags,
     evidenceRefs: artifact.body.evidenceRefs,
     dependsOn: artifact.body.dependsOn,
@@ -152,21 +154,32 @@ export function compactLearningSearchResult(result: LearningSearchResult) {
     title: result.record.title,
     status: result.record.status,
     category: result.record.category,
-    scope: result.record.scope,
+    location: result.location,
     score: result.score,
     snippet: result.snippet,
     evidenceSummary: result.evidenceSummary,
   };
 }
 
-export function formatLearningLine(artifact: Artifact<LearningRecord>): string {
+export function formatLearningLine(
+  artifact: Artifact<LearningRecord>,
+  location = inferLearningArtifactLocation(artifact),
+): string {
   const tags = artifact.body.tags.length ? ` tags=${artifact.body.tags.join(",")}` : "";
-  return `- [${artifact.body.status}/${artifact.body.category}/${artifact.body.scope}] ${artifact.ref}: ${artifact.body.title}${tags}`;
+  return `- [${artifact.body.status}/${artifact.body.category}/${location}] ${artifact.ref}: ${artifact.body.title}${tags}`;
 }
 
 export function formatLearningSearchLine(result: LearningSearchResult): string {
   const tags = result.record.tags.length ? ` tags=${result.record.tags.join(",")}` : "";
-  return `- [${result.record.status}/${result.record.category}/${result.record.scope}] ${result.ref}: ${result.record.title} — ${result.snippet}${tags}`;
+  return `- [${result.record.status}/${result.record.category}/${result.location}] ${result.ref}: ${result.record.title} — ${result.snippet}${tags}`;
+}
+
+function inferLearningArtifactLocation(artifact: Artifact<LearningRecord>): LearningLocation {
+  const note = artifact.provenance.note ?? "";
+  if (note.includes("location=user")) return "user";
+  if (note.includes("location=repo")) return "repo";
+  if (note.includes("location=workspace")) return "workspace";
+  return "workspace";
 }
 
 export interface ParsedLearningImport {

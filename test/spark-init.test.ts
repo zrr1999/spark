@@ -124,17 +124,17 @@ void test("initializeSparkIdea does not overwrite an existing initialized projec
   }
 });
 
-void test("active Spark prompt preserves base prompt and avoids repeated Spark docs", () => {
+void test("active Spark prompt preserves base prompt and stays a single-line state marker", () => {
   const prompt = renderSparkActiveSystemPrompt("Base prompt", "SPARK.md");
-  assert.match(prompt, /^Base prompt\n\nSpark is active for this workspace/);
-  assert.match(prompt, /standing project state/);
-  assert.match(prompt, /Spark tools for project\/task\/TODO\/workflow-run\/ask state/);
-  assert.match(prompt, /Spark ask tools \(`spark_ask`\)/);
-  assert.match(prompt, /fix concrete repo behavior feedback in code\/docs\/tests/);
+  assert.match(prompt, /^Base prompt\n\nSpark active \(SPARK\.md\); mode: auto\./);
+  assert.match(prompt, /Manage project\/task\/ask\/run state via Spark tools/);
+  assert.match(prompt, /spark_ask on real blockers/);
+  assert.doesNotMatch(prompt, /spark skill/);
+  assert.doesNotMatch(prompt, /standing project state/);
+  assert.doesNotMatch(prompt, /workflow-run\/ask state/);
   assert.doesNotMatch(prompt, /Do not auto-create placeholder tasks or projects/);
-  assert.doesNotMatch(prompt, /Before launching multiple roles or parallel workstreams/);
   assert.doesNotMatch(prompt, /prefer direct-exec commands and Pi file tools over \/bin\/sh/);
-  assert.doesNotMatch(prompt, /Do not satisfy such feedback by only storing memory or preferences/);
+  assert.doesNotMatch(prompt, /fix concrete repo behavior feedback in code\/docs\/tests/);
 });
 
 void test("active Spark context reports no selected project without persisting current selection", async () => {
@@ -315,7 +315,12 @@ void test("active Spark context omits finished history and finished TODOs", asyn
     assert.match(summary, /My claimed task: \[running\] @compact-context: Compact active context/);
     assert.match(summary, /Keep active TODO/);
     assert.match(summary, /Blocked child TODO/);
+    assert.match(summary, /Independent TODOs \(session priority\): 1 active/);
     assert.match(summary, /Independent active TODO/);
+    assert.ok(
+      summary.indexOf("Independent active TODO") < summary.indexOf("My claimed task"),
+      "session TODOs should precede claimed task context so execute mode sees them first",
+    );
     assert.doesNotMatch(summary, /Finished task history/);
     assert.doesNotMatch(summary, /Finished child TODO/);
     assert.doesNotMatch(summary, /Finished history TODO/);

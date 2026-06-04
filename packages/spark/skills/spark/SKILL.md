@@ -5,12 +5,14 @@ description: Use for turning an initial or ambiguous project intent into SPARK.m
 
 # Spark
 
+Spark extensions are dual-host: the same retained extension packages should run under Pi's `@earendil-works/pi-coding-agent` host and under the native `spark-cli` host via `SparkHostRuntime` / `pi-extension-api`. Keep shared extension behavior host-neutral; put native CLI boot, provider/model selection, sessions, skills, and pi-tui wrappers in `packages/spark-cli/src/host/` or `packages/spark-cli/src/tui/`.
+
 Use Spark command modes intentionally: `/spark <idea>` for initialization/autodetection, `/research <focus>` for investigation, `/plan <focus>` for task-DAG refinement, `/execute <focus>` for one default execution step, and `/workflow[:selector] <focus>` for Spark-owned workflows. Builtins are intentionally minimal: `/workflow:goal` and `/workflow:ready`; scripted workflows use `/workflow workspace:<name>` and `/workflow user:<name>`. Do not reintroduce legacy `/run*` or `/goal` command guidance.
 
 Spark primitives:
 
 - `spark-core`: shared refs, schemas, and typed artifact storage/provenance.
-- `spark-ask`: structured decisions and approvals.
+- `pi-ask` (and `packages/spark/src/extension/spark-ask-tool.ts` for the Spark-specific persistence/replay wrapper): structured decisions and approvals.
 - `pi-cue`: reusable controlled execution infrastructure.
 - `pi-roles`: reusable `RoleSpec`s plus simple `fresh | forked` child Pi `RoleRun` helpers.
 - `spark-tasks`: project/task DAG and task planning helpers.
@@ -28,7 +30,7 @@ Rules:
 7. Running a role only accepts an instruction; no runtime system-prompt patching.
 8. Task-generated work must pass plan readiness before persistence; tasks that do not pass are rejected rather than stored as drafts.
 9. Store durable context as typed artifacts rather than relying on chat history.
-10.   Treat `.spark/` as local runtime state that should be added to `.gitignore`; share stable learnings only through explicit exports, reports, or committed Markdown artifacts.
+10.   Treat `.spark/` as local runtime state that should be added to `.gitignore`; Spark learnings live under `.learning/` for repo/workspace knowledge or the user learning directory for personal cross-project knowledge.
 11.   Treat Spark learnings as evidence-backed reusable judgments for future action, not generic chat memory or source-of-truth replacement; use `spark_learning_search` when prior lessons may be relevant, and current repo/source/tool evidence wins.
 12.   Treat SPARK.md as persistent project intent that the extension injects into the active system prompt.
 13.   Models may improve Spark display names without asking when the active project title or current task `@name`/title is obviously placeholder, generic, stale, too broad, or inconsistent with the current confirmed intent. Examples include placeholder labels such as `Untitled`, `New project`, `Task`, `TODO`, `Custom input`, or `「自定义输入」`; generic labels such as `Fix bug`, `Implement task`, `Research`, `Review`, `Spark work`, `Update docs`, or `Plan`; and stale labels that describe an older scope than the active request. Use `spark_rename_project` for project metadata and `spark_claim_task` for the claimed task. Display names are mutable labels only: stable `project:*` and `task:*` refs, dependencies, runs, artifacts, and TODOs continue to point at the same entities after a rename. Preserve user-specific intentional names, distinctive project/code names, issue IDs, release names, and ambiguous naming choices; ask with `spark_ask` only when the right name depends on a real user decision.

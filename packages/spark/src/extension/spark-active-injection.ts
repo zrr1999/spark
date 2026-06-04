@@ -11,9 +11,11 @@ import { ensureSparkGraphInvariants } from "./spark-graph-invariants.ts";
 import {
   currentSparkProject,
   loadSparkGraph,
+  loadSparkMode,
   sparkSessionKey,
   sparkTodoStore,
   type SparkSessionContext,
+  type SparkSessionMode,
 } from "./session-state.ts";
 import { loadIndependentTodos } from "./session-todos.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
@@ -40,7 +42,12 @@ export async function injectSparkHints(event: unknown, ctx: SparkToolContext): P
   if (!activation.active) return undefined;
   await ensureSparkStateForActiveWorkspace(ctx.cwd, ctx);
   const contextSummary = await renderActiveSparkContextSummary(ctx.cwd, ctx);
-  const sparkPrompt = renderSparkActiveSystemPrompt(eventSystemPrompt(event), activation.reason);
+  const mode = (await loadSparkMode(ctx.cwd, ctx)).mode;
+  const sparkPrompt = renderSparkActiveSystemPrompt(
+    eventSystemPrompt(event),
+    activation.reason,
+    mode,
+  );
   return {
     systemPrompt: contextSummary ? `${sparkPrompt}\n\n${contextSummary}` : sparkPrompt,
   };
@@ -75,12 +82,12 @@ export async function ensureSparkStateForActiveWorkspace(
   return loadSparkGraph(cwd, ctx);
 }
 
-export function renderSparkActiveSystemPrompt(basePrompt: string, reason: string): string {
-  const sparkPrompt = [
-    `Spark is active for this workspace (${reason}).`,
-    "Use the injected Active Spark context as standing project state; read SPARK.md or the spark skill only when you need full intent or workflow details.",
-    "Follow the active workflow contract: use Spark tools for project/task/TODO/workflow-run/ask state, claim at most one unfinished session task, ask via Spark ask tools (`spark_ask`) for real blockers or missing decisions, and fix concrete repo behavior feedback in code/docs/tests instead of treating it as memory-only.",
-  ].join(" ");
+export function renderSparkActiveSystemPrompt(
+  basePrompt: string,
+  reason: string,
+  mode: SparkSessionMode = "auto",
+): string {
+  const sparkPrompt = `Spark active (${reason}); mode: ${mode}. Manage project/task/ask/run state via Spark tools; claim \u22641 unfinished task per session; spark_ask on real blockers.`;
   return basePrompt ? `${basePrompt}\n\n${sparkPrompt}` : sparkPrompt;
 }
 

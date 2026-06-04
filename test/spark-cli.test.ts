@@ -6,6 +6,7 @@ import registerBaiduOneApiProvider, {
   resolveBaiduOneApiKey,
 } from "../packages/spark-cli/src/baidu-oneapi-provider.ts";
 import { parseSparkCliArgs } from "../packages/spark-cli/src/cli.ts";
+import { SparkNativeSession } from "../packages/spark-cli/src/native-tui.ts";
 import sparkCliHostExtension from "../packages/spark-cli/src/spark-host-extension.ts";
 
 void test("parseSparkCliArgs treats positional args as the initial message", () => {
@@ -113,19 +114,54 @@ void test("Baidu OneAPI key resolver uses only dedicated auth identity", () => {
   }
 });
 
-void test("Spark CLI host routes ordinary input through /spark", () => {
+void test("Spark CLI host routes ordinary input through /spark with follow-up queueing", () => {
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
-  const sent: string[] = [];
+  const sent: Array<{ content: string; options: unknown }> = [];
   sparkCliHostExtension({
     on: (event, handler) => handlers.set(event, handler),
-    sendUserMessage: (content) => sent.push(content),
+    sendUserMessage: (content, options) => sent.push({ content, options }),
     isIdle: () => true,
   });
 
   const result = handlers.get("input")?.({ text: "build the CLI", source: "interactive" }, {});
 
   assert.deepEqual(result, { action: "handled" });
-  assert.deepEqual(sent, ["/spark build the CLI"]);
+  assert.deepEqual(sent, [
+    {
+      content: "/spark build the CLI",
+      options: { deliverAs: "followUp", streamingBehavior: "followUp" },
+    },
+  ]);
+});
+
+void test("Spark native session queues follow-ups while processing", async () => {
+  let releaseFirst: ((value: string) => void) | undefined;
+  const calls: string[] = [];
+  const session = new SparkNativeSession(async (input) => {
+    calls.push(input);
+    if (input === "first") {
+      return await new Promise<string>((resolve) => {
+        releaseFirst = resolve;
+      });
+    }
+    return `done ${input}`;
+  });
+
+  assert.equal(await session.submit("first"), "started");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(session.isProcessing, true);
+
+  assert.equal(await session.submit("second"), "queued");
+  assert.equal(session.queuedCount, 1);
+  assert.deepEqual(calls, ["first"]);
+
+  releaseFirst?.("done first");
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(session.isProcessing, false);
+  assert.equal(session.queuedCount, 0);
+  assert.deepEqual(calls, ["first", "second"]);
 });
 
 void test("Spark CLI host preserves slash commands and shell input", () => {

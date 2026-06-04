@@ -1,4 +1,4 @@
-import type { SparkCopyLanguage } from "spark-ask";
+import type { CopyLanguage } from "spark-core";
 import type { ArtifactRef } from "spark-core";
 
 export interface SparkInitResult {
@@ -7,7 +7,7 @@ export interface SparkInitResult {
   projectTitle: string;
   projectRef: string;
   taskCount: number;
-  outputLanguage: SparkCopyLanguage;
+  outputLanguage: CopyLanguage;
   status?: string;
   currentTaskRef?: string;
   currentTaskTitle?: string;

@@ -394,15 +394,26 @@ function flattenWidgetRows(tasks: TaskEntry[], independentTodos: SessionTodoEntr
   const rows: WidgetRow[] = [];
   let todoIndex = 1;
   const visibleTasks = sortTasksForVisibility(tasks);
-  for (const task of visibleTasks) {
-    rows.push({ kind: "task", task });
-    if (task.status === "done" || task.status === "cancelled") continue;
-    for (const todo of sortTodosForVisibility(task.todos.filter(isVisibleTaskTodo)))
-      rows.push({ kind: "task-todo", todo, fallbackNumber: todoIndex++ });
-  }
+  const priorityTasks = visibleTasks.filter(taskPrecedesSessionTodos);
+  const lowerPriorityTasks = visibleTasks.filter((task) => !taskPrecedesSessionTodos(task));
+
+  for (const task of priorityTasks) todoIndex = appendTaskRows(rows, task, todoIndex);
   for (const todo of sortTodosForVisibility(independentTodos))
     rows.push({ kind: "independent-todo", todo, fallbackNumber: todoIndex++ });
+  for (const task of lowerPriorityTasks) todoIndex = appendTaskRows(rows, task, todoIndex);
   return rows;
+}
+
+function appendTaskRows(rows: WidgetRow[], task: TaskEntry, todoIndex: number): number {
+  rows.push({ kind: "task", task });
+  if (task.status === "done" || task.status === "cancelled") return todoIndex;
+  for (const todo of sortTodosForVisibility(task.todos.filter(isVisibleTaskTodo)))
+    rows.push({ kind: "task-todo", todo, fallbackNumber: todoIndex++ });
+  return todoIndex;
+}
+
+function taskPrecedesSessionTodos(task: TaskEntry): boolean {
+  return task.status === "running" || task.status === "blocked";
 }
 
 function sortTasksForVisibility(tasks: TaskEntry[]): TaskEntry[] {

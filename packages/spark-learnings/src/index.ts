@@ -1,4 +1,9 @@
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+
 import {
+  ArtifactStore,
   type Artifact,
   type ArtifactFormat,
   type ArtifactKind,
@@ -12,10 +17,9 @@ import {
   nowIso,
   stableId,
 } from "spark-core";
-import { defaultArtifactStore } from "spark-core";
 
 export type LearningCategory = "pattern" | "gotcha" | "decision" | "workflow" | "tool" | "project";
-export type LearningScope = "global" | "workspace" | "project" | "task";
+export type LearningLocation = "user" | "workspace" | "repo";
 export type LearningStatus = "candidate" | "active" | "stale" | "superseded" | "rejected";
 
 export interface LearningRecord extends Record<string, JsonValue> {
@@ -23,7 +27,6 @@ export interface LearningRecord extends Record<string, JsonValue> {
   title: string;
   statement: string;
   category: LearningCategory;
-  scope: LearningScope;
   status: LearningStatus;
   applicability: string;
   nonApplicability: string | null;
@@ -51,7 +54,6 @@ export interface LearningRecordInput {
   title: string;
   statement: string;
   category?: LearningCategory;
-  scope?: LearningScope;
   status?: LearningStatus;
   applicability?: string;
   nonApplicability?: string;
@@ -70,7 +72,6 @@ export interface LearningRecordInput {
 
 export interface LearningListFilter {
   status?: LearningStatus | LearningStatus[];
-  scope?: LearningScope;
   category?: LearningCategory;
   tag?: string;
   includeCandidates?: boolean;
@@ -84,6 +85,7 @@ export interface LearningSearchFilter extends LearningListFilter {
 
 export interface LearningSearchResult {
   ref: ArtifactRef;
+  location: LearningLocation;
   record: LearningRecord;
   score: number;
   snippet: string;
@@ -92,6 +94,7 @@ export interface LearningSearchResult {
 
 export interface LearningStoreOptions {
   artifactStore: LearningArtifactStore;
+  location?: LearningLocation;
 }
 
 export interface LearningArtifactStore {
@@ -135,8 +138,6 @@ const LEARNING_CATEGORIES: LearningCategory[] = [
   "tool",
   "project",
 ];
-const LEARNING_SCOPES: LearningScope[] = ["global", "workspace", "project", "task"];
-
 export class LearningExportFormatError extends Error {
   readonly filePath: string;
   readonly blockIndex: number | undefined;
@@ -224,7 +225,6 @@ export function parseLegacyCompoundLearningMarkdown(
     title,
     statement: context ?? firstMeaningfulMarkdownParagraph(body) ?? title,
     category: legacyLearningCategory(frontmatter.category, input.relativePath ?? input.sourcePath),
-    scope: "project",
     status: "active",
     applicability: context ?? `Imported from legacy compound-learnings file ${input.sourcePath}.`,
     evidenceRefs: [input.sourcePath],
@@ -238,9 +238,11 @@ export function parseLegacyCompoundLearningMarkdown(
 
 export class LearningStore {
   readonly artifactStore: LearningArtifactStore;
+  readonly location: LearningLocation;
 
   constructor(options: LearningStoreOptions) {
     this.artifactStore = options.artifactStore;
+    this.location = options.location ?? "workspace";
   }
 
   async record(input: LearningRecordInput): Promise<Artifact<LearningRecord>> {
@@ -262,7 +264,7 @@ export class LearningStore {
       body: record,
       provenance: {
         producer: "spark",
-        note: "spark-learnings record",
+        note: learningProvenanceNote("record"),
       },
       links: relationLinks(record),
     });
@@ -279,7 +281,7 @@ export class LearningStore {
       body: record,
       provenance: {
         producer: "spark",
-        note: "spark-learnings import restore",
+        note: learningProvenanceNote("import restore"),
       },
       links: relationLinks(record),
     });
@@ -308,7 +310,7 @@ export class LearningStore {
     const query = filter.query.trim();
     const artifacts = await this.list(filter);
     const results = artifacts
-      .map((artifact) => scoreLearning(artifact, query))
+      .map((artifact) => scoreLearning(artifact, query, this.location))
       .filter((result) => result.score > 0 || !query)
       .sort((left, right) => {
         if (right.score !== left.score) return right.score - left.score;
@@ -380,15 +382,65 @@ export class LearningStore {
       body: record,
       provenance: {
         producer: "spark",
-        note: "spark-learnings status update",
+        note: learningProvenanceNote("status update"),
       },
       links: relationLinks(record),
     });
   }
 }
 
-export function defaultLearningStore(cwd: string): LearningStore {
-  return new LearningStore({ artifactStore: defaultArtifactStore(cwd) });
+export function defaultLearningStore(cwd: string, location?: LearningLocation): LearningStore {
+  const target = resolveLearningStoreTarget(cwd, location);
+  return new LearningStore({
+    artifactStore: new ArtifactStore({ rootDir: target.rootDir }),
+    location: target.location,
+  });
+}
+
+export function defaultUserLearningStore(): LearningStore {
+  return defaultLearningStore(process.cwd(), "user");
+}
+
+export function resolveLearningStoreTarget(
+  cwd: string,
+  requestedLocation?: LearningLocation,
+): { rootDir: string; location: LearningLocation } {
+  const gitRoot = findGitRoot(cwd);
+  if (requestedLocation === "user") return { rootDir: defaultUserLearningRoot(), location: "user" };
+  if (requestedLocation === "repo") {
+    return {
+      rootDir: join(gitRoot ?? cwd, ".learning"),
+      location: gitRoot ? "repo" : "workspace",
+    };
+  }
+  if (requestedLocation === "workspace") {
+    return {
+      rootDir: join(gitRoot ?? cwd, ".learning"),
+      location: gitRoot ? "repo" : "workspace",
+    };
+  }
+  return {
+    rootDir: join(gitRoot ?? cwd, ".learning"),
+    location: gitRoot ? "repo" : "workspace",
+  };
+}
+
+function learningProvenanceNote(action: string): string {
+  return `spark-learnings ${action}`;
+}
+
+function defaultUserLearningRoot(): string {
+  return join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "learning");
+}
+
+function findGitRoot(cwd: string): string | undefined {
+  let current = cwd;
+  while (true) {
+    if (existsSync(join(current, ".git"))) return current;
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
 }
 
 async function hydrateLearningArtifacts(
@@ -428,9 +480,6 @@ export function validateLearningRecord(record: unknown): asserts record is Learn
   requireNonEmpty(record.statement, "learning statement");
   if (!LEARNING_CATEGORIES.includes(record.category as LearningCategory)) {
     throw new Error(`invalid learning category: ${String(record.category)}`);
-  }
-  if (!LEARNING_SCOPES.includes(record.scope as LearningScope)) {
-    throw new Error(`invalid learning scope: ${String(record.scope)}`);
   }
   if (!LEARNING_STATUSES.includes(record.status as LearningStatus)) {
     throw new Error(`invalid learning status: ${String(record.status)}`);
@@ -485,7 +534,6 @@ function normalizeLearningRecord(
     title: input.title.trim(),
     statement: input.statement.trim(),
     category: input.category ?? "pattern",
-    scope: input.scope ?? "project",
     status: input.status ?? "active",
     applicability: input.applicability?.trim() ?? "",
     nonApplicability: emptyToNull(input.nonApplicability),
@@ -514,7 +562,7 @@ function artifactKindForLearningStatus(status: LearningStatus): "learning" | "le
 function stableLearningId(input: LearningRecordInput): string {
   const sourceKey = input.sourceHash
     ? `${input.sourcePaths?.join("\n") ?? ""}\n${input.sourceHash}`
-    : `${input.scope ?? "project"}\n${input.category ?? "pattern"}\n${input.title}\n${input.statement}`;
+    : `${input.category ?? "pattern"}\n${input.title}\n${input.statement}`;
   return `learning-${stableId(sourceKey)}`;
 }
 
@@ -533,13 +581,16 @@ function matchesLearningFilter(record: LearningRecord, filter: LearningListFilte
         ? ["active", "candidate"]
         : DEFAULT_ACTIVE_STATUSES;
   if (!statuses.includes(record.status)) return false;
-  if (filter.scope && record.scope !== filter.scope) return false;
   if (filter.category && record.category !== filter.category) return false;
   if (filter.tag && !record.tags.includes(filter.tag)) return false;
   return true;
 }
 
-function scoreLearning(artifact: Artifact<LearningRecord>, query: string): LearningSearchResult {
+function scoreLearning(
+  artifact: Artifact<LearningRecord>,
+  query: string,
+  location: LearningLocation,
+): LearningSearchResult {
   const record = artifact.body;
   const haystack = searchableLearningText(record);
   const terms = query
@@ -559,6 +610,7 @@ function scoreLearning(artifact: Artifact<LearningRecord>, query: string): Learn
   if (record.status === "active") score += 0.25;
   return {
     ref: artifact.ref,
+    location,
     record,
     score,
     snippet: learningSnippet(record, terms),
@@ -575,7 +627,6 @@ function searchableLearningText(record: LearningRecord): string {
     record.rationale,
     record.sourceContent,
     record.category,
-    record.scope,
     record.status,
     ...record.tags,
     ...record.sourcePaths,

@@ -293,18 +293,25 @@ void test("task role labels prefer active claim, finished attribution, then late
   );
 });
 
-void test("active Spark prompt keeps only the active workflow contract", () => {
+void test("active Spark prompt is a one-line state marker with the current mode", () => {
   const prompt = renderSparkActiveSystemPrompt("", "SPARK.md");
-  assert.match(prompt, /Spark is active for this workspace/);
-  assert.match(prompt, /Active Spark context/);
-  assert.match(prompt, /claim at most one unfinished session task/);
-  assert.match(prompt, /Spark ask tools/);
-  assert.match(prompt, /spark_ask/);
-  assert.match(prompt, /fix concrete repo behavior feedback/);
+  assert.match(prompt, /^Spark active \(SPARK\.md\); mode: auto\./);
+  assert.match(prompt, /Manage project\/task\/ask\/run state via Spark tools/);
+  assert.match(prompt, /spark_ask on real blockers/);
+  assert.doesNotMatch(prompt, /read SPARK\.md or the spark skill/);
+  assert.doesNotMatch(prompt, /spark skill/);
+  assert.doesNotMatch(prompt, /standing project state/);
+  assert.doesNotMatch(prompt, /Active Spark context/);
   assert.doesNotMatch(prompt, /spark_use_project/);
-  assert.doesNotMatch(prompt, /spark_list_roles\/spark_get_role/);
   assert.doesNotMatch(prompt, /Do not spawn nested pi CLI sessions/);
-  assert.ok(prompt.length < 700);
+  assert.ok(prompt.length < 220, `expected short standing prompt, got ${prompt.length}`);
+});
+
+void test("active Spark prompt threads the current session mode into the marker", () => {
+  const planPrompt = renderSparkActiveSystemPrompt("", ".spark/projects.json", "plan");
+  assert.match(planPrompt, /^Spark active \(\.spark\/projects\.json\); mode: plan\./);
+  const executePrompt = renderSparkActiveSystemPrompt("", "SPARK.md", "execute");
+  assert.match(executePrompt, /mode: execute/);
 });
 
 void test("builtin Spark roles are instructed to use ask tools for blockers", () => {

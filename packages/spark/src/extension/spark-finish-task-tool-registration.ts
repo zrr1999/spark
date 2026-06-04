@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defaultLearningStore, type LearningRecord } from "spark-learnings";
+import { defaultLearningStore, type LearningLocation, type LearningRecord } from "spark-learnings";
 import {
   DependencyError,
   type Artifact,
@@ -141,7 +141,7 @@ export function registerSparkFinishTaskTool(
               .join("; ")}`
           : "";
       const candidateSuffix = learningCandidate
-        ? `\nLearning candidate: ${learningCandidate.ref}`
+        ? `\nLearning candidate: ${learningCandidate.artifact.ref}`
         : "";
       const executionSuffix = renderExecutionModeFinishSuffix(
         executionMode,
@@ -163,7 +163,7 @@ export function registerSparkFinishTaskTool(
             ? compactTaskDetail(finishedResult.nextReady)
             : undefined,
           learningCandidate: learningCandidate
-            ? compactLearningDetail(learningCandidate)
+            ? compactLearningDetail(learningCandidate.artifact, learningCandidate.location)
             : undefined,
         },
       };
@@ -220,12 +220,12 @@ async function recordTaskLearningCandidate(
   cwd: string,
   task: Task,
   summary: string,
-): Promise<Artifact<LearningRecord>> {
-  return defaultLearningStore(cwd).record({
+): Promise<{ artifact: Artifact<LearningRecord>; location: LearningLocation }> {
+  const store = defaultLearningStore(cwd);
+  const artifact = await store.record({
     title: `Candidate from @${task.name}: ${task.title}`,
     statement: summary,
     category: "workflow",
-    scope: "project",
     status: "candidate",
     applicability: "Review this task-derived candidate before applying it to future Spark work.",
     evidenceRefs: [task.ref],
@@ -240,4 +240,5 @@ async function recordTaskLearningCandidate(
       `Completion summary: ${summary}`,
     ].join("\n"),
   });
+  return { artifact, location: store.location };
 }

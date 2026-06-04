@@ -96,6 +96,43 @@ class GraftdError extends Error {
   }
 }
 
+class GraftCliError extends Error {
+  readonly program: string;
+  readonly argv: string[];
+  readonly cwd: string;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly exitCode: number | null;
+
+  constructor({
+    program,
+    argv,
+    cwd,
+    stdout,
+    stderr,
+    exitCode,
+  }: {
+    program: string;
+    argv: string[];
+    cwd: string;
+    stdout: string;
+    stderr: string;
+    exitCode: number | null;
+  }) {
+    const output = `${stdout}${stderr}`.trim();
+    super(
+      `graft CLI failed (${program} ${argv.join(" ")}): ${output || `exit ${exitCode ?? "unknown"}`}`,
+    );
+    this.name = "GraftCliError";
+    this.program = program;
+    this.argv = argv;
+    this.cwd = cwd;
+    this.stdout = stdout;
+    this.stderr = stderr;
+    this.exitCode = exitCode;
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -138,6 +175,122 @@ function workspaceIdForRequest(): string {
 function compactError(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+interface DirectGraftExecution {
+  mode: "direct";
+  program: string;
+  cwd: string;
+  argv: string[];
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+interface DaemonGraftExecution {
+  mode: "daemon";
+  cwd: string;
+  argv: string[];
+}
+
+function graftCandidates(): string[] {
+  const fromEnv = process.env.GRAFT_BIN?.trim();
+  if (fromEnv) return [fromEnv];
+  return ["graft"];
+}
+
+async function runDirectGraft(cwd: string, argv: string[]): Promise<DirectGraftExecution> {
+  let lastError = "no graft candidate tried";
+  for (const graft of graftCandidates()) {
+    const actualArgv = ["--cwd", cwd, ...argv];
+    const result = await new Promise<{
+      code: number | null;
+      stdout: string;
+      stderr: string;
+      error?: Error;
+    }>((resolve) => {
+      const child = spawn(graft, actualArgv, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      child.stdout?.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
+      child.stderr?.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+      child.once("error", (error) => {
+        resolve({
+          code: null,
+          stdout: Buffer.concat(stdout).toString(),
+          stderr: Buffer.concat(stderr).toString(),
+          error,
+        });
+      });
+      child.once("exit", (code) => {
+        resolve({
+          code,
+          stdout: Buffer.concat(stdout).toString(),
+          stderr: Buffer.concat(stderr).toString(),
+        });
+      });
+    });
+
+    if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
+      lastError = `${graft} not found`;
+      continue;
+    }
+    if (result.error) {
+      throw new Error(`could not run graft CLI with ${graft}: ${result.error.message}`);
+    }
+    if (result.code !== 0) {
+      throw new GraftCliError({
+        program: graft,
+        argv: actualArgv,
+        cwd,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.code,
+      });
+    }
+    return {
+      mode: "direct",
+      program: graft,
+      cwd,
+      argv: actualArgv,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.code,
+    };
+  }
+  throw new Error(`${lastError}; set GRAFT_BIN or put graft on PATH`);
+}
+
+function tryParseJsonRecord(text: string): JsonRecord | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return isRecord(parsed) ? (parsed as JsonRecord) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseJsonRecord(text: string, context: string): JsonRecord {
+  const parsed = tryParseJsonRecord(text);
+  if (!parsed) throw new Error(`${context} did not return a JSON object.`);
+  return parsed;
+}
+
+async function directCliJson(
+  cwd: string,
+  argv: string[],
+): Promise<{ envelope: JsonRecord; execution: DirectGraftExecution }> {
+  const execution = await runDirectGraft(cwd, argv);
+  return { envelope: parseJsonRecord(execution.stdout, `graft ${argv.join(" ")}`), execution };
+}
+
+function formatDirectOutput(execution: DirectGraftExecution): string {
+  return (
+    `${execution.stdout}${execution.stderr}`.trim() ||
+    `graft ${execution.argv.join(" ")} completed.`
+  );
 }
 
 async function canConnect(
@@ -341,11 +494,109 @@ function normalizeStringList(value: unknown): string[] {
   });
 }
 
+function optionalBooleanParam(
+  params: Record<string, unknown>,
+  field: string,
+  defaultValue = false,
+): boolean {
+  const value = params[field];
+  if (value === undefined) return defaultValue;
+  if (typeof value !== "boolean") throw new Error(`${field} must be a boolean.`);
+  return value;
+}
+
+function stringArrayParam(params: Record<string, unknown>, field: string): string[] | undefined {
+  const value = params[field];
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error(`${field} must be a string array.`);
+  return value.map((item, index) => {
+    if (typeof item !== "string") throw new Error(`${field}[${index}] must be a string.`);
+    if (item.trim().length === 0) throw new Error(`${field}[${index}] must not be empty.`);
+    return item;
+  });
+}
+
+function cliArgvParam(params: Record<string, unknown>): string[] {
+  const argv = stringArrayParam(params, "argv");
+  if (!argv || argv.length === 0) {
+    throw new Error("graft_cli_exec argv must be a non-empty string array.");
+  }
+  for (const [index, item] of argv.entries()) {
+    if (item === "--cwd" || item.startsWith("--cwd=")) {
+      throw new Error(
+        `graft_cli_exec argv[${index}] must not set --cwd; pass the tool cwd parameter instead.`,
+      );
+    }
+  }
+  return argv;
+}
+
+const DIRECT_CLI_COMMANDS = new Set(["init", "explain", "ps", "doctor"]);
+
+function primaryCliCommand(argv: string[]): string | undefined {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]!;
+    if (arg === "--cwd") {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--cwd=")) continue;
+    if (arg === "--json") continue;
+    if (arg === "--help" || arg === "-h") return arg;
+    if (arg.startsWith("-")) continue;
+    return arg;
+  }
+  return undefined;
+}
+
+function hasHelpFlag(argv: string[]): boolean {
+  return argv.some((arg) => arg === "--help" || arg === "-h");
+}
+
+function shouldRunDirectCli(argv: string[]): boolean {
+  const primary = primaryCliCommand(argv);
+  return primary !== undefined && (DIRECT_CLI_COMMANDS.has(primary) || hasHelpFlag(argv));
+}
+
 function formatEnvelope(envelope: JsonRecord): string {
   const message = typeof envelope.message === "string" ? envelope.message : undefined;
   const candidate =
     typeof envelope.candidate_id === "string" ? `candidate: ${envelope.candidate_id}` : undefined;
-  return [message, candidate].filter(Boolean).join("\n") || JSON.stringify(envelope, null, 2);
+  const patch = typeof envelope.patch_id === "string" ? `patch: ${envelope.patch_id}` : undefined;
+  return (
+    [message, candidate, patch].filter(Boolean).join("\n") || JSON.stringify(envelope, null, 2)
+  );
+}
+
+function envelopeToolResult(
+  envelope: JsonRecord,
+  details: Record<string, unknown> = {},
+): PiGraftToolResult {
+  return {
+    content: [{ type: "text", text: formatEnvelope(envelope) }],
+    details: { envelope, ...details },
+  };
+}
+
+async function executeCliArgv(
+  cwd: string,
+  argv: string[],
+): Promise<{ text: string; details: Record<string, unknown> }> {
+  if (shouldRunDirectCli(argv)) {
+    const execution = await runDirectGraft(cwd, argv);
+    const envelope = tryParseJsonRecord(execution.stdout);
+    return {
+      text: envelope ? formatEnvelope(envelope) : formatDirectOutput(execution),
+      details: { envelope, execution },
+    };
+  }
+  const envelope = await cliExec(cwd, argv);
+  const execution: DaemonGraftExecution = {
+    mode: "daemon",
+    cwd,
+    argv: ["graft", "--cwd", cwd, ...argv],
+  };
+  return { text: formatEnvelope(envelope), details: { envelope, execution } };
 }
 
 async function notifyCliExec(
@@ -353,8 +604,8 @@ async function notifyCliExec(
   argv: string[],
   fallbackMessage: string,
 ): Promise<void> {
-  const envelope = await cliExec(ctx.cwd, argv);
-  ctx.ui?.notify?.(formatEnvelope(envelope) || fallbackMessage, "info");
+  const result = await executeCliArgv(ctx.cwd, argv);
+  ctx.ui?.notify?.(result.text || fallbackMessage, "info");
 }
 
 interface ParsedAnchor {
@@ -630,10 +881,143 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   });
 
   pi.registerTool({
+    name: "graft_help",
+    label: "Graft Help",
+    description: "Show maintained Graft workflow or command help.",
+    parameters: Type.Object({
+      topic: Type.Optional(
+        Type.String({ description: "Explain topic; defaults to agent-workflow." }),
+      ),
+      command: Type.Optional(Type.Array(Type.String({ description: "Command token for --help." }))),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const topic = optionalStringParam(params, "topic");
+      const command = stringArrayParam(params, "command");
+      if (topic && command)
+        throw new Error("graft_help accepts either topic or command, not both.");
+      if (command && command.length === 0) throw new Error("graft_help command must not be empty.");
+      const argv = command ? [...command, "--help"] : ["explain", topic ?? "agent-workflow"];
+      const execution = await runDirectGraft(cwd, argv);
+      return {
+        content: [{ type: "text", text: formatDirectOutput(execution) }],
+        details: {
+          mode: command ? "command-help" : "explain",
+          topic: command ? undefined : (topic ?? "agent-workflow"),
+          command,
+          execution,
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "graft_init",
+    label: "Graft Init",
+    description: "Initialize or register a Graft workspace.",
+    parameters: Type.Object({
+      cwd: Type.Optional(Type.String({ description: "Workspace directory; defaults to ctx.cwd." })),
+      registerOnly: Type.Optional(
+        Type.Boolean({ description: "Only register an existing workspace." }),
+      ),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = optionalStringParam(params, "cwd") ?? toolCwd(ctx, activeState, lastCwd);
+      const argv = ["--json", "init"];
+      if (optionalBooleanParam(params, "registerOnly")) argv.push("--register-only");
+      const { envelope, execution } = await directCliJson(cwd, argv);
+      lastCwd = cwd;
+      return envelopeToolResult(envelope, { execution });
+    },
+  });
+
+  pi.registerTool({
+    name: "graft_status",
+    label: "Graft Status",
+    description: "Inspect pi-graft convenience state and graftd status.",
+    parameters: Type.Object({}),
+    async execute(
+      _toolCallId: string,
+      _params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const state = stateForCwd(activeState, cwd);
+      let daemon: JsonValue | undefined;
+      let daemonText = "graftd: unavailable";
+      try {
+        daemon = await requestGraftd(cwd, "status");
+        daemonText = `graftd: ${stringField(daemon, "status") ?? "ok"}`;
+      } catch (error) {
+        daemonText = `graftd: unavailable (${compactError(error)})`;
+      }
+      return {
+        content: [{ type: "text", text: `${stateSummary(state)}\n${daemonText}` }],
+        details: { active: Boolean(state), state, daemon },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "graft_ps",
+    label: "Graft Ps",
+    description: "Show global daemon and registry status.",
+    parameters: Type.Object({}),
+    async execute(
+      _toolCallId: string,
+      _params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const { envelope, execution } = await directCliJson(cwd, ["--json", "ps"]);
+      return envelopeToolResult(envelope, { execution });
+    },
+  });
+
+  pi.registerTool({
+    name: "graft_doctor",
+    label: "Graft Doctor",
+    description: "Diagnose or repair the Graft registry.",
+    parameters: Type.Object({
+      rebuildRegistry: Type.Optional(
+        Type.Boolean({ description: "Rebuild missing registry entries." }),
+      ),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const argv = ["--json", "doctor"];
+      if (optionalBooleanParam(params, "rebuildRegistry")) argv.push("--rebuild-registry");
+      const { envelope, execution } = await directCliJson(cwd, argv);
+      return envelopeToolResult(envelope, { execution });
+    },
+  });
+
+  pi.registerTool({
     name: "graft_read",
-    label: "Graft read (experimental)",
-    description:
-      "Experimental: read a UTF-8 text file through graftd scratch_read. Pass base for the first operation or from to continue a returned scratch. Output uses LINE#HASH anchors and details.result.scratch returns the scratch id.",
+    label: "Graft Read",
+    description: "Read a UTF-8 file from a graft scratch as LINE#HASH text.",
     parameters: Type.Object({
       ...scratchSourceSchema(),
       path: Type.String({ description: "Path to read from the graft scratch source." }),
@@ -679,9 +1063,8 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
 
   pi.registerTool({
     name: "graft_write",
-    label: "Graft write (experimental)",
-    description:
-      "Experimental: write UTF-8 text content through graftd scratch_write. Pass base for the first operation or from to continue a returned scratch. Does not modify the worktree or create a candidate.",
+    label: "Graft Write",
+    description: "Write a UTF-8 file into a graft scratch.",
     parameters: Type.Object({
       ...scratchSourceSchema(),
       path: Type.String({ description: "Path to write in the graft scratch source." }),
@@ -723,9 +1106,8 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
 
   pi.registerTool({
     name: "graft_edit",
-    label: "Graft edit (experimental)",
-    description:
-      "Experimental: apply strict hashline edits through graftd scratch_edit. Pass base for the first operation or from to continue a returned scratch. Supported ops: replace, append, prepend. Does not accept oldText/newText exact replacement fields.",
+    label: "Graft Edit",
+    description: "Apply strict LINE#HASH edits into a graft scratch.",
     parameters: Type.Object({
       ...scratchSourceSchema(),
       path: Type.String({ description: "Path to edit in the graft scratch source." }),
@@ -799,9 +1181,8 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
 
   pi.registerTool({
     name: "graft_delete",
-    label: "Graft delete (experimental)",
-    description:
-      "Experimental: delete a file through graftd scratch_delete. Pass base for the first operation or from to continue a returned scratch. Does not modify the worktree or create a candidate.",
+    label: "Graft Delete",
+    description: "Delete a file from a graft scratch.",
     parameters: Type.Object({
       ...scratchSourceSchema(),
       path: Type.String({ description: "Path to delete in the graft scratch source." }),
@@ -840,39 +1221,9 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   });
 
   pi.registerTool({
-    name: "graft_status",
-    label: "Graft Status",
-    description: "Inspect pi-graft convenience state and graftd status.",
-    parameters: Type.Object({}),
-    async execute(
-      _toolCallId: string,
-      _params: Record<string, unknown>,
-      _signal?: AbortSignal,
-      _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
-    ) {
-      const cwd = toolCwd(ctx, activeState, lastCwd);
-      const state = stateForCwd(activeState, cwd);
-      let daemon: JsonValue | undefined;
-      let daemonText = "graftd: unavailable";
-      try {
-        daemon = await requestGraftd(cwd, "status");
-        daemonText = `graftd: ${stringField(daemon, "status") ?? "ok"}`;
-      } catch (error) {
-        daemonText = `graftd: unavailable (${compactError(error)})`;
-      }
-      return {
-        content: [{ type: "text", text: `${stateSummary(state)}\n${daemonText}` }],
-        details: { active: Boolean(state), state, daemon },
-      };
-    },
-  });
-
-  pi.registerTool({
     name: "graft_candidate_from_scratch",
-    label: "Graft candidate from scratch",
-    description:
-      "Create a candidate from a scratch id through graftd candidate_from_scratch. Pass scratch explicitly, or omit it to use the last scratch returned by a pi-graft scratch tool in this workspace.",
+    label: "Graft Candidate From Scratch",
+    description: "Create a candidate from a scratch id.",
     parameters: Type.Object({
       scratch: Type.Optional(
         Type.String({
@@ -880,7 +1231,9 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         }),
       ),
       expected: Type.Optional(
-        Type.Array(Type.String({ description: "Expected property, e.g. ValidPatch" })),
+        Type.Array(
+          Type.String({ description: "Expected workspace property, e.g. CargoTestsPass" }),
+        ),
       ),
       producer: Type.Optional(
         Type.String({ description: "Candidate provenance producer. Defaults to pi-graft." }),
@@ -933,7 +1286,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   pi.registerTool({
     name: "graft_validate",
     label: "Graft Validate",
-    description: "Run graft validation for a candidate or patch through graftd cli_exec.",
+    description: "Validate a candidate or patch.",
     parameters: Type.Object({
       target: Type.Optional(
         Type.String({
@@ -969,7 +1322,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   pi.registerTool({
     name: "graft_admit",
     label: "Graft Admit",
-    description: "Admit a validated candidate to the graft patch registry through graftd cli_exec.",
+    description: "Admit a validated candidate as a patch.",
     parameters: Type.Object({
       candidate: Type.Optional(
         Type.String({
@@ -1007,6 +1360,183 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         content: [{ type: "text", text: formatEnvelope(envelope) }],
         details: { envelope, state: nextState },
       };
+    },
+  });
+
+  pi.registerTool({
+    name: "graft_show",
+    label: "Graft Show",
+    description: "Show a candidate or patch summary.",
+    parameters: Type.Object({
+      target: Type.Optional(Type.String({ description: "Candidate or patch id." })),
+      evidence: Type.Optional(Type.Boolean({ description: "Include evidence details." })),
+      change: Type.Optional(Type.Boolean({ description: "Include file change details." })),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const state = stateForCwd(activeState, cwd);
+      const target =
+        optionalStringParam(params, "target") ?? state?.lastPatch ?? state?.lastCandidate;
+      if (!target) throw new Error("graft_show requires target or a previous candidate/patch.");
+      const argv = ["show", target];
+      if (optionalBooleanParam(params, "evidence")) argv.push("--evidence");
+      if (optionalBooleanParam(params, "change")) argv.push("--change");
+      const envelope = await cliExec(cwd, argv);
+      return envelopeToolResult(envelope, { state });
+    },
+  });
+
+  pi.registerTool({
+    name: "graft_evidence",
+    label: "Graft Evidence",
+    description: "List evidence for a candidate or patch.",
+    parameters: Type.Object({
+      subject: Type.Optional(Type.String({ description: "Candidate or patch id." })),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const state = stateForCwd(activeState, cwd);
+      const subject =
+        optionalStringParam(params, "subject") ?? state?.lastPatch ?? state?.lastCandidate;
+      if (!subject)
+        throw new Error("graft_evidence requires subject or a previous candidate/patch.");
+      const envelope = await cliExec(cwd, ["evidence", subject]);
+      return envelopeToolResult(envelope, { state });
+    },
+  });
+
+  pi.registerTool({
+    name: "graft_candidates",
+    label: "Graft Candidates",
+    description: "List unadmitted candidates.",
+    parameters: Type.Object({
+      property: Type.Optional(Type.String({ description: "Filter by expected property." })),
+      failed: Type.Optional(Type.Boolean({ description: "Show only failed candidates." })),
+      producer: Type.Optional(Type.String({ description: "Filter by producer." })),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const argv = ["candidates"];
+      const property = optionalStringParam(params, "property");
+      const producer = optionalStringParam(params, "producer");
+      if (property) argv.push("--property", property);
+      if (optionalBooleanParam(params, "failed")) argv.push("--failed");
+      if (producer) argv.push("--producer", producer);
+      const envelope = await cliExec(cwd, argv);
+      return envelopeToolResult(envelope);
+    },
+  });
+
+  pi.registerTool({
+    name: "graft_search",
+    label: "Graft Search",
+    description: "Search admitted patches.",
+    parameters: Type.Object({
+      property: Type.Optional(Type.String({ description: "Filter by property." })),
+      base: Type.Optional(Type.String({ description: "Filter by base state." })),
+      producer: Type.Optional(Type.String({ description: "Filter by producer." })),
+      hasEvidence: Type.Optional(
+        Type.String({ description: "Filter by passing evidence property." }),
+      ),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const argv = ["search"];
+      const property = optionalStringParam(params, "property");
+      const base = optionalStringParam(params, "base");
+      const producer = optionalStringParam(params, "producer");
+      const hasEvidence = optionalStringParam(params, "hasEvidence");
+      if (property) argv.push("--property", property);
+      if (base) argv.push("--base", base);
+      if (producer) argv.push("--producer", producer);
+      if (hasEvidence) argv.push("--has-evidence", hasEvidence);
+      const envelope = await cliExec(cwd, argv);
+      return envelopeToolResult(envelope);
+    },
+  });
+
+  pi.registerTool({
+    name: "graft_materialize",
+    label: "Graft Materialize",
+    description: "Plan or materialize an admitted patch target.",
+    parameters: Type.Object({
+      patch: Type.Optional(
+        Type.String({ description: "Patch id; defaults to last admitted patch." }),
+      ),
+      dryRun: Type.Optional(
+        Type.Boolean({ description: "Plan without writing; defaults to true." }),
+      ),
+      asCommit: Type.Optional(Type.Boolean({ description: "Write a detached Git commit." })),
+      ref: Type.Optional(Type.String({ description: "Git ref for materialized commit." })),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const state = stateForCwd(activeState, cwd);
+      const patch = optionalStringParam(params, "patch") ?? state?.lastPatch;
+      if (!patch) throw new Error("graft_materialize requires patch or a previous admitted patch.");
+      const argv = ["materialize", patch];
+      if (optionalBooleanParam(params, "dryRun", true)) argv.push("--dry-run");
+      if (optionalBooleanParam(params, "asCommit")) argv.push("--as-commit");
+      const ref = optionalStringParam(params, "ref");
+      if (ref) argv.push("--ref", ref);
+      const envelope = await cliExec(cwd, argv);
+      return envelopeToolResult(envelope, { state });
+    },
+  });
+
+  pi.registerTool({
+    name: "graft_cli_exec",
+    label: "Graft CLI Exec",
+    description: "Run allowlisted low-frequency read-only or diagnostic graft CLI argv safely.",
+    parameters: Type.Object({
+      argv: Type.Array(
+        Type.String({ description: "Graft CLI arguments, excluding the graft binary." }),
+      ),
+      cwd: Type.Optional(Type.String({ description: "Working directory; defaults to ctx.cwd." })),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const argv = cliArgvParam(params);
+      if ("cwd" in params && typeof params.cwd !== "string")
+        throw new Error("cwd must be a string.");
+      const cwd = optionalStringParam(params, "cwd") ?? toolCwd(ctx, activeState, lastCwd);
+      const { text, details } = await executeCliArgv(cwd, argv);
+      return { content: [{ type: "text", text }], details };
     },
   });
 }

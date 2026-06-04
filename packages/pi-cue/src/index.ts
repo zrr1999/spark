@@ -23,7 +23,7 @@
  * See ARCHITECTURE.md for the category-theoretic model.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "pi-extension-api";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 

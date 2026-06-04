@@ -41,8 +41,7 @@ in `spark-workflows` above this package.
 
 `call_role` modes:
 
-- default / `dryRun: true` — resolve the role and return the exact Pi CLI args without launching a child process.
-- `dryRun: false, mode: "fresh"` — launch a new child Pi session from the role and instruction.
-- `dryRun: false, mode: "forked"` — launch with explicit parent context; requires `forkFromSession`.
+- default / `mode: "fresh"` — launch a new child Pi session from the role and instruction.
+- `mode: "forked"` — launch with explicit parent context; requires `forkFromSession`.
 
 `call_role` intentionally stays below Spark: it does not claim tasks, write Spark artifacts, or schedule DAG work. Use `spark_run_ready_tasks` for Spark-managed task execution.

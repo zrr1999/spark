@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -22,9 +22,8 @@ void test("learning store records active learnings and searches by content", asy
     const evidenceRef = newRef("artifact", "evidence-plan");
     const recorded = await store.record({
       title: "Prefer explicit export for shared knowledge",
-      statement: ".spark is local runtime state; shared learnings must be exported explicitly.",
+      statement: "Spark learnings live in .learning and can be shared explicitly when repo-owned.",
       category: "decision",
-      scope: "project",
       applicability: "When persisting Spark learning artifacts for a repository.",
       evidenceRefs: [evidenceRef],
       tags: ["nyakore", "spark"],
@@ -38,10 +37,10 @@ void test("learning store records active learnings and searches by content", asy
       [evidenceRef],
     );
 
-    const results = await store.search({ query: "explicit export", scope: "project" });
+    const results = await store.search({ query: "explicit export" });
     assert.equal(results.length, 1);
     assert.equal(results[0]?.ref, recorded.ref);
-    assert.match(results[0]?.snippet ?? "", /export/);
+    assert.match(results[0]?.snippet ?? "", /learning/);
     assert.equal(results[0]?.evidenceSummary, evidenceRef);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -58,7 +57,6 @@ void test("learning store hydrates compacted artifact metadata for list and sear
       title: "Hydrate compacted learning metadata",
       statement: "Learning list/search should read full bodies when metadata keeps only previews.",
       category: "workflow",
-      scope: "project",
       applicability: "x".repeat(200),
     });
     assert.equal(recorded.bodyTruncated, true);
@@ -126,7 +124,6 @@ void test("learning export markdown round-trips and rejects malformed blocks", a
       title: "Learning export format is package-owned",
       statement: "Spark learning export Markdown must parse as validated LearningRecord objects.",
       category: "decision",
-      scope: "project",
       tags: ["learning", "export"],
     });
 
@@ -192,7 +189,6 @@ Stripe webhook 签名验证要求使用原始请求体（raw body）。
     title: "Webhook 验证必须使用 raw body",
     statement: "集成 Stripe webhook 时验证始终失败",
     category: "gotcha",
-    scope: "project",
     status: "active",
     applicability: "集成 Stripe webhook 时验证始终失败",
     evidenceRefs: [".learnings/gotchas/stripe-webhook-raw-body.md"],
@@ -229,6 +225,83 @@ void test("learning store keeps candidates out of default active recall", async 
     assert.equal(active.body.status, "active");
     assert.equal((await store.search({ query: "task-derived" })).length, 1);
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("default learning store writes to .learning outside git workspaces", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-learnings-location-"));
+  try {
+    const store = defaultLearningStore(dir);
+    assert.equal(store.location, "workspace");
+    await store.record({
+      id: "learning-location-path",
+      title: "Location-derived learning store",
+      statement: "Learning storage location is derived from the store path.",
+    });
+    assert.ok((await stat(join(dir, ".learning", "learning-location-path.json"))).isFile());
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("default learning store treats git workspaces as repo learnings", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-learnings-repo-location-"));
+  try {
+    await mkdir(join(dir, ".git"));
+    const store = defaultLearningStore(join(dir, "subdir"));
+    assert.equal(store.location, "repo");
+    await store.record({
+      id: "learning-repo-location-path",
+      title: "Repo learning store",
+      statement: "Git workspace learnings are repo learnings.",
+    });
+    assert.ok((await stat(join(dir, ".learning", "learning-repo-location-path.json"))).isFile());
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("default learning store uses child repo .learning over parent workspace .learning", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "spark-learnings-parent-workspace-"));
+  const repo = join(workspace, "child-repo");
+  try {
+    await mkdir(join(workspace, ".learning"));
+    await mkdir(join(repo, ".git"), { recursive: true });
+    const store = defaultLearningStore(join(repo, "src"));
+    assert.equal(store.location, "repo");
+    await store.record({
+      id: "learning-child-repo-location-path",
+      title: "Child repo learning store",
+      statement: "Nested Git repos use their own repo learning store.",
+    });
+    assert.ok(
+      (await stat(join(repo, ".learning", "learning-child-repo-location-path.json"))).isFile(),
+    );
+    await assert.rejects(
+      stat(join(workspace, ".learning", "learning-child-repo-location-path.json")),
+    );
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+void test("default learning store writes user learnings under PI_CODING_AGENT_DIR", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-learnings-user-location-"));
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  try {
+    const store = defaultLearningStore(dir, "user");
+    assert.equal(store.location, "user");
+    await store.record({
+      id: "learning-user-location-path",
+      title: "User learning store",
+      statement: "User learnings live outside the repo/workspace.",
+    });
+    assert.ok((await stat(join(dir, "learning", "learning-user-location-path.json"))).isFile());
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
     await rm(dir, { recursive: true, force: true });
   }
 });

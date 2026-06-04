@@ -30,9 +30,9 @@ Tools:
 - `spark_ask_replay` — replay the latest or a specified Spark ask artifact.
 - `spark_list_artifacts` — list Spark artifacts with compact bounded output.
 - `spark_get_artifact` — read a Spark artifact, truncated by default with `full=true` opt-in.
-- `spark_learning_record` — record one evidence-backed reusable learning as a local Spark artifact. Learning records are local runtime state under `.spark/`; use export tools for sharing.
-- `spark_learning_search` — search active Spark learnings by default. Candidate or inactive learnings are only returned with explicit `includeCandidates`, `includeInactive`, or `status` filters.
-- `spark_learning_list` — list local Spark learnings with compact status/category/scope metadata.
+- `spark_learning_record` — record one evidence-backed reusable learning under `.learning/` for the current repo/workspace, or in the user learning directory when `location: "user"` is explicit.
+- `spark_learning_search` — search active Spark learnings by default across the current repo/workspace plus user learnings; pass `location` to restrict. Candidate or inactive learnings are only returned with explicit `includeCandidates`, `includeInactive`, or `status` filters.
+- `spark_learning_list` — list local Spark learnings with compact status/category/location metadata.
 - `spark_learning_read` — read one learning by artifact ref or stable id, truncated by default with `full=true` opt-in.
 - `spark_learning_mark_stale` — mark a learning stale with a reason while preserving the record for audit.
 - `spark_learning_supersede` — mark a learning superseded by one or more replacement learning refs.
@@ -231,9 +231,7 @@ allow_dirs = [
 
 `call_role` is intentionally minimal and task-agnostic:
 
-- defaults to `dryRun: true`, returning the exact Pi CLI args that would be launched;
-- `dryRun: false` launches one child Pi run;
-- `mode: "fresh"` starts a new child session;
+- `mode: "fresh"` starts a new child session and is the default;
 - `mode: "forked"` requires explicit `forkFromSession` and shares that parent context;
 - it does not claim Spark tasks, write Spark artifacts, or schedule DAG work.
 
@@ -281,7 +279,7 @@ canonical Spark flow-native ask surface: prefer `questions[]`, persist
 `ask-answer` artifacts as `{ request, result, summary }`, replay from those
 artifacts, and treat no-selection/cancelled gate results as blocked. Keep the
 package boundary clear: generic ask protocol/TUI/summary behavior belongs in
-`pi-ask`; Spark ask artifact persistence/replay helpers belong in `spark-ask`;
+`pi-ask`; the Spark ask artifact persistence/replay tool wiring lives in `packages/spark/src/extension/spark-ask-tool.ts` and consumes pi-ask primitives by their original names;
 concrete ask questions belong at the call site where the actual task, blocker,
 review, or decision context is known; Pi tool registration, Spark
 option-description validation, artifacts, and replay tool behavior belong in

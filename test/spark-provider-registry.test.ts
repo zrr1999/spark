@@ -1,0 +1,126 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  SparkProviderRegistry,
+  type ProviderConfig,
+} from "../packages/spark-cli/src/host/index.ts";
+import registerBaiduOneApiProvider from "../packages/spark-cli/src/baidu-oneapi-provider.ts";
+
+function fakeStream(_model: unknown, _context: unknown, _options?: unknown) {
+  return {} as unknown;
+}
+
+const fakeProvider: ProviderConfig = {
+  name: "fake",
+  baseUrl: "https://fake.test",
+  apiKey: "FAKE_KEY",
+  api: "anthropic-messages",
+  streamSimple: fakeStream,
+  models: [
+    {
+      id: "model-a",
+      name: "Model A",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 4096,
+      maxTokens: 1024,
+    },
+    {
+      id: "model-b",
+      name: "Model B",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 2048,
+    },
+  ],
+};
+
+void test("SparkProviderRegistry registerProvider validates name + streamSimple + models", () => {
+  const registry = new SparkProviderRegistry();
+  assert.throws(() => registry.registerProvider("", fakeProvider), /requires a provider name/);
+  assert.throws(
+    () =>
+      registry.registerProvider("missing-stream", {
+        ...fakeProvider,
+        streamSimple: undefined as unknown as ProviderConfig["streamSimple"],
+      }),
+    /must expose a streamSimple function/,
+  );
+  assert.throws(
+    () => registry.registerProvider("no-models", { ...fakeProvider, models: [] }),
+    /must declare at least one model/,
+  );
+});
+
+void test("SparkProviderRegistry registers, lists, and looks up providers/models", () => {
+  const registry = new SparkProviderRegistry();
+  registry.registerProvider("fake", fakeProvider);
+  assert.equal(registry.hasProvider("fake"), true);
+  assert.equal(registry.hasProvider("missing"), false);
+  assert.equal(registry.listProviders().length, 1);
+  assert.equal(registry.getProvider("fake")?.baseUrl, "https://fake.test");
+  assert.deepEqual(
+    registry.listModelsFor("fake").map((m) => m.id),
+    ["model-a", "model-b"],
+  );
+});
+
+void test("SparkProviderRegistry setActive validates provider + model existence", () => {
+  const registry = new SparkProviderRegistry();
+  registry.registerProvider("fake", fakeProvider);
+  assert.throws(
+    () => registry.setActive({ providerName: "missing", modelId: "model-a" }),
+    /Unknown provider: missing/,
+  );
+  assert.throws(
+    () => registry.setActive({ providerName: "fake", modelId: "missing" }),
+    /no model with id "missing"/,
+  );
+  registry.setActive({ providerName: "fake", modelId: "model-b" });
+  assert.deepEqual(registry.getActive(), { providerName: "fake", modelId: "model-b" });
+});
+
+void test("SparkProviderRegistry buildModel returns a pi-ai compatible Model<Api>", () => {
+  const registry = new SparkProviderRegistry();
+  registry.registerProvider("fake", fakeProvider);
+  const model = registry.buildModel("fake", "model-b");
+  assert.equal(model.id, "model-b");
+  assert.equal(model.api, "anthropic-messages");
+  assert.equal(model.provider, "fake");
+  assert.equal(model.baseUrl, "https://fake.test");
+  assert.equal(model.reasoning, true);
+  assert.equal(model.contextWindow, 8192);
+  assert.deepEqual(model.input, ["text", "image"]);
+});
+
+void test("SparkProviderRegistry buildActiveModel reuses the active selection", () => {
+  const registry = new SparkProviderRegistry();
+  registry.registerProvider("fake", fakeProvider);
+  assert.equal(registry.buildActiveModel(), undefined);
+  registry.setActive({ providerName: "fake", modelId: "model-a" });
+  const model = registry.buildActiveModel();
+  assert.equal(model?.id, "model-a");
+});
+
+void test("SparkProviderRegistry accepts the production baidu-oneapi-provider plugin", () => {
+  const registry = new SparkProviderRegistry();
+  // Provider plugins follow the same contract as ExtensionAPI plugins:
+  //   default function(pi: ProviderRegistrationAPI): void
+  registerBaiduOneApiProvider(registry);
+  assert.equal(registry.hasProvider("baidu-oneapi"), true);
+  const provider = registry.getProvider("baidu-oneapi")!;
+  assert.equal(provider.api, "anthropic-messages");
+  assert.equal(provider.models.length >= 3, true);
+  assert.equal(
+    provider.models.some((m) => m.id === "claude-opus-4.8"),
+    true,
+  );
+
+  const model = registry.buildModel("baidu-oneapi", "claude-opus-4.6");
+  assert.equal(model.provider, "baidu-oneapi");
+  assert.equal(model.contextWindow, 200_000);
+});

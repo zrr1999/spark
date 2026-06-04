@@ -31,10 +31,10 @@ but end-to-end local vertical slice.
      commits on Enter, renders committed custom answers as selected,
      and allows optional blank freeform answers to advance as
      `skipped`
-- `spark-ask`
-   - lightweight Spark ask artifact persistence/replay helpers built on top of `pi-ask`
+- `spark/extension/spark-ask-tool` (consumes `pi-ask`)
+   - lightweight Spark ask artifact persistence/replay helpers; no separate `spark-ask` package any more
    - no canned question presets; callers must generate ask questions from concrete task, blocker, review, or decision context
-   - type aliases over the generic `pi-ask` flow API
+   - relies directly on `pi-ask` primitives (`createPiAskFlowRequest`, `runPiAskFlow`, `replayPiAskFlow`, etc.)
    - no Pi extension registration or workflow ownership; those stay in `spark`
 - `pi-cue`
    - migrated cue-shell IPC client and full short-name tool surface from `pi-cue-shell`
@@ -52,7 +52,7 @@ but end-to-end local vertical slice.
    - explicit `forkFromSession` requirement for forked runs
    - role-ref requirement for every run request
    - role-spec management tools (`list_roles`, `get_role`, `create_role`)
-   - minimal task-agnostic `call_role` tool with dry-run, fresh, and explicit forked modes
+   - minimal task-agnostic `call_role` tool with fresh and explicit forked modes
 - `spark-tasks`
    - project/task DAG
    - cycle detection

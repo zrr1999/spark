@@ -4,7 +4,6 @@ import { Type } from "typebox";
 
 import {
   RoleRegistry,
-  buildRoleRunArgs,
   createRoleSpec,
   defaultProjectRoleStore,
   defaultUserRoleModelBindingStore,
@@ -77,7 +76,6 @@ export interface CallRoleToolParams {
   role: string;
   instruction: string;
   mode?: RoleRunMode;
-  dryRun?: boolean;
   piCommand?: string;
   cwd?: string;
   sessionDir?: string;
@@ -262,7 +260,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     name: "call_role",
     label: "Call Role",
     description:
-      "Call one reusable Pi role directly with an explicit instruction. This is a one-off role invocation and is not attached to Spark tasks or DAG runs. Defaults to dry-run and returns the Pi CLI args; set dryRun=false to launch a fresh or explicitly forked child Pi run.",
+      "Call one reusable Pi role directly with an explicit instruction. This is a one-off role invocation and is not attached to Spark tasks or DAG runs. Launches a fresh child Pi run by default, or an explicitly forked child run when mode=forked.",
     parameters: Type.Object({
       role: Type.String({
         description: "Role id or full role ref, e.g. worker or role:builtin-worker.",
@@ -271,11 +269,6 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       mode: Type.Optional(
         Type.Union([Type.Literal("fresh"), Type.Literal("forked")], {
           description: "fresh | forked. Defaults to fresh; forked requires forkFromSession.",
-        }),
-      ),
-      dryRun: Type.Optional(
-        Type.Boolean({
-          description: "When true, only resolve the role and return the Pi CLI args.",
         }),
       ),
       piCommand: Type.Optional(
@@ -307,7 +300,6 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         [
           formatStringArg(args.role),
           formatStringArg(args.mode, { fallback: "fresh" }),
-          args.dryRun === false ? "run" : "dry-run",
           formatNumberArg(args.timeoutMs, { prefix: "timeout=" }),
           formatStringArg(args.cwd, { prefix: "cwd=" }),
           formatStringArg(args.model, { prefix: "model=" }),
@@ -328,7 +320,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         explicitModel: p.model,
         piCommand: p.piCommand ?? "pi",
         cwd,
-        actualRun: p.dryRun === false,
+        actualRun: true,
         ui: ctx.ui,
       });
       const commandInput = {
@@ -346,44 +338,31 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         signal,
       };
 
-      if (p.dryRun !== false) {
-        const args = buildRoleRunArgs(commandInput);
-        return {
-          content: [
-            {
-              type: "text",
-              text: [
-                `Role call dry-run: ${role.id} (${role.ref})`,
-                `mode: ${mode}`,
-                `cwd: ${cwd}`,
-                `piCommand: ${commandInput.piCommand}`,
-                `model: ${model ?? "not bound"}`,
-                `args: ${JSON.stringify(args)}`,
-              ].join("\n"),
-            },
-          ],
-          details: {
-            dryRun: true,
-            role: compactRole(role),
-            mode,
-            runRef,
-            cwd,
-            piCommand: commandInput.piCommand,
-            model,
-            args,
-          },
-        };
-      }
-
       const result = await runRole(commandInput);
       const stdoutTail = result.stdout ? tailText(result.stdout, 12_000) : undefined;
       const stderrTail = result.stderr ? tailText(result.stderr, 8_000) : undefined;
+      const stdoutNonJsonTail = nonJsonStdoutTail(result.stdout, 12_000);
+      const finalAssistantText = extractFinalAssistantText(result.jsonEvents);
       const summary = [
         `Role call ${result.record.status}: ${role.id} (${role.ref})`,
-        `runRef: ${result.record.ref}`,
-        `mode: ${result.record.mode}`,
+        formatRoleRunIdentity({
+          runRef: result.record.ref,
+          mode: result.record.mode,
+          model: result.record.model,
+          sessionDir: result.record.sessionDir,
+          forkFromSession: result.record.forkFromSession,
+        }),
         result.record.errorMessage ? `error: ${result.record.errorMessage}` : undefined,
-        stdoutTail ? `stdout:\n${stdoutTail}` : undefined,
+        finalAssistantText
+          ? `result:\n${truncateBlock(finalAssistantText, 12_000)}`
+          : stdoutNonJsonTail
+            ? `output:\n${stdoutNonJsonTail}`
+            : result.jsonEvents.length > 0
+              ? `No final assistant message found (${result.jsonEvents.length} JSON events captured).`
+              : undefined,
+        result.record.status !== "succeeded" && stdoutTail && !stdoutNonJsonTail
+          ? `stdout:\n${stdoutTail}`
+          : undefined,
         stderrTail ? `stderr:\n${stderrTail}` : undefined,
       ]
         .filter((line): line is string => Boolean(line))
@@ -391,7 +370,6 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       return {
         content: [{ type: "text", text: summary }],
         details: {
-          dryRun: false,
           role: compactRole(role),
           mode,
           runRef,
@@ -452,6 +430,10 @@ function normalizeCallRoleToolParams(params: Record<string, unknown>): CallRoleT
   const role = normalizeRequiredString(params.role, "call_role role");
   const instruction = normalizeRequiredString(params.instruction, "call_role instruction");
   const mode = normalizeRoleRunMode(params.mode);
+  if (Object.hasOwn(params, "dryRun"))
+    throw new Error(
+      "call_role dryRun is no longer supported; call_role always launches a child run",
+    );
   const forkFromSession = normalizeOptionalString(
     params.forkFromSession,
     "call_role forkFromSession",
@@ -462,7 +444,6 @@ function normalizeCallRoleToolParams(params: Record<string, unknown>): CallRoleT
     role,
     instruction,
     mode,
-    dryRun: normalizeOptionalBoolean(params.dryRun, true, "call_role dryRun"),
     piCommand: normalizeOptionalString(params.piCommand, "call_role piCommand"),
     cwd: normalizeOptionalString(params.cwd, "call_role cwd"),
     sessionDir: normalizeOptionalString(params.sessionDir, "call_role sessionDir"),
@@ -586,6 +567,110 @@ function truncateInline(value: string, maxLength: number): string {
   const normalized = value.replaceAll(/\s+/g, " ");
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function formatRoleRunIdentity(input: {
+  runRef: string;
+  mode: RoleRunMode;
+  model?: string;
+  sessionDir?: string;
+  forkFromSession?: string;
+}): string {
+  return compactKeyValues([
+    ["runRef", input.runRef],
+    ["mode", input.mode],
+    ["model", input.model],
+    ["sessionDir", input.sessionDir],
+    ["forkFromSession", input.forkFromSession],
+  ]);
+}
+
+function compactKeyValues(items: Array<[string, string | number | undefined]>): string {
+  return items
+    .filter((item): item is [string, string | number] => item[1] !== undefined && item[1] !== "")
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(" · ");
+}
+
+function truncateBlock(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function extractFinalAssistantText(events: unknown[]): string | undefined {
+  for (const event of [...events].reverse()) {
+    const direct = extractAssistantText(eventMessage(event));
+    if (direct) return direct;
+
+    const messages = eventMessages(event);
+    for (const message of [...messages].reverse()) {
+      const text = extractAssistantText(message);
+      if (text) return text;
+    }
+  }
+  return undefined;
+}
+
+function eventMessage(event: unknown): unknown {
+  if (!event || typeof event !== "object") return undefined;
+  return (event as { message?: unknown }).message;
+}
+
+function eventMessages(event: unknown): unknown[] {
+  if (!event || typeof event !== "object") return [];
+  const messages = (event as { messages?: unknown }).messages;
+  return Array.isArray(messages) ? messages : [];
+}
+
+function extractAssistantText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") return undefined;
+  if ((message as { role?: unknown }).role !== "assistant") return undefined;
+  return messageContentText((message as { content?: unknown }).content);
+}
+
+function messageContentText(content: unknown): string | undefined {
+  if (typeof content === "string") return content.trim() || undefined;
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .map((block) => {
+      if (!block || typeof block !== "object") return "";
+      const item = block as { type?: unknown; text?: unknown };
+      return item.type === "text" && typeof item.text === "string" ? item.text : "";
+    })
+    .join("")
+    .trim();
+  return text || undefined;
+}
+
+function nonJsonStdoutTail(value: string, maxLength: number): string | undefined {
+  const text = value
+    .split(/\r?\n/u)
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return false;
+      if (looksLikePiJsonProtocolFragment(trimmed)) return false;
+      try {
+        JSON.parse(line);
+        return false;
+      } catch {
+        return true;
+      }
+    })
+    .join("\n");
+  return text ? tailText(text, maxLength) : undefined;
+}
+
+function looksLikePiJsonProtocolFragment(value: string): boolean {
+  if (value.startsWith('{"type":"') || value.startsWith('{"type": "')) return true;
+  if (value.startsWith('"type":"') || value.startsWith('"type": "')) return true;
+  return (
+    value.includes('"assistantMessageEvent"') ||
+    value.includes('"toolCallId"') ||
+    value.includes('"toolName"') ||
+    value.includes('"message_update"') ||
+    value.includes('"message_end"') ||
+    value.includes('"turn_end"')
+  );
 }
 
 function tailText(value: string, maxLength: number): string {

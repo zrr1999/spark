@@ -22,45 +22,6 @@ interface ToolConfig {
   }>;
 }
 
-void test("call_role dry-run resolves builtin roles and returns Pi args", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-roles-tool-dryrun-"));
-  const previousBindingHome = process.env.PI_ROLES_HOME;
-  process.env.PI_ROLES_HOME = dir;
-  try {
-    const tools = registerRoleToolsForTest();
-    const result = await executeCallRole(tools, {
-      role: "worker",
-      instruction: "Implement a small change.",
-      sessionDir: "/tmp/sessions",
-    });
-
-    assert.match(
-      result.content[0]?.text ?? "",
-      /Role call dry-run: worker \(role:builtin-worker\)/,
-    );
-    assert.match(result.content[0]?.text ?? "", /mode: fresh/);
-    const details = result.details as {
-      args?: string[];
-      dryRun?: boolean;
-      role?: { ref?: string };
-    };
-    assert.equal(details.dryRun, true);
-    assert.equal(details.role?.ref, "role:builtin-worker");
-    assert.deepEqual(details.args?.slice(0, 6), [
-      "--print",
-      "--mode",
-      "json",
-      "--session-dir",
-      "/tmp/sessions",
-      "--append-system-prompt",
-    ]);
-  } finally {
-    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousBindingHome;
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
 void test("role spec tools list, get, and create project roles", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-roles-spec-tools-"));
   try {
@@ -93,7 +54,7 @@ void test("role spec tools list, get, and create project roles", async () => {
   }
 });
 
-void test("call_role launches fresh role runs when dryRun is false", async () => {
+void test("call_role launches fresh role runs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-roles-tool-"));
   const previousBindingHome = process.env.PI_ROLES_HOME;
   process.env.PI_ROLES_HOME = dir;
@@ -107,7 +68,7 @@ void test("call_role launches fresh role runs when dryRun is false", async () =>
         "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
         "if (!args.includes('--print')) process.exit(10);",
         "if (!args.includes('--model') || args[args.indexOf('--model') + 1] !== 'test/model') process.exit(11);",
-        "process.stdout.write(JSON.stringify({ type: 'done', args }) + '\\n');",
+        "process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Fake worker result.' }] }, args }) + '\\n');",
       ].join("\n"),
       "utf8",
     );
@@ -119,7 +80,6 @@ void test("call_role launches fresh role runs when dryRun is false", async () =>
       {
         role: "worker",
         instruction: "Run the fake worker.",
-        dryRun: false,
         mode: "fresh",
         model: "test/model",
         piCommand: fakePi,
@@ -129,6 +89,13 @@ void test("call_role launches fresh role runs when dryRun is false", async () =>
     );
 
     assert.match(result.content[0]?.text ?? "", /Role call succeeded: worker/);
+    assert.match(
+      result.content[0]?.text ?? "",
+      /runRef=run:[^\n]+ · mode=fresh · model=test\/model/,
+    );
+    assert.match(result.content[0]?.text ?? "", /result:\nFake worker result\./);
+    assert.doesNotMatch(result.content[0]?.text ?? "", /lastJsonEvent/);
+    assert.doesNotMatch(result.content[0]?.text ?? "", /stdout:\n\{"type":"message_end"/);
     const details = result.details as {
       record?: { status?: string; mode?: string };
       jsonEventCount?: number;
@@ -143,13 +110,52 @@ void test("call_role launches fresh role runs when dryRun is false", async () =>
   }
 });
 
+void test("call_role does not expose raw JSON protocol fragments as output", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-protocol-fragment-"));
+  const previousBindingHome = process.env.PI_ROLES_HOME;
+  process.env.PI_ROLES_HOME = dir;
+  try {
+    const fakePi = join(dir, "fake-pi-fragment.mjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "const args = process.argv.slice(2);",
+        "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
+        'process.stdout.write(\'"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta"}\\n\');',
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    const tools = registerRoleToolsForTest();
+    const result = await executeCallRole(
+      tools,
+      {
+        role: "worker",
+        instruction: "Run the fake worker.",
+        model: "test/model",
+        piCommand: fakePi,
+      },
+      dir,
+    );
+
+    assert.match(result.content[0]?.text ?? "", /Role call succeeded: worker/);
+    assert.doesNotMatch(result.content[0]?.text ?? "", /assistantMessageEvent/);
+    assert.doesNotMatch(result.content[0]?.text ?? "", /toolcall_delta/);
+  } finally {
+    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousBindingHome;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("call_role forked mode requires explicit parent session", async () => {
   const tools = registerRoleToolsForTest();
   await assert.rejects(
     executeCallRole(tools, {
       role: "reviewer",
       instruction: "Review with context.",
-      dryRun: false,
       mode: "forked",
     }),
     /forked mode requires forkFromSession/,
@@ -197,12 +203,24 @@ void test("pi-roles tools require ctx cwd unless call_role cwd is explicit", asy
     /call_role requires ctx\.cwd/,
   );
 
-  const explicit = await executeRoleToolWithoutCwd(tools, "call_role", {
-    role: "worker",
-    instruction: "Run with explicit cwd.",
-    cwd: DEFAULT_TEST_CWD,
-  });
-  assert.match(explicit.content[0]?.text ?? "", /cwd: \/tmp\/pi-roles-tool-default-cwd/);
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-explicit-cwd-"));
+  const previousBindingHome = process.env.PI_ROLES_HOME;
+  process.env.PI_ROLES_HOME = dir;
+  try {
+    const fakePi = await writeFakePi(dir);
+    const explicit = await executeRoleToolWithoutCwd(tools, "call_role", {
+      role: "worker",
+      instruction: "Run with explicit cwd.",
+      cwd: dir,
+      model: "test/model",
+      piCommand: fakePi,
+    });
+    assert.match(explicit.content[0]?.text ?? "", /Role call succeeded: worker/);
+  } finally {
+    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousBindingHome;
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 void test("pi-roles tools reject invalid explicit parameters instead of using defaults", async () => {
@@ -311,10 +329,10 @@ void test("pi-roles tools reject invalid explicit parameters instead of using de
   await assert.rejects(
     executeCallRole(tools, {
       role: "worker",
-      instruction: "Run with an invalid dryRun flag.",
-      dryRun: "false",
+      instruction: "Run with removed dryRun flag.",
+      dryRun: true,
     }),
-    /call_role dryRun must be a boolean/,
+    /call_role dryRun is no longer supported/,
   );
   await assert.rejects(
     executeCallRole(tools, {
@@ -342,6 +360,24 @@ void test("pi-roles tools reject invalid explicit parameters instead of using de
     /call_role forkFromSession must be a string/,
   );
 });
+
+async function writeFakePi(dir: string): Promise<string> {
+  const fakePi = join(dir, "fake-pi.mjs");
+  await writeFile(
+    fakePi,
+    [
+      "#!/usr/bin/env node",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
+      "if (!args.includes('--print')) process.exit(10);",
+      "if (!args.includes('--model') || args[args.indexOf('--model') + 1] !== 'test/model') process.exit(11);",
+      "process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Fake worker result.' }] }, args }) + '\\n');",
+    ].join("\n"),
+    "utf8",
+  );
+  await chmod(fakePi, 0o755);
+  return fakePi;
+}
 
 function registerRoleToolsForTest(): Map<string, ToolConfig> {
   const tools = new Map<string, ToolConfig>();

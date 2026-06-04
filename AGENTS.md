@@ -30,6 +30,13 @@ Pi Spark monorepo: agent-oriented docs for contributors and automation. Product 
 - `.github/workflows/ci-pr-checks.yml` — PR title validation (zendev).
 - `.github/workflows/ci-typos.yml` — spellcheck with `_typos.toml`.
 
+## Dual-host Spark extension boundary
+
+- `packages/spark/src/extension/` must remain loadable by Pi as a normal extension; do not import `packages/spark-cli` or `@earendil-works/pi-coding-agent` concrete runtime code from shared extension packages.
+- Native Spark CLI host code belongs under `packages/spark-cli/src/host/`; pi-tui-specific wrappers belong under `packages/spark-cli/src/tui/`.
+- When adding or changing a host-touching extension capability, update the shared `pi-extension-api` contract only if both hosts need it, and add/adjust dual-host tests such as `test/spark-ext-host-contract.test.ts`, `test/spark-host-runtime-cross.test.ts`, and the relevant `spark-cli` host test.
+- Keep builtin extension loading explicit for `spark-cli`; do not reintroduce Pi SDK package discovery or `loadPiSdk` into `packages/spark-cli`.
+
 ## Notes for agents
 
 - Prefer `vp fmt` / `vp check` before committing when touching TS/Markdown; pre-commit runs `vp check --fix`.

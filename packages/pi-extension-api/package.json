@@ -1,7 +1,7 @@
 {
-  "name": "spark-ask",
+  "name": "pi-extension-api",
   "version": "0.1.0",
-  "description": "Spark ask artifact helpers built on top of pi-ask.",
+  "description": "Shared TypeScript contract surface (types only) for Pi-style extensions consumed by both pi-coding-agent and the spark-cli native host.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [
@@ -14,9 +14,5 @@
   },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
-  },
-  "dependencies": {
-    "pi-ask": "file:../pi-ask",
-    "spark-core": "file:../spark-core"
   }
 }

@@ -1,8 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { defaultArtifactStore } from "spark-core";
-import { detectCopyLanguage, type SparkCopyLanguage } from "spark-ask";
+import { defaultArtifactStore, detectCopyLanguage } from "spark-core";
+import type { CopyLanguage } from "spark-core";
 import { builtinRoleRef } from "pi-roles";
 import {
   newRef,
@@ -27,7 +27,7 @@ import { sparkTodoStore, writeJsonFileAtomic } from "./session-state.ts";
 
 export interface SparkInitOptions {
   projectTitle?: string;
-  outputLanguage?: SparkCopyLanguage;
+  outputLanguage?: CopyLanguage;
   clarification?: SparkInitClarificationData;
   sparkMd?: string;
   askArtifactRefs?: ArtifactRef[];
@@ -242,7 +242,7 @@ async function sparkInitResultFromExisting(
     taskCount: graph.tasks(project.ref).length,
     outputLanguage:
       options.clarification?.outputLanguage ??
-      (project.outputLanguage as SparkCopyLanguage | undefined) ??
+      (project.outputLanguage as CopyLanguage | undefined) ??
       detectCopyLanguage(latestSparkMd ?? idea),
     currentTaskRef: currentTask?.ref,
     currentTaskTitle: currentTask?.title,

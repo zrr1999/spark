@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-import { registerPiAskTools } from "../packages/pi-ask/src/index.ts";
+import piAskExtension from "../packages/pi-ask/src/extension.ts";
 import { registerPiCueTools } from "../packages/pi-cue/src/index.ts";
 import { registerPiRolesTools } from "../packages/pi-roles/src/extension.ts";
 import sparkExtension from "../packages/spark/src/extension/index.ts";
@@ -68,15 +68,7 @@ void test("Spark extension tools render parameter-aware tool calls", () => {
     }),
     "spark_plan_tasks 2 tasks @inspect,@implement",
   );
-  assert.equal(
-    renderCall(tools, "cue_exec", {
-      command: "pnpm test",
-      background: true,
-      timeout: 30,
-      cwd: "packages/spark",
-    }),
-    'cue_exec "pnpm test" background timeout=30s cwd=packages/spark',
-  );
+  assert.equal(tools.has("cue_exec"), false, "pi-cue is registered as its own extension");
   const longAsk = renderCall(
     tools,
     "spark_ask",
@@ -126,10 +118,11 @@ void test("Spark extension tools render parameter-aware tool calls", () => {
 
 void test("standalone Pi ask, cue, and role tools render parameter-aware tool calls", () => {
   const askTools = new Map<string, RenderableToolConfig>();
-  registerPiAskTools({
+  piAskExtension({
     registerTool: (config) => askTools.set(config.name, config),
   });
   assertAllToolsHaveCallRenderers(askTools);
+  assert.deepEqual([...askTools.keys()].sort(), ["ask_flow", "ask_user"]);
   assert.equal(
     renderCall(askTools, "ask_user", {
       title: "Choose scope",
@@ -137,6 +130,14 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
       questions: [{ id: "scope", prompt: "What next?" }],
     }),
     'ask_user title="Choose scope" clarification 1q',
+  );
+  assert.equal(
+    renderCall(askTools, "ask_flow", {
+      title: "Choose scope",
+      mode: "clarification",
+      questions: [{ id: "scope", prompt: "What next?" }],
+    }),
+    'ask_flow title="Choose scope" clarification 1q',
   );
 
   const cueTools = registerCueToolsForRendering();
@@ -250,10 +251,9 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
       role: "worker",
       instruction: "Inspect the implementation.",
       mode: "fresh",
-      dryRun: true,
       timeoutMs: 1000,
     }),
-    "call_role worker fresh dry-run timeout=1000",
+    "call_role worker fresh timeout=1000",
   );
 
   const longAskUser = renderCall(

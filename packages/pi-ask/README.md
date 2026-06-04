@@ -68,7 +68,7 @@ semantics.
 
 ## Behavior comparison and adopted affordances
 
-The local `pi-ask` / `spark-ask` flow is intentionally small, but it now
+The local `pi-ask` flow (which now also hosts the Spark-specific ask artifact persistence/replay surface formerly in `spark-ask`) is intentionally small, but it now
 keeps the useful protocol traits observed in related Pi packages:
 
 - `@eko24ive/pi-ask`: review tab, elaborate/re-ask flow, replay of the

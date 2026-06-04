@@ -24,14 +24,6 @@
   "dependencies": {
     "typebox": "^1.1.38"
   },
-  "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
-  },
-  "peerDependenciesMeta": {
-    "@earendil-works/pi-coding-agent": {
-      "optional": true
-    }
-  },
   "pi": {
     "extensions": [
       "./src/extension-entry.ts"

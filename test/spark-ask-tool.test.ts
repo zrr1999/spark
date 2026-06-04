@@ -6,13 +6,11 @@ import test from "node:test";
 
 import type { ArtifactRef } from "spark-core";
 import { defaultArtifactStore } from "spark-core";
+import { createElaborationResult, createPiAskFlowRequest, replayablePiAskFlow } from "pi-ask";
 import {
-  createElaborationResult,
-  createSparkAskRequest,
   createSparkAskToolRequest,
-  replayableSparkAsk,
   runSparkAskTool,
-} from "spark-ask";
+} from "../packages/spark/src/extension/spark-ask-tool.ts";
 
 type AskArtifactBodyForTest = {
   summary?: string;
@@ -569,7 +567,7 @@ void test("spark_ask tool multi-select decision persists explicit selections", a
 });
 
 void test("replayable spark ask preserves prior selections in option descriptions", () => {
-  const request = createSparkAskRequest({
+  const request = createPiAskFlowRequest({
     flow: "svg-animation-delivery",
     mode: "decision",
     title: "Choose SVG animation delivery mode",
@@ -631,7 +629,7 @@ void test("replayable spark ask preserves prior selections in option description
       },
     ],
   );
-  const replay = replayableSparkAsk(request, elaborated);
+  const replay = replayablePiAskFlow(request, elaborated);
   const chosen = replay.questions
     .find((question) => question.id === "delivery-mode")
     ?.options?.find((option) => option.value === "document_and_execute");

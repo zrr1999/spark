@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  createSparkAskRequest,
-  createSparkAskResult,
-  detectCopyLanguage,
-  isSparkAskGateBlocked,
-  runSparkAsk,
-} from "spark-ask";
+  createPiAskFlowRequest,
+  createPiAskFlowResult,
+  isPiAskFlowGateBlocked,
+  runPiAskFlow,
+} from "pi-ask";
+import { detectCopyLanguage } from "spark-core";
 
 void test("Spark asks are built from caller-provided context-specific questions", () => {
-  const request = createSparkAskRequest({
+  const request = createPiAskFlowRequest({
     flow: "svg-role-approval",
     mode: "approval",
     title: "Approve SVG role for animation planning",
@@ -40,7 +40,7 @@ void test("copy helpers only detect language; they do not create canned ask form
 });
 
 void test("approval flow without UI blocks instead of implicitly approving", async () => {
-  const request = createSparkAskRequest({
+  const request = createPiAskFlowRequest({
     flow: "svg-role-approval",
     mode: "approval",
     title: "Approve SVG role for animation planning",
@@ -57,17 +57,17 @@ void test("approval flow without UI blocks instead of implicitly approving", asy
       },
     ],
   });
-  const result = await runSparkAsk(request);
+  const result = await runPiAskFlow(request);
   assert.equal(result.flow, "svg-role-approval");
   assert.equal(result.mode, "submit");
   assert.equal(result.status, "no_selection");
   assert.equal(result.nextAction, "block");
   assert.equal(result.answers.approval, undefined);
-  assert.equal(isSparkAskGateBlocked(result, request), true);
+  assert.equal(isPiAskFlowGateBlocked(result, request), true);
 });
 
 void test("context-specific approval asks record explicit selections", async () => {
-  const request = createSparkAskRequest({
+  const request = createPiAskFlowRequest({
     flow: "svg-role-approval",
     mode: "approval",
     title: "Approve SVG role for animation planning",
@@ -84,7 +84,7 @@ void test("context-specific approval asks record explicit selections", async () 
       },
     ],
   });
-  const result = await runSparkAsk(request, { select: async () => "Approve" });
+  const result = await runPiAskFlow(request, { select: async () => "Approve" });
   assert.equal(result.flow, "svg-role-approval");
   assert.equal(result.mode, "submit");
   assert.equal(result.status, "answered");
@@ -93,7 +93,7 @@ void test("context-specific approval asks record explicit selections", async () 
 });
 
 void test("decision/approval asks expose no-selection as a blocking result envelope", async () => {
-  const request = createSparkAskRequest({
+  const request = createPiAskFlowRequest({
     flow: "custom",
     mode: "decision",
     title: "Dispatch roles?",
@@ -110,15 +110,15 @@ void test("decision/approval asks expose no-selection as a blocking result envel
       },
     ],
   });
-  const result = await runSparkAsk(request, { select: async () => undefined });
+  const result = await runPiAskFlow(request, { select: async () => undefined });
   assert.equal(result.status, "no_selection");
   assert.equal(result.cancelled, false);
   assert.equal(result.nextAction, "block");
-  assert.equal(isSparkAskGateBlocked(result, request), true);
+  assert.equal(isPiAskFlowGateBlocked(result, request), true);
 });
 
 void test("partial decision asks block when a later required selection is missing", async () => {
-  const request = createSparkAskRequest({
+  const request = createPiAskFlowRequest({
     flow: "custom",
     mode: "decision",
     title: "Dispatch roles?",
@@ -146,7 +146,7 @@ void test("partial decision asks block when a later required selection is missin
     ],
   });
   let calls = 0;
-  const result = await runSparkAsk(request, {
+  const result = await runPiAskFlow(request, {
     select: async () => {
       calls += 1;
       if (calls === 1) return "Plan A";
@@ -157,11 +157,11 @@ void test("partial decision asks block when a later required selection is missin
   assert.equal(result.nextAction, "block");
   assert.deepEqual(result.answers.plan?.values, ["a"]);
   assert.equal(result.answers.approval, undefined);
-  assert.equal(isSparkAskGateBlocked(result, request), true);
+  assert.equal(isPiAskFlowGateBlocked(result, request), true);
 });
 
 void test("slow decision asks wait for user answer instead of timing out", async () => {
-  const request = createSparkAskRequest({
+  const request = createPiAskFlowRequest({
     flow: "custom",
     mode: "approval",
     title: "Approve?",
@@ -178,16 +178,16 @@ void test("slow decision asks wait for user answer instead of timing out", async
       },
     ],
   });
-  const result = await runSparkAsk(request, {
+  const result = await runPiAskFlow(request, {
     select: () => new Promise((resolve) => setTimeout(() => resolve("Approve"), 20)),
   });
   assert.equal(result.status, "answered");
   assert.equal(result.nextAction, "resume");
-  assert.equal(isSparkAskGateBlocked(result, request), false);
+  assert.equal(isPiAskFlowGateBlocked(result, request), false);
 });
 
 void test("cancelled decision asks are blocking gate results", () => {
-  const request = createSparkAskRequest({
+  const request = createPiAskFlowRequest({
     flow: "custom",
     mode: "decision",
     title: "Continue?",
@@ -204,7 +204,7 @@ void test("cancelled decision asks are blocking gate results", () => {
       },
     ],
   });
-  const result = createSparkAskResult({
+  const result = createPiAskFlowResult({
     status: "cancelled",
     flow: request.flow,
     mode: "cancel",
@@ -213,11 +213,11 @@ void test("cancelled decision asks are blocking gate results", () => {
   });
   assert.equal(result.status, "cancelled");
   assert.equal(result.nextAction, "block");
-  assert.equal(isSparkAskGateBlocked(result, request), true);
+  assert.equal(isPiAskFlowGateBlocked(result, request), true);
 });
 
 void test("multi-select decision select path parses explicit comma-separated selections", async () => {
-  const request = createSparkAskRequest({
+  const request = createPiAskFlowRequest({
     flow: "custom",
     mode: "decision",
     title: "Choose workstreams",
@@ -235,10 +235,10 @@ void test("multi-select decision select path parses explicit comma-separated sel
       },
     ],
   });
-  const result = await runSparkAsk(request, { select: async () => "Docs, Runtime" });
+  const result = await runPiAskFlow(request, { select: async () => "Docs, Runtime" });
   assert.equal(result.status, "answered");
   assert.equal(result.nextAction, "resume");
   assert.deepEqual(result.answers.streams?.values, ["docs", "runtime"]);
   assert.deepEqual(result.answers.streams?.labels, ["Docs", "Runtime"]);
-  assert.equal(isSparkAskGateBlocked(result, request), false);
+  assert.equal(isPiAskFlowGateBlocked(result, request), false);
 });

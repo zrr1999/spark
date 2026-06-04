@@ -50,6 +50,18 @@ function renderActiveSparkProjectSummary(
     `- Unfinished tasks: ${unfinishedTasks.length} / claimed: ${claimed.length} / current_session_claimed: ${sessionClaimed.length} (${tasks.length} total)`,
   ];
 
+  const activeIndependentTodos = independentTodos.filter(isActiveSessionTodo);
+  if (activeIndependentTodos.length > 0) {
+    const visibleTodos = activeIndependentTodos.slice(0, SPARK_CONTEXT_TODO_LIMIT);
+    lines.push(`- Independent TODOs (session priority): ${activeIndependentTodos.length} active`);
+    for (const todo of visibleTodos) {
+      const id = todo.id ? `${todo.id} ` : "";
+      lines.push(`  - [${todo.status}] ${id}${truncateInline(todo.content, 160)}`);
+    }
+    const hidden = activeIndependentTodos.length - visibleTodos.length;
+    if (hidden > 0) lines.push(`  - … ${hidden} more active TODOs`);
+  }
+
   const visibleSessionClaimed = sessionClaimed.slice(0, SPARK_CONTEXT_CLAIMED_TASK_LIMIT);
   for (const task of visibleSessionClaimed) {
     const activeTodos = graph
@@ -69,18 +81,6 @@ function renderActiveSparkProjectSummary(
   const hiddenSessionClaimed = sessionClaimed.length - visibleSessionClaimed.length;
   if (hiddenSessionClaimed > 0)
     lines.push(`- … ${hiddenSessionClaimed} more claimed task(s); use spark_status for details`);
-
-  const activeIndependentTodos = independentTodos.filter(isActiveSessionTodo);
-  if (activeIndependentTodos.length > 0) {
-    const visibleTodos = activeIndependentTodos.slice(0, SPARK_CONTEXT_TODO_LIMIT);
-    lines.push(`- Independent TODOs: ${activeIndependentTodos.length} active`);
-    for (const todo of visibleTodos) {
-      const id = todo.id ? `${todo.id} ` : "";
-      lines.push(`  - [${todo.status}] ${id}${truncateInline(todo.content, 160)}`);
-    }
-    const hidden = activeIndependentTodos.length - visibleTodos.length;
-    if (hidden > 0) lines.push(`  - … ${hidden} more active TODOs`);
-  }
 
   return lines.join("\n");
 }

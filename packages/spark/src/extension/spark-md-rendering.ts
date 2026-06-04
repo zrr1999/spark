@@ -1,9 +1,9 @@
-import { detectCopyLanguage, type SparkCopyLanguage } from "spark-ask";
+import { detectCopyLanguage, type CopyLanguage } from "spark-core";
 import { escapeYamlLine } from "./task-plan-tool.ts";
 
 export interface SparkInitClarificationData {
   workingTitle?: string;
-  outputLanguage?: SparkCopyLanguage;
+  outputLanguage?: CopyLanguage;
   sparkFocus?: string;
   objective?: string;
   targetUser?: string;
@@ -33,10 +33,7 @@ export function renderSparkMd(input: {
   return language === "zh" ? renderSparkMdZh(input) : renderSparkMdEn(input);
 }
 
-export function describeDeliveryMode(
-  value: string | undefined,
-  language: SparkCopyLanguage,
-): string {
+export function describeDeliveryMode(value: string | undefined, language: CopyLanguage): string {
   if (language === "zh") {
     switch (value) {
       case "clarify_only":
@@ -231,7 +228,7 @@ inspired_by: []
   return `${sections.join("\n")}\n`;
 }
 
-function describeSparkFocus(value: string | undefined, language: SparkCopyLanguage): string {
+function describeSparkFocus(value: string | undefined, language: CopyLanguage): string {
   if (language === "zh") {
     switch (value) {
       case "audit":

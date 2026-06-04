@@ -627,7 +627,7 @@ void test("spark widget hides placeholder-only done TODO state", () => {
   assert.deepEqual(lines, []);
 });
 
-void test("spark widget prioritizes unfinished rows before done or cancelled rows", () => {
+void test("spark widget prioritizes session TODOs before pending, done, or cancelled rows", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
@@ -637,7 +637,7 @@ void test("spark widget prioritizes unfinished rows before done or cancelled row
         { title: "Pending task", status: "pending", agentLabel: "unassigned", todos: [] },
         { title: "Running task", status: "running", agentLabel: "unassigned", todos: [] },
       ],
-      independentTodos: [],
+      independentTodos: [{ displayNumber: 2, content: "Session follow-up", status: "pending" }],
       taskCountTotal: 4,
       taskCountClaimed: 0,
       taskCountClaimedBySession: 0,
@@ -648,7 +648,8 @@ void test("spark widget prioritizes unfinished rows before done or cancelled row
   );
 
   const text = lines.join("\n");
-  assert.ok(text.indexOf("Running task") < text.indexOf("Pending task"));
+  assert.ok(text.indexOf("Running task") < text.indexOf("Session follow-up"));
+  assert.ok(text.indexOf("Session follow-up") < text.indexOf("Pending task"));
   assert.ok(text.indexOf("Pending task") < text.indexOf("Done task"));
   assert.ok(text.indexOf("Done task") < text.indexOf("Cancelled task"));
 });

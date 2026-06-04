@@ -9,7 +9,16 @@ spark
 spark <initial goal>
 ```
 
-The standalone `spark` command is built on the Pi SDK `InteractiveMode`. It disables normal Pi extension/skill discovery, bundles Spark-related extensions as built-in capabilities, loads Spark skills explicitly, and routes ordinary TUI input through Spark mode by default. This MVP is intentionally TUI-only: it does not provide `--print`, JSON/RPC, or standalone subcommands yet. Child/background role-runs still use the existing `pi --print --mode json` runner, so `pi` must remain installed and authenticated for workflow execution.
+The standalone `spark` command is built directly on `@earendil-works/pi-tui`. It owns the terminal loop, editor, transcript, follow-up queue, host runtime, provider registry, model selection, session store, and explicit Spark extension loading instead of embedding Pi SDK `InteractiveMode`. It also now has a local-only `spark daemon ...` surface for file-queued detached `session.run` work. The daemon is intentionally not a gateway: no HTTP server, bearer token, remote job API, service installer, or Pi RPC wrapper. Child/background role-runs still use the existing `pi --print --mode json` runner, so `pi` must remain installed and authenticated for workflow execution until Spark gets its own non-TUI role executor.
+
+## Spark CLI native host vs Pi extension
+
+Spark now has two supported host targets:
+
+- **Pi extension host**: `packages/spark/src/extension/` is loaded by `@earendil-works/pi-coding-agent` through Pi's normal extension/package discovery. This remains the canonical `/spark`, `/research`, `/plan`, `/execute`, `/workflow`, and Spark tool surface inside Pi.
+- **Spark CLI native host**: `packages/spark-cli` starts `SparkHostRuntime` directly on `@earendil-works/pi-tui`, loads retained builtin extensions through explicit factories (`pi-ask`, `pi-cue`, `pi-roles`, `pi-graft`, `spark`), registers providers such as `baidu-oneapi`, discovers Spark skills from builtin/workspace/user layers, and runs turns through `@earendil-works/pi-ai`.
+
+The extension packages depend on the shared `pi-extension-api` contract, not on Pi's concrete SDK package. Host-specific code belongs under `packages/spark-cli/src/host/` and TUI wrappers under `packages/spark-cli/src/tui/`; the Pi extension implementation should stay usable by Pi without importing spark-cli.
 
 ## User-facing entry point
 
@@ -39,14 +48,14 @@ The first vertical slice then creates local Spark state under `.spark/`:
 
 A root `SPARK.md` is only materialized by `/spark` initialization, and only when the current `cwd` looks like a concrete repo (currently: `.git` exists in `cwd`). Direct modes such as `/research`, `/plan`, `/execute`, and `/workflow[:selector]` do not create or overwrite root `SPARK.md`; when they initialize minimal Spark state, intent is kept in `.spark` artifacts.
 
-`.spark/` is local runtime state and should be ignored by Git. Stable shared knowledge, including Spark learnings, should be shared only through explicit exports, reports, or committed Markdown artifacts. Use `spark_state` for explicit cache status/cleanup; cleanup is dry-run by default and never targets protected stores such as project graph, artifacts, notes, workflow runs, or review-gate state.
+`.spark/` is local runtime state and should be ignored by Git. Spark learnings live separately under `.learning/` for repo/workspace knowledge or under the user learning directory for personal cross-project knowledge. Use `spark_state` for explicit cache status/cleanup; cleanup is dry-run by default and never targets protected stores such as project graph, artifacts, notes, workflow runs, or review-gate state.
 
 `GitHub` repo/issue creation is intentionally deferred.
 
 ## Packages
 
 - `spark` — high-level `/spark`, `/research`, `/plan`, `/execute`, and `/workflow[:selector]` facade plus Spark status/workflow tools.
-- `spark-cli` — standalone Spark-first TUI host built on the Pi SDK; starts directly with `spark` and bundles Spark/pi-\* extensions as built-ins.
+- `spark-cli` — standalone Spark-first native TUI host built directly on `@earendil-works/pi-tui`; starts directly with `spark`, owns its local transcript/follow-up queue, and provides a local daemon queue for detached session-run tasks.
 - `spark-core` — internal shared refs, schemas, errors, artifact store, durable artifact metadata/blobs, and contracts.
 - `pi-cue` — reusable Pi/cue-shell execution substrate; absorbs `pi-cue-shell` code without a compatibility package and does not depend on `spark-core`.
 - `pi-ask` — minimal `ask_user` plus reusable `ask_flow` protocol/state/renderer with direct custom input handling.
@@ -55,9 +64,11 @@ A root `SPARK.md` is only materialized by `/spark` initialization, and only when
 - `spark-runtime` — Spark single-task runtime adapter that executes one task through `pi-roles`, writes artifacts, and owns task/run/timeout mapping above `RoleRun`.
 - `spark-workflows` — private Spark-owned workflow runtime, example workflow script factories, `/workflow:goal` goal continuation, `/workflow:ready` ready-frontier orchestration, workflow-run state in `.spark/workflow-runs.json`, and the role-run adapter boundary for `/workflow[:selector]`.
 - `spark-learnings` — evidence-backed reusable learning records, lifecycle state, search, explicit export/import, and legacy `compound-learnings` migration helpers.
-- `spark-ask` — Spark-specific ask artifact persistence/replay and tool helpers built on top of `pi-ask`; callers provide context-specific questions instead of canned presets.
+- `pi-ask` (formerly also `spark-ask`) — generic ask_user / ask_flow engine plus the Spark-specific ask artifact persistence/replay surface. The `spark_ask` tool wiring lives directly in `packages/spark/src/extension/spark-ask-tool.ts` and consumes pi-ask primitives by their original names. Callers provide context-specific questions instead of canned presets.
 
 No compatibility packages are planned. `spark-github` is intentionally deferred.
+
+Pi package loading is manifest-first: the root `pi` manifest explicitly lists each user-visible extension entry (`pi-ask`, `pi-cue`, `pi-roles`, `pi-graft`, the Baidu OneAPI provider, and `spark`). Library-only packages stay as dependencies, and `spark` does not embed-register lower-level `pi-*` tools.
 
 ## Development
 
@@ -65,6 +76,7 @@ No compatibility packages are planned. `spark-github` is intentionally deferred.
 pnpm install
 pnpm run verify
 packages/spark-cli/bin/spark --help
+packages/spark-cli/bin/spark daemon --help
 ```
 
 Tooling (pnpm, Vite+ / `vp`, prek hooks, CI) matches the stack documented in [`AGENTS.md`](./AGENTS.md).
@@ -77,4 +89,5 @@ Pi loads raw TypeScript from the package manifest; there is no build step.
 - [`docs/implementation-status.md`](./docs/implementation-status.md)
 - [`docs/spark-store-inventory.md`](./docs/spark-store-inventory.md)
 - [`docs/tools.md`](./docs/tools.md)
+- [`docs/spark-host-architecture.md`](./docs/spark-host-architecture.md)
 - [`docs/commit-convention.md`](./docs/commit-convention.md)

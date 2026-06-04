@@ -1,4 +1,3 @@
-import { registerPiCueTools, type PiCueExtensionApi, type PiCueToolConfig } from "pi-cue";
 import { renderSparkToolCall } from "./tool-rendering.ts";
 import { registerSparkArtifactTools } from "./artifact-tool-registration.ts";
 import { registerSparkAskTools } from "./spark-ask-tool-registration.ts";
@@ -24,13 +23,9 @@ import { SparkWidgetController } from "./spark-widget-controller.ts";
 interface SparkExtensionAPI extends SparkCommandApi {
   registerTool?(config: SparkRegisteredToolConfig): void;
   on?(event: string, handler: (event: unknown, ctx: SparkToolContext) => unknown): void;
-  getAllTools?: PiCueExtensionApi["getAllTools"];
-  setActiveTools?: PiCueExtensionApi["setActiveTools"];
 }
 
 export default function sparkExtension(pi: SparkExtensionAPI) {
-  registerEmbeddedPiCueTools(pi);
-
   const widgetController = new SparkWidgetController();
 
   async function refreshSparkWidget(cwd: string, ctx?: SparkToolContext): Promise<void> {
@@ -85,31 +80,4 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   registerSparkLearningTools(registerSparkTool);
 
   registerSparkArtifactTools(registerSparkTool);
-}
-
-function registerEmbeddedPiCueTools(pi: SparkExtensionAPI): void {
-  if (!pi.registerTool) return;
-  registerPiCueTools({
-    registerTool: (config) => pi.registerTool?.(toSparkRegisteredToolConfig(config)),
-    on: pi.on
-      ? (event, handler) => {
-          pi.on?.(event, (payload, ctx) => handler(payload, ctx));
-        }
-      : undefined,
-    getAllTools: pi.getAllTools ? () => pi.getAllTools!() : undefined,
-    setActiveTools: pi.setActiveTools ? (names) => pi.setActiveTools!(names) : undefined,
-  });
-}
-
-function toSparkRegisteredToolConfig(config: PiCueToolConfig): SparkRegisteredToolConfig {
-  const renderCall = config.renderCall;
-  return {
-    name: config.name,
-    label: config.label,
-    description: config.description,
-    parameters: config.parameters,
-    renderCall: renderCall ? (args, theme, context) => renderCall(args, theme, context) : undefined,
-    execute: (toolCallId, params, signal, onUpdate, ctx) =>
-      config.execute(toolCallId, params, signal, onUpdate, ctx),
-  };
 }

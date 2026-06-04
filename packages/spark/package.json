@@ -18,22 +18,12 @@
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.74.1",
-    "pi-cue": "file:../pi-cue",
     "pi-roles": "file:../pi-roles",
-    "spark-ask": "file:../spark-ask",
     "spark-core": "file:../spark-core",
     "spark-learnings": "file:../spark-learnings",
     "spark-runtime": "file:../spark-runtime",
     "spark-tasks": "file:../spark-tasks",
     "spark-workflows": "file:../spark-workflows",
     "typebox": "^1.1.38"
-  },
-  "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
-  },
-  "peerDependenciesMeta": {
-    "@earendil-works/pi-coding-agent": {
-      "optional": true
-    }
   }
 }

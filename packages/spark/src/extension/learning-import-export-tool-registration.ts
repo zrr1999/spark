@@ -13,6 +13,7 @@ import { compactArtifactDetail } from "./artifact-tools.ts";
 import {
   compactLearningDetail,
   normalizeLearningBoolean,
+  normalizeLearningLocation,
   normalizeLearningString,
   normalizeLearningStatusFilter,
   parseLearningImportPath,
@@ -39,10 +40,11 @@ export function registerSparkLearningImportExportTools(
       ),
       includeCandidates: Type.Optional(Type.Boolean({ default: false })),
       includeInactive: Type.Optional(Type.Boolean({ default: false })),
+      location: Type.Optional(Type.String({ description: "user | workspace | repo" })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd;
-      const store = defaultLearningStore(cwd);
+      const store = defaultLearningStore(cwd, normalizeLearningLocation(params.location));
       const artifacts = await store.list({
         status: normalizeLearningStatusFilter(params.status),
         includeCandidates: normalizeLearningBoolean(
@@ -108,6 +110,7 @@ export function registerSparkLearningImportExportTools(
       verificationExportPath: Type.Optional(
         Type.String({ description: "Optional path for the verification export before deletion." }),
       ),
+      location: Type.Optional(Type.String({ description: "user | workspace | repo" })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd;
@@ -129,7 +132,7 @@ export function registerSparkLearningImportExportTools(
       );
       const parsed = await parseLearningImportPath(cwd, inputPath);
       const count = parsed.records.length + parsed.inputs.length;
-      const store = defaultLearningStore(cwd);
+      const store = defaultLearningStore(cwd, normalizeLearningLocation(params.location));
       const imported: Artifact<LearningRecord>[] = [];
       if (apply) {
         for (const record of parsed.records) imported.push(await store.restore(record));
@@ -186,7 +189,7 @@ export function registerSparkLearningImportExportTools(
           source: parsed.source,
           apply,
           count,
-          imported: imported.map(compactLearningDetail),
+          imported: imported.map((artifact) => compactLearningDetail(artifact, store.location)),
           deletedLegacySource: deleteLegacyAfterVerifiedExport,
           verificationExportArtifact: verificationExportArtifact
             ? compactArtifactDetail(verificationExportArtifact)

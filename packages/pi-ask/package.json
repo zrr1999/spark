@@ -1,7 +1,7 @@
 {
   "name": "pi-ask",
   "version": "0.1.0",
-  "description": "Minimal structured ask_user primitive for Pi.",
+  "description": "Structured ask_user and ask_flow primitives for Pi.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [
@@ -10,21 +10,20 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./extension": "./src/extension.ts"
   },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.74.1",
+    "pi-extension-api": "file:../pi-extension-api",
     "typebox": "^1.1.38"
   },
-  "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
-  },
-  "peerDependenciesMeta": {
-    "@earendil-works/pi-coding-agent": {
-      "optional": true
-    }
+  "pi": {
+    "extensions": [
+      "./src/extension-entry.ts"
+    ]
   }
 }

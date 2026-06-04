@@ -1,5 +1,11 @@
-import type { Api, Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import { type AnthropicEffort, streamAnthropic } from "@earendil-works/pi-ai/anthropic";
+import {
+  type AnthropicEffort,
+  type Api,
+  type Context,
+  type Model,
+  type SimpleStreamOptions,
+  streamAnthropic,
+} from "@earendil-works/pi-ai";
 
 const BAIDU_ONEAPI_PROVIDER = "baidu-oneapi";
 const BAIDU_ONEAPI_BASE_URL = "https://oneapi-comate.baidu-int.com";

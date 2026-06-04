@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { replaySparkAskTool, runSparkAskTool, type SparkAskToolParams } from "spark-ask";
+import { replaySparkAskTool, runSparkAskTool, type SparkAskToolParams } from "./spark-ask-tool.ts";
 import type { ArtifactRef } from "spark-core";
 import { normalizeArtifactRef } from "./artifact-tools.ts";
 import { sparkAskUi } from "./spark-ask-ui.ts";

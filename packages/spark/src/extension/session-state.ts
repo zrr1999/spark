@@ -28,6 +28,16 @@ export {
   type SparkRunStrategy,
 } from "./current-project-state.ts";
 export {
+  clearSparkMode,
+  loadSparkMode,
+  nextSparkSessionMode,
+  saveSparkMode,
+  SPARK_SESSION_MODE_CYCLE,
+  type SparkSessionMode,
+  type SparkSessionModeInput,
+  type SparkSessionModeState,
+} from "./mode-state.ts";
+export {
   loadHiddenRoleRunInboxState,
   saveHiddenRoleRunInboxState,
   type HiddenRoleRunInboxState,
