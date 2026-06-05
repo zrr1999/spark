@@ -23,8 +23,8 @@ import {
   type PiAskFlowRequest,
   type PiAskFlowResult,
 } from "pi-ask";
-import { defaultArtifactStore } from "spark-core";
-import type { ArtifactRef, JsonValue } from "spark-core";
+import { defaultArtifactStore } from "pi-artifacts";
+import type { ArtifactRef, JsonValue } from "pi-extension-api";
 
 export const MIN_SPARK_ASK_OPTION_DESCRIPTION_LENGTH = 12;
 

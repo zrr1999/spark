@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import type { RoleRegistry } from "pi-roles";
-import { DependencyError } from "spark-core";
+import { DependencyError } from "pi-extension-api";
 import {
   collectNonConcreteTaskIssues,
   decideTaskPlanBeforeCreate,
@@ -10,7 +10,7 @@ import {
   renderNonConcreteTaskIssues,
   type TaskGraph,
   type TaskPlanInput,
-} from "spark-tasks";
+} from "pi-tasks";
 import {
   applyRoadmapHintsToTaskPlanInput,
   attachRoadmapPlanningRefs,

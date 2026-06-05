@@ -1,9 +1,10 @@
-import type { TaskGraph, SessionTodoEntry } from "spark-tasks";
-import { isUnfinishedTaskStatus } from "spark-tasks";
-import type { TaskRunCompletionSummary } from "spark-core";
-import type { SparkDagStatusSummary } from "spark-workflows";
+import type { TaskGraph, SessionTodoEntry } from "pi-tasks";
+import { isUnfinishedTaskStatus } from "pi-tasks";
+import type { TaskRunCompletionSummary } from "pi-extension-api";
+import type { SparkDagStatusSummary } from "pi-workflows";
 import type { SparkRunModeState } from "./current-project-state.ts";
 import { appendRecentRoleRunCompletionLines } from "./role-run-completions.ts";
+import type { SparkProjectGoal } from "./spark-project-goals.ts";
 import { sparkRunStrategyForMaxConcurrency } from "./session-state.ts";
 import { visibleIndependentTodos } from "./session-todos.ts";
 import {
@@ -44,6 +45,7 @@ export interface SparkStatusRenderInput {
   currentProject?: ReturnType<TaskGraph["projects"]>[number];
   dagStatus: SparkDagStatusSummary;
   runMode?: SparkRunModeState;
+  projectGoal?: SparkProjectGoal;
   independentTodos: SessionTodoEntry[];
   recentRoleRunCompletions: TaskRunCompletionSummary[];
   state?: SparkStateHousekeepingSummary;
@@ -82,6 +84,7 @@ export function renderSparkStatus(input: SparkStatusRenderInput): {
       projects: compactProjectStatusSummaries(input.graph, input.sessionKey),
       dag: input.dagStatus,
       runMode: input.runMode,
+      projectGoal: input.projectGoal,
       recentRoleRunCompletions: input.recentRoleRunCompletions,
       ...(input.state ? { state: input.state } : {}),
     },
@@ -145,6 +148,13 @@ function renderProjectStatusLines(
     lines.push(
       `  Tasks: ${tasks.length} total | ${claimed.length} claimed | ${sessionClaimed.length} current_session_claimed | ${formatTaskStatusCounts(statusCounts)}`,
     );
+    if (isCurrent && input.projectGoal) {
+      const reason = input.projectGoal.pauseReason ?? input.projectGoal.completedReason;
+      const reasonText = reason ? ` | reason: ${truncateInline(reason, 120)}` : "";
+      lines.push(
+        `  Goal: ${input.projectGoal.status} | ${truncateInline(input.projectGoal.objective, 180)}${reasonText}`,
+      );
+    }
     if (hiddenByView > 0)
       lines.push(`  Hidden finished tasks: ${hiddenByView} (use view=full to include)`);
     if (hiddenByLimit > 0)
@@ -165,6 +175,7 @@ function renderProjectStatusLines(
       },
       hiddenFinishedTasks: hiddenByView,
       hiddenByLimit,
+      goal: isCurrent ? input.projectGoal : undefined,
       tasks: renderedTaskDetails,
     };
     if (input.view === "summary") {

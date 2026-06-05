@@ -15,7 +15,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { RoleRegistry, builtinRoleRef, defaultUserRoleModelBindingStore } from "pi-roles";
-import { ArtifactStore } from "spark-core";
+import { ArtifactStore } from "pi-artifacts";
 import {
   DependencyError,
   newRef,
@@ -24,13 +24,13 @@ import {
   type RunRef,
   type TaskPlan,
   type TaskRef,
-} from "spark-core";
+} from "pi-extension-api";
 import {
   SparkDagRunStoreFormatError,
   defaultSparkDagRunStore,
   runReadySparkTasks,
   type SparkDagRunRecord,
-} from "../packages/spark-workflows/src/index.ts";
+} from "../packages/pi-workflows/src/index.ts";
 import {
   buildRoleRunArgs,
   createRoleRunName,
@@ -63,7 +63,7 @@ import {
   taskCompletionReadiness,
   taskPlanReadiness,
   type SessionTodoEntry,
-} from "spark-tasks";
+} from "pi-tasks";
 import {
   cleanupOwnedBackgroundSubroles,
   resumeOwnedBackgroundSubroles,
@@ -406,7 +406,7 @@ void test("task plan readiness distinguishes minimal and execution-ready plans",
     [
       [
         "open_questions",
-        "Resolve material questions with spark_ask, then move decisions into askRefs or the plan body.",
+        "Resolve material questions with ask, then move decisions into askRefs or the plan body.",
       ],
     ],
   );
@@ -595,7 +595,7 @@ void test("task plan readiness provides remediation for every issue kind", () =>
       ["missing_steps", "Add at least one concrete execution step to plan.steps."],
       [
         "open_questions",
-        "Resolve material questions with spark_ask, then move decisions into askRefs or the plan body.",
+        "Resolve material questions with ask, then move decisions into askRefs or the plan body.",
       ],
     ],
   );
@@ -1770,7 +1770,7 @@ void test("Spark runtime Pi command args use current CLI flags and explicit sess
   assert.equal(args.includes("role:builtin-worker"), false);
   assert.equal(args.at(-2), "You are a worker.");
   assert.equal(args.at(-1)?.includes("Spark role-run ask policy:"), true);
-  assert.equal(args.at(-1)?.includes("use the available Spark ask tools"), true);
+  assert.equal(args.at(-1)?.includes("use the canonical ask tool"), true);
   assert.equal(args.at(-1)?.includes("Spark naming quality policy:"), true);
   assert.equal(args.at(-1)?.includes("placeholder, generic, stale"), true);
   assert.equal(args.at(-1)?.includes("Stable refs must remain unchanged"), true);
@@ -2648,7 +2648,7 @@ void test("Spark DAG run store marks finished manager runs failed when child run
       followUp.summary,
       `Spark workflow run: ${dagRun.ref} failed: scheduled 1, completed 1.`,
     );
-    assert.match(followUp.nextActions.join("\n"), /failed: inspect spark_background_runs inspect/);
+    assert.match(followUp.nextActions.join("\n"), /failed: inspect task\(\{ action: "run_status"/);
     assert.match(followUp.nextActions.join("\n"), /rerun ready background work/);
     const status = await store.status();
     assert.equal(status.manager.status, "idle");

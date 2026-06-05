@@ -1,6 +1,6 @@
 import { join } from "node:path";
 
-import { type RunRef } from "spark-core";
+import type { RunRef } from "pi-extension-api";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {
   sanitizeStoreScope,

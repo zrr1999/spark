@@ -1,8 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { defaultArtifactStore, detectCopyLanguage } from "spark-core";
-import type { CopyLanguage } from "spark-core";
+import { defaultArtifactStore } from "pi-artifacts";
+import { detectCopyLanguage } from "pi-extension-api";
+import type { CopyLanguage } from "pi-extension-api";
 import { builtinRoleRef } from "pi-roles";
 import {
   newRef,
@@ -13,8 +14,8 @@ import {
   type SparkRunTrace,
   type ProjectRef,
   type ReviewGate,
-} from "spark-core";
-import { defaultTaskGraphStore, TaskGraph, type TaskTodoSummary } from "spark-tasks";
+} from "pi-extension-api";
+import { defaultTaskGraphStore, TaskGraph, type TaskTodoSummary } from "pi-tasks";
 import { pathExists, readActiveSparkMd, shouldMaterializeSparkMd } from "./spark-activation.ts";
 import {
   describeDeliveryMode,

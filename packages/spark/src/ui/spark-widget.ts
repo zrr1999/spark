@@ -1,16 +1,15 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
-import type { SessionTodoEntry, SessionTodoStatus } from "spark-tasks";
+import type { SessionTodoEntry, SessionTodoStatus } from "pi-tasks";
 
-export type { SessionTodoEntry, SessionTodoStatus } from "spark-tasks";
+export type { SessionTodoEntry, SessionTodoStatus } from "pi-tasks";
 
 /**
  * spark-widget.ts — Above-editor widget showing durable Spark project/task state plus
  * the current task's TODO working set.
  *
  * Display model:
- *   ◆ Tasks(running=2 pending=1 failed=1): @agent-a, @agent-b
- *   ◆ Project title
+ *   ◆ Project title · Tasks(running=2 pending=1 failed=1): @agent-a, @agent-b · Goal(●): active objective
  *   ├─ ◐ @me/worker role-run task title
  *   │  ├─ ✓ #7 task TODO
  *   │  └─ ○ #12 task TODO
@@ -44,10 +43,16 @@ export interface SparkRunWidgetEntry {
   focus?: string;
 }
 
+export interface SparkGoalWidgetEntry {
+  status: "active" | "paused" | "complete";
+  objective: string;
+}
+
 export interface SparkWidgetState {
   projectTitle?: string;
   dag?: SparkDagWidgetEntry;
   run?: SparkRunWidgetEntry;
+  goal?: SparkGoalWidgetEntry;
   tasks: TaskEntry[];
   independentTodos: SessionTodoEntry[];
   taskCountTotal: number;
@@ -135,6 +140,7 @@ function hasWidgetContent(state: SparkWidgetState | undefined): state is SparkWi
     (state.projectTitle ||
       state.dag ||
       state.run ||
+      state.goal ||
       state.tasks.length > 0 ||
       state.independentTodos.some(isVisibleIndependentTodo)),
   );
@@ -162,6 +168,7 @@ export function renderSparkWidgetLines(
     !state.projectTitle &&
     !state.dag &&
     !state.run &&
+    !state.goal &&
     state.tasks.length === 0 &&
     visibleTodos.length === 0
   )
@@ -174,14 +181,12 @@ export function renderSparkWidgetLines(
   const lines: string[] = [];
   const visibleTasks = state.tasks.filter(isVisibleTaskEntry);
 
-  const summaryLine = formatTaskSummaryLine(state, visibleTasks, l.tasks, theme);
-  if (summaryLine) lines.push(trunc(summaryLine));
-  const backgroundLine = formatBackgroundLine(state.dag, state.run, theme);
+  const headerLine = formatProjectHeaderLine(state, visibleTasks, l.tasks, theme);
+  if (headerLine) lines.push(trunc(headerLine));
+  const backgroundLine = hasSessionRunningAgent(visibleTasks)
+    ? undefined
+    : formatBackgroundLine(state.dag, state.run, theme);
   if (backgroundLine) lines.push(trunc(backgroundLine));
-
-  if (state.projectTitle) {
-    lines.push(trunc(`${theme.fg("accent", "◆")} ${theme.bold(state.projectTitle)}`));
-  }
 
   const tasks = visibleTasks.map((task) => ({
     ...task,
@@ -202,6 +207,34 @@ export function renderSparkWidgetLines(
   }
 
   return lines;
+}
+
+function hasSessionRunningAgent(tasks: TaskEntry[]): boolean {
+  return tasks.some(
+    (task) =>
+      task.status === "running" && task.claim === "role-run" && task.backgroundOwner === "session",
+  );
+}
+
+function formatGoalSummary(
+  goal: SparkGoalWidgetEntry | undefined,
+  theme: SparkWidgetTheme,
+): string | undefined {
+  if (!goal) return undefined;
+  const status = theme.fg(goalStatusColor(goal.status), goalStatusSymbol(goal.status));
+  return `${theme.fg("dim", "Goal(")}${status}${theme.fg("dim", `): ${goal.objective}`)}`;
+}
+
+function goalStatusSymbol(status: SparkGoalWidgetEntry["status"]): string {
+  if (status === "active") return "●";
+  if (status === "paused") return "⏸";
+  return "✓";
+}
+
+function goalStatusColor(status: SparkGoalWidgetEntry["status"]): string {
+  if (status === "active") return "accent";
+  if (status === "paused") return "warning";
+  return "success";
 }
 
 function formatBackgroundLine(
@@ -240,18 +273,38 @@ function shortDagRunRef(runRef: string): string {
   return match ? `run:${match[1]}` : runRef;
 }
 
-function formatTaskSummaryLine(
+function formatProjectHeaderLine(
   state: SparkWidgetState,
   visibleTasks: TaskEntry[],
   tasksLabel: string,
   theme: SparkWidgetTheme,
+): string | undefined {
+  const taskSummary = formatTaskSummaryHeader(state, visibleTasks, tasksLabel);
+  const goalSummary = formatGoalSummary(state.goal, theme);
+  const suffix = [taskSummary ? theme.fg("dim", taskSummary) : undefined, goalSummary]
+    .filter((part): part is string => Boolean(part))
+    .map((part) => `${theme.fg("dim", "·")} ${part}`)
+    .join(" ");
+  if (!state.projectTitle) {
+    const summary = [taskSummary ? theme.fg("dim", taskSummary) : undefined, goalSummary]
+      .filter((part): part is string => Boolean(part))
+      .join(` ${theme.fg("dim", "·")} `);
+    return summary ? `${theme.fg("accent", "◆")} ${summary}` : undefined;
+  }
+  return `${theme.fg("accent", "◆")} ${theme.bold(state.projectTitle)}${suffix ? ` ${suffix}` : ""}`;
+}
+
+function formatTaskSummaryHeader(
+  state: SparkWidgetState,
+  visibleTasks: TaskEntry[],
+  tasksLabel: string,
 ): string | undefined {
   if (state.taskCountTotal === 0 && visibleTasks.length === 0) return undefined;
   if (visibleTasks.length === 0 && state.tasks.length > 0) return undefined;
   const taskSummary = formatTaskSummary(state, visibleTasks);
   const agentSummary = formatRunningAgentSummary(visibleTasks);
   const suffix = agentSummary ? `${taskSummary}: ${agentSummary}` : taskSummary;
-  return `${theme.fg("accent", "◆")} ${theme.fg("dim", `${tasksLabel}(${suffix})`)}`;
+  return `${tasksLabel}(${suffix})`;
 }
 
 function formatTaskSummary(state: SparkWidgetState, visibleTasks: TaskEntry[]): string {

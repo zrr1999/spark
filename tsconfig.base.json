@@ -16,8 +16,6 @@
     "ignoreDeprecations": "6.0",
     "paths": {
       "pi-extension-api": ["./packages/pi-extension-api/src/index.ts"],
-      "spark-core": ["./packages/spark-core/src/index.ts"],
-      "spark-learnings": ["./packages/spark-learnings/src/index.ts"],
       "pi-roles": ["./packages/pi-roles/src/index.ts"],
       "pi-roles/extension": ["./packages/pi-roles/src/extension.ts"],
       "pi-graft": ["./packages/pi-graft/src/index.ts"],
@@ -27,9 +25,8 @@
       "pi-cue": ["./packages/pi-cue/src/index.ts"],
       "pi-cue/extension": ["./packages/pi-cue/src/extension/index.ts"],
       "spark/extension": ["./packages/spark/src/extension/index.ts"],
-      "spark-goal": ["./packages/spark-goal/src/index.ts"],
-      "spark-tasks": ["./packages/spark-tasks/src/index.ts"],
-      "spark-workflows": ["./packages/spark-workflows/src/index.ts"]
+      "pi-goal": ["./packages/pi-goal/src/index.ts"],
+      "pi-workflows": ["./packages/pi-workflows/src/index.ts"]
     }
   }
 }

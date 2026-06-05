@@ -1,5 +1,5 @@
-import type { Task, TaskRun } from "spark-core";
-import { isUnfinishedTaskStatus } from "spark-tasks";
+import type { Task, TaskRun } from "pi-extension-api";
+import { isUnfinishedTaskStatus } from "pi-tasks";
 
 export function taskClaimedBy(task: Task): string | undefined {
   return task.claim?.claimedBy;

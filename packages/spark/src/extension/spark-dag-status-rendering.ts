@@ -2,7 +2,7 @@ import {
   sparkDagRunNextSteps,
   type SparkDagRunRecord,
   type SparkDagStatusSummary,
-} from "spark-workflows";
+} from "pi-workflows";
 
 export function appendCompactSparkDagStatusLines(
   lines: string[],

@@ -10,8 +10,8 @@ import {
   type LearningStatus,
   parseLearningExportMarkdown,
   parseLegacyCompoundLearningMarkdown,
-} from "spark-learnings";
-import type { Artifact } from "spark-core";
+} from "pi-learnings";
+import type { Artifact } from "pi-artifacts";
 
 const LEARNING_STATUSES = ["candidate", "active", "stale", "superseded", "rejected"] as const;
 const LEARNING_LOCATIONS = ["user", "workspace", "repo"] as const;

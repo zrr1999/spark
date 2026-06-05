@@ -57,7 +57,11 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
   assert.ok(tools.includes("cue_exec"));
   assert.ok(tools.includes("list_roles"));
   assert.ok(tools.includes("graft_status"));
-  assert.ok(tools.includes("spark_status"));
+  assert.ok(tools.includes("task"));
+  assert.equal(
+    tools.some((tool) => tool.startsWith("spark_")),
+    false,
+  );
   const commands = host.listCommands().map((command) => command.name);
   assert.ok(commands.includes("spark"));
   assert.ok(commands.includes("graft-attach"));

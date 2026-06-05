@@ -1,16 +1,16 @@
-import {
-  type ArtifactRef,
-  type RoleRef,
-  type RunRef,
-  type TaskRef,
-  type TaskStatus,
-  type ProjectRef,
-} from "spark-core";
+import type {
+  ArtifactRef,
+  RoleRef,
+  RunRef,
+  TaskRef,
+  TaskStatus,
+  ProjectRef,
+} from "pi-extension-api";
 import {
   defaultSparkDagRunStore,
   type SparkDagRunAcknowledgeResult,
   type SparkDagRunStatus,
-} from "spark-workflows";
+} from "pi-workflows";
 import {
   listActiveSparkRoleRunProcesses,
   type KillSparkRoleRunProcessResult,
@@ -18,7 +18,7 @@ import {
   type RoleRunJsonEventsTail,
   type RoleRunTextTail,
 } from "spark-runtime";
-import type { TaskGraph } from "spark-tasks";
+import type { TaskGraph } from "pi-tasks";
 import {
   collectBackgroundChildRuns,
   enrichBackgroundChildRunsWithRoleRunArtifacts,

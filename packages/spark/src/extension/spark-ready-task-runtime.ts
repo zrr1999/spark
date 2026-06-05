@@ -1,8 +1,9 @@
 import type { RoleRegistry } from "pi-roles";
-import type { ArtifactStore, RoleRef } from "spark-core";
+import type { ArtifactStore } from "pi-artifacts";
+import type { RoleRef } from "pi-extension-api";
 import { killActiveSparkRoleRunProcesses, runSparkTask, type RoleRunMode } from "spark-runtime";
-import type { TaskGraph } from "spark-tasks";
-import type { SparkReadyTaskRun, SparkReadyTaskRunKiller } from "spark-workflows";
+import type { TaskGraph } from "pi-tasks";
+import type { SparkReadyTaskRun, SparkReadyTaskRunKiller } from "pi-workflows";
 
 export interface SparkRuntimeReadyTaskRunner {
   runTask: SparkReadyTaskRun;

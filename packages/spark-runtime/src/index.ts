@@ -1,3 +1,5 @@
+export * from "./workflow-role-run-adapter.ts";
+
 import type { ChildProcess } from "node:child_process";
 import {
   buildRoleRunArgs as buildGenericRoleRunArgs,
@@ -9,7 +11,7 @@ import {
   type RoleRegistry,
   type RoleRunMode,
 } from "pi-roles";
-import type { ArtifactStore } from "spark-core";
+import type { ArtifactStore } from "pi-artifacts";
 import {
   DependencyError,
   type ArtifactRef,
@@ -24,14 +26,14 @@ import {
   type TaskRun,
   type TaskRunCompletionSummary,
   type TaskTodo,
-} from "spark-core";
+} from "pi-extension-api";
 import type { RoleInstruction, RoleRunRecord, RoleRunStatus } from "pi-roles";
 import {
   taskCompletionReadiness,
   type TaskGraph,
   type TaskGraphStore,
   type TaskGraphStoreUpdateOptions,
-} from "spark-tasks";
+} from "pi-tasks";
 import {
   type RoleRunArtifactBody,
   type RoleRunJsonEventsTail,
@@ -668,7 +670,7 @@ function taskTodoInstructionRank(todo: TaskTodo): number {
 
 function boundTaskRoleInstruction(instruction: string): string {
   if (instruction.length <= MAX_TASK_ROLE_INSTRUCTION_CHARS) return instruction;
-  return `${instruction.slice(0, MAX_TASK_ROLE_INSTRUCTION_CHARS).trimEnd()}\n\n… task instruction truncated; inspect spark_status/spark_get_artifact if more context is needed.`;
+  return `${instruction.slice(0, MAX_TASK_ROLE_INSTRUCTION_CHARS).trimEnd()}\n\n… task instruction truncated; inspect task({ action: "status" }) and artifact({ action: "read" }) if more context is needed.`;
 }
 
 function createRoleRunArtifactBody(input: {
@@ -985,13 +987,13 @@ function defaultRoleRefForTaskKind(kind: Task["kind"]): RoleRef {
 function sparkRoleRunGuidance(): string {
   return [
     "Spark role-run ask policy:",
-    "- You have access to Spark ask tools in this run. If the task is blocked by missing user intent, an approval gate, or a real ambiguity that cannot be resolved from repository context, use the available Spark ask tools rather than only writing questions in your final response.",
+    "- You have access to ask tools in this run. If the task is blocked by missing user intent, an approval gate, or a real ambiguity that cannot be resolved from repository context, use the canonical ask tool rather than only writing questions in your final response.",
     "- Do not ask for routine implementation choices you can safely infer from the assigned task and repository context; proceed and document the decision.",
     "- If an ask times out or returns no selection for a decision/approval gate, stop and report the blocked state rather than continuing.",
     "",
     "Spark naming quality policy:",
     "- Judge whether the active project title and your task @name/title are placeholder, generic, stale, too broad, or inconsistent with the current instruction.",
-    "- When the improvement is obvious, update Spark display names without asking: use spark_rename_project for the project, and spark_claim_task with the existing task ref/name intent to improve your claimed task @name/title/description. Stable refs must remain unchanged.",
+    '- When the improvement is obvious, update Spark display names without asking: use task({ action: "project_update" }) for the project, and task({ action: "claim" }) with the existing task ref/name intent to improve your claimed task @name/title/description. Stable refs must remain unchanged.',
     "- Preserve user-specific intentional names and distinctive project/code names; ask only if multiple plausible names require a real user decision.",
   ].join("\n");
 }

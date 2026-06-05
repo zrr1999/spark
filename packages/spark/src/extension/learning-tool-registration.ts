@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defaultLearningStore, type LearningLocation, type LearningStore } from "spark-learnings";
+import { defaultLearningStore, type LearningLocation, type LearningStore } from "pi-learnings";
 import { normalizeArtifactLimit, truncateBlock } from "./artifact-tools.ts";
 import { registerSparkLearningImportExportTools } from "./learning-import-export-tool-registration.ts";
 import {

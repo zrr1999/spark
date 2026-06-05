@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { ArtifactStore } from "spark-core";
+import { ArtifactStore } from "pi-artifacts";
 import {
   defaultLearningStore,
   LearningExportFormatError,
@@ -12,8 +12,8 @@ import {
   parseLegacyCompoundLearningMarkdown,
   parseLearningExportMarkdown,
   renderLearningExportMarkdown,
-} from "spark-learnings";
-import { contentHash, newRef } from "spark-core";
+} from "pi-learnings";
+import { contentHash, newRef } from "pi-extension-api";
 
 void test("learning store records active learnings and searches by content", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-learnings-"));

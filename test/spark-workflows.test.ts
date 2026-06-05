@@ -4,14 +4,14 @@ import { test } from "node:test";
 
 import {
   adversarialReviewWorkflowScript,
-  createSparkWorkflowRoleRunAdapter,
   deepResearchWorkflowScript,
   parseSparkWorkflowScript,
   runSparkWorkflowScript,
-} from "../packages/spark-workflows/src/index.ts";
+} from "../packages/pi-workflows/src/index.ts";
+import { createSparkWorkflowRoleRunAdapter } from "../packages/spark-runtime/src/index.ts";
 
-void test("spark-workflows package stays isolated from runtime execution packages", async () => {
-  const pkg = JSON.parse(await readFile("packages/spark-workflows/package.json", "utf8")) as {
+void test("pi-workflows package stays isolated from runtime execution packages", async () => {
+  const pkg = JSON.parse(await readFile("packages/pi-workflows/package.json", "utf8")) as {
     dependencies?: Record<string, string>;
   };
 
@@ -19,7 +19,7 @@ void test("spark-workflows package stays isolated from runtime execution package
   assert.equal(pkg.dependencies?.["pi-roles"], undefined);
   assert.equal(pkg.dependencies?.["spark-goal"], undefined);
 
-  const sourceFiles = await listTypeScriptFiles("packages/spark-workflows/src");
+  const sourceFiles = await listTypeScriptFiles("packages/pi-workflows/src");
   for (const file of sourceFiles) {
     const source = await readFile(file, "utf8");
     assert.doesNotMatch(
@@ -30,7 +30,7 @@ void test("spark-workflows package stays isolated from runtime execution package
   }
 });
 
-void test("spark-workflows parses metadata and runs sandbox primitives with journal", async () => {
+void test("pi-workflows parses metadata and runs sandbox primitives with journal", async () => {
   const script = `export const meta = {
   name: 'demo',
   description: 'Demo workflow',
@@ -85,7 +85,7 @@ return { scan, a, b }`;
   );
 });
 
-void test("spark-workflows exposes and runs workflow script factories", async () => {
+void test("pi-workflows exposes and runs workflow script factories", async () => {
   const deep = parseSparkWorkflowScript(deepResearchWorkflowScript());
   assert.equal(deep.meta.name, "deep_research");
   assert.deepEqual(
@@ -115,7 +115,7 @@ void test("spark-workflows exposes and runs workflow script factories", async ()
   assert.deepEqual(reviewRun.phases, ["Investigate", "Refute", "Consensus"]);
 });
 
-void test("spark-workflows applies phase model defaults and per-agent overrides", async () => {
+void test("pi-workflows applies phase model defaults and per-agent overrides", async () => {
   const script = `export const meta = {
     name: 'model routing',
     description: 'Model routing workflow',
@@ -137,7 +137,7 @@ void test("spark-workflows applies phase model defaults and per-agent overrides"
   assert.deepEqual(models, ["provider/phase-model", "provider/agent-model"]);
 });
 
-void test("spark-workflows role-run adapter maps workflow agents to Spark dependency boundary", async () => {
+void test("pi-workflows role-run adapter maps workflow agents to Spark dependency boundary", async () => {
   const requests: unknown[] = [];
   const agent = createSparkWorkflowRoleRunAdapter({
     roleRef: "role:builtin-worker",
@@ -178,7 +178,7 @@ void test("spark-workflows role-run adapter maps workflow agents to Spark depend
   assert.match(request.instruction, /Isolation: worktree/);
 });
 
-void test("spark-workflows rejects unsupported workflow agent isolation", async () => {
+void test("pi-workflows rejects unsupported workflow agent isolation", async () => {
   const script = `export const meta = { name: 'isolation', description: 'isolation test' }
 await agent('check isolation', { isolation: 'container' })`;
 

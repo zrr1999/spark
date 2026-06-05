@@ -31,8 +31,9 @@ export interface RoleSpec {
    source: RoleSource;
    description: string;
    systemPrompt: string;
+   allowedTools?: string[];
+   defaultModel?: string;
    origin?: { kind: RoleOriginKind; note?: string; artifactRef?: string };
-   metadata?: Record<string, unknown>;
    createdAt: string;
    updatedAt: string;
 }
@@ -44,8 +45,9 @@ export interface RoleSpecProposal {
    systemPrompt: string;
    rationale?: string;
    expectedUses?: string[];
+   allowedTools?: string[];
+   defaultModel?: string;
    origin?: { kind: RoleOriginKind; note?: string; artifactRef?: string };
-   metadata?: Record<string, unknown>;
 }
 
 export interface RoleRunRequest {
@@ -66,6 +68,11 @@ Use `source` for role storage/provenance scope:
 - `builtin` — shipped with a package or Pi distribution.
 - `project` — stored in a project repo under `.agents/roles/**/*.md`.
 - `user` — user-global roles under `~/.agents/roles/**/*.md`.
+
+The builtin role set is deliberately small: `scout`, `planner`, `worker`,
+`reviewer`, and `oracle`. `allowedTools` is a declarative profile on a role spec;
+host or Spark preset code may consume it, but `pi-roles` does not own tool
+activation or package-specific preset policy.
 
 Runtime role loading does not read old agent-shaped paths. If a repository still has `.pi/agents`, `~/.pi/agent/agents`, or `.spark/agents/*.json` data, migrate it explicitly into `.agents/roles` before relying on `pi-roles`.
 

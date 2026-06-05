@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { ArtifactStore, ArtifactStoreFormatError } from "spark-core";
+import { ArtifactStore, ArtifactStoreFormatError } from "pi-artifacts";
 import {
   AskConfigStoreFormatError,
   askUser,
@@ -25,7 +25,7 @@ import {
   type PiAskUi,
   type StoredAskPayload,
 } from "pi-ask";
-import { newRef, type JsonValue } from "spark-core";
+import { newRef, type JsonValue } from "pi-extension-api";
 
 void test("artifact store writes hashes, blobs, and lineage links", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-core-artifacts-"));
@@ -702,6 +702,117 @@ void test("ask_flow fullscreen requires explicit cwd for persisted payloads", as
       ),
     /ask_flow fullscreen requires ctx\.cwd/,
   );
+});
+
+void test("ask_flow fullscreen passes a custom UI factory to Pi host", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ask-flow-custom-factory-"));
+  try {
+    const tools = new Map<string, { execute: Function }>();
+    registerPiAskFlowTool({ registerTool: (config) => tools.set(config.name, config) });
+    const tool = tools.get("ask_flow");
+    assert.ok(tool);
+
+    let sawFactory = false;
+    const result = await tool.execute(
+      "ask-flow-custom-factory-test",
+      {
+        title: "Choose mode",
+        mode: "clarification",
+        questions: [
+          {
+            id: "mode",
+            prompt: "Which mode?",
+            type: "single",
+            options: [
+              { value: "safe_mode", label: "Safe path" },
+              { value: "fast_mode", label: "Fast path" },
+            ],
+          },
+        ],
+      },
+      new AbortController().signal,
+      () => undefined,
+      {
+        cwd: dir,
+        ui: {
+          custom: async (...args: unknown[]) => {
+            assert.equal(args.length, 1);
+            assert.equal(typeof args[0], "function");
+            sawFactory = true;
+            const factory = args[0] as Function;
+            const component = factory(
+              { terminal: { columns: 120 }, requestRender() {} },
+              {
+                fg: (_color: string, text: string) => text,
+                bold: (text: string) => text,
+                strikethrough: (text: string) => text,
+                dim: (text: string) => text,
+              },
+              {},
+              () => undefined,
+            ) as { handleInput(data: string): void; render(width: number): string[] };
+            assert.match(component.render(120).join("\n"), /Safe path/);
+            component.handleInput("enter");
+            component.handleInput("ctrl+s");
+            component.handleInput("enter");
+          },
+        },
+      },
+    );
+
+    assert.equal(sawFactory, true);
+    assert.match(result.content.map((part: { text: string }) => part.text).join("\n"), /Safe path/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("ask_flow fullscreen catches custom UI failures and returns a blocking fallback", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ask-flow-custom-fallback-"));
+  try {
+    const tools = new Map<string, { execute: Function }>();
+    registerPiAskFlowTool({ registerTool: (config) => tools.set(config.name, config) });
+    const tool = tools.get("ask_flow");
+    assert.ok(tool);
+
+    const result = await tool.execute(
+      "ask-flow-custom-fallback-test",
+      {
+        title: "Confirm scope",
+        mode: "decision",
+        questions: [
+          {
+            id: "scope",
+            prompt: "Which scope?",
+            type: "single",
+            required: true,
+            options: [
+              { value: "safe", label: "Safe", description: "Use the safe scope." },
+              { value: "broad", label: "Broad", description: "Use the broad scope." },
+            ],
+          },
+        ],
+      },
+      new AbortController().signal,
+      () => undefined,
+      {
+        cwd: dir,
+        ui: {
+          custom: async (...args: unknown[]) => {
+            assert.equal(typeof args[0], "function");
+            throw new TypeError("factory is not a function");
+          },
+        },
+      },
+    );
+
+    assert.equal(result.details.status, "cancelled");
+    assert.equal(result.details.cancelled, true);
+    assert.equal(result.details.result.nextAction, "block");
+    assert.match(result.details.customUiFallback, /factory is not a function/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 void test("ask_user and ask_flow share UX result matrix semantics", async () => {

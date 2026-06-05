@@ -5,14 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { ArtifactStore } from "spark-core";
-import {
-  type JsonValue,
-  type RoleRef,
-  type RunRef,
-  type TaskRef,
-  type ProjectRef,
-} from "spark-core";
+import { ArtifactStore } from "pi-artifacts";
+import type { JsonValue, RoleRef, RunRef, TaskRef, ProjectRef } from "pi-extension-api";
 import {
   collectRoleRunArtifactRetentionPlan,
   isRoleRunArtifactBody,

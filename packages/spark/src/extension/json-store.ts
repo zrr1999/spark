@@ -1,7 +1,7 @@
 import {
   readJsonFileOptional as readCoreJsonFileOptional,
   writeJsonFileAtomic as writeCoreJsonFileAtomic,
-} from "spark-core";
+} from "pi-extension-api";
 
 export class JsonStoreFormatError extends Error {
   readonly filePath: string;

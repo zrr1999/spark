@@ -1,5 +1,5 @@
-import type { TaskRef } from "spark-core";
-import type { TaskGraph, TaskGraphStore } from "spark-tasks";
+import type { TaskRef } from "pi-extension-api";
+import type { TaskGraph, TaskGraphStore } from "pi-tasks";
 
 export async function mergeTaskProgressIntoStore(
   store: TaskGraphStore,

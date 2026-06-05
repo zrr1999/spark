@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { ProjectRef } from "spark-core";
+import type { ProjectRef } from "pi-extension-api";
 import {
   clearSparkMode,
   loadSparkMode,

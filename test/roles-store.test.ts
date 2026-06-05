@@ -7,13 +7,9 @@ import test from "node:test";
 import {
   RoleRegistry,
   MarkdownRoleStore,
-  createDefaultRoleRegistry,
-  createRoleRef,
   createRoleSpec,
   createBuiltinRoles,
-  registerBuiltinRoleProvider,
-  unregisterBuiltinRoleProvider,
-  type RoleSpec,
+  builtinRoleIds,
 } from "pi-roles";
 
 void test("builtin Spark roles are instructed to implement concrete repo behavior feedback", () => {
@@ -25,6 +21,42 @@ void test("builtin Spark roles are instructed to implement concrete repo behavio
     worker?.systemPrompt ?? "",
     /fix the implementation instead of only recording a preference/,
   );
+});
+
+void test("builtin Spark roles expose minimal sufficient tool profiles", () => {
+  const roles = createBuiltinRoles("2026-06-04T00:00:00.000Z");
+  assert.deepEqual(
+    roles.map((role) => role.id),
+    [...builtinRoleIds],
+  );
+
+  const byId = new Map(roles.map((role) => [role.id, role]));
+
+  for (const id of ["scout", "planner", "oracle"]) {
+    assert.deepEqual(byId.get(id)?.allowedTools, [
+      "context",
+      "learning",
+      "artifact",
+      "task",
+      "ask",
+    ]);
+  }
+
+  for (const id of ["worker", "reviewer"]) {
+    assert.deepEqual(byId.get(id)?.allowedTools, [
+      "context",
+      "learning",
+      "artifact",
+      "task",
+      "ask",
+      "cue_exec",
+      "cue_run",
+      "cue_script",
+      "script_run",
+      "script_eval",
+      "cue_jobs",
+    ]);
+  }
 });
 
 void test("project role spec store persists and hydrates registry", async () => {
@@ -49,30 +81,5 @@ void test("project role spec store persists and hydrates registry", async () => 
     assert.match(loaded.ref, /^role:project-/);
   } finally {
     await rm(dir, { recursive: true, force: true });
-  }
-});
-
-void test("registered builtin role providers participate in default role registries", () => {
-  const providerId = "roles-store-test";
-  const now = "2026-06-04T00:00:00.000Z";
-  const role: RoleSpec = {
-    ref: createRoleRef("builtin", "provider-test"),
-    id: "provider-test",
-    source: "builtin",
-    description: "Test-provided builtin role.",
-    systemPrompt: "You are a test-provided builtin role.",
-    origin: { kind: "builtin", note: "test provider" },
-    createdAt: now,
-    updatedAt: now,
-  };
-  registerBuiltinRoleProvider(providerId, () => [role]);
-  try {
-    const registry = createDefaultRoleRegistry({ now });
-    const loaded = registry.select("provider-test");
-
-    assert.equal(loaded.ref, "role:builtin-provider-test");
-    assert.equal(loaded.origin?.note, "test provider");
-  } finally {
-    unregisterBuiltinRoleProvider(providerId);
   }
 });

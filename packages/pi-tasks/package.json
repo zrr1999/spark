@@ -18,7 +18,6 @@
   },
   "dependencies": {
     "pi-extension-api": "file:../pi-extension-api",
-    "spark-tasks": "file:../spark-tasks",
     "typebox": "^1.1.38"
   }
 }

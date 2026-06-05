@@ -15,10 +15,10 @@ import {
   type TaskPlan,
   type TaskRef,
   type ProjectRef,
-} from "spark-core";
-import { defaultArtifactStore } from "spark-core";
-import { defaultLearningStore, LearningExportFormatError } from "spark-learnings";
-import { defaultSparkDagRunStore } from "../packages/spark-workflows/src/index.ts";
+} from "pi-extension-api";
+import { defaultArtifactStore } from "pi-artifacts";
+import { defaultLearningStore, LearningExportFormatError } from "pi-learnings";
+import { defaultSparkDagRunStore } from "../packages/pi-workflows/src/index.ts";
 import {
   killActiveSparkRoleRunProcesses,
   listActiveSparkRoleRunProcesses,
@@ -29,13 +29,15 @@ import {
   defaultTaskTodoStore,
   renderTaskPlanReadinessRules,
   TaskGraph,
-} from "spark-tasks";
+} from "pi-tasks";
 import { registerPiArtifactTool } from "pi-artifacts/extension";
+import piAskExtension from "../packages/pi-ask/src/extension.ts";
 import sparkExtension from "../packages/spark/src/extension/index.ts";
 import { JsonStoreFormatError } from "../packages/spark/src/extension/json-store.ts";
 import {
   loadCurrentProjectState,
   loadHiddenRoleRunInboxState,
+  loadSparkMode,
   loadSparkRunMode,
   saveCurrentProjectRef,
 } from "../packages/spark/src/extension/session-state.ts";
@@ -557,6 +559,7 @@ type TestSparkContext = {
     getSessionFile: () => string | undefined;
     getLeafId: () => string | undefined;
   };
+  waitForIdle?: () => Promise<void>;
   hasUI: boolean;
   notifications: TestNotification[];
   selected?: string;
@@ -669,7 +672,6 @@ void test("/spark command detects empty, existing, and initialized project modes
     const initializedRun = registerSparkToolsForTest();
     const initializedCommand = initializedRun.commands.get("spark");
     assert.ok(initializedCommand, "missing /spark command");
-    initializedCtx.selected = "Plan “Tool persistence”";
     await initializedCommand.handler("", initializedCtx);
     assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /Spark plan mode requested/);
     assert.match(
@@ -677,18 +679,6 @@ void test("/spark command detects empty, existing, and initialized project modes
       /Enter Spark planning mode/,
     );
 
-    initializedCtx.selected = "Execute “Tool persistence”";
-    await initializedCommand.handler("", initializedCtx);
-    assert.match(
-      initializedRun.customMessages.at(-1)?.content ?? "",
-      /Spark execute mode requested/,
-    );
-    assert.match(
-      await consumeSparkModeContext(initializedRun, initializedCtx),
-      /Enter Spark execution mode/,
-    );
-
-    initializedCtx.selected = "Research “Tool persistence”";
     await initializedCommand.handler("investigate current context", initializedCtx);
     assert.match(
       initializedRun.customMessages.at(-1)?.content ?? "",
@@ -845,24 +835,17 @@ void test("/research, /plan, /execute, /goal, and /workflow selector commands en
     assert.match(executeMessage, /suggest \/goal/);
     assert.match(executeMessage, /suggest \/workflow/);
     assert.match(executeMessage, /missing user decision blocks execution/);
-    assert.match(executeMessage, /call ask instead of guessing/);
+    assert.match(executeMessage, /do not guess user intent/);
     assert.doesNotMatch(executeMessage, /continue by auto-claiming/);
     assert.equal(
       initializedCtx.notifications.at(-1)?.message,
       "Spark execute mode: default strategy selected.",
     );
 
-    let strategyAskOptions: string[] = [];
-    initializedCtx.ui.select = async (title, options) => {
-      assert.match(title, /which execute strategy should this \/execute turn use/);
-      strategyAskOptions = options;
-      return options.find((option) => option.startsWith("Goal"));
-    };
+    initializedCtx.ui.select = async () =>
+      assert.fail("/execute should not open a canned execute-strategy ask");
     await executeCommand.handler("keep going until done", initializedCtx);
-    assert.ok(strategyAskOptions.some((option) => option.startsWith("Default")));
-    assert.ok(strategyAskOptions.some((option) => option.startsWith("Goal")));
-    assert.ok(strategyAskOptions.some((option) => option.startsWith("Workflow")));
-    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /strategy: goal/);
+    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /strategy: default/);
     const askedGoalState = JSON.parse(
       await readFile(
         join(initializedDir, ".spark", "sessions", `${ctxSessionStoreScope(initializedCtx)}.json`),
@@ -870,8 +853,10 @@ void test("/research, /plan, /execute, /goal, and /workflow selector commands en
       ),
     ) as { executionMode?: { mode?: string; strategy?: string } };
     assert.equal(askedGoalState.executionMode?.mode, "execute");
-    assert.equal(askedGoalState.executionMode?.strategy, "goal");
-    await consumeSparkModeContext(initializedRun, initializedCtx);
+    assert.equal(askedGoalState.executionMode?.strategy, "default");
+    const untilDoneExecutePrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
+    assert.match(untilDoneExecutePrompt, /suggest \/goal/);
+    assert.match(untilDoneExecutePrompt, /suggest \/workflow/);
     initializedCtx.ui.select = async () =>
       assert.fail("explicit /workflow selector aliases should not ask for strategy");
 
@@ -881,39 +866,47 @@ void test("/research, /plan, /execute, /goal, and /workflow selector commands en
     assert.equal(initializedRun.commands.get("workflow:deep-research"), undefined);
     assert.equal(initializedRun.commands.get("workflow:adversarial-review"), undefined);
     await goalCommand.handler("Finish the queue until done", initializedCtx);
-    assert.match(
+    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /Spark goal active/);
+    assert.doesNotMatch(
       initializedRun.customMessages.at(-1)?.content ?? "",
       /Spark execute mode requested/,
     );
-    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /strategy: goal/);
-    assert.doesNotMatch(
-      initializedRun.customMessages.at(-1)?.content ?? "",
-      /workflow: builtin:goal/,
-    );
+    assert.doesNotMatch(initializedRun.customMessages.at(-1)?.content ?? "", /strategy: goal/);
     assert.match(
       initializedRun.customMessages.at(-1)?.content ?? "",
       /Finish the queue until done/,
     );
     const goalPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
-    assert.doesNotMatch(goalPrompt, /Workflow selector: builtin:goal/);
+    assert.match(goalPrompt, /Spark project goal is active/);
+    assert.match(goalPrompt, /Finish the queue until done/);
     const goalProjectStateRaw = await readFile(
-      join(initializedDir, ".spark", "sessions", `${ctxSessionStoreScope(initializedCtx)}.json`),
+      join(initializedDir, ".spark", "project-goals.json"),
       "utf8",
     );
     const goalProjectState = JSON.parse(goalProjectStateRaw) as {
-      executionMode?: { mode?: string; strategy?: string; workflowName?: string };
-      runMode?: unknown;
+      goals?: Record<string, { objective?: string; status?: string }>;
     };
-    assert.equal(goalProjectState.executionMode?.mode, "execute");
-    assert.equal(goalProjectState.executionMode?.strategy, "goal");
-    assert.equal(goalProjectState.executionMode?.workflowName, undefined);
-    assert.equal(goalProjectState.runMode, undefined);
+    assert.equal(
+      Object.values(goalProjectState.goals ?? {})[0]?.objective,
+      "Finish the queue until done",
+    );
+    assert.equal(Object.values(goalProjectState.goals ?? {})[0]?.status, "active");
+    const sessionAfterGoal = JSON.parse(
+      await readFile(
+        join(initializedDir, ".spark", "sessions", `${ctxSessionStoreScope(initializedCtx)}.json`),
+        "utf8",
+      ),
+    ) as { executionMode?: unknown };
+    assert.equal(sessionAfterGoal.executionMode, undefined);
 
     await goalCommand.handler("", initializedCtx);
     const inferredGoalPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
-    assert.match(inferredGoalPrompt, /Goal focus: none provided/);
-    assert.match(inferredGoalPrompt, /Infer the target objective from the active project title/);
-    assert.match(inferredGoalPrompt, /ask with ask instead of inventing the goal/);
+    assert.match(inferredGoalPrompt, /Spark project goal is active/);
+    assert.match(inferredGoalPrompt, /Advance project/);
+    const pauseGoalCommand = initializedRun.commands.get("pause_goal");
+    assert.ok(pauseGoalCommand, "missing /pause_goal command");
+    await pauseGoalCommand.handler("waiting for user", initializedCtx);
+    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /Spark goal paused/);
 
     assert.equal(initializedRun.commands.get("workflow:ready"), undefined);
 
@@ -949,18 +942,13 @@ void test("/research, /plan, /execute, /goal, and /workflow selector commands en
     assert.match(workflowPrompt, /broken\.js/);
     assert.match(workflowPrompt, /discovery never executes saved workflow bodies/);
 
-    let workflowAskOptions: string[] = [];
-    initializedCtx.ui.select = async (title, options) => {
-      assert.match(title, /Which workflow should Spark use/);
-      workflowAskOptions = options;
-      return options.find((option) => option.startsWith("workspace:triage"));
-    };
+    initializedCtx.ui.select = async () =>
+      assert.fail("/workflow should not open a canned selector ask");
     await workflowCommand.handler("", initializedCtx);
-    assert.ok(!workflowAskOptions.some((option) => option.startsWith("builtin:")));
-    assert.ok(workflowAskOptions.some((option) => option.startsWith("workspace:triage")));
-    assert.ok(workflowAskOptions.some((option) => option.startsWith("Create workspace workflow")));
-    const askedWorkflowPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
-    assert.match(askedWorkflowPrompt, /Workflow selector: workspace:triage/);
+    assert.match(
+      initializedCtx.notifications.at(-1)?.message ?? "",
+      /Spark workflow mode needs an explicit saved workflow selector|Available workflow\(s\):/,
+    );
     initializedCtx.ui.select = async () =>
       assert.fail("non-empty /workflow focus should not ask for a selector before prompting");
 
@@ -1431,7 +1419,7 @@ void test("/execute stops after one task and only hints the next ready task", as
   }
 });
 
-void test("/goal tells finish_task to continue to the next ready task", async () => {
+void test("/goal sets a durable project goal instead of execute-mode continuation", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-run-foreground-continue-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1445,22 +1433,6 @@ void test("/goal tells finish_task to continue to the next ready task", async ()
         JSON.stringify({ projectRef: project.ref }, null, 2),
         "utf8",
       );
-      graph.createTask({
-        projectRef: project.ref,
-        name: "run-first-ready",
-        title: "Run first ready task",
-        description: "Run first ready task",
-        plan: executionReadyPlan("Run first ready task"),
-        status: "pending",
-      });
-      graph.createTask({
-        projectRef: project.ref,
-        name: "run-second-ready",
-        title: "Run second ready task",
-        description: "Run second ready task",
-        plan: executionReadyPlan("Run second ready task"),
-        status: "pending",
-      });
     });
 
     const run = registerSparkToolsForTest();
@@ -1469,33 +1441,229 @@ void test("/goal tells finish_task to continue to the next ready task", async ()
     assert.equal(run.commands.get("workflow:goal"), undefined);
     await goalCommand.handler("work through the ready queue until done", ctx);
     const goalPrompt = await consumeSparkModeContext(run, ctx);
-    assert.match(goalPrompt, /Enter Spark execution mode/);
-    assert.doesNotMatch(goalPrompt, /Workflow selector: builtin:goal/);
-    assert.match(run.customMessages.at(-1)?.content ?? "", /strategy: goal/);
+    assert.match(goalPrompt, /Spark project goal is active/);
+    assert.doesNotMatch(goalPrompt, /Enter Spark execution mode/);
+    assert.doesNotMatch(run.customMessages.at(-1)?.content ?? "", /strategy: goal/);
     assert.doesNotMatch(run.customMessages.at(-1)?.content ?? "", /workflow: builtin:goal/);
-    assert.match(goalPrompt, /Run Spark goal mode/);
-    assert.match(goalPrompt, /call ask instead of guessing/);
+    const goalState = JSON.parse(
+      await readFile(join(dir, ".spark", "project-goals.json"), "utf8"),
+    ) as {
+      goals?: Record<string, { objective?: string; status?: string }>;
+    };
+    assert.equal(
+      Object.values(goalState.goals ?? {})[0]?.objective,
+      "work through the ready queue until done",
+    );
+    assert.equal(Object.values(goalState.goals ?? {})[0]?.status, "active");
 
-    await executeSparkTool(run.tools, "spark_claim_task", ctx, {
-      name: "run-first-ready",
-      title: "Run first ready task",
-      description: "Run first ready task",
-      status: "running",
-    });
-    const finished = await executeSparkTool(run.tools, "spark_finish_task", ctx, {
-      summary: "Finished first run task.",
-    });
-
-    const text = finished.content.map((item) => item.text).join("\n");
-    assert.match(text, /Goal execution mode continuing/);
-    assert.match(text, /Next ready task: @run-second-ready/);
-    assert.match(text, /Continue now using the Spark goal continuation below/);
-    assert.match(text, /<spark_goal_continuation/);
-    assert.match(text, /get_spark_goal/);
-    assert.match(text, /update_spark_goal/);
-    assert.doesNotMatch(text, /Execution mode stopped after one task/);
+    const sessionState = JSON.parse(
+      await readFile(join(dir, ".spark", "sessions", `${ctxSessionStoreScope(ctx)}.json`), "utf8"),
+    ) as { executionMode?: unknown; runMode?: unknown };
+    assert.equal(sessionState.executionMode, undefined);
+    assert.equal(sessionState.runMode, undefined);
+    assert.match(goalPrompt, /foreground goal loop/);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("/goal foreground loop waits for idle and stops after pause", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-tick-"));
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  type FakeTimer = {
+    callback: () => void;
+    delay: number | undefined;
+    cleared: boolean;
+    unref: () => FakeTimer;
+  };
+  const timers: FakeTimer[] = [];
+  globalThis.setTimeout = ((
+    callback: Parameters<typeof setTimeout>[0],
+    delay?: number,
+    ...args: unknown[]
+  ) => {
+    const timer: FakeTimer = {
+      callback: () => {
+        if (typeof callback === "function") callback(...args);
+      },
+      delay,
+      cleared: false,
+      unref: () => timer,
+    };
+    timers.push(timer);
+    return timer as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
+    const fake = timer as unknown as FakeTimer | undefined;
+    if (fake) fake.cleared = true;
+  }) as typeof clearTimeout;
+
+  async function flushAsyncWork(): Promise<void> {
+    for (let index = 0; index < 20; index += 1) {
+      await new Promise((resolve) => originalSetTimeout(resolve, 0));
+    }
+  }
+
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    let idleWaits = 0;
+    ctx.waitForIdle = async () => {
+      idleWaits += 1;
+    };
+    const run = registerSparkToolsForTest();
+    await useOnlySparkProject(run.tools, ctx);
+    const goalCommand = run.commands.get("goal");
+    const pauseGoalCommand = run.commands.get("pause_goal");
+    assert.ok(goalCommand, "missing /goal command");
+    assert.ok(pauseGoalCommand, "missing /pause_goal command");
+
+    await goalCommand.handler("finish active goal work", ctx);
+    assert.equal(timers.length, 0);
+    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
+      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    }
+    assert.equal(timers.length, 1);
+    assert.equal(timers[0]?.delay, 30_000);
+
+    const messageCountBeforeTick = run.customMessages.length;
+    timers[0]?.callback();
+    await flushAsyncWork();
+
+    assert.equal(idleWaits, 1);
+    assert.ok(run.customMessages.length > messageCountBeforeTick);
+    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
+    assert.match(await consumeSparkModeContext(run, ctx), /Spark foreground goal loop tick/);
+    assert.equal(timers.length, 1);
+
+    for (const handler of run.eventHandlers.get("turn_end") ?? []) {
+      await handler({ message: { role: "assistant", stopReason: "stop" } }, ctx);
+    }
+    assert.equal(timers.length, 1);
+    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
+      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    }
+    assert.equal(timers.length, 2);
+    assert.equal(timers[1]?.delay, 30_000);
+
+    await pauseGoalCommand.handler("waiting for review", ctx);
+    assert.equal(timers[1]?.cleared, true);
+    const messageCountAfterPause = run.customMessages.length;
+    timers[1]?.callback();
+    await flushAsyncWork();
+
+    assert.equal(run.customMessages.length, messageCountAfterPause);
+    assert.equal(idleWaits, 1);
+    assert.equal(timers.length, 2);
+    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
+      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    }
+    assert.equal(timers.length, 2);
+
+    await goalCommand.handler("finish failed goal work", ctx);
+    assert.equal(timers.length, 2);
+    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
+      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    }
+    assert.equal(timers.length, 3);
+    timers[2]?.callback();
+    await flushAsyncWork();
+    assert.equal(idleWaits, 2);
+    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
+    assert.match(await consumeSparkModeContext(run, ctx), /Spark foreground goal loop tick/);
+    for (const handler of run.eventHandlers.get("turn_end") ?? []) {
+      await handler(
+        {
+          message: {
+            role: "assistant",
+            stopReason: "error",
+            errorMessage: "Context overflow recovery failed: invalidated oauth token",
+          },
+        },
+        ctx,
+      );
+    }
+    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
+      await handler(
+        {
+          messages: [
+            {
+              role: "assistant",
+              stopReason: "error",
+              errorMessage: "Context overflow recovery failed: invalidated oauth token",
+            },
+          ],
+        },
+        ctx,
+      );
+    }
+    const failedGoalState = JSON.parse(
+      await readFile(join(dir, ".spark", "project-goals.json"), "utf8"),
+    ) as { goals?: Record<string, { status?: string; pauseReason?: string }> };
+    assert.equal(Object.values(failedGoalState.goals ?? {})[0]?.status, "paused");
+    assert.match(
+      Object.values(failedGoalState.goals ?? {})[0]?.pauseReason ?? "",
+      /Context overflow recovery failed: invalidated oauth token/,
+    );
+    assert.equal(timers.length, 3);
+
+    await goalCommand.handler("finish complete goal work", ctx);
+    assert.equal(timers.length, 3);
+    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
+      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    }
+    assert.equal(timers.length, 4);
+    await executeSparkTool(run.tools, "goal", ctx, {
+      action: "complete",
+      reason: "verified",
+    });
+    const messageCountAfterComplete = run.customMessages.length;
+    timers[3]?.callback();
+    await flushAsyncWork();
+
+    assert.equal(run.customMessages.length, messageCountAfterComplete);
+    assert.equal(idleWaits, 2);
+    assert.equal(timers.length, 4);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("Shift+Tab shortcut cycles Spark mode when Spark is active", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-shift-tab-mode-"));
+  const inactiveDir = await mkdtemp(join(tmpdir(), "spark-shift-tab-inactive-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const run = registerSparkToolsForTest();
+    const shortcut = run.shortcuts.get("shift+tab");
+    assert.ok(shortcut, "missing Shift+Tab Spark mode shortcut");
+    assert.equal(shortcut.isActive?.(testSparkContext(inactiveDir, "main")), false);
+    assert.equal(shortcut.isActive?.(ctx), true);
+
+    await executeSparkTool(run.tools, "spark_use_project", ctx, { project: "Tool persistence" });
+    await shortcut.handler(ctx);
+    assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark mode: research/);
+
+    await shortcut.handler(ctx);
+    const planMode = await loadSparkMode(dir, ctx);
+    assert.equal(planMode.mode, "plan");
+    assert.equal(planMode.planningSource, "direct");
+
+    await shortcut.handler(ctx);
+    const executeMode = await loadSparkMode(dir, ctx);
+    assert.equal(executeMode.mode, "execute");
+    assert.equal(executeMode.executeStrategy, "default");
+
+    await shortcut.handler(ctx);
+    assert.equal((await loadSparkMode(dir, ctx)).mode, "auto");
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+    await rm(inactiveDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
 
@@ -2847,6 +3015,100 @@ void test("spark_use_project reports selected existing projects", async () => {
   }
 });
 
+void test("spark_goal tool infers and updates durable project goals", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-project-goal-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+    await executeSparkTool(tools, "spark_use_project", ctx, { project: "Tool persistence" });
+
+    const inferred = await executeSparkTool(tools, "goal", ctx, { action: "infer" });
+    assert.match(toolText(inferred), /Advance project/);
+    assert.match(toolText(inferred), /Tool persistence/);
+
+    const started = await executeSparkTool(tools, "goal", ctx, {
+      action: "set",
+      objective: "Finish the durable goal slice",
+    });
+    assert.match(toolText(started), /Spark goal active/);
+    assert.equal(
+      (started.details as { goal?: { objective?: string; status?: string } } | undefined)?.goal
+        ?.objective,
+      "Finish the durable goal slice",
+    );
+    assert.equal(
+      (started.details as { goal?: { objective?: string; status?: string } } | undefined)?.goal
+        ?.status,
+      "active",
+    );
+    const status = await executeSparkTool(tools, "spark_status", ctx, {});
+    assert.match(toolText(status), /Goal: active \| Finish the durable goal slice/);
+    assert.equal(
+      (status.details as { projectGoal?: { objective?: string } } | undefined)?.projectGoal
+        ?.objective,
+      "Finish the durable goal slice",
+    );
+
+    const paused = await executeSparkTool(tools, "goal", ctx, {
+      action: "pause",
+      reason: "waiting",
+    });
+    assert.match(toolText(paused), /Spark goal paused/);
+    assert.match(toolText(paused), /Reason: waiting/);
+
+    const completed = await executeSparkTool(tools, "goal", ctx, {
+      action: "complete",
+      reason: "review passed",
+    });
+    assert.match(toolText(completed), /Spark goal complete/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("active project goal disables ask-like tools before agent turns", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-goal-disable-asks-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const run = registerSparkToolsForTest();
+    await executeSparkTool(run.tools, "spark_use_project", ctx, { project: "Tool persistence" });
+    assert.ok(run.getActiveToolNames().includes("ask"));
+    assert.ok(run.getActiveToolNames().includes("ask_user"));
+    assert.ok(run.getActiveToolNames().includes("ask_flow"));
+    assert.ok(!run.getActiveToolNames().some((name) => name.startsWith("spark_")));
+
+    await executeSparkTool(run.tools, "goal", ctx, {
+      action: "start",
+      objective: "Run without interactive asks",
+    });
+    for (const handler of run.eventHandlers.get("before_agent_start") ?? []) {
+      await handler({}, ctx);
+    }
+
+    assert.ok(!run.getActiveToolNames().includes("ask"));
+    assert.ok(!run.getActiveToolNames().includes("ask_user"));
+    assert.ok(!run.getActiveToolNames().includes("ask_flow"));
+    assert.ok(run.getActiveToolNames().includes("goal"));
+    assert.ok(run.getActiveToolNames().includes("task"));
+
+    await executeSparkTool(run.tools, "goal", ctx, {
+      action: "pause",
+      reason: "waiting",
+    });
+    for (const handler of run.eventHandlers.get("before_agent_start") ?? []) {
+      await handler({}, ctx);
+    }
+
+    assert.ok(run.getActiveToolNames().includes("ask"));
+    assert.ok(run.getActiveToolNames().includes("ask_user"));
+    assert.ok(run.getActiveToolNames().includes("ask_flow"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("spark project tools reject invalid explicit parameters", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-project-invalid-params-"));
   try {
@@ -2880,15 +3142,19 @@ void test("spark project tools reject invalid explicit parameters", async () => 
   }
 });
 
-void test("all spark tools describe prerequisites and operation semantics", () => {
-  const { tools } = registerSparkToolsForTest();
-  const sparkTools = [...tools.values()].filter((tool) => tool.name.startsWith("spark_"));
-  assert.ok(sparkTools.length >= 20);
-  for (const tool of sparkTools) {
-    assert.match(tool.description, /\nAtomic: /, `${tool.name} is missing Atomic marker`);
-    assert.match(tool.description, /\nIdempotent: /, `${tool.name} is missing Idempotent marker`);
-    assert.match(tool.description, /\nPrerequisites:\n- /, `${tool.name} is missing prerequisites`);
-  }
+void test("Spark extension exposes canonical tools instead of spark_* compatibility tools", () => {
+  const run = registerSparkToolsForTest();
+  assert.ok(run.tools.has("task"));
+  assert.ok(run.tools.has("learning"));
+  assert.ok(run.tools.has("ask"));
+  assert.ok(run.tools.has("goal"));
+  assert.deepEqual(
+    run
+      .getActiveToolNames()
+      .filter((name) => name.startsWith("spark_"))
+      .sort(),
+    [],
+  );
 });
 
 void test("spark_plan_tasks describes the public spark-tasks readiness contract", () => {
@@ -3264,7 +3530,7 @@ void test("spark_status includes persisted Spark orchestrator status", async () 
       ),
     );
     assert.match(text, /Next steps \(stale\):/);
-    assert.match(text, /stale: run spark_background_runs reconcile/);
+    assert.match(text, /stale: run task\(\{ action: "run_status"/);
     const dagDetails = status.details as {
       dag?: {
         stale?: number;
@@ -3510,7 +3776,7 @@ void test("spark_dag_manager reconciles and clears inactive records", async () =
     assert.match(toolText(reconciled), /failed=0/);
     assert.match(toolText(reconciled), /stale=1/);
     assert.match(toolText(reconciled), /Next steps \(stale\):/);
-    assert.match(toolText(reconciled), /stale: run spark_background_runs reconcile/);
+    assert.match(toolText(reconciled), /stale: run task\(\{ action: "run_status"/);
     assert.match(
       (
         (reconciled.details as { dag?: { nextSteps?: Array<{ nextActions: string[] }> } }).dag
@@ -4574,12 +4840,12 @@ void test("spark_run_ready_tasks marks Spark workflow-run scheduler failed when 
     );
     assert.match(
       ctx.notifications.at(-1)?.message ?? "",
-      /failed: inspect spark_background_runs inspect/,
+      /failed: inspect task\(\{ action: "run_status"/,
     );
     const hiddenInbox = await consumeSparkModeContext(extension, ctx);
     assert.match(hiddenInbox, /Recent unread background role-run results:/);
     assert.match(hiddenInbox, /\[failed\] task=task:/);
-    assert.match(hiddenInbox, /next=inspect with spark_background_runs inspect runRef=run:/);
+    assert.match(hiddenInbox, /next=inspect with task\(\{ action: "run_status"/);
     assert.doesNotMatch(hiddenInbox, /full transcript/i);
     assert.equal(await tryConsumeSparkModeContext(extension, ctx), undefined);
     await waitFor(() => existsSync(join(dir, ".spark", "todos")), 3_000);
@@ -5794,12 +6060,19 @@ function registerSparkToolsForTest(): {
   messages: string[];
   customMessages: Array<{ customType: string; content: string; display?: boolean }>;
   commands: Map<string, Parameters<SparkExtensionApiForTest["registerCommand"]>[1]>;
+  shortcuts: Map<string, Parameters<NonNullable<SparkExtensionApiForTest["registerShortcut"]>>[1]>;
   eventHandlers: Map<string, Array<(event: unknown, ctx: TestSparkContext) => unknown>>;
+  getActiveToolNames: () => string[];
 } {
   const tools = new Map<string, SparkToolConfig>();
+  const activeToolNames = new Set<string>();
   const messages: string[] = [];
   const customMessages: Array<{ customType: string; content: string; display?: boolean }> = [];
   const commands = new Map<string, Parameters<SparkExtensionApiForTest["registerCommand"]>[1]>();
+  const shortcuts = new Map<
+    string,
+    Parameters<NonNullable<SparkExtensionApiForTest["registerShortcut"]>>[1]
+  >();
   const eventHandlers = new Map<
     string,
     Array<(event: unknown, ctx: TestSparkContext) => unknown>
@@ -5813,6 +6086,13 @@ function registerSparkToolsForTest(): {
     },
     registerTool: (config) => {
       tools.set(config.name, config);
+      activeToolNames.add(config.name);
+    },
+    registerInternalTool: (config) => {
+      tools.set(config.name, config);
+    },
+    registerShortcut: (shortcut, options) => {
+      shortcuts.set(shortcut, options);
     },
     on: (event, handler) => {
       const handlers = eventHandlers.get(event) ?? [];
@@ -5822,14 +6102,31 @@ function registerSparkToolsForTest(): {
     sendMessage: (message) => {
       customMessages.push(message);
     },
-    getAllTools: () => [...tools.keys()].map((name) => ({ name })),
-    setActiveTools: () => undefined,
+    getAllTools: () => [...activeToolNames].map((name) => ({ name })),
+    setActiveTools: (names) => {
+      activeToolNames.clear();
+      for (const name of names) {
+        if (tools.has(name)) activeToolNames.add(name);
+      }
+    },
   };
   registerPiArtifactTool({
-    registerTool: (config) => tools.set(config.name, config as SparkToolConfig),
+    registerTool: (config) => {
+      tools.set(config.name, config as SparkToolConfig);
+      activeToolNames.add(config.name);
+    },
   });
+  piAskExtension(pi as never);
   sparkExtension(pi);
-  return { tools, messages, customMessages, commands, eventHandlers };
+  return {
+    tools,
+    messages,
+    customMessages,
+    commands,
+    shortcuts,
+    eventHandlers,
+    getActiveToolNames: () => [...activeToolNames],
+  };
 }
 
 async function tryConsumeSparkModeContext(

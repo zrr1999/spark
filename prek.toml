@@ -39,6 +39,13 @@ hooks = [{ id = "zendev-commit-msg" }]
 repo = "local"
 hooks = [
   {
+    id = "pi-boundary-check",
+    name = "pi package boundary check",
+    entry = "pnpm run check:boundaries",
+    language = "system",
+    pass_filenames = false
+  },
+  {
     id = "vp-check",
     name = "vp check --fix",
     entry = "env NO_COLOR=1 vp check --fix",

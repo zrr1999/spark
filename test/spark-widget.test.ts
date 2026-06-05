@@ -161,8 +161,40 @@ void test("spark widget shows compact DAG progress above project details", () =>
 
   assert.match(
     lines.join("\n"),
-    /◆ Tasks\(total=2 claimed=0\/0\)\n◆ Background work: 1\/3 tasks finished · running · run:abc\n◆ Spark UX redesign/,
+    /◆ Spark UX redesign · Tasks\(total=2 claimed=0\/0\)\n◆ Background work: 1\/3 tasks finished · running · run:abc/,
   );
+});
+
+void test("spark widget suppresses duplicate background row when session agent is shown", () => {
+  const lines = renderSparkWidgetLines(
+    widgetState({
+      dag: {
+        status: "running",
+        runRef: "run:abc",
+        scheduled: 1,
+        completed: 0,
+        active: true,
+      },
+      tasks: [
+        {
+          title: "Running worker task",
+          status: "running",
+          claim: "role-run",
+          agentLabel: "worker",
+          backgroundOwner: "session",
+          todos: [],
+        },
+      ],
+      taskCountTotal: 1,
+      taskCountClaimed: 1,
+      taskCountClaimedBySession: 1,
+    }),
+    { terminal: { columns: 120 }, requestRender() {} },
+    theme,
+  );
+
+  assert.match(lines.join("\n"), /◆ Spark UX redesign · Tasks\(running=1: agents worker\)/);
+  assert.doesNotMatch(lines.join("\n"), /Background work/);
 });
 
 void test("spark widget merges run mode state into background progress", () => {
@@ -186,7 +218,7 @@ void test("spark widget merges run mode state into background progress", () => {
 
   assert.match(
     lines.join("\n"),
-    /◆ Background work: 13\/13 tasks finished · failed · run:9fb95fb0\n◆ Spark UX redesign/,
+    /◆ Spark UX redesign\n◆ Background work: 13\/13 tasks finished · failed · run:9fb95fb0/,
   );
   assert.doesNotMatch(lines.join("\n"), /Spark DAG|Spark run/);
 });
@@ -212,6 +244,33 @@ void test("spark widget renders completed DAG state in plain language", () => {
   assert.doesNotMatch(lines.join("\n"), /DAG\(failed|Spark DAG/);
 });
 
+void test("spark widget shows project goal on the project header", () => {
+  const lines = renderSparkWidgetLines(
+    widgetState({
+      goal: {
+        status: "active",
+        objective: "Advance Spark mode-as-state UX rework to completion.",
+      },
+      tasks: [
+        {
+          title: "Ready goal task",
+          status: "pending",
+          todos: [],
+        },
+      ],
+      taskCountTotal: 1,
+    }),
+    tui,
+    theme,
+  );
+
+  assert.match(
+    lines[0] ?? "",
+    /◆ Spark UX redesign · Tasks\(pending=1\) · Goal\(●\): Advance Spark mode-as-state UX rework/,
+  );
+  assert.doesNotMatch(lines.slice(1).join("\n"), /◆ Goal\(●\):/);
+});
+
 void test("spark widget shows project header with task counts even before claims", () => {
   const lines = renderSparkWidgetLines(
     {
@@ -227,7 +286,7 @@ void test("spark widget shows project header with task counts even before claims
     theme,
   );
 
-  assert.match(lines.join("\n"), /◆ Tasks\(total=5 claimed=2\/0\)\n◆ Spark UX redesign/);
+  assert.match(lines.join("\n"), /◆ Spark UX redesign · Tasks\(total=5 claimed=2\/0\)/);
 });
 
 void test("spark widget only shows missing plan marker on task rows", () => {
@@ -568,7 +627,10 @@ void test("spark widget summarizes tasks and current-session in-memory running r
   ).join("\n");
 
   const header = lines.split("\n")[0] ?? "";
-  assert.match(header, /◆ Tasks\(running=5 pending=1 failed=1: agents worker×2, reviewer\)/);
+  assert.match(
+    header,
+    /◆ Spark UX redesign · Tasks\(running=5 pending=1 failed=1: agents worker×2, reviewer\)/,
+  );
   assert.doesNotMatch(header, /a1b2c3d4|0c5a1efe|2dd9591d|stale-worker/);
 });
 
@@ -603,10 +665,9 @@ void test("spark widget renders task summary on the project header", () => {
     theme,
   );
 
-  assert.match(lines[0] ?? "", /^◆ Tasks\(running=2: agents worker\)/);
+  assert.match(lines[0] ?? "", /^◆ Spark UX redesign · Tasks\(running=2: agents worker\)/);
   assert.doesNotMatch(lines[0] ?? "", /a1b2c3d4|^├─/);
-  assert.match(lines[1] ?? "", /^◆ Spark UX redesign/);
-  assert.match(lines[2] ?? "", /^├─ ⠧/);
+  assert.match(lines[1] ?? "", /^├─ ⠧/);
 });
 
 void test("spark widget hides placeholder-only done TODO state", () => {

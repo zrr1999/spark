@@ -3,7 +3,7 @@ import {
   DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
   type ProjectRef,
   type RunRef,
-} from "spark-core";
+} from "pi-extension-api";
 import { JsonStoreFormatError } from "./json-store.ts";
 
 export type SparkRunStrategy = "sequential" | "parallel";

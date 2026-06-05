@@ -122,14 +122,20 @@ export interface ActiveRoleRun {
 
 export const builtinRoleIds = ["scout", "planner", "worker", "reviewer", "oracle"] as const;
 export type BuiltinRoleId = (typeof builtinRoleIds)[number];
-export type BuiltinRoleProvider = (now: string) => readonly RoleSpec[];
 
 export interface DefaultRoleRegistryOptions {
   now?: string;
-  extraRoles?: readonly RoleSpec[];
 }
 
-const builtinRoleProviders = new Map<string, BuiltinRoleProvider>();
+const ROLE_CONTEXT_TOOLS = ["context", "learning", "artifact", "task", "ask"] as const;
+const ROLE_EXECUTION_TOOLS = [
+  "cue_exec",
+  "cue_run",
+  "cue_script",
+  "script_run",
+  "script_eval",
+  "cue_jobs",
+] as const;
 
 const ROLE_FRONTMATTER_KEYS = new Set([
   "id",
@@ -184,64 +190,42 @@ export function createBuiltinRoles(now = nowIso()): RoleSpec[] {
       "Fast repo and context reconnaissance.",
       "You are a Spark scout. Gather context, identify relevant files and risks, do not edit files, use Spark ask tools for real ambiguities/blockers instead of only listing questions when a user decision is needed, and flag obviously placeholder/generic/stale Spark project or task names so they can be safely improved without changing refs.",
       now,
+      ROLE_CONTEXT_TOOLS,
     ),
     builtin(
       "planner",
       "Turns context into concrete task plans.",
       "You are a Spark planner. Produce concrete plans and dependencies without editing files, use Spark ask tools for real ambiguities/blockers instead of only listing questions when a user decision is needed, treat user-reported repo behavior changes as implementation work rather than memory-only updates, and improve obviously placeholder/generic/stale Spark project or task display names only when the new name is clear and refs stay stable.",
       now,
+      ROLE_CONTEXT_TOOLS,
     ),
     builtin(
       "worker",
       "Executes approved implementation tasks.",
       "You are a Spark worker. Implement only the assigned instruction, use Spark ask tools for blockers or missing requirements instead of only reporting questions, and when the user reports a concrete repo behavior change, fix the implementation instead of only recording a preference. Safely improve obviously placeholder/generic/stale Spark project or claimed-task @name/title when the current intent makes the better name clear while preserving refs and intentional user names.",
       now,
+      [...ROLE_CONTEXT_TOOLS, ...ROLE_EXECUTION_TOOLS],
     ),
     builtin(
       "reviewer",
       "Reviews results and artifacts against task intent.",
       "You are a Spark reviewer. Verify claims from fresh context, return actionable findings, use Spark ask tools for blocking ambiguous intent instead of silently assuming it, and call out placeholder/generic/stale Spark project or task names only when a safe improvement is obvious and would preserve refs.",
       now,
+      [...ROLE_CONTEXT_TOOLS, ...ROLE_EXECUTION_TOOLS],
     ),
     builtin(
       "oracle",
       "Challenges risky decisions before execution.",
       "You are a Spark oracle. Challenge assumptions, use Spark ask tools for missing blocking decisions when a concrete user choice is required, recommend the safest next move without editing files, and preserve intentional Spark project/task names unless a placeholder/generic/stale rename is plainly correct and ref-safe.",
       now,
+      ROLE_CONTEXT_TOOLS,
     ),
   ];
 }
 
-export function registerBuiltinRoleProvider(id: string, provider: BuiltinRoleProvider): void {
-  assertNonEmpty(id, "builtin role provider id");
-  builtinRoleProviders.set(id, provider);
-}
-
-export function unregisterBuiltinRoleProvider(id: string): boolean {
-  return builtinRoleProviders.delete(id);
-}
-
-export function createRegisteredBuiltinRoles(now = nowIso()): RoleSpec[] {
-  const roles: RoleSpec[] = [];
-  for (const [id, provider] of [...builtinRoleProviders.entries()].sort(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    for (const role of provider(now)) {
-      if (role.source !== "builtin")
-        throw new Error(`builtin role provider ${id} returned non-builtin role: ${role.id}`);
-      roles.push(role);
-    }
-  }
-  return roles;
-}
-
 export function createDefaultRoleRegistry(options: DefaultRoleRegistryOptions = {}): RoleRegistry {
   const now = options.now ?? nowIso();
-  return new RoleRegistry([
-    ...createBuiltinRoles(now),
-    ...createRegisteredBuiltinRoles(now),
-    ...(options.extraRoles ?? []),
-  ]);
+  return new RoleRegistry(createBuiltinRoles(now));
 }
 
 function builtin(
@@ -249,6 +233,7 @@ function builtin(
   description: string,
   systemPrompt: string,
   now: string,
+  allowedTools: readonly string[],
 ): RoleSpec {
   return {
     ref: builtinRoleRef(id),
@@ -256,6 +241,7 @@ function builtin(
     source: "builtin",
     description,
     systemPrompt,
+    allowedTools: [...allowedTools],
     origin: { kind: "builtin" },
     createdAt: now,
     updatedAt: now,

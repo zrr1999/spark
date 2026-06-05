@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parseSparkWorkflowScript } from "spark-workflows";
+import { parseSparkWorkflowScript } from "pi-workflows";
 
 export interface SparkSavedWorkflowDescriptor {
   name: string;

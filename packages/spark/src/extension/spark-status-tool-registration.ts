@@ -1,6 +1,6 @@
 import { Type } from "typebox";
-import { defaultSparkDagRunStore } from "spark-workflows";
-import { defaultTaskGraphStore } from "spark-tasks";
+import { defaultSparkDagRunStore } from "pi-workflows";
+import { defaultTaskGraphStore } from "pi-tasks";
 import { reconcileSparkDagRunsWithActiveProcesses } from "./background-runs.ts";
 import { collectRecentRoleRunCompletions } from "./role-run-completions.ts";
 import {
@@ -17,6 +17,7 @@ import {
   renderSparkStatus,
 } from "./spark-status-rendering.ts";
 import { ensureSparkGraphInvariants } from "./spark-graph-invariants.ts";
+import { loadProjectGoal } from "./spark-project-goals.ts";
 import {
   normalizeSparkStatusFormat,
   normalizeSparkStatusLimit,
@@ -103,6 +104,9 @@ export function registerSparkStatusTool(
       const sessionKey = sparkSessionKey(ctx);
       const independentTodos = await loadIndependentTodos(cwd, ctx);
       const currentProject = await currentSparkProject(cwd, ctx, graph);
+      const projectGoal = currentProject
+        ? await loadProjectGoal(cwd, currentProject.ref)
+        : undefined;
       const recentRoleRunCompletions =
         view === "summary"
           ? []
@@ -123,6 +127,7 @@ export function registerSparkStatusTool(
         currentProject,
         dagStatus,
         runMode,
+        projectGoal,
         independentTodos,
         recentRoleRunCompletions,
         state,

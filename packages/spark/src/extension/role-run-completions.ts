@@ -1,5 +1,5 @@
-import { nowIso, type TaskRunCompletionSummary, type ProjectRef } from "spark-core";
-import type { TaskGraph } from "spark-tasks";
+import { nowIso, type TaskRunCompletionSummary, type ProjectRef } from "pi-extension-api";
+import type { TaskGraph } from "pi-tasks";
 import {
   loadHiddenRoleRunInboxState,
   saveHiddenRoleRunInboxState,
@@ -66,7 +66,9 @@ export function formatHiddenRoleRunInbox(input: HiddenRoleRunInbox): string {
   }
   if (input.remaining > 0)
     lines.push(`- ${input.remaining} more unread result(s) remain for a later turn.`);
-  lines.push("Use artifact refs or spark_background_runs inspect for full details if needed.");
+  lines.push(
+    'Use artifact refs or task({ action: "run_status", runAction: "inspect" }) for full details if needed.',
+  );
   return lines.join("\n");
 }
 
@@ -106,10 +108,10 @@ function formatRoleRunCompletionLine(summary: TaskRunCompletionSummary): string 
 
 function hiddenRoleRunNextAction(summary: TaskRunCompletionSummary): string {
   if (summary.status === "failed") {
-    return `inspect with spark_background_runs inspect runRef=${summary.runRef}; fix the failure cause, then rerun the ready frontier`;
+    return `inspect with task({ action: "run_status", runAction: "inspect", runRef: "${summary.runRef}" }); fix the failure cause, then rerun the ready frontier`;
   }
   if (summary.status === "cancelled") {
-    return `inspect with spark_background_runs inspect runRef=${summary.runRef}; decide whether to requeue, supersede, or acknowledge cancellation`;
+    return `inspect with task({ action: "run_status", runAction: "inspect", runRef: "${summary.runRef}" }); decide whether to requeue, supersede, or acknowledge cancellation`;
   }
   return "continue parent task using this compact summary and artifact refs";
 }

@@ -1,12 +1,18 @@
 import { Type } from "typebox";
 import type { RoleRegistry } from "pi-roles";
-import { stableId, type RoleRef, type Task, type TaskPlan, type ProjectRef } from "spark-core";
+import {
+  stableId,
+  type RoleRef,
+  type Task,
+  type TaskPlan,
+  type ProjectRef,
+} from "pi-extension-api";
 import {
   defaultTaskGraphStore,
   isUnfinishedTaskStatus,
   normalizeTaskPlan,
   type TaskGraph,
-} from "spark-tasks";
+} from "pi-tasks";
 import {
   compactTaskDetail,
   normalizeOptionalToolString,
@@ -104,7 +110,7 @@ export function registerSparkClaimTaskTool(
           content: [
             {
               type: "text",
-              text: `Cannot claim ${input.title}: spark_claim_task only accepts unfinished statuses (pending, ready, running, blocked). Use task completion/failure/cancellation flows instead of claiming with terminal status ${input.requestedStatus}.`,
+              text: `Cannot claim ${input.title}: task({ action: "claim" }) only accepts unfinished statuses (pending, ready, running, blocked). Use task completion/failure/cancellation flows instead of claiming with terminal status ${input.requestedStatus}.`,
             },
           ],
           details: {

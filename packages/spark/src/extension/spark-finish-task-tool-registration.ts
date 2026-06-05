@@ -1,13 +1,13 @@
 import { Type } from "typebox";
-import { defaultLearningStore, type LearningLocation, type LearningRecord } from "spark-learnings";
+import { defaultLearningStore, type LearningLocation, type LearningRecord } from "pi-learnings";
+import type { Artifact } from "pi-artifacts";
 import {
   DependencyError,
-  type Artifact,
   type Task,
   type TaskCompletionReadiness,
   type ProjectRef,
-} from "spark-core";
-import { defaultTaskGraphStore, taskCompletionReadiness } from "spark-tasks";
+} from "pi-extension-api";
+import { defaultTaskGraphStore, taskCompletionReadiness } from "pi-tasks";
 import {
   currentSparkProject,
   loadSparkExecutionMode,

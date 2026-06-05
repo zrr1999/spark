@@ -1,4 +1,4 @@
-import type { ProjectRef } from "spark-core";
+import type { ProjectRef } from "pi-extension-api";
 import {
   clearSparkExecutionMode,
   loadCurrentProjectState,

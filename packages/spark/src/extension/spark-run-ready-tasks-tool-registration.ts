@@ -1,11 +1,11 @@
 import { Type } from "typebox";
-import { defaultArtifactStore } from "spark-core";
+import { defaultArtifactStore } from "pi-artifacts";
 import {
   DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
   DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
-} from "spark-core";
-import { runReadySparkTasks } from "spark-workflows";
-import { defaultTaskGraphStore } from "spark-tasks";
+} from "pi-extension-api";
+import { runReadySparkTasks } from "pi-workflows";
+import { defaultTaskGraphStore } from "pi-tasks";
 import { ensureRoleModelBindingsForProject } from "./role-model-bindings.ts";
 import {
   currentSparkProject,
@@ -135,14 +135,14 @@ export function registerSparkRunReadyTasksTool(
         );
         deps.ensureDagManager(cwd, ctx);
         ctx.ui?.notify?.(
-          `Spark workflow-run scheduler started for “${project.title}”. Progress appears in the Spark widget; inspect with spark_background_runs status.`,
+          `Spark workflow-run scheduler started for “${project.title}”. Progress appears in the Spark widget; inspect with task({ action: "run_status" }).`,
           "info",
         );
         return {
           content: [
             {
               type: "text",
-              text: `Spark workflow-run scheduler started for current project “${project.title}”. Progress appears in the Spark widget; inspect with spark_background_runs status, or stop explicit stuck child role-runs with spark_background_runs kill.`,
+              text: `Spark workflow-run scheduler started for current project “${project.title}”. Progress appears in the Spark widget; inspect with task({ action: "run_status" }), or stop explicit stuck child role-runs with task({ action: "run_control", control: "kill" }).`,
             },
           ],
           details: {

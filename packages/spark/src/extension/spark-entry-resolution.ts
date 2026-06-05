@@ -1,25 +1,14 @@
 import { readFile, readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { runSparkAskTool } from "./spark-ask-tool.ts";
-import { isUnfinishedTaskStatus, type TaskGraph } from "spark-tasks";
+import { isUnfinishedTaskStatus, type TaskGraph } from "pi-tasks";
 import { hasNonSparkProjectFiles } from "./spark-activation.ts";
-import { sparkAskUi } from "./spark-ask-ui.ts";
 import {
   analyzeSparkEntryMode,
-  analyzeSparkExecuteStrategy,
   type SparkCommandProjectState,
   type SparkEntryIntent,
   type SparkEntryModeChoice,
   type SparkEntryResolution,
 } from "./spark-entry.ts";
-import {
-  sparkExecuteStrategyAsk,
-  sparkExecuteStrategyFromAskDetails,
-  sparkModeAsk,
-  sparkModeFromAskDetails,
-  sparkWorkflowSelectorAsk,
-  sparkWorkflowSelectorFromAskDetails,
-} from "./spark-entry-asks.ts";
 import { currentSparkProject, type SparkExecuteStrategy } from "./session-state.ts";
 import { listSparkWorkflowRegistry, normalizeSparkWorkflowId } from "./spark-workflow-registry.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
@@ -72,10 +61,7 @@ export async function resolveSparkEntry(
       ? { action: "initialize_new_project", idea, enterPlanning: true, planningSource: "auto" }
       : { action: "none" };
   }
-  const executeStrategy =
-    mode === "execute"
-      ? await resolveExecuteStrategy(ctx, graph, intent.prompt, intent)
-      : undefined;
+  const executeStrategy = mode === "execute" ? resolveExecuteStrategy(intent) : undefined;
   const workflowSelector =
     executeStrategy === "workflow"
       ? await resolveWorkflowSelector(ctx, graph, intent.prompt, intent)
@@ -91,23 +77,9 @@ export async function resolveSparkEntry(
   };
 }
 
-async function resolveExecuteStrategy(
-  ctx: SparkEntryResolutionContext,
-  graph: TaskGraph,
-  prompt: string,
-  intent: SparkEntryIntent,
-): Promise<SparkExecuteStrategy> {
-  if (intent.kind === "direct" && intent.executeStrategy && intent.executeStrategy !== "default")
-    return intent.executeStrategy;
-  const project = await currentSparkProject(ctx.cwd, ctx, graph);
-  const analysis = analyzeSparkExecuteStrategy(graph, prompt, project);
-  if (analysis.confidence === "high") return analysis.recommendation;
-
-  const response = await runSparkAskTool(sparkExecuteStrategyAsk(analysis), {
-    cwd: ctx.cwd,
-    ui: sparkAskUi(ctx),
-  });
-  return sparkExecuteStrategyFromAskDetails(response.details) ?? "default";
+function resolveExecuteStrategy(intent: SparkEntryIntent): SparkExecuteStrategy {
+  if (intent.kind === "direct" && intent.executeStrategy) return intent.executeStrategy;
+  return "default";
 }
 
 async function resolveWorkflowSelector(
@@ -129,26 +101,16 @@ async function resolveWorkflowSelector(
   }
   if (!requested && prompt.trim()) return undefined;
 
-  const project = await currentSparkProject(ctx.cwd, ctx, graph);
-  const response = await runSparkAskTool(
-    sparkWorkflowSelectorAsk({
-      currentProjectTitle: project?.title ?? "Spark project",
-      focus: prompt,
-      listing,
-      requestedSelector: normalizedRequested,
-    }),
-    { cwd: ctx.cwd, ui: sparkAskUi(ctx) },
-  );
-  const selected = sparkWorkflowSelectorFromAskDetails(response.details);
-  if (selected === "create_workspace") {
-    ctx.setEditorText?.(renderWorkspaceWorkflowTemplate(prompt));
-    ctx.ui?.notify?.(
-      "Drafted a workspace workflow template. Save it under .spark/workflows/<name>.js, then run /workflow workspace:<name>.",
-      "info",
-    );
-    return false;
-  }
-  return normalizeWorkflowSelector(selected) ?? false;
+  const available = listing.workflows.map((workflow) => workflow.source + ":" + workflow.id);
+  if (!requested && !prompt.trim() && available.length === 1) return available[0];
+  const reason = normalizedRequested
+    ? "Spark workflow selector not found: " + normalizedRequested + "."
+    : "Spark workflow mode needs an explicit saved workflow selector.";
+  const suffix = available.length
+    ? " Available workflow(s): " + available.join(", ") + "."
+    : " Create a saved workspace workflow under .spark/workflows/<name>.js, then run /workflow workspace:<name>.";
+  ctx.ui?.notify?.(reason + suffix, "warning");
+  return false;
 }
 
 function normalizeWorkflowSelector(selector: string | undefined): string | undefined {
@@ -160,26 +122,6 @@ function normalizeWorkflowSelector(selector: string | undefined): string | undef
   } catch {
     return undefined;
   }
-}
-
-function renderWorkspaceWorkflowTemplate(focus: string): string {
-  const summary = focus.trim() || "Describe what this workspace workflow should accomplish";
-  return [
-    "export const meta = {",
-    '  name: "workspace_workflow",',
-    "  description: " + JSON.stringify(summary) + ",",
-    "  phases: [",
-    '    { id: "first", title: "First phase", model: "inherit" },',
-    "  ],",
-    "};",
-    "",
-    "export default async function workflow({ phase, agent }) {",
-    '  await phase("first", async () => {',
-    '    await agent("worker", "Implement the first workflow phase.");',
-    "  });",
-    "}",
-    "",
-  ].join("\n");
 }
 
 async function resolveSparkEntryWithoutGraph(
@@ -232,13 +174,7 @@ async function chooseInitializedSparkMode(
 ): Promise<SparkEntryModeChoice | undefined> {
   const project = await currentSparkProject(ctx.cwd, ctx, graph);
   const analysis = analyzeSparkEntryMode(graph, projectState, prompt, project);
-  if (analysis.confidence === "high") return analysis.recommendation;
-
-  const response = await runSparkAskTool(sparkModeAsk(analysis), {
-    cwd: ctx.cwd,
-    ui: sparkAskUi(ctx),
-  });
-  return sparkModeFromAskDetails(response.details);
+  return analysis.recommendation;
 }
 
 async function inferExistingProjectSparkIdea(

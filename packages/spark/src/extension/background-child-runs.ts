@@ -1,7 +1,7 @@
-import type { RunRef, TaskRef, ProjectRef } from "spark-core";
-import type { SparkDagRunRecord } from "spark-workflows";
+import type { RunRef, TaskRef, ProjectRef } from "pi-extension-api";
+import type { SparkDagRunRecord } from "pi-workflows";
 import { readRoleRunArtifactPreview, type ActiveSparkRoleRunProcess } from "spark-runtime";
-import type { TaskGraph } from "spark-tasks";
+import type { TaskGraph } from "pi-tasks";
 import type { SparkBackgroundChildRunView, SparkBackgroundChildStatus } from "./background-runs.ts";
 
 export function resolveBackgroundTaskRef(

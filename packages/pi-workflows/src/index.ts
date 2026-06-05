@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { parseSparkWorkflowScript } from "spark-workflows";
+import { parseSparkWorkflowScript } from "./metadata.ts";
 
 export type WorkflowSource = "workspace" | "user";
 export type WorkflowSelector = `${WorkflowSource}:${string}`;
@@ -145,3 +145,9 @@ async function discoverWorkflowDir(
 function isNodeErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && "code" in error && (error as { code?: unknown }).code === code;
 }
+
+export * from "./types.ts";
+export * from "./metadata.ts";
+export * from "./runtime.ts";
+export * from "./builtins.ts";
+export * from "./orchestrator/index.ts";

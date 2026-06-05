@@ -1,5 +1,5 @@
-import type { Task, TaskStatus, ProjectRef } from "spark-core";
-import { isUnfinishedTaskStatus, type TaskGraph } from "spark-tasks";
+import type { Task, TaskStatus, ProjectRef } from "pi-extension-api";
+import { isUnfinishedTaskStatus, type TaskGraph } from "pi-tasks";
 import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 
 export type SparkStatusView = "active" | "summary" | "full";

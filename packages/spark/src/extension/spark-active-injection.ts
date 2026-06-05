@@ -1,7 +1,6 @@
-import { defaultTaskGraphStore, type TaskGraph } from "spark-tasks";
+import { defaultTaskGraphStore, type TaskGraph } from "pi-tasks";
 import { renderActiveSparkContext } from "./spark-active-context.ts";
 import {
-  detectNaturalSparkIntent,
   detectSparkActivation,
   hasLocalSparkDirectory,
   readActiveSparkMd,
@@ -18,6 +17,7 @@ import {
   type SparkSessionMode,
 } from "./session-state.ts";
 import { loadIndependentTodos } from "./session-todos.ts";
+import type { SparkModeEntryDeps, SparkModeMessageApi } from "./spark-mode-entry.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
 interface SparkInputEvent {
@@ -25,15 +25,24 @@ interface SparkInputEvent {
   source?: string;
 }
 
-export async function handleSparkInput(event: unknown, ctx: SparkToolContext): Promise<unknown> {
+export interface SparkInputModeRouter {
+  piApi: SparkModeMessageApi;
+  deps: SparkModeEntryDeps;
+}
+
+export async function handleSparkInput(
+  event: unknown,
+  ctx: SparkToolContext,
+  _router?: SparkInputModeRouter,
+): Promise<unknown> {
   if (!isSparkInputEvent(event)) return { action: "continue" };
   if (event.source === "extension") return { action: "continue" };
   const text = event.text.trim();
   if (!text || text.startsWith("/")) return { action: "continue" };
   const activation = await detectSparkActivation(ctx.cwd);
-  if (activation.active) return { action: "continue" };
-  const intent = detectNaturalSparkIntent(text);
-  if (intent === "new_idea") return { action: "transform", text: `/spark ${text}` };
+  if (!activation.active) return { action: "continue" };
+  const mode = await loadSparkMode(ctx.cwd, ctx);
+  if (mode.mode !== "auto") return { action: "continue" };
   return { action: "continue" };
 }
 
@@ -84,7 +93,7 @@ export function renderSparkActiveSystemPrompt(
   reason: string,
   mode: SparkSessionMode = "auto",
 ): string {
-  const sparkPrompt = `Spark active (${reason}); mode: ${mode}. Spark is the mode facade; manage state via task, artifact, ask, role, learning, context, recall, and workflow tools. Claim ≤1 unfinished task per session; ask on real blockers.`;
+  const sparkPrompt = `Spark active (${reason}); mode: ${mode}. Spark is the mode facade; use task, artifact, ask, role, learning, context, recall, and workflow tools. ≤1 task; no canned asks; no guessing: ask unless user says infer/research.`;
   return basePrompt ? `${basePrompt}\n\n${sparkPrompt}` : sparkPrompt;
 }
 

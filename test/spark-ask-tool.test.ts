@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { ArtifactRef } from "spark-core";
-import { defaultArtifactStore } from "spark-core";
+import type { ArtifactRef } from "pi-extension-api";
+import { defaultArtifactStore } from "pi-artifacts";
 import { createElaborationResult, createPiAskFlowRequest, replayablePiAskFlow } from "pi-ask";
 import {
   createSparkAskToolRequest,

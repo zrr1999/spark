@@ -1,13 +1,11 @@
+import type { Artifact, ArtifactKind, Provenance } from "pi-artifacts";
 import {
   isRef,
-  type Artifact,
-  type ArtifactKind,
   type ArtifactRef,
   type ProjectRef,
-  type Provenance,
   type RoleRef,
   type TaskRef,
-} from "spark-core";
+} from "pi-extension-api";
 
 export function normalizeArtifactLimit(value: unknown, fallback: number, field = "limit"): number {
   if (value === undefined || value === null) return fallback;

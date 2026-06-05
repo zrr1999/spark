@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { applyIndependentTodoOps, defaultTaskGraphStore, type TaskTodoOp } from "spark-tasks";
+import { applyIndependentTodoOps, defaultTaskGraphStore, type TaskTodoOp } from "pi-tasks";
 import { currentSparkProject, sparkSessionKey, sparkTodoStore } from "./session-state.ts";
 import { loadIndependentTodos, saveIndependentTodos } from "./session-todos.ts";
 import { resolveSessionClaimedTask } from "./task-claim-selection.ts";

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 
-import { nowIso, type TaskRef } from "spark-core";
-import { isDeletedSessionTodo, type SessionTodoEntry, type SessionTodoStatus } from "spark-tasks";
+import { nowIso, type TaskRef } from "pi-extension-api";
+import { isDeletedSessionTodo, type SessionTodoEntry, type SessionTodoStatus } from "pi-tasks";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {
   sanitizeStoreScope,

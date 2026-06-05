@@ -1,5 +1,5 @@
-import type { ProjectRef } from "spark-core";
-import { isUnfinishedTaskStatus, type TaskGraph } from "spark-tasks";
+import type { ProjectRef } from "pi-extension-api";
+import { isUnfinishedTaskStatus, type TaskGraph } from "pi-tasks";
 import { normalizeProjectTitle } from "./spark-md-rendering.ts";
 
 export function ensureSparkGraphInvariants(graph: TaskGraph): boolean {

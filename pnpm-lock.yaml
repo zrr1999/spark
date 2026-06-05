@@ -31,6 +31,9 @@ importers:
       pi-extension-api:
         specifier: file:packages/pi-extension-api
         version: link:packages/pi-extension-api
+      pi-goal:
+        specifier: file:packages/pi-goal
+        version: link:packages/pi-goal
       pi-graft:
         specifier: file:packages/pi-graft
         version: link:packages/pi-graft
@@ -49,24 +52,9 @@ importers:
       pi-workflows:
         specifier: file:packages/pi-workflows
         version: link:packages/pi-workflows
-      spark-core:
-        specifier: file:packages/spark-core
-        version: link:packages/spark-core
-      spark-goal:
-        specifier: file:packages/spark-goal
-        version: link:packages/spark-goal
-      spark-learnings:
-        specifier: file:packages/spark-learnings
-        version: link:packages/spark-learnings
       spark-runtime:
         specifier: file:packages/spark-runtime
         version: link:packages/spark-runtime
-      spark-tasks:
-        specifier: file:packages/spark-tasks
-        version: link:packages/spark-tasks
-      spark-workflows:
-        specifier: file:packages/spark-workflows
-        version: link:packages/spark-workflows
       typebox:
         specifier: ^1.1.38
         version: 1.1.38
@@ -146,6 +134,8 @@ importers:
 
   packages/pi-extension-api: {}
 
+  packages/pi-goal: {}
+
   packages/pi-graft:
     dependencies:
       typebox:
@@ -154,12 +144,12 @@ importers:
 
   packages/pi-learnings:
     dependencies:
+      pi-artifacts:
+        specifier: file:../pi-artifacts
+        version: link:../pi-artifacts
       pi-extension-api:
         specifier: file:../pi-extension-api
         version: link:../pi-extension-api
-      spark-learnings:
-        specifier: file:../spark-learnings
-        version: link:../spark-learnings
       typebox:
         specifier: ^1.1.38
         version: 1.1.38
@@ -169,9 +159,6 @@ importers:
       pi-extension-api:
         specifier: file:../pi-extension-api
         version: link:../pi-extension-api
-      spark-core:
-        specifier: file:../spark-core
-        version: link:../spark-core
       typebox:
         specifier: ^1.1.38
         version: 1.1.38
@@ -190,9 +177,6 @@ importers:
       pi-extension-api:
         specifier: file:../pi-extension-api
         version: link:../pi-extension-api
-      spark-tasks:
-        specifier: file:../spark-tasks
-        version: link:../spark-tasks
       typebox:
         specifier: ^1.1.38
         version: 1.1.38
@@ -202,9 +186,9 @@ importers:
       pi-extension-api:
         specifier: file:../pi-extension-api
         version: link:../pi-extension-api
-      spark-workflows:
-        specifier: file:../spark-workflows
-        version: link:../spark-workflows
+      pi-tasks:
+        specifier: file:../pi-tasks
+        version: link:../pi-tasks
       typebox:
         specifier: ^1.1.38
         version: 1.1.38
@@ -214,9 +198,18 @@ importers:
       '@earendil-works/pi-tui':
         specifier: ^0.74.1
         version: 0.74.1
+      pi-artifacts:
+        specifier: file:../pi-artifacts
+        version: link:../pi-artifacts
       pi-context:
         specifier: file:../pi-context
         version: link:../pi-context
+      pi-extension-api:
+        specifier: file:../pi-extension-api
+        version: link:../pi-extension-api
+      pi-goal:
+        specifier: file:../pi-goal
+        version: link:../pi-goal
       pi-learnings:
         specifier: file:../pi-learnings
         version: link:../pi-learnings
@@ -226,24 +219,12 @@ importers:
       pi-tasks:
         specifier: file:../pi-tasks
         version: link:../pi-tasks
-      spark-core:
-        specifier: file:../spark-core
-        version: link:../spark-core
-      spark-goal:
-        specifier: file:../spark-goal
-        version: link:../spark-goal
-      spark-learnings:
-        specifier: file:../spark-learnings
-        version: link:../spark-learnings
+      pi-workflows:
+        specifier: file:../pi-workflows
+        version: link:../pi-workflows
       spark-runtime:
         specifier: file:../spark-runtime
         version: link:../spark-runtime
-      spark-tasks:
-        specifier: file:../spark-tasks
-        version: link:../spark-tasks
-      spark-workflows:
-        specifier: file:../spark-workflows
-        version: link:../spark-workflows
       typebox:
         specifier: ^1.1.38
         version: 1.1.38
@@ -260,46 +241,23 @@ importers:
         specifier: file:../pi-extension-api
         version: link:../pi-extension-api
 
-  packages/spark-core:
+  packages/spark-runtime:
     dependencies:
       pi-artifacts:
         specifier: file:../pi-artifacts
         version: link:../pi-artifacts
-
-  packages/spark-goal: {}
-
-  packages/spark-learnings:
-    dependencies:
-      spark-core:
-        specifier: file:../spark-core
-        version: link:../spark-core
-
-  packages/spark-runtime:
-    dependencies:
+      pi-extension-api:
+        specifier: file:../pi-extension-api
+        version: link:../pi-extension-api
       pi-roles:
         specifier: file:../pi-roles
         version: link:../pi-roles
-      spark-core:
-        specifier: file:../spark-core
-        version: link:../spark-core
-      spark-tasks:
-        specifier: file:../spark-tasks
-        version: link:../spark-tasks
-
-  packages/spark-tasks:
-    dependencies:
-      spark-core:
-        specifier: file:../spark-core
-        version: link:../spark-core
-
-  packages/spark-workflows:
-    dependencies:
-      spark-core:
-        specifier: file:../spark-core
-        version: link:../spark-core
-      spark-tasks:
-        specifier: file:../spark-tasks
-        version: link:../spark-tasks
+      pi-tasks:
+        specifier: file:../pi-tasks
+        version: link:../pi-tasks
+      pi-workflows:
+        specifier: file:../pi-workflows
+        version: link:../pi-workflows
 
 packages:
 

@@ -1,5 +1,5 @@
-import type { RunRef, TaskRef, ProjectRef } from "spark-core";
-import type { SparkDagRunRecord } from "spark-workflows";
+import type { RunRef, TaskRef, ProjectRef } from "pi-extension-api";
+import type { SparkDagRunRecord } from "pi-workflows";
 import type {
   SparkBackgroundChildRunView,
   SparkBackgroundDagRunView,

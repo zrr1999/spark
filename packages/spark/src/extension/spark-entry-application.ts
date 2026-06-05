@@ -1,6 +1,6 @@
-import { detectCopyLanguage, type CopyLanguage } from "spark-core";
-import type { ProjectRef } from "spark-core";
-import type { TaskGraph } from "spark-tasks";
+import { detectCopyLanguage, type CopyLanguage } from "pi-extension-api";
+import type { ProjectRef } from "pi-extension-api";
+import type { TaskGraph } from "pi-tasks";
 import type { SparkEntryResolution } from "./spark-entry.ts";
 import { titleFromIdea, type SparkInitClarificationData } from "./spark-md-rendering.ts";
 import { renderSparkInitFollowUp, renderSparkInitSummary } from "./spark-init-rendering.ts";

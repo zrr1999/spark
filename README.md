@@ -49,33 +49,30 @@ The first vertical slice then creates local Spark state under `.spark/`:
 
 A root `SPARK.md` is only materialized by `/spark` initialization, and only when the current `cwd` looks like a concrete repo (currently: `.git` exists in `cwd`). Direct modes such as `/research`, `/plan`, `/execute`, `/goal`, and `/workflow[:selector]` do not create or overwrite root `SPARK.md`; when they initialize minimal Spark state, intent is kept in `.spark` artifacts.
 
-`.spark/` is local runtime state and should be ignored by Git. Spark learnings live separately under the ignored local `.learnings/` directory for repo/workspace-scoped recall or under the user learning directory for personal cross-project knowledge; share them through explicit Markdown exports instead of committing the local artifact store by default. Use `spark_state` for explicit cache status/cleanup; cleanup is dry-run by default and never targets protected stores such as project graph, artifacts, notes, workflow runs, or review-gate state.
+`.spark/` is local runtime state and should be ignored by Git. Spark learnings live separately under the ignored local `.learnings/` directory for repo/workspace-scoped recall or under the user learning directory for personal cross-project knowledge; share them through explicit Markdown exports instead of committing the local artifact store by default. Use canonical owner tools for maintenance (`task({ action: "cache_cleanup" })`, `artifact({ action: "compact" })`, and workflow-run retention actions as they land); cleanup remains dry-run by default and must never target protected stores such as project graph, artifacts, notes, workflow runs, or review-gate state.
 
 `GitHub` repo/issue creation is intentionally deferred.
 
 ## Packages
 
-- `spark` — high-level `/spark`, `/research`, `/plan`, `/execute`, `/goal`, and `/workflow[:selector]` mode facade that composes generic `pi-*` capabilities with Spark-owned orchestration policy.
+- `spark` — high-level `/spark`, `/research`, `/plan`, `/execute`, `/goal`, and `/workflow[:selector]` mode facade that composes generic `pi-*` capabilities with Spark-owned orchestration policy, widget state, builtin Spark roles, and active-context provider registration.
 - `spark-cli` — standalone Spark-first native TUI host built directly on `@earendil-works/pi-tui`; starts directly with `spark`, owns its local transcript/follow-up queue, and provides a local daemon queue for detached session-run tasks.
-- `spark-core` — internal shared refs, schemas, errors, and compatibility re-exports for migrated generic capability contracts.
+- `spark-runtime` — Spark single-task runtime adapter that executes one task through `pi-roles`, writes artifacts, and owns task/run/timeout mapping above `RoleRun`.
+- `pi-extension-api` — shared extension host/tool contract, refs, errors, and light JSON/fs/time helpers.
 - `pi-artifacts` — reusable artifact/evidence store, durable artifact metadata/blobs, provenance/lineage contracts, and the canonical `artifact` action tool.
-- `pi-tasks` — generic project/task/TODO/run graph capability, currently re-exporting the existing `spark-tasks` implementation while providing the canonical `task` action tool contract.
-- `pi-learnings` — generic evidence-backed learning capability, currently re-exporting the existing `spark-learnings` implementation while providing the canonical `learning` action tool contract.
+- `pi-tasks` — generic project/task/TODO/run graph capability and canonical `task({ action })` tool; owns readiness, claims, TODO stores, and `.spark/projects.json` graph state without depending on Spark packages.
+- `pi-learnings` — generic evidence-backed learning capability and canonical `learning({ action })` tool; owns `.learnings/` local/user learning stores.
+- `pi-goal` — generic durable goal primitives and continuation prompt helpers; Spark owns the project-bound `/goal` facade while preserving historical serialized marker strings.
+- `pi-workflows` — saved-script workflow discovery/runtime primitives plus workflow/DAG run-store support for `.spark/workflow-runs.json`.
 - `pi-context` — registered context-provider capability with bounded list/preview actions and no freeform prompt injection.
 - `pi-recall` — controlled explicit-scope recall candidate store/tool, separate from `.learnings/` and automatic memory.
-- `pi-workflows` — saved-script workflow discovery/preview tool for controlled workspace/user roots; execution remains host policy.
-- `pi-cue` — reusable Pi/cue-shell execution substrate; absorbs `pi-cue-shell` code without a compatibility package and does not depend on `spark-core`.
-- `pi-ask` — canonical `ask` action tool plus compatibility `ask_user` / `ask_flow` protocol/state/renderer with direct custom input handling.
+- `pi-cue` — reusable Pi/cue-shell execution substrate.
+- `pi-ask` — canonical `ask` action tool plus `ask_user` / `ask_flow` protocol/state/renderer with direct custom input handling.
 - `pi-roles` — canonical `role` action tool plus reusable `RoleSpec` definitions, builtin/project/user role discovery, Markdown stores, and task-agnostic direct role calls. It owns fresh/forked CLI launch, timeout/cancel, stdout/stderr capture, and tolerant JSONL parsing; it does not own Spark task DAGs, asks, artifacts, review gates, or package-specific role semantics.
-- `spark-tasks` — durable project/task DAG, task names/titles/descriptions, TODOs, dependencies, readiness, runs, and unified claim/lease state. Optional task `roleRef` values are preferred executor hints, not readiness requirements.
-- `spark-runtime` — Spark single-task runtime adapter that executes one task through `pi-roles`, writes artifacts, and owns task/run/timeout mapping above `RoleRun`.
-- `spark-goal` — private Spark-owned goal state, usage accounting, and hidden continuation prompts for `/goal`.
-- `spark-workflows` — private Spark-owned workflow runtime, example workflow script factories, workflow-run state in `.spark/workflow-runs.json`, and the role-run adapter boundary for `/workflow[:selector]`.
-- `spark-learnings` — compatibility implementation now promoted through `pi-learnings`; owns the current store logic during migration.
 
-No compatibility packages are planned. `spark-github` is intentionally deferred.
+Retired migration packages (`spark-core`, `spark-tasks`, `spark-learnings`, `spark-goal`, and `spark-workflows`) are no longer workspaces. No compatibility packages or long-lived `spark_*` tool aliases are planned. `spark-github` is intentionally deferred.
 
-Pi package loading is manifest-first: the root `pi` manifest explicitly lists each user-visible extension entry (`pi-ask`, `pi-artifacts`, `pi-cue`, `pi-roles`, `pi-recall`, `pi-workflows`, `pi-graft`, the Baidu OneAPI provider, and `spark`). Library-only packages stay as dependencies; during capability migration Spark supplies host-specific handlers/providers for generic `pi-tasks`, `pi-learnings`, and `pi-context` tools while native `spark-cli` host internals remain untouched.
+Pi package loading is manifest-first: the root `pi` manifest explicitly lists each user-visible extension entry (`pi-ask`, `pi-artifacts`, `pi-cue`, `pi-roles`, `pi-recall`, `pi-workflows`, `pi-graft`, the Baidu OneAPI provider, and `spark`). Library-only packages stay as dependencies. `pi-* -> spark-*` regressions are guarded by `pnpm run check:boundaries`, a `prek` hook, and the CI static-check workflow.
 
 ## Development
 

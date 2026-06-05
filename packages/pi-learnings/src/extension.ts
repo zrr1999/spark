@@ -40,10 +40,6 @@ export interface PiLearningToolOptions {
   handlers: PiLearningToolHandlers;
 }
 
-interface SparkCompatToolConfig {
-  execute: ToolConfig["execute"];
-}
-
 class ToolCallText implements ToolRenderComponent {
   private readonly text: string;
 
@@ -137,46 +133,9 @@ export function registerPiLearningTool(
   });
 }
 
-export function createPiLearningSparkCompatHandlers(
-  resolveTool: (name: string) => SparkCompatToolConfig | undefined,
-): PiLearningToolHandlers {
-  const direct = (toolName: string): PiLearningActionHandler => {
-    return ({ toolCallId, params, signal, onUpdate, ctx }) => {
-      const tool = requireSparkCompatTool(resolveTool, toolName);
-      return tool.execute(toolCallId, stripLearningAction(params), signal, onUpdate, ctx as never);
-    };
-  };
-
-  return {
-    record: direct("spark_learning_record"),
-    search: direct("spark_learning_search"),
-    list: direct("spark_learning_list"),
-    read: direct("spark_learning_read"),
-    mark_stale: direct("spark_learning_mark_stale"),
-    supersede: direct("spark_learning_supersede"),
-    reject: direct("spark_learning_reject"),
-    export_markdown: direct("spark_learning_export_markdown"),
-    import_markdown: direct("spark_learning_import_markdown"),
-  };
-}
-
 function normalizeLearningAction(value: unknown): PiLearningAction {
   if (LEARNING_ACTIONS.includes(value as PiLearningAction)) return value as PiLearningAction;
   throw new Error(`learning.action must be one of: ${LEARNING_ACTIONS.join(", ")}`);
-}
-
-function stripLearningAction(params: Record<string, unknown>): Record<string, unknown> {
-  const { action: _action, ...rest } = params;
-  return Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined));
-}
-
-function requireSparkCompatTool(
-  resolveTool: (name: string) => SparkCompatToolConfig | undefined,
-  toolName: string,
-): SparkCompatToolConfig {
-  const tool = resolveTool(toolName);
-  if (!tool) throw new Error(`learning action adapter could not find ${toolName}`);
-  return tool;
 }
 
 function renderLearningCall(

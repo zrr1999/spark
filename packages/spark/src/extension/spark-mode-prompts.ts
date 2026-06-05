@@ -1,5 +1,5 @@
-import type { ProjectRef } from "spark-core";
-import type { TaskGraph } from "spark-tasks";
+import type { ProjectRef } from "pi-extension-api";
+import type { TaskGraph } from "pi-tasks";
 import {
   renderRoadmapPlanningContext,
   type RoadmapPlanningContext,
@@ -14,9 +14,11 @@ import {
 const PLANNING_AFFECTING_CHOICES =
   "scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order";
 
-const SPARK_ASK_PLANNING_REMINDER = `Reminder for planning mode: if a user-facing open question or decision would change ${PLANNING_AFFECTING_CHOICES}, call ask with context-specific questions before task({ action: "plan" }); do not leave those questions as prose or plan.openQuestions.`;
+const SPARK_ASK_PLANNING_REMINDER = `Reminder for planning mode: do not guess user intent. Unless the user explicitly asks you to infer or research, if a user-facing open question or decision would change ${PLANNING_AFFECTING_CHOICES}, call ask with context-specific questions before task({ action: "plan" }); do not leave those questions as prose or plan.openQuestions.`;
 
-const SPARK_ASK_EXECUTION_REMINDER = `Reminder: if a missing user decision blocks execution or would change ${PLANNING_AFFECTING_CHOICES}, stop and call ask instead of guessing, inventing scope, or finishing the task.`;
+const SPARK_ASK_EXECUTION_REMINDER = `Reminder: do not guess user intent. Unless the user explicitly asks you to infer or research, if a missing user decision blocks execution or would change ${PLANNING_AFFECTING_CHOICES}, stop and call ask instead of inventing scope or finishing the task.`;
+
+const SPARK_GOAL_NON_INTERACTIVE_REMINDER = `Reminder for goal mode: interactive ask tools are disabled, but do not guess user intent. If task decomposition is wrong or missing, create or revise concrete tasks with task({ action: "plan" }); if a missing user decision would change ${PLANNING_AFFECTING_CHOICES} and cannot be inferred from context, stop, report the blocker, or pause the goal with goal({ action: "pause" }) instead of calling ask or inventing scope.`;
 
 export function renderSparkResearchModePrompt(
   graph: TaskGraph,
@@ -80,8 +82,10 @@ export function renderSparkExecutionModePrompt(
         ? renderWorkflowAction(workflowSelector)
         : 'Read the current project/task plan and inspect ready tasks with task({ action: "status" }). Claim at most one concrete task with task({ action: "claim" }), execute it, verify the required evidence with artifact/learning/context as needed, then call task({ action: "finish" }). Stop after that task finishes; do not auto-claim another task or dispatch continuous work from /execute. If the user wants autonomous completion of all ready work, suggest /goal. If the user wants a scripted saved workflow, suggest /workflow.'
     : strategy === "goal"
-      ? 'No current project is selected for goal mode. Inspect projects with task({ action: "status" }) or task({ action: "project_list" }), select the obvious active project with task({ action: "project_use" }) when the state is unambiguous, or ask when multiple active projects or scopes could be the intended goal. Do not claim project-bound work until a current project is selected.'
+      ? 'No current project is selected for goal mode. Inspect projects with task({ action: "status" }) or task({ action: "project_list" }), select the obvious active project with task({ action: "project_use" }) when the state is unambiguous, or stop and report when multiple active projects or scopes could be the intended goal. Do not claim project-bound work until a current project is selected.'
       : 'Select a current project with task({ action: "project_use" }) before claiming project-bound work; use task({ action: "status" }) to inspect available projects first if needed.';
+  const decisionReminder =
+    strategy === "goal" ? SPARK_GOAL_NON_INTERACTIVE_REMINDER : SPARK_ASK_EXECUTION_REMINDER;
   return (
     summary +
     focusLine +
@@ -91,7 +95,7 @@ export function renderSparkExecutionModePrompt(
     " " +
     action +
     " " +
-    SPARK_ASK_EXECUTION_REMINDER +
+    decisionReminder +
     workflowGuidance
   );
 }
@@ -108,7 +112,7 @@ function renderExecutionFocusLine(
     return `\n\nExecution focus: ${trimmed}\nUse this focus to filter ready tasks and pre-flight questions; do not auto-dispatch solely because a focus was provided.`;
   }
   if (strategy === "goal") {
-    return "\n\nGoal focus: none provided. Derive the concrete goal from the current Spark project/task state before claiming work; ask with ask if the goal, project, or scope is ambiguous.";
+    return "\n\nGoal focus: none provided. Derive the concrete goal from the current Spark project/task state before claiming work; stop and report if the goal, project, or scope is ambiguous.";
   }
   return "";
 }
@@ -116,19 +120,19 @@ function renderExecutionFocusLine(
 function renderGoalAction(hasExplicitGoal: boolean): string {
   const goalSource = hasExplicitGoal
     ? "Use the explicit goal focus as the target objective."
-    : "Infer the target objective from the active project title, unfinished task DAG, ready tasks, task plans, required evidence, recent artifacts, and blockers.";
+    : "Infer the target objective from the active project title, unfinished tasks, ready tasks, task plans, required evidence, recent artifacts, and blockers.";
   return (
     'Run Spark goal mode: read the current project/task plan and inspect ready tasks with task({ action: "status" }). ' +
     goalSource +
-    ' If a single next goal is obvious, state that derived goal briefly and work toward it by claiming one ready concrete task at a time with task({ action: "claim" }), executing it, verifying required evidence, and calling task({ action: "finish" }). If multiple plausible goals, missing scope, conflicting priorities, no selected project, no ready path, or a user-facing decision would change the goal or execution order, stop and ask with ask instead of inventing the goal. Continue to the next ready task after each successful finish until the goal is complete, no ready task remains, validation fails, or a required user decision blocks progress.'
+    ' If a single next goal is obvious, state that derived goal briefly and work toward it by claiming one ready concrete task at a time with task({ action: "claim" }), executing it, verifying required evidence, and calling task({ action: "finish" }). Goal mode is non-interactive: do not call ask/ask_flow. If task decomposition is wrong, missing, or blocks the goal, create or revise concrete tasks with task({ action: "plan" }) and continue from the updated ready work. If multiple plausible goals, missing scope, conflicting priorities, no selected project, no ready path, or a user-facing decision would change the goal or execution order and cannot be inferred from context, stop and report or pause the goal with goal({ action: "pause" }) instead of inventing the goal. Continue to the next ready task after each successful finish until the goal is complete, no ready task remains, validation fails, or a required user decision blocks progress.'
   );
 }
 
 function renderWorkflowAction(workflowSelector: string | undefined): string {
   if (workflowSelector?.startsWith("workspace:") || workflowSelector?.startsWith("user:")) {
-    return "Run the selected saved scripted workflow through Spark workflow runtime boundaries: use Spark-owned workflow script metadata, route agent steps through the Spark workflow role-run adapter, preserve project attribution and evidence, and do not bypass the task DAG for durable task truth.";
+    return "Run the selected saved scripted workflow through Spark workflow runtime boundaries: use Spark-owned workflow script metadata, route agent steps through the Spark workflow role-run adapter, preserve project attribution and evidence, and do not bypass Spark tasks as durable project truth.";
   }
-  return "Select or start the appropriate saved workflow for the focus. Use workflow for saved-script discovery/preview, run workflow-owned steps only through Spark workflow/runtime plumbing, keep artifacts attributed to the project, and stop for ask whenever workflow selection, scope, or approval is required.";
+  return "Select or start the appropriate saved workflow for the focus. Use workflow for saved-script discovery/preview, run workflow-owned steps only through Spark workflow/runtime plumbing, keep artifacts attributed to the project, and stop/report when workflow selection, scope, or approval is required.";
 }
 
 export function renderSparkModeVisibleMessage(

@@ -1,4 +1,4 @@
-import { type ArtifactRef } from "spark-core";
+import type { ArtifactRef } from "pi-extension-api";
 import {
   runSparkAskTool,
   type SparkAskToolParams,

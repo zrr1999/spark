@@ -1,6 +1,6 @@
-import type { TaskGraph } from "spark-tasks";
-import { isUnfinishedTaskStatus } from "spark-tasks";
-import { isActiveSessionTodo, type SessionTodoEntry } from "spark-tasks";
+import type { TaskGraph } from "pi-tasks";
+import { isUnfinishedTaskStatus } from "pi-tasks";
+import { isActiveSessionTodo, type SessionTodoEntry } from "pi-tasks";
 import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 import { truncateInline } from "./tool-rendering.ts";
 

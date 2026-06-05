@@ -1,12 +1,12 @@
-import { defaultArtifactStore } from "spark-core";
-import { newRef, nowIso } from "spark-core";
+import { defaultArtifactStore } from "pi-artifacts";
+import { newRef, nowIso } from "pi-extension-api";
 import {
   createRoleRunClaimId,
   findResumableBackgroundRoleRunTasks,
   killActiveSparkRoleRunProcesses,
   runSparkTask,
 } from "spark-runtime";
-import { defaultTaskGraphStore } from "spark-tasks";
+import { defaultTaskGraphStore } from "pi-tasks";
 import {
   loadSparkGraph,
   saveSparkGraphAndTodos,

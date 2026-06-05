@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { validateArtifact } from "pi-artifacts";
 import {
   formatJsonFile,
   newRef,
@@ -11,13 +12,12 @@ import {
   refKind,
   refId,
   isRef,
-  validateArtifact,
   writeJsonFileAtomic,
   writeTextFileAtomic,
   type TaskPlan,
-} from "spark-core";
+} from "pi-extension-api";
 import { builtinRoleRef, createBuiltinRoles } from "pi-roles";
-import { TaskGraph } from "spark-tasks";
+import { TaskGraph } from "pi-tasks";
 import { renderSparkActiveSystemPrompt } from "../packages/spark/src/extension/spark-active-injection.ts";
 import { isGenericTaskNameForTitle } from "../packages/spark/src/extension/spark-claim-task-tool-registration.ts";
 import { isPlaceholderProjectTitle } from "../packages/spark/src/extension/spark-graph-invariants.ts";
@@ -307,7 +307,7 @@ void test("active Spark prompt is a one-line state marker with the current mode"
   assert.match(prompt, /^Spark active \(SPARK\.md\); mode: auto\./);
   assert.match(prompt, /Spark is the mode facade/);
   assert.match(prompt, /task, artifact, ask, role, learning, context, recall, and workflow tools/);
-  assert.match(prompt, /ask on real blockers/);
+  assert.match(prompt, /no guessing: ask unless user says infer\/research/);
   assert.doesNotMatch(prompt, /read SPARK\.md or the spark skill/);
   assert.doesNotMatch(prompt, /spark skill/);
   assert.doesNotMatch(prompt, /standing project state/);

@@ -1,17 +1,17 @@
-import { defaultArtifactStore } from "spark-core";
+import { defaultArtifactStore } from "pi-artifacts";
 import {
   DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
   DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
   type TaskRef,
   type ProjectRef,
-} from "spark-core";
+} from "pi-extension-api";
 import {
   type SparkDagCompletionFollowUp,
   type SparkDagRunStatus,
   defaultSparkDagRunStore,
   runReadySparkTasks,
-} from "spark-workflows";
-import { defaultTaskGraphStore, isUnfinishedTaskStatus, type TaskGraph } from "spark-tasks";
+} from "pi-workflows";
+import { defaultTaskGraphStore, isUnfinishedTaskStatus, type TaskGraph } from "pi-tasks";
 import { reconcileSparkDagRunsWithActiveProcesses } from "./background-runs.ts";
 import { ensureRoleModelBindingsForProject } from "./role-model-bindings.ts";
 import { hasLocalSparkDirectory } from "./spark-activation.ts";

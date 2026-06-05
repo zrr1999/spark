@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 
-import { type Task, type TaskKind, type TaskPlan, type TaskStatus } from "spark-core";
-import { type TaskPlanResult } from "spark-tasks";
+import type { Task, TaskKind, TaskPlan, TaskStatus } from "pi-extension-api";
+import { type TaskPlanResult } from "pi-tasks";
 
 export function taskPlanSchema() {
   return Type.Object({

@@ -1,5 +1,5 @@
-import type { Task, TaskRef } from "spark-core";
-import { isUnfinishedTaskStatus } from "spark-tasks";
+import type { Task, TaskRef } from "pi-extension-api";
+import { isUnfinishedTaskStatus } from "pi-tasks";
 
 export function todoStatus(todo: unknown): string | undefined {
   return todo && typeof todo === "object" && "status" in todo

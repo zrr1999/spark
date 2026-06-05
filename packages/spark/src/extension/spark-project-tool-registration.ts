@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defaultTaskGraphStore } from "spark-tasks";
+import { defaultTaskGraphStore } from "pi-tasks";
 import { clarifyProjectIntentIfNeeded } from "../flows/project-intent-flow.ts";
 import {
   clearCurrentProjectRef,
@@ -33,7 +33,7 @@ export function registerSparkProjectTools(
     name: "spark_list_projects",
     label: "Spark List Projects",
     description:
-      "List Spark projects as structured JSON without parsing spark_status text. Parameters: status=active|done|all (default active). Example output item: { ref, title, status, taskCounts: { total, active, done, cancelled }, currentForSession }.",
+      'List Spark projects as structured JSON without parsing task({ action: "status" }) text. Parameters: status=active|done|all (default active). Example output item: { ref, title, status, taskCounts: { total, active, done, cancelled }, currentForSession }.',
     parameters: Type.Object({
       status: Type.Optional(
         Type.String({

@@ -1,4 +1,4 @@
-import { stableId } from "spark-core";
+import { stableId } from "pi-extension-api";
 
 export interface SparkSessionContext {
   cwd?: string;

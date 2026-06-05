@@ -1,15 +1,10 @@
 import { basename, join, relative, resolve } from "node:path";
 
-import { resolveArtifactBlobPath } from "spark-core";
-import {
-  nowIso,
-  type ArtifactKind,
-  type ArtifactRef,
-  type RunRef,
-  type ProjectRef,
-} from "spark-core";
-import { defaultSparkDagRunStore, type SparkDagRunStatus } from "spark-workflows";
-import { isUnfinishedTaskStatus, type TaskGraph } from "spark-tasks";
+import { resolveArtifactBlobPath } from "pi-artifacts";
+import type { ArtifactKind } from "pi-artifacts";
+import { nowIso, type ArtifactRef, type RunRef, type ProjectRef } from "pi-extension-api";
+import { defaultSparkDagRunStore, type SparkDagRunStatus } from "pi-workflows";
+import { isUnfinishedTaskStatus, type TaskGraph } from "pi-tasks";
 import { listSparkStateFiles, readJsonObject, statIfPresent } from "./state-housekeeping-files.ts";
 
 export interface SparkStateTerminalProjectCandidate {

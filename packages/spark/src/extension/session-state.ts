@@ -1,4 +1,4 @@
-import { defaultTaskGraphStore, defaultTaskTodoStore, type TaskGraph } from "spark-tasks";
+import { defaultTaskGraphStore, defaultTaskTodoStore, type TaskGraph } from "pi-tasks";
 import { sparkSessionKey, type SparkSessionContext } from "./session-identity.ts";
 
 export {

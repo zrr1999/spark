@@ -29,91 +29,46 @@ const plainTheme: RenderTheme = {
   bold: (text) => text,
 };
 
-void test("Spark extension tools render parameter-aware tool calls", () => {
+void test("Spark extension canonical facade tools render parameter-aware tool calls", () => {
   const tools = registerSparkToolsForRendering();
 
   assertAllToolsHaveCallRenderers(tools);
   assert.equal(
-    renderCall(tools, "spark_status", { view: "full", limit: 5 }),
-    "spark_status full limit=5",
+    renderCall(tools, "task", { action: "status", view: "full", limit: 5 }),
+    "task status",
   );
   assert.equal(
-    renderCall(tools, "spark_list_projects", { status: "all" }),
-    "spark_list_projects all",
+    renderCall(tools, "task", { action: "project_list", status: "all" }),
+    "task project_list",
   );
   assert.equal(
-    renderCall(tools, "spark_ask", {
-      mode: "decision",
-      title: "Proceed with implementation?",
-      questions: [
-        {
-          id: "decision",
-          prompt: "Proceed with implementation?",
-          options: [
-            { id: "yes", label: "Yes", description: "Proceed" },
-            { id: "no", label: "No", description: "Stop" },
-          ],
-        },
-        { id: "note", prompt: "Any note?", type: "freeform" },
-      ],
-    }),
-    'spark_ask decision "Proceed with implementation?" 2 questions',
-  );
-  assert.equal(
-    renderCall(tools, "spark_plan_tasks", {
+    renderCall(tools, "task", {
+      action: "plan",
       tasks: [
         { name: "inspect", title: "Inspect code", description: "Read sources" },
         { name: "implement", title: "Implement rendering", description: "Patch tools" },
       ],
     }),
-    "spark_plan_tasks 2 tasks @inspect,@implement",
+    "task plan",
   );
+  assert.equal(renderCall(tools, "goal", { action: "status" }), "goal action=status");
   assert.equal(tools.has("cue_exec"), false, "pi-cue is registered as its own extension");
-  const longAsk = renderCall(
+  assert.deepEqual(
+    [...tools.keys()].filter((name) => name.startsWith("spark_")),
+    [],
+  );
+
+  const longTask = renderCall(
     tools,
-    "spark_ask",
+    "task",
     {
-      mode: "decision",
+      action: "claim",
       title:
         "请确认 standalone Spark 下一阶段 RFC/实现准备采用的决策 bundle。推荐默认：Project-first with intake artifact；local files are source of truth；manager owns DAG.",
-      questions: [
-        {
-          id: "decision",
-          prompt:
-            "请确认 standalone Spark 下一阶段 RFC/实现准备采用的决策 bundle。推荐默认：Project-first with intake artifact；local files are source of truth；manager owns DAG.",
-          options: Array.from({ length: 8 }, (_, index) => ({
-            id: `o${index}`,
-            label: `Option ${index}`,
-            description: "Option",
-          })),
-        },
-      ],
     },
     80,
   );
-  assertVisibleWidthAtMost(longAsk, 80);
-
-  const longFlowAsk = renderCall(
-    tools,
-    "spark_ask",
-    {
-      mode: "clarification",
-      title: "测试 ask_flow 模式",
-      questions: [
-        {
-          id: "scope",
-          prompt:
-            "测试 Spark ask_flow 模式：用户明确要求使用 flow 模式，而不是单题 ask。请用 flow 交互收集/确认用途。",
-          options: [
-            { id: "a", label: "A", description: "选择 A 的详细含义。" },
-            { id: "b", label: "B", description: "选择 B 的详细含义。" },
-          ],
-        },
-      ],
-    },
-    80,
-  );
-  assertVisibleWidthAtMost(longFlowAsk, 80);
+  assertVisibleWidthAtMost(longTask, 80);
 });
 
 void test("standalone Pi ask, cue, and role tools render parameter-aware tool calls", () => {

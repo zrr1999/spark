@@ -63,19 +63,20 @@ interface PiExtensionAPI {
 interface PiAskFlowToolContext {
   cwd?: string;
   ui?: {
-    custom?: (
-      componentName: string,
-      renderer: PiAskFlowCustomRenderer,
-      options: { placement: "fullScreen" },
-    ) => unknown;
+    custom?: unknown;
   };
 }
 
-type PiAskFlowCustomRenderer = (
+interface PiAskFlowCustomOptions {
+  overlay?: boolean;
+  overlayOptions?: unknown;
+}
+
+type PiAskFlowCustomFactory<T = unknown> = (
   tui: unknown,
   theme: unknown,
   keybindings: unknown,
-  done: () => void,
+  done: (result: T) => void,
 ) => unknown;
 
 export interface PiAskFlowElaborationNote {
@@ -299,40 +300,22 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
       const context = decodePiAskFlowToolContext(ctx);
       const ui = context.ui;
 
-      if (!ui?.custom) {
-        const result = createPiAskFlowResult({
-          answers: {},
-          flow: request.flow,
-          mode: "cancel",
-          cancelled: true,
-          status: "cancelled",
-        });
+      if (typeof ui?.custom !== "function") {
+        const result = createCancelledPiAskFlowResult(request);
         return {
           content: [{ type: "text" as const, text: summarizeFlowResult(result, request) }],
           details: { result, status: result.status, cancelled: true, mode: "cancel" },
         };
       }
 
-      const custom = ui.custom;
+      const custom = ui.custom as <T>(
+        factory: PiAskFlowCustomFactory<T>,
+        options?: PiAskFlowCustomOptions,
+      ) => unknown;
       const cwd = requiredPiAskFlowCwd(context);
 
-      const result = await new Promise<PiAskFlowResult>((resolve) => {
-        const controller = new PiAskFlowController({ request, language: "en" });
-        const cb: PiAskFlowCustomRenderer = (tui, theme, _keybindings, done) => {
-          const view = controller.run(
-            tui as Parameters<typeof controller.run>[0],
-            theme as Parameters<typeof controller.run>[1],
-            (flowResult: PiAskFlowResult) => {
-              done();
-              resolve(flowResult);
-            },
-          );
-          return view;
-        };
-        custom("pi-ask-flow", cb, { placement: "fullScreen" });
-      });
-
-      const normalizedResult = normalizePiAskFlowResult(result, request);
+      const customRun = await runPiAskFlowCustomUi(request, custom);
+      const normalizedResult = normalizePiAskFlowResult(customRun.result, request);
       await payloadStore.save(cwd, { request, result: normalizedResult, timestamp: Date.now() });
 
       return {
@@ -342,10 +325,100 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
           status: normalizedResult.status,
           cancelled: normalizedResult.cancelled,
           mode: normalizedResult.mode,
+          ...(customRun.fallbackReason ? { customUiFallback: customRun.fallbackReason } : {}),
         },
       };
     },
   });
+}
+
+interface PiAskFlowCustomRun {
+  result: PiAskFlowResult;
+  fallbackReason?: string;
+}
+
+async function runPiAskFlowCustomUi(
+  request: PiAskFlowRequest,
+  custom: <T>(factory: PiAskFlowCustomFactory<T>, options?: PiAskFlowCustomOptions) => unknown,
+): Promise<PiAskFlowCustomRun> {
+  try {
+    const result = await new Promise<PiAskFlowResult>((resolve, reject) => {
+      const resolveOnce = once(resolve);
+      const rejectOnce = once(reject);
+      const controller = new PiAskFlowController({ request, language: "en" });
+      const factory: PiAskFlowCustomFactory<PiAskFlowResult> = (tui, theme, _keybindings, done) => {
+        try {
+          return controller.run(
+            tui as Parameters<typeof controller.run>[0],
+            theme as Parameters<typeof controller.run>[1],
+            (flowResult: PiAskFlowResult) => {
+              try {
+                done(flowResult);
+              } catch (error) {
+                rejectOnce(error);
+                return;
+              }
+              resolveOnce(flowResult);
+            },
+          );
+        } catch (error) {
+          rejectOnce(error);
+          return undefined;
+        }
+      };
+      const customResult = custom(factory);
+      if (isPromiseLike(customResult)) {
+        void Promise.resolve(customResult).then((value) => {
+          if (isPiAskFlowResultLike(value)) resolveOnce(value);
+        }, rejectOnce);
+      }
+    });
+    return { result };
+  } catch (error) {
+    return {
+      result: createCancelledPiAskFlowResult(request),
+      fallbackReason: `custom UI failed: ${formatUnknownError(error)}`,
+    };
+  }
+}
+
+function createCancelledPiAskFlowResult(request: PiAskFlowRequest): PiAskFlowResult {
+  return createPiAskFlowResult({
+    answers: {},
+    flow: request.flow,
+    mode: "cancel",
+    cancelled: true,
+    status: "cancelled",
+  });
+}
+
+function once<Args extends unknown[]>(fn: (...args: Args) => void): (...args: Args) => void {
+  let called = false;
+  return (...args: Args) => {
+    if (called) return;
+    called = true;
+    fn(...args);
+  };
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return Boolean(
+    value && typeof value === "object" && typeof (value as { then?: unknown }).then === "function",
+  );
+}
+
+function isPiAskFlowResultLike(value: unknown): value is PiAskFlowResult {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    "answers" in value &&
+    "mode" in value &&
+    "cancelled" in value,
+  );
+}
+
+function formatUnknownError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function renderAskFlowToolCall(

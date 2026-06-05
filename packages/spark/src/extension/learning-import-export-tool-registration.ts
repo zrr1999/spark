@@ -2,13 +2,13 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import { Type } from "typebox";
-import { defaultArtifactStore } from "spark-core";
+import { defaultArtifactStore } from "pi-artifacts";
 import {
   defaultLearningStore,
   renderLearningExportMarkdown,
   type LearningRecord,
-} from "spark-learnings";
-import type { Artifact } from "spark-core";
+} from "pi-learnings";
+import type { Artifact } from "pi-artifacts";
 import { compactArtifactDetail } from "./artifact-tools.ts";
 import {
   compactLearningDetail,
@@ -93,7 +93,7 @@ export function registerSparkLearningImportExportTools(
     name: "spark_learning_import_markdown",
     label: "Spark Learning Import Markdown",
     description:
-      "Import Markdown produced by spark_learning_export_markdown, or legacy compound-learnings Markdown/.learnings directories. Dry-run by default; set apply=true to persist.",
+      'Import Markdown produced by learning({ action: "export_markdown" }), or legacy compound-learnings Markdown/.learnings directories. Dry-run by default; set apply=true to persist.',
     parameters: Type.Object({
       inputPath: Type.String({
         description:

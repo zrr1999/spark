@@ -1,6 +1,6 @@
 import { Type } from "typebox";
-import { type RunRef } from "spark-core";
-import { defaultSparkDagRunStore } from "spark-workflows";
+import type { RunRef } from "pi-extension-api";
+import { defaultSparkDagRunStore } from "pi-workflows";
 import { killActiveSparkRoleRunProcesses } from "spark-runtime";
 import {
   acknowledgeBackgroundDagRuns,

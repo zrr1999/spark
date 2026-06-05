@@ -1,5 +1,5 @@
-import type { CopyLanguage } from "spark-core";
-import type { ArtifactRef } from "spark-core";
+import type { CopyLanguage } from "pi-extension-api";
+import type { ArtifactRef } from "pi-extension-api";
 
 export interface SparkInitResult {
   cwd: string;

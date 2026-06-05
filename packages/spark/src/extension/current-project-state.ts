@@ -8,8 +8,8 @@ import {
   nowIso,
   type RunRef,
   type ProjectRef,
-} from "spark-core";
-import type { TaskGraph } from "spark-tasks";
+} from "pi-extension-api";
+import type { TaskGraph } from "pi-tasks";
 import {
   normalizeCurrentProjectStoreSnapshot,
   type CurrentProjectStoreSnapshot,

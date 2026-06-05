@@ -5,20 +5,20 @@ import { test } from "node:test";
 import {
   compactContinuationPrompt,
   continuationGoalIdFromPrompt,
-  createSparkGoal,
+  createGoal,
   formatSparkBudgetLines,
   goalToolResponse,
   validateObjective,
-} from "spark-goal";
+} from "pi-goal";
 
-void test("spark-goal package stays isolated from workflow packages", async () => {
-  const pkg = JSON.parse(await readFile("packages/spark-goal/package.json", "utf8")) as {
+void test("pi-goal package stays isolated from workflow packages", async () => {
+  const pkg = JSON.parse(await readFile("packages/pi-goal/package.json", "utf8")) as {
     dependencies?: Record<string, string>;
   };
 
   assert.equal(pkg.dependencies?.["spark-workflows"], undefined);
 
-  const sourceFiles = await listTypeScriptFiles("packages/spark-goal/src");
+  const sourceFiles = await listTypeScriptFiles("packages/pi-goal/src");
   for (const file of sourceFiles) {
     const source = await readFile(file, "utf8");
     assert.doesNotMatch(
@@ -29,17 +29,17 @@ void test("spark-goal package stays isolated from workflow packages", async () =
   }
 });
 
-void test("spark-goal helpers create Spark-owned goals and continuation prompts", () => {
+void test("pi-goal helpers create goals and continuation prompts", () => {
   assert.equal(validateObjective("  ship feature  "), null);
-  const goal = createSparkGoal("  ship feature  ", 1000, 123);
+  const goal = createGoal("  ship feature  ", 1000, 123);
   assert.equal(goal.objective, "ship feature");
   assert.equal(goal.status, "active");
   assert.equal(goal.tokenBudget, 1000);
 
   const prompt = compactContinuationPrompt(goal);
   assert.match(prompt, /<spark_goal_continuation/);
-  assert.match(prompt, /get_spark_goal/);
-  assert.match(prompt, /update_spark_goal/);
+  assert.match(prompt, /goal\(\{ action: "status" \}\)/);
+  assert.match(prompt, /goal\(\{ action: "complete" \}\)/);
   assert.equal(continuationGoalIdFromPrompt(prompt), goal.goalId);
 
   const response = goalToolResponse(goal);

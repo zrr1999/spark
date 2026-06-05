@@ -1,7 +1,7 @@
-import type { Task, ProjectRef } from "spark-core";
-import { type SparkDagStatusSummary, defaultSparkDagRunStore } from "spark-workflows";
-import { defaultTaskGraphStore } from "spark-tasks";
-import { independentTodoDisplayKey, isActiveSessionTodo, type SessionTodoEntry } from "spark-tasks";
+import type { Task, ProjectRef } from "pi-extension-api";
+import { type SparkDagStatusSummary, defaultSparkDagRunStore } from "pi-workflows";
+import { defaultTaskGraphStore } from "pi-tasks";
+import { independentTodoDisplayKey, isActiveSessionTodo, type SessionTodoEntry } from "pi-tasks";
 import { SparkWidget, type SparkWidgetState, type TaskEntry } from "../ui/spark-widget.ts";
 import { activeSparkRoleRunProcessesForCwd } from "./background-runs.ts";
 import {
@@ -22,6 +22,7 @@ import {
   taskTodoDisplayKey,
 } from "./session-todos.ts";
 import { ensureSparkGraphInvariants, isPlaceholderProjectTitle } from "./spark-graph-invariants.ts";
+import { loadProjectGoal } from "./spark-project-goals.ts";
 import { latestRunsByTaskRef, taskPlanSummary } from "./task-display.ts";
 import { deriveTaskRoleLabel, isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 
@@ -92,6 +93,7 @@ export class SparkWidgetController {
       return;
     }
 
+    const projectGoal = await loadProjectGoal(cwd, project.ref);
     const allTasks = graph.tasks(project.ref);
     const claimedTasks = allTasks.filter((task) => taskClaimedBy(task));
     const sessionTasks = claimedTasks.filter((task) => isClaimOwnedBySession(task, sessionKey));
@@ -101,6 +103,9 @@ export class SparkWidgetController {
       projectTitle: isPlaceholderProjectTitle(project.title) ? undefined : project.title,
       dag: sparkDagWidgetEntry(dagStatus, project.ref),
       run: sparkRunWidgetEntry(currentState?.runMode, project.ref),
+      goal: projectGoal
+        ? { status: projectGoal.status, objective: compactGoalObjective(projectGoal.objective) }
+        : undefined,
       tasks: allTasks.map((task) => ({
         title: task.title,
         status: mapTaskStatus(task.status),
@@ -175,6 +180,11 @@ function mapTodoStatus(status: string): SessionTodoEntry["status"] {
     default:
       return "pending";
   }
+}
+
+function compactGoalObjective(objective: string): string {
+  const normalized = objective.replace(/\s+/gu, " ").trim();
+  return normalized.length > 96 ? `${normalized.slice(0, 93)}...` : normalized;
 }
 
 function sparkRunWidgetEntry(

@@ -2,7 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { parseSparkWorkflowScript } from "spark-workflows";
+import { parseSparkWorkflowScript } from "pi-workflows";
 
 export type SparkWorkflowSource = "workspace" | "user";
 export type SparkWorkflowRef = `workflow:${SparkWorkflowSource}-${string}`;

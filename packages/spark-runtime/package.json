@@ -16,8 +16,10 @@
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
+    "pi-artifacts": "file:../pi-artifacts",
+    "pi-extension-api": "file:../pi-extension-api",
     "pi-roles": "file:../pi-roles",
-    "spark-core": "file:../spark-core",
-    "spark-tasks": "file:../spark-tasks"
+    "pi-tasks": "file:../pi-tasks",
+    "pi-workflows": "file:../pi-workflows"
   }
 }

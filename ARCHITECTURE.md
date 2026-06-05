@@ -4,67 +4,67 @@
 
 Use the dependency boundary as the naming boundary:
 
-- `spark-*` packages depend on `spark-core` and participate in Spark-specific workflow state.
-- `pi-*` packages do **not** depend on `spark-core`; they are reusable Pi infrastructure primitives.
+- `pi-*` packages are reusable Pi infrastructure primitives and must not depend on `spark-*` packages.
+- `spark-*` packages are Spark facade/runtime policy packages and may compose `pi-*` primitives.
+- Historical serialized strings under `.spark/` are schema compatibility, not package ownership. Keep `.spark/`, `.spark/projects.json`, `.spark/workflow-runs.json`, and the historical goal custom-entry marker values stable unless an explicit migration is planned.
 
-`pi-cue`, `pi-ask`, and `pi-roles` are infrastructure, not Spark-specific workflow logic. Future packages like `pi-warp` should follow the same rule.
+`pi-cue`, `pi-ask`, `pi-roles`, `pi-tasks`, `pi-learnings`, `pi-goal`, `pi-workflows`, `pi-artifacts`, `pi-context`, and `pi-recall` are infrastructure, not Spark-specific workflow logic. Future generic packages should follow the same rule.
 
 ## Dependency direction
 
 ```text
-pi-cue                 # independent Pi infrastructure
-pi-ask                 # independent ask infrastructure
-pi-roles               # reusable role specs and simple role-run helpers
+pi-extension-api       # host/tool contracts, refs, light fs/json/time helpers
 
-spark-core             # refs, schemas, contracts, artifact store
-  ↑
-  ├─ spark-learnings
-  ├─ spark/extension/spark-ask-tool ──→ pi-ask
-  └─ spark-tasks
-        ↑
-   spark-runtime ─────→ pi-roles
-        ↑
- spark-workflows ─────→ spark-runtime, pi-roles
-        ↑
-       spark  ───────→ pi-cue, pi-roles, spark-learnings
+pi-artifacts           # artifact/evidence store and canonical artifact tool
+pi-ask                 # ask_user/ask_flow/ask UI and result semantics
+pi-context             # bounded registered context providers
+pi-cue                 # cue-shell execution tools
+pi-goal                # generic durable goal state/prompt primitives
+pi-learnings           # evidence-backed local learning records and learning tool
+pi-recall              # explicit lightweight recall candidates
+pi-roles               # reusable role specs and simple role-run helpers
+pi-tasks               # generic project/task/TODO graph, readiness, claims, canonical task tool
+pi-workflows           # saved workflow discovery/runtime primitives and DAG run store
+
+spark-runtime          # Spark task-to-role-run adapter and role-run artifacts
+spark                  # /spark facade: modes, widget, commands, builtin Spark roles, policy
+spark-cli              # native Spark CLI host over the extension contract
 ```
 
 Allowed high-level usage:
 
-- `spark` may orchestrate every Spark primitive and may use `pi-cue`, `pi-roles`, and Spark packages. It is no longer exposed as a package-level Pi extension; Spark CLI is a Spark-owned native `pi-tui` host rather than a Pi SDK `InteractiveMode` wrapper.
-- `spark-core` owns shared refs, schemas, contracts, and the physical artifact store (`ArtifactStore`, `defaultArtifactStore`, metadata/blob compaction helpers).
-- `spark-runtime` may combine `spark-tasks`, `pi-roles`, and `spark-core` artifacts to run one claimed task. It maps a Spark task into a `RoleRun` request and maps completion back into task status, claims, and artifacts.
-- `spark-workflows` owns Spark workflow script/runtime primitives plus Spark-owned goal continuation and workflow-run orchestration.
-- `spark-learnings` may combine `spark-core` artifact storage with learning-specific lifecycle/search/export helpers, but it must not own task scheduling or prompt injection.
-- `spark-tasks` owns DAGs, TODOs, scheduling state, task names, role refs as optional plain-string executor hints, and claim leases. It must not run roles or import `pi-roles`.
-- The Spark-specific ask wiring lives in `packages/spark/src/extension/spark-ask-tool.ts` and depends on `pi-ask`, but it must not provide canned question presets; Spark asks are constructed by the caller from the concrete task, blocker, review, or decision context.
-- `pi-*` packages must remain generic and usable outside Spark mode.
+- `spark` may orchestrate Spark mode UI/policy and compose `pi-*` capabilities plus `spark-runtime`. It owns `/spark`, `/research`, `/plan`, `/execute`, `/goal`, `/workflow`, the Spark widget, active-context provider registration, and the five builtin Spark role specs (`worker`, `scout`, `planner`, `reviewer`, `oracle`).
+- `spark-runtime` adapts one Spark task into a `pi-roles` role run and maps completion back into task status, claims, and artifacts.
+- `pi-tasks` owns durable project/task/TODO graph state, readiness rules, task/run types, claim leases, and the canonical `task({ action })` tool. Optional task `roleRef` values are executor hints, not readiness requirements.
+- `pi-workflows` owns saved workflow discovery/runtime primitives and `.spark/workflow-runs.json` DAG/workflow-run state. Workflow is the generic superset; DAG runs are workflow runs.
+- `pi-goal` owns generic goal primitives while Spark owns project-bound `/goal` command/facade behavior. Historical goal entry marker strings remain stable for compatibility.
+- `pi-learnings` owns `.learnings/` evidence-backed learning records and the canonical `learning({ action })` tool.
+- `pi-artifacts` owns artifact metadata/blobs and the canonical `artifact({ action })` tool.
+- `pi-ask` owns ask protocol/UI/result semantics and the canonical ask tools. Spark asks must be context-specific; no canned intake forms.
+- `pi-context`, `pi-recall`, and `pi-learnings` are separate capabilities: current bounded context, explicit recall candidates, and evidence-backed reusable learnings.
 - `RoleSpec` objects are definition-layer objects; runtime launch mode is `fresh | forked`. Do not expose legacy `managed` as a runtime-facing mode or primary source.
 
 Forbidden dependencies:
 
 ```text
-pi-cue -> spark-core
-pi-ask -> spark-core
-pi-roles -> spark-core
-pi-cue -> spark-tasks
-spark-tasks -> pi-roles
-spark-tasks -> spark-runtime
-spark-tasks -> spark-workflows
 pi-* -> spark-*
+pi-tasks -> pi-roles
+pi-tasks -> spark-runtime
+pi-tasks -> pi-workflows
 ```
+
+A local `prek` hook and CI static checks run `pnpm run check:boundaries`, which scans `packages/pi-*` manifests and source imports for `spark-*` regressions.
 
 ## Public mental model
 
-- Users know `/spark`.
-- Reusable roles are `RoleSpec`s from `pi-roles` (`builtin`, `project`, or `user`).
-- Long-lived work and claim scheduling are `spark-tasks`.
-- Role execution/runtime workflow scheduling is split: generic single-run launch/control/JSONL helpers live in `pi-roles`; Spark single-task adaptation lives in `spark-runtime`; graph-level workflow orchestration lives in `spark-workflows`.
-- Durable context and artifact blobs are stored through `spark-core`'s artifact store.
-- Evidence-backed reusable learning is `spark-learnings`.
-- Execution is `pi-cue`.
-- Generic human/supervisor ask mechanics are `pi-ask`.
-- Spark-specific ask artifact persistence/replay lives in `packages/spark/src/extension/spark-ask-tool.ts` (consumes `pi-ask` primitives directly); concrete ask questions are generated at the call site from actual context.
+- Users know `/spark` plus canonical tools.
+- Durable project/task work is `task({ action: ... })`.
+- Background ready-task execution is `task({ action: "run_ready" })`; run inspection/control is `task({ action: "run_status" })` and `task({ action: "run_control" })`.
+- Evidence is `artifact({ action: ... })`.
+- Reusable learnings are `learning({ action: ... })`.
+- User decisions are `ask`, `ask_user`, and `ask_flow`.
+- Saved workflow discovery is `workflow({ action: ... })`; Spark commands decide when/how to execute workflow policy.
+- Execution shell integration is `pi-cue`.
 - Review gates remain Spark initialization/review-flow data, not a separate package boundary.
 
 `subagents` is not a public product concept in this repo; the Spark-side concrete child execution term is `role-run`.

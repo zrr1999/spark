@@ -1,6 +1,6 @@
-import { defaultArtifactStore } from "spark-core";
-import { type ArtifactRef, type JsonValue, type ProjectRef } from "spark-core";
-import type { TaskGraph } from "spark-tasks";
+import { defaultArtifactStore } from "pi-artifacts";
+import type { ArtifactRef, JsonValue, ProjectRef } from "pi-extension-api";
+import type { TaskGraph } from "pi-tasks";
 import type { clarifyProjectIntentIfNeeded } from "../flows/project-intent-flow.ts";
 import { isImportantStatus, type SparkProjectListStatus } from "./spark-status.ts";
 

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 
-import type { ReviewGate } from "spark-core";
+import type { ReviewGate } from "pi-extension-api";
 import { writeJsonFileAtomic } from "./json-store.ts";
 
 export class ReviewGateStore {

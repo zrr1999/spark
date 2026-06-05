@@ -18,16 +18,15 @@
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.74.1",
+    "pi-artifacts": "file:../pi-artifacts",
     "pi-context": "file:../pi-context",
+    "pi-extension-api": "file:../pi-extension-api",
+    "pi-goal": "file:../pi-goal",
     "pi-learnings": "file:../pi-learnings",
     "pi-roles": "file:../pi-roles",
     "pi-tasks": "file:../pi-tasks",
-    "spark-core": "file:../spark-core",
-    "spark-goal": "file:../spark-goal",
-    "spark-learnings": "file:../spark-learnings",
+    "pi-workflows": "file:../pi-workflows",
     "spark-runtime": "file:../spark-runtime",
-    "spark-tasks": "file:../spark-tasks",
-    "spark-workflows": "file:../spark-workflows",
     "typebox": "^1.1.38"
   }
 }

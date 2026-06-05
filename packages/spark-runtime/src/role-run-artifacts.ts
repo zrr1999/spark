@@ -2,12 +2,11 @@ import { copyFile, mkdir, open, readFile, readdir, rm, stat } from "node:fs/prom
 import { basename, dirname, join, relative, resolve } from "node:path";
 
 import type { RoleRunRecord, RoleRunStatus } from "pi-roles";
-import { resolveArtifactBlobPath } from "spark-core";
+import { resolveArtifactBlobPath } from "pi-artifacts";
+import type { ArtifactTranscriptRetention, Artifact } from "pi-artifacts";
 import {
   contentHash,
   type ArtifactRef,
-  type ArtifactTranscriptRetention,
-  type Artifact,
   isFileNotFoundError,
   nowIso,
   readJsonFileOptional,
@@ -16,7 +15,7 @@ import {
   type RunRef,
   type TaskRef,
   writeJsonFileAtomic,
-} from "spark-core";
+} from "pi-extension-api";
 
 export const SPARK_ROLE_RUN_ARTIFACT_PREVIEW_METADATA_MAX_BYTES = 256 * 1024;
 

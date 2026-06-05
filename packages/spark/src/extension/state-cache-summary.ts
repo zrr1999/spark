@@ -1,7 +1,7 @@
 import { dirname, join, relative } from "node:path";
 
-import type { Task, TaskRef, ProjectRef } from "spark-core";
-import type { TaskGraph } from "spark-tasks";
+import type { Task, TaskRef, ProjectRef } from "pi-extension-api";
+import type { TaskGraph } from "pi-tasks";
 import {
   fileScope,
   listSparkStateFiles,

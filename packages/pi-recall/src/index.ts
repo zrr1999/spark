@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { writeJsonFileAtomic } from "spark-core";
+import { writeJsonFileAtomic } from "pi-extension-api";
 
 export type RecallScope = "user" | "workspace" | "repo";
 export type RecallCandidateStatus = "candidate" | "rejected";

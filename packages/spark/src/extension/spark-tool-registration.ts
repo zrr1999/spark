@@ -39,6 +39,7 @@ export interface SparkToolContext {
     select?: (title: string, options: string[]) => Promise<string | undefined>;
     setWidget?: (key: string, cb: unknown, opts?: { placement?: string }) => void;
     setStatus?: (key: string, text: string | undefined) => void;
+    setEditorText?: (text: string) => void;
     custom?: (...args: unknown[]) => unknown;
   };
 }

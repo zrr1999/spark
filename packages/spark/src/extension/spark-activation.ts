@@ -2,9 +2,7 @@ import { access, readFile, readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
-import { defaultArtifactStore } from "spark-core";
-
-export type SparkNaturalIntent = "new_idea" | "maybe_idea" | "normal_task";
+import { defaultArtifactStore } from "pi-artifacts";
 
 export interface SparkActivation {
   active: boolean;
@@ -39,19 +37,6 @@ export async function detectSparkActivation(cwd: string): Promise<SparkActivatio
   if (await isWhitelistedByConfig(cwd))
     return { active: true, reason: "~/.config/spark/config.toml" };
   return { active: false, reason: "none" };
-}
-
-export function detectNaturalSparkIntent(text: string): SparkNaturalIntent {
-  const normalized = text.toLowerCase();
-  if (
-    /^(我想|我希望|我有个|帮我构建|帮我做|构建一个|做一个|create a|build a|i want to build|i have an idea)/i.test(
-      text.trim(),
-    )
-  )
-    return "new_idea";
-  if (normalized.includes("idea") || text.includes("想法") || text.includes("新项目"))
-    return "maybe_idea";
-  return "normal_task";
 }
 
 export async function shouldMaterializeSparkMd(cwd: string): Promise<boolean> {

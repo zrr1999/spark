@@ -17,8 +17,8 @@
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
+    "pi-artifacts": "file:../pi-artifacts",
     "pi-extension-api": "file:../pi-extension-api",
-    "spark-learnings": "file:../spark-learnings",
     "typebox": "^1.1.38"
   }
 }

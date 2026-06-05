@@ -8,8 +8,8 @@ import {
   type TaskPlan,
   type TaskRef,
   type ProjectRef,
-} from "spark-core";
-import { type TaskPlanInput } from "spark-tasks";
+} from "pi-extension-api";
+import { type TaskPlanInput } from "pi-tasks";
 
 export type RoadmapRef = `roadmap:${string}`;
 export type RoadmapItemRef = `roadmap-item:${string}`;
@@ -169,7 +169,7 @@ export function renderRoadmapPlanningContext(context: RoadmapPlanningContext | u
       "- Planning focus matched this roadmap item; reuse/update it instead of creating a parallel item.",
     );
   lines.push(
-    "- When planning tasks, map this item into TaskPlan contextRefs/constraints/successCriteria/evidenceRequired; spark_plan_tasks will attach produced project/task refs back to the item.",
+    '- When planning tasks, map this item into TaskPlan contextRefs/constraints/successCriteria/evidenceRequired; task({ action: "plan" }) will attach produced project/task refs back to the item.',
   );
   return `\n\n${lines.join("\n")}`;
 }

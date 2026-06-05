@@ -1,7 +1,7 @@
 {
   "name": "pi-workflows",
   "version": "0.1.0",
-  "description": "Saved-script workflow discovery and canonical workflow tool for Pi extensions.",
+  "description": "Generic saved workflow discovery, script runtime, and workflow/DAG run-store capability for Pi extensions.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [
@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "pi-extension-api": "file:../pi-extension-api",
-    "spark-workflows": "file:../spark-workflows",
+    "pi-tasks": "file:../pi-tasks",
     "typebox": "^1.1.38"
   },
   "pi": {

@@ -1,5 +1,5 @@
-import type { Task } from "spark-core";
-import type { TaskGraph } from "spark-tasks";
+import type { Task } from "pi-extension-api";
+import type { TaskGraph } from "pi-tasks";
 import { shortRoleLabel, taskClaimedBy } from "./task-ownership.ts";
 import { truncateInline } from "./tool-rendering.ts";
 

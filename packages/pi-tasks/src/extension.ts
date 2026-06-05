@@ -41,10 +41,6 @@ export interface PiTaskToolOptions {
   handlers: PiTaskToolHandlers;
 }
 
-interface SparkCompatToolConfig {
-  execute: ToolConfig["execute"];
-}
-
 class ToolCallText implements ToolRenderComponent {
   private readonly text: string;
 
@@ -156,80 +152,6 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
   });
 }
 
-export function createPiTaskSparkCompatHandlers(
-  resolveTool: (name: string) => SparkCompatToolConfig | undefined,
-): PiTaskToolHandlers {
-  const direct = (toolName: string): PiTaskActionHandler => {
-    return ({ toolCallId, params, signal, onUpdate, ctx }) => {
-      const tool = requireSparkCompatTool(resolveTool, toolName);
-      return tool.execute(toolCallId, stripTaskAction(params), signal, onUpdate, ctx as never);
-    };
-  };
-
-  return {
-    status: direct("spark_status"),
-    project_list: direct("spark_list_projects"),
-    project_use: direct("spark_use_project"),
-    project_update: direct("spark_rename_project"),
-    claim: direct("spark_claim_task"),
-    plan: direct("spark_plan_tasks"),
-    finish: direct("spark_finish_task"),
-    todo_update: ({ toolCallId, params, signal, onUpdate, ctx }) => {
-      const scope = normalizeTodoScope(params.scope);
-      const tool = requireSparkCompatTool(
-        resolveTool,
-        scope === "task" ? "spark_update_task_todos" : "spark_update_todos",
-      );
-      return tool.execute(
-        toolCallId,
-        stripTaskActionAndScope(params),
-        signal,
-        onUpdate,
-        ctx as never,
-      );
-    },
-    run_ready: direct("spark_run_ready_tasks"),
-    run_status: ({ toolCallId, params, signal, onUpdate, ctx }) => {
-      const tool = requireSparkCompatTool(resolveTool, "spark_background_runs");
-      return tool.execute(
-        toolCallId,
-        {
-          ...stripTaskAction(params),
-          action: normalizeRunStatusAction(params.runAction),
-          runAction: undefined,
-        },
-        signal,
-        onUpdate,
-        ctx as never,
-      );
-    },
-    run_control: ({ toolCallId, params, signal, onUpdate, ctx }) => {
-      const tool = requireSparkCompatTool(resolveTool, "spark_background_runs");
-      return tool.execute(
-        toolCallId,
-        {
-          ...stripTaskAction(params),
-          action: normalizeRunControlAction(params.control),
-          control: undefined,
-        },
-        signal,
-        onUpdate,
-        ctx as never,
-      );
-    },
-    cache_cleanup: ({ toolCallId, params, signal, onUpdate, ctx }) => {
-      const tool = requireSparkCompatTool(resolveTool, "spark_state");
-      return tool.execute(
-        toolCallId,
-        { ...stripTaskAction(params), action: "cleanup" },
-        signal,
-        onUpdate,
-        ctx as never,
-      );
-    },
-  };
-}
-
 function renderTaskCall(
   args: Record<string, unknown>,
   theme: ToolRenderTheme,
@@ -249,46 +171,4 @@ function renderTaskCall(
 function normalizePiTaskAction(value: unknown): PiTaskAction {
   if (TASK_ACTIONS.includes(value as PiTaskAction)) return value as PiTaskAction;
   throw new Error(`task.action must be one of: ${TASK_ACTIONS.join(", ")}`);
-}
-
-function normalizeTodoScope(value: unknown): "session" | "task" {
-  if (value === "session" || value === undefined || value === null) return "session";
-  if (value === "task") return "task";
-  throw new Error('task.scope must be "session" or "task" for todo_update');
-}
-
-function normalizeRunStatusAction(value: unknown): "status" | "list" | "inspect" | "reconcile" {
-  if (value === undefined || value === null) return "status";
-  if (value === "status" || value === "list" || value === "inspect" || value === "reconcile") {
-    return value;
-  }
-  throw new Error("task.runAction must be status, list, inspect, or reconcile for run_status");
-}
-
-function normalizeRunControlAction(value: unknown): "kill" | "reconcile" | "ack" {
-  if (value === "kill" || value === "reconcile" || value === "ack") return value;
-  throw new Error("task.control must be kill, reconcile, or ack for run_control");
-}
-
-function stripTaskAction(params: Record<string, unknown>): Record<string, unknown> {
-  const { action: _action, ...rest } = params;
-  return removeUndefined(rest);
-}
-
-function stripTaskActionAndScope(params: Record<string, unknown>): Record<string, unknown> {
-  const { action: _action, scope: _scope, ...rest } = params;
-  return removeUndefined(rest);
-}
-
-function removeUndefined(value: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
-}
-
-function requireSparkCompatTool(
-  resolveTool: (name: string) => SparkCompatToolConfig | undefined,
-  toolName: string,
-): SparkCompatToolConfig {
-  const tool = resolveTool(toolName);
-  if (!tool) throw new Error(`task action adapter could not find ${toolName}`);
-  return tool;
 }

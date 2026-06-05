@@ -4,9 +4,9 @@ import {
   type RoleRegistry,
   type RoleSpec,
 } from "pi-roles";
-import type { RoleRef, ProjectRef } from "spark-core";
+import type { RoleRef, ProjectRef } from "pi-extension-api";
 import { sparkTaskExecutorRoleRef } from "spark-runtime";
-import type { TaskGraph } from "spark-tasks";
+import type { TaskGraph } from "pi-tasks";
 
 export interface RoleModelBindingPreflightResult {
   ready: boolean;

@@ -4,12 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import {
-  createRoleRef,
-  registerBuiltinRoleProvider,
-  unregisterBuiltinRoleProvider,
-  type RoleSpec,
-} from "pi-roles";
 import { registerPiRolesTools } from "../packages/pi-roles/src/extension.ts";
 
 const DEFAULT_TEST_CWD = "/tmp/pi-roles-tool-default-cwd";
@@ -96,35 +90,25 @@ void test("role action tool dispatches canonical list, get, and create actions",
   }
 });
 
-void test("role spec tools include registered builtin role providers", async () => {
-  const providerId = "pi-roles-tool-test";
-  const now = "2026-06-04T00:00:00.000Z";
-  const providedRole: RoleSpec = {
-    ref: createRoleRef("builtin", "tool-provider-test"),
-    id: "tool-provider-test",
-    source: "builtin",
-    description: "Role supplied by a test builtin role provider.",
-    systemPrompt: "You are a test builtin role provider role.",
-    origin: { kind: "builtin", note: "tool provider test" },
-    createdAt: now,
-    updatedAt: now,
-  };
-  registerBuiltinRoleProvider(providerId, () => [providedRole]);
+void test("role spec tools keep patch presets out of builtin role lookup", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-no-patcher-"));
   try {
-    const dir = await mkdtemp(join(tmpdir(), "pi-roles-tool-provider-"));
-    try {
-      const tools = registerRoleToolsForTest();
-      const listed = await executeRoleTool(tools, "list_roles", { source: "builtin" }, dir);
-      assert.match(listed.content[0]?.text ?? "", /tool-provider-test/);
+    const tools = registerRoleToolsForTest();
+    const listed = await executeRoleTool(tools, "list_roles", { source: "builtin" }, dir);
+    const roleIds = ((listed.details?.roles ?? []) as Array<{ id: string }>).map((role) => role.id);
 
-      const got = await executeRoleTool(tools, "get_role", { role: "tool-provider-test" }, dir);
-      assert.match(got.content[0]?.text ?? "", /source: builtin/);
-      assert.match(got.content[0]?.text ?? "", /Role supplied by a test builtin role provider/);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    assert.deepEqual(roleIds, ["oracle", "planner", "reviewer", "scout", "worker"]);
+    assert.doesNotMatch(listed.content[0]?.text ?? "", /\bpatcher?\b/);
+    await assert.rejects(
+      executeRoleTool(tools, "get_role", { role: "patch" }, dir),
+      /no role matches: patch/,
+    );
+    await assert.rejects(
+      executeRoleTool(tools, "get_role", { role: "patcher" }, dir),
+      /no role matches: patcher/,
+    );
   } finally {
-    unregisterBuiltinRoleProvider(providerId);
+    await rm(dir, { recursive: true, force: true });
   }
 });
 
