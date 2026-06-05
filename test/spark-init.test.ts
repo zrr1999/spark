@@ -133,8 +133,9 @@ void test("initializeSparkIdea does not overwrite an existing initialized projec
 void test("active Spark prompt preserves base prompt and stays a single-line state marker", () => {
   const prompt = renderSparkActiveSystemPrompt("Base prompt", "SPARK.md");
   assert.match(prompt, /^Base prompt\n\nSpark active \(SPARK\.md\); mode: auto\./);
-  assert.match(prompt, /Manage project\/task\/ask\/run state via Spark tools/);
-  assert.match(prompt, /spark_ask on real blockers/);
+  assert.match(prompt, /Spark is the mode facade/);
+  assert.match(prompt, /task, artifact, ask, role, learning, context, recall, and workflow tools/);
+  assert.match(prompt, /ask on real blockers/);
   assert.doesNotMatch(prompt, /spark skill/);
   assert.doesNotMatch(prompt, /standing project state/);
   assert.doesNotMatch(prompt, /workflow-run\/ask state/);

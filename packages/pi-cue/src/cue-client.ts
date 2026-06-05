@@ -38,9 +38,18 @@ export interface RequestEnvelope {
 
 export type RequestPayload =
   | { Eval: { input: string; mode: Mode } }
-  | { RunScript: { path: string; input: string; mode: Mode } }
+  | { RunScript: { path: string; input: string } }
   | { Subscribe: { channels: string[] } }
   | { Unsubscribe: { channels: string[] } }
+  | { ListJobs: { limit?: number | null } }
+  | { ListCrons: { limit?: number | null } }
+  | { ListScopes: { limit?: number | null } }
+  | { ShowLog: { id?: string | null; limit?: number | null; tail_bytes?: number | null } }
+  | { JobOutput: { id: string; stdout_bytes?: number | null; stderr_bytes?: number | null } }
+  | { KillJob: { id: string } }
+  | { RemoveCron: { id: string } }
+  | { ShowEnv: { tail_bytes?: number | null } }
+  | { ShowConfig: { tail_bytes?: number | null } }
   | { Ping: Record<string, never> }
   | { Shutdown: Record<string, never> };
 
@@ -59,11 +68,26 @@ export type OkPayload =
   | { ScriptCreated: ScriptCreatedPayload }
   | { JobInfo: JobInfo }
   | { JobList: JobInfo[] }
+  | { JobListPage: { jobs: JobInfo[]; page: PageInfo } }
+  | { CronAdded: { cron_id: string } }
+  | { CronRemoved: { cron_id: string } }
+  | { CronList: CronInfo[] }
+  | { CronListPage: { crons: CronInfo[]; page: PageInfo } }
   | { ScopeInfo: ScopeInfo }
   | { ScopeList: ScopeInfo[] }
+  | { ScopeListPage: { scopes: ScopeInfo[]; page: PageInfo } }
   | { Pong: PongPayload }
   | { EvalText: { text: string } }
+  | { TextOutput: { text: string; truncated: boolean } }
   | { Output: { id: string; data: string; truncated: boolean } }
+  | {
+      JobOutput: {
+        id: string;
+        stdout: StreamText;
+        stderr: StreamText;
+        stderr_pty_merged: boolean;
+      };
+    }
   | Record<string, unknown>;
 
 /**
@@ -203,6 +227,7 @@ export type EventPayload =
   | { ScriptFinished: ScriptFinishedEvent }
   | { JobRemoved: { job_id: string } }
   | { OutputChunk: OutputChunkEvent }
+  | { OutputChunkBinary: OutputChunkBinaryEvent }
   | { OutputEof: { id: string } }
   | { ShuttingDown: { reason: string } }
   | { DaemonReady: Record<string, never> }
@@ -233,6 +258,24 @@ export interface OutputChunkEvent {
   data: string;
 }
 
+export interface OutputChunkBinaryEvent {
+  id: string;
+  stream: "stdout" | "stderr";
+  base64: string;
+}
+
+export interface PageInfo {
+  total: number;
+  shown: number;
+  limit?: number | null;
+  truncated: boolean;
+}
+
+export interface StreamText {
+  data: string;
+  truncated: boolean;
+}
+
 export type CueMessage = RequestEnvelope | ResponseEnvelope | EventEnvelope;
 
 function normalizeJobStatus(status: unknown): JobStatus {
@@ -243,6 +286,45 @@ function normalizeJobStatus(status: unknown): JobStatus {
     return "Cancelled";
   }
   return "Pending";
+}
+
+function normalizeJob(job: JobInfo): JobInfo {
+  return {
+    ...job,
+    status: normalizeJobStatus((job as { status: unknown }).status),
+  };
+}
+
+function textFromOutputEvent(event: EventPayload): OutputChunkEvent | null {
+  if ("OutputChunk" in event) {
+    return (event as { OutputChunk: OutputChunkEvent }).OutputChunk;
+  }
+  if ("OutputChunkBinary" in event) {
+    const chunk = (event as { OutputChunkBinary: OutputChunkBinaryEvent }).OutputChunkBinary;
+    return {
+      id: chunk.id,
+      stream: chunk.stream,
+      data: Buffer.from(chunk.base64, "base64").toString("utf8"),
+    };
+  }
+  return null;
+}
+
+function okRecord(response: ResponsePayload): Record<string, unknown> {
+  if ("Err" in response) {
+    throw new CueError(response.Err.code, response.Err.message);
+  }
+  return (response as { Ok: Record<string, unknown> }).Ok;
+}
+
+function textOutputFromOk(ok: Record<string, unknown>): string | null {
+  if ("TextOutput" in ok) {
+    return (ok as { TextOutput: { text: string; truncated: boolean } }).TextOutput.text;
+  }
+  if ("EvalText" in ok) {
+    return (ok as { EvalText: { text: string } }).EvalText.text;
+  }
+  return null;
 }
 
 // ── Framing constants ──────────────────────────────────────────────────────
@@ -508,12 +590,12 @@ export class CueClient {
    * the script-level terminal status.
    */
   async runScript(opts: RunScriptOptions): Promise<ScriptResult> {
-    const { path, input, mode = "Job" } = opts;
+    const { path, input } = opts;
     const timeoutMs = (opts.timeout ?? 300) * 1000;
 
     await this.#ensureSubscribed("jobs");
 
-    const requestId = await this.#send({ RunScript: { path, input, mode } });
+    const requestId = await this.#send({ RunScript: { path, input } });
     const response = await this.#waitForResponse(requestId);
     if ("Err" in response) {
       throw new CueError(response.Err.code, response.Err.message);
@@ -738,8 +820,8 @@ export class CueClient {
       }, timeoutMs);
 
       const onOutput = (event: EventPayload) => {
-        if (!("OutputChunk" in event)) return;
-        const chunk = (event as { OutputChunk: OutputChunkEvent }).OutputChunk;
+        const chunk = textFromOutputEvent(event);
+        if (!chunk) return;
         if (!allKnownJobIds.has(chunk.id) && !unknownJobIds.includes(chunk.id)) {
           unknownJobIds.push(chunk.id);
         }
@@ -868,36 +950,42 @@ export class CueClient {
 
   /** Stop (kill) a running job or remove a cron. */
   async stopJob(jobId: string): Promise<void> {
-    const requestId = await this.#rawEval(`:kill ${jobId}`);
-    const response = await this.#waitForResponse(requestId);
-    if ("Err" in response) {
-      throw new CueError(response.Err.code, response.Err.message);
+    try {
+      const requestId = await this.#send(
+        jobId.startsWith("C") ? { RemoveCron: { id: jobId } } : { KillJob: { id: jobId } },
+      );
+      okRecord(await this.#waitForResponse(requestId));
+      return;
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
     }
+    const requestId = await this.#rawEval(`:kill ${jobId}`);
+    okRecord(await this.#waitForResponse(requestId));
   }
 
   /** List all jobs via `:jobs`. */
-  async listJobs(): Promise<JobInfo[]> {
-    const response = await this.#rawEvalAndWait(":jobs");
-
-    if ("Err" in response) {
-      throw new CueError(response.Err.code, response.Err.message);
+  async listJobs(limit?: number): Promise<JobInfo[]> {
+    let response: ResponsePayload;
+    try {
+      const requestId = await this.#send({ ListJobs: { limit: limit ?? null } });
+      response = await this.#waitForResponse(requestId);
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
+      response = await this.#rawEvalAndWait(":jobs");
     }
 
-    const ok = (response as { Ok: Record<string, unknown> }).Ok;
+    const ok = okRecord(response);
+    if (ok && "JobListPage" in ok) {
+      return (ok as { JobListPage: { jobs: JobInfo[]; page: PageInfo } }).JobListPage.jobs.map(
+        normalizeJob,
+      );
+    }
     if (ok && "JobList" in ok) {
-      return (ok as { JobList: JobInfo[] }).JobList.map((job) => ({
-        ...job,
-        status: normalizeJobStatus((job as { status: unknown }).status),
-      }));
+      return (ok as { JobList: JobInfo[] }).JobList.map(normalizeJob);
     }
     if (ok && "JobInfo" in ok) {
       const job = (ok as { JobInfo: JobInfo }).JobInfo;
-      return [
-        {
-          ...job,
-          status: normalizeJobStatus((job as { status: unknown }).status),
-        },
-      ];
+      return [normalizeJob(job)];
     }
     return [];
   }
@@ -972,51 +1060,78 @@ export class CueClient {
   /** Get buffered stdout from the daemon. */
   async jobOutput(
     jobId: string,
-    _tailBytes?: number,
+    tailBytes?: number,
   ): Promise<{ stdout: string; stderr: string; truncated?: boolean }> {
-    const response = await this.#rawEvalAndWait(`:out ${jobId}`);
-
-    if ("Err" in response) {
-      throw new CueError(response.Err.code, response.Err.message);
+    try {
+      const requestId = await this.#send({
+        JobOutput: { id: jobId, stdout_bytes: tailBytes ?? null, stderr_bytes: tailBytes ?? null },
+      });
+      const ok = okRecord(await this.#waitForResponse(requestId));
+      if (ok && "JobOutput" in ok) {
+        const out = (
+          ok as {
+            JobOutput: {
+              stdout: StreamText;
+              stderr: StreamText;
+              stderr_pty_merged: boolean;
+            };
+          }
+        ).JobOutput;
+        return {
+          stdout: out.stdout.data,
+          stderr: out.stderr.data,
+          truncated: out.stdout.truncated,
+        };
+      }
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
     }
 
-    const ok = (response as { Ok: Record<string, unknown> }).Ok;
+    const response = await this.#rawEvalAndWait(`:out ${jobId}`);
+    const ok = okRecord(response);
     if (ok && "Output" in ok) {
       const out = (ok as { Output: { id: string; data: string; truncated: boolean } }).Output;
       return { stdout: out.data, stderr: "", truncated: out.truncated };
     }
 
-    if (ok && "EvalText" in ok) {
-      return {
-        stdout: (ok as { EvalText: { text: string } }).EvalText.text,
-        stderr: "",
-        truncated: false,
-      };
-    }
+    const text = textOutputFromOk(ok);
+    if (text !== null) return { stdout: text, stderr: "", truncated: false };
 
     return { stdout: "", stderr: "", truncated: false };
   }
 
   /** Get buffered stderr from the daemon. */
   async jobError(jobId: string): Promise<{ stderr: string; truncated?: boolean }> {
-    const response = await this.#rawEvalAndWait(`:err ${jobId}`);
-
-    if ("Err" in response) {
-      throw new CueError(response.Err.code, response.Err.message);
+    try {
+      const requestId = await this.#send({
+        JobOutput: { id: jobId, stdout_bytes: null, stderr_bytes: null },
+      });
+      const ok = okRecord(await this.#waitForResponse(requestId));
+      if (ok && "JobOutput" in ok) {
+        const out = (
+          ok as {
+            JobOutput: {
+              stdout: StreamText;
+              stderr: StreamText;
+              stderr_pty_merged: boolean;
+            };
+          }
+        ).JobOutput;
+        return { stderr: out.stderr.data, truncated: out.stderr.truncated };
+      }
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
     }
 
-    const ok = (response as { Ok: Record<string, unknown> }).Ok;
+    const response = await this.#rawEvalAndWait(`:err ${jobId}`);
+    const ok = okRecord(response);
     if (ok && "Output" in ok) {
       const out = (ok as { Output: { id: string; data: string; truncated: boolean } }).Output;
       return { stderr: out.data, truncated: out.truncated };
     }
 
-    if (ok && "EvalText" in ok) {
-      return {
-        stderr: (ok as { EvalText: { text: string } }).EvalText.text,
-        truncated: false,
-      };
-    }
+    const text = textOutputFromOk(ok);
+    if (text !== null) return { stderr: text, truncated: false };
 
     return { stderr: "", truncated: false };
   }
@@ -1095,25 +1210,28 @@ export class CueClient {
   /** Evaluate a raw daemon command that returns plain text. */
   async evalText(input: string, mode: Mode = "Job"): Promise<string> {
     const response = await this.#rawEvalAndWait(input, mode);
-    if ("Err" in response) {
-      throw new CueError(response.Err.code, response.Err.message);
-    }
-
-    const ok = (response as { Ok: Record<string, unknown> }).Ok;
-    if (ok && "EvalText" in ok) {
-      return (ok as { EvalText: { text: string } }).EvalText.text;
-    }
+    const ok = okRecord(response);
+    const text = textOutputFromOk(ok);
+    if (text !== null) return text;
     throw new CueError("UNEXPECTED_RESPONSE", "expected EvalText response");
   }
 
   /** List all scopes. */
-  async listScopes(): Promise<ScopeInfo[]> {
-    const response = await this.#rawEvalAndWait(":scopes");
-    if ("Err" in response) {
-      throw new CueError(response.Err.code, response.Err.message);
+  async listScopes(limit?: number): Promise<ScopeInfo[]> {
+    let response: ResponsePayload;
+    try {
+      const requestId = await this.#send({ ListScopes: { limit: limit ?? null } });
+      response = await this.#waitForResponse(requestId);
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
+      response = await this.#rawEvalAndWait(":scopes");
     }
 
-    const ok = (response as { Ok: Record<string, unknown> }).Ok;
+    const ok = okRecord(response);
+    if (ok && "ScopeListPage" in ok) {
+      return (ok as { ScopeListPage: { scopes: ScopeInfo[]; page: PageInfo } }).ScopeListPage
+        .scopes;
+    }
     if (ok && "ScopeList" in ok) {
       return (ok as { ScopeList: ScopeInfo[] }).ScopeList;
     }
@@ -1125,16 +1243,39 @@ export class CueClient {
 
   /** Show current env snapshot. */
   async showEnv(): Promise<string> {
+    try {
+      const requestId = await this.#send({ ShowEnv: { tail_bytes: null } });
+      const text = textOutputFromOk(okRecord(await this.#waitForResponse(requestId)));
+      if (text !== null) return text;
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
+    }
     return this.evalText(":env");
   }
 
   /** Show current config. */
   async showConfig(): Promise<string> {
+    try {
+      const requestId = await this.#send({ ShowConfig: { tail_bytes: null } });
+      const text = textOutputFromOk(okRecord(await this.#waitForResponse(requestId)));
+      if (text !== null) return text;
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
+    }
     return this.evalText(":config");
   }
 
   /** Show log output. */
-  async showLog(id?: string): Promise<string> {
+  async showLog(id?: string, limit?: number, tailBytes?: number): Promise<string> {
+    try {
+      const requestId = await this.#send({
+        ShowLog: { id: id ?? null, limit: limit ?? null, tail_bytes: tailBytes ?? null },
+      });
+      const text = textOutputFromOk(okRecord(await this.#waitForResponse(requestId)));
+      if (text !== null) return text;
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
+    }
     return this.evalText(id ? `:log ${id}` : ":log");
   }
 
@@ -1156,15 +1297,20 @@ export class CueClient {
   }
 
   /** List all cron jobs. */
-  async listCrons(): Promise<CronInfo[]> {
-    const requestId = await this.#rawEval(":crons");
-    const response = await this.#waitForResponse(requestId);
-
-    if ("Err" in response) {
-      throw new CueError(response.Err.code, response.Err.message);
+  async listCrons(limit?: number): Promise<CronInfo[]> {
+    let response: ResponsePayload;
+    try {
+      const requestId = await this.#send({ ListCrons: { limit: limit ?? null } });
+      response = await this.#waitForResponse(requestId);
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
+      response = await this.#rawEvalAndWait(":crons");
     }
 
-    const ok = (response as { Ok: Record<string, unknown> }).Ok;
+    const ok = okRecord(response);
+    if (ok && "CronListPage" in ok) {
+      return (ok as { CronListPage: { crons: CronInfo[]; page: PageInfo } }).CronListPage.crons;
+    }
     if (ok && "CronList" in ok) {
       return (ok as { CronList: CronInfo[] }).CronList;
     }
@@ -1290,12 +1436,16 @@ export class CueClient {
       channel = `jobs`;
     } else if ("JobRemoved" in payload) {
       channel = `jobs`;
-    } else if ("OutputChunk" in payload) {
-      const jobId = (payload as { OutputChunk: OutputChunkEvent }).OutputChunk.id;
-      channel = `output:${jobId}`;
-    } else if ("OutputEof" in payload) {
-      const jobId = (payload as { OutputEof: { id: string } }).OutputEof.id;
-      channel = `output:${jobId}`;
+    } else {
+      const chunk = textFromOutputEvent(payload);
+      if (!chunk) {
+        if ("OutputEof" in payload) {
+          const jobId = (payload as { OutputEof: { id: string } }).OutputEof.id;
+          channel = `output:${jobId}`;
+        }
+      } else {
+        channel = `output:${chunk.id}`;
+      }
     }
 
     if (channel) {
@@ -1443,18 +1593,17 @@ export class CueClient {
 
       const unsubs: Array<() => void> = [];
       const onOutput = (event: EventPayload) => {
-        if ("OutputChunk" in event) {
-          const chunk = (event as { OutputChunk: OutputChunkEvent }).OutputChunk;
-          if (chunk.stream === "stdout") {
-            if (stdoutLen < MAX_OUTPUT_BUFFER) {
-              stdoutChunks.push(chunk.data);
-              stdoutLen += chunk.data.length;
-            }
-          } else {
-            if (stderrLen < MAX_OUTPUT_BUFFER) {
-              stderrChunks.push(chunk.data);
-              stderrLen += chunk.data.length;
-            }
+        const chunk = textFromOutputEvent(event);
+        if (!chunk) return;
+        if (chunk.stream === "stdout") {
+          if (stdoutLen < MAX_OUTPUT_BUFFER) {
+            stdoutChunks.push(chunk.data);
+            stdoutLen += chunk.data.length;
+          }
+        } else {
+          if (stderrLen < MAX_OUTPUT_BUFFER) {
+            stderrChunks.push(chunk.data);
+            stderrLen += chunk.data.length;
           }
         }
       };
@@ -1586,8 +1735,6 @@ export interface RunScriptOptions {
   path: string;
   /** Raw `.cue` script body to execute. */
   input: string;
-  /** Submission mode. Defaults to "Job". */
-  mode?: Mode;
   /** Foreground wait budget in seconds. Defaults to 300. */
   timeout?: number;
 }

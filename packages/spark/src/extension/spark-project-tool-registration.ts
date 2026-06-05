@@ -134,7 +134,7 @@ export function registerSparkProjectTools(
     name: "spark_use_project",
     label: "Spark Use Project",
     description:
-      "Set or create this Pi session's current Spark project. Other sessions keep their own current project selection. Use spark_rename_project to rename an existing project.",
+      'Compatibility surface for task({ action: "project_use" }): set or create this Pi session\'s current Spark project. Other sessions keep their own current project selection. Use task({ action: "project_update" }) to rename an existing project.',
     parameters: Type.Object({
       project: Type.Optional(
         Type.String({ description: "Existing project ref or title/title prefix to use." }),

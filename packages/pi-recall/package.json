@@ -1,0 +1,29 @@
+{
+  "name": "pi-recall",
+  "version": "0.1.0",
+  "description": "Controlled scoped recall candidate capability for Pi extensions.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./extension": "./src/extension.ts"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "pi-extension-api": "file:../pi-extension-api",
+    "spark-core": "file:../spark-core",
+    "typebox": "^1.1.38"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension-entry.ts"
+    ]
+  }
+}

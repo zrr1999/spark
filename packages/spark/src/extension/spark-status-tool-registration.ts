@@ -39,7 +39,7 @@ export function registerSparkStatusTool(
     name: "spark_status",
     label: "Spark Status",
     description:
-      "Show Spark project/task status. Defaults to an active view focused on unfinished work and current session state; use view=full for all history.",
+      'Compatibility surface for task({ action: "status" }): show Spark project/task status. Defaults to an active view focused on unfinished work and current session state; use view=full for all history.',
     parameters: Type.Object({
       view: Type.Optional(
         Type.String({

@@ -1,0 +1,24 @@
+{
+  "name": "pi-tasks",
+  "version": "0.1.0",
+  "description": "Generic project/task/TODO/run graph capability and canonical task tool for Pi extensions.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./extension": "./src/extension.ts"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "pi-extension-api": "file:../pi-extension-api",
+    "spark-tasks": "file:../spark-tasks",
+    "typebox": "^1.1.38"
+  }
+}

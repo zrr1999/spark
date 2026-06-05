@@ -30,6 +30,7 @@ import {
   renderTaskPlanReadinessRules,
   TaskGraph,
 } from "spark-tasks";
+import { registerPiArtifactTool } from "pi-artifacts/extension";
 import sparkExtension from "../packages/spark/src/extension/index.ts";
 import { JsonStoreFormatError } from "../packages/spark/src/extension/json-store.ts";
 import {
@@ -609,7 +610,7 @@ void test("/spark command detects empty, existing, and initialized project modes
     assert.match(emptyMessage, /Spark initialized|Spark 已初始化/);
     const emptyHidden = await consumeSparkModeContext(emptyRun, emptyCtx);
     assert.match(emptyHidden, /minimal local state/);
-    assert.match(emptyHidden, /spark_rename_project/);
+    assert.match(emptyHidden, /task\(\{ action: "project_update" \}\)/);
     assert.match(emptyHidden, /do not create tasks merely because Spark just initialized/);
 
     await mkdir(join(existingDir, ".git"));
@@ -630,8 +631,11 @@ void test("/spark command detects empty, existing, and initialized project modes
     assert.match(existingMessage, /Enter Spark planning mode/);
     assert.match(existingMessage, /Audit existing project structure/);
     assert.match(existingMessage, /answer directly for a simple research\/read-and-comment turn/);
-    assert.match(existingMessage, /spark_plan_tasks only when there are concrete plan-bound tasks/);
-    assert.match(existingMessage, /context-specific spark_ask questions/);
+    assert.match(
+      existingMessage,
+      /task\(\{ action: "plan" \}\) only when there are concrete plan-bound tasks/,
+    );
+    assert.match(existingMessage, /context-specific ask questions/);
     assert.match(existingMessage, /Do not use generic intake templates/);
     assert.match(existingMessage, /Reminder for planning mode/);
     assert.match(existingMessage, /plan\.openQuestions/);
@@ -693,7 +697,7 @@ void test("/spark command detects empty, existing, and initialized project modes
     {
       const researchMsg = await consumeSparkModeContext(initializedRun, initializedCtx);
       assert.match(researchMsg, /Enter Spark research mode/);
-      assert.match(researchMsg, /Do not call spark_plan_tasks/);
+      assert.match(researchMsg, /Do not call task\(\{ action: "plan" \| "claim" \| "finish" \}\)/);
     }
 
     initializedCtx.ui.select = async () =>
@@ -714,10 +718,14 @@ void test("/spark command detects empty, existing, and initialized project modes
   }
 });
 
-void test("bare /spark in an existing project requires a concrete planning focus", async () => {
+void test("bare /spark in an existing project infers a context planning focus", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-command-existing-no-focus-"));
   try {
-    await writeFile(join(dir, "README.md"), "# Existing project\n", "utf8");
+    await writeFile(
+      join(dir, "README.md"),
+      "# Existing project\n\nA focused repository for Spark workflow tests.\n",
+      "utf8",
+    );
     const ctx = testSparkContext(dir, "main");
     const run = registerSparkToolsForTest();
     const command = run.commands.get("spark");
@@ -725,9 +733,18 @@ void test("bare /spark in an existing project requires a concrete planning focus
 
     await command.handler("", ctx);
 
-    assert.equal(existsSync(join(dir, ".spark", "projects.json")), false);
-    assert.match(ctx.notifications.at(-1)?.message ?? "", /needs a concrete focus/);
+    assert.ok(existsSync(join(dir, ".spark", "projects.json")));
+    assert.ok(
+      ctx.notifications.some((notification) =>
+        /inferred a planning focus/.test(notification.message),
+      ),
+    );
     assert.equal(run.messages.length, 0);
+    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark plan mode requested/);
+    const message = await consumeSparkModeContext(run, ctx);
+    assert.match(message, /Existing project/);
+    assert.match(message, /focused repository for Spark workflow tests/);
+    assert.match(message, /infer the current project intent/);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -760,17 +777,20 @@ void test("/research, /plan, /execute, /goal, and /workflow selector commands en
     assert.match(planMessage, /Enter Spark planning mode from \/plan/);
     assert.match(planMessage, /not as a permission gate/);
     assert.match(planMessage, /Audit current task flow/);
-    assert.match(planMessage, /context-specific spark_ask questions/);
+    assert.match(planMessage, /context-specific ask questions/);
     assert.match(planMessage, /target project selection/);
     assert.match(planMessage, /design options only or durable task planning/);
-    assert.match(planMessage, /Do not call spark_plan_tasks while those choices remain unresolved/);
+    assert.match(
+      planMessage,
+      /Do not call task\(\{ action: "plan" \}\) while those choices remain unresolved/,
+    );
     assert.match(planMessage, /do not leave them as prose/);
     assert.match(planMessage, /do not use canned intake templates/);
     assert.match(planMessage, /Reminder for planning mode/);
-    assert.match(planMessage, /call spark_ask with context-specific questions/);
+    assert.match(planMessage, /call ask with context-specific questions/);
     assert.match(
       planMessage,
-      /Once planning-affecting uncertainty is resolved, call spark_plan_tasks directly/,
+      /Once planning-affecting uncertainty is resolved, call task\(\{ action: "plan" \}\) directly/,
     );
     assert.doesNotMatch(
       planMessage,
@@ -825,7 +845,7 @@ void test("/research, /plan, /execute, /goal, and /workflow selector commands en
     assert.match(executeMessage, /suggest \/goal/);
     assert.match(executeMessage, /suggest \/workflow/);
     assert.match(executeMessage, /missing user decision blocks execution/);
-    assert.match(executeMessage, /call spark_ask instead of guessing/);
+    assert.match(executeMessage, /call ask instead of guessing/);
     assert.doesNotMatch(executeMessage, /continue by auto-claiming/);
     assert.equal(
       initializedCtx.notifications.at(-1)?.message,
@@ -893,7 +913,7 @@ void test("/research, /plan, /execute, /goal, and /workflow selector commands en
     const inferredGoalPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
     assert.match(inferredGoalPrompt, /Goal focus: none provided/);
     assert.match(inferredGoalPrompt, /Infer the target objective from the active project title/);
-    assert.match(inferredGoalPrompt, /ask with spark_ask instead of inventing the goal/);
+    assert.match(inferredGoalPrompt, /ask with ask instead of inventing the goal/);
 
     assert.equal(initializedRun.commands.get("workflow:ready"), undefined);
 
@@ -952,25 +972,18 @@ void test("/research, /plan, /execute, /goal, and /workflow selector commands en
         '  description: "Clean up temporary files with a one-shot workflow.",\n' +
         '  phases: [{ title: "Inspect" }, { title: "Remove" }],\n' +
         "};\n" +
-        'export default async function workflow() { throw new Error("not run during inline discovery"); }\n' +
+        'export default async function workflow() { throw new Error("not run during discovery"); }\n' +
         "```",
       initializedCtx,
     );
     const inlineWorkflowPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
-    assert.match(inlineWorkflowPrompt, /Inline workflow detected in the \/workflow focus/);
-    assert.match(inlineWorkflowPrompt, /Inline Cleanup: Clean up temporary files/);
-    assert.match(inlineWorkflowPrompt, /metadata only; body was not executed or saved/);
-
-    await workflowCommand.handler(
-      "Run broken inline workflow:\n\n" +
-        "```js\n" +
-        'export const meta = { name: "Broken Inline" };\n' +
-        "```",
-      initializedCtx,
+    assert.match(inlineWorkflowPrompt, /No saved workflow was selected confidently/);
+    assert.match(
+      inlineWorkflowPrompt,
+      /\/workflow only accepts saved workspace:\/user: workflow selectors/,
     );
-    const invalidInlinePrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
-    assert.match(invalidInlinePrompt, /Inline workflow validation issue/);
-    assert.match(invalidInlinePrompt, /workflow meta.description must be a non-empty string/);
+    assert.doesNotMatch(inlineWorkflowPrompt, /Inline workflow detected/);
+    assert.doesNotMatch(inlineWorkflowPrompt, /metadata only/);
 
     assert.equal(initializedRun.commands.get("run"), undefined);
     assert.equal(initializedRun.commands.get("run-sequential"), undefined);
@@ -1461,7 +1474,7 @@ void test("/goal tells finish_task to continue to the next ready task", async ()
     assert.match(run.customMessages.at(-1)?.content ?? "", /strategy: goal/);
     assert.doesNotMatch(run.customMessages.at(-1)?.content ?? "", /workflow: builtin:goal/);
     assert.match(goalPrompt, /Run Spark goal mode/);
-    assert.match(goalPrompt, /call spark_ask instead of guessing/);
+    assert.match(goalPrompt, /call ask instead of guessing/);
 
     await executeSparkTool(run.tools, "spark_claim_task", ctx, {
       name: "run-first-ready",
@@ -2309,7 +2322,70 @@ void test("spark_finish_task refuses to cancel a claimed prerequisite with depen
   }
 });
 
-void test("spark artifact tools list and read artifacts with truncated default body", async () => {
+void test("task tool dispatches canonical project, plan, claim, TODO, and finish actions", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "task-tool-canonical-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+    assert.ok(tools.has("task"), "missing canonical task tool");
+
+    const created = await executeSparkTool(tools, "task", ctx, {
+      action: "project_use",
+      title: "Canonical task tool project",
+      description: "Exercise the canonical task action tool.",
+    });
+    assert.match(toolText(created), /Created new Spark project/);
+
+    const planned = await executeSparkTool(tools, "task", ctx, {
+      action: "plan",
+      tasks: [
+        {
+          name: "canonical-task-tool",
+          title: "Canonical task tool",
+          description: "Exercise task action routing.",
+          status: "ready",
+          plan: executionReadyPlan("Exercise task action routing"),
+        },
+      ],
+    });
+    assert.match(toolText(planned), /Planned tasks: created=1/);
+
+    const claimed = await executeSparkTool(tools, "task", ctx, {
+      action: "claim",
+      name: "canonical-task-tool",
+      title: "Canonical task tool",
+      description: "Exercise task action routing.",
+    });
+    assert.match(toolText(claimed), /Claimed Spark task/);
+
+    const todos = await executeSparkTool(tools, "task", ctx, {
+      action: "todo_update",
+      scope: "task",
+      ops: [{ op: "append", items: ["Validate canonical task routing"] }],
+    });
+    assert.match(toolText(todos), /Updated TODOs/);
+
+    const finished = await executeSparkTool(tools, "task", ctx, {
+      action: "finish",
+      summary: "Canonical task routing works.",
+    });
+    assert.match(toolText(finished), /Finished Spark task/);
+
+    const contextList = await executeSparkTool(tools, "context", ctx, { action: "list" });
+    assert.match(toolText(contextList), /spark\.active/);
+    const contextPreview = await executeSparkTool(tools, "context", ctx, {
+      action: "preview",
+      providerIds: ["spark.active"],
+      budgetChars: 1_000,
+    });
+    assert.match(toolText(contextPreview), /Spark active state/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("artifact tool lists and reads artifacts with truncated default body", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-artifacts-"));
   try {
     await writeEmptySparkProject(dir);
@@ -2323,13 +2399,17 @@ void test("spark artifact tools list and read artifacts with truncated default b
     });
     const { tools } = registerSparkToolsForTest();
 
-    const listed = await executeSparkTool(tools, "spark_list_artifacts", ctx, { kind: "research" });
+    const listed = await executeSparkTool(tools, "artifact", ctx, {
+      action: "list",
+      kind: "research",
+    });
     assert.match(toolText(listed), new RegExp(`${artifact.ref}.*Long research note`));
     const [listedArtifact] =
       (listed.details as { artifacts?: Array<{ bodyTruncated?: boolean }> }).artifacts ?? [];
     assert.equal(listedArtifact?.bodyTruncated, true);
 
-    const read = await executeSparkTool(tools, "spark_get_artifact", ctx, {
+    const read = await executeSparkTool(tools, "artifact", ctx, {
+      action: "read",
       artifactRef: artifact.ref,
       maxChars: 40,
     });
@@ -2341,7 +2421,7 @@ void test("spark artifact tools list and read artifacts with truncated default b
   }
 });
 
-void test("spark artifact tools reject invalid explicit filters", async () => {
+void test("artifact tool rejects invalid explicit filters", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-artifacts-invalid-filters-"));
   try {
     await writeEmptySparkProject(dir);
@@ -2356,24 +2436,25 @@ void test("spark artifact tools reject invalid explicit filters", async () => {
     const { tools } = registerSparkToolsForTest();
 
     await assert.rejects(
-      () => executeSparkTool(tools, "spark_list_artifacts", ctx, { kind: "note" }),
-      /kind must be spark-md/,
+      () => executeSparkTool(tools, "artifact", ctx, { action: "list", kind: "note" }),
+      /kind must be a valid artifact kind/,
     );
     await assert.rejects(
-      () => executeSparkTool(tools, "spark_list_artifacts", ctx, { producer: "agent" }),
-      /producer must be spark/,
+      () => executeSparkTool(tools, "artifact", ctx, { action: "list", producer: "agent" }),
+      /producer must be a valid artifact producer/,
     );
     await assert.rejects(
-      () => executeSparkTool(tools, "spark_list_artifacts", ctx, { projectRef: "project:one" }),
+      () => executeSparkTool(tools, "artifact", ctx, { action: "list", projectRef: "project:one" }),
       /projectRef must be a proj: ref/,
     );
     await assert.rejects(
-      () => executeSparkTool(tools, "spark_list_artifacts", ctx, { limit: 1.5 }),
-      /limit must be a non-negative integer/,
+      () => executeSparkTool(tools, "artifact", ctx, { action: "list", limit: 1.5 }),
+      /limit must be a positive integer/,
     );
     await assert.rejects(
       () =>
-        executeSparkTool(tools, "spark_get_artifact", ctx, {
+        executeSparkTool(tools, "artifact", ctx, {
+          action: "read",
           artifactRef: artifact.ref,
           full: "true",
         }),
@@ -2381,17 +2462,18 @@ void test("spark artifact tools reject invalid explicit filters", async () => {
     );
     await assert.rejects(
       () =>
-        executeSparkTool(tools, "spark_get_artifact", ctx, {
+        executeSparkTool(tools, "artifact", ctx, {
+          action: "read",
           artifactRef: "note:one",
         }),
-      /artifactRef must be an artifact: ref/,
+      /artifactRef must be an artifact ref/,
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-void test("spark learning tools record, search, export, and import learnings", async () => {
+void test("learning tool records, searches, exports, and imports learnings", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-learnings-"));
   const importDir = await mkdtemp(join(tmpdir(), "spark-tool-learnings-import-"));
   try {
@@ -2401,7 +2483,9 @@ void test("spark learning tools record, search, export, and import learnings", a
     const importCtx = testSparkContext(importDir, "main");
     const { tools } = registerSparkToolsForTest();
 
-    const recorded = await executeSparkTool(tools, "spark_learning_record", ctx, {
+    assert.ok(tools.has("learning"), "missing canonical learning tool");
+    const recorded = await executeSparkTool(tools, "learning", ctx, {
+      action: "record",
       id: "learning-explicit-export",
       title: "Export shared learnings explicitly",
       statement:
@@ -2413,30 +2497,35 @@ void test("spark learning tools record, search, export, and import learnings", a
     });
     assert.match(toolText(recorded), /Recorded learning artifact:learning-explicit-export/);
 
-    const search = await executeSparkTool(tools, "spark_learning_search", ctx, {
+    const search = await executeSparkTool(tools, "learning", ctx, {
+      action: "search",
       query: "explicit Markdown exports",
     });
     assert.match(toolText(search), /Export shared learnings explicitly/);
 
-    const read = await executeSparkTool(tools, "spark_learning_read", ctx, {
+    const read = await executeSparkTool(tools, "learning", ctx, {
+      action: "read",
       ref: "artifact:learning-explicit-export",
     });
     assert.match(toolText(read), /\.learnings/);
 
     const exportPath = join("exports", "learnings.md");
-    const exported = await executeSparkTool(tools, "spark_learning_export_markdown", ctx, {
+    const exported = await executeSparkTool(tools, "learning", ctx, {
+      action: "export_markdown",
       outputPath: exportPath,
     });
     assert.match(toolText(exported), /Exported 1 learning/);
     assert.match(await readFile(join(dir, exportPath), "utf8"), /```json spark-learning/);
 
-    const dryRun = await executeSparkTool(tools, "spark_learning_import_markdown", importCtx, {
+    const dryRun = await executeSparkTool(tools, "learning", importCtx, {
+      action: "import_markdown",
       inputPath: join(dir, exportPath),
     });
     assert.match(toolText(dryRun), /Dry-run parsed 1 learning/);
     assert.equal((await defaultLearningStore(importDir).list()).length, 0);
 
-    const imported = await executeSparkTool(tools, "spark_learning_import_markdown", importCtx, {
+    const imported = await executeSparkTool(tools, "learning", importCtx, {
+      action: "import_markdown",
       inputPath: join(dir, exportPath),
       apply: true,
     });
@@ -5299,7 +5388,8 @@ void test("spark_state compact-role-run-artifacts apply writes replacement summa
     assert.ok(after.transcriptRetention?.exportPath);
     assert.equal(existsSync(join(dir, after.transcriptRetention.exportPath)), true);
 
-    const fetched = await executeSparkTool(tools, "spark_get_artifact", ctx, {
+    const fetched = await executeSparkTool(tools, "artifact", ctx, {
+      action: "read",
       artifactRef: roleRun.ref,
     });
     assert.match(toolText(fetched), /Historical role-run transcript worker-large-apply/);
@@ -5735,6 +5825,9 @@ function registerSparkToolsForTest(): {
     getAllTools: () => [...tools.keys()].map((name) => ({ name })),
     setActiveTools: () => undefined,
   };
+  registerPiArtifactTool({
+    registerTool: (config) => tools.set(config.name, config as SparkToolConfig),
+  });
   sparkExtension(pi);
   return { tools, messages, customMessages, commands, eventHandlers };
 }

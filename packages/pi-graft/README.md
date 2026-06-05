@@ -12,6 +12,7 @@ graft_write/read/edit/delete { base: "graft:empty" | "candidate:..." | ... } -> 
 graft_write/read/edit/delete { from: "scratch:a" }                         -> scratch:b/c/...
 graft_candidate_from_scratch { scratch: "scratch:c" }                      -> candidate:...
 graft_validate / graft_admit / graft_show / graft_evidence / graft_materialize -> evidence / patch inspection
+graft_repo { action: "add" | "list" | "sync" | "lock" | "update" }          -> managed repo config/cache/lock workflow
 ```
 
 The extension keeps only convenience metadata (`base`, `lastScratch`, `lastCandidate`, and `lastPatch`) so later tool calls can omit `from`/`scratch` in the same workspace. That state is not the protocol entrance: every scratch tool accepts explicit `base` or `from`, and every result includes the returned scratch id in `details.result.scratch` for the next call. Rename has no separate operation yet; express it as `graft_delete` for the old path followed by `graft_write` for the new path.
@@ -54,6 +55,7 @@ These tools do not override Pi built-ins. Each scratch tool accepts either `base
 - `graft_candidates` — list unadmitted candidates.
 - `graft_search` — search admitted patches.
 - `graft_materialize` — plan or materialize an admitted patch target; dry-run defaults to true.
+- `graft_repo` — manage configured repositories with the current `repo add/list/sync/lock/update` flow. `add/sync/lock/update` use daemon-owned CLI execution; `list` uses the direct local CLI path.
 - `graft_cli_exec` — allowlisted argv-only path for low-frequency read-only or diagnostic commands; bootstrap and mutation commands use dedicated tools.
 
 ## Example
@@ -85,7 +87,7 @@ The extension talks to `$GRAFT_HOME/run/daemon.sock` (default `$HOME/.graft/run/
 graftd start --cwd <cwd> --socket "$GRAFT_HOME/run/daemon.sock"
 ```
 
-Each wire request includes `workspace_id` (from `GRAFT_WORKSPACE`, default `ws:default`) and `cwd`; lifecycle/query/materialize tools route through `graftd cli_exec` with `graft --cwd <cwd> ...`, while help/init/diagnostics can run the direct `graft` binary. Set `GRAFT_BIN`/`GRAFT_DAEMON_BIN` if they are not on `PATH`.
+Routed wire requests include `workspace_id` and `workspace_root` (the Pi cwd). The extension resolves `workspace_id` from `GRAFT_WORKSPACE` first, then from `graft --json status` / `graft_init` output, then from restored Pi session state; only an uninitialized or undiscoverable workspace falls back to `ws:default` and lets graftd report the precise routing error. Lifecycle/materialize/repo write tools route through `graftd cli_exec` with `graft --cwd <cwd> ...`; read-only query, help, bootstrap, and diagnostics paths can run the direct `graft` binary. Set `GRAFT_BIN`/`GRAFT_DAEMON_BIN` if they are not on `PATH`.
 
 The current implementation is UTF-8-text first. Binary, image, and directory behavior follows the current graft scratch wire errors and should fail loudly rather than falling back to disk reads or writes.
 

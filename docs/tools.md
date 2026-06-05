@@ -8,7 +8,7 @@ Commands:
 - `/research <focus>` — investigate repository/project context and summarize findings without task graph changes or task claims.
 - `/plan <focus>` — inject a high-priority planning prompt for research, clarification, and task-DAG creation/refinement. It is prompt guidance, not a permission gate; planning mode does not execute tasks and does not create root `SPARK.md`.
 - `/execute <focus>` — enter default execution mode. Claim and finish at most one concrete task; run `/execute` again for one more default step. If the request needs continuous execution, use `/goal`; if it needs scripted execution, use `/workflow[:selector]`.
-- `/goal <focus>` — enter autonomous verified foreground goal mode; continue across ready tasks until complete, blocked, or budget-limited. When `<focus>` is omitted, derive the goal from the current project/task state and ask with `spark_ask` if project, scope, or priority is ambiguous.
+- `/goal <focus>` — enter autonomous verified foreground goal mode; continue across ready tasks until complete, blocked, or budget-limited. When `<focus>` is omitted, derive the goal from the current project/task state and ask with `ask` if project, scope, or priority is ambiguous.
 - `/workflow[:selector] <focus>` — enter workflow execution mode for saved workflow scripts. Use `/workflow workspace:<name>` for `.spark/workflows/*.js` and `/workflow user:<name>` for `~/.agents/workflows/*.js`. Empty `/workflow` asks which workflow to use or whether to draft a workspace workflow.
 
 Tools:
@@ -18,28 +18,28 @@ Tools:
 - `spark_list_projects` — list Spark projects as structured JSON with task counts and a `currentForSession` marker. Supports `status: "active" | "done" | "all"`.
 - `spark_use_project` — set or create this session's current Spark project.
 - `spark_rename_project` — rename or update metadata for an existing Spark project without changing task refs.
-- `spark_plan_tasks` — create or update multiple durable named tasks (`name` / `title` / `description`) in the active project from a concrete plan without claiming them for the current session. Each task is plan-bound: callers may provide a structured `plan`, and Spark derives a minimal plan from the task description when omitted. The tool writes directly after readiness checks pass and can be used whenever the request requires durable task planning; agents should clarify planning-affecting questions first, then refine by calling it again with concrete updates. Task dependencies are scoped to the active project only; cross-project dependencies are intentionally out of scope. Cancelling a task is rejected while any non-cancelled task still depends on it.
-- `spark_claim_task` — claim or update concrete task work for the current session in the active project; tasks render as `@name: title`, and optional `roleRef` values are preferred executor hints for orchestrated runs. Claiming is an execution commitment: agents should read the task's bound plan before creating TODOs or executing.
-- `spark_update_task_todos` — update TODOs attached to a claimed task.
-- `spark_update_todos` — update independent session TODOs that are siblings of the project display.
-- `spark_finish_task` — finish this session's claimed task as `done`, `failed`, or `cancelled` without routing through task planning or auto-claiming the next task. When a done task's plan declares `evidenceRequired` but no output artifacts are attached, the tool reports a completion-evidence warning instead of silently treating process/status success as full evidence. In `/execute`, a successful finish may mention the next ready task, but the next task remains unclaimed until another `/execute` or an explicit `/goal` continues it.
+- `task` — canonical generic project/task/TODO/run graph tool. Use `action: "project_list" | "project_use" | "project_update" | "claim" | "plan" | "finish" | "todo_update" | "run_ready" | "run_status" | "run_control" | "cache_cleanup"` instead of adding new Spark-specific task surfaces. During the migration, Spark supplies host-specific handlers for these actions while existing `spark_*` tools remain available for compatibility until the facade cutover.
+- `spark_plan_tasks` — compatibility surface for `task({ action: "plan" })`: create or update multiple durable named tasks (`name` / `title` / `description`) in the active project from a concrete plan without claiming them for the current session. Each task is plan-bound: callers may provide a structured `plan`, and Spark derives a minimal plan from the task description when omitted. The tool writes directly after readiness checks pass and can be used whenever the request requires durable task planning; agents should clarify planning-affecting questions first, then refine by calling it again with concrete updates. Task dependencies are scoped to the active project only; cross-project dependencies are intentionally out of scope. Cancelling a task is rejected while any non-cancelled task still depends on it.
+- `spark_claim_task` — compatibility surface for `task({ action: "claim" })`: claim or update concrete task work for the current session in the active project; tasks render as `@name: title`, and optional `roleRef` values are preferred executor hints for orchestrated runs. Claiming is an execution commitment: agents should read the task's bound plan before creating TODOs or executing.
+- `spark_update_task_todos` — compatibility surface for `task({ action: "todo_update", scope: "task" })`.
+- `spark_update_todos` — compatibility surface for `task({ action: "todo_update", scope: "session" })`.
+- `spark_finish_task` — compatibility surface for `task({ action: "finish" })`: finish this session's claimed task as `done`, `failed`, or `cancelled` without routing through task planning or auto-claiming the next task. When a done task's plan declares `evidenceRequired` but no output artifacts are attached, the tool reports a completion-evidence warning instead of silently treating process/status success as full evidence. In `/execute`, a successful finish may mention the next ready task, but the next task remains unclaimed until another `/execute` or an explicit `/goal` continues it.
 - `spark_run_ready_tasks` — start or preflight the Spark workflow-run scheduler for ready tasks; dry-run remains synchronous and read-only by default. Ready-task execution assigns reusable role specs at dispatch time and creates fresh `role-run`s by default. This is the low-level orchestration tool; the user-facing command surface is `/research`, `/plan`, `/execute`, `/goal`, and `/workflow[:selector]` rather than legacy `/run*` slash commands.
 - `spark_background_runs` — user-facing background work interface with `status`, `list`, `inspect`, `kill`, `reconcile`, and `ack`. It exposes active child role-runs, task claims, pids, run refs, workflow-run progress, legacy timeout records, compact role-run summaries, transcript refs or bounded tail metadata, and next actions. `inspect`/`list` use the compact `role-run` result body and task-run completion summary by default; full stdout/json event transcripts stay behind artifact/transcript refs and are not expanded unless a caller explicitly reads the artifact. Legacy large role-run artifacts are reported by ref with a safe fallback instead of loading full artifact bodies. `kill` requires `runRef`, `taskRef`, or `all:true` and only targets active child role-run processes; `ack` targets failed/stale/legacy `timed_out` problem records.
 - `spark_dag_manager` — legacy low-level compatibility/debug control for persisted Spark workflow-run state with `status`, `reconcile`, `ack`, `prune`, `clear_inactive`, and `kill_active` actions. Prefer `spark_background_runs status/inspect/kill` for normal background inspection and `spark_state prune` for auditable retention; `kill_active` targets child role-run processes, and `timed_out` records are legacy actionable problem records rather than the expected status for new detached background runs.
-- `spark_ask` — run a unified flow-native Spark ask workflow with
-  one or more questions and persist the result as an ask artifact.
-- `spark_ask_replay` — replay the latest or a specified Spark ask artifact.
-- `spark_list_artifacts` — list Spark artifacts with compact bounded output.
-- `spark_get_artifact` — read a Spark artifact, truncated by default with `full=true` opt-in.
-- `spark_learning_record` — record one evidence-backed reusable learning under the ignored local `.learnings/` store for the current repo/workspace scope, or in the user learning directory when `location: "user"` is explicit.
-- `spark_learning_search` — search active Spark learnings by default across the current repo/workspace plus user learnings; pass `location` to restrict. Candidate or inactive learnings are only returned with explicit `includeCandidates`, `includeInactive`, or `status` filters.
-- `spark_learning_list` — list local Spark learnings with compact status/category/location metadata.
-- `spark_learning_read` — read one learning by artifact ref or stable id, truncated by default with `full=true` opt-in.
-- `spark_learning_mark_stale` — mark a learning stale with a reason while preserving the record for audit.
-- `spark_learning_supersede` — mark a learning superseded by one or more replacement learning refs.
-- `spark_learning_reject` — reject a learning candidate while preserving the rejected record and reason.
-- `spark_learning_export_markdown` — explicitly export selected local learnings to a Markdown artifact and optional file when they should be reviewed, shared, or committed outside the local artifact store.
-- `spark_learning_import_markdown` — import Markdown produced by `spark_learning_export_markdown` or legacy `compound-learnings` `.learnings/{patterns,gotchas,decisions}` Markdown; dry-run by default, `apply=true` persists records, and `deleteLegacyAfterVerifiedExport=true` can remove the legacy source only after an explicit verification export is written.
+- `ask` — canonical generic ask tool. Use `action: "ask"` for a structured user ask and `action: "flow"` when the fullscreen multi-question flow renderer is required. During migration, Spark-specific persisted ask artifacts remain on `spark_ask` / `spark_ask_replay` until the facade cutover routes persistence through `pi-ask`.
+- `spark_ask` — compatibility surface for Spark flow-native asks that persist the result as an ask artifact.
+- `spark_ask_replay` — compatibility replay surface for Spark ask artifacts.
+- `artifact` — canonical generic artifact/evidence tool. Use `action: "list"` for compact bounded listings, `action: "read"` for default-truncated artifact reads with `full: true` opt-in, `action: "record"` for provenance-backed evidence writes, `action: "link"` for typed artifact lineage, and `action: "compact"` for artifact-retention previews/applies. The old Spark-specific `spark_list_artifacts` / `spark_get_artifact` surfaces are not registered as canonical tools.
+- `learning` — canonical generic evidence-backed learning tool. Use `action: "record" | "search" | "list" | "read" | "mark_stale" | "supersede" | "reject" | "export_markdown" | "import_markdown"`. Learnings remain distinct from recall/memory and use ignored plural local `.learnings/` stores unless explicitly exported.
+- `context` — canonical registered context-provider tool. Use `action: "list"` or `action: "preview"` with optional `providerIds`/`budgetChars`; content must come from registered providers such as `spark.active`, not arbitrary prompt text.
+- `recall` — canonical controlled recall-candidate tool. Use explicit `scope: "user" | "workspace" | "repo"` with `record_candidate`, `list`, `search`, and `reject`; recall candidates are not `.learnings/` and are not automatic memory.
+- `workflow` — canonical saved-script workflow discovery/preview tool. Use `action: "list"` or `action: "read"` with `workspace:<id>` / `user:<id>` selectors; inline workflows and arbitrary paths are rejected. Execution remains through `/workflow[:selector]` host runtime policy.
+- `spark_learning_record` — compatibility surface for `learning({ action: "record" })`; record one evidence-backed reusable learning under the ignored local `.learnings/` store for the current repo/workspace scope, or in the user learning directory when `location: "user"` is explicit.
+- `spark_learning_search` — compatibility surface for `learning({ action: "search" })`; search active learnings by default across the current repo/workspace plus user learnings.
+- `spark_learning_list` / `spark_learning_read` — compatibility surfaces for `learning({ action: "list" })` and `learning({ action: "read" })`.
+- `spark_learning_mark_stale` / `spark_learning_supersede` / `spark_learning_reject` — compatibility lifecycle surfaces for learning actions.
+- `spark_learning_export_markdown` / `spark_learning_import_markdown` — compatibility explicit sharing/import surfaces for Markdown exports and legacy `compound-learnings` imports.
 
 Automatic behavior:
 
@@ -53,7 +53,7 @@ Automatic behavior:
      investigation/planning tasks first
    - Spark does not create placeholder projects/tasks or a
      fake current task just to populate UI; the model should
-     use `spark_claim_task` only after it has concrete work
+     use `task({ action: "claim" })` only after it has concrete work
      from the actual situation
    - each session should have at most one unfinished main-session claim at a time; role-run execution is represented as an auto-claim when the run starts
    - initialization and planning analyze the request and
@@ -62,7 +62,7 @@ Automatic behavior:
    - when open questions or decision points would change task
      scope, dependencies, priorities, success criteria,
      evidence, architecture, dependency choices, or
-     implementation order, Spark should use `spark_ask` instead
+     implementation order, Spark should use `ask` instead
      of leaving those questions as prose
    - the output language defaults from the current request
      language; do not ask a separate language question when the
@@ -146,16 +146,10 @@ Automatic behavior:
    - no placeholder task content is shown when no task is claimed
    - active Spark turns include SPARK.md as persistent
      project intent in the system prompt
-   - `spark_status` defaults to an active, limited diagnostic view;
-     use `view: "full"` explicitly when full historical task rows are needed
+   - `task({ action: "status" })` / `spark_status` defaults to an active, limited diagnostic view;
+     use full history explicitly when needed
 7. When Spark is active, a turn hint reminds the model to
-   use `spark_status`, `spark_use_project`,
-   `spark_rename_project`, `spark_plan_tasks`,
-   `spark_claim_task`, `spark_update_task_todos`,
-   `spark_update_todos`, `spark_ask`,
-   `list_roles` / `get_role`,
-   `spark_run_ready_tasks`, `spark_list_artifacts` / `spark_get_artifact`,
-   `spark_learning_search` / `spark_learning_record`, and `pi-cue` tools.
+   use `task`, `artifact`, `ask`, `role`, `learning`, `context`, `recall`, `workflow`, and `pi-cue` tools.
 8. Spark display-name quality is model-maintained when the
    improvement is obvious:
    - models may update the active project title and the current
@@ -175,30 +169,30 @@ Automatic behavior:
      about ask UX, or a claimed task titled `Investigate CI` after
      the user has narrowed the task to `Fix Node test runner flags`
    - obvious fixes can be made without asking by using
-     `spark_rename_project` for project metadata and
-     `spark_claim_task` for the claimed task. Display names are
+     `task({ action: "project_update" })` for project metadata and
+     `task({ action: "claim" })` for the claimed task. Display names are
      mutable labels only: underlying `project:*` and `task:*` refs,
      dependency edges, runs, artifacts, and TODO state continue to
      point at the same entities after a rename
    - preserve user-specific intentional names, distinctive
      project/code names, issue IDs, release names, or naming that
-     could encode scope/ownership. Ask with `spark_ask` only when
+     could encode scope/ownership. Ask with `ask` only when
      the right display name reflects a real user decision, such as
      choosing between two plausible scopes, renaming a user-chosen
      project codename, or changing a title that could affect
      external reporting
 9. Process guardrails are part of the active prompt and skill:
-   - use `spark_plan_tasks` to梳理/organize multiple tasks before
+   - use `task({ action: "plan" })` to梳理/organize multiple tasks before
      assigning roles instead of claiming many unfinished tasks in
      one session; task planning writes directly after readiness
      checks pass, and `/plan` only injects stronger planning
      guidance rather than gating the tool
-   - ask with `spark_ask` before launching multiple role-runs or
+   - ask with `ask` before launching multiple role-runs or
      parallel workstreams unless the user explicitly requests
      immediate dispatch; no-selection is not approval
    - prefer Spark-native delegation by binding concrete tasks to
      builtin/project/user reusable role `roleRef`s and handing execution to the
-     `spark_run_ready_tasks` workflow-run scheduler or a Spark workflow; this creates concrete
+     `task({ action: "run_ready" })` workflow-run scheduler or a Spark workflow; this creates concrete
      fresh role-runs with task claims and run artifacts
      attributed to the task/run, while the `roleRef` remains the
      reusable role identity; do not spawn nested `pi` CLI sessions as
@@ -225,29 +219,27 @@ allow_dirs = [
 
 ## `pi-roles`
 
-- `list_roles` — list builtin/project roles, optionally including user roles.
-- `get_role` — inspect one role; the full system prompt is opt-in.
-- `create_role` — persist a project role by default, or a user role when explicitly requested.
-- `call_role` — call one reusable role directly with an explicit instruction.
+- `role` — canonical role action tool. Use `action: "list" | "get" | "create" | "call"` instead of adding new fragmented role tool names.
+- `list_roles` — compatibility surface for `role({ action: "list" })`; list builtin/project roles, optionally including user roles.
+- `get_role` — compatibility surface for `role({ action: "get" })`; inspect one role; the full system prompt is opt-in.
+- `create_role` — compatibility surface for `role({ action: "create" })`; persist a project role by default, or a user role when explicitly requested.
+- `call_role` — compatibility surface for `role({ action: "call" })`; call one reusable role directly with an explicit instruction.
 
-`call_role` is intentionally minimal and task-agnostic:
+`role({ action: "call" })` / `call_role` is intentionally minimal and task-agnostic:
 
 - `mode: "fresh"` starts a new child session and is the default;
 - `mode: "forked"` requires explicit `forkFromSession` and shares that parent context;
 - it does not claim Spark tasks, write Spark artifacts, or schedule DAG work.
 
-Use `spark_run_ready_tasks` instead when a Spark task should be claimed, attributed, persisted, and tracked by Spark workflow-run state.
+Use `task({ action: "run_ready" })` instead when a Spark task should be claimed, attributed, persisted, and tracked by Spark workflow-run state.
 
 ## `pi-ask`
 
-- `ask_user` — focused single-question human-input primitive
-  with stable result details.
-- `ask_flow` — reusable multi-question/fullscreen form protocol,
-  state machine, renderer, replay mechanics, and result shape.
+- `ask` — canonical ask action tool. `action: "ask"` auto-selects the focused single-question or flow renderer from the request shape; `action: "flow"` forces the fullscreen flow renderer.
+- `ask_user` — compatibility focused single-question human-input primitive with stable result details.
+- `ask_flow` — compatibility reusable multi-question/fullscreen form protocol, state machine, renderer, replay mechanics, and result shape.
 
-`ask_user` and `ask_flow` are peers over the same ask contract, not
-primary/fallback implementations. Use `ask_user` for one focused question and
-`ask_flow` for multi-question forms or review/replay-heavy interactions.
+`ask_user` and `ask_flow` remain peers over the same ask contract, not primary/fallback implementations. New callers should use `ask` and let the package choose the focused or flow renderer unless the flow renderer is explicitly required.
 
 Shared ask contract:
 
@@ -274,17 +266,7 @@ Shared ask contract:
 - `ask_flow` may run a freeform-only request with only `input` UI available;
   absence of `select` does not imply default answers for that case.
 
-`spark_ask` builds Spark workflow semantics on top of this contract and must
-provide clear option descriptions explaining what each choice means. It is the
-canonical Spark flow-native ask surface: prefer `questions[]`, persist
-`ask-answer` artifacts as `{ request, result, summary }`, replay from those
-artifacts, and treat no-selection/cancelled gate results as blocked. Keep the
-package boundary clear: generic ask protocol/TUI/summary behavior belongs in
-`pi-ask`; the Spark ask artifact persistence/replay tool wiring lives in `packages/spark/src/extension/spark-ask-tool.ts` and consumes pi-ask primitives by their original names;
-concrete ask questions belong at the call site where the actual task, blocker,
-review, or decision context is known; Pi tool registration, Spark
-option-description validation, artifacts, and replay tool behavior belong in
-`packages/spark`.
+`ask` is the canonical ask surface and must provide clear option descriptions explaining what each choice means. During migration, `spark_ask` keeps Spark ask artifact persistence/replay as a compatibility wrapper that stores `ask-answer` artifacts as `{ request, result, summary }`; the facade cutover continues moving generic ask protocol/TUI/summary behavior into `pi-ask`. Concrete ask questions belong at the call site where the actual task, blocker, review, or decision context is known.
 
 ## `pi-cue`
 

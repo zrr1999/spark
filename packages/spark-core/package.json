@@ -14,5 +14,8 @@
   },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "pi-artifacts": "file:../pi-artifacts"
   }
 }

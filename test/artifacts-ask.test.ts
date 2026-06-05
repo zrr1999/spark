@@ -17,6 +17,7 @@ import {
   getDefaultConfig,
   PiAskFlowPayloadStore,
   PiAskFlowPayloadStoreFormatError,
+  registerPiAskActionTool,
   registerPiAskFlowTool,
   registerPiAskTools,
   runPiAskFlow,
@@ -630,6 +631,44 @@ void test("ask_user tool summary uses option labels rather than raw ids", async 
   const text = result.content.map((part: { text: string }) => part.text).join("\n");
   assert.match(text, /mode=Safe path/);
   assert.doesNotMatch(text, /safe_mode/);
+});
+
+void test("ask action tool dispatches canonical single-question asks", async () => {
+  const tools = new Map<string, { execute: Function }>();
+  const registerTool = (config: { name: string; execute: Function }) =>
+    tools.set(config.name, config);
+  registerPiAskTools({ registerTool });
+  registerPiAskFlowTool({ registerTool });
+  registerPiAskActionTool({ registerTool }, { resolveTool: (name) => tools.get(name) as never });
+  const tool = tools.get("ask");
+  assert.ok(tool);
+
+  const result = await tool.execute(
+    "ask-action-test",
+    {
+      action: "ask",
+      title: "Choose mode",
+      mode: "clarification",
+      questions: [
+        {
+          id: "mode",
+          prompt: "Which mode?",
+          type: "single",
+          options: [
+            { value: "fast_mode", label: "Fast path" },
+            { value: "safe_mode", label: "Safe path" },
+          ],
+        },
+      ],
+    },
+    new AbortController().signal,
+    () => undefined,
+    { ui: { select: async () => "Safe path" } },
+  );
+
+  const text = result.content.map((part: { text: string }) => part.text).join("\n");
+  assert.match(text, /mode=Safe path/);
+  assert.equal(result.details.request.questions.length, 1);
 });
 
 void test("ask_flow fullscreen requires explicit cwd for persisted payloads", async () => {

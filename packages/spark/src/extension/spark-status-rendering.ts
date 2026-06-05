@@ -62,7 +62,7 @@ export function renderSparkStatus(input: SparkStatusRenderInput): {
     appendRecentRoleRunCompletionLines(lines, input.recentRoleRunCompletions);
   if (input.view === "active" && !input.currentProject)
     lines.push(
-      "\nSpark available: no project selected for this session. Use spark_use_project to select a project, or use view=summary/full to inspect all projects.",
+      '\nSpark available: no project selected for this session. Use task({ action: "project_use" }) to select a project, or request summary/full history to inspect all projects.',
     );
 
   const renderedProjectDetails = renderProjectStatusLines(lines, input);

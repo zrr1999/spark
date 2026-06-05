@@ -67,7 +67,7 @@ export function registerSparkClaimTaskTool(
     name: "spark_claim_task",
     label: "Spark Claim Task",
     description:
-      "Create or update a concrete Spark task for this session. For Spark-native delegated work, tasks may include an optional roleRef hint, but spark_run_ready_tasks assigns the concrete executor role at dispatch; do not spawn nested pi CLI sessions as pseudo-roles unless explicitly testing Pi CLI behavior.",
+      'Compatibility surface for task({ action: "claim" }): create or update a concrete Spark task for this session. For Spark-native delegated work, tasks may include an optional roleRef hint, but task({ action: "run_ready" }) assigns the concrete executor role at dispatch; do not spawn nested pi CLI sessions as pseudo-roles unless explicitly testing Pi CLI behavior.',
     parameters: Type.Object({
       name: Type.Optional(
         Type.String({
@@ -89,7 +89,7 @@ export function registerSparkClaimTaskTool(
       roleRef: Type.Optional(
         Type.String({
           description:
-            "Optional builtin/project/user role spec id or ref from list_roles, e.g. planner or role:builtin-planner. This is a preferred executor hint; spark_run_ready_tasks can also assign a role at dispatch.",
+            'Optional builtin/project/user role spec id or ref from role({ action: "list" }), e.g. planner or role:builtin-planner. This is a preferred executor hint; task({ action: "run_ready" }) can also assign a role at dispatch.',
         }),
       ),
       plan: Type.Optional(taskPlanSchema()),

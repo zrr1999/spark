@@ -1156,14 +1156,16 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
 
       if (language === "cue-shell") {
         if (!resolvedPath.endsWith(".cue")) {
-          throw new Error(`script_run language=cue-shell path must end in .cue (got )`);
+          throw new Error(
+            `script_run language=cue-shell path must end in .cue (got ${resolvedPath})`,
+          );
         }
         const { readFile } = await import("node:fs/promises");
         let body: string;
         try {
           body = await readFile(resolvedPath, "utf-8");
         } catch (err) {
-          throw new Error(`script_run failed to read : ${(err as Error).message}`);
+          throw new Error(`script_run failed to read ${resolvedPath}: ${(err as Error).message}`);
         }
         return runCueScript(
           {

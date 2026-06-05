@@ -8,6 +8,8 @@ import { Type } from "typebox";
 const STATE_ENTRY = "pi-graft-state";
 const DEFAULT_CONNECT_TIMEOUT_MS = 500;
 const DEFAULT_START_TIMEOUT_MS = 5_000;
+const GLOBAL_GRAFTD_OPS = new Set(["status", "shutdown"]);
+const GRAFT_REPO_ACTIONS = ["add", "list", "sync", "lock", "update"] as const;
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 type JsonRecord = Record<string, JsonValue>;
@@ -64,6 +66,7 @@ export interface PiGraftExtensionApi {
 
 export interface ActiveGraftScratchState {
   workspace: string;
+  workspaceId?: string;
   base?: string;
   lastScratch?: string;
   updatedAt: string;
@@ -168,8 +171,25 @@ function workspaceSocketPath(_cwd: string): string {
   return join(graftHome(), "run", "daemon.sock");
 }
 
-function workspaceIdForRequest(): string {
-  return process.env.GRAFT_WORKSPACE?.trim() || "ws:default";
+const workspaceIdsByRoot = new Map<string, string>();
+
+async function workspaceIdForRequest(cwd: string): Promise<string> {
+  const fromEnv = process.env.GRAFT_WORKSPACE?.trim();
+  if (fromEnv) return fromEnv;
+
+  try {
+    const execution = await runDirectGraft(cwd, ["--json", "status"]);
+    const envelope = tryParseJsonRecord(execution.stdout);
+    const workspaceId = workspaceIdFromEnvelope(envelope);
+    if (workspaceId) {
+      workspaceIdsByRoot.set(cwd, workspaceId);
+      return workspaceId;
+    }
+  } catch {
+    /* Fall through to the last known id/default; the daemon will report a precise routing error. */
+  }
+
+  return workspaceIdsByRoot.get(cwd) ?? "ws:default";
 }
 
 function compactError(error: unknown): string {
@@ -276,6 +296,18 @@ function parseJsonRecord(text: string, context: string): JsonRecord {
   const parsed = tryParseJsonRecord(text);
   if (!parsed) throw new Error(`${context} did not return a JSON object.`);
   return parsed;
+}
+
+function workspaceIdFromEnvelope(envelope: JsonRecord | undefined): string | undefined {
+  const direct = stringField(envelope, "workspace_id");
+  if (direct?.startsWith("ws:")) return direct;
+  const message = stringField(envelope, "message");
+  if (!message) return undefined;
+  const line = message
+    .split(/\r?\n/)
+    .find((item) => item.startsWith("workspace_id\t") || item.includes("registered ws:"));
+  const match = /\b(ws:[A-Za-z0-9_.:-]+)/.exec(line ?? "");
+  return match?.[1];
 }
 
 async function directCliJson(
@@ -397,11 +429,13 @@ async function requestGraftd(
   const socketPath =
     options.spawnIfMissing === false ? workspaceSocketPath(cwd) : await ensureGraftd(cwd);
   const id = `pi-graft-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const requestParams = GLOBAL_GRAFTD_OPS.has(op)
+    ? params
+    : { workspace_id: await workspaceIdForRequest(cwd), workspace_root: cwd, ...params };
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(socketPath);
     let buffer = "";
     socket.once("connect", () => {
-      const requestParams = { workspace_id: workspaceIdForRequest(), cwd, ...params };
       socket.write(`${JSON.stringify({ id, op, params: requestParams })}\n`);
     });
     socket.on("data", (chunk) => {
@@ -458,6 +492,7 @@ function restoreState(ctx: PiGraftSessionContext): ActiveGraftScratchState | und
     state = {
       workspace,
       updatedAt,
+      workspaceId: stringField(nextState, "workspaceId"),
       base: stringField(nextState, "base"),
       lastScratch: stringField(nextState, "lastScratch"),
       lastCandidate: stringField(nextState, "lastCandidate"),
@@ -473,6 +508,7 @@ function stateSummary(state: ActiveGraftScratchState | undefined): string {
   }
   return [
     `workspace: ${state.workspace}`,
+    `workspaceId: ${state.workspaceId ?? "auto"}`,
     `base: ${state.base ?? "none"}`,
     `lastScratch: ${state.lastScratch ?? "none"}`,
     `lastCandidate: ${state.lastCandidate ?? "none"}`,
@@ -505,6 +541,24 @@ function optionalBooleanParam(
   return value;
 }
 
+function enumParam<const T extends readonly string[]>(
+  params: Record<string, unknown>,
+  field: string,
+  fallback: T[number],
+  values: T,
+): T[number] {
+  const value = params[field];
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${field} must be one of: ${values.join(", ")}.`);
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!(values as readonly string[]).includes(normalized)) {
+    throw new Error(`${field} must be one of: ${values.join(", ")}.`);
+  }
+  return normalized as T[number];
+}
+
 function stringArrayParam(params: Record<string, unknown>, field: string): string[] | undefined {
   const value = params[field];
   if (value === undefined) return undefined;
@@ -531,7 +585,27 @@ function cliArgvParam(params: Record<string, unknown>): string[] {
   return argv;
 }
 
-const DIRECT_CLI_COMMANDS = new Set(["init", "explain", "ps", "doctor"]);
+const DIRECT_CLI_COMMANDS = new Set([
+  "attach",
+  "cache",
+  "candidate",
+  "candidates",
+  "clone",
+  "detach",
+  "diff",
+  "discard",
+  "doctor",
+  "evidence",
+  "explain",
+  "incoming",
+  "init",
+  "ps",
+  "property",
+  "scratch",
+  "search",
+  "show",
+  "status",
+]);
 
 function primaryCliCommand(argv: string[]): string | undefined {
   for (let index = 0; index < argv.length; index += 1) {
@@ -553,9 +627,40 @@ function hasHelpFlag(argv: string[]): boolean {
   return argv.some((arg) => arg === "--help" || arg === "-h");
 }
 
+function secondaryCliCommand(argv: string[], primary: string): string | undefined {
+  let foundPrimary = false;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]!;
+    if (arg === "--cwd") {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--cwd=") || arg === "--json") continue;
+    if (arg.startsWith("-")) continue;
+    if (!foundPrimary) {
+      foundPrimary = arg === primary;
+      continue;
+    }
+    return arg;
+  }
+  return undefined;
+}
+
 function shouldRunDirectCli(argv: string[]): boolean {
   const primary = primaryCliCommand(argv);
-  return primary !== undefined && (DIRECT_CLI_COMMANDS.has(primary) || hasHelpFlag(argv));
+  if (primary === undefined) return false;
+  if (hasHelpFlag(argv)) return true;
+  if (primary === "repo") {
+    const subcommand = secondaryCliCommand(argv, primary);
+    return subcommand === "list";
+  }
+  if (primary === "registry") {
+    return secondaryCliCommand(argv, primary) !== "import";
+  }
+  if (primary === "gc") {
+    return !argv.includes("--apply");
+  }
+  return DIRECT_CLI_COMMANDS.has(primary);
 }
 
 function formatEnvelope(envelope: JsonRecord): string {
@@ -776,6 +881,7 @@ function mergeState(
   const base = updates.base === null ? undefined : (updates.base ?? sameWorkspace?.base);
   return {
     workspace: cwd,
+    workspaceId: updates.workspaceId ?? sameWorkspace?.workspaceId,
     base,
     lastScratch: updates.lastScratch ?? sameWorkspace?.lastScratch,
     lastCandidate: updates.lastCandidate ?? sameWorkspace?.lastCandidate,
@@ -817,6 +923,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
 
   function rememberState(cwd: string, updates: StateUpdates): ActiveGraftScratchState {
     activeState = mergeState(activeState, cwd, updates);
+    if (activeState.workspaceId) workspaceIdsByRoot.set(cwd, activeState.workspaceId);
     registerState(pi, activeState);
     return activeState;
   }
@@ -824,6 +931,8 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   pi.on("session_start", (_event: unknown, ctx: PiGraftSessionContext) => {
     lastCwd = ctx.cwd;
     activeState = restoreState(ctx);
+    if (activeState?.workspaceId)
+      workspaceIdsByRoot.set(activeState.workspace, activeState.workspaceId);
   });
 
   pi.registerCommand("graft-attach", {
@@ -938,8 +1047,10 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const argv = ["--json", "init"];
       if (optionalBooleanParam(params, "registerOnly")) argv.push("--register-only");
       const { envelope, execution } = await directCliJson(cwd, argv);
+      const workspaceId = workspaceIdFromEnvelope(envelope);
+      const state = workspaceId ? rememberState(cwd, { workspaceId }) : undefined;
       lastCwd = cwd;
-      return envelopeToolResult(envelope, { execution });
+      return envelopeToolResult(envelope, { execution, state });
     },
   });
 
@@ -1384,11 +1495,11 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const target =
         optionalStringParam(params, "target") ?? state?.lastPatch ?? state?.lastCandidate;
       if (!target) throw new Error("graft_show requires target or a previous candidate/patch.");
-      const argv = ["show", target];
+      const argv = ["--json", "show", target];
       if (optionalBooleanParam(params, "evidence")) argv.push("--evidence");
       if (optionalBooleanParam(params, "change")) argv.push("--change");
-      const envelope = await cliExec(cwd, argv);
-      return envelopeToolResult(envelope, { state });
+      const { text, details } = await executeCliArgv(cwd, argv);
+      return { content: [{ type: "text", text }], details: { state, ...details } };
     },
   });
 
@@ -1412,8 +1523,8 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         optionalStringParam(params, "subject") ?? state?.lastPatch ?? state?.lastCandidate;
       if (!subject)
         throw new Error("graft_evidence requires subject or a previous candidate/patch.");
-      const envelope = await cliExec(cwd, ["evidence", subject]);
-      return envelopeToolResult(envelope, { state });
+      const { text, details } = await executeCliArgv(cwd, ["--json", "evidence", subject]);
+      return { content: [{ type: "text", text }], details: { state, ...details } };
     },
   });
 
@@ -1434,14 +1545,14 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
-      const argv = ["candidates"];
+      const argv = ["--json", "candidates"];
       const property = optionalStringParam(params, "property");
       const producer = optionalStringParam(params, "producer");
       if (property) argv.push("--property", property);
       if (optionalBooleanParam(params, "failed")) argv.push("--failed");
       if (producer) argv.push("--producer", producer);
-      const envelope = await cliExec(cwd, argv);
-      return envelopeToolResult(envelope);
+      const { text, details } = await executeCliArgv(cwd, argv);
+      return { content: [{ type: "text", text }], details };
     },
   });
 
@@ -1465,7 +1576,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
-      const argv = ["search"];
+      const argv = ["--json", "search"];
       const property = optionalStringParam(params, "property");
       const base = optionalStringParam(params, "base");
       const producer = optionalStringParam(params, "producer");
@@ -1474,8 +1585,8 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       if (base) argv.push("--base", base);
       if (producer) argv.push("--producer", producer);
       if (hasEvidence) argv.push("--has-evidence", hasEvidence);
-      const envelope = await cliExec(cwd, argv);
-      return envelopeToolResult(envelope);
+      const { text, details } = await executeCliArgv(cwd, argv);
+      return { content: [{ type: "text", text }], details };
     },
   });
 
@@ -1511,6 +1622,60 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       if (ref) argv.push("--ref", ref);
       const envelope = await cliExec(cwd, argv);
       return envelopeToolResult(envelope, { state });
+    },
+  });
+
+  pi.registerTool({
+    name: "graft_repo",
+    label: "Graft Repo",
+    description:
+      "Manage Graft configured repositories through the current repo add/list/sync/lock/update workflow.",
+    parameters: Type.Object({
+      action: Type.Optional(
+        Type.String({ description: "Action: add, list, sync, lock, or update. Default: list." }),
+      ),
+      repoId: Type.Optional(
+        Type.String({
+          description:
+            "Repository id. Required for action=add; optional filter for sync/lock/update.",
+        }),
+      ),
+      url: Type.Optional(Type.String({ description: "Repository URL or local path for add." })),
+      defaultBranch: Type.Optional(
+        Type.String({ description: "Default branch label to record for add." }),
+      ),
+      cwd: Type.Optional(Type.String({ description: "Working directory; defaults to ctx.cwd." })),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const action = enumParam(params, "action", "list", GRAFT_REPO_ACTIONS);
+      if ("cwd" in params && typeof params.cwd !== "string")
+        throw new Error("cwd must be a string.");
+      const cwd = optionalStringParam(params, "cwd") ?? toolCwd(ctx, activeState, lastCwd);
+      const repoId = optionalStringParam(params, "repoId");
+      const url = optionalStringParam(params, "url");
+      const defaultBranch = optionalStringParam(params, "defaultBranch");
+      const argv = ["repo", action];
+
+      if (action === "add") {
+        if (!repoId) throw new Error("graft_repo action=add requires repoId.");
+        if (!url) throw new Error("graft_repo action=add requires url.");
+        argv.push(repoId, url);
+        if (defaultBranch) argv.push("--default-branch", defaultBranch);
+      } else {
+        if (url) throw new Error(`graft_repo action=${action} does not accept url.`);
+        if (defaultBranch)
+          throw new Error(`graft_repo action=${action} does not accept defaultBranch.`);
+        if (repoId && action !== "list") argv.push(repoId);
+      }
+
+      const { text, details } = await executeCliArgv(cwd, argv);
+      return { content: [{ type: "text", text }], details: { action, repoId, ...details } };
     },
   });
 

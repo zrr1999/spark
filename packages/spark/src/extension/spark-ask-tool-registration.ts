@@ -17,8 +17,8 @@ export function registerSparkAskTools(registerSparkTool: SparkToolRegistrar): vo
     description:
       "Ask the user a structured multi-question clarification, decision, approval, or unblock form and persist the answer as an artifact.",
     promptGuidelines: [
-      "Use spark_ask as the single Spark ask tool; prefer questions[] for both single- and multi-question asks.",
-      "When user-facing open questions or decision points would change task scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order, turn them into a context-specific spark_ask instead of leaving them as prose.",
+      "Use ask as the canonical ask tool; spark_ask is a compatibility surface for persisted Spark ask artifacts.",
+      "When user-facing open questions or decision points would change task scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order, turn them into context-specific ask questions instead of leaving them as prose.",
       "Each option needs a stable id, short label, and clear description explaining what choosing it means.",
       "Use freeform questions for notes/context instead of creating business options named Other or Type your own.",
       "Do not use generic or template intake questions; ask only questions grounded in the inspected situation whose answers would change the next action or plan.",

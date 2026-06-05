@@ -86,7 +86,13 @@ export interface CallRoleToolParams {
 }
 
 export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
-  pi.registerTool({
+  const registeredRoleTools = new Map<string, PiRolesToolConfig>();
+  const registerRoleTool = (config: PiRolesToolConfig): void => {
+    registeredRoleTools.set(config.name, config);
+    pi.registerTool(config);
+  };
+
+  registerRoleTool({
     name: "list_roles",
     label: "List Roles",
     description: "List builtin, project, and optionally user Pi role specs.",
@@ -140,7 +146,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerRoleTool({
     name: "get_role",
     label: "Get Role",
     description: "Inspect one builtin, project, or user Pi role spec.",
@@ -205,7 +211,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerRoleTool({
     name: "create_role",
     label: "Create Role",
     description: "Create and persist a project or explicitly requested user Pi role spec.",
@@ -256,7 +262,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerRoleTool({
     name: "call_role",
     label: "Call Role",
     description:
@@ -383,6 +389,77 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       };
     },
   });
+
+  registerRoleTool({
+    name: "role",
+    label: "Role",
+    description:
+      "Canonical role capability. Use action=list, get, create, or call instead of fragmented role tool names.",
+    parameters: Type.Object({
+      action: Type.String({ description: "list | get | create | call" }),
+      role: Type.Optional(Type.String({ description: "Role id or ref for get/call." })),
+      source: Type.Optional(Type.String({ description: "builtin | project | user." })),
+      includeUser: Type.Optional(Type.Boolean({ description: "Also load user roles." })),
+      includePrompt: Type.Optional(
+        Type.Boolean({ description: "Include full role system prompt." }),
+      ),
+      limit: Type.Optional(Type.Number({ description: "Maximum role rows for list." })),
+      id: Type.Optional(Type.String({ description: "Stable role id for create." })),
+      description: Type.Optional(Type.String({ description: "Role description for create." })),
+      systemPrompt: Type.Optional(Type.String({ description: "Role system prompt for create." })),
+      rationale: Type.Optional(Type.String({ description: "Role creation rationale." })),
+      expectedUses: Type.Optional(Type.Array(Type.String())),
+      allowedTools: Type.Optional(Type.Array(Type.String())),
+      defaultModel: Type.Optional(Type.String()),
+      instruction: Type.Optional(Type.String({ description: "Instruction for call." })),
+      mode: Type.Optional(Type.String({ description: "fresh | forked for call." })),
+      piCommand: Type.Optional(Type.String()),
+      cwd: Type.Optional(Type.String()),
+      sessionDir: Type.Optional(Type.String()),
+      forkFromSession: Type.Optional(Type.String()),
+      timeoutMs: Type.Optional(Type.Number()),
+      model: Type.Optional(Type.String()),
+    }),
+    renderCall(args, theme) {
+      return renderToolCall(
+        "role",
+        [
+          formatStringArg(args.action, { fallback: "?" }),
+          formatStringArg(args.role),
+          formatStringArg(args.id, { prefix: "id=" }),
+        ],
+        theme,
+      );
+    },
+    execute(toolCallId, params, signal, onUpdate, ctx) {
+      const action = normalizeRoleAction(params.action);
+      const target = roleToolNameForAction(action);
+      const tool = registeredRoleTools.get(target);
+      if (!tool) throw new Error(`role action adapter could not find ${target}`);
+      return tool.execute(toolCallId, stripRoleAction(params), signal, onUpdate, ctx);
+    },
+  });
+}
+
+type RoleAction = "list" | "get" | "create" | "call";
+
+function normalizeRoleAction(value: unknown): RoleAction {
+  if (value === "list" || value === "get" || value === "create" || value === "call") return value;
+  throw new Error("role.action must be list, get, create, or call");
+}
+
+function roleToolNameForAction(
+  action: RoleAction,
+): "list_roles" | "get_role" | "create_role" | "call_role" {
+  if (action === "list") return "list_roles";
+  if (action === "get") return "get_role";
+  if (action === "create") return "create_role";
+  return "call_role";
+}
+
+function stripRoleAction(params: Record<string, unknown>): Record<string, unknown> {
+  const { action: _action, ...rest } = params;
+  return Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined));
 }
 
 function requiredPiRolesCwd(ctx: { cwd?: string }, toolName: string): string {

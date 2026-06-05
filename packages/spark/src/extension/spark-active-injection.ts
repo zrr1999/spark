@@ -84,7 +84,7 @@ export function renderSparkActiveSystemPrompt(
   reason: string,
   mode: SparkSessionMode = "auto",
 ): string {
-  const sparkPrompt = `Spark active (${reason}); mode: ${mode}. Manage project/task/ask/run state via Spark tools; claim \u22641 unfinished task per session; spark_ask on real blockers.`;
+  const sparkPrompt = `Spark active (${reason}); mode: ${mode}. Spark is the mode facade; manage state via task, artifact, ask, role, learning, context, recall, and workflow tools. Claim ≤1 unfinished task per session; ask on real blockers.`;
   return basePrompt ? `${basePrompt}\n\n${sparkPrompt}` : sparkPrompt;
 }
 

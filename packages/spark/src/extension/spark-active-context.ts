@@ -80,7 +80,9 @@ function renderActiveSparkProjectSummary(
   }
   const hiddenSessionClaimed = sessionClaimed.length - visibleSessionClaimed.length;
   if (hiddenSessionClaimed > 0)
-    lines.push(`- … ${hiddenSessionClaimed} more claimed task(s); use spark_status for details`);
+    lines.push(
+      `- … ${hiddenSessionClaimed} more claimed task(s); use task({ action: "status" }) for details`,
+    );
 
   return lines.join("\n");
 }
@@ -91,7 +93,7 @@ function renderNoCurrentSparkProjectSummary(graph: TaskGraph): string {
   return [
     "Spark available: no project selected for this session.",
     `- Projects: ${projects.length} total / ${activeProjects.length} active`,
-    "- Use spark_use_project to select or create a current project before planning, claiming, or updating project-bound tasks.",
+    '- Use task({ action: "project_use" }) to select or create a current project before planning, claiming, or updating project-bound tasks.',
   ].join("\n");
 }
 

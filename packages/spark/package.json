@@ -18,7 +18,10 @@
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.74.1",
+    "pi-context": "file:../pi-context",
+    "pi-learnings": "file:../pi-learnings",
     "pi-roles": "file:../pi-roles",
+    "pi-tasks": "file:../pi-tasks",
     "spark-core": "file:../spark-core",
     "spark-goal": "file:../spark-goal",
     "spark-learnings": "file:../spark-learnings",

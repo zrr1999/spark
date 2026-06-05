@@ -11,13 +11,28 @@ but end-to-end local vertical slice.
    - Spark error classes
    - core contracts for roles, tasks, artifacts, ask, review, cue, and traces
    - typed JSON artifact metadata, content hashes, blob files, provenance, lineage, and list/query/diff helpers
+- `pi-learnings`
+   - generic evidence-backed learning capability package
+   - canonical `learning` action tool contract with Spark-host compatibility handlers during migration
+   - re-exports the current `spark-learnings` implementation so plural local `.learnings/` stores remain local-only and unmoved
 - `spark-learnings`
-   - typed evidence-backed `learning` / `learning-candidate` / `learning-export` records
+   - typed evidence-backed `learning` / `learning-candidate` / `learning-export` records implementation now promoted through `pi-learnings`
    - active/candidate/stale/superseded/rejected lifecycle helpers
    - keyword search, explicit Markdown export/import, and legacy `compound-learnings` migration
+- `pi-context`
+   - registered context provider contracts and canonical `context` list/preview tool with per-provider budgets
+   - Spark registers `spark.active` as a bounded provider for active project/task/TODO/SPARK.md context
+   - freeform system prompt injection is intentionally not supported
+- `pi-recall`
+   - controlled explicit-scope `user | workspace | repo` recall candidate store and canonical `recall` tool
+   - candidate record/list/search/reject lifecycle only; no automatic memory promotion and no `.learnings/` writes
+- `pi-workflows`
+   - canonical `workflow` list/read tool for saved scripts in controlled workspace `.spark/workflows/*.js` and user `~/.agents/workflows/*.js` roots
+   - no inline workflow execution and no `/goal` aliasing; execution remains explicit host/runtime policy
 - `pi-ask`
-   - minimal `ask_user` primitive for focused single-question asks
-   - reusable `ask_flow` state machine, renderer, replay
+   - canonical `ask` action tool that dispatches focused asks to `ask_user` and multi/replay-heavy requests to `ask_flow`
+   - compatibility `ask_user` primitive for focused single-question asks
+   - compatibility `ask_flow` state machine, renderer, replay
      helpers, payload store, and result shape for
      multi-question/fullscreen forms
    - shared ask contract across `ask_user` and `ask_flow`:
@@ -51,10 +66,15 @@ but end-to-end local vertical slice.
    - active-run listing/cancellation and timeout signalling
    - explicit `forkFromSession` requirement for forked runs
    - role-ref requirement for every run request
-   - role-spec management tools (`list_roles`, `get_role`, `create_role`)
-   - minimal task-agnostic `call_role` tool with fresh and explicit forked modes
+   - canonical `role` action tool for `list`, `get`, `create`, and `call`
+   - compatibility role-spec management tools (`list_roles`, `get_role`, `create_role`)
+   - compatibility minimal task-agnostic `call_role` tool with fresh and explicit forked modes
+- `pi-tasks`
+   - generic project/task/TODO/run graph capability package
+   - canonical `task` action tool contract with Spark-host compatibility handlers for project, task, TODO, run, and cleanup actions during migration
+   - re-exports the current `spark-tasks` implementation so no persisted `.spark/projects.json` or `.spark/todos/*` migration is required
 - `spark-tasks`
-   - project/task DAG
+   - project/task DAG implementation now promoted through `pi-tasks`
    - cycle detection
    - dependency readiness
    - persisted graph store backed by `TaskGraphStore` at
@@ -86,8 +106,11 @@ but end-to-end local vertical slice.
    - heartbeat loop for active runtime claims
    - Spark-specific active role-run tracking for timeout/reconciliation and kill controls
    - persisted expired-claim sweeper and distinct `runtime_timeout` failure marking
+- `pi-artifacts`
+   - generic artifact/evidence store and canonical `artifact` action tool for `record`, `list`, `read`, `link`, and `compact`
+   - preserved Spark artifact layout under `.spark/artifacts` via `defaultArtifactStore(cwd)` and `spark-core` re-exports during migration
 - `spark`
-   - `/spark <idea>`, `/research <focus>`, `/plan <focus>`, `/execute <focus>`, and `/workflow[:selector] <focus>` commands; see [tools.md](./tools.md) for the canonical command-mode wording.
+   - `/spark <idea>`, `/research <focus>`, `/plan <focus>`, `/execute <focus>`, `/goal <focus>`, and `/workflow[:selector] <focus>` commands; see [tools.md](./tools.md) for the canonical command-mode wording.
    - `spark_status` tool
    - `spark_claim_task` tool for named model-claimed current work
    - `spark_plan_tasks` writes durable task-plan changes directly after
@@ -97,20 +120,17 @@ but end-to-end local vertical slice.
    - `spark_update_todos` for independent session TODOs
    - `spark_run_ready_tasks` tool
    - flow-native multi-question `spark_ask` and
-     `spark_ask_replay` tools
-   - `spark_finish_task`, `spark_list_artifacts`, and `spark_get_artifact` tools
+     `spark_ask_replay` compatibility tools; canonical generic asks use `ask`
+   - `spark_finish_task` tool; artifact listing/reading now uses the canonical generic `artifact` tool instead of `spark_list_artifacts` / `spark_get_artifact`
    - `spark_learning_record` / `spark_learning_search` / `spark_learning_list` /
-     `spark_learning_read` / lifecycle tools plus explicit Markdown export/import
-     for local Spark learnings; legacy `.learnings/{patterns,gotchas,decisions}`
+     `spark_learning_read` / lifecycle tools remain compatibility surfaces; canonical learning operations use `learning`
+     for local evidence-backed learnings; legacy `.learnings/{patterns,gotchas,decisions}`
      compound-learnings imports are supported with dry-run by default
    - two-layer activation detection: `SPARK.md` /
      `.spark/projects.json` /
      `~/.config/spark/config.toml` allowlist first,
      high-confidence natural-language idea detection second
-   - active-project tool hints for `spark_status`,
-     `spark_claim_task`, `spark_update_task_todos`,
-     `spark_update_todos`, `spark_run_ready_tasks`, and
-     `pi-cue` tools
+   - active-project tool hints for the canonical `task` tool plus `artifact`, learning, ask, role, and `pi-cue` tools
    - `/spark` initializes state without a generic intake
      template; clarification and decision asks are grounded in
      context from the current workspace, and plan-changing open

@@ -60,6 +60,42 @@ void test("role spec tools list, get, and create project roles", async () => {
   }
 });
 
+void test("role action tool dispatches canonical list, get, and create actions", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-action-tool-"));
+  try {
+    const tools = registerRoleToolsForTest();
+    assert.ok(tools.has("role"), "missing canonical role tool");
+
+    const created = await executeRoleTool(
+      tools,
+      "role",
+      {
+        action: "create",
+        id: "action-inspector",
+        description: "Inspect repository state through the canonical role tool.",
+        systemPrompt: "You inspect repositories and report concise findings.",
+        rationale: "Reusable inspection role for project work.",
+        expectedUses: ["repo inspection"],
+      },
+      dir,
+    );
+    assert.match(created.content[0]?.text ?? "", /Role created: action-inspector/);
+
+    const listed = await executeRoleTool(tools, "role", { action: "list", source: "project" }, dir);
+    assert.match(listed.content[0]?.text ?? "", /action-inspector/);
+
+    const got = await executeRoleTool(
+      tools,
+      "role",
+      { action: "get", role: "action-inspector" },
+      dir,
+    );
+    assert.match(got.content[0]?.text ?? "", /source: project/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("role spec tools include registered builtin role providers", async () => {
   const providerId = "pi-roles-tool-test";
   const now = "2026-06-04T00:00:00.000Z";
@@ -141,6 +177,22 @@ void test("call_role launches fresh role runs", async () => {
     assert.equal(details.record?.status, "succeeded");
     assert.equal(details.record?.mode, "fresh");
     assert.equal(details.jsonEventCount, 1);
+
+    const canonical = await executeRoleTool(
+      tools,
+      "role",
+      {
+        action: "call",
+        role: "worker",
+        instruction: "Run the fake worker through the canonical role tool.",
+        mode: "fresh",
+        model: "test/model",
+        piCommand: fakePi,
+        timeoutMs: 5_000,
+      },
+      dir,
+    );
+    assert.match(canonical.content[0]?.text ?? "", /Role call succeeded: worker/);
   } finally {
     if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
     else process.env.PI_ROLES_HOME = previousBindingHome;

@@ -122,7 +122,15 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
     registerTool: (config) => askTools.set(config.name, config),
   });
   assertAllToolsHaveCallRenderers(askTools);
-  assert.deepEqual([...askTools.keys()].sort(), ["ask_flow", "ask_user"]);
+  assert.deepEqual([...askTools.keys()].sort(), ["ask", "ask_flow", "ask_user"]);
+  assert.equal(
+    renderCall(askTools, "ask", {
+      action: "flow",
+      title: "Choose scope",
+      questions: [{ id: "scope", prompt: "What next?" }],
+    }),
+    "ask flow Choose scope 1q",
+  );
   assert.equal(
     renderCall(askTools, "ask_user", {
       title: "Choose scope",

@@ -20,43 +20,6 @@ export interface SparkSavedWorkflowDiscovery {
   errors: SparkSavedWorkflowError[];
 }
 
-export interface SparkInlineWorkflowDescriptor {
-  title: string;
-  description: string;
-  phases: string[];
-}
-
-export interface SparkInlineWorkflowDiscovery {
-  workflow?: SparkInlineWorkflowDescriptor;
-  error?: string;
-}
-
-export function discoverSparkInlineWorkflow(
-  focus: string | undefined,
-): SparkInlineWorkflowDiscovery {
-  const script = extractInlineWorkflowScript(focus);
-  if (!script) return {};
-  try {
-    const meta = parseSparkWorkflowScript(script).meta;
-    return {
-      workflow: {
-        title: meta.name,
-        description: meta.description,
-        phases: meta.phases?.map((phase) => phase.title) ?? [],
-      },
-    };
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-function extractInlineWorkflowScript(focus: string | undefined): string | undefined {
-  const text = focus ?? "";
-  const fence = /```(?:js|javascript|workflow)\s*\n([\s\S]*?)```/iu.exec(text);
-  if (fence?.[1]?.includes("export const meta")) return fence[1];
-  return undefined;
-}
-
 export async function discoverSparkSavedWorkflows(
   cwd: string,
 ): Promise<SparkSavedWorkflowDiscovery> {
@@ -101,15 +64,13 @@ export function renderSparkWorkflowGuidance(
 ): string {
   const budgetCatalog = renderWorkflowBudgetCatalog();
   const savedCatalog = renderSavedWorkflowCatalog(saved);
-  const inlineCatalog = renderInlineWorkflowCatalog(discoverSparkInlineWorkflow(focus));
   if (workflowSelector?.startsWith("workspace:") || workflowSelector?.startsWith("user:")) {
     return (
       "Selected saved workflow: " +
       workflowSelector +
       ". Use registry metadata only for discovery; execute the workflow body only through Spark workflow runtime and role-run adapter boundaries." +
       budgetCatalog +
-      savedCatalog +
-      inlineCatalog
+      savedCatalog
     );
   }
   const goalFocus = /(goal|autonomous|continue|until done|完成所有|持续|自主|继续)/i.test(
@@ -120,10 +81,9 @@ export function renderSparkWorkflowGuidance(
     : "No saved workflow was selected confidently from the focus.";
   return (
     recommendation +
-    " Empty /workflow should ask for an explicit workspace/user selector before execution." +
+    " /workflow only accepts saved workspace:/user: workflow selectors; ask for an explicit selector before execution." +
     budgetCatalog +
-    savedCatalog +
-    inlineCatalog
+    savedCatalog
   );
 }
 
@@ -154,32 +114,9 @@ function renderSavedWorkflowCatalog(saved: SparkSavedWorkflowDiscovery): string 
   }
   if (!lines.length) return "";
   lines.push(
-    "Ask with spark_ask before selecting a saved workflow unless the focus clearly names it; discovery never executes saved workflow bodies.",
+    "Ask with ask before selecting a saved workflow unless the focus clearly names it; discovery never executes saved workflow bodies.",
   );
   return "\n" + lines.join("\n");
-}
-
-function renderInlineWorkflowCatalog(inline: SparkInlineWorkflowDiscovery): string {
-  if (inline.workflow) {
-    return (
-      "\n\nInline workflow detected in the /workflow focus (metadata only; body was not executed or saved):\n" +
-      "- " +
-      inline.workflow.title +
-      ": " +
-      inline.workflow.description +
-      (inline.workflow.phases.length
-        ? " (phases: " + inline.workflow.phases.join(", ") + ")"
-        : "") +
-      "\nConfirm with spark_ask before executing this one-shot inline workflow if it changes scope, roles, or approval requirements."
-    );
-  }
-  if (inline.error) {
-    return (
-      "\n\nInline workflow validation issue (not executable until fixed): " +
-      inline.error.slice(0, 240)
-    );
-  }
-  return "";
 }
 
 function renderWorkflowBudgetCatalog(): string {

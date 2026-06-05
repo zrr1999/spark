@@ -30,11 +30,18 @@
     "prepare": "pnpx @j178/prek install --hook-type commit-msg --hook-type pre-commit"
   },
   "dependencies": {
+    "pi-artifacts": "file:packages/pi-artifacts",
     "pi-ask": "file:packages/pi-ask",
+    "pi-btw": "file:packages/pi-btw",
+    "pi-context": "file:packages/pi-context",
     "pi-cue": "file:packages/pi-cue",
     "pi-extension-api": "file:packages/pi-extension-api",
     "pi-graft": "file:packages/pi-graft",
+    "pi-learnings": "file:packages/pi-learnings",
+    "pi-recall": "file:packages/pi-recall",
     "pi-roles": "file:packages/pi-roles",
+    "pi-tasks": "file:packages/pi-tasks",
+    "pi-workflows": "file:packages/pi-workflows",
     "spark-core": "file:packages/spark-core",
     "spark-goal": "file:packages/spark-goal",
     "spark-learnings": "file:packages/spark-learnings",
@@ -55,13 +62,18 @@
   "pi": {
     "extensions": [
       "./packages/pi-ask/src/extension-entry.ts",
+      "./packages/pi-artifacts/src/extension-entry.ts",
+      "./packages/pi-btw/extensions/btw.ts",
       "./packages/pi-cue/src/extension/index.ts",
       "./packages/pi-roles/src/extension-entry.ts",
+      "./packages/pi-recall/src/extension-entry.ts",
+      "./packages/pi-workflows/src/extension-entry.ts",
       "./packages/pi-graft/src/extension-entry.ts",
       "./packages/spark-cli/src/baidu-oneapi-provider.ts",
       "./packages/spark/src/extension/index.ts"
     ],
     "skills": [
+      "./packages/pi-btw/skills",
       "./packages/pi-cue/skills",
       "./packages/spark/skills"
     ]

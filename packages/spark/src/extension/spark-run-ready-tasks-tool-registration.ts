@@ -54,7 +54,7 @@ export function registerSparkRunReadyTasksTool(
     name: "spark_run_ready_tasks",
     label: "Spark Run Ready Tasks",
     description:
-      "Run all currently ready Spark tasks with their bound builtin/project/user Spark role specs and persist task-run artifacts. Dry-run by default. Use this for Spark-native role/task workflow instead of spawning nested pi CLI sessions.",
+      'Compatibility surface for task({ action: "run_ready" }): run all currently ready Spark tasks with their bound builtin/project/user Spark role specs and persist task-run artifacts. Dry-run by default. Use this for Spark-native role/task workflow instead of spawning nested pi CLI sessions.',
     parameters: Type.Object({
       dryRun: Type.Optional(Type.Boolean({ default: true })),
       maxConcurrency: Type.Optional(
@@ -102,7 +102,7 @@ export function registerSparkRunReadyTasksTool(
           content: [
             {
               type: "text",
-              text: "No current Spark project selected. Use spark_use_project before running ready tasks.",
+              text: 'No current Spark project selected. Use task({ action: "project_use" }) before running ready tasks.',
             },
           ],
           details: { found: false, error: "no_current_project" },

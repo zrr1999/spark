@@ -33,13 +33,13 @@ export function renderSparkInitFollowUp(result: SparkInitResult): string {
     return [
       summary,
       "",
-      "Spark 初始化只创建了最小本地状态；不要把自动项目标题当成最终项目命名。先按用户原始意图研究上下文并给出回应：如果阅读真实上下文后发现当前标题只是动作/请求复述，或已有更合适的项目标签，请用 spark_rename_project 动态改名。只有在确实需要组织具体可执行工作时才调用 spark_plan_tasks；不要因为 Spark 刚初始化就创建任务。",
+      'Spark 初始化只创建了最小本地状态；不要把自动项目标题当成最终项目命名。先按用户原始意图研究上下文并给出回应：如果阅读真实上下文后发现当前标题只是动作/请求复述，或已有更合适的项目标签，请用 task({ action: "project_update" }) 动态改名。只有在确实需要组织具体可执行工作时才调用 task({ action: "plan" })；不要因为 Spark 刚初始化就创建任务。',
     ].join("\n");
   }
   return [
     summary,
     "",
-    "Spark initialization only created minimal local state; do not treat the automatic project title as the final project name. First research the context and respond to the user's original intent: if the inspected context shows the current title only repeats an action/request, or a better project label is available, call spark_rename_project with that dynamic name. Call spark_plan_tasks only when there are concrete executable work items to organize; do not create tasks merely because Spark just initialized.",
+    'Spark initialization only created minimal local state; do not treat the automatic project title as the final project name. First research the context and respond to the user\'s original intent: if the inspected context shows the current title only repeats an action/request, or a better project label is available, call task({ action: "project_update" }) with that dynamic name. Call task({ action: "plan" }) only when there are concrete executable work items to organize; do not create tasks merely because Spark just initialized.',
   ].join("\n");
 }
 

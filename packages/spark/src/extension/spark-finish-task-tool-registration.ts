@@ -52,7 +52,7 @@ export function registerSparkFinishTaskTool(
     name: "spark_finish_task",
     label: "Spark Finish Task",
     description:
-      "Finish this session's claimed Spark task as done, failed, or cancelled. Defaults to the current claimed task and status=done.",
+      'Compatibility surface for task({ action: "finish" }): finish this session\'s claimed Spark task as done, failed, or cancelled. Defaults to the current claimed task and status=done.',
     parameters: Type.Object({
       task: Type.Optional(
         Type.String({
@@ -194,7 +194,7 @@ function renderExecutionModeFinishSuffix(
           nextReady.name +
           ": " +
           nextReady.title +
-          ". Continue now using the Spark goal continuation below: claim this task with spark_claim_task, execute it, verify evidence, then call spark_finish_task again. Do not stop after this task unless blocked, no ready task remains, a user decision is required, validation fails, or the user interrupts.\n\n" +
+          '. Continue now using the Spark goal continuation below: claim this task with task({ action: "claim" }), execute it, verify evidence, then call task({ action: "finish" }) again. Do not stop after this task unless blocked, no ready task remains, a user decision is required, validation fails, or the user interrupts.\n\n' +
           continuation
       : "\n" +
           modeLabel +

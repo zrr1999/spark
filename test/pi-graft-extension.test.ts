@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import net, { type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -87,6 +88,46 @@ async function writeMockGraft(dir: string, scriptBody: string): Promise<string> 
   return path;
 }
 
+type MockGraftdRequest = {
+  id: string;
+  op: string;
+  params: Record<string, unknown>;
+};
+
+async function withMockGraftd(
+  handler: (request: MockGraftdRequest) => Record<string, unknown>,
+  run: (home: string) => Promise<void>,
+): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graftd-mock-"));
+  const home = join(dir, "home");
+  const socketPath = join(home, "run", "daemon.sock");
+  await mkdir(join(home, "run"), { recursive: true });
+  const server = net.createServer((socket: Socket) => {
+    let buffer = "";
+    socket.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString("utf8");
+      const newline = buffer.indexOf("\n");
+      if (newline === -1) return;
+      const line = buffer.slice(0, newline).trim();
+      const request = JSON.parse(line) as MockGraftdRequest;
+      const response = handler(request);
+      socket.write(`${JSON.stringify(response)}\n`);
+      socket.end();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, resolve);
+  });
+
+  try {
+    await run(home);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(dir, { force: true, recursive: true });
+  }
+}
+
 void test("pi-graft registers the final high-frequency direct tool set", () => {
   const { pi, commands, tools, handlers } = createFakePi();
   registerPiGraftExtension(pi);
@@ -116,6 +157,7 @@ void test("pi-graft registers the final high-frequency direct tool set", () => {
       "graft_candidates",
       "graft_search",
       "graft_materialize",
+      "graft_repo",
       "graft_cli_exec",
     ],
   );
@@ -278,6 +320,178 @@ void test("pi-graft tools require explicit cwd or restored session state", async
   );
 });
 
+void test("pi-graft routed daemon requests use workspace_root, not cwd", async () => {
+  const project = "/tmp/pi-graft-routed-workspace";
+  const previousHome = process.env.GRAFT_HOME;
+  const previousWorkspace = process.env.GRAFT_WORKSPACE;
+
+  try {
+    await withMockGraftd(
+      (request) => {
+        assert.equal(request.op, "cli_exec");
+        assert.equal(request.params.workspace_id, "ws:test");
+        assert.equal(request.params.workspace_root, project);
+        assert.equal("cwd" in request.params, false);
+        assert.deepEqual(request.params.argv, [
+          "graft",
+          "--cwd",
+          project,
+          "validate",
+          "candidate:abc",
+        ]);
+        return {
+          id: request.id,
+          ok: true,
+          result: { message: "validation completed" },
+        };
+      },
+      async (home) => {
+        process.env.GRAFT_HOME = home;
+        process.env.GRAFT_WORKSPACE = "ws:test";
+        const { pi, tools } = createFakePi();
+        registerPiGraftExtension(pi);
+        const result = await executeTool(
+          tools.get("graft_validate"),
+          "graft_validate",
+          { target: "candidate:abc" },
+          { cwd: project },
+        );
+        assert.match(result.content[0].text, /validation completed/);
+      },
+    );
+  } finally {
+    if (previousHome === undefined) delete process.env.GRAFT_HOME;
+    else process.env.GRAFT_HOME = previousHome;
+    if (previousWorkspace === undefined) delete process.env.GRAFT_WORKSPACE;
+    else process.env.GRAFT_WORKSPACE = previousWorkspace;
+  }
+});
+
+void test("graft_status uses the global daemon status op without routing fields", async () => {
+  const project = "/tmp/pi-graft-status-workspace";
+  const previousHome = process.env.GRAFT_HOME;
+
+  try {
+    await withMockGraftd(
+      (request) => {
+        assert.equal(request.op, "status");
+        assert.deepEqual(request.params, {});
+        return {
+          id: request.id,
+          ok: true,
+          result: { status: "ok", daemon: "graftd" },
+        };
+      },
+      async (home) => {
+        process.env.GRAFT_HOME = home;
+        const { pi, tools } = createFakePi();
+        registerPiGraftExtension(pi);
+        const result = await executeTool(
+          tools.get("graft_status"),
+          "graft_status",
+          {},
+          { cwd: project },
+        );
+        assert.match(result.content[0].text, /graftd: ok/);
+      },
+    );
+  } finally {
+    if (previousHome === undefined) delete process.env.GRAFT_HOME;
+    else process.env.GRAFT_HOME = previousHome;
+  }
+});
+
+void test("graft_repo list uses the direct CLI route", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graft-repo-list-"));
+  const argvFile = join(dir, "argv.txt");
+  const previousGraftBin = process.env.GRAFT_BIN;
+  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
+  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
+  process.env.GRAFT_BIN = await writeMockGraft(
+    dir,
+    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\nprintf 'pi-spark\\tpresent\\t.graft/repos/pi-spark\\tlocal\\n'`,
+  );
+
+  try {
+    const { pi, tools } = createFakePi();
+    registerPiGraftExtension(pi);
+    const result = await executeTool(
+      tools.get("graft_repo"),
+      "graft_repo",
+      { action: "list" },
+      { cwd: dir },
+    );
+    assert.match(result.content[0].text, /pi-spark/);
+    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
+      "--cwd",
+      dir,
+      "repo",
+      "list",
+    ]);
+  } finally {
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
+    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
+    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+void test("graft_repo add uses daemon-owned cli_exec routing", async () => {
+  const project = "/tmp/pi-graft-repo-add-workspace";
+  const previousHome = process.env.GRAFT_HOME;
+  const previousWorkspace = process.env.GRAFT_WORKSPACE;
+
+  try {
+    await withMockGraftd(
+      (request) => {
+        assert.equal(request.op, "cli_exec");
+        assert.equal(request.params.workspace_id, "ws:repo");
+        assert.equal(request.params.workspace_root, project);
+        assert.deepEqual(request.params.argv, [
+          "graft",
+          "--cwd",
+          project,
+          "repo",
+          "add",
+          "pi-spark",
+          "/repos/pi-spark",
+          "--default-branch",
+          "main",
+        ]);
+        return {
+          id: request.id,
+          ok: true,
+          result: { message: "added repo pi-spark" },
+        };
+      },
+      async (home) => {
+        process.env.GRAFT_HOME = home;
+        process.env.GRAFT_WORKSPACE = "ws:repo";
+        const { pi, tools } = createFakePi();
+        registerPiGraftExtension(pi);
+        const result = await executeTool(
+          tools.get("graft_repo"),
+          "graft_repo",
+          {
+            action: "add",
+            repoId: "pi-spark",
+            url: "/repos/pi-spark",
+            defaultBranch: "main",
+          },
+          { cwd: project },
+        );
+        assert.match(result.content[0].text, /added repo pi-spark/);
+      },
+    );
+  } finally {
+    if (previousHome === undefined) delete process.env.GRAFT_HOME;
+    else process.env.GRAFT_HOME = previousHome;
+    if (previousWorkspace === undefined) delete process.env.GRAFT_WORKSPACE;
+    else process.env.GRAFT_WORKSPACE = previousWorkspace;
+  }
+});
+
 void test("pi-graft controls real graftd scratch lifecycle through canonical protocol", async (t) => {
   if (process.env.PI_GRAFT_E2E !== "1") {
     t.skip("set PI_GRAFT_E2E=1 to run the real graftd scratch lifecycle test");
@@ -344,7 +558,7 @@ void test("pi-graft controls real graftd scratch lifecycle through canonical pro
     const seedCandidateResult = await executeTool(
       tools.get("graft_candidate_from_scratch"),
       "graft_candidate_from_scratch",
-      { scratch: scratchSeed, expected: ["ValidPatch"], message: "pi-graft-seed" },
+      { scratch: scratchSeed, message: "pi-graft-seed" },
       toolCtx,
     );
     const seedCandidate = requiredString(
@@ -407,7 +621,7 @@ void test("pi-graft controls real graftd scratch lifecycle through canonical pro
     const candidateResult = await executeTool(
       tools.get("graft_candidate_from_scratch"),
       "graft_candidate_from_scratch",
-      { scratch: scratchDelete, expected: ["ValidPatch"], message: "pi-graft-candidate" },
+      { scratch: scratchDelete, message: "pi-graft-candidate" },
       toolCtx,
     );
     const candidate = requiredString(
@@ -425,7 +639,7 @@ void test("pi-graft controls real graftd scratch lifecycle through canonical pro
     const validate = await executeTool(
       tools.get("graft_validate"),
       "graft_validate",
-      { target: candidate, expected: ["ValidPatch"] },
+      { target: candidate },
       toolCtx,
     );
     assert.match(validate.content[0].text, /validation completed/);
@@ -433,7 +647,7 @@ void test("pi-graft controls real graftd scratch lifecycle through canonical pro
     const admit = await executeTool(
       tools.get("graft_admit"),
       "graft_admit",
-      { candidate, required: ["ValidPatch"] },
+      { candidate },
       toolCtx,
     );
     assert.match(admit.content[0].text, /admitted|patch/i);

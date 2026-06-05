@@ -305,8 +305,9 @@ void test("task role labels prefer active claim, finished attribution, then late
 void test("active Spark prompt is a one-line state marker with the current mode", () => {
   const prompt = renderSparkActiveSystemPrompt("", "SPARK.md");
   assert.match(prompt, /^Spark active \(SPARK\.md\); mode: auto\./);
-  assert.match(prompt, /Manage project\/task\/ask\/run state via Spark tools/);
-  assert.match(prompt, /spark_ask on real blockers/);
+  assert.match(prompt, /Spark is the mode facade/);
+  assert.match(prompt, /task, artifact, ask, role, learning, context, recall, and workflow tools/);
+  assert.match(prompt, /ask on real blockers/);
   assert.doesNotMatch(prompt, /read SPARK\.md or the spark skill/);
   assert.doesNotMatch(prompt, /spark skill/);
   assert.doesNotMatch(prompt, /standing project state/);

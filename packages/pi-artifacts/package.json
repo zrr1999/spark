@@ -1,0 +1,28 @@
+{
+  "name": "pi-artifacts",
+  "version": "0.1.0",
+  "description": "Artifact/evidence storage and canonical artifact tool for Pi extensions.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./extension": "./src/extension.ts"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "pi-extension-api": "file:../pi-extension-api",
+    "typebox": "^1.1.38"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension-entry.ts"
+    ]
+  }
+}
