@@ -26,6 +26,11 @@ export function defaultSocketPath(): string {
   return join(runtimeDir, APP_DIR, SOCK_NAME);
 }
 
+function quoteModeParamValue(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return JSON.stringify(value);
+}
+
 // ── IPC message types (mirrors cue_core::ipc) ──────────────────────────────
 
 export type Mode = "Job" | "Cron";
@@ -420,7 +425,7 @@ export class CueClient {
   async eval(input: string, mode: Mode = "Job", opts: RunEvalOptions = {}): Promise<number> {
     const modeParams: string[] = [];
     if (opts.pty !== undefined) modeParams.push(`pty=${opts.pty ? "true" : "false"}`);
-    if (opts.cwd) modeParams.push(`cwd=${opts.cwd}`);
+    if (opts.cwd) modeParams.push(`cwd=${quoteModeParamValue(opts.cwd)}`);
     const modeParamText = modeParams.length > 0 ? `(${modeParams.join(",")})` : "";
     return this.#send({ Eval: { input: `:run${modeParamText} ${input}`, mode } });
   }

@@ -24,6 +24,7 @@
  */
 
 import type { ExtensionAPI } from "pi-extension-api";
+import * as nodePath from "node:path";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
@@ -332,14 +333,10 @@ function renderCueScriptItemId(item: ScriptResult["items"][number]): string {
   }
 }
 
-const ANSI_OSC_SEQUENCE_PATTERN = new RegExp(
-  String.raw`\u001B\][^\u0007]*(?:\u0007|\u001B\\)`,
-  "g",
-);
-const ANSI_CONTROL_SEQUENCE_PATTERN = new RegExp(
-  String.raw`\u001B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])`,
-  "g",
-);
+// eslint-disable-next-line no-control-regex
+const ANSI_OSC_SEQUENCE_PATTERN = /\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g;
+// eslint-disable-next-line no-control-regex
+const ANSI_CONTROL_SEQUENCE_PATTERN = /\u001B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 
 function stripAnsiSequences(value: string): string {
   return value
@@ -539,6 +536,16 @@ export function normalizeCueBoolean(value: unknown, fallback: boolean, field: st
   if (value === undefined || value === null) return fallback;
   if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
   return value;
+}
+
+export function resolveCueWorkingDirectory(
+  requestedCwd: string | undefined,
+  ctxCwd: string | undefined,
+  fallbackCwd = process.cwd(),
+): string {
+  const baseCwd = ctxCwd?.trim() ? ctxCwd.trim() : fallbackCwd;
+  if (!requestedCwd) return nodePath.resolve(baseCwd);
+  return nodePath.isAbsolute(requestedCwd) ? requestedCwd : nodePath.resolve(baseCwd, requestedCwd);
 }
 
 function normalizeRequiredCueString(value: unknown, field: string): string {
@@ -757,8 +764,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       const command = normalizeRequiredCueString(params.command, "cue_exec command");
       const background = normalizeCueBoolean(params.background, false, "cue_exec background");
       const pty = normalizeCueBoolean(params.pty, false, "cue_exec pty");
-      const cwd =
-        normalizeOptionalCueString(params.cwd, "cue_exec cwd") ?? ctx.cwd ?? process.cwd();
+      const cwd = resolveCueWorkingDirectory(
+        normalizeOptionalCueString(params.cwd, "cue_exec cwd"),
+        ctx.cwd,
+      );
       const tailBytes = normalizeCueTailBytes(
         params.tail_bytes,
         DEFAULT_CUE_TAIL_BYTES,
@@ -990,7 +999,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         DEFAULT_CUE_TAIL_BYTES,
         "cue_run tail_bytes",
       );
-      const baseCwd = ctx.cwd ?? process.cwd();
+      const baseCwd = resolveCueWorkingDirectory(undefined, ctx.cwd);
       const { isAbsolute, resolve } = await import("node:path");
       const resolvedPath = isAbsolute(pathParam) ? pathParam : resolve(baseCwd, pathParam);
       if (!resolvedPath.endsWith(".cue")) {
@@ -1149,7 +1158,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         DEFAULT_CUE_TAIL_BYTES,
         "script_run tail_bytes",
       );
-      const baseCwd = ctx.cwd ?? process.cwd();
+      const baseCwd = resolveCueWorkingDirectory(undefined, ctx.cwd);
       const { isAbsolute, resolve } = await import("node:path");
       const resolvedPath = isAbsolute(pathParam) ? pathParam : resolve(baseCwd, pathParam);
       const cued = await getClient(ctx);
@@ -1270,7 +1279,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         path: tempPath,
         timeout,
         tailBytes,
-        cwd: ctx.cwd ?? process.cwd(),
+        cwd: resolveCueWorkingDirectory(undefined, ctx.cwd),
       });
     },
   });

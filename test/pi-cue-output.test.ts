@@ -12,6 +12,7 @@ import {
   normalizeCueTimeoutSeconds,
   renderCueScriptResult,
   registerPiCueTools,
+  resolveCueWorkingDirectory,
 } from "../packages/pi-cue/src/index.ts";
 
 type RegisteredPiCueTool = Parameters<PiCueExtensionApi["registerTool"]>[0];
@@ -129,6 +130,25 @@ void test("pi-cue numeric and boolean normalizers reject invalid explicit values
   assert.throws(
     () => normalizeCueBoolean("true", false, "cue_exec background"),
     /must be a boolean/,
+  );
+});
+
+void test("resolveCueWorkingDirectory anchors explicit relative cwd to the Pi context cwd", () => {
+  assert.equal(
+    resolveCueWorkingDirectory(".", "/tmp/pi-session", "/tmp/process-cwd"),
+    "/tmp/pi-session",
+  );
+  assert.equal(
+    resolveCueWorkingDirectory("worktree", "/tmp/pi-session", "/tmp/process-cwd"),
+    "/tmp/pi-session/worktree",
+  );
+  assert.equal(
+    resolveCueWorkingDirectory("/var/tmp/absolute", "/tmp/pi-session", "/tmp/process-cwd"),
+    "/var/tmp/absolute",
+  );
+  assert.equal(
+    resolveCueWorkingDirectory(undefined, undefined, "/tmp/process-cwd"),
+    "/tmp/process-cwd",
   );
 });
 

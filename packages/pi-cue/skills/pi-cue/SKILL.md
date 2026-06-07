@@ -173,6 +173,9 @@ The extension automatically passes cwd. To run in a different directory:
 cue_exec(command="ls", cwd="/path/to/target")
 ```
 
+Relative `cwd` values (for example `cwd="."` or `cwd="subdir"`) are resolved against the
+current Pi session working directory before being sent to `cued`.
+
 ### Cron scheduling
 
 ```text
