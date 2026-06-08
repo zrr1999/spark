@@ -1,13 +1,37 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import net, { type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { CueClient } from "../packages/pi-cue/src/index.ts";
+import { CueClient, CueError, resolveCueTransport } from "../packages/pi-cue/src/index.ts";
 
 type CueFrame = Record<string, unknown>;
+
+async function writeExecutable(path: string, body: string): Promise<void> {
+  await writeFile(path, body);
+  await chmod(path, 0o755);
+}
+
+async function withTempPath(
+  files: Record<string, string>,
+  run: (dir: string) => Promise<void>,
+): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), "pi-cue-resolver-"));
+  const originalPath = process.env.PATH;
+  try {
+    for (const [name, body] of Object.entries(files)) {
+      await writeExecutable(join(dir, name), body);
+    }
+    process.env.PATH = originalPath ? `${dir}:${originalPath}` : dir;
+    await run(dir);
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    await rm(dir, { force: true, recursive: true });
+  }
+}
 
 function encodeFrame(message: CueFrame): Buffer {
   const body = Buffer.from(JSON.stringify(message), "utf8");
@@ -64,6 +88,56 @@ function requestPayload(message: CueFrame): Record<string, unknown> {
   assert.ok(payload && typeof payload === "object" && !Array.isArray(payload));
   return payload as Record<string, unknown>;
 }
+
+void test("resolveCueTransport uses cue-client target resolver JSON", async () => {
+  await withTempPath(
+    {
+      "cue-client": `#!/bin/sh\nprintf '%s\n' '{"schema_version":1,"profile_name":"local","transport":"unix","socket_path":"/tmp/custom-cued.sock"}'\n`,
+    },
+    async () => {
+      const resolved = await resolveCueTransport();
+      assert.deepEqual(resolved, {
+        schema_version: 1,
+        profile_name: "local",
+        transport: "unix",
+        socket_path: "/tmp/custom-cued.sock",
+      });
+    },
+  );
+});
+
+void test("resolveCueTransport falls back to cue client namespace", async () => {
+  await withTempPath(
+    {
+      "cue-client": `#!/bin/sh\necho cue-client unavailable >&2\nexit 127\n`,
+      cue: `#!/bin/sh\nif [ "$1 $2 $3 $4" = "client target resolve --json" ]; then\n  printf '%s\n' '{"schema_version":1,"profile_name":"fallback","transport":"unix","socket_path":"/tmp/fallback.sock"}'\n  exit 0\nfi\necho unexpected args: "$@" >&2\nexit 2\n`,
+    },
+    async () => {
+      const resolved = await resolveCueTransport();
+      assert.equal(resolved.transport, "unix");
+      assert.equal(resolved.profile_name, "fallback");
+      assert.equal(resolved.socket_path, "/tmp/fallback.sock");
+    },
+  );
+});
+
+void test("implicit CueClient.connect rejects ssh resolver profiles without autostart", async () => {
+  await withTempPath(
+    {
+      "cue-client": `#!/bin/sh\nprintf '%s\n' '{"schema_version":1,"profile_name":"remote","transport":"ssh","destination":"devbox","gateway_command":"cued gateway --stdio","start_command":"cued start"}'\n`,
+    },
+    async () => {
+      await assert.rejects(
+        CueClient.connect(),
+        (error) =>
+          error instanceof CueError &&
+          error.code === "UNSUPPORTED_TRANSPORT" &&
+          error.message.includes("remote") &&
+          error.message.includes("devbox"),
+      );
+    },
+  );
+});
 
 void test("cue RunScript request matches the current strict daemon schema", async () => {
   await withCueServer(

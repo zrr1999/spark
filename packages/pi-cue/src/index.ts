@@ -85,8 +85,9 @@ class ToolCallText implements ToolCallComponent {
   }
 }
 
-export { CueClient, CueError, defaultSocketPath } from "./cue-client.ts";
+export { CueClient, CueError, defaultSocketPath, resolveCueTransport } from "./cue-client.ts";
 export type {
+  CueResolvedTransport,
   JobInfo,
   JobResult,
   JobStatus,
@@ -107,10 +108,11 @@ export type { DaemonVersion, VersionCheckOptions, VersionVerdict } from "./versi
 import {
   CueClient,
   CueError,
+  type CueResolvedTransport,
   type JobInfo,
   type JobStatus,
   type ScriptResult,
-  defaultSocketPath,
+  resolveCueTransport,
 } from "./cue-client.ts";
 import { checkAndWarn as checkCuedVersionAndWarn } from "./version-check.ts";
 
@@ -123,22 +125,24 @@ async function getClient(ctx?: {
 }): Promise<CueClient> {
   if (client && !client.isClosed) return client;
   client = null;
+  const transport = await resolveCueTransport();
+  const socketPath = socketPathForPiCue(transport);
   try {
-    client = await CueClient.connect();
+    client = await CueClient.connect(socketPath);
   } catch {
-    // Daemon not running — auto-start it.
+    // Daemon not running — auto-start local/unix transports only.
     ctx?.ui?.notify?.("cue-shell: auto-starting daemon…", "info");
     try {
-      await autoStartDaemon();
+      await autoStartDaemon(socketPath);
     } catch (startErr) {
-      const msg = `cue-shell daemon not reachable at ${defaultSocketPath()}.  Auto-start failed: ${(startErr as Error).message}`;
+      const msg = `cue-shell daemon not reachable at ${socketPath}. Auto-start failed: ${(startErr as Error).message}`;
       throw new CueError("DAEMON_UNREACHABLE", msg);
     }
     // Retry connection after starting.
     try {
-      client = await CueClient.connect();
+      client = await CueClient.connect(socketPath);
     } catch (err) {
-      const msg = `cue-shell daemon started but still not reachable at ${defaultSocketPath()}: ${(err as Error).message}`;
+      const msg = `cue-shell daemon started but still not reachable at ${socketPath}: ${(err as Error).message}`;
       throw new CueError("DAEMON_UNREACHABLE", msg);
     }
   }
@@ -151,10 +155,18 @@ async function getClient(ctx?: {
 }
 
 /** Spawn `cued start` as a detached background process. */
-async function autoStartDaemon(): Promise<void> {
+function socketPathForPiCue(transport: CueResolvedTransport): string {
+  if (transport.transport === "unix") return transport.socket_path;
+  throw new CueError(
+    "UNSUPPORTED_TRANSPORT",
+    `cue profile \`${transport.profile_name}\` resolves to ssh transport (${transport.destination}), but pi-cue currently supports only unix cue-shell transport profiles. Use cue-client/cue-tui for remote targets or configure a unix profile for pi-cue.`,
+  );
+}
+
+async function autoStartDaemon(socketPath: string): Promise<void> {
   const { spawn } = await import("node:child_process");
   return new Promise((resolve, reject) => {
-    const child = spawn("cued", ["start"], {
+    const child = spawn("cued", ["start", "--socket", socketPath], {
       detached: true,
       stdio: "ignore",
     });
