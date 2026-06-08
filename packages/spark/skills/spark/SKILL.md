@@ -20,7 +20,8 @@ Spark is now a composition/mode facade over generic Pi capabilities:
 - `recall`: explicit scoped recall candidates, distinct from `.learnings/`.
 - `workflow`: saved-script workflow discovery/preview from controlled roots.
 - `pi-cue`: reusable controlled execution infrastructure.
-- `spark-runtime`, `spark-goal`, and `spark-workflows`: Spark-owned orchestration/runtime policy for `/execute`, `/goal`, and `/workflow`.
+- `pi-goal` and `pi-workflows`: reusable goal/workflow primitives; Spark owns project-bound `/goal` and `/workflow` command policy.
+- `spark-runtime`: Spark-owned single-task role-run adapter for `/execute`, ready-task execution, and role-run artifacts.
 
 Rules:
 

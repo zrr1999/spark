@@ -28,7 +28,7 @@ local state explicitly before loading it; new writes use Markdown role files.
 `runRole()` launches a single Pi child process with `fresh | forked` mode,
 timeout/cancel handling, stdout/stderr capture, and tolerant JSONL parsing. Spark
 uses these primitives from `spark-runtime` and keeps graph-level task orchestration
-in `spark-workflows` above this package.
+in `pi-workflows` above this package.
 
 ## Tool surface
 
@@ -49,4 +49,4 @@ host-level tool activation policy.
 - default / `mode: "fresh"` — launch a new child Pi session from the role and instruction.
 - `mode: "forked"` — launch with explicit parent context; requires `forkFromSession`.
 
-`call_role` intentionally stays below Spark: it does not claim tasks, write Spark artifacts, or schedule DAG work. Use `spark_run_ready_tasks` for Spark-managed task execution.
+`call_role` intentionally stays below Spark: it does not claim tasks, write Spark artifacts, or schedule DAG work. Use `task({ action: "run_ready" })` for Spark-managed task execution.

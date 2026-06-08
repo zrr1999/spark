@@ -2,7 +2,7 @@
 
 Reusable Pi extension that exposes cue-shell as a durable, observable execution substrate.
 
-`pi-cue` is infrastructure: it does not depend on `spark-core` and can be used by Spark, future `pi-warp`, or any other Pi package.
+`pi-cue` is infrastructure: it does not depend on `spark-*` packages and can be used by Spark, future `pi-warp`, or any other Pi package.
 
 ## Tools
 

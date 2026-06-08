@@ -2,7 +2,7 @@
 
 Spark runtime adapter for executing one Spark task with a registered role.
 
-Runtime resolves reusable `RoleSpec`s from `pi-roles`, calls `runRole()` for concrete child Pi executions, and adapts those `RoleRun`s back into Spark task/run/artifact state. Ready-task scheduling and durable workflow-run state live in `spark-workflows`.
+Runtime resolves reusable `RoleSpec`s from `pi-roles`, calls `runRole()` for concrete child Pi executions, and adapts those `RoleRun`s back into Spark task/run/artifact state. Graph-level ready-task scheduling and durable workflow-run state live in `pi-workflows`; `spark-runtime` stays focused on one task execution at a time.
 
 Responsibilities:
 
@@ -14,7 +14,7 @@ Responsibilities:
 - refresh active claim leases with a heartbeat loop during non-dry-run execution
 - sweep persisted expired claims with `sweepExpiredTaskClaims()`
 - maintain Spark-specific active child process tracking for timeout/reconciliation UI and kill controls
-- persist task-run artifacts through `spark-core`
+- persist task-run artifacts through `pi-artifacts`
 - read bounded role-run artifact previews for background-run inspection
 - compact historical role-run transcript artifacts through `collectRoleRunArtifactRetentionPlan()`
 - update `TaskRun` and task status on success/failure
@@ -22,8 +22,8 @@ Responsibilities:
 Non-responsibilities:
 
 - does not own role specs or role storage (`pi-roles`)
-- does not own DAG/TODO/claim data structures (`spark-tasks`)
-- does not schedule ready task waves or own `.spark/workflow-runs.json` (`spark-workflows`)
+- does not own project/task/TODO/claim data structures (`pi-tasks`)
+- does not schedule ready task waves or own `.spark/workflow-runs.json` (`pi-workflows`)
 - does not provide generic Pi tools (`pi-*` packages)
 
 Default launch mode:
@@ -44,4 +44,4 @@ Attribution:
 - `runName`, `ownerSessionId`, and `runRef` identify the concrete run in `TaskRun` records and active `TaskClaim`s.
 - Runtime-created artifacts use `kind: "role-run"` with task provenance and run-record data so outputs are attributed to the Spark task and concrete run while still retaining the role ref.
 
-Use `runSparkTask()` for single-task execution. Use `spark-workflows` `runReadySparkTasks()` for graph-level ready task scheduling.
+Use `runSparkTask()` for single-task execution. Use `pi-workflows` `runReadySparkTasks()` for graph-level ready task scheduling.

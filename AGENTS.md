@@ -4,7 +4,7 @@ Pi Spark monorepo: agent-oriented docs for contributors and automation. Product 
 
 ## Layout
 
-- `packages/*` — TypeScript libraries wired into Pi (`spark`, `spark-core`, `pi-cue`, …).
+- `packages/*` — TypeScript libraries wired into Pi (`spark`, `spark-runtime`, `pi-tasks`, `pi-workflows`, `pi-cue`, …).
 
 ## Tooling
 

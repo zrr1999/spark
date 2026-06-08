@@ -3,7 +3,7 @@
 Minimal structured ask primitives for Pi.
 
 `pi-ask` is infrastructure: it does not depend on
-`spark-core` and focuses on a small, stable protocol
+`spark-*` packages and focuses on a small, stable protocol
 for collecting human input.
 
 ## Tools
@@ -59,8 +59,8 @@ Both tools follow these rules:
    answers may be submitted as `kind: "skipped"` so forms can advance without
    pretending the user entered text.
 
-Spark-specific wrappers build on this contract. In particular, `spark_ask`
-requires each option to provide a stable id, a short label, and a clear
+Spark-specific wrappers build on this contract. In particular, Spark's canonical `ask`
+facade requires each option to provide a stable id, a short label, and a clear
 human-readable description of what choosing that option means. Keep that
 Spark/LLM-facing option-description validation in Spark packages; `pi-ask`
 only owns generic structural validation, reserved UI labels, and ask runtime
@@ -68,7 +68,7 @@ semantics.
 
 ## Behavior comparison and adopted affordances
 
-The local `pi-ask` flow (which now also hosts the Spark-specific ask artifact persistence/replay surface formerly in `spark-ask`) is intentionally small, but it now
+The local `pi-ask` flow is intentionally small, but it now
 keeps the useful protocol traits observed in related Pi packages:
 
 - `@eko24ive/pi-ask`: review tab, elaborate/re-ask flow, replay of the
@@ -161,7 +161,7 @@ Schema and validation:
 - `defaultValues` is valid for `single` and `multi`; it is invalid for
   `freeform` and cannot reference the UI-only custom sentinel.
 - Single-select questions may contain at most one default value.
-- `spark_ask` question params expose `defaultValues` directly on each question.
+- Spark ask facade question params expose `defaultValues` directly on each question.
 
 Runtime semantics:
 
@@ -200,7 +200,7 @@ Regression coverage:
    submit if no explicit answer was committed.
 4. Preserved/replay answers override `defaultValues` in both single and multi
    questions.
-5. `spark_ask` passes validated `defaultValues` through without accepting custom
+5. Spark ask facade code passes validated `defaultValues` through without accepting custom
    sentinel labels as default ids.
 
 ## Result and persistence helpers

@@ -1,18 +1,20 @@
 # pi-goal
 
-Spark-owned goal state, usage accounting, and hidden continuation prompt primitives for `/goal`.
+Generic durable goal state, usage accounting, and continuation prompt primitives for Pi extensions.
+
+Spark uses this package for project-bound `/goal` mode, but `pi-goal` does not own Spark commands, task scheduling, workflow runs, or widget policy. Historical serialized marker strings such as `"spark-goal"` remain stable for on-disk compatibility and are not package ownership markers.
 
 This package vendors and rewrites selected MIT-licensed ideas from `pi-codex-goal`. It intentionally does not expose Pi extension entrypoints, slash commands, or workflow script registration.
 
 Responsibilities:
 
-- model Spark goal state and usage accounting
+- model generic goal state and usage accounting
 - reconstruct goal state from session custom entries
 - render goal summaries, budget text, and continuation prompts
-- keep Spark goal tool-name guidance and continuation markers in one package
+- keep goal tool-name guidance and continuation markers in one package
 
 Non-responsibilities:
 
-- does not parse or run workflow scripts (`spark-workflows`)
-- does not schedule ready tasks or own workflow-run state (`spark-workflows`)
+- does not parse or run workflow scripts (`pi-workflows`)
+- does not schedule ready tasks or own workflow-run state (`pi-workflows`)
 - does not register Pi tools or slash commands (`spark` extension facade)
