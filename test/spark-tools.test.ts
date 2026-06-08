@@ -877,20 +877,22 @@ void test("/research, /plan, /execute, /goal, and /workflow selector commands en
       /Finish the queue until done/,
     );
     const goalPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
-    assert.match(goalPrompt, /Spark project goal is active/);
+    assert.match(goalPrompt, /Spark session goal is active/);
     assert.match(goalPrompt, /Finish the queue until done/);
-    const goalProjectStateRaw = await readFile(
-      join(initializedDir, ".spark", "project-goals.json"),
+    const goalSessionStateRaw = await readFile(
+      join(
+        initializedDir,
+        ".spark",
+        "session-goals",
+        `${ctxSessionStoreScope(initializedCtx)}.json`,
+      ),
       "utf8",
     );
-    const goalProjectState = JSON.parse(goalProjectStateRaw) as {
-      goals?: Record<string, { objective?: string; status?: string }>;
+    const goalSessionState = JSON.parse(goalSessionStateRaw) as {
+      goal?: { objective?: string; status?: string };
     };
-    assert.equal(
-      Object.values(goalProjectState.goals ?? {})[0]?.objective,
-      "Finish the queue until done",
-    );
-    assert.equal(Object.values(goalProjectState.goals ?? {})[0]?.status, "active");
+    assert.equal(goalSessionState.goal?.objective, "Finish the queue until done");
+    assert.equal(goalSessionState.goal?.status, "active");
     const sessionAfterGoal = JSON.parse(
       await readFile(
         join(initializedDir, ".spark", "sessions", `${ctxSessionStoreScope(initializedCtx)}.json`),
@@ -901,10 +903,11 @@ void test("/research, /plan, /execute, /goal, and /workflow selector commands en
 
     await goalCommand.handler("", initializedCtx);
     const inferredGoalPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
-    assert.match(inferredGoalPrompt, /Spark project goal is active/);
+    assert.match(inferredGoalPrompt, /Spark session goal is active/);
     assert.match(inferredGoalPrompt, /Advance project/);
-    const pauseGoalCommand = initializedRun.commands.get("pause_goal");
-    assert.ok(pauseGoalCommand, "missing /pause_goal command");
+    const pauseGoalCommand = initializedRun.commands.get("pause-goal");
+    assert.ok(pauseGoalCommand, "missing /pause-goal command");
+    assert.equal(initializedRun.commands.get("pause_goal"), undefined);
     await pauseGoalCommand.handler("waiting for user", initializedCtx);
     assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /Spark goal paused/);
 
@@ -945,10 +948,18 @@ void test("/research, /plan, /execute, /goal, and /workflow selector commands en
     initializedCtx.ui.select = async () =>
       assert.fail("/workflow should not open a canned selector ask");
     await workflowCommand.handler("", initializedCtx);
-    assert.match(
-      initializedCtx.notifications.at(-1)?.message ?? "",
-      /Spark workflow mode needs an explicit saved workflow selector|Available workflow\(s\):/,
+    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /strategy: workflow/);
+    assert.doesNotMatch(
+      initializedRun.customMessages.at(-1)?.content ?? "",
+      /workflow: workspace:triage/,
     );
+    const autoWorkflowPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
+    assert.match(autoWorkflowPrompt, /No workflow selector was provided/);
+    assert.match(autoWorkflowPrompt, /Agent must choose an existing saved workflow or create/);
+    assert.match(autoWorkflowPrompt, /workflow\(\{ action: "list" \}\)/);
+    assert.match(autoWorkflowPrompt, /\.spark\/workflows\/<name>\.js/);
+    assert.doesNotMatch(autoWorkflowPrompt, /Workflow selector: workspace:triage/);
+    assert.doesNotMatch(autoWorkflowPrompt, /Selected saved workflow: workspace:triage/);
     initializedCtx.ui.select = async () =>
       assert.fail("non-empty /workflow focus should not ask for a selector before prompting");
 
@@ -965,8 +976,10 @@ void test("/research, /plan, /execute, /goal, and /workflow selector commands en
       initializedCtx,
     );
     const inlineWorkflowPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
-    assert.match(inlineWorkflowPrompt, /No saved workflow was selected confidently/);
-    assert.match(
+    assert.match(inlineWorkflowPrompt, /No workflow selector was provided/);
+    assert.match(inlineWorkflowPrompt, /Agent must choose an existing saved workflow or create/);
+    assert.match(inlineWorkflowPrompt, /\.spark\/workflows\/<name>\.js/);
+    assert.doesNotMatch(
       inlineWorkflowPrompt,
       /\/workflow only accepts saved workspace:\/user: workflow selectors/,
     );
@@ -987,7 +1000,10 @@ void test("/research, /plan, /execute, /goal, and /workflow selector commands en
     assert.ok(emptyGoalCommand, "missing /goal command");
     assert.equal(emptyRun.commands.get("workflow:goal"), undefined);
     await emptyGoalCommand.handler("", emptyCtx);
-    assert.match(emptyCtx.notifications.at(-1)?.message ?? "", /needs initialized Spark state/);
+    assert.match(
+      emptyCtx.notifications.at(-1)?.message ?? "",
+      /needs an explicit objective when no Spark state exists/,
+    );
   } finally {
     await rm(existingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
     await rm(initializedDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
@@ -1419,7 +1435,7 @@ void test("/execute stops after one task and only hints the next ready task", as
   }
 });
 
-void test("/goal sets a durable project goal instead of execute-mode continuation", async () => {
+void test("/goal sets a durable session goal instead of execute-mode continuation", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-run-foreground-continue-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1441,20 +1457,20 @@ void test("/goal sets a durable project goal instead of execute-mode continuatio
     assert.equal(run.commands.get("workflow:goal"), undefined);
     await goalCommand.handler("work through the ready queue until done", ctx);
     const goalPrompt = await consumeSparkModeContext(run, ctx);
-    assert.match(goalPrompt, /Spark project goal is active/);
+    assert.match(goalPrompt, /Spark session goal is active/);
     assert.doesNotMatch(goalPrompt, /Enter Spark execution mode/);
     assert.doesNotMatch(run.customMessages.at(-1)?.content ?? "", /strategy: goal/);
     assert.doesNotMatch(run.customMessages.at(-1)?.content ?? "", /workflow: builtin:goal/);
     const goalState = JSON.parse(
-      await readFile(join(dir, ".spark", "project-goals.json"), "utf8"),
+      await readFile(
+        join(dir, ".spark", "session-goals", `${ctxSessionStoreScope(ctx)}.json`),
+        "utf8",
+      ),
     ) as {
-      goals?: Record<string, { objective?: string; status?: string }>;
+      goal?: { objective?: string; status?: string };
     };
-    assert.equal(
-      Object.values(goalState.goals ?? {})[0]?.objective,
-      "work through the ready queue until done",
-    );
-    assert.equal(Object.values(goalState.goals ?? {})[0]?.status, "active");
+    assert.equal(goalState.goal?.objective, "work through the ready queue until done");
+    assert.equal(goalState.goal?.status, "active");
 
     const sessionState = JSON.parse(
       await readFile(join(dir, ".spark", "sessions", `${ctxSessionStoreScope(ctx)}.json`), "utf8"),
@@ -1515,9 +1531,10 @@ void test("/goal foreground loop waits for idle and stops after pause", async ()
     const run = registerSparkToolsForTest();
     await useOnlySparkProject(run.tools, ctx);
     const goalCommand = run.commands.get("goal");
-    const pauseGoalCommand = run.commands.get("pause_goal");
+    const pauseGoalCommand = run.commands.get("pause-goal");
     assert.ok(goalCommand, "missing /goal command");
-    assert.ok(pauseGoalCommand, "missing /pause_goal command");
+    assert.ok(pauseGoalCommand, "missing /pause-goal command");
+    assert.equal(run.commands.get("pause_goal"), undefined);
 
     await goalCommand.handler("finish active goal work", ctx);
     assert.equal(timers.length, 0);
@@ -1599,11 +1616,14 @@ void test("/goal foreground loop waits for idle and stops after pause", async ()
       );
     }
     const failedGoalState = JSON.parse(
-      await readFile(join(dir, ".spark", "project-goals.json"), "utf8"),
-    ) as { goals?: Record<string, { status?: string; pauseReason?: string }> };
-    assert.equal(Object.values(failedGoalState.goals ?? {})[0]?.status, "paused");
+      await readFile(
+        join(dir, ".spark", "session-goals", `${ctxSessionStoreScope(ctx)}.json`),
+        "utf8",
+      ),
+    ) as { goal?: { status?: string; pauseReason?: string } };
+    assert.equal(failedGoalState.goal?.status, "paused");
     assert.match(
-      Object.values(failedGoalState.goals ?? {})[0]?.pauseReason ?? "",
+      failedGoalState.goal?.pauseReason ?? "",
       /Context overflow recovery failed: invalidated oauth token/,
     );
     assert.equal(timers.length, 3);
@@ -3015,8 +3035,8 @@ void test("spark_use_project reports selected existing projects", async () => {
   }
 });
 
-void test("spark_goal tool infers and updates durable project goals", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-tool-project-goal-"));
+void test("spark_goal tool infers and updates durable session goals", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-session-goal-"));
   try {
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
@@ -3031,7 +3051,7 @@ void test("spark_goal tool infers and updates durable project goals", async () =
       action: "set",
       objective: "Finish the durable goal slice",
     });
-    assert.match(toolText(started), /Spark goal active/);
+    assert.match(toolText(started), /Spark session goal active/);
     assert.equal(
       (started.details as { goal?: { objective?: string; status?: string } } | undefined)?.goal
         ?.objective,
@@ -3043,9 +3063,9 @@ void test("spark_goal tool infers and updates durable project goals", async () =
       "active",
     );
     const status = await executeSparkTool(tools, "spark_status", ctx, {});
-    assert.match(toolText(status), /Goal: active \| Finish the durable goal slice/);
+    assert.match(toolText(status), /Session goal: active \| Finish the durable goal slice/);
     assert.equal(
-      (status.details as { projectGoal?: { objective?: string } } | undefined)?.projectGoal
+      (status.details as { sessionGoal?: { objective?: string } } | undefined)?.sessionGoal
         ?.objective,
       "Finish the durable goal slice",
     );
@@ -3054,20 +3074,20 @@ void test("spark_goal tool infers and updates durable project goals", async () =
       action: "pause",
       reason: "waiting",
     });
-    assert.match(toolText(paused), /Spark goal paused/);
+    assert.match(toolText(paused), /Spark session goal paused/);
     assert.match(toolText(paused), /Reason: waiting/);
 
     const completed = await executeSparkTool(tools, "goal", ctx, {
       action: "complete",
       reason: "review passed",
     });
-    assert.match(toolText(completed), /Spark goal complete/);
+    assert.match(toolText(completed), /Spark session goal complete/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-void test("active project goal disables ask-like tools before agent turns", async () => {
+void test("active session goal disables ask-like tools before agent turns", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-disable-asks-"));
   try {
     await writeEmptySparkProject(dir);

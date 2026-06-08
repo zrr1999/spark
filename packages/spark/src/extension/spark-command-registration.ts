@@ -4,13 +4,12 @@ import {
   type SparkEntryApplicationDeps,
 } from "./spark-entry-application.ts";
 import { detectSparkProjectState, resolveSparkEntry } from "./spark-entry-resolution.ts";
-import type { ProjectRef } from "pi-extension-api";
 import { currentSparkProject, loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
 import {
-  pauseCurrentProjectGoal,
-  startOrInferProjectGoal,
+  pauseCurrentSessionGoal,
+  startOrInferSessionGoal,
 } from "./spark-goal-tool-registration.ts";
-import { loadProjectGoal, updateProjectGoalStatus } from "./spark-project-goals.ts";
+import { loadSessionGoal, updateSessionGoalStatus } from "./spark-session-goals.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
 export interface SparkCommandContext extends SparkToolContext {
@@ -47,7 +46,6 @@ const foregroundGoalAwaitingTurns = new Map<string, ForegroundGoalAwaitingTurn>(
 interface ForegroundGoalAwaitingTurn {
   piApi: SparkCommandApi;
   ctx: SparkCommandContext;
-  projectRef: ProjectRef;
   failure?: string;
 }
 
@@ -107,14 +105,14 @@ export function registerSparkCommands(
   });
 
   pi.registerCommand("goal", {
-    description: "Set or start the current project's durable Spark goal.",
+    description: "Set or start the current session's durable Spark goal.",
     async handler(args, ctx) {
       await handleSparkGoalCommand(pi, ctx, args.trim());
     },
   });
 
-  pi.registerCommand("pause_goal", {
-    description: "Pause the current project's active Spark goal without deleting it.",
+  pi.registerCommand("pause-goal", {
+    description: "Pause the current session's active Spark goal without deleting it.",
     async handler(args, ctx) {
       await handleSparkPauseGoalCommand(pi, ctx, args.trim());
     },
@@ -164,41 +162,37 @@ export function registerSparkCommands(
     objective: string,
   ): Promise<void> {
     const graph = await loadSparkGraph(ctx.cwd, ctx);
-    if (!graph) {
+    const project = graph ? await currentSparkProject(ctx.cwd, ctx, graph) : undefined;
+    if (!graph && !objective) {
       ctx.ui?.notify?.(
-        "Spark goal mode needs initialized Spark state. Use /plan first.",
+        "Spark goal mode needs an explicit objective when no Spark state exists.",
         "warning",
       );
       return;
     }
-    const project = await currentSparkProject(ctx.cwd, ctx, graph);
-    if (!project) {
-      ctx.ui?.notify?.(
-        "Spark goal mode needs a current project. Select one with task project_use.",
-        "warning",
-      );
-      return;
-    }
-    const goal = await startOrInferProjectGoal(ctx.cwd, ctx, graph, objective || undefined);
+    const goal = await startOrInferSessionGoal(ctx.cwd, ctx, graph, objective || undefined);
     if (!goal) return;
     await deps.refreshSparkWidget(ctx.cwd, ctx);
-    const visible = `Spark goal active · project: ${project.title} · goal: ${compactInline(goal.objective)}`;
+    const projectLabel = project ? ` · project: ${project.title}` : "";
+    const visible = `Spark goal active${projectLabel} · goal: ${compactInline(goal.objective)}`;
     ctx.ui?.notify?.(visible, "info");
     deps.queueSparkAgentInstruction(
       ctx,
       [
-        "Spark project goal is active.",
-        `Project: ${project.title}`,
+        "Spark session goal is active.",
+        project ? `Current project: ${project.title}` : undefined,
         `Goal: ${goal.objective}`,
-        'Spark has started the foreground goal loop for this project. It will wait for the main agent to become idle, then continue at the goal interval. Use task({ action: "status" }) and goal({ action: "status" }) to inspect current work. Goal mode is non-interactive: do not call ask/ask_flow. If task decomposition is wrong or missing, create or revise concrete tasks with task({ action: "plan" }); if the goal itself is ambiguous, stop and report or pause the goal with goal.',
-      ].join("\n"),
+        'Spark has started the foreground goal loop for this session. It will wait for the main agent to become idle, then continue at the goal interval. Use task({ action: "status" }) and goal({ action: "status" }) to inspect current work. Goal mode is non-interactive: do not call ask/ask_flow. If task decomposition is wrong or missing, create or revise concrete tasks with task({ action: "plan" }); if the goal itself is ambiguous, stop and report or pause the goal with goal.',
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join("\n"),
     );
     piApi.sendMessage(
       { customType: "spark-goal-request", content: visible, display: true },
       { deliverAs: "followUp", triggerTurn: true },
     );
-    markForegroundGoalAwaitingTurn(piApi, ctx, project.ref);
-    if (!piApi.on) scheduleForegroundGoalLoop(piApi, ctx, project.ref);
+    markForegroundGoalAwaitingTurn(piApi, ctx);
+    if (!piApi.on) scheduleForegroundGoalLoop(piApi, ctx);
   }
 
   async function handleSparkPauseGoalCommand(
@@ -206,88 +200,66 @@ export function registerSparkCommands(
     ctx: SparkCommandContext,
     reason: string,
   ): Promise<void> {
-    const graph = await loadSparkGraph(ctx.cwd, ctx);
-    if (!graph) {
-      ctx.ui?.notify?.("Spark goal pause needs initialized Spark state.", "warning");
-      return;
-    }
-    const project = await currentSparkProject(ctx.cwd, ctx, graph);
-    if (!project) {
-      ctx.ui?.notify?.("Spark goal pause needs a current project.", "warning");
-      return;
-    }
-    const goal = await pauseCurrentProjectGoal(ctx.cwd, ctx, graph, reason || undefined);
+    const goal = await pauseCurrentSessionGoal(ctx.cwd, ctx, reason || undefined);
     if (!goal) {
-      ctx.ui?.notify?.("No project goal is set.", "warning");
+      ctx.ui?.notify?.("No session goal is set.", "warning");
       return;
     }
-    clearForegroundGoalLoop(ctx.cwd, ctx, project.ref);
+    clearForegroundGoalLoop(ctx.cwd, ctx);
     await deps.refreshSparkWidget(ctx.cwd, ctx);
-    const visible = `Spark goal paused · project: ${project.title} · goal: ${compactInline(goal.objective)}`;
+    const visible = `Spark goal paused · goal: ${compactInline(goal.objective)}`;
     ctx.ui?.notify?.(visible, "info");
     piApi.sendMessage({ customType: "spark-goal-request", content: visible, display: true });
   }
 
-  function scheduleForegroundGoalLoop(
-    piApi: SparkCommandApi,
-    ctx: SparkCommandContext,
-    projectRef: ProjectRef,
-  ): void {
-    const key = foregroundGoalLoopKey(ctx.cwd, ctx, projectRef);
-    clearForegroundGoalLoop(ctx.cwd, ctx, projectRef);
+  function scheduleForegroundGoalLoop(piApi: SparkCommandApi, ctx: SparkCommandContext): void {
+    const key = foregroundGoalLoopKey(ctx.cwd, ctx);
+    clearForegroundGoalLoop(ctx.cwd, ctx);
     const timer = setTimeout(() => {
       foregroundGoalTimers.delete(key);
-      void runForegroundGoalLoopTick(piApi, ctx, projectRef).catch(reportGoalLoopError);
+      void runForegroundGoalLoopTick(piApi, ctx).catch(reportGoalLoopError);
     }, FOREGROUND_GOAL_LOOP_INTERVAL_MS);
     timer.unref?.();
     foregroundGoalTimers.set(key, timer);
   }
 
-  function clearForegroundGoalLoop(
-    cwd: string,
-    ctx: SparkCommandContext,
-    projectRef: ProjectRef,
-  ): void {
-    const key = foregroundGoalLoopKey(cwd, ctx, projectRef);
+  function clearForegroundGoalLoop(cwd: string, ctx: SparkCommandContext): void {
+    const key = foregroundGoalLoopKey(cwd, ctx);
     const timer = foregroundGoalTimers.get(key);
     if (timer) clearTimeout(timer);
     foregroundGoalTimers.delete(key);
     foregroundGoalAwaitingTurns.delete(key);
   }
 
-  function markForegroundGoalAwaitingTurn(
-    piApi: SparkCommandApi,
-    ctx: SparkCommandContext,
-    projectRef: ProjectRef,
-  ): void {
-    const key = foregroundGoalLoopKey(ctx.cwd, ctx, projectRef);
+  function markForegroundGoalAwaitingTurn(piApi: SparkCommandApi, ctx: SparkCommandContext): void {
+    const key = foregroundGoalLoopKey(ctx.cwd, ctx);
     const timer = foregroundGoalTimers.get(key);
     if (timer) clearTimeout(timer);
     foregroundGoalTimers.delete(key);
-    foregroundGoalAwaitingTurns.set(key, { piApi, ctx, projectRef });
+    foregroundGoalAwaitingTurns.set(key, { piApi, ctx });
   }
 
   async function runForegroundGoalLoopTick(
     piApi: SparkCommandApi,
     ctx: SparkCommandContext,
-    projectRef: ProjectRef,
   ): Promise<void> {
-    const initial = await loadActiveForegroundGoal(ctx, projectRef);
+    const initial = await loadActiveForegroundGoal(ctx);
     if (!initial) return;
     await ctx.waitForIdle?.();
-    const active = await loadActiveForegroundGoal(ctx, projectRef);
+    const active = await loadActiveForegroundGoal(ctx);
     if (!active) return;
     const { project, goal } = active;
-    const visible = `Spark goal tick · project: ${project.title} · goal: ${compactInline(goal.objective)}`;
+    const projectLabel = project ? ` · project: ${project.title}` : "";
+    const visible = `Spark goal tick${projectLabel} · goal: ${compactInline(goal.objective)}`;
     deps.queueSparkAgentInstruction(
       ctx,
-      renderForegroundGoalTickInstruction(project.title, goal.objective),
+      renderForegroundGoalTickInstruction(project?.title, goal.objective),
     );
     piApi.sendMessage(
       { customType: "spark-goal-request", content: visible, display: true },
       { deliverAs: "followUp", triggerTurn: true },
     );
-    markForegroundGoalAwaitingTurn(piApi, ctx, projectRef);
+    markForegroundGoalAwaitingTurn(piApi, ctx);
   }
 
   function handleForegroundGoalTurnEnd(ctx: SparkToolContext, event: unknown): void {
@@ -310,29 +282,28 @@ export function registerSparkCommands(
       const failure =
         agentOutcome.failure ?? (!agentOutcome.hasAssistantMessage ? awaiting.failure : undefined);
       if (failure) {
-        await pauseForegroundGoalAfterFailedTurn(awaiting.ctx, awaiting.projectRef, failure);
+        await pauseForegroundGoalAfterFailedTurn(awaiting.ctx, failure);
         continue;
       }
-      const active = await loadActiveForegroundGoal(awaiting.ctx, awaiting.projectRef);
+      const active = await loadActiveForegroundGoal(awaiting.ctx);
       if (!active) continue;
-      scheduleForegroundGoalLoop(awaiting.piApi ?? piApi, awaiting.ctx, awaiting.projectRef);
+      scheduleForegroundGoalLoop(awaiting.piApi ?? piApi, awaiting.ctx);
     }
   }
 
   function foregroundGoalAwaitingTurnsForSession(
     ctx: SparkToolContext,
   ): Array<[string, ForegroundGoalAwaitingTurn]> {
-    const prefix = `${ctx.cwd}:${sparkSessionOwnerKey(ctx)}:`;
-    return [...foregroundGoalAwaitingTurns.entries()].filter(([key]) => key.startsWith(prefix));
+    const currentKey = foregroundGoalLoopKey(ctx.cwd, ctx);
+    return [...foregroundGoalAwaitingTurns.entries()].filter(([key]) => key === currentKey);
   }
 
   async function pauseForegroundGoalAfterFailedTurn(
     ctx: SparkCommandContext,
-    projectRef: ProjectRef,
     failure: string,
   ): Promise<void> {
     const reason = `Foreground goal loop paused after agent turn failed: ${failure}`;
-    const goal = await updateProjectGoalStatus(ctx.cwd, projectRef, "paused", { reason });
+    const goal = await updateSessionGoalStatus(ctx.cwd, ctx, "paused", { reason });
     if (!goal) return;
     await deps.refreshSparkWidget(ctx.cwd, ctx);
     ctx.ui?.notify?.(`Spark goal paused after failed turn: ${compactInline(failure)}`, "warning");
@@ -381,40 +352,36 @@ export function registerSparkCommands(
       : undefined;
   }
 
-  async function loadActiveForegroundGoal(
-    ctx: SparkCommandContext,
-    projectRef: ProjectRef,
-  ): Promise<
+  async function loadActiveForegroundGoal(ctx: SparkCommandContext): Promise<
     | {
-        project: NonNullable<Awaited<ReturnType<typeof currentSparkProject>>>;
-        goal: NonNullable<Awaited<ReturnType<typeof loadProjectGoal>>>;
+        project?: NonNullable<Awaited<ReturnType<typeof currentSparkProject>>>;
+        goal: NonNullable<Awaited<ReturnType<typeof loadSessionGoal>>>;
       }
     | undefined
   > {
-    const graph = await loadSparkGraph(ctx.cwd, ctx);
-    if (!graph) return undefined;
-    const project = await currentSparkProject(ctx.cwd, ctx, graph);
-    if (!project || project.ref !== projectRef) return undefined;
-    const goal = await loadProjectGoal(ctx.cwd, projectRef);
+    const goal = await loadSessionGoal(ctx.cwd, ctx);
     if (!goal || goal.status !== "active") return undefined;
+    const graph = await loadSparkGraph(ctx.cwd, ctx);
+    const project = graph ? await currentSparkProject(ctx.cwd, ctx, graph) : undefined;
     return { project, goal };
   }
 
-  function renderForegroundGoalTickInstruction(projectTitle: string, objective: string): string {
+  function renderForegroundGoalTickInstruction(
+    projectTitle: string | undefined,
+    objective: string,
+  ): string {
     return [
       "Spark foreground goal loop tick.",
-      `Project: ${projectTitle}`,
+      projectTitle ? `Current project: ${projectTitle}` : undefined,
       `Goal: ${objective}`,
       'Inspect current work with task({ action: "status" }) and goal({ action: "status" }). If a concrete ready task is obvious, claim and complete one verified task in the foreground, then finish it with evidence. Goal mode is non-interactive: do not call ask/ask_flow. If task decomposition is wrong, missing, or blocks the goal, create or revise concrete tasks with task({ action: "plan" }) and continue from the updated ready work. If no ready path remains, validation fails, or the goal itself is ambiguous, stop and report or pause the goal with goal. Do not spawn background workflow execution from the goal loop.',
-    ].join("\n");
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n");
   }
 
-  function foregroundGoalLoopKey(
-    cwd: string,
-    ctx: SparkCommandContext,
-    projectRef: ProjectRef,
-  ): string {
-    return `${cwd}:${sparkSessionOwnerKey(ctx)}:${projectRef}`;
+  function foregroundGoalLoopKey(cwd: string, ctx: SparkToolContext): string {
+    return `${cwd}:${sparkSessionOwnerKey(ctx)}`;
   }
 
   function compactInline(value: string): string {

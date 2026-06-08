@@ -97,6 +97,23 @@ void test("SparkProviderRegistry buildModel returns a pi-ai compatible Model<Api
   assert.deepEqual(model.input, ["text", "image"]);
 });
 
+void test("SparkProviderRegistry supports model-level API overrides", () => {
+  const registry = new SparkProviderRegistry();
+  registry.registerProvider("fake", {
+    ...fakeProvider,
+    models: [
+      {
+        ...fakeProvider.models[0]!,
+        api: "openai-responses",
+        baseUrl: "https://fake.test/v1",
+      },
+    ],
+  });
+  const model = registry.buildModel("fake", "model-a");
+  assert.equal(model.api, "openai-responses");
+  assert.equal(model.baseUrl, "https://fake.test/v1");
+});
+
 void test("SparkProviderRegistry buildActiveModel reuses the active selection", () => {
   const registry = new SparkProviderRegistry();
   registry.registerProvider("fake", fakeProvider);
@@ -114,13 +131,22 @@ void test("SparkProviderRegistry accepts the production baidu-oneapi-provider pl
   assert.equal(registry.hasProvider("baidu-oneapi"), true);
   const provider = registry.getProvider("baidu-oneapi")!;
   assert.equal(provider.api, "anthropic-messages");
-  assert.equal(provider.models.length >= 3, true);
+  assert.equal(provider.models.length >= 5, true);
   assert.equal(
     provider.models.some((m) => m.id === "claude-opus-4.8"),
+    true,
+  );
+  assert.equal(
+    provider.models.some((m) => m.id === "gpt-5.5"),
     true,
   );
 
   const model = registry.buildModel("baidu-oneapi", "claude-opus-4.6");
   assert.equal(model.provider, "baidu-oneapi");
   assert.equal(model.contextWindow, 200_000);
+  const gptModel = registry.buildModel("baidu-oneapi", "gpt-5.5");
+  assert.equal(gptModel.api, "openai-responses");
+  assert.equal(gptModel.baseUrl, "https://oneapi-comate.baidu-int.com/v1");
+  assert.equal(gptModel.contextWindow, 258_000);
+  assert.equal(gptModel.maxTokens, 32_768);
 });

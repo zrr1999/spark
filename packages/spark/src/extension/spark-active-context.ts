@@ -2,6 +2,7 @@ import type { TaskGraph } from "pi-tasks";
 import { isUnfinishedTaskStatus } from "pi-tasks";
 import { isActiveSessionTodo, type SessionTodoEntry } from "pi-tasks";
 import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
+import type { SparkSessionGoal } from "./spark-session-goals.ts";
 import { truncateInline } from "./tool-rendering.ts";
 
 const SPARK_CONTEXT_TODO_LIMIT = 3;
@@ -16,6 +17,7 @@ export function renderActiveSparkContext(input: {
   project?: SparkProject;
   sessionKey: string;
   independentTodos: SessionTodoEntry[];
+  sessionGoal?: SparkSessionGoal;
   sparkMd?: string;
 }): string | undefined {
   const stateLines = input.project
@@ -24,8 +26,9 @@ export function renderActiveSparkContext(input: {
         input.project,
         input.sessionKey,
         input.independentTodos,
+        input.sessionGoal,
       )
-    : renderNoCurrentSparkProjectSummary(input.graph);
+    : renderNoCurrentSparkProjectSummary(input.graph, input.sessionGoal);
   const sparkMdExcerpt = input.sparkMd ? renderSparkMdActiveExcerpt(input.sparkMd) : undefined;
   const lines = [
     sparkMdExcerpt ? ["SPARK.md (active intent excerpt):", sparkMdExcerpt].join("\n") : undefined,
@@ -39,6 +42,7 @@ function renderActiveSparkProjectSummary(
   project: SparkProject,
   sessionKey: string,
   independentTodos: SessionTodoEntry[],
+  sessionGoal?: SparkSessionGoal,
 ): string {
   const tasks = graph.tasks(project.ref);
   const unfinishedTasks = tasks.filter((task) => isUnfinishedTaskStatus(task.status));
@@ -49,6 +53,14 @@ function renderActiveSparkProjectSummary(
     `- Current project: ${project.title} (${project.ref})`,
     `- Unfinished tasks: ${unfinishedTasks.length} / claimed: ${claimed.length} / current_session_claimed: ${sessionClaimed.length} (${tasks.length} total)`,
   ];
+
+  if (sessionGoal) {
+    const reason = sessionGoal.pauseReason ?? sessionGoal.completedReason;
+    const reasonText = reason ? `; reason: ${truncateInline(reason, 120)}` : "";
+    lines.push(
+      `- Session goal: ${sessionGoal.status}; ${truncateInline(sessionGoal.objective, 180)}${reasonText}`,
+    );
+  }
 
   const activeIndependentTodos = independentTodos.filter(isActiveSessionTodo);
   if (activeIndependentTodos.length > 0) {
@@ -87,14 +99,27 @@ function renderActiveSparkProjectSummary(
   return lines.join("\n");
 }
 
-function renderNoCurrentSparkProjectSummary(graph: TaskGraph): string {
+function renderNoCurrentSparkProjectSummary(
+  graph: TaskGraph,
+  sessionGoal?: SparkSessionGoal,
+): string {
   const projects = graph.projects();
   const activeProjects = projects.filter((project) => project.status !== "done");
-  return [
+  const lines = [
     "Spark available: no project selected for this session.",
     `- Projects: ${projects.length} total / ${activeProjects.length} active`,
+  ];
+  if (sessionGoal) {
+    const reason = sessionGoal.pauseReason ?? sessionGoal.completedReason;
+    const reasonText = reason ? `; reason: ${truncateInline(reason, 120)}` : "";
+    lines.push(
+      `- Session goal: ${sessionGoal.status}; ${truncateInline(sessionGoal.objective, 180)}${reasonText}`,
+    );
+  }
+  lines.push(
     '- Use task({ action: "project_use" }) to select or create a current project before planning, claiming, or updating project-bound tasks.',
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 function isActiveSparkTodoStatus(status: string): boolean {

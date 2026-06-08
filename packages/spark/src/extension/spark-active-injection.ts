@@ -17,6 +17,7 @@ import {
   type SparkSessionMode,
 } from "./session-state.ts";
 import { loadIndependentTodos } from "./session-todos.ts";
+import { loadSessionGoal } from "./spark-session-goals.ts";
 import type { SparkModeEntryDeps, SparkModeMessageApi } from "./spark-mode-entry.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
@@ -74,7 +75,15 @@ export async function renderActiveSparkContextSummary(
   const project = await currentSparkProject(cwd, ctx, graph);
   const sessionKey = sparkSessionKey(ctx);
   const independentTodos = await loadIndependentTodos(cwd, ctx);
-  return renderActiveSparkContext({ graph, project, sessionKey, independentTodos, sparkMd });
+  const sessionGoal = await loadSessionGoal(cwd, ctx);
+  return renderActiveSparkContext({
+    graph,
+    project,
+    sessionKey,
+    independentTodos,
+    sessionGoal,
+    sparkMd,
+  });
 }
 
 export async function ensureSparkStateForActiveWorkspace(

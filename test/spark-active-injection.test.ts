@@ -15,7 +15,7 @@ import {
   loadSparkMode,
   saveCurrentProjectRef,
 } from "../packages/spark/src/extension/session-state.ts";
-import { setProjectGoal } from "../packages/spark/src/extension/spark-project-goals.ts";
+import { setSessionGoal } from "../packages/spark/src/extension/spark-session-goals.ts";
 import type { SparkToolContext } from "../packages/spark/src/extension/spark-tool-registration.ts";
 
 interface TestSparkInputContext extends SparkToolContext {
@@ -90,12 +90,7 @@ void test("handleSparkInput does not turn until-done input into a template ask",
 void test("handleSparkInput lets active goal input bypass auto route ask", async () => {
   await withActiveSparkInputProject(
     async ({ dir, ctx, router, customMessages, queuedInstructions }) => {
-      const graph = await defaultTaskGraphStore(dir).load();
-      assert.ok(graph);
-      const project = graph.projects()[0];
-      assert.ok(project);
-      await setProjectGoal(dir, {
-        projectRef: project.ref,
+      await setSessionGoal(dir, ctx, {
         objective: "Finish the active goal without interactive routing asks.",
         source: "explicit",
         status: "active",

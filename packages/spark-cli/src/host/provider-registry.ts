@@ -29,6 +29,8 @@ import type { Api, Context, Model, SimpleStreamOptions } from "@earendil-works/p
 export interface ProviderModelDefinition {
   id: string;
   name: string;
+  api?: Api;
+  baseUrl?: string;
   reasoning: boolean;
   thinkingLevelMap?: Model<Api>["thinkingLevelMap"];
   input: ("text" | "image")[];
@@ -140,9 +142,9 @@ export class SparkProviderRegistry implements ProviderRegistrationAPI {
     return {
       id: def.id,
       name: def.name,
-      api: provider.api,
+      api: def.api ?? provider.api,
       provider: providerName,
-      baseUrl: provider.baseUrl,
+      baseUrl: def.baseUrl ?? provider.baseUrl,
       reasoning: def.reasoning,
       thinkingLevelMap: def.thinkingLevelMap,
       input: def.input,

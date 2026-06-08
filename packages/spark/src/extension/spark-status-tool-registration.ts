@@ -17,7 +17,7 @@ import {
   renderSparkStatus,
 } from "./spark-status-rendering.ts";
 import { ensureSparkGraphInvariants } from "./spark-graph-invariants.ts";
-import { loadProjectGoal } from "./spark-project-goals.ts";
+import { loadSessionGoal } from "./spark-session-goals.ts";
 import {
   normalizeSparkStatusFormat,
   normalizeSparkStatusLimit,
@@ -104,9 +104,7 @@ export function registerSparkStatusTool(
       const sessionKey = sparkSessionKey(ctx);
       const independentTodos = await loadIndependentTodos(cwd, ctx);
       const currentProject = await currentSparkProject(cwd, ctx, graph);
-      const projectGoal = currentProject
-        ? await loadProjectGoal(cwd, currentProject.ref)
-        : undefined;
+      const sessionGoal = await loadSessionGoal(cwd, ctx);
       const recentRoleRunCompletions =
         view === "summary"
           ? []
@@ -127,7 +125,7 @@ export function registerSparkStatusTool(
         currentProject,
         dagStatus,
         runMode,
-        projectGoal,
+        sessionGoal,
         independentTodos,
         recentRoleRunCompletions,
         state,

@@ -244,7 +244,7 @@ void test("spark widget renders completed DAG state in plain language", () => {
   assert.doesNotMatch(lines.join("\n"), /DAG\(failed|Spark DAG/);
 });
 
-void test("spark widget shows project goal on the project header", () => {
+void test("spark widget shows session goal on the project header", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       goal: {

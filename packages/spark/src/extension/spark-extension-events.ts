@@ -11,13 +11,8 @@ import {
 import { ensureSparkClaimReaper, sweepExpiredSparkClaims } from "./spark-claim-reaper.ts";
 import { ensureSparkGraphInvariants } from "./spark-graph-invariants.ts";
 import { hasLocalSparkDirectory } from "./spark-activation.ts";
-import {
-  currentSparkProject,
-  loadSparkGraph,
-  saveSparkGraphAndTodos,
-  sparkSessionOwnerKey,
-} from "./session-state.ts";
-import { loadProjectGoal } from "./spark-project-goals.ts";
+import { loadSparkGraph, saveSparkGraphAndTodos, sparkSessionOwnerKey } from "./session-state.ts";
+import { loadSessionGoal } from "./spark-session-goals.ts";
 import {
   collectUnreadHiddenRoleRunInbox,
   formatHiddenRoleRunInbox,
@@ -142,7 +137,7 @@ async function syncGoalInteractiveToolAvailability(
 ): Promise<void> {
   if (!pi.getAllTools || !pi.setActiveTools) return;
   const key = `${ctx.cwd}:${sparkSessionOwnerKey(ctx)}`;
-  const activeGoal = await hasActiveCurrentProjectGoal(ctx);
+  const activeGoal = await hasActiveCurrentSessionGoal(ctx);
   if (activeGoal) {
     const baseline = baselines.get(key) ?? pi.getAllTools().map((tool) => tool.name);
     baselines.set(key, baseline);
@@ -155,12 +150,8 @@ async function syncGoalInteractiveToolAvailability(
   baselines.delete(key);
 }
 
-async function hasActiveCurrentProjectGoal(ctx: SparkToolContext): Promise<boolean> {
-  const graph = await loadSparkGraph(ctx.cwd, ctx);
-  if (!graph) return false;
-  const project = await currentSparkProject(ctx.cwd, ctx, graph);
-  if (!project) return false;
-  const goal = await loadProjectGoal(ctx.cwd, project.ref);
+async function hasActiveCurrentSessionGoal(ctx: SparkToolContext): Promise<boolean> {
+  const goal = await loadSessionGoal(ctx.cwd, ctx);
   return goal?.status === "active";
 }
 

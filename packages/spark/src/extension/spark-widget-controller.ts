@@ -22,7 +22,7 @@ import {
   taskTodoDisplayKey,
 } from "./session-todos.ts";
 import { ensureSparkGraphInvariants, isPlaceholderProjectTitle } from "./spark-graph-invariants.ts";
-import { loadProjectGoal } from "./spark-project-goals.ts";
+import { loadSessionGoal } from "./spark-session-goals.ts";
 import { latestRunsByTaskRef, taskPlanSummary } from "./task-display.ts";
 import { deriveTaskRoleLabel, isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 
@@ -93,7 +93,7 @@ export class SparkWidgetController {
       return;
     }
 
-    const projectGoal = await loadProjectGoal(cwd, project.ref);
+    const sessionGoal = await loadSessionGoal(cwd, ctx);
     const allTasks = graph.tasks(project.ref);
     const claimedTasks = allTasks.filter((task) => taskClaimedBy(task));
     const sessionTasks = claimedTasks.filter((task) => isClaimOwnedBySession(task, sessionKey));
@@ -103,8 +103,8 @@ export class SparkWidgetController {
       projectTitle: isPlaceholderProjectTitle(project.title) ? undefined : project.title,
       dag: sparkDagWidgetEntry(dagStatus, project.ref),
       run: sparkRunWidgetEntry(currentState?.runMode, project.ref),
-      goal: projectGoal
-        ? { status: projectGoal.status, objective: compactGoalObjective(projectGoal.objective) }
+      goal: sessionGoal
+        ? { status: sessionGoal.status, objective: compactGoalObjective(sessionGoal.objective) }
         : undefined,
       tasks: allTasks.map((task) => ({
         title: task.title,

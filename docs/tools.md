@@ -14,7 +14,7 @@ Commands:
 Tools:
 
 - `task` — canonical generic project/task/TODO/run graph tool. Use `action: "status" | "project_list" | "project_use" | "project_update" | "claim" | "plan" | "finish" | "todo_update" | "run_ready" | "run_status" | "run_control" | "cache_cleanup"`. This is the external surface for Spark project/task status, planning, claiming, finishing, TODO updates, ready-task scheduling, and background run inspection/control.
-- `goal` — Spark project-bound goal facade. Use `action: "status" | "infer" | "set" | "start" | "pause" | "complete"`; generic goal primitives live in `pi-goal`, while Spark owns project selection, widget integration, and command policy.
+- `goal` — Spark session-bound goal facade. Use `action: "status" | "infer" | "set" | "start" | "pause" | "complete"`; generic goal primitives live in `pi-goal`, while Spark owns session goal storage, widget integration, and command policy.
 - `ask` — canonical generic ask tool. Use `action: "ask"` for structured asks and `action: "flow"` when the fullscreen multi-question flow renderer is required. `ask_user` and `ask_flow` remain lower-level peer surfaces over the same ask result semantics.
 - `artifact` — canonical generic artifact/evidence tool. Use `action: "list"`, `"read"`, `"record"`, `"link"`, or `"compact"`; reads are truncated by default and full reads are explicit.
 - `learning` — canonical generic evidence-backed learning tool. Use `action: "record" | "search" | "list" | "read" | "mark_stale" | "supersede" | "reject" | "export_markdown" | "import_markdown"`. Learnings remain distinct from recall/memory and use ignored plural local `.learnings/` stores unless explicitly exported.

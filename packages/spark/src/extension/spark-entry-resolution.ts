@@ -99,10 +99,9 @@ async function resolveWorkflowSelector(
   ) {
     return normalizedRequested;
   }
-  if (!requested && prompt.trim()) return undefined;
+  if (!requested) return "agent:auto";
 
   const available = listing.workflows.map((workflow) => workflow.source + ":" + workflow.id);
-  if (!requested && !prompt.trim() && available.length === 1) return available[0];
   const reason = normalizedRequested
     ? "Spark workflow selector not found: " + normalizedRequested + "."
     : "Spark workflow mode needs an explicit saved workflow selector.";

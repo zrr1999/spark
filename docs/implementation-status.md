@@ -47,8 +47,8 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
    - Spark single-task adapter over `pi-roles`
    - dry-run and real task execution, runtime-created role-run claims, heartbeat loop, artifact persistence, timeout/reconciliation tracking, kill controls, and role-run transcript compaction support
 - `spark`
-   - `/spark`, `/research`, `/plan`, `/execute`, `/goal`, and `/workflow[:selector]` commands
-   - Spark widget, mode state, active context provider, project-bound goal facade, review/init flow state, builtin Spark roles, and role/model binding policy
+   - `/spark`, `/research`, `/plan`, `/execute`, `/goal`, `/pause-goal`, and `/workflow[:selector]` commands
+   - Spark widget, mode state, active context provider, session-bound goal facade, review/init flow state, builtin Spark roles, and role/model binding policy
    - canonical visible tool surface through `task`, `learning`, `artifact`, `ask`, `context`, `workflow`, `role`, `recall`, and `goal`; legacy `spark_*` tool configs are internal implementation details only and are not registered as active tools
    - state initialization without a generic intake template; clarification/decision asks are grounded in inspected context
    - root `SPARK.md` materialization only during `/spark` initialization when `.git` exists in cwd; direct modes keep intent under `.spark` artifacts
@@ -66,7 +66,7 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
 ## Current public tool surface
 
 - `task({ action })` owns project/task/TODO/run/status/cache-cleanup actions.
-- `goal({ action })` owns Spark project-bound goal actions.
+- `goal({ action })` owns Spark session-bound goal actions.
 - `artifact({ action })` owns evidence/artifact records.
 - `learning({ action })` owns evidence-backed reusable learnings.
 - `ask`, `ask_user`, and `ask_flow` own user-question UX and result semantics.

@@ -4,6 +4,7 @@ import { test } from "node:test";
 import registerBaiduOneApiProvider, {
   remapBaiduOneApiPayload,
   resolveBaiduOneApiKey,
+  streamBaiduOneApi,
 } from "../packages/spark-cli/src/baidu-oneapi-provider.ts";
 import { parseSparkCliArgs } from "../packages/spark-cli/src/cli.ts";
 import { SparkNativeSession } from "../packages/spark-cli/src/native-tui.ts";
@@ -36,6 +37,8 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
     models: Array<{
       id: string;
       reasoning: boolean;
+      api?: string;
+      baseUrl?: string;
       thinkingLevelMap?: Record<string, string | null>;
     }>;
     streamSimple: unknown;
@@ -43,13 +46,15 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
 
   assert.equal(registeredName, "baidu-oneapi");
   assert.equal(config.api, "anthropic-messages");
-  assert.equal(typeof config.streamSimple, "function");
+  assert.equal(config.streamSimple, streamBaiduOneApi);
   assert.deepEqual(
-    config.models.map((model) => [model.id, model.reasoning]),
+    config.models.map((model) => [model.id, model.reasoning, model.api]),
     [
-      ["claude-opus-4.6", true],
-      ["claude-opus-4.7", true],
-      ["claude-opus-4.8", true],
+      ["claude-opus-4.6", true, undefined],
+      ["claude-opus-4.7", true, undefined],
+      ["claude-opus-4.8", true, undefined],
+      ["gpt-5.5", true, "openai-responses"],
+      ["gpt-5.5-coding-plan", true, "openai-responses"],
     ],
   );
   assert.deepEqual(
@@ -61,6 +66,10 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
       high: null,
       xhigh: "xhigh",
     },
+  );
+  assert.equal(
+    config.models.find((model) => model.id === "gpt-5.5")?.baseUrl,
+    "https://oneapi-comate.baidu-int.com/v1",
   );
 });
 

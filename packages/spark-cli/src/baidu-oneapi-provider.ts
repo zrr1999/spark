@@ -5,15 +5,19 @@ import {
   type Model,
   type SimpleStreamOptions,
   streamAnthropic,
+  streamSimpleOpenAIResponses,
 } from "@earendil-works/pi-ai";
 
 const BAIDU_ONEAPI_PROVIDER = "baidu-oneapi";
 const BAIDU_ONEAPI_BASE_URL = "https://oneapi-comate.baidu-int.com";
+const BAIDU_ONEAPI_OPENAI_BASE_URL = `${BAIDU_ONEAPI_BASE_URL}/v1`;
 
 const GATEWAY_MODEL_BY_ID: Record<string, string> = {
   "claude-opus-4.6": "Claude Opus 4.6",
   "claude-opus-4.7": "Claude Opus 4.7",
   "claude-opus-4.8": "Claude Opus 4.8",
+  "gpt-5.5": "gpt-5.5-coding-plan",
+  "gpt-5.5-coding-plan": "gpt-5.5-coding-plan",
 };
 
 export interface ProviderRegistrationAPI {
@@ -105,13 +109,45 @@ export function streamBaiduOneApiAnthropic(
   });
 }
 
+export function streamBaiduOneApi(
+  model: Model<Api>,
+  context: Context,
+  options?: SimpleStreamOptions,
+) {
+  if (model.api === "openai-responses")
+    return streamBaiduOneApiOpenAIResponses(model, context, options);
+  return streamBaiduOneApiAnthropic(model, context, options);
+}
+
+export function streamBaiduOneApiOpenAIResponses(
+  model: Model<Api>,
+  context: Context,
+  options?: SimpleStreamOptions,
+) {
+  const gatewayModel = GATEWAY_MODEL_BY_ID[model.id] ?? model.id;
+  const apiKey = resolveBaiduOneApiKey(options?.apiKey);
+
+  return streamSimpleOpenAIResponses(model as Model<"openai-responses">, context, {
+    ...options,
+    apiKey,
+    async onPayload(payload, payloadModel) {
+      const remapped = remapOpenAIResponsesModel(payload, gatewayModel);
+      return (await options?.onPayload?.(remapped, payloadModel)) ?? remapped;
+    },
+  });
+}
+
+function remapOpenAIResponsesModel(payload: unknown, gatewayModel: string): unknown {
+  return isRecord(payload) ? { ...payload, model: gatewayModel } : payload;
+}
+
 export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI): void {
   pi.registerProvider(BAIDU_ONEAPI_PROVIDER, {
     name: "Baidu OneAPI",
     baseUrl: process.env.BAIDU_ONEAPI_BASE_URL ?? BAIDU_ONEAPI_BASE_URL,
     apiKey: "BAIDU_ONEAPI_API_KEY",
     api: "anthropic-messages",
-    streamSimple: streamBaiduOneApiAnthropic,
+    streamSimple: streamBaiduOneApi,
     models: [
       {
         id: "claude-opus-4.6",
@@ -160,6 +196,28 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 32000,
+      },
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5 Coding Plan (Baidu OneAPI)",
+        api: "openai-responses",
+        baseUrl: process.env.BAIDU_ONEAPI_OPENAI_BASE_URL ?? BAIDU_ONEAPI_OPENAI_BASE_URL,
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 258000,
+        maxTokens: 32768,
+      },
+      {
+        id: "gpt-5.5-coding-plan",
+        name: "GPT-5.5 Coding Plan (Baidu OneAPI)",
+        api: "openai-responses",
+        baseUrl: process.env.BAIDU_ONEAPI_OPENAI_BASE_URL ?? BAIDU_ONEAPI_OPENAI_BASE_URL,
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 258000,
+        maxTokens: 32768,
       },
     ],
   });

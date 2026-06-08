@@ -107,9 +107,11 @@ export async function enterSparkExecutionMode(
   workflowSelector?: string,
 ): Promise<void> {
   const project = await currentSparkProject(ctx.cwd, ctx, graph);
+  const persistedWorkflowSelector =
+    workflowSelector === "agent:auto" ? undefined : workflowSelector;
   if (project)
     await saveSparkExecutionMode(ctx.cwd, ctx, project.ref, focus, "execute", strategy, {
-      workflowName: workflowSelector,
+      workflowName: persistedWorkflowSelector,
     });
   else await clearSparkExecutionMode(ctx.cwd, ctx);
   await deps.refreshSparkWidget(ctx.cwd, ctx);
@@ -128,6 +130,12 @@ export async function enterSparkExecutionMode(
       savedWorkflows,
       workflowSelector,
     ),
-    renderSparkModeVisibleMessage("execute", project?.title, focus, strategy, workflowSelector),
+    renderSparkModeVisibleMessage(
+      "execute",
+      project?.title,
+      focus,
+      strategy,
+      persistedWorkflowSelector,
+    ),
   );
 }

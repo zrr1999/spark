@@ -68,7 +68,7 @@ export function renderSparkExecutionModePrompt(
   const focusLine = renderExecutionFocusLine(strategy, focus);
   const strategyLine = "Execution strategy: " + strategy + ".";
   const workflowSelectorLine =
-    strategy === "workflow" && workflowSelector
+    strategy === "workflow" && workflowSelector && workflowSelector !== "agent:auto"
       ? "\n\nWorkflow selector: " + workflowSelector + "."
       : "";
   const workflowGuidance =
