@@ -9,7 +9,8 @@ export type { SessionTodoEntry, SessionTodoStatus } from "pi-tasks";
  * the current task's TODO working set.
  *
  * Display model:
- *   ◆ Project title · Tasks(running=2 pending=1 failed=1): @agent-a, @agent-b · Goal(●): active objective
+ *   ◆ Project title · Tasks(running=2 pending=1 failed=1): @agent-a, @agent-b
+ *   ◆ Goal(●): active objective
  *   ├─ ◐ @me/worker role-run task title
  *   │  ├─ ✓ #7 task TODO
  *   │  └─ ○ #12 task TODO
@@ -183,6 +184,8 @@ export function renderSparkWidgetLines(
 
   const headerLine = formatProjectHeaderLine(state, visibleTasks, l.tasks, theme);
   if (headerLine) lines.push(trunc(headerLine));
+  const goalLine = formatGoalLine(state.goal, theme);
+  if (goalLine) lines.push(trunc(goalLine));
   const backgroundLine = hasSessionRunningAgent(visibleTasks)
     ? undefined
     : formatBackgroundLine(state.dag, state.run, theme);
@@ -216,13 +219,14 @@ function hasSessionRunningAgent(tasks: TaskEntry[]): boolean {
   );
 }
 
-function formatGoalSummary(
+function formatGoalLine(
   goal: SparkGoalWidgetEntry | undefined,
   theme: SparkWidgetTheme,
 ): string | undefined {
   if (!goal) return undefined;
   const status = theme.fg(goalStatusColor(goal.status), goalStatusSymbol(goal.status));
-  return `${theme.fg("dim", "Goal(")}${status}${theme.fg("dim", `): ${goal.objective}`)}`;
+  const summary = `${theme.fg("dim", "Goal(")}${status}${theme.fg("dim", `): ${goal.objective}`)}`;
+  return `${theme.fg("accent", "◆")} ${summary}`;
 }
 
 function goalStatusSymbol(status: SparkGoalWidgetEntry["status"]): string {
@@ -280,16 +284,9 @@ function formatProjectHeaderLine(
   theme: SparkWidgetTheme,
 ): string | undefined {
   const taskSummary = formatTaskSummaryHeader(state, visibleTasks, tasksLabel);
-  const goalSummary = formatGoalSummary(state.goal, theme);
-  const suffix = [taskSummary ? theme.fg("dim", taskSummary) : undefined, goalSummary]
-    .filter((part): part is string => Boolean(part))
-    .map((part) => `${theme.fg("dim", "·")} ${part}`)
-    .join(" ");
+  const suffix = taskSummary ? `${theme.fg("dim", "·")} ${theme.fg("dim", taskSummary)}` : "";
   if (!state.projectTitle) {
-    const summary = [taskSummary ? theme.fg("dim", taskSummary) : undefined, goalSummary]
-      .filter((part): part is string => Boolean(part))
-      .join(` ${theme.fg("dim", "·")} `);
-    return summary ? `${theme.fg("accent", "◆")} ${summary}` : undefined;
+    return taskSummary ? `${theme.fg("accent", "◆")} ${theme.fg("dim", taskSummary)}` : undefined;
   }
   return `${theme.fg("accent", "◆")} ${theme.bold(state.projectTitle)}${suffix ? ` ${suffix}` : ""}`;
 }

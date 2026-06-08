@@ -244,7 +244,7 @@ void test("spark widget renders completed DAG state in plain language", () => {
   assert.doesNotMatch(lines.join("\n"), /DAG\(failed|Spark DAG/);
 });
 
-void test("spark widget shows session goal on the project header", () => {
+void test("spark widget shows session goal on a separate line", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       goal: {
@@ -264,11 +264,9 @@ void test("spark widget shows session goal on the project header", () => {
     theme,
   );
 
-  assert.match(
-    lines[0] ?? "",
-    /◆ Spark UX redesign · Tasks\(pending=1\) · Goal\(●\): Advance Spark mode-as-state UX rework/,
-  );
-  assert.doesNotMatch(lines.slice(1).join("\n"), /◆ Goal\(●\):/);
+  assert.match(lines[0] ?? "", /◆ Spark UX redesign · Tasks\(pending=1\)/);
+  assert.doesNotMatch(lines[0] ?? "", /Goal\(●\):/);
+  assert.match(lines[1] ?? "", /◆ Goal\(●\): Advance Spark mode-as-state UX rework/);
 });
 
 void test("spark widget shows project header with task counts even before claims", () => {
