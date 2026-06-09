@@ -295,25 +295,98 @@ function compactTaskForReview(task: Task): Record<string, unknown> {
 function parseJsonObjectFromText(text: string): Record<string, unknown> {
   const trimmed = text.trim();
   if (!trimmed) throw new Error("reviewer verdict must be non-empty JSON");
+  let fallback: Record<string, unknown> | undefined;
   try {
     const parsed = JSON.parse(trimmed);
-    if (isRecord(parsed)) return parsed;
+    if (isRecord(parsed)) {
+      fallback = parsed;
+      const verdict = findReviewerVerdictRecord(parsed);
+      if (verdict) return verdict;
+    }
   } catch {
     // Fall through to JSON-object extraction for role output wrappers.
   }
-  let fallback: Record<string, unknown> | undefined;
   for (const objectText of extractJsonObjects(trimmed)) {
     try {
       const parsed = JSON.parse(objectText);
       if (!isRecord(parsed)) continue;
       fallback ??= parsed;
-      if (typeof parsed.outcome === "string") return parsed;
+      const verdict = findReviewerVerdictRecord(parsed);
+      if (verdict) return verdict;
     } catch {
       // Keep scanning later objects; role stdout can contain protocol JSON and text fragments.
     }
   }
   if (fallback) return fallback;
   throw new Error("reviewer verdict must be a JSON object");
+}
+
+function findReviewerVerdictRecord(
+  record: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (typeof record.outcome === "string") return record;
+  for (const text of reviewerVerdictTextCandidates(record)) {
+    const found = findReviewerVerdictRecordInText(text);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function findReviewerVerdictRecordInText(text: string): Record<string, unknown> | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (isRecord(parsed)) {
+      const found = findReviewerVerdictRecord(parsed);
+      if (found) return found;
+    }
+  } catch {
+    // Continue with object extraction below.
+  }
+  for (const objectText of extractJsonObjects(trimmed)) {
+    try {
+      const parsed = JSON.parse(objectText);
+      if (!isRecord(parsed)) continue;
+      const found = findReviewerVerdictRecord(parsed);
+      if (found) return found;
+    } catch {
+      // Keep scanning; assistant content can include prose plus JSON.
+    }
+  }
+  return undefined;
+}
+
+function reviewerVerdictTextCandidates(record: Record<string, unknown>): string[] {
+  return [
+    assistantMessageText(record.message),
+    ...eventMessages(record).map(assistantMessageText),
+    assistantMessageText(record.assistantMessageEvent),
+  ].filter((value): value is string => Boolean(value));
+}
+
+function eventMessages(record: Record<string, unknown>): unknown[] {
+  return Array.isArray(record.messages) ? record.messages : [];
+}
+
+function assistantMessageText(message: unknown): string | undefined {
+  if (!isRecord(message)) return undefined;
+  const role = message.role;
+  if (role !== undefined && role !== "assistant") return undefined;
+  return messageContentText(message.content) ?? stringField(message, "text");
+}
+
+function messageContentText(content: unknown): string | undefined {
+  if (typeof content === "string") return content.trim() || undefined;
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .map((block) => {
+      if (!isRecord(block)) return "";
+      return block.type === "text" && typeof block.text === "string" ? block.text : "";
+    })
+    .join("")
+    .trim();
+  return text || undefined;
 }
 
 function extractJsonObjects(text: string): string[] {
