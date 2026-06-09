@@ -101,6 +101,13 @@ export async function setSessionGoal(
   return goal;
 }
 
+export async function clearSessionGoal(
+  cwd: string,
+  ctx: SparkSessionContext | undefined,
+): Promise<void> {
+  await saveSessionGoalSnapshot(cwd, ctx, { version: 1 });
+}
+
 export async function updateSessionGoalStatus(
   cwd: string,
   ctx: SparkSessionContext | undefined,

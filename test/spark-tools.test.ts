@@ -1545,7 +1545,7 @@ void test("/goal restarts without overwriting an existing goal objective", async
   }
 });
 
-void test("/goal does not continue stale inferred project goal after project is done", async () => {
+void test("/goal handles stale inferred project goals after the project is done", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-stale-done-project-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -1560,20 +1560,39 @@ void test("/goal does not continue stale inferred project goal after project is 
     const run = registerSparkToolsForTest();
     const goalCommand = run.commands.get("goal");
     assert.ok(goalCommand, "missing /goal command");
+    const staleObjective = `Advance project “${project.title}” to completion.\nUnfinished tasks: 3. Ready tasks: 2.`;
     await setSessionGoal(dir, ctx, {
-      objective: `Advance project “${project.title}” to completion.\nUnfinished tasks: 3. Ready tasks: 2.`,
+      objective: staleObjective,
       source: "inferred",
       status: "active",
     });
 
-    await goalCommand.handler("continue stale goal", ctx);
+    await goalCommand.handler("", ctx);
 
-    const goal = await loadSessionGoal(dir, ctx);
-    assert.equal(goal?.status, "paused");
-    assert.match(goal?.pauseReason ?? "", /already done/);
-    assert.match(ctx.notifications.at(-1)?.message ?? "", /already done/);
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal stale/);
-    assert.equal(run.customMessages.at(-1)?.options?.triggerTurn, undefined);
+    let goal = await loadSessionGoal(dir, ctx);
+    assert.equal(goal, undefined);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Cleared stale Spark goal/);
+    assert.equal(run.customMessages.length, 0);
+
+    await setSessionGoal(dir, ctx, {
+      objective: staleObjective,
+      source: "inferred",
+      status: "active",
+    });
+    await goalCommand.handler("review 全盘代码进行改进", ctx);
+
+    goal = await loadSessionGoal(dir, ctx);
+    assert.equal(goal?.status, "active");
+    assert.equal(goal?.objective, "review 全盘代码进行改进");
+    assert.equal(goal?.source, "explicit");
+    assert.match(
+      ctx.notifications.at(-1)?.message ?? "",
+      /replaced a stale completed-project goal/,
+    );
+    const goalPrompt = await consumeSparkModeContext(run, ctx);
+    assert.match(goalPrompt, /Spark session goal is active/);
+    assert.match(goalPrompt, /review 全盘代码进行改进/);
+    assert.doesNotMatch(goalPrompt, /Unfinished tasks: 3/);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }

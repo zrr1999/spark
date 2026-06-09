@@ -14,6 +14,7 @@ import {
   startOrInferSessionGoal,
 } from "./spark-goal-tool-registration.ts";
 import {
+  clearSessionGoal,
   loadSessionGoal,
   updateSessionGoalStatus,
   type SparkSessionGoal,
@@ -200,22 +201,26 @@ export function registerSparkCommands(
         ? completedProjectForInferredGoal(existingGoal, graph)
         : undefined;
       if (completedProject) {
-        const goal =
-          existingGoal.status === "active"
-            ? await updateSessionGoalStatus(ctx.cwd, ctx, "paused", {
-                reason: completedProjectGoalPauseReason(completedProject.title),
-                retryState: null,
-              })
-            : existingGoal;
         clearForegroundGoalLoop(ctx.cwd, ctx);
+        if (objective.trim()) {
+          const goal = await startOrInferSessionGoal(ctx.cwd, ctx, graph, objective);
+          if (!goal) return;
+          await deps.refreshSparkWidget(ctx.cwd, ctx);
+          const projectLabel = project ? ` · project: ${project.title}` : "";
+          const visible = `Spark goal active${projectLabel} · goal: ${compactInline(goal.objective)}`;
+          ctx.ui?.notify?.(
+            "Spark goal replaced a stale completed-project goal with the new objective.",
+            "info",
+          );
+          queueForegroundGoalStartInstruction(piApi, ctx, project?.title, goal, visible);
+          return;
+        }
+        await clearSessionGoal(ctx.cwd, ctx);
         await deps.refreshSparkWidget(ctx.cwd, ctx);
-        const visible = `Spark goal stale · project already done: ${completedProject.title}`;
         ctx.ui?.notify?.(
-          "Spark goal points to a project that is already done; not continuing the stale goal.",
+          `Cleared stale Spark goal for completed project: ${compactInline(completedProject.title)}`,
           "info",
         );
-        piApi.sendMessage({ customType: "spark-goal-request", content: visible, display: true });
-        if (!goal) return;
         return;
       }
       const goal =
@@ -293,10 +298,6 @@ export function registerSparkCommands(
       objective.includes(`Advance project "${title}"`) ||
       objective.includes(`Advance project '${title}'`)
     );
-  }
-
-  function completedProjectGoalPauseReason(projectTitle: string): string {
-    return `Inferred project goal is stale: project “${projectTitle}” is already done and has no active task frontier.`;
   }
 
   function queueForegroundGoalStartInstruction(
@@ -610,13 +611,10 @@ export function registerSparkCommands(
     const graph = await loadSparkGraph(ctx.cwd, ctx);
     const completedProject = graph ? completedProjectForInferredGoal(goal, graph) : undefined;
     if (completedProject) {
-      await updateSessionGoalStatus(ctx.cwd, ctx, "paused", {
-        reason: completedProjectGoalPauseReason(completedProject.title),
-        retryState: null,
-      });
+      await clearSessionGoal(ctx.cwd, ctx);
       await deps.refreshSparkWidget(ctx.cwd, ctx);
       ctx.ui?.notify?.(
-        `Spark goal paused because project is already done: ${compactInline(completedProject.title)}`,
+        `Cleared stale Spark goal for completed project: ${compactInline(completedProject.title)}`,
         "info",
       );
       return undefined;
