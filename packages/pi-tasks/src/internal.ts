@@ -34,6 +34,7 @@ import type {
   TaskTodoStoreEntry,
   TaskTodoSummary,
 } from "./common.ts";
+import { createDefaultProjectRoadmap, normalizeProjectRoadmap } from "./roadmap.ts";
 
 export function independentTodoDisplayKey(todo: SessionTodoEntry): string {
   return `independent:${todo.id ?? stableId(todo.content)}`;
@@ -193,10 +194,15 @@ export function taskLookup(tasks: Task[]): Map<string, TaskRef> {
 }
 
 export function normalizeProject(project: Project): Project {
+  const now = nowIso();
   return {
     ...project,
     status: normalizeProjectStatus(project.status),
     currentTaskRef: project.currentTaskRef,
+    intent: typeof project.intent === "string" ? project.intent.trim() || undefined : undefined,
+    roadmap: project.roadmap
+      ? normalizeProjectRoadmap(project.roadmap, `project(${project.ref}).roadmap`)
+      : createDefaultProjectRoadmap(project.title, project.createdAt ?? now),
   };
 }
 

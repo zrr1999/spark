@@ -1,8 +1,9 @@
 /** Spark CLI native host service construction. */
 
-import { join, resolve } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { basename, join, resolve } from "node:path";
 import type { AssistantMessageEvent, Context, Model, StreamOptions } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "pi-extension-api";
+import { stableId, type ExtensionAPI } from "pi-extension-api";
 
 import { SparkAgentLoop, type SparkAgentStreamFunction } from "./agent-loop.ts";
 import {
@@ -147,6 +148,9 @@ export async function createSparkCliHostServices(
   }
 
   const sessionStore = new SparkSessionStore({ cwd, sparkHome: options.sparkHome });
+  runtime.setSessionManager(
+    options.sessionManager ?? createSparkCliSessionManagerStub(sessionStore, cwd),
+  );
   const skillResolver = new SparkSkillResolver({ cwd, sparkHome: options.sparkHome });
   const skillsPrompt = await skillResolver.formatAvailableSkillsForPrompt();
   const streamFunction = createProviderRegistryStreamFunction(providerRegistry);
@@ -222,8 +226,28 @@ export async function submitToSparkAgent(
   services: SparkCliHostServices,
   input: string,
 ): Promise<string> {
+  await ensureSparkCliSessionFile(services.sessionStore);
   const result = await services.agentLoop.submit(input);
   return result ? assistantMessageToText(result) : "No assistant response.";
+}
+
+function createSparkCliSessionManagerStub(store: SparkSessionStore, cwd: string) {
+  return {
+    getSessionFile: () => currentSparkCliSessionFile(store, cwd),
+    getLeafId: () => currentSparkCliLeafId(store, cwd),
+  };
+}
+
+function currentSparkCliSessionFile(store: SparkSessionStore, cwd: string): string {
+  return join(store.sessionDir, `${stableId(cwd)}.jsonl`);
+}
+
+function currentSparkCliLeafId(store: SparkSessionStore, cwd: string): string {
+  return basename(currentSparkCliSessionFile(store, cwd), ".jsonl");
+}
+
+async function ensureSparkCliSessionFile(store: SparkSessionStore): Promise<void> {
+  await mkdir(store.sessionDir, { recursive: true });
 }
 
 export function assistantMessageToText(message: { content?: unknown }): string {

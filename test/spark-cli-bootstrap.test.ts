@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import test from "node:test";
 
+import { stableId } from "../packages/pi-extension-api/src/index.ts";
 import { parseSparkCliArgs } from "../packages/spark-cli/src/cli.ts";
 import {
   createSparkCliHostServices,
@@ -106,10 +107,16 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
     assert.equal(services.providerRegistry.getActive()?.providerName, "fake-provider");
     assert.equal(services.providerRegistry.getActive()?.modelId, "fake-model");
     assert.equal(
-      services.runtime.getAllTools().some((tool) => tool.name === "ask_user"),
+      services.runtime.getAllTools().some((tool) => tool.name === "ask"),
       true,
     );
     assert.equal(services.sessionStore.cwd, cwd);
+    const sessionManager = services.runtime.makeContext().sessionManager;
+    const sessionFile = sessionManager?.getSessionFile?.();
+    assert.ok(sessionFile);
+    assert.ok(sessionFile.endsWith(`${stableId(cwd)}.jsonl`));
+    assert.equal(sessionManager?.getLeafId?.(), basename(sessionFile, ".jsonl"));
+    assert.notEqual(sessionManager?.getLeafId?.(), "spark-cli-leaf");
     assert.equal(services.keybindings.keyFor("app.modelCycle.next"), "ctrl+n");
     assert.equal(
       (await services.skillResolver.resolve()).skills.some(

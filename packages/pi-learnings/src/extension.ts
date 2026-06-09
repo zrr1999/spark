@@ -146,6 +146,6 @@ function renderLearningCall(
   const ref = typeof args.ref === "string" ? args.ref : undefined;
   const title = typeof args.title === "string" ? args.title : undefined;
   const query = typeof args.query === "string" ? args.query : undefined;
-  const text = ["learning", action, ref ?? title ?? query].filter(Boolean).join(" ");
+  const text = ["learning", `action=${action}`, ref ?? title ?? query].filter(Boolean).join(" ");
   return new ToolCallText(theme.bold ? theme.bold(text) : text);
 }

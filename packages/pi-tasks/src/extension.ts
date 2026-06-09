@@ -164,7 +164,7 @@ function renderTaskCall(
         ? args.taskRef
         : undefined;
   const project = typeof args.project === "string" ? args.project : undefined;
-  const text = ["task", action, task ?? project].filter(Boolean).join(" ");
+  const text = ["task", `action=${action}`, task ?? project].filter(Boolean).join(" ");
   return new ToolCallText(theme.bold ? theme.bold(text) : text);
 }
 

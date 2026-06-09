@@ -5,6 +5,7 @@ import { test } from "node:test";
 import {
   adversarialReviewWorkflowScript,
   deepResearchWorkflowScript,
+  fanOutWithBriefWorkflowScript,
   parseSparkWorkflowScript,
   runSparkWorkflowScript,
 } from "../packages/pi-workflows/src/index.ts";
@@ -61,7 +62,10 @@ return { scan, a, b }`;
     },
   });
   assert.deepEqual(prompts, ["scan repo", "check a", "check b"]);
-  assert.deepEqual(result.phases, ["Scan", "Report"]);
+  assert.deepEqual(
+    result.phases.map((phase) => phase.title),
+    ["Scan", "Report"],
+  );
   assert.equal(result.agentCount, 3);
   assert.equal(result.journal.length, 3);
   assert.deepEqual(JSON.parse(JSON.stringify(result.result)), {
@@ -100,19 +104,90 @@ void test("pi-workflows exposes and runs workflow script factories", async () =>
     ["Investigate", "Refute", "Consensus"],
   );
 
+  const fanOut = parseSparkWorkflowScript(fanOutWithBriefWorkflowScript());
+  assert.equal(fanOut.meta.name, "fan_out_with_brief");
+  assert.deepEqual(
+    fanOut.meta.phases?.map((phase) => phase.title),
+    ["Brief", "Fan out", "Fan in"],
+  );
+
   const deepRun = await runSparkWorkflowScript(deepResearchWorkflowScript(), {
     args: { question: "workflow smoke" },
     agent: async (_prompt, options) => options.label ?? "agent",
   });
   assert.equal(deepRun.agentCount, 5);
-  assert.deepEqual(deepRun.phases, ["Queries", "Gather", "Verify", "Report"]);
+  assert.deepEqual(
+    deepRun.phases.map((phase) => phase.title),
+    ["Queries", "Gather", "Verify", "Report"],
+  );
 
   const reviewRun = await runSparkWorkflowScript(adversarialReviewWorkflowScript(), {
     args: { task: "workflow smoke" },
     agent: async (_prompt, options) => options.label ?? "agent",
   });
   assert.equal(reviewRun.agentCount, 4);
-  assert.deepEqual(reviewRun.phases, ["Investigate", "Refute", "Consensus"]);
+  assert.deepEqual(
+    reviewRun.phases.map((phase) => phase.title),
+    ["Investigate", "Refute", "Consensus"],
+  );
+});
+
+void test("pi-workflows records explicit phase statuses", async () => {
+  const script = `export const meta = {
+    name: 'phase status',
+    description: 'Phase status workflow',
+  }
+
+  phase('Scan')
+  await agent('scan work', { label: 'scan' })
+  phase('Scan', { status: 'success' })
+  phase('Skipped', { status: 'skip' })
+  return 'done'`;
+
+  const phaseEvents: Array<{
+    title: string;
+    status?: string;
+    startedAt: string;
+    finishedAt?: string;
+  }> = [];
+  const run = await runSparkWorkflowScript(script, {
+    now: (() => {
+      let tick = 0;
+      return () => `2026-06-09T00:00:0${tick++}.000Z`;
+    })(),
+    agent: async (_prompt, options) => options.phase ?? "none",
+    onPhase: (event) => phaseEvents.push(event),
+  });
+
+  assert.deepEqual(run.phases, [
+    {
+      title: "Scan",
+      status: "success",
+      startedAt: "2026-06-09T00:00:00.000Z",
+      finishedAt: "2026-06-09T00:00:01.000Z",
+    },
+    {
+      title: "Skipped",
+      status: "skip",
+      startedAt: "2026-06-09T00:00:02.000Z",
+      finishedAt: "2026-06-09T00:00:02.000Z",
+    },
+  ]);
+  assert.deepEqual(phaseEvents, [
+    { title: "Scan", startedAt: "2026-06-09T00:00:00.000Z" },
+    {
+      title: "Scan",
+      status: "success",
+      startedAt: "2026-06-09T00:00:00.000Z",
+      finishedAt: "2026-06-09T00:00:01.000Z",
+    },
+    {
+      title: "Skipped",
+      status: "skip",
+      startedAt: "2026-06-09T00:00:02.000Z",
+      finishedAt: "2026-06-09T00:00:02.000Z",
+    },
+  ]);
 });
 
 void test("pi-workflows applies phase model defaults and per-agent overrides", async () => {
@@ -155,6 +230,7 @@ void test("pi-workflows role-run adapter maps workflow agents to Spark dependenc
     agentType: "reviewer",
     isolation: "worktree",
     timeoutMs: 123,
+    artifactRef: "artifact:brief-123",
   });
 
   assert.equal(result, "adapter result");
@@ -172,10 +248,73 @@ void test("pi-workflows role-run adapter maps workflow agents to Spark dependenc
   assert.equal(request.metadata.workflowAgent, true);
   assert.equal(request.metadata.index, 2);
   assert.equal(request.metadata.isolation, "worktree");
+  assert.equal(request.metadata.artifactRef, "artifact:brief-123");
   assert.match(request.instruction, /Spark workflow child role-run/);
   assert.match(request.instruction, /Inspect auth routes/);
   assert.match(request.instruction, /Phase: Review/);
   assert.match(request.instruction, /Isolation: worktree/);
+  assert.match(request.instruction, /Briefing artifact: artifact:brief-123/);
+});
+
+void test("pi-workflows fan_out_with_brief records one brief and fans out with artifactRef", async () => {
+  const prompts: string[] = [];
+  const artifactInputs: Array<{ title: string; body: string; kind?: string; format?: string }> = [];
+
+  const run = await runSparkWorkflowScript(fanOutWithBriefWorkflowScript(), {
+    args: {
+      briefTitle: "Audit brief",
+      briefBody: "Shared context for all workers.",
+      agents: [
+        { name: "task", prompt: "audit task output", label: "Task auditor" },
+        { name: "artifact", prompt: "audit artifact output" },
+      ],
+      concurrency: 1,
+    },
+    artifactRecord: async (input) => {
+      artifactInputs.push(input);
+      return { ref: "artifact:brief-xyz" };
+    },
+    agent: async (prompt, options) => {
+      prompts.push(prompt);
+      assert.equal(options.artifactRef, "artifact:brief-xyz");
+      return "result:" + options.label;
+    },
+  });
+
+  assert.deepEqual(artifactInputs, [
+    {
+      title: "Audit brief",
+      body: "Shared context for all workers.",
+      kind: "research",
+      format: "markdown",
+    },
+  ]);
+  assert.equal(run.agentCount, 2);
+  assert.deepEqual(
+    run.phases.map((phase) => `${phase.title}:${phase.status ?? "open"}`),
+    ["Brief:success", "Fan out:success", "Fan in:open"],
+  );
+  assert.match(prompts[0] ?? "", /CONTEXT_BUNDLE: read artifact ref artifact:brief-xyz/);
+  assert.match(prompts[0] ?? "", /audit task output/);
+  assert.match(prompts[1] ?? "", /audit artifact output/);
+  assert.deepEqual(JSON.parse(JSON.stringify(run.result)), {
+    briefRef: "artifact:brief-xyz",
+    outputs: [
+      { name: "task", label: "Task auditor", result: "result:Task auditor" },
+      { name: "artifact", label: "artifact", result: "result:artifact" },
+    ],
+  });
+});
+
+void test("pi-workflows fan_out_with_brief requires artifact recorder", async () => {
+  await assert.rejects(
+    () =>
+      runSparkWorkflowScript(fanOutWithBriefWorkflowScript(), {
+        args: { briefBody: "brief", agents: [{ name: "one", prompt: "work" }] },
+        agent: async () => "unused",
+      }),
+    /artifactRecord adapter is required/,
+  );
 });
 
 void test("pi-workflows rejects unsupported workflow agent isolation", async () => {
@@ -188,6 +327,95 @@ await agent('check isolation', { isolation: 'container' })`;
         agent: async () => "should not run",
       }),
     /Spark workflow agent isolation must be 'worktree'/,
+  );
+});
+
+void test("pi-workflows parallel limits concurrency", async () => {
+  const script = `export const meta = { name: 'parallel limit', description: 'limit test' }
+let active = 0
+let maxActive = 0
+const output = await parallel([1, 2, 3, 4].map((value) => async () => {
+  active += 1
+  maxActive = Math.max(maxActive, active)
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  active -= 1
+  return value
+}), { concurrency: 2 })
+return { output, maxActive }`;
+
+  const run = await runSparkWorkflowScript(script, { agent: async () => "unused" });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(run.result)), {
+    output: [1, 2, 3, 4],
+    maxActive: 2,
+  });
+});
+
+void test("pi-workflows parallel retries failures and can collect rejected results", async () => {
+  const script = `export const meta = { name: 'parallel retry', description: 'retry test' }
+const attempts = { flaky: 0, bad: 0 }
+const retried = await parallel([
+  async () => {
+    attempts.flaky += 1
+    if (attempts.flaky < 2) throw new Error('not yet')
+    return 'ok'
+  },
+], { retry: { attempts: 2 } })
+const collected = await parallel([
+  async () => 'good',
+  async () => {
+    attempts.bad += 1
+    throw new Error('bad')
+  },
+], { retry: { attempts: 2 }, onError: 'collect' })
+return { attempts, retried, collected }`;
+
+  const run = await runSparkWorkflowScript(script, { agent: async () => "unused" });
+  const result = JSON.parse(JSON.stringify(run.result)) as {
+    attempts: { flaky: number; bad: number };
+    retried: string[];
+    collected: Array<{ status: string; value?: string; attempts: number }>;
+  };
+
+  assert.equal(result.attempts.flaky, 2);
+  assert.equal(result.attempts.bad, 2);
+  assert.deepEqual(result.retried, ["ok"]);
+  assert.equal(result.collected[0]?.status, "fulfilled");
+  assert.equal(result.collected[0]?.value, "good");
+  assert.equal(result.collected[1]?.status, "rejected");
+  assert.equal(result.collected[1]?.attempts, 2);
+});
+
+void test("pi-workflows agent artifactRef prepends context bundle prompt", async () => {
+  const script = `export const meta = { name: 'brief', description: 'artifact ref test' }
+return await agent('do the work', { label: 'worker', artifactRef: 'artifact:brief-123' })`;
+  const prompts: string[] = [];
+
+  const run = await runSparkWorkflowScript(script, {
+    agent: async (prompt, options) => {
+      prompts.push(prompt);
+      assert.equal(options.artifactRef, "artifact:brief-123");
+      return "done";
+    },
+  });
+
+  assert.match(prompts[0] ?? "", /CONTEXT_BUNDLE: read artifact ref artifact:brief-123/);
+  assert.match(prompts[0] ?? "", /Workflow agent request:\ndo the work/);
+  assert.equal(run.result, "done");
+});
+
+void test("pi-workflows rejects empty child delivery instead of journaling success", async () => {
+  const script = `export const meta = { name: 'empty delivery', description: 'empty delivery test' }
+await agent('child', { label: 'child' })`;
+
+  await assert.rejects(
+    () =>
+      runSparkWorkflowScript(script, {
+        agent: async () => ({
+          delivery: { status: "empty", message: "No final assistant message found" },
+        }),
+      }),
+    /Spark workflow agent child produced empty delivery: No final assistant message found/,
   );
 });
 

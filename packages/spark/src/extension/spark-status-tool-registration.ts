@@ -62,6 +62,13 @@ export function registerSparkStatusTool(
             "text | json. text returns the human-readable status; json returns the structured status payload as JSON text for tool/LLM callers.",
         }),
       ),
+      includeDetails: Type.Optional(
+        Type.Boolean({
+          default: false,
+          description:
+            "When format=json, return the full historical payload instead of the compact decision payload.",
+        }),
+      ),
       showFinished: Type.Optional(
         Type.Boolean({
           default: false,
@@ -130,8 +137,15 @@ export function registerSparkStatusTool(
         recentRoleRunCompletions,
         state,
       });
+      const includeDetails = normalizeSparkStatusBoolean(
+        params.includeDetails,
+        false,
+        "includeDetails",
+      );
+      const jsonPayload =
+        includeDetails || view === "full" ? rendered.details : rendered.compactDetails;
       const details = {
-        ...rendered.details,
+        ...(format === "json" ? jsonPayload : rendered.details),
         format,
       };
       return {
@@ -145,4 +159,10 @@ export function registerSparkStatusTool(
       };
     },
   });
+}
+
+function normalizeSparkStatusBoolean(value: unknown, fallback: boolean, field: string): boolean {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
+  return value;
 }

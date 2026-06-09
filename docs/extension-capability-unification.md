@@ -97,7 +97,7 @@ The text summary stays compact. Full structured data lives in `details` or artif
 | ---------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | Host contract          | `packages/pi-extension-api/src/index.ts`                                                         | `pi-extension-api`               | Host/tool contract plus shared refs and light helpers.                                                                                   |
 | Role specs/runs        | `packages/pi-roles/src/extension.ts`, `docs/role-boundaries.md`                                  | `pi-roles`                       | Generic reusable role ownership is correct; Spark role execution goes through task/run policy.                                           |
-| Ask UI                 | `packages/pi-ask/src/index.ts`, `packages/pi-ask/src/flow.ts`                                    | `pi-ask`                         | Generic ask UI/result semantics are shared by `ask`, `ask_user`, and `ask_flow`.                                                         |
+| Ask UI                 | `packages/pi-ask/src/index.ts`, `packages/pi-ask/src/flow.ts`                                    | `pi-ask`                         | Generic ask UI/result semantics are exposed through canonical `ask`; focused/flow implementations are internal.                          |
 | Artifacts              | `packages/pi-artifacts/src/index.ts`, `packages/pi-artifacts/src/extension.ts`                   | `pi-artifacts`                   | Artifact store is generic evidence infrastructure, not Spark-specific.                                                                   |
 | Task graph/TODO/run    | `packages/pi-tasks/src/*`, `packages/spark/src/extension/index.ts` action handlers               | `pi-tasks` + Spark facade        | TODO belongs to task state; project/task/TODO/run share the canonical `task` capability.                                                 |
 | Learnings              | `packages/pi-learnings/src/*`                                                                    | `pi-learnings`                   | Evidence-backed learning is generic; plural `.learnings/` is retained.                                                                   |
@@ -189,12 +189,12 @@ ask({ mode: "clarification" | "decision" | "approval" | "unblock", action?: "ask
 
 Actions/modes:
 
-| Surface                                   | Behavior                                 | Replaces / borrows from         |
-| ----------------------------------------- | ---------------------------------------- | ------------------------------- |
-| `ask` with one question                   | uses single-question UI when appropriate | current `ask_user`              |
-| `ask` with multiple questions or previews | uses flow/fullscreen UI                  | current `ask_flow`, `spark_ask` |
-| `replay`                                  | replays latest/specified persisted ask   | `spark_ask_replay`              |
-| `list`                                    | read-only persisted ask listing, bounded | artifact-backed ask history     |
+| Surface                                   | Behavior                                 | Replaces / borrows from                       |
+| ----------------------------------------- | ---------------------------------------- | --------------------------------------------- |
+| `ask` with one question                   | uses single-question UI when appropriate | internal focused implementation               |
+| `ask` with multiple questions or previews | uses flow/fullscreen UI                  | internal flow implementation, old `spark_ask` |
+| `replay`                                  | replays latest/specified persisted ask   | `spark_ask_replay`                            |
+| `list`                                    | read-only persisted ask listing, bounded | artifact-backed ask history                   |
 
 UI improvements to absorb:
 
@@ -211,7 +211,7 @@ Keep ownership of reusable `RoleSpec` and concrete `RoleRun`. Consolidate tool s
 Canonical tool:
 
 ```ts
-role({ action: "list" | "get" | "create" | "run", ... })
+role({ action: "list" | "get" | "create" | "call", ... })
 ```
 
 Actions:
@@ -336,48 +336,48 @@ It should not register duplicate canonical tools for task, artifact, ask, role, 
 
 ## Migration table
 
-| Current tool/command                      | Canonical replacement                                                                              | Keep?                 | Notes                                                                 |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------- | --------------------- | --------------------------------------------------------------------- |
-| `spark_status`                            | `task({ action: "status" })` plus owner-specific status/context diagnostics                        | No long-term alias    | Status rendering can stay shared internally.                          |
-| `spark_list_projects`                     | `task({ action: "project_list" })`                                                                 | No                    | Generic task capability owns project lists.                           |
-| `spark_use_project`                       | `task({ action: "project_use" })`                                                                  | No                    | Session-scoped selection remains.                                     |
-| `spark_rename_project`                    | `task({ action: "project_update" })`                                                               | No                    | Rename/status/output language under explicit fields.                  |
-| `spark_claim_task`                        | `task({ action: "claim" })`                                                                        | No                    | Preserve one-claim-per-session rule.                                  |
-| `spark_plan_tasks`                        | `task({ action: "plan" })`                                                                         | No                    | Preserve readiness blocking rules.                                    |
-| `spark_finish_task`                       | `task({ action: "finish" })`                                                                       | No                    | Preserve completion evidence requirement.                             |
-| `spark_update_todos`                      | `task({ action: "todo_update", scope: "session" })`                                                | No                    | TODO belongs to task capability.                                      |
-| `spark_update_task_todos`                 | `task({ action: "todo_update", scope: "task" })`                                                   | No                    | Task-bound TODO requires claimed task/selector.                       |
-| `spark_run_ready_tasks`                   | `task({ action: "run_ready" })`                                                                    | No                    | Spark role scheduling remains an adapter behind task capability.      |
-| `spark_background_runs`                   | `task({ action: "run_status" })`, `task({ action: "run_control" })`                                | No                    | Split read/control through action.                                    |
-| `spark_dag_manager`                       | `task({ action: "run_status" })` / `task({ action: "run_control" })` / `workflow({ action: ... })` | No                    | Low-level compatibility/debug surface is not canonical.               |
-| `spark_state status/doctor`               | owner-specific status actions                                                                      | No                    | Avoid one broad state dumping ground.                                 |
-| `spark_state cleanup`                     | `task({ action: "cache_cleanup" })` plus owner-specific cleanup actions                            | No                    | Owner-scoped dry-run cleanup only.                                    |
-| `spark_state prune`                       | `workflow({ action: "runs_prune" })`                                                               | No                    | Workflow-run store owner handles retention.                           |
-| `spark_state compact-role-run-artifacts`  | `artifact({ action: "compact" })`                                                                  | No                    | Artifact owner handles blob retention.                                |
-| `spark_list_artifacts`                    | `artifact({ action: "list" })`                                                                     | No                    | Generic artifact capability.                                          |
-| `spark_get_artifact`                      | `artifact({ action: "read" })`                                                                     | No                    | Generic artifact capability.                                          |
-| `spark_ask`                               | `ask({ action: "ask", persistence: { artifact: true }, ... })`                                     | No                    | Pi ask owns UI and persistence adapter.                               |
-| `spark_ask_replay`                        | `ask({ action: "replay" })`                                                                        | No                    | Generic persisted ask replay.                                         |
-| `ask_user`                                | `ask({ action: "ask", questions: [one] })`                                                         | Existing peer surface | Optimized single-question UI.                                         |
-| `ask_flow`                                | `ask({ action: "ask", questions: [...] })`                                                         | Existing peer surface | Optimized fullscreen/multi-question UI.                               |
-| `list_roles`                              | `role({ action: "list" })`                                                                         | Existing peer surface | Canonical `role` also exists.                                         |
-| `get_role`                                | `role({ action: "get" })`                                                                          | Existing peer surface | Canonical `role` also exists.                                         |
-| `create_role`                             | `role({ action: "create" })`                                                                       | Existing peer surface | Canonical `role` also exists.                                         |
-| `call_role`                               | `role({ action: "call" })`                                                                         | Existing peer surface | Direct one-off role run; Spark mode still prefers task runs.          |
-| `spark_learning_record`                   | `learning({ action: "record" })`                                                                   | No                    | Generic evidence-backed learning.                                     |
-| `spark_learning_search`                   | `learning({ action: "search" })`                                                                   | No                    | Generic evidence-backed learning.                                     |
-| `spark_learning_list`                     | `learning({ action: "list" })`                                                                     | No                    | Generic evidence-backed learning.                                     |
-| `spark_learning_read`                     | `learning({ action: "read" })`                                                                     | No                    | Generic evidence-backed learning.                                     |
-| `spark_learning_mark_stale`               | `learning({ action: "mark_stale" })`                                                               | No                    | Generic evidence-backed learning.                                     |
-| `spark_learning_supersede`                | `learning({ action: "supersede" })`                                                                | No                    | Generic evidence-backed learning.                                     |
-| `spark_learning_reject`                   | `learning({ action: "reject" })`                                                                   | No                    | Generic evidence-backed learning.                                     |
-| `spark_learning_export_markdown`          | `learning({ action: "export_markdown" })`                                                          | No                    | Generic export.                                                       |
-| `spark_learning_import_markdown`          | `learning({ action: "import_markdown" })`                                                          | No                    | Generic import.                                                       |
-| `/spark`                                  | `/spark`                                                                                           | Yes                   | Spark mode command.                                                   |
-| `/research`, `/plan`, `/execute`, `/goal` | same                                                                                               | Yes                   | Spark mode commands.                                                  |
-| `/workflow`                               | `/workflow` delegating to `workflow({ action: "run" })`                                            | Yes                   | Saved scripts only.                                                   |
-| `/workflow:goal`                          | none                                                                                               | No                    | Goal is not workflow.                                                 |
-| `cue_*`, `graft_*`                        | unchanged for this pass                                                                            | Yes                   | Not duplicated Spark concepts; explicit schemas remain safer for now. |
+| Current tool/command                      | Canonical replacement                                                                              | Keep?              | Notes                                                                   |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------ | ----------------------------------------------------------------------- |
+| `spark_status`                            | `task({ action: "status" })` plus owner-specific status/context diagnostics                        | No long-term alias | Status rendering can stay shared internally.                            |
+| `spark_list_projects`                     | `task({ action: "project_list" })`                                                                 | No                 | Generic task capability owns project lists.                             |
+| `spark_use_project`                       | `task({ action: "project_use" })`                                                                  | No                 | Session-scoped selection remains.                                       |
+| `spark_rename_project`                    | `task({ action: "project_update" })`                                                               | No                 | Rename/status/output language under explicit fields.                    |
+| `spark_claim_task`                        | `task({ action: "claim" })`                                                                        | No                 | Preserve one-claim-per-session rule.                                    |
+| `spark_plan_tasks`                        | `task({ action: "plan" })`                                                                         | No                 | Preserve readiness blocking rules.                                      |
+| `spark_finish_task`                       | `task({ action: "finish" })`                                                                       | No                 | Preserve completion evidence requirement.                               |
+| `spark_update_todos`                      | `task({ action: "todo_update", scope: "session" })`                                                | No                 | TODO belongs to task capability.                                        |
+| `spark_update_task_todos`                 | `task({ action: "todo_update", scope: "task" })`                                                   | No                 | Task-bound TODO requires claimed task/selector.                         |
+| `spark_run_ready_tasks`                   | `task({ action: "run_ready" })`                                                                    | No                 | Spark role scheduling remains an adapter behind task capability.        |
+| `spark_background_runs`                   | `task({ action: "run_status" })`, `task({ action: "run_control" })`                                | No                 | Split read/control through action.                                      |
+| `spark_dag_manager`                       | `task({ action: "run_status" })` / `task({ action: "run_control" })` / `workflow({ action: ... })` | No                 | Low-level compatibility/debug surface is not canonical.                 |
+| `spark_state status/doctor`               | owner-specific status actions                                                                      | No                 | Avoid one broad state dumping ground.                                   |
+| `spark_state cleanup`                     | `task({ action: "cache_cleanup" })` plus owner-specific cleanup actions                            | No                 | Owner-scoped dry-run cleanup only.                                      |
+| `spark_state prune`                       | `workflow({ action: "runs_prune" })`                                                               | No                 | Workflow-run store owner handles retention.                             |
+| `spark_state compact-role-run-artifacts`  | `artifact({ action: "compact" })`                                                                  | No                 | Artifact owner handles blob retention.                                  |
+| `spark_list_artifacts`                    | `artifact({ action: "list" })`                                                                     | No                 | Generic artifact capability.                                            |
+| `spark_get_artifact`                      | `artifact({ action: "read" })`                                                                     | No                 | Generic artifact capability.                                            |
+| `spark_ask`                               | `ask({ action: "ask", persistence: { artifact: true }, ... })`                                     | No                 | Pi ask owns UI and persistence adapter.                                 |
+| `spark_ask_replay`                        | `ask({ action: "replay" })`                                                                        | No                 | Generic persisted ask replay.                                           |
+| `ask_user`                                | `ask({ action: "ask", questions: [one] })`                                                         | Internal only      | Single-question implementation behind canonical `ask`.                  |
+| `ask_flow`                                | `ask({ action: "flow", questions: [...] })`                                                        | Internal only      | Fullscreen/multi-question implementation behind canonical `ask`.        |
+| `list_roles`                              | `role({ action: "list" })`                                                                         | Internal only      | Role listing implementation behind canonical `role`.                    |
+| `get_role`                                | `role({ action: "get" })`                                                                          | Internal only      | Role inspection implementation behind canonical `role`.                 |
+| `create_role`                             | `role({ action: "create" })`                                                                       | Internal only      | Role creation implementation behind canonical `role`.                   |
+| `call_role`                               | `role({ action: "call" })`                                                                         | Internal only      | Direct one-off role implementation; Spark mode still prefers task runs. |
+| `spark_learning_record`                   | `learning({ action: "record" })`                                                                   | No                 | Generic evidence-backed learning.                                       |
+| `spark_learning_search`                   | `learning({ action: "search" })`                                                                   | No                 | Generic evidence-backed learning.                                       |
+| `spark_learning_list`                     | `learning({ action: "list" })`                                                                     | No                 | Generic evidence-backed learning.                                       |
+| `spark_learning_read`                     | `learning({ action: "read" })`                                                                     | No                 | Generic evidence-backed learning.                                       |
+| `spark_learning_mark_stale`               | `learning({ action: "mark_stale" })`                                                               | No                 | Generic evidence-backed learning.                                       |
+| `spark_learning_supersede`                | `learning({ action: "supersede" })`                                                                | No                 | Generic evidence-backed learning.                                       |
+| `spark_learning_reject`                   | `learning({ action: "reject" })`                                                                   | No                 | Generic evidence-backed learning.                                       |
+| `spark_learning_export_markdown`          | `learning({ action: "export_markdown" })`                                                          | No                 | Generic export.                                                         |
+| `spark_learning_import_markdown`          | `learning({ action: "import_markdown" })`                                                          | No                 | Generic import.                                                         |
+| `/spark`                                  | `/spark`                                                                                           | Yes                | Spark mode command.                                                     |
+| `/research`, `/plan`, `/execute`, `/goal` | same                                                                                               | Yes                | Spark mode commands.                                                    |
+| `/workflow`                               | `/workflow` delegating to `workflow({ action: "run" })`                                            | Yes                | Saved scripts only.                                                     |
+| `/workflow:goal`                          | none                                                                                               | No                 | Goal is not workflow.                                                   |
+| `cue_*`, `graft_*`                        | unchanged for this pass                                                                            | Yes                | Not duplicated Spark concepts; explicit schemas remain safer for now.   |
 
 ## Implementation order
 
@@ -396,7 +396,7 @@ It should not register duplicate canonical tools for task, artifact, ask, role, 
 - `pnpm run check:tsc` passes.
 - Focused tests for artifacts, tasks/TODOs, ask flow, roles, learnings, workflows, and Spark commands pass.
 - Grep finds no canonical `spark_*` registrations for concepts owned by `pi-*` capabilities.
-- Docs and skills direct agents to `task`, `artifact`, `ask`, `role`, `learning`, `context`, `recall`, and `workflow` tools.
+- Docs and skills direct agents to `task`, `artifact`, `ask`, `role`, `learning`, `context`, `recall`, `workflow`, `pi-cue`, and `pi-graft` tools; patcher-style child runs use `graft_patch`.
 - Mutating tools have strict schemas and provenance/scope.
 - Broad cleanup/destructive actions default to dry-run and target only owner-approved stores.
 - Automatic learning/recall writes enter candidate/review when evidence or user approval is absent.

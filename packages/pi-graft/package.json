@@ -22,6 +22,7 @@
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
+    "pi-roles": "file:../pi-roles",
     "typebox": "^1.1.38"
   },
   "pi": {

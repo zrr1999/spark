@@ -15,6 +15,7 @@ export interface SparkWorkflowRoleRunRequest {
     agentType?: string;
     isolation?: "worktree";
     timeoutMs?: number;
+    artifactRef?: string;
     index: number;
   };
 }
@@ -51,6 +52,7 @@ export function createSparkWorkflowRoleRunAdapter(
         agentType: options.agentType,
         isolation: options.isolation,
         timeoutMs: options.timeoutMs,
+        artifactRef: options.artifactRef,
         index: options.index,
       },
     };
@@ -83,6 +85,7 @@ export function renderSparkWorkflowAgentInstruction(
   if (options.agentType) lines.push("- Agent type: " + options.agentType);
   if (options.isolation) lines.push("- Isolation: " + options.isolation);
   if (options.timeoutMs) lines.push("- Timeout ms: " + options.timeoutMs);
+  if (options.artifactRef) lines.push("- Briefing artifact: " + options.artifactRef);
   if (options.schema)
     lines.push(
       "- Structured schema is attached in workflow options; satisfy it when the host provides structured-output support.",

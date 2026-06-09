@@ -6,6 +6,10 @@ import type {
   ToolRenderTheme,
 } from "pi-extension-api";
 import {
+  ARTIFACT_FORMATS,
+  ARTIFACT_KINDS,
+  ARTIFACT_LINK_RELATIONS,
+  ARTIFACT_PRODUCERS,
   defaultArtifactStore,
   isArtifactFormat,
   isArtifactKind,
@@ -25,6 +29,9 @@ export interface PiArtifactsExtensionApi {
 }
 
 type ArtifactAction = "record" | "list" | "read" | "link" | "compact";
+type ArtifactListView = "ref-only" | "summary" | "full";
+
+const DEFAULT_ARTIFACT_READ_PREVIEW_CHARS = 1_500;
 
 class ToolCallText implements ToolRenderComponent {
   private readonly text: string;
@@ -85,12 +92,15 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
       limit: Type.Optional(
         Type.Number({ description: "Maximum rows for action=list. Default: 20." }),
       ),
+      view: Type.Optional(
+        Type.String({ description: "List view for action=list: ref-only | summary | full." }),
+      ),
       full: Type.Optional(
         Type.Boolean({ description: "Read full body for action=read. Default: false." }),
       ),
       maxChars: Type.Optional(
         Type.Number({
-          description: "Maximum body chars for action=read when full=false. Default: 4000.",
+          description: "Maximum body chars for action=read when full=false. Default: 1500.",
         }),
       ),
       dryRun: Type.Optional(
@@ -122,10 +132,11 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
         });
         const newest = artifacts.slice().reverse();
         const limit = normalizeLimit(params.limit, 20, "limit");
+        const view = normalizeArtifactListView(params.view);
         const visible = newest.slice(0, limit);
         const lines = [
           `Artifacts: ${artifacts.length}${visible.length < artifacts.length ? ` (showing ${visible.length})` : ""}`,
-          ...visible.map((artifact) => `- [${artifact.kind}] ${artifact.ref}: ${artifact.title}`),
+          ...visible.map((artifact) => renderArtifactListLine(artifact, view)),
         ];
         if (visible.length === 0) lines.push("- No artifacts.");
         if (visible.length < artifacts.length)
@@ -133,7 +144,12 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
         return toolResult("artifact", action, lines.join("\n"), {
           count: artifacts.length,
           shown: visible.length,
-          artifacts: visible.map(compactArtifactDetail),
+          view,
+          artifacts: visible.map((artifact) =>
+            view === "full"
+              ? compactArtifactDetail(artifact)
+              : compactArtifactSummaryDetail(artifact),
+          ),
         });
       }
 
@@ -142,7 +158,11 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
         const artifact = await store.get(artifactRef);
         const body = await store.getBody(artifactRef);
         const full = normalizeBoolean(params.full, false, "full");
-        const maxChars = normalizeLimit(params.maxChars, 4_000, "maxChars");
+        const maxChars = normalizeLimit(
+          params.maxChars,
+          DEFAULT_ARTIFACT_READ_PREVIEW_CHARS,
+          "maxChars",
+        );
         const renderedBody = full ? body : truncateBlock(body, maxChars);
         const truncated = !full && renderedBody.length < body.length;
         const lines = [
@@ -246,7 +266,7 @@ function renderArtifactCall(
       : typeof args.from === "string"
         ? args.from
         : undefined;
-  const text = ["artifact", action, target].filter(Boolean).join(" ");
+  const text = ["artifact", `action=${action}`, target].filter(Boolean).join(" ");
   return new ToolCallText(theme.bold ? theme.bold(text) : text);
 }
 
@@ -279,6 +299,43 @@ function compactArtifactDetail(artifact: Artifact): Record<string, unknown> {
   };
 }
 
+function compactArtifactSummaryDetail(artifact: Artifact): Record<string, unknown> {
+  return {
+    ref: artifact.ref,
+    kind: artifact.kind,
+    title: artifact.title,
+    format: artifact.format,
+    producer: artifact.provenance.producer,
+    projectRef: artifact.provenance.projectRef,
+    taskRef: artifact.provenance.taskRef,
+    roleRef: artifact.provenance.roleRef,
+    bodySize: artifact.bodySize,
+    bodyTruncated: artifact.bodyTruncated,
+    updatedAt: artifact.updatedAt,
+  };
+}
+
+function renderArtifactListLine(artifact: Artifact, view: ArtifactListView): string {
+  if (view === "ref-only") return `- ${artifact.ref}`;
+  if (view === "full") {
+    return `- [${artifact.kind}] ${artifact.ref}: ${artifact.title} format=${artifact.format} producer=${artifact.provenance.producer} links=${artifact.links.length} bodySize=${artifact.bodySize ?? "unknown"}`;
+  }
+  return `- [${artifact.kind}] ${artifact.ref}: ${artifact.title}`;
+}
+
+function formatValidValuesError(
+  field: string,
+  received: unknown,
+  label: string,
+  validValues: readonly string[],
+  hints: Record<string, string> = {},
+): string {
+  const rendered = typeof received === "string" ? received : JSON.stringify(received);
+  const message = `${field} must be ${label}; valid values: ${validValues.join(", ")}; received: ${rendered ?? String(received)}`;
+  const hint = typeof received === "string" ? hints[received] : undefined;
+  return hint ? `${message}. Hint: ${hint}` : message;
+}
+
 function normalizeAction(value: unknown): ArtifactAction {
   if (
     value === "record" ||
@@ -292,8 +349,21 @@ function normalizeAction(value: unknown): ArtifactAction {
   throw new Error("artifact.action must be record, list, read, link, or compact");
 }
 
+function normalizeArtifactListView(value: unknown): ArtifactListView {
+  if (value === undefined || value === null) return "summary";
+  if (value === "ref-only" || value === "summary" || value === "full") return value;
+  throw new Error("view must be ref-only, summary, or full");
+}
+
 function normalizeArtifactKind(value: unknown, field: string): ArtifactKind {
-  if (!isArtifactKind(value)) throw new Error(`${field} must be a valid artifact kind`);
+  if (!isArtifactKind(value)) {
+    throw new Error(
+      formatValidValuesError(field, value, "a valid artifact kind", ARTIFACT_KINDS, {
+        "plan-draft":
+          "Use kind=research with a title prefix like 'Plan draft: ...', or kind=plan for finalized plans.",
+      }),
+    );
+  }
   return value;
 }
 
@@ -303,13 +373,25 @@ function normalizeOptionalArtifactKind(value: unknown, field: string): ArtifactK
 }
 
 function normalizeArtifactFormat(value: unknown, field: string): ArtifactFormat {
-  if (!isArtifactFormat(value)) throw new Error(`${field} must be markdown, json, or text`);
+  if (!isArtifactFormat(value)) {
+    throw new Error(
+      formatValidValuesError(field, value, "a valid artifact format", ARTIFACT_FORMATS),
+    );
+  }
   return value;
 }
 
 function normalizeArtifactRelation(value: unknown, field: string): ArtifactLink["relation"] {
-  if (!isArtifactLinkRelation(value))
-    throw new Error(`${field} must be a valid artifact link relation`);
+  if (!isArtifactLinkRelation(value)) {
+    throw new Error(
+      formatValidValuesError(
+        field,
+        value,
+        "a valid artifact link relation",
+        ARTIFACT_LINK_RELATIONS,
+      ),
+    );
+  }
   return value;
 }
 
@@ -318,7 +400,14 @@ function normalizeOptionalProducer(
   field: string,
 ): Provenance["producer"] | undefined {
   if (value === undefined || value === null) return undefined;
-  if (!isArtifactProducer(value)) throw new Error(`${field} must be a valid artifact producer`);
+  if (!isArtifactProducer(value)) {
+    throw new Error(
+      formatValidValuesError(field, value, "a valid artifact producer", ARTIFACT_PRODUCERS, {
+        agent:
+          "Use producer=role for subagent output artifacts, or producer=task for parent-session task evidence.",
+      }),
+    );
+  }
   return value;
 }
 

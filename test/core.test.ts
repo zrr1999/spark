@@ -158,6 +158,16 @@ void test("task graph rejects cycles and cross-project dependencies", () => {
   );
 });
 
+void test("task graph bootstraps one roadmap per project", () => {
+  const graph = new TaskGraph();
+  const project = graph.createProject({ title: "Demo", description: "demo", intent: "Ship v0" });
+  assert.equal(project.intent, "Ship v0");
+  assert.equal(project.roadmap.ref, "roadmap:main");
+  assert.equal(project.roadmap.items.length, 0);
+  const reloaded = TaskGraph.fromSnapshot(graph.snapshot());
+  assert.equal(reloaded.getProject(project.ref).roadmap.ref, "roadmap:main");
+});
+
 void test("task graph can update placeholder project titles and status", () => {
   const graph = new TaskGraph();
   const project = graph.createProject({ title: "「自定义输入」", description: "demo" });
@@ -306,7 +316,7 @@ void test("active Spark prompt is a one-line state marker with the current mode"
   const prompt = renderSparkActiveSystemPrompt("", "SPARK.md");
   assert.match(prompt, /^Spark active \(SPARK\.md\); mode: auto\./);
   assert.match(prompt, /Spark is the mode facade/);
-  assert.match(prompt, /task, artifact, ask, role, learning, context, recall, and workflow tools/);
+  assert.match(prompt, /task, artifact, ask, role, learning, context, recall, workflow, patch/);
   assert.match(prompt, /no guessing: ask unless user says infer\/research/);
   assert.doesNotMatch(prompt, /read SPARK\.md or the spark skill/);
   assert.doesNotMatch(prompt, /spark skill/);

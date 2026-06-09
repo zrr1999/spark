@@ -62,6 +62,20 @@ void test("pi-roles includes resolved user model in JSON Pi role args", () => {
   assert.deepEqual(args.slice(0, 5), ["--print", "--mode", "json", "--model", "openai/gpt-5.5"]);
 });
 
+void test("pi-roles can pass a child Pi tool allowlist", () => {
+  const args = buildRoleRunArgs({
+    roleRef: "role:builtin-worker",
+    mode: "fresh",
+    systemPrompt: "You are a worker.",
+    instruction: "Create a patch.",
+    allowedTools: ["graft_read", " graft_write ", "", "graft_validate"],
+  });
+
+  const index = args.indexOf("--tools");
+  assert.notEqual(index, -1);
+  assert.equal(args[index + 1], "graft_read,graft_write,graft_validate");
+});
+
 void test("pi-roles builds forked JSON Pi role args only when forked mode is explicit", () => {
   const args = buildRoleRunArgs({
     roleRef: "role:builtin-reviewer",

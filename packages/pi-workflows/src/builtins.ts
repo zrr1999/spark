@@ -20,6 +20,53 @@ const report = await agent('Write final cited report for: ' + question + '\\n' +
 return { question, gathered, verified, report }`;
 }
 
+export function fanOutWithBriefWorkflowScript(): string {
+  return `export const meta = {
+  name: 'fan_out_with_brief',
+  description: 'Fan out multiple agents from one shared briefing artifact and collect their outputs',
+  phases: [{ title: 'Brief' }, { title: 'Fan out' }, { title: 'Fan in' }],
+}
+
+const briefBody = args && typeof args.briefBody === 'string' ? args.briefBody : ''
+const agents = Array.isArray(args && args.agents) ? args.agents : []
+if (!briefBody.trim()) throw new Error('fan_out_with_brief requires args.briefBody')
+if (agents.length === 0) throw new Error('fan_out_with_brief requires args.agents[]')
+
+phase('Brief')
+const brief = await artifactRecord({
+  title: args.briefTitle || 'Workflow briefing',
+  kind: 'research',
+  format: 'markdown',
+  body: briefBody,
+})
+phase('Brief', { status: 'success' })
+
+phase('Fan out')
+const outputs = await parallel(agents.map((item, index) => async () => {
+  const name = item && (item.name || item.label) ? String(item.name || item.label) : 'agent-' + (index + 1)
+  const prompt = item && item.prompt ? String(item.prompt) : ''
+  if (!prompt.trim()) throw new Error('fan_out_with_brief agent ' + name + ' requires prompt')
+  return {
+    name,
+    label: item && item.label ? String(item.label) : name,
+    result: await agent(prompt, {
+      label: item && item.label ? String(item.label) : name,
+      artifactRef: brief.ref,
+      agentType: item && item.agentType ? String(item.agentType) : undefined,
+      model: item && item.model ? String(item.model) : undefined,
+    }),
+  }
+}), {
+  concurrency: args && args.concurrency,
+  retry: args && args.retry,
+  onError: args && args.onError,
+})
+phase('Fan out', { status: 'success' })
+
+phase('Fan in')
+return { briefRef: brief.ref, outputs }`;
+}
+
 export function adversarialReviewWorkflowScript(): string {
   return `export const meta = {
   name: 'adversarial_review',

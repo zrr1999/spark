@@ -32,21 +32,20 @@ in `pi-workflows` above this package.
 
 ## Tool surface
 
-`pi-roles` registers role-spec management tools plus one minimal direct-call tool:
+`pi-roles` registers one public/default action tool:
 
-- `list_roles` — list builtin/project roles, optionally including user roles with `includeUser: true`.
-- `get_role` — inspect one role; full `systemPrompt` is opt-in with `includePrompt: true`.
-- `create_role` — persist a project role by default, or a user role when `source: "user"` is explicit.
-- `call_role` — resolve a builtin/project/user role and call it once with an explicit instruction.
+- `role` — use `action: "list" | "get" | "create" | "call"` to list roles, inspect a role, create a role, or run one direct role call.
+
+Historical fragmented implementation functions may remain internal dispatch targets behind `role`, but they are not active public/default tools.
 
 Builtin roles are the core five role shapes: `scout`, `planner`, `worker`,
 `reviewer`, and `oracle`. Their `allowedTools` fields are declarative tool
 profiles for hosts or presets to consume; `pi-roles` itself does not own
 host-level tool activation policy.
 
-`call_role` modes:
+`role({ action: "call" })` modes:
 
 - default / `mode: "fresh"` — launch a new child Pi session from the role and instruction.
 - `mode: "forked"` — launch with explicit parent context; requires `forkFromSession`.
 
-`call_role` intentionally stays below Spark: it does not claim tasks, write Spark artifacts, or schedule DAG work. Use `task({ action: "run_ready" })` for Spark-managed task execution.
+`role({ action: "call" })` intentionally stays below Spark: it does not claim tasks, write Spark artifacts, or schedule DAG work. Use `task({ action: "run_ready" })` for Spark-managed task execution.

@@ -5,6 +5,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { Type } from "typebox";
 
+import { registerPiGraftPatchTool } from "./patch-tool.ts";
+
 const STATE_ENTRY = "pi-graft-state";
 const DEFAULT_CONNECT_TIMEOUT_MS = 500;
 const DEFAULT_START_TIMEOUT_MS = 5_000;
@@ -16,7 +18,11 @@ type JsonRecord = Record<string, JsonValue>;
 
 export interface PiGraftSessionContext {
   cwd?: string;
-  sessionManager?: { getBranch?: () => unknown[]; getEntries?: () => unknown[] };
+  sessionManager?: {
+    getBranch?: () => unknown[];
+    getEntries?: () => unknown[];
+    getSessionFile?: () => string | undefined;
+  };
 }
 
 export interface PiGraftCommandContext extends PiGraftSessionContext {
@@ -28,6 +34,10 @@ export interface PiGraftCommandContext extends PiGraftSessionContext {
 
 export interface PiGraftToolContext extends PiGraftSessionContext {
   cwd: string;
+  ui?: {
+    input?: (prompt: string, defaultValue?: string) => Promise<string | undefined>;
+    notify?: (message: string, level?: "info" | "warning" | "error" | "success") => void;
+  };
 }
 
 export interface PiGraftCommand {
@@ -45,6 +55,11 @@ export interface PiGraftToolDefinition {
   label: string;
   description: string;
   parameters: unknown;
+  renderCall?: (
+    args: Record<string, unknown>,
+    theme: PiGraftToolRenderTheme,
+    context: unknown,
+  ) => PiGraftToolCallComponent;
   execute: (
     toolCallId: string,
     params: Record<string, unknown>,
@@ -52,6 +67,28 @@ export interface PiGraftToolDefinition {
     onUpdate?: unknown,
     ctx?: PiGraftToolContext,
   ) => Promise<PiGraftToolResult>;
+}
+
+export interface PiGraftToolRenderTheme {
+  fg?: (color: string, text: string) => string;
+  bold?: (text: string) => string;
+}
+
+export interface PiGraftToolCallComponent {
+  render(width: number): string[];
+}
+
+class PiGraftToolCallText implements PiGraftToolCallComponent {
+  private readonly text: string;
+
+  constructor(text: string) {
+    this.text = text;
+  }
+
+  render(width: number): string[] {
+    const maxWidth = Math.max(1, width);
+    return [this.text.length > maxWidth ? `${this.text.slice(0, maxWidth - 1)}…` : this.text];
+  }
 }
 
 export interface PiGraftExtensionApi {
@@ -918,6 +955,8 @@ function scratchSourceSchema(): Record<string, unknown> {
 }
 
 export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
+  registerPiGraftPatchTool(pi);
+
   let activeState: ActiveGraftScratchState | undefined;
   let lastCwd: string | undefined;
 
@@ -1646,6 +1685,18 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ),
       cwd: Type.Optional(Type.String({ description: "Working directory; defaults to ctx.cwd." })),
     }),
+    renderCall(args, theme) {
+      return renderGraftToolCall(
+        "graft_repo",
+        [
+          formatGraftStringArg(args.action, { prefix: "action=", fallback: "list" }),
+          formatGraftStringArg(args.repoId, { prefix: "repo=" }),
+          formatGraftStringArg(args.url, { prefix: "url=", maxLength: 60 }),
+          formatGraftStringArg(args.cwd, { prefix: "cwd=", maxLength: 60 }),
+        ],
+        theme,
+      );
+    },
     async execute(
       _toolCallId: string,
       params: Record<string, unknown>,
@@ -1704,6 +1755,30 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       return { content: [{ type: "text", text }], details };
     },
   });
+}
+
+function renderGraftToolCall(
+  toolName: string,
+  parts: Array<string | undefined>,
+  theme: PiGraftToolRenderTheme,
+): PiGraftToolCallComponent {
+  const title =
+    theme.fg?.("toolTitle", theme.bold?.(`${toolName} `) ?? `${toolName} `) ?? `${toolName} `;
+  const renderedParts = parts.filter((part): part is string => Boolean(part));
+  const renderedArgs = theme.fg?.("muted", renderedParts.join(" ")) ?? renderedParts.join(" ");
+  return new PiGraftToolCallText(`${title}${renderedArgs}`.trimEnd());
+}
+
+function formatGraftStringArg(
+  value: unknown,
+  options: { prefix?: string; fallback?: string; maxLength?: number } = {},
+): string | undefined {
+  const raw = typeof value === "string" && value.trim() ? value.trim() : options.fallback;
+  if (!raw) return undefined;
+  const maxLength = options.maxLength ?? 80;
+  const normalized = raw.length <= maxLength ? raw : `${raw.slice(0, Math.max(0, maxLength - 1))}…`;
+  const rendered = /\s/u.test(normalized) ? JSON.stringify(normalized) : normalized;
+  return `${options.prefix ?? ""}${rendered}`;
 }
 
 export default function piGraftExtension(pi: PiGraftExtensionApi): void {

@@ -133,7 +133,8 @@ export function registerSparkPlanTasksTool(
           content: [{ type: "text", text: "Task plan is required." }],
           details: { found: true, error: "missing_tasks" },
         };
-      const roadmapContext = await roadmapPlanningContext(cwd);
+      const roadmapResult = roadmapPlanningContext(graph, project.ref);
+      const roadmapContext = roadmapResult?.context;
       const tasks: TaskPlanInput[] = normalizedTasks.map((task) =>
         applyRoadmapHintsToTaskPlanInput(task, roadmapContext?.item),
       );
@@ -181,10 +182,10 @@ export function registerSparkPlanTasksTool(
         };
       }
       const changedRefs = [...result.created, ...result.updated].map((task) => task.ref);
-      const updatedRoadmapItem = await attachRoadmapPlanningRefs(
-        cwd,
-        roadmapContext?.item.ref,
+      const updatedRoadmapItem = attachRoadmapPlanningRefs(
+        graph,
         project.ref,
+        roadmapContext?.item.ref,
         changedRefs,
       );
       await saveSparkGraphAndTodos(cwd, graph, ctx, store);

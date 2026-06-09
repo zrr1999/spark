@@ -287,26 +287,79 @@ void test("ask flow defaultValues initialize recommendations without answers", (
   assert.deepEqual([...replayState.multiSelectChecked], ["dns"]);
 });
 
-void test("ask flow rejects invalid defaultValues", () => {
-  assert.equal(
-    validatePiAskFlowRequest({
-      flow: "custom",
-      mode: "decision",
-      questions: [
-        {
-          id: "route",
-          prompt: "Which route?",
-          type: "single",
-          defaultValues: ["missing"],
-          options: [
-            { value: "fast", label: "Fast" },
-            { value: "safe", label: "Safe" },
-          ],
-        },
-      ],
-    }).error,
-    "invalid_default_value",
-  );
+void test("ask flow rejects invalid defaultValues with actionable hints", () => {
+  const missingDefault = validatePiAskFlowRequest({
+    flow: "custom",
+    mode: "decision",
+    questions: [
+      {
+        id: "route",
+        prompt: "Which route?",
+        type: "single",
+        defaultValues: ["missing"],
+        options: [
+          { value: "fast", label: "Fast" },
+          { value: "safe", label: "Safe" },
+        ],
+      },
+    ],
+  });
+  assert.equal(missingDefault.error, "invalid_default_value");
+  assert.match(missingDefault.details ?? "", /defaultValues must match options\[\]\.value exactly/);
+  assert.match(missingDefault.details ?? "", /valid values: fast, safe/);
+
+  const freeformDefault = validatePiAskFlowRequest({
+    flow: "custom",
+    mode: "clarification",
+    questions: [
+      {
+        id: "notes",
+        prompt: "Any notes?",
+        type: "freeform",
+        defaultValues: ["suggested text"],
+      },
+    ],
+  });
+  assert.equal(freeformDefault.error, "invalid_default_value");
+  assert.match(freeformDefault.details ?? "", /freeform questions do not accept defaultValues/);
+  assert.match(freeformDefault.details ?? "", /put suggested text in prompt\/context/);
+
+  const singleMultiDefault = validatePiAskFlowRequest({
+    flow: "custom",
+    mode: "decision",
+    questions: [
+      {
+        id: "route",
+        prompt: "Which route?",
+        type: "single",
+        defaultValues: ["fast", "safe"],
+        options: [
+          { value: "fast", label: "Fast" },
+          { value: "safe", label: "Safe" },
+        ],
+      },
+    ],
+  });
+  assert.equal(singleMultiDefault.error, "invalid_default_value");
+  assert.match(singleMultiDefault.details ?? "", /accept at most one default value/);
+
+  const reservedLabel = validatePiAskFlowRequest({
+    flow: "custom",
+    mode: "decision",
+    questions: [
+      {
+        id: "route",
+        prompt: "Which route?",
+        type: "single",
+        options: [
+          { value: "other", label: "Other" },
+          { value: "safe", label: "Safe" },
+        ],
+      },
+    ],
+  });
+  assert.equal(reservedLabel.error, "reserved_label");
+  assert.match(reservedLabel.details ?? "", /reserved option labels are UI affordances/);
 });
 
 void test("spark ask plain select path receives only business options", async () => {

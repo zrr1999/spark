@@ -67,10 +67,10 @@ A root `SPARK.md` is only materialized by `/spark` initialization, and only when
 - `pi-context` — registered context-provider capability with bounded list/preview actions and no freeform prompt injection.
 - `pi-recall` — controlled explicit-scope recall candidate store/tool, separate from `.learnings/` and automatic memory.
 - `pi-cue` — reusable Pi/cue-shell execution substrate.
-- `pi-ask` — canonical `ask` action tool plus `ask_user` / `ask_flow` protocol/state/renderer with direct custom input handling.
+- `pi-ask` — canonical public/default `ask` action tool with shared focused/flow protocol, state, renderer, and direct custom input handling behind that surface.
 - `pi-roles` — canonical `role` action tool plus reusable `RoleSpec` definitions, builtin/project/user role discovery, Markdown stores, and task-agnostic direct role calls. It owns fresh/forked CLI launch, timeout/cancel, stdout/stderr capture, and tolerant JSONL parsing; it does not own Spark task DAGs, asks, artifacts, review gates, or package-specific role semantics.
 
-Retired migration packages (`spark-core`, `spark-tasks`, `spark-learnings`, `spark-goal`, and `spark-workflows`) are no longer workspaces. No compatibility packages or long-lived `spark_*` tool aliases are planned. `spark-github` is intentionally deferred.
+Retired migration packages (`spark-core`, `spark-tasks`, `spark-learnings`, `spark-goal`, and `spark-workflows`) are no longer workspaces. No compatibility packages, long-lived `spark_*` tool aliases, or dual public/default tool surfaces are planned. Public action tools render as `tool action=<value> ...`. `spark-github` is intentionally deferred.
 
 Pi package loading is manifest-first: the root `pi` manifest explicitly lists each user-visible extension entry (`pi-ask`, `pi-artifacts`, `pi-cue`, `pi-roles`, `pi-recall`, `pi-workflows`, `pi-graft`, the Baidu OneAPI provider, and `spark`). Library-only packages stay as dependencies. `pi-* -> spark-*` regressions are guarded by `pnpm run check:boundaries`, a `prek` hook, and the CI static-check workflow.
 

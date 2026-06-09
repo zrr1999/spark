@@ -304,6 +304,7 @@ export interface PiRoleCommandInput {
   systemPrompt: string;
   instruction: string;
   model?: string;
+  allowedTools?: string[];
   sessionDir?: string;
   mode?: RoleRunMode;
   forkFromSession?: string;
@@ -316,6 +317,7 @@ export function buildRoleRunArgs(input: PiRoleCommandInput): string[] {
     systemPrompt: input.systemPrompt,
     instruction: input.instruction,
     model: input.model,
+    allowedTools: input.allowedTools,
     runGuidance: sparkRoleRunGuidance(),
     sessionDir: input.sessionDir,
     forkFromSession: input.forkFromSession,
@@ -790,6 +792,10 @@ function roleRunEvidenceCompletionFailure(
 }
 
 function roleRunCompletionFailure(result: SparkRoleRunResult, dryRun: boolean): string | undefined {
+  if (!dryRun) {
+    const blockedSparkModeRequest = blockedSparkModeRequestCompletionFailure(result);
+    if (blockedSparkModeRequest) return blockedSparkModeRequest;
+  }
   if (result.record.status === "succeeded") {
     if (dryRun) return undefined;
     const emptyOutput =
@@ -807,6 +813,80 @@ function roleRunCompletionFailure(result: SparkRoleRunResult, dryRun: boolean): 
     return emptyOutput ? "role run did not start and produced no output" : "role run did not start";
   }
   return `role run finished with status ${result.record.status}`;
+}
+
+function blockedSparkModeRequestCompletionFailure(result: SparkRoleRunResult): string | undefined {
+  const structuredReason = findBlockedSparkModeRequestReason(result.jsonEvents);
+  if (structuredReason)
+    return `role run produced a blocked Spark mode request: ${structuredReason}`;
+  const text = `${result.stdout}\n${result.stderr}`;
+  if (/Spark auto mode selection blocked/u.test(text))
+    return "role run produced a blocked Spark mode request: Spark auto mode selection blocked";
+  return undefined;
+}
+
+function findBlockedSparkModeRequestReason(events: unknown[]): string | undefined {
+  for (const event of events) {
+    for (const message of collectSparkModeRequestMessages(event)) {
+      const reason = blockedSparkModeRequestReason(message);
+      if (reason) return reason;
+    }
+  }
+  return undefined;
+}
+
+function collectSparkModeRequestMessages(event: unknown): Array<Record<string, unknown>> {
+  const messages: Array<Record<string, unknown>> = [];
+  const stack = [event];
+  const seen = new Set<object>();
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (!value || typeof value !== "object") continue;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) stack.push(item);
+      continue;
+    }
+    const record = value as Record<string, unknown>;
+    if (record.customType === "spark-mode-request") messages.push(record);
+    for (const nested of Object.values(record)) {
+      if (nested && typeof nested === "object") stack.push(nested);
+    }
+  }
+  return messages;
+}
+
+function blockedSparkModeRequestReason(message: Record<string, unknown>): string | undefined {
+  const details = asRecord(message.details);
+  const status = stringField(details, "status") ?? stringField(message, "status");
+  const reason = stringField(details, "reason") ?? stringField(message, "reason");
+  const content = stringField(message, "content");
+  const normalized = `${status ?? ""} ${reason ?? ""} ${content ?? ""}`.toLocaleLowerCase();
+  if (status === "blocked") return reason || "blocked";
+  if (
+    reason &&
+    /(?:^|[_\s-])(?:no_selection|mode_selection_blocked|blocked|refused)(?:$|[_\s-])/u.test(reason)
+  )
+    return reason;
+  if (/spark auto mode selection blocked/u.test(normalized))
+    return reason || "mode_selection_blocked";
+  if (/mode selection blocked/u.test(normalized)) return reason || "mode_selection_blocked";
+  return undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function stringField(
+  record: Record<string, unknown> | undefined,
+  field: string,
+): string | undefined {
+  const value = record?.[field];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 export interface TaskClaimHeartbeatOptions {

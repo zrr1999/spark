@@ -1335,7 +1335,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       return renderToolCall(
         "cue_jobs",
         [
-          formatStringArg(args.action, { fallback: "list" }),
+          formatStringArg(args.action, { prefix: "action=", fallback: "list" }),
           formatStringArg(args.id, { prefix: "id=" }),
           formatStringArg(args.status, { prefix: "status=" }),
           formatNumberArg(args.limit, { prefix: "limit=" }),
@@ -1631,7 +1631,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       return renderToolCall(
         "cue_schedule",
         [
-          formatStringArg(args.action, { fallback: "list" }),
+          formatStringArg(args.action, { prefix: "action=", fallback: "list" }),
           formatStringArg(args.id, { prefix: "id=" }),
           formatStringArg(args.schedule, { prefix: "schedule=", maxLength: 40 }),
           formatStringArg(args.command, { prefix: "command=", maxLength: 80 }),
@@ -1805,7 +1805,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       return renderToolCall(
         "cue_scope",
         [
-          formatStringArg(args.action, { fallback: "list" }),
+          formatStringArg(args.action, { prefix: "action=", fallback: "list" }),
           formatNumberArg(args.limit, { prefix: "limit=" }),
           args.includeEnv === true ? "include-env" : undefined,
           formatNumberArg(args.tail_bytes, { prefix: "tail=" }),

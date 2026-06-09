@@ -152,6 +152,6 @@ function renderRecallCall(
 ): ToolRenderComponent {
   const action = typeof args.action === "string" ? args.action : "?";
   const scope = typeof args.scope === "string" ? args.scope : undefined;
-  const text = ["recall", action, scope].filter(Boolean).join(" ");
+  const text = ["recall", `action=${action}`, scope].filter(Boolean).join(" ");
   return new ToolCallText(theme.bold ? theme.bold(text) : text);
 }

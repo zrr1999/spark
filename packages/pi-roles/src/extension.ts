@@ -86,13 +86,16 @@ export interface CallRoleToolParams {
 }
 
 export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
-  const registeredRoleTools = new Map<string, PiRolesToolConfig>();
-  const registerRoleTool = (config: PiRolesToolConfig): void => {
-    registeredRoleTools.set(config.name, config);
+  const roleActionTools = new Map<string, PiRolesToolConfig>();
+  const registerRoleActionTool = (config: PiRolesToolConfig): void => {
+    roleActionTools.set(config.name, config);
+  };
+  const registerPublicRoleTool = (config: PiRolesToolConfig): void => {
+    roleActionTools.set(config.name, config);
     pi.registerTool(config);
   };
 
-  registerRoleTool({
+  registerRoleActionTool({
     name: "list_roles",
     label: "List Roles",
     description: "List builtin, project, and optionally user Pi role specs.",
@@ -146,7 +149,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     },
   });
 
-  registerRoleTool({
+  registerRoleActionTool({
     name: "get_role",
     label: "Get Role",
     description: "Inspect one builtin, project, or user Pi role spec.",
@@ -211,7 +214,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     },
   });
 
-  registerRoleTool({
+  registerRoleActionTool({
     name: "create_role",
     label: "Create Role",
     description: "Create and persist a project or explicitly requested user Pi role spec.",
@@ -262,7 +265,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     },
   });
 
-  registerRoleTool({
+  registerRoleActionTool({
     name: "call_role",
     label: "Call Role",
     description:
@@ -349,6 +352,11 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       const stderrTail = result.stderr ? tailText(result.stderr, 8_000) : undefined;
       const stdoutNonJsonTail = nonJsonStdoutTail(result.stdout, 12_000);
       const finalAssistantText = extractFinalAssistantText(result.jsonEvents);
+      const delivery = summarizeRoleCallDelivery({
+        finalAssistantText,
+        stdoutNonJsonTail,
+        jsonEventCount: result.jsonEvents.length,
+      });
       const summary = [
         `Role call ${result.record.status}: ${role.id} (${role.ref})`,
         formatRoleRunIdentity({
@@ -359,13 +367,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
           forkFromSession: result.record.forkFromSession,
         }),
         result.record.errorMessage ? `error: ${result.record.errorMessage}` : undefined,
-        finalAssistantText
-          ? `result:\n${truncateBlock(finalAssistantText, 12_000)}`
-          : stdoutNonJsonTail
-            ? `output:\n${stdoutNonJsonTail}`
-            : result.jsonEvents.length > 0
-              ? `No final assistant message found (${result.jsonEvents.length} JSON events captured).`
-              : undefined,
+        renderRoleCallDelivery(delivery),
         result.record.status !== "succeeded" && stdoutTail && !stdoutNonJsonTail
           ? `stdout:\n${stdoutTail}`
           : undefined,
@@ -383,6 +385,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
           model,
           record: result.record,
           jsonEventCount: result.jsonEvents.length,
+          delivery,
           stdoutTail,
           stderrTail,
         },
@@ -390,7 +393,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     },
   });
 
-  registerRoleTool({
+  registerPublicRoleTool({
     name: "role",
     label: "Role",
     description:
@@ -424,7 +427,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       return renderToolCall(
         "role",
         [
-          formatStringArg(args.action, { fallback: "?" }),
+          formatStringArg(args.action, { prefix: "action=", fallback: "?" }),
           formatStringArg(args.role),
           formatStringArg(args.id, { prefix: "id=" }),
         ],
@@ -434,7 +437,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     execute(toolCallId, params, signal, onUpdate, ctx) {
       const action = normalizeRoleAction(params.action);
       const target = roleToolNameForAction(action);
-      const tool = registeredRoleTools.get(target);
+      const tool = roleActionTools.get(target);
       if (!tool) throw new Error(`role action adapter could not find ${target}`);
       return tool.execute(toolCallId, stripRoleAction(params), signal, onUpdate, ctx);
     },
@@ -672,6 +675,59 @@ function compactKeyValues(items: Array<[string, string | number | undefined]>): 
 function truncateBlock(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+interface RoleCallDeliverySummary {
+  status: "delivered" | "non_json_output" | "empty";
+  hasFinalAssistantText: boolean;
+  hasNonJsonOutput: boolean;
+  jsonEventCount: number;
+  finalAssistantText?: string;
+  stdoutNonJsonTail?: string;
+}
+
+function summarizeRoleCallDelivery(input: {
+  finalAssistantText?: string;
+  stdoutNonJsonTail?: string;
+  jsonEventCount: number;
+}): RoleCallDeliverySummary {
+  if (input.finalAssistantText) {
+    return {
+      status: "delivered",
+      hasFinalAssistantText: true,
+      hasNonJsonOutput: Boolean(input.stdoutNonJsonTail),
+      jsonEventCount: input.jsonEventCount,
+      finalAssistantText: input.finalAssistantText,
+      stdoutNonJsonTail: input.stdoutNonJsonTail,
+    };
+  }
+  if (input.stdoutNonJsonTail) {
+    return {
+      status: "non_json_output",
+      hasFinalAssistantText: false,
+      hasNonJsonOutput: true,
+      jsonEventCount: input.jsonEventCount,
+      stdoutNonJsonTail: input.stdoutNonJsonTail,
+    };
+  }
+  return {
+    status: "empty",
+    hasFinalAssistantText: false,
+    hasNonJsonOutput: false,
+    jsonEventCount: input.jsonEventCount,
+  };
+}
+
+function renderRoleCallDelivery(delivery: RoleCallDeliverySummary): string | undefined {
+  if (delivery.status === "delivered" && delivery.finalAssistantText) {
+    return `result:\n${truncateBlock(delivery.finalAssistantText, 12_000)}`;
+  }
+  if (delivery.status === "non_json_output" && delivery.stdoutNonJsonTail) {
+    return `output:\n${delivery.stdoutNonJsonTail}`;
+  }
+  return delivery.jsonEventCount > 0
+    ? `delivery: empty — no final assistant message found (${delivery.jsonEventCount} JSON events captured).`
+    : "delivery: empty — child process exited without assistant output.";
 }
 
 function extractFinalAssistantText(events: unknown[]): string | undefined {

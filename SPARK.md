@@ -43,7 +43,7 @@ Spark 现在支持两个 host target：Pi 中的 `packages/spark/src/extension/`
 - `packages/pi-learnings`：evidence-backed reusable learning store、`.learnings/` local/user scope、export/import/lifecycle 与 canonical `learning({ action })` tool。
 - `packages/pi-goal`：generic goal state 与 continuation prompt primitives；Spark 只保留 project-bound `/goal` facade，历史 serialized marker 保持兼容。
 - `packages/pi-workflows`：saved workflow discovery/runtime primitives 与 `.spark/workflow-runs.json` DAG/workflow-run store。
-- `packages/pi-ask`：通用 `ask` / `ask_user` / `ask_flow` 协议、状态机、TUI 渲染与 result semantics；具体 ask 问题由调用处基于实际上下文生成，不提供制式表单。
+- `packages/pi-ask`：通用 canonical `ask({ action })` 协议、内部 focused/flow 状态机、TUI 渲染与 result semantics；具体 ask 问题由调用处基于实际上下文生成，不提供制式表单。
 - `packages/pi-roles`：`RoleSpec`、project/user/builtin role store、`RoleRun` fresh/forked child Pi 执行、role tools；不拥有 task DAG。
 - `packages/pi-cue`：cue-shell IPC/tool adapter；不依赖 Spark 状态。
 - `packages/pi-context`：bounded registered context providers。
@@ -58,7 +58,7 @@ Spark 现在支持两个 host target：Pi 中的 `packages/spark/src/extension/`
 - 不复制 OpenSpec/OpenArc 的完整文件树、change directory 或重型流程。
 - 不在 `pi-roles` 中引入 Spark DAG、task claim、artifact 或 scheduler 语义。
 - 不保留旧 `spark-agents` / `pi-agent-run` 公开兼容包；只对必要的历史持久化状态保留窄读兼容。
-- 不保留长期 `spark_*` tool aliases；外部工具表面使用 canonical `task`、`learning`、`artifact`、`ask`、`goal` 等。
+- 不保留长期 `spark_*` tool aliases 或双 public/default tool surface；外部工具表面使用 canonical `task`、`learning`、`artifact`、`ask`、`goal` 等，action tool 渲染为 `tool action=<value> ...`。
 - 不让 ask 成为用户必须直接操作的独立产品面；它应服务具体 project/task/roadmap/review flow。
 - 不默认隐藏或吞掉执行证据；输出可精简，但完整证据应可通过 artifacts/full/tail 参数取回。
 
@@ -67,14 +67,14 @@ Spark 现在支持两个 host target：Pi 中的 `packages/spark/src/extension/`
 - `/spark` 初始化/恢复不会覆盖既有状态，不会生成占位任务，也不会要求用户先填宽泛表单。
 - `task({ action: "status" })` 和 Spark widget 能以低噪声方式展示当前 project、active tasks、TODO、workflow-run 状态和 readiness 问题。
 - `task({ action: "plan" })` / `task({ action: "claim" })` / `task({ action: "run_ready" })` 能区分规划、claim、执行和完成；role-run 失败或 not_started 不会错误完成 task。
-- `ask`、`ask_user`、`ask_flow` 的结果语义一致：custom input 一等公民，decision/approval 无有效选项时阻塞，用户界面不泄漏 raw ids。
-- `pi-roles` role-spec/run 工具与 Spark workflow-run 执行边界清晰，direct `call_role` 不冒充 task execution。
+- `ask({ action: "ask" | "flow" })` 的 focused/flow 结果语义一致：custom input 一等公民，decision/approval 无有效选项时阻塞，用户界面不泄漏 raw ids。
+- `pi-roles` role-spec/run 工具与 Spark workflow-run 执行边界清晰，direct `role({ action: "call" })` 不冒充 task execution。
 - `pi-cue` 工具默认输出 bounded/context-friendly，同时保留获取完整输出的显式方式。
 - 关键行为有 tests/typecheck/`vp check` 覆盖，并通过 `prek`/CI 验证。
 
 ## 当前开放问题
 
-- Project-bound roadmap 模型如何最小落地：继续放在 Spark facade flow-local，还是后续独立为更通用的 planning capability。
+- Roadmap 已作为每个 Project 内嵌的唯一 planning 层落在 `projects.json`；后续是否抽成独立 `pi-planning` capability 仍待观察。
 - done 完成证据门禁应严格到什么程度：对人工任务、review/design 任务和 role-run/DAG 任务是否采用不同要求。
 - 历史任务中被完成摘要覆盖的原始意图是否需要进一步从聊天记录、daily memory 或 git 历史中恢复。
 

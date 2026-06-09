@@ -156,15 +156,15 @@ Every run references an existing role. A run can be fresh or forked regardless o
 
 ## Tool / Spark mapping
 
-| Surface                | `pi-roles` / Spark concept                                               |
-| ---------------------- | ------------------------------------------------------------------------ |
-| `list_roles`           | Pi role-spec management over `RoleRegistry.list()`                       |
-| `get_role`             | Pi role-spec management over `RoleRegistry.select()`                     |
-| `create_role`          | Pi role-spec management creating project/user `RoleSpec`s                |
-| `call_role`            | One-off direct role invocation; not attached to Spark tasks              |
-| Spark task binding     | `Task.roleRef` string resolved by `RoleRegistry`                         |
-| Spark task execution   | `spark-runtime` calls `runRole()` behind `task({ action: "run_ready" })` |
-| Spark runtime claim    | `TaskClaim.kind = "role-run"`, `roleRef`, `runName`, `runRef`            |
-| Spark runtime artifact | `kind: "role-run"` with task/run provenance                              |
+| Surface                      | `pi-roles` / Spark concept                                               |
+| ---------------------------- | ------------------------------------------------------------------------ |
+| `role({ action: "list" })`   | Pi role-spec management over `RoleRegistry.list()`                       |
+| `role({ action: "get" })`    | Pi role-spec management over `RoleRegistry.select()`                     |
+| `role({ action: "create" })` | Pi role-spec management creating project/user `RoleSpec`s                |
+| `role({ action: "call" })`   | One-off direct role invocation; not attached to Spark tasks              |
+| Spark task binding           | `Task.roleRef` string resolved by `RoleRegistry`                         |
+| Spark task execution         | `spark-runtime` calls `runRole()` behind `task({ action: "run_ready" })` |
+| Spark runtime claim          | `TaskClaim.kind = "role-run"`, `roleRef`, `runName`, `runRef`            |
+| Spark runtime artifact       | `kind: "role-run"` with task/run provenance                              |
 
 Runtime package boundaries should not keep compatibility aliases. Repair stale local state with explicit migration or cleanup tooling before it reaches `pi-roles`, `pi-tasks`, or `spark-runtime`.

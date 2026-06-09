@@ -1,5 +1,4 @@
 import type { TaskGraph } from "pi-tasks";
-import { roadmapPlanningContext } from "../flows/roadmap-flow.ts";
 import {
   renderSparkExecutionModePrompt,
   renderSparkResearchModePrompt,
@@ -7,10 +6,12 @@ import {
   renderSparkPlanningModePrompt,
 } from "./spark-mode-prompts.ts";
 import { discoverSparkSavedWorkflows } from "./spark-workflow-builtins.ts";
+import { roadmapPlanningContext } from "../flows/roadmap-flow.ts";
 import {
   clearSparkExecutionMode,
   currentSparkProject,
   saveSparkExecutionMode,
+  saveSparkGraphAndTodos,
   saveSparkPlanningMode,
   type SparkExecuteStrategy,
   type SparkPlanningModeSource,
@@ -83,16 +84,17 @@ export async function enterSparkPlanningMode(
   source: SparkPlanningModeSource = "auto",
 ): Promise<void> {
   const project = await currentSparkProject(ctx.cwd, ctx, graph);
-  const roadmapContext = await roadmapPlanningContext(ctx.cwd, focus);
+  const roadmapResult = project ? roadmapPlanningContext(graph, project.ref, focus) : undefined;
   if (project) await saveSparkPlanningMode(ctx.cwd, ctx, project.ref, focus, source);
   else await clearSparkExecutionMode(ctx.cwd, ctx);
+  if (roadmapResult?.mutated) await saveSparkGraphAndTodos(ctx.cwd, graph, ctx);
   await deps.refreshSparkWidget(ctx.cwd, ctx);
   ctx.ui?.notify?.("Spark planning mode: research, clarify, and add projects/tasks.", "info");
   dispatchSparkAgentInstruction(
     piApi,
     deps,
     ctx,
-    renderSparkPlanningModePrompt(graph, project?.ref, focus, roadmapContext, source),
+    renderSparkPlanningModePrompt(graph, project?.ref, focus, source, roadmapResult?.context),
     renderSparkModeVisibleMessage("plan", project?.title, focus),
   );
 }

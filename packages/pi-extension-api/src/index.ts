@@ -121,6 +121,7 @@ export interface ExtensionContext {
   cwd?: string;
   hasUI?: boolean;
   ui?: ExtensionUi;
+  isIdle?: () => boolean;
 }
 
 export interface ExtensionCommandContext extends ExtensionContext {
@@ -395,13 +396,48 @@ export interface TaskTodo {
 
 export type ProjectStatus = "active" | "done";
 
+export type RoadmapRef = `roadmap:${string}`;
+export type RoadmapItemRef = `roadmap-item:${string}`;
+
+/** One roadmap owned by a single Project; items link to tasks only (no cross-project refs). */
+export interface ProjectRoadmap {
+  ref: RoadmapRef;
+  title: string;
+  status?: "active" | "done";
+  activeItemRef?: RoadmapItemRef;
+  items: RoadmapItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RoadmapItem {
+  ref: RoadmapItemRef;
+  title?: string;
+  status?: "active" | "pending" | "blocked" | "done";
+  objective: string;
+  scope?: string | string[];
+  constraints?: string[];
+  successCriteria?: string[];
+  acceptance?: string[];
+  evidenceRequired?: string[];
+  evidenceRefs?: string[];
+  openQuestions?: string[];
+  askRefs?: Array<AskRef | ArtifactRef | string>;
+  taskRefs?: TaskRef[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface Project {
   ref: ProjectRef;
   title: string;
   description: string;
+  /** Durable project intent; distinct from session goal pursuit. */
+  intent?: string;
   status: ProjectStatus;
   outputLanguage?: "zh" | "en";
   currentTaskRef?: TaskRef;
+  roadmap: ProjectRoadmap;
   createdAt: string;
   updatedAt: string;
 }

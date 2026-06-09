@@ -26,6 +26,7 @@ void test("role spec tools list, get, and create project roles", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-roles-spec-tools-"));
   try {
     const tools = registerRoleToolsForTest();
+    assert.deepEqual([...tools.keys()].sort(), ["role"]);
 
     const created = await executeRoleTool(
       tools,
@@ -157,10 +158,13 @@ void test("call_role launches fresh role runs", async () => {
     const details = result.details as {
       record?: { status?: string; mode?: string };
       jsonEventCount?: number;
+      delivery?: { status?: string; hasFinalAssistantText?: boolean };
     };
     assert.equal(details.record?.status, "succeeded");
     assert.equal(details.record?.mode, "fresh");
     assert.equal(details.jsonEventCount, 1);
+    assert.equal(details.delivery?.status, "delivered");
+    assert.equal(details.delivery?.hasFinalAssistantText, true);
 
     const canonical = await executeRoleTool(
       tools,
@@ -215,8 +219,63 @@ void test("call_role does not expose raw JSON protocol fragments as output", asy
     );
 
     assert.match(result.content[0]?.text ?? "", /Role call succeeded: worker/);
+    assert.match(result.content[0]?.text ?? "", /delivery: empty/);
     assert.doesNotMatch(result.content[0]?.text ?? "", /assistantMessageEvent/);
     assert.doesNotMatch(result.content[0]?.text ?? "", /toolcall_delta/);
+    assert.equal((result.details as { delivery?: { status?: string } }).delivery?.status, "empty");
+  } finally {
+    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousBindingHome;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("call_role exposes empty delivery when JSON events have no final assistant message", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-empty-delivery-"));
+  const previousBindingHome = process.env.PI_ROLES_HOME;
+  process.env.PI_ROLES_HOME = dir;
+  try {
+    const fakePi = join(dir, "fake-pi-empty-delivery.mjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "const args = process.argv.slice(2);",
+        "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
+        "process.stdout.write(JSON.stringify({ type: 'agent_start' }) + '\\n');",
+        "process.stdout.write(JSON.stringify({ type: 'agent_end', messages: [] }) + '\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    const tools = registerRoleToolsForTest();
+    const result = await executeCallRole(
+      tools,
+      {
+        role: "worker",
+        instruction: "Run without final message.",
+        model: "test/model",
+        piCommand: fakePi,
+      },
+      dir,
+    );
+
+    assert.match(result.content[0]?.text ?? "", /Role call succeeded: worker/);
+    assert.match(
+      result.content[0]?.text ?? "",
+      /delivery: empty .*no final assistant message found \(2 JSON events captured\)/,
+    );
+    const details = result.details as {
+      record?: { status?: string };
+      jsonEventCount?: number;
+      delivery?: { status?: string; hasFinalAssistantText?: boolean; jsonEventCount?: number };
+    };
+    assert.equal(details.record?.status, "succeeded");
+    assert.equal(details.jsonEventCount, 2);
+    assert.equal(details.delivery?.status, "empty");
+    assert.equal(details.delivery?.hasFinalAssistantText, false);
+    assert.equal(details.delivery?.jsonEventCount, 2);
   } finally {
     if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
     else process.env.PI_ROLES_HOME = previousBindingHome;
@@ -473,9 +532,12 @@ function executeRoleTool(
   params: Record<string, unknown>,
   cwd = DEFAULT_TEST_CWD,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }> {
-  const tool = tools.get(name);
-  assert.ok(tool, `missing ${name} tool`);
-  return tool.execute("tool-call", params, new AbortController().signal, () => undefined, { cwd });
+  const call = canonicalRoleToolCall(name, params);
+  const tool = tools.get(call.name);
+  assert.ok(tool, `missing ${call.name} tool`);
+  return tool.execute("tool-call", call.params, new AbortController().signal, () => undefined, {
+    cwd,
+  });
 }
 
 function executeRoleToolWithoutCwd(
@@ -483,7 +545,28 @@ function executeRoleToolWithoutCwd(
   name: string,
   params: Record<string, unknown>,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }> {
-  const tool = tools.get(name);
-  assert.ok(tool, `missing ${name} tool`);
-  return tool.execute("tool-call", params, new AbortController().signal, () => undefined, {});
+  const call = canonicalRoleToolCall(name, params);
+  const tool = tools.get(call.name);
+  assert.ok(tool, `missing ${call.name} tool`);
+  return tool.execute("tool-call", call.params, new AbortController().signal, () => undefined, {});
+}
+
+function canonicalRoleToolCall(
+  name: string,
+  params: Record<string, unknown>,
+): { name: "role"; params: Record<string, unknown> } {
+  switch (name) {
+    case "role":
+      return { name, params };
+    case "list_roles":
+      return { name: "role", params: { action: "list", ...params } };
+    case "get_role":
+      return { name: "role", params: { action: "get", ...params } };
+    case "create_role":
+      return { name: "role", params: { action: "create", ...params } };
+    case "call_role":
+      return { name: "role", params: { action: "call", ...params } };
+    default:
+      throw new Error(`unknown test role tool: ${name}`);
+  }
 }

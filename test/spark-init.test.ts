@@ -134,7 +134,7 @@ void test("active Spark prompt preserves base prompt and stays a single-line sta
   const prompt = renderSparkActiveSystemPrompt("Base prompt", "SPARK.md");
   assert.match(prompt, /^Base prompt\n\nSpark active \(SPARK\.md\); mode: auto\./);
   assert.match(prompt, /Spark is the mode facade/);
-  assert.match(prompt, /task, artifact, ask, role, learning, context, recall, and workflow tools/);
+  assert.match(prompt, /task, artifact, ask, role, learning, context, recall, workflow, patch/);
   assert.match(prompt, /no guessing: ask unless user says infer\/research/);
   assert.doesNotMatch(prompt, /spark skill/);
   assert.doesNotMatch(prompt, /standing project state/);

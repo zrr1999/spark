@@ -244,7 +244,7 @@ void test("spark widget renders completed DAG state in plain language", () => {
   assert.doesNotMatch(lines.join("\n"), /DAG\(failed|Spark DAG/);
 });
 
-void test("spark widget shows session goal on a separate line", () => {
+void test("spark widget shows session goal before project task state", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       goal: {
@@ -264,9 +264,42 @@ void test("spark widget shows session goal on a separate line", () => {
     theme,
   );
 
-  assert.match(lines[0] ?? "", /◆ Spark UX redesign · Tasks\(pending=1\)/);
-  assert.doesNotMatch(lines[0] ?? "", /Goal\(●\):/);
-  assert.match(lines[1] ?? "", /◆ Goal\(●\): Advance Spark mode-as-state UX rework/);
+  assert.match(lines[0] ?? "", /◆ Goal\(●\): Advance Spark mode-as-state UX rework/);
+  assert.match(lines[1] ?? "", /◆ Spark UX redesign · Tasks\(pending=1\)/);
+  assert.doesNotMatch(lines[1] ?? "", /Goal\(●\):/);
+});
+
+void test("spark widget pulses active session goal symbol", () => {
+  const lines = renderSparkWidgetLines(
+    widgetState({
+      goal: {
+        status: "active",
+        objective: "Keep working toward the session goal.",
+      },
+      animationFrame: 2,
+    }),
+    tui,
+    theme,
+  );
+
+  assert.match(lines[0] ?? "", /◆ Goal\(◉\): Keep working toward the session goal/);
+});
+
+void test("spark widget shows project-scoped goal label", () => {
+  const lines = renderSparkWidgetLines(
+    widgetState({
+      goal: {
+        status: "active",
+        scope: "project",
+        projectRef: "proj:example",
+        objective: "Finish the selected project goal.",
+      },
+    }),
+    tui,
+    theme,
+  );
+
+  assert.match(lines[0] ?? "", /◆ Goal\(●\): Finish the selected project goal/);
 });
 
 void test("spark widget shows project header with task counts even before claims", () => {
@@ -686,7 +719,7 @@ void test("spark widget hides placeholder-only done TODO state", () => {
   assert.deepEqual(lines, []);
 });
 
-void test("spark widget prioritizes session TODOs before pending, done, or cancelled rows", () => {
+void test("spark widget renders session TODOs as their own top-level section", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
@@ -707,8 +740,10 @@ void test("spark widget prioritizes session TODOs before pending, done, or cance
   );
 
   const text = lines.join("\n");
-  assert.ok(text.indexOf("Running task") < text.indexOf("Session follow-up"));
-  assert.ok(text.indexOf("Session follow-up") < text.indexOf("Pending task"));
+  assert.ok(text.indexOf("Session TODOs(pending=1)") < text.indexOf("Spark UX redesign"));
+  assert.ok(text.indexOf("Session follow-up") < text.indexOf("Spark UX redesign"));
+  assert.ok(text.indexOf("Spark UX redesign") < text.indexOf("Running task"));
+  assert.ok(text.indexOf("Running task") < text.indexOf("Pending task"));
   assert.ok(text.indexOf("Pending task") < text.indexOf("Done task"));
   assert.ok(text.indexOf("Done task") < text.indexOf("Cancelled task"));
 });

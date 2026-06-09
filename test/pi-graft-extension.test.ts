@@ -140,6 +140,7 @@ void test("pi-graft registers the final high-frequency direct tool set", () => {
   assert.deepEqual(
     [...tools.keys()],
     [
+      "graft_patch",
       "graft_help",
       "graft_init",
       "graft_status",

@@ -54,6 +54,7 @@ export interface SparkStatusRenderInput {
 export function renderSparkStatus(input: SparkStatusRenderInput): {
   lines: string[];
   details: Record<string, unknown>;
+  compactDetails: Record<string, unknown>;
 } {
   const lines = [
     `Spark tasks (${input.view} view${typeof input.taskLimit === "number" ? `, limit=${input.taskLimit}` : ""}):`,
@@ -72,22 +73,217 @@ export function renderSparkStatus(input: SparkStatusRenderInput): {
   const independentTodoDetails = appendIndependentTodoStatusLines(lines, input);
   if (input.state) appendSparkStateHousekeepingLines(lines, input.state);
 
+  const details = {
+    found: true,
+    view: input.view,
+    limit: input.taskLimit,
+    activeProjectRef: input.currentProject?.ref,
+    renderedProjects: renderedProjectDetails,
+    independentTodos: independentTodoDetails,
+    projects: compactProjectStatusSummaries(input.graph, input.sessionKey),
+    dag: input.dagStatus,
+    runMode: input.runMode,
+    sessionGoal: input.sessionGoal,
+    recentRoleRunCompletions: input.recentRoleRunCompletions,
+    ...(input.state ? { state: input.state } : {}),
+  };
   return {
     lines,
-    details: {
-      found: true,
-      view: input.view,
-      limit: input.taskLimit,
-      activeProjectRef: input.currentProject?.ref,
-      renderedProjects: renderedProjectDetails,
-      independentTodos: independentTodoDetails,
-      projects: compactProjectStatusSummaries(input.graph, input.sessionKey),
-      dag: input.dagStatus,
-      runMode: input.runMode,
-      sessionGoal: input.sessionGoal,
-      recentRoleRunCompletions: input.recentRoleRunCompletions,
-      ...(input.state ? { state: input.state } : {}),
+    details,
+    compactDetails: compactSparkStatusDetails(
+      input,
+      renderedProjectDetails,
+      independentTodoDetails,
+    ),
+  };
+}
+
+function compactSparkStatusDetails(
+  input: SparkStatusRenderInput,
+  renderedProjectDetails: Array<Record<string, unknown>>,
+  independentTodoDetails: Record<string, unknown>,
+): Record<string, unknown> {
+  const currentProjectTasks = input.currentProject
+    ? input.graph.tasks(input.currentProject.ref)
+    : [];
+  const importantCurrentTasks = sortTasksForStatusVisibility(
+    currentProjectTasks.filter((task) => isImportantStatus(task.status)),
+  );
+  const taskLimit = input.taskLimit ?? DEFAULT_SPARK_STATUS_ACTIVE_LIMIT;
+  const currentClaim = importantCurrentTasks.find((task) =>
+    isClaimOwnedBySession(task, input.sessionKey),
+  );
+  const readyTasks = importantCurrentTasks.filter((task) => task.status === "ready");
+  return {
+    found: true,
+    compact: true,
+    view: input.view,
+    limit: input.taskLimit,
+    activeProjectRef: input.currentProject?.ref,
+    activeProject: input.currentProject
+      ? compactProjectDecisionDetail(input, currentProjectTasks)
+      : undefined,
+    currentClaim: currentClaim ? compactTaskDecisionDetail(input, currentClaim) : undefined,
+    ready: readyTasks.slice(0, taskLimit).map((task) => compactTaskDecisionDetail(input, task)),
+    renderedProjects: renderedProjectDetails.map(compactRenderedProjectDecisionDetail),
+    independentTodos: compactIndependentTodoDecisionDetail(independentTodoDetails),
+    dag: compactDagDecisionDetail(input.dagStatus),
+    runMode: input.runMode
+      ? {
+          status: input.runMode.status,
+          runRef: input.runMode.runRef,
+          projectRef: input.runMode.projectRef,
+          focus: input.runMode.focus,
+          maxConcurrency: input.runMode.policy.maxConcurrency,
+          timeoutMs: input.runMode.policy.timeoutMs,
+        }
+      : undefined,
+    sessionGoal: input.sessionGoal
+      ? {
+          status: input.sessionGoal.status,
+          scope: input.sessionGoal.scope,
+          projectRef: input.sessionGoal.projectRef,
+          objective: truncateInline(input.sessionGoal.objective, 180),
+        }
+      : undefined,
+    hints: [
+      'Use view="full" or includeDetails=true for full project/task/DAG details.',
+      "Use text format for a human-readable active frontier.",
+    ],
+  };
+}
+
+function compactProjectDecisionDetail(
+  input: SparkStatusRenderInput,
+  tasks: ReturnType<TaskGraph["tasks"]>,
+): Record<string, unknown> {
+  const claimed = tasks.filter((task) => taskClaimedBy(task));
+  const sessionClaimed = claimed.filter((task) => isClaimOwnedBySession(task, input.sessionKey));
+  const ready = tasks.filter((task) => task.status === "ready").length;
+  return {
+    ref: input.currentProject?.ref,
+    title: input.currentProject?.title,
+    status: input.currentProject?.status,
+    taskCounts: {
+      total: tasks.length,
+      unfinished: tasks.filter((task) => isUnfinishedTaskStatus(task.status)).length,
+      ready,
+      claimed: claimed.length,
+      claimedByCurrentSession: sessionClaimed.length,
+      statusCounts: countTaskStatuses(tasks),
     },
+  };
+}
+
+function compactRenderedProjectDecisionDetail(
+  project: Record<string, unknown>,
+): Record<string, unknown> {
+  const taskCounts = project.taskCounts as Record<string, unknown> | undefined;
+  return {
+    ref: project.ref,
+    title: project.title,
+    status: project.status,
+    current: project.current,
+    taskCounts: taskCounts
+      ? {
+          total: taskCounts.total,
+          unfinished: taskCounts.unfinished,
+          claimed: taskCounts.claimed,
+          claimedByCurrentSession: taskCounts.claimedByCurrentSession,
+          statusCounts: taskCounts.statusCounts,
+        }
+      : undefined,
+    hiddenFinishedTasks: project.hiddenFinishedTasks,
+    hiddenByLimit: project.hiddenByLimit,
+  };
+}
+
+function compactTaskDecisionDetail(
+  input: SparkStatusRenderInput,
+  task: ReturnType<TaskGraph["tasks"]>[number],
+): Record<string, unknown> {
+  const taskOwnedBySession = isClaimOwnedBySession(task, input.sessionKey);
+  const taskTodos = taskOwnedBySession ? input.graph.taskTodos(task.ref) : [];
+  const visibleTaskTodos = taskTodos.slice(0, DEFAULT_SPARK_STATUS_TODO_LIMIT);
+  return {
+    ref: task.ref,
+    name: task.name,
+    title: task.title,
+    status: task.status,
+    kind: task.kind,
+    projectRef: task.projectRef,
+    owner: deriveTaskRoleLabel({ task, currentSessionKey: input.sessionKey }),
+    claimedByCurrentSession: taskOwnedBySession,
+    plan: taskPlanSummary(task),
+    todos: {
+      total: taskTodos.length,
+      hidden: taskTodos.length - visibleTaskTodos.length,
+      items: visibleTaskTodos.map((todo) => ({
+        id: todo.id,
+        content: truncateInline(todo.content, 160),
+        status: todo.status,
+      })),
+    },
+  };
+}
+
+function compactIndependentTodoDecisionDetail(
+  detail: Record<string, unknown>,
+): Record<string, unknown> {
+  const todos = Array.isArray(detail.todos) ? detail.todos : [];
+  return {
+    total: detail.total,
+    hidden: detail.hidden,
+    todos: todos.map((todo) => {
+      if (!isRecord(todo)) return todo;
+      return {
+        id: todo.id,
+        content:
+          typeof todo.content === "string" ? truncateInline(todo.content, 160) : todo.content,
+        status: todo.status,
+      };
+    }),
+  };
+}
+
+function compactDagDecisionDetail(dagStatus: SparkDagStatusSummary): Record<string, unknown> {
+  return {
+    manager: dagStatus.manager,
+    counts: {
+      running: dagStatus.running,
+      succeeded: dagStatus.succeeded,
+      failed: dagStatus.failed,
+      stale: dagStatus.stale,
+      timedOut: dagStatus.timedOut,
+      acknowledged: dagStatus.acknowledged,
+      actionable: dagStatus.actionable,
+    },
+    activeRun: dagStatus.activeRun ? compactDagRunDecisionDetail(dagStatus.activeRun) : undefined,
+    actionableRun: dagStatus.actionableRun
+      ? compactDagRunDecisionDetail(dagStatus.actionableRun)
+      : undefined,
+    lastRun: dagStatus.lastRun ? compactDagRunDecisionDetail(dagStatus.lastRun) : undefined,
+    nextSteps: dagStatus.nextSteps.map((step) => ({
+      runRef: step.runRef,
+      status: step.status,
+      summary: truncateInline(step.summary, 200),
+      nextActions: step.nextActions.slice(0, 3),
+    })),
+  };
+}
+
+function compactDagRunDecisionDetail(
+  run: NonNullable<SparkDagStatusSummary["lastRun"]>,
+): Record<string, unknown> {
+  return {
+    ref: run.ref,
+    projectRef: run.projectRef,
+    status: run.status,
+    scheduled: run.scheduled,
+    completed: run.completed,
+    timedOut: run.timedOut,
+    errorMessage: run.errorMessage ? truncateInline(run.errorMessage, 200) : undefined,
+    acknowledgedAt: run.acknowledgedAt,
   };
 }
 
@@ -152,7 +348,7 @@ function renderProjectStatusLines(
       const reason = input.sessionGoal.pauseReason ?? input.sessionGoal.completedReason;
       const reasonText = reason ? ` | reason: ${truncateInline(reason, 120)}` : "";
       lines.push(
-        `  Session goal: ${input.sessionGoal.status} | ${truncateInline(input.sessionGoal.objective, 180)}${reasonText}`,
+        `  ${formatGoalScopeLabel(input.sessionGoal)} goal: ${input.sessionGoal.status} | ${truncateInline(input.sessionGoal.objective, 180)}${reasonText}`,
       );
     }
     if (hiddenByView > 0)
@@ -297,6 +493,10 @@ function appendIndependentTodoStatusLines(
   };
 }
 
+function formatGoalScopeLabel(goal: SparkSessionGoal): string {
+  return goal.scope === "project" ? `Project(${goal.projectRef})` : "Session";
+}
+
 function sparkRunModeStatusLine(runMode: SparkRunModeState): string {
   const focusSuffix = runMode.focus ? ` focus=${runMode.focus}` : "";
   const strategy = sparkRunStrategyForMaxConcurrency(runMode.policy.maxConcurrency);
@@ -315,4 +515,8 @@ function sparkRunModeStatusLine(runMode: SparkRunModeState): string {
     " timeoutMs=" +
     runMode.policy.timeoutMs
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

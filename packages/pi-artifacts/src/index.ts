@@ -25,6 +25,16 @@ export type LinkableRef =
 
 export type ArtifactProducer = "spark" | "role" | "task" | "review" | "ask" | "cue" | "user";
 
+export const ARTIFACT_PRODUCERS = [
+  "spark",
+  "role",
+  "task",
+  "review",
+  "ask",
+  "cue",
+  "user",
+] as const satisfies readonly ArtifactProducer[];
+
 export interface Provenance {
   producer: ArtifactProducer;
   runRef?: RunRef;
@@ -52,7 +62,31 @@ export type ArtifactKind =
   | "learning-candidate"
   | "learning-export";
 
+export const ARTIFACT_KINDS = [
+  "spark-md",
+  "research",
+  "plan",
+  "task-breakdown",
+  "role-plan",
+  "handoff",
+  "review",
+  "cue-output",
+  "role-run",
+  "role-spec-proposal",
+  "ask-answer",
+  "run-trace",
+  "learning",
+  "learning-candidate",
+  "learning-export",
+] as const satisfies readonly ArtifactKind[];
+
 export type ArtifactFormat = "markdown" | "json" | "text";
+
+export const ARTIFACT_FORMATS = [
+  "markdown",
+  "json",
+  "text",
+] as const satisfies readonly ArtifactFormat[];
 
 export interface ArtifactTranscriptRetention {
   schemaVersion: 1;
@@ -102,6 +136,16 @@ export interface ArtifactLink {
   to: LinkableRef;
   relation: "parent" | "input" | "output" | "review-of" | "answer-to" | "trace-of" | "derived-from";
 }
+
+export const ARTIFACT_LINK_RELATIONS = [
+  "parent",
+  "input",
+  "output",
+  "review-of",
+  "answer-to",
+  "trace-of",
+  "derived-from",
+] as const satisfies readonly ArtifactLink["relation"][];
 
 export interface PutArtifactInput<T extends JsonValue | string = JsonValue | string> {
   kind: ArtifactKind;
@@ -543,51 +587,19 @@ export function validateArtifact(artifact: unknown): asserts artifact is Artifac
 }
 
 export function isArtifactKind(value: unknown): value is ArtifactKind {
-  return (
-    value === "spark-md" ||
-    value === "research" ||
-    value === "plan" ||
-    value === "task-breakdown" ||
-    value === "role-plan" ||
-    value === "handoff" ||
-    value === "review" ||
-    value === "cue-output" ||
-    value === "role-run" ||
-    value === "role-spec-proposal" ||
-    value === "ask-answer" ||
-    value === "run-trace" ||
-    value === "learning" ||
-    value === "learning-candidate" ||
-    value === "learning-export"
-  );
+  return ARTIFACT_KINDS.includes(value as ArtifactKind);
 }
 
 export function isArtifactFormat(value: unknown): value is ArtifactFormat {
-  return value === "markdown" || value === "json" || value === "text";
+  return ARTIFACT_FORMATS.includes(value as ArtifactFormat);
 }
 
 export function isArtifactLinkRelation(value: unknown): value is ArtifactLink["relation"] {
-  return (
-    value === "parent" ||
-    value === "input" ||
-    value === "output" ||
-    value === "review-of" ||
-    value === "answer-to" ||
-    value === "trace-of" ||
-    value === "derived-from"
-  );
+  return ARTIFACT_LINK_RELATIONS.includes(value as ArtifactLink["relation"]);
 }
 
 export function isArtifactProducer(value: unknown): value is ArtifactProducer {
-  return (
-    value === "spark" ||
-    value === "role" ||
-    value === "task" ||
-    value === "review" ||
-    value === "ask" ||
-    value === "cue" ||
-    value === "user"
-  );
+  return ARTIFACT_PRODUCERS.includes(value as ArtifactProducer);
 }
 
 export function newArtifactRef(id: string = randomUUID()): ArtifactRef {

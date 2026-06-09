@@ -102,7 +102,7 @@ export function renderSparkActiveSystemPrompt(
   reason: string,
   mode: SparkSessionMode = "auto",
 ): string {
-  const sparkPrompt = `Spark active (${reason}); mode: ${mode}. Spark is the mode facade; use task, artifact, ask, role, learning, context, recall, and workflow tools. ≤1 task; no canned asks; no guessing: ask unless user says infer/research.`;
+  const sparkPrompt = `Spark active (${reason}); mode: ${mode}. Spark is the mode facade; use task, artifact, ask, role, learning, context, recall, workflow, patch. ≤1 task; no canned asks; no guessing: ask unless user says infer/research.`;
   return basePrompt ? `${basePrompt}\n\n${sparkPrompt}` : sparkPrompt;
 }
 

@@ -28,6 +28,7 @@ import { isGenericInitialTaskTitle } from "./spark-graph-invariants.ts";
 import { findActiveSessionClaim, resolveSessionClaimedTask } from "./task-claim-selection.ts";
 import { taskClaimSummary } from "./task-display.ts";
 import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
+import { truncateInline } from "./tool-rendering.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 
@@ -218,7 +219,7 @@ export function registerSparkClaimTaskTool(
         content: [
           {
             type: "text",
-            text: `Claimed Spark task: @${claimed.result.task.name}: ${claimed.result.task.title} (${claimed.result.task.ref})`,
+            text: renderClaimedTaskText(claimed.result.task),
           },
         ],
         details: {
@@ -227,6 +228,43 @@ export function registerSparkClaimTaskTool(
       };
     },
   });
+}
+
+function renderClaimedTaskText(task: Task): string {
+  const plan = task.plan;
+  const lines = [`Claimed Spark task: @${task.name}: ${task.title} (${task.ref})`, "", "Plan:"];
+  if (!plan) {
+    lines.push(
+      "- objective: missing",
+      "- successCriteria: missing",
+      "- evidenceRequired: missing",
+      "- steps: missing",
+      "- constraints: missing",
+    );
+  } else {
+    lines.push(
+      `- objective: ${truncateInline(plan.objective, 220)}`,
+      `- successCriteria: ${renderPlanList(plan.successCriteria)}`,
+      `- evidenceRequired: ${renderPlanList(plan.evidenceRequired)}`,
+      `- steps: ${renderPlanList(plan.steps)}`,
+      `- constraints: ${renderPlanList(plan.constraints)}`,
+    );
+  }
+  lines.push(
+    "",
+    'Next: execute this plan, and if useful create task-scoped TODOs with task({ action: "todo_update", scope: "task", ops: [{ op: "append", items: [...] }] }).',
+  );
+  return lines.join("\n");
+}
+
+function renderPlanList(items: readonly string[]): string {
+  if (items.length === 0) return "none";
+  if (items.length <= 3) return items.map((item) => truncateInline(item, 140)).join("; ");
+  const head = items
+    .slice(0, 3)
+    .map((item) => truncateInline(item, 120))
+    .join("; ");
+  return `${head}; … +${items.length - 3} more`;
 }
 
 function resolveObviousTaskRenameCandidate(

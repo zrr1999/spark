@@ -11,6 +11,7 @@ import {
 import { sparkAskUi } from "./spark-ask-ui.ts";
 import {
   collectSparkProjectSummaries,
+  findDuplicateSparkProjects,
   hasSparkProjectPatch,
   normalizeSparkNewProjectInput,
   normalizeSparkProjectPatch,
@@ -76,6 +77,7 @@ export function registerSparkProjectTools(
       ),
       title: Type.Optional(Type.String({ description: "New project title." })),
       description: Type.Optional(Type.String({ description: "New project description." })),
+      intent: Type.Optional(Type.String({ description: "Durable project intent." })),
       status: Type.Optional(Type.String({ description: "active | done" })),
       outputLanguage: Type.Optional(Type.String({ description: "zh | en" })),
     }),
@@ -88,7 +90,7 @@ export function registerSparkProjectTools(
           content: [
             {
               type: "text",
-              text: "Provide title, description, status, or outputLanguage to update the Spark project.",
+              text: "Provide title, description, intent, status, or outputLanguage to update the Spark project.",
             },
           ],
           details: { found: true, error: "missing_project_patch" },
@@ -173,6 +175,27 @@ export function registerSparkProjectTools(
             details: { found: true, error: "missing_project_or_title" },
           };
         const description = input.description || input.title;
+        const duplicateGate = findDuplicateSparkProjects({
+          graph,
+          title: input.title,
+          description,
+        });
+        if (duplicateGate.blocked)
+          return {
+            content: [
+              {
+                type: "text",
+                text: renderDuplicateProjectBlockedMessage(duplicateGate.candidates),
+              },
+            ],
+            details: {
+              found: true,
+              error: "duplicate_project",
+              duplicateProject: true,
+              candidates: duplicateGate.candidates,
+              guidance: duplicateGate.guidance,
+            },
+          };
         const clarification = await clarifyProjectIntentIfNeeded({
           cwd,
           title: input.title,
@@ -183,6 +206,7 @@ export function registerSparkProjectTools(
         project = graph.createProject({
           title: input.title,
           description,
+          intent: input.intent,
           outputLanguage: input.outputLanguage,
         });
         created = true;
@@ -202,4 +226,27 @@ export function registerSparkProjectTools(
       };
     },
   });
+}
+
+function renderDuplicateProjectBlockedMessage(
+  candidates: Array<{ ref: string; title: string; status: string; reason: string }>,
+): string {
+  const candidateLines = candidates.length
+    ? candidates
+        .map(
+          (candidate, index) =>
+            `${index + 1}. ${candidate.title} (${candidate.ref}, status=${candidate.status}, ${candidate.reason})`,
+        )
+        .join("\n")
+    : "No candidate details available.";
+  return [
+    "Duplicate Spark project creation blocked: the requested Project is too similar to an existing Project.",
+    "Candidates:",
+    candidateLines,
+    "Next steps:",
+    '- Select the existing Project with task({ action: "project_use", project: <candidate ref or title> }) when it is the same work.',
+    "- Ask the user which Project to use when the match is ambiguous.",
+    "- Retry creation only with a clearer differentiated title/description for genuinely new work.",
+    "- No destructive merge/task move/artifact relink is performed; selecting an existing Project is the merge-like action in this slice.",
+  ].join("\n");
 }

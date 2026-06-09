@@ -1,11 +1,15 @@
 import { Type } from "typebox";
 import { defaultLearningStore, type LearningLocation, type LearningRecord } from "pi-learnings";
-import type { Artifact } from "pi-artifacts";
+import { defaultArtifactStore, type Artifact } from "pi-artifacts";
 import {
   DependencyError,
+  nowIso,
+  type ArtifactRef,
+  type JsonValue,
+  type ProjectRef,
+  type RoleRef,
   type Task,
   type TaskCompletionReadiness,
-  type ProjectRef,
 } from "pi-extension-api";
 import { defaultTaskGraphStore, taskCompletionReadiness } from "pi-tasks";
 import {
@@ -23,9 +27,20 @@ import {
   sparkGoalObjectiveForNextTask,
 } from "./spark-goal-continuation.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
+import type {
+  ReviewerRunResult,
+  ReviewerRunner,
+  TaskReviewInput,
+  TaskReviewVerdict,
+} from "./reviewer-runner.ts";
+import { withSparkReviewerLease } from "./spark-reviewer-lease.ts";
 
 interface SparkFinishTaskToolDependencies {
   refreshSparkWidget: (cwd: string, ctx?: SparkToolContext) => Promise<void>;
+  createReviewerRunner?: (
+    cwd: string,
+    ctx: SparkToolContext,
+  ) => ReviewerRunner | Promise<ReviewerRunner>;
 }
 
 interface NormalizedSparkFinishTaskInput {
@@ -33,6 +48,52 @@ interface NormalizedSparkFinishTaskInput {
   status: "done" | "failed" | "cancelled";
   summary?: string;
 }
+
+interface FinishTaskSuccessResult {
+  error?: undefined;
+  task: Task;
+  completionReadiness?: TaskCompletionReadiness;
+  projectRef: ProjectRef;
+  nextReady?: Task;
+}
+
+interface FinishTaskErrorResult {
+  error: "no_project" | "no_matching_claimed_task";
+}
+
+type FinishCommitResult = FinishTaskSuccessResult | FinishTaskErrorResult;
+
+interface FollowUpDispositionSignal {
+  source: string;
+  line: number;
+  signal: string;
+  excerpt: string;
+}
+
+interface FollowUpDispositionCheck {
+  checked: boolean;
+  ready: boolean;
+  allowedDispositions: string[];
+  undispositioned: FollowUpDispositionSignal[];
+}
+
+const FOLLOW_UP_DISPOSITIONS = [
+  "created_task",
+  "already_covered",
+  "deferred",
+  "rejected",
+  "out_of_scope",
+] as const;
+const FOLLOW_UP_RESEARCH_KINDS = new Set(["research", "review", "plan"]);
+const FOLLOW_UP_SIGNAL_PATTERN =
+  /\b(?:P0|P1|P2|TODO)\b|follow[- ]?ups?|recommended[- ]route|recommended route|next actions?|action items?/i;
+const FOLLOW_UP_DISPOSITION_PATTERN =
+  /\b(?:created_task|created task|already_covered|already covered|deferred|rejected|out_of_scope|out of scope)\b/i;
+const NO_FOLLOW_UP_PATTERN =
+  /\b(?:no|none|without)\s+(?:open\s+)?(?:P0|P1|P2|TODOs?|follow[- ]?ups?|recommended[- ]routes?|next actions?|action items?)\b/i;
+const FOLLOW_UP_HEADING_PATTERN =
+  /^\s*(?:#{1,6}\s*)?(?:follow[- ]?ups?|recommended[- ]route|recommended route|next actions?|action items?|TODOs?)\s*:?\s*$/i;
+const FOLLOW_UP_SECTION_ITEM_PATTERN = /^\s*(?:[-*+]\s+|\d+[.)]\s+)\S/;
 
 export function normalizeSparkFinishTaskInput(
   params: Record<string, unknown>,
@@ -70,31 +131,103 @@ export function registerSparkFinishTaskTool(
       const input = normalizeSparkFinishTaskInput(params);
       const executionMode = await loadSparkExecutionMode(cwd, ctx);
       const store = defaultTaskGraphStore(cwd);
+      let reviewArtifact: Artifact<JsonValue> | undefined;
+      let reviewResult: ReviewerRunResult | undefined;
+      if (input.status === "done") {
+        const candidate = await resolveFinishReviewCandidate(store, cwd, ctx, input);
+        if (isFinishTaskErrorResult(candidate)) {
+          if (candidate.error === "no_project")
+            return {
+              content: [{ type: "text", text: "No Spark project found." }],
+              details: { found: false },
+            };
+          return {
+            content: [{ type: "text", text: "No matching claimed task for this session." }],
+            details: { found: true, error: "no_matching_claimed_task" },
+          };
+        }
+        const followUpDisposition = await checkResearchFollowUpDisposition(
+          cwd,
+          candidate.task,
+          input.summary,
+        );
+        if (!followUpDisposition.ready) {
+          await deps.refreshSparkWidget(cwd, ctx);
+          return {
+            content: [
+              {
+                type: "text",
+                text: renderFollowUpDispositionBlockedMessage(candidate.task, followUpDisposition),
+              },
+            ],
+            details: {
+              found: true,
+              error: "followup_disposition_required",
+              task: compactTaskDetail(candidate.task),
+              followUpDisposition,
+            },
+          };
+        }
+        const reviewInput: TaskReviewInput = {
+          targetKind: "task",
+          cwd,
+          projectRef: candidate.projectRef,
+          task: candidate.task,
+          requestedStatus: "done",
+          summary: input.summary,
+          evidenceRefs: candidate.task.outputArtifacts,
+          sessionKey: sparkSessionKey(ctx),
+          forkFromSession: ctx.sessionManager?.getSessionFile?.(),
+        };
+        const reviewerRunner = await deps.createReviewerRunner?.(cwd, ctx);
+        if (!reviewerRunner)
+          throw new Error("spark_finish_task requires a reviewer runner for done transitions");
+        try {
+          const leasedReview = await withSparkReviewerLease(cwd, ctx, () =>
+            reviewerRunner.review(reviewInput, _signal),
+          );
+          if (!leasedReview.acquired) {
+            reviewResult = failedTaskReviewerRunResult(
+              reviewInput,
+              "another Spark reviewer gate is already running for this session",
+            );
+          } else {
+            if (!leasedReview.result) throw new Error("reviewer did not return a verdict");
+            reviewResult = leasedReview.result;
+          }
+        } catch (error) {
+          reviewResult = failedTaskReviewerRunResult(reviewInput, unknownErrorMessage(error));
+        }
+        const verdict = reviewResult.verdict as TaskReviewVerdict;
+        reviewArtifact = await recordTaskReviewArtifact(
+          cwd,
+          candidate.projectRef,
+          candidate.task,
+          reviewResult,
+        );
+        if (!verdict.approved) {
+          await deps.refreshSparkWidget(cwd, ctx);
+          return {
+            content: [
+              {
+                type: "text",
+                text: renderTaskReviewRejectedMessage(candidate.task, verdict, reviewArtifact.ref),
+              },
+            ],
+            details: {
+              found: true,
+              error: "task_review_failed",
+              task: compactTaskDetail(candidate.task),
+              review: verdict,
+              reviewArtifact: reviewArtifact.ref,
+            },
+          };
+        }
+      }
+
       let updated: Awaited<ReturnType<typeof store.update>>;
       try {
-        updated = await store.update(
-          async (graph) => {
-            await sparkTodoStore(cwd, ctx).hydrate(graph);
-            const project = await currentSparkProject(cwd, ctx, graph);
-            if (!project) return { error: "no_project" as const };
-            const sessionKey = sparkSessionKey(ctx);
-            const task = resolveSessionClaimedTask(graph, project.ref, sessionKey, input.task);
-            if (!task) return { error: "no_matching_claimed_task" as const };
-            const finished = graph.setTaskStatus(task.ref, input.status);
-            const completionReadiness =
-              input.status === "done" ? taskCompletionReadiness(finished) : undefined;
-            const nextReady =
-              input.status === "done" ? graph.readyTasks(project.ref)[0] : undefined;
-            await sparkTodoStore(cwd, ctx).save(graph);
-            return {
-              task: finished,
-              completionReadiness,
-              projectRef: project.ref,
-              nextReady,
-            };
-          },
-          { createIfMissing: false },
-        );
+        updated = await commitFinishedTask(store, cwd, ctx, input);
       } catch (error) {
         if (error instanceof DependencyError) {
           return {
@@ -104,30 +237,24 @@ export function registerSparkFinishTaskTool(
         }
         throw error;
       }
-      const finishResult = updated.result as
-        | { error: "no_project" | "no_matching_claimed_task" }
-        | {
-            task: Task;
-            completionReadiness?: TaskCompletionReadiness;
-            projectRef: ProjectRef;
-            nextReady?: Task;
-          };
-      if (!updated.graph || ("error" in finishResult && finishResult.error === "no_project"))
+      const finishResult = updated.result as FinishCommitResult;
+      if (!updated.graph)
         return {
           content: [{ type: "text", text: "No Spark project found." }],
           details: { found: false },
         };
-      if ("error" in finishResult && finishResult.error === "no_matching_claimed_task")
+      if (isFinishTaskErrorResult(finishResult)) {
+        if (finishResult.error === "no_project")
+          return {
+            content: [{ type: "text", text: "No Spark project found." }],
+            details: { found: false },
+          };
         return {
           content: [{ type: "text", text: "No matching claimed task for this session." }],
           details: { found: true, error: "no_matching_claimed_task" },
         };
-      const finishedResult = finishResult as {
-        task: Task;
-        completionReadiness?: TaskCompletionReadiness;
-        projectRef: ProjectRef;
-        nextReady?: Task;
-      };
+      }
+      const finishedResult = finishResult;
       await deps.refreshSparkWidget(cwd, ctx);
       const learningCandidate =
         input.status === "done" && input.summary
@@ -165,10 +292,232 @@ export function registerSparkFinishTaskTool(
           learningCandidate: learningCandidate
             ? compactLearningDetail(learningCandidate.artifact, learningCandidate.location)
             : undefined,
+          review: reviewResult?.verdict,
+          reviewArtifact: reviewArtifact?.ref,
         },
       };
     },
   });
+}
+
+async function checkResearchFollowUpDisposition(
+  cwd: string,
+  task: Task,
+  summary: string | undefined,
+): Promise<FollowUpDispositionCheck> {
+  if (!FOLLOW_UP_RESEARCH_KINDS.has(task.kind))
+    return {
+      checked: false,
+      ready: true,
+      allowedDispositions: [...FOLLOW_UP_DISPOSITIONS],
+      undispositioned: [],
+    };
+
+  const sources: Array<{ source: string; text: string }> = [];
+  if (summary) sources.push({ source: "finish summary", text: summary });
+  const artifactStore = defaultArtifactStore(cwd);
+  for (const artifactRef of task.outputArtifacts) {
+    try {
+      sources.push({ source: artifactRef, text: await artifactStore.getBody(artifactRef) });
+    } catch {
+      // Missing/unreadable artifacts are handled by the existing completion evidence warning path.
+      // This gate only inspects available research/review output text for orphan follow-ups.
+    }
+  }
+
+  const undispositioned = sources.flatMap(({ source, text }) =>
+    inspectFollowUpDispositionSource(source, text),
+  );
+  return {
+    checked: true,
+    ready: undispositioned.length === 0,
+    allowedDispositions: [...FOLLOW_UP_DISPOSITIONS],
+    undispositioned,
+  };
+}
+
+function inspectFollowUpDispositionSource(
+  source: string,
+  text: string,
+): FollowUpDispositionSignal[] {
+  const signals: FollowUpDispositionSignal[] = [];
+  const lines = text.split(/\r?\n/);
+  let inFollowUpSection = false;
+  for (const [index, line] of lines.entries()) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      inFollowUpSection = false;
+      continue;
+    }
+    if (FOLLOW_UP_HEADING_PATTERN.test(line)) {
+      inFollowUpSection = true;
+      continue;
+    }
+    const sectionItem = inFollowUpSection && FOLLOW_UP_SECTION_ITEM_PATTERN.test(line);
+    const signalMatch = FOLLOW_UP_SIGNAL_PATTERN.exec(line);
+    const hasSignal = Boolean(signalMatch);
+    if (!hasSignal && !sectionItem) continue;
+    if (NO_FOLLOW_UP_PATTERN.test(line) || FOLLOW_UP_DISPOSITION_PATTERN.test(line)) continue;
+    signals.push({
+      source,
+      line: index + 1,
+      signal: signalMatch?.[0] ?? "follow-up section item",
+      excerpt: truncateInline(trimmed, 180),
+    });
+  }
+  return signals;
+}
+
+function renderFollowUpDispositionBlockedMessage(
+  task: Task,
+  check: FollowUpDispositionCheck,
+): string {
+  const signals = check.undispositioned
+    .slice(0, 5)
+    .map((signal) => `- ${signal.source}:${signal.line} (${signal.signal}) ${signal.excerpt}`)
+    .join("\n");
+  const hidden =
+    check.undispositioned.length > 5
+      ? `\n- … ${check.undispositioned.length - 5} more undispositioned follow-up signal(s)`
+      : "";
+  return `Task finish blocked by follow-up disposition gate: @${task.name}: ${task.title}\nResearch/review output contains follow-up signals that are not explicitly dispositioned. Mark each follow-up as one of: ${check.allowedDispositions.join(", ")}.\nUndispositioned signals:\n${signals}${hidden}\nThe task was not marked done. Create/confirm/defer/reject/scope follow-up work, then call task({ action: "finish" }) again.`;
+}
+
+function unknownErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function failedTaskReviewerRunResult(input: TaskReviewInput, reason: string): ReviewerRunResult {
+  const timestamp = nowIso();
+  return {
+    verdict: {
+      targetKind: "task",
+      taskRef: input.task.ref,
+      approved: false,
+      outcome: "blocked",
+      summary: `reviewer failed: ${reason}`,
+      findings: [],
+      blockers: [reason],
+      confidence: "low",
+    },
+    record: {
+      roleRef: "role:builtin-reviewer" as RoleRef,
+      runName: "reviewer-failed",
+      startedAt: timestamp,
+      finishedAt: timestamp,
+    },
+  };
+}
+
+function isFinishTaskErrorResult(
+  result:
+    | FinishCommitResult
+    | { error?: undefined; projectRef: ProjectRef; task: Task }
+    | { error: "no_project" | "no_matching_claimed_task" },
+): result is FinishTaskErrorResult {
+  return result.error === "no_project" || result.error === "no_matching_claimed_task";
+}
+
+async function resolveFinishReviewCandidate(
+  store: ReturnType<typeof defaultTaskGraphStore>,
+  cwd: string,
+  ctx: SparkToolContext,
+  input: NormalizedSparkFinishTaskInput,
+): Promise<
+  | { error: "no_project" | "no_matching_claimed_task" }
+  | { error?: undefined; projectRef: ProjectRef; task: Task }
+> {
+  const updated = await store.update(
+    async (graph) => {
+      await sparkTodoStore(cwd, ctx).hydrate(graph);
+      const project = await currentSparkProject(cwd, ctx, graph);
+      if (!project) return { error: "no_project" as const };
+      const task = resolveSessionClaimedTask(graph, project.ref, sparkSessionKey(ctx), input.task);
+      if (!task) return { error: "no_matching_claimed_task" as const };
+      return { projectRef: project.ref, task };
+    },
+    { createIfMissing: false },
+  );
+  if (!updated.graph) return { error: "no_project" };
+  return updated.result as
+    | { error: "no_project" | "no_matching_claimed_task" }
+    | { error?: undefined; projectRef: ProjectRef; task: Task };
+}
+
+async function commitFinishedTask(
+  store: ReturnType<typeof defaultTaskGraphStore>,
+  cwd: string,
+  ctx: SparkToolContext,
+  input: NormalizedSparkFinishTaskInput,
+): Promise<Awaited<ReturnType<typeof store.update>>> {
+  return store.update(
+    async (graph) => {
+      await sparkTodoStore(cwd, ctx).hydrate(graph);
+      const project = await currentSparkProject(cwd, ctx, graph);
+      if (!project) return { error: "no_project" as const };
+      const sessionKey = sparkSessionKey(ctx);
+      const task = resolveSessionClaimedTask(graph, project.ref, sessionKey, input.task);
+      if (!task) return { error: "no_matching_claimed_task" as const };
+      const finished = graph.setTaskStatus(task.ref, input.status);
+      const completionReadiness =
+        input.status === "done" ? taskCompletionReadiness(finished) : undefined;
+      const nextReady = input.status === "done" ? graph.readyTasks(project.ref)[0] : undefined;
+      await sparkTodoStore(cwd, ctx).save(graph);
+      return {
+        task: finished,
+        completionReadiness,
+        projectRef: project.ref,
+        nextReady,
+      } satisfies FinishTaskSuccessResult;
+    },
+    { createIfMissing: false },
+  );
+}
+
+async function recordTaskReviewArtifact(
+  cwd: string,
+  projectRef: ProjectRef,
+  task: Task,
+  review: ReviewerRunResult,
+): Promise<Artifact<JsonValue>> {
+  const verdict = review.verdict as TaskReviewVerdict;
+  const reviewerRun = {
+    ...(review.record.runRef ? { runRef: review.record.runRef } : {}),
+    roleRef: review.record.roleRef,
+    ...(review.record.runName ? { runName: review.record.runName } : {}),
+    startedAt: review.record.startedAt,
+    finishedAt: review.record.finishedAt,
+  };
+  return defaultArtifactStore(cwd).put({
+    kind: "review",
+    title: `Task finish review for @${task.name}: ${task.title}`,
+    format: "json",
+    body: {
+      taskRef: task.ref,
+      projectRef,
+      verdict,
+      reviewerRun,
+      recordedAt: nowIso(),
+    } as unknown as JsonValue,
+    provenance: {
+      producer: "review",
+      projectRef,
+      taskRef: task.ref,
+      roleRef: review.record.roleRef as RoleRef | undefined,
+      runRef: review.record.runRef,
+    },
+    links: [{ to: task.ref, relation: "review-of" }],
+  });
+}
+
+function renderTaskReviewRejectedMessage(
+  task: Task,
+  verdict: TaskReviewVerdict,
+  artifactRef: ArtifactRef,
+): string {
+  const findings = verdict.findings.length ? `\nFindings: ${verdict.findings.join("; ")}` : "";
+  const blockers = verdict.blockers.length ? `\nBlockers: ${verdict.blockers.join("; ")}` : "";
+  return `Task finish blocked by reviewer: @${task.name}: ${task.title}\nReview outcome: ${verdict.outcome}\nReview summary: ${verdict.summary}${findings}${blockers}\nReview artifact: ${artifactRef}\nThe task was not marked done. Address the reviewer feedback, keep or update evidence, then call task({ action: "finish" }) again.`;
 }
 
 function renderExecutionModeFinishSuffix(

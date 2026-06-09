@@ -25,12 +25,13 @@ void test("SparkHostRuntime accepts piGraftExtension(pi) and records its command
   assert.ok(toolNames.includes("graft_status"));
 });
 
-void test("SparkHostRuntime accepts piAskExtension(pi) and registers ask tools", () => {
+void test("SparkHostRuntime accepts piAskExtension(pi) and registers canonical ask tool", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-cross" });
   assert.doesNotThrow(() => piAskExtension(host));
   const toolNames = host.getAllTools().map((tool) => tool.name);
-  assert.ok(toolNames.includes("ask_user"));
-  assert.ok(toolNames.includes("ask_flow"));
+  assert.ok(toolNames.includes("ask"));
+  assert.ok(!toolNames.includes("ask_user"));
+  assert.ok(!toolNames.includes("ask_flow"));
 });
 
 void test("SparkHostRuntime survives a session_start event from pi-graft", async () => {

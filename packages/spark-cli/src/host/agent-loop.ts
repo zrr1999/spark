@@ -169,96 +169,114 @@ export class SparkAgentLoop {
   private async runTurns(): Promise<AssistantMessage | undefined> {
     let lastAssistant: AssistantMessage | undefined;
     let roundtrips = 0;
+    let agentEndPayload: { messages: AssistantMessage[]; errorMessage?: string } | undefined;
+    const finishAgentTurn = (payload: {
+      messages: AssistantMessage[];
+      errorMessage?: string;
+    }): void => {
+      agentEndPayload ??= payload;
+    };
 
-    while (roundtrips < this.maxRoundtrips) {
-      if (this.state === "aborting") break;
-      this.transition("streaming");
+    try {
+      while (roundtrips < this.maxRoundtrips) {
+        if (this.state === "aborting") break;
+        this.transition("streaming");
 
-      const abortController = new AbortController();
-      this.currentAbort = abortController;
-      const tools = this.collectActiveTools();
-      const messageCountBeforeAssistant = this.messages.length;
-      const context: Context = {
-        systemPrompt: this.systemPrompt || undefined,
-        messages: this.messages,
-        tools,
-      };
+        const abortController = new AbortController();
+        this.currentAbort = abortController;
+        const tools = this.collectActiveTools();
+        const messageCountBeforeAssistant = this.messages.length;
+        const context: Context = {
+          systemPrompt: this.systemPrompt || undefined,
+          messages: this.messages,
+          tools,
+        };
 
-      let assistant: AssistantMessage | undefined;
-      try {
-        const stream = this.streamFunction(this.getModel(), context, {
-          signal: abortController.signal,
-        } as StreamOptions);
-        for await (const event of stream) {
-          this.publish({ type: "stream_event", event });
-          if (event.type === "done" || event.type === "error") {
-            assistant = event.type === "done" ? event.message : event.error;
+        let assistant: AssistantMessage | undefined;
+        try {
+          const stream = this.streamFunction(this.getModel(), context, {
+            signal: abortController.signal,
+          } as StreamOptions);
+          for await (const event of stream) {
+            this.publish({ type: "stream_event", event });
+            if (event.type === "done" || event.type === "error") {
+              assistant = event.type === "done" ? event.message : event.error;
+            }
           }
+          if (!assistant) assistant = await stream.result();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.publish({ type: "error", message });
+          finishAgentTurn({ messages: [], errorMessage: message });
+          return undefined;
         }
-        if (!assistant) assistant = await stream.result();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.publish({ type: "error", message });
-        this.transition("idle");
-        return undefined;
-      }
 
-      if (!assistant) {
-        this.publish({ type: "error", message: "stream produced no assistant message" });
-        this.transition("idle");
-        return undefined;
-      }
+        if (!assistant) {
+          const message = "stream produced no assistant message";
+          this.publish({ type: "error", message });
+          finishAgentTurn({ messages: [], errorMessage: message });
+          return undefined;
+        }
 
-      this.messages.push(assistant);
-      lastAssistant = assistant;
-      this.publish({ type: "turn_complete", assistant, reason: assistant.stopReason });
+        this.messages.push(assistant);
+        lastAssistant = assistant;
+        this.publish({ type: "turn_complete", assistant, reason: assistant.stopReason });
+        await this.host.emit("turn_end", { message: assistant, toolResults: [] });
 
-      if (assistant.stopReason === "aborted" || assistant.stopReason === "error") {
-        this.transition("idle");
-        return assistant;
-      }
-
-      // Tool calls require execution and another stream pass.
-      const toolCalls = collectToolCalls(assistant);
-      if (toolCalls.length === 0) {
-        this.drainOutboxIntoMessages();
-        // If the outbox didn't add anything beyond the assistant we just
-        // pushed, the turn is over. Compare against the snapshot taken
-        // before this round, plus 1 for the assistant message itself.
-        if (this.messages.length === messageCountBeforeAssistant + 1) {
-          this.transition("idle");
+        if (assistant.stopReason === "aborted" || assistant.stopReason === "error") {
+          finishAgentTurn({ messages: [assistant] });
           return assistant;
         }
-        // Outbox queued more user/system messages; loop again.
+
+        // Tool calls require execution and another stream pass.
+        const toolCalls = collectToolCalls(assistant);
+        if (toolCalls.length === 0) {
+          this.drainOutboxIntoMessages();
+          // If the outbox didn't add anything beyond the assistant we just
+          // pushed, the turn is over. Compare against the snapshot taken
+          // before this round, plus 1 for the assistant message itself.
+          if (this.messages.length === messageCountBeforeAssistant + 1) {
+            finishAgentTurn({ messages: [assistant] });
+            return assistant;
+          }
+          // Outbox queued more user/system messages; loop again.
+          roundtrips += 1;
+          continue;
+        }
+
+        this.transition("tooling");
+        for (const toolCall of toolCalls) {
+          if ((this.state as SparkAgentLoopState) === "aborting") break;
+          const result = await this.dispatchToolCall(toolCall, abortController.signal);
+          this.messages.push(result);
+          this.publish({ type: "tool_result", message: result });
+        }
+
+        this.drainOutboxIntoMessages();
         roundtrips += 1;
-        continue;
       }
 
-      this.transition("tooling");
-      for (const toolCall of toolCalls) {
-        if ((this.state as SparkAgentLoopState) === "aborting") break;
-        const result = await this.dispatchToolCall(toolCall, abortController.signal);
-        this.messages.push(result);
-        this.publish({ type: "tool_result", message: result });
+      if (this.state === "aborting") {
+        finishAgentTurn(lastAssistant ? { messages: [lastAssistant] } : { messages: [] });
+        return lastAssistant;
       }
 
-      this.drainOutboxIntoMessages();
-      roundtrips += 1;
-    }
-
-    if (this.state === "aborting") {
-      this.transition("idle");
+      if (roundtrips >= this.maxRoundtrips) {
+        this.publish({
+          type: "error",
+          message: `agent loop hit maxRoundtrips=${this.maxRoundtrips}; stopping`,
+        });
+      }
+      finishAgentTurn(lastAssistant ? { messages: [lastAssistant] } : { messages: [] });
       return lastAssistant;
+    } finally {
+      this.currentAbort = undefined;
+      this.transition("idle");
+      await this.host.emit(
+        "agent_end",
+        agentEndPayload ?? (lastAssistant ? { messages: [lastAssistant] } : { messages: [] }),
+      );
     }
-
-    if (roundtrips >= this.maxRoundtrips) {
-      this.publish({
-        type: "error",
-        message: `agent loop hit maxRoundtrips=${this.maxRoundtrips}; stopping`,
-      });
-    }
-    this.transition("idle");
-    return lastAssistant;
   }
 
   private async dispatchToolCall(

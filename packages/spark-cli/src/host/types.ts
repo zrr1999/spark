@@ -28,6 +28,7 @@ export interface RegisteredCommand {
 
 export type BuiltinEventName =
   | "session_start"
+  | "agent_end"
   | "turn_start"
   | "turn_end"
   | "tool_call"
@@ -66,6 +67,8 @@ export interface OutboxEnvelope {
 export type SparkHostUiTransport = ExtensionUi;
 
 export interface SparkHostSessionManagerStub {
+  getSessionFile?: () => string | undefined;
+  getLeafId?: () => string | undefined;
   getEntries?: () => unknown[];
   getBranch?: () => unknown[];
   getLabel?: (entryId: string) => string | undefined;

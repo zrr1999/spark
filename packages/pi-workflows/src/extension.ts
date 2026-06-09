@@ -144,6 +144,6 @@ function renderWorkflowCall(
 ): ToolRenderComponent {
   const action = typeof args.action === "string" ? args.action : "?";
   const selector = typeof args.selector === "string" ? args.selector : undefined;
-  const text = ["workflow", action, selector].filter(Boolean).join(" ");
+  const text = ["workflow", `action=${action}`, selector].filter(Boolean).join(" ");
   return new ToolCallText(theme.bold ? theme.bold(text) : text);
 }

@@ -9,12 +9,13 @@ export type { SessionTodoEntry, SessionTodoStatus } from "pi-tasks";
  * the current task's TODO working set.
  *
  * Display model:
- *   ◆ Project title · Tasks(running=2 pending=1 failed=1): @agent-a, @agent-b
  *   ◆ Goal(●): active objective
+ *   ◆ Session TODOs(pending=1)
+ *   └─ ○ #3 independent session TODO
+ *   ◆ Project title · Tasks(running=2 pending=1 failed=1): @agent-a, @agent-b
  *   ├─ ◐ @me/worker role-run task title
  *   │  ├─ ✓ #7 task TODO
  *   │  └─ ○ #12 task TODO
- *   └─ ◐ #3 independent session TODO
  */
 
 export interface TaskEntry {
@@ -46,6 +47,8 @@ export interface SparkRunWidgetEntry {
 
 export interface SparkGoalWidgetEntry {
   status: "active" | "paused" | "complete";
+  scope?: "session" | "project";
+  projectRef?: string;
   objective: string;
 }
 
@@ -90,6 +93,7 @@ const L = {
     claimed: "已认领",
     session: "当前会话",
     todos: "TODO",
+    sessionTodos: "会话 TODO",
     none: "无",
     more: "更多",
   },
@@ -107,6 +111,7 @@ const L = {
     claimed: "claimed",
     session: "session",
     todos: "TODO",
+    sessionTodos: "Session TODOs",
     none: "none",
     more: "more",
   },
@@ -114,6 +119,7 @@ const L = {
 
 const MAX_WIDGET_LINES = 12;
 const RUNNING_TASK_SPINNER_FRAMES = ["⠧", "⠇", "⠏", "⠋", "⠙", "⠹", "⠸", "⠼"] as const;
+const ACTIVE_GOAL_PULSE_FRAMES = ["●", "●", "◉", "◉", "◎", "◎", "◉", "◉"] as const;
 const RUNNING_TASK_WAITING_ICON = "◼";
 const RUNNING_TASK_SPINNER_INTERVAL_MS = 140;
 
@@ -145,6 +151,10 @@ function hasWidgetContent(state: SparkWidgetState | undefined): state is SparkWi
       state.tasks.length > 0 ||
       state.independentTodos.some(isVisibleIndependentTodo)),
   );
+}
+
+function hasAnimatedWidgetContent(state: SparkWidgetState | undefined): boolean {
+  return Boolean(state?.goal?.status === "active" || hasAnimatedRunningTask(state));
 }
 
 function hasAnimatedRunningTask(state: SparkWidgetState | undefined): boolean {
@@ -182,31 +192,45 @@ export function renderSparkWidgetLines(
   const lines: string[] = [];
   const visibleTasks = state.tasks.filter(isVisibleTaskEntry);
 
-  const headerLine = formatProjectHeaderLine(state, visibleTasks, l.tasks, theme);
-  if (headerLine) lines.push(trunc(headerLine));
-  const goalLine = formatGoalLine(state.goal, theme);
-  if (goalLine) lines.push(trunc(goalLine));
+  const goalLine = formatGoalLine(state.goal, theme, state.animationFrame ?? 0);
+  const sessionTodosHeaderLine = formatSessionTodosHeaderLine(visibleTodos, l.sessionTodos, theme);
+  const projectHeaderLine = formatProjectHeaderLine(state, visibleTasks, l.tasks, theme);
   const backgroundLine = hasSessionRunningAgent(visibleTasks)
     ? undefined
     : formatBackgroundLine(state.dag, state.run, theme);
-  if (backgroundLine) lines.push(trunc(backgroundLine));
 
   const tasks = visibleTasks.map((task) => ({
     ...task,
     animationFrame: task.animationFrame ?? state.animationFrame ?? 0,
   }));
-  const allRows = flattenWidgetRows(tasks, visibleTodos);
-  const budget = Math.max(0, MAX_WIDGET_LINES - lines.length);
-  const visibleRows = allRows.slice(0, budget);
-  for (const row of visibleRows) {
-    lines.push(trunc(formatWidgetRow(row, theme)));
-  }
-  const hidden = allRows.length - visibleRows.length;
+  const sessionRows = flattenSessionTodoRows(visibleTodos);
+  const projectRows = flattenTaskRows(tasks);
+  const fixedLineCount = [
+    goalLine,
+    sessionTodosHeaderLine,
+    projectHeaderLine,
+    backgroundLine,
+  ].filter(Boolean).length;
+  const budget = Math.max(0, MAX_WIDGET_LINES - fixedLineCount);
+  const visibleSessionRows = sessionRows.slice(0, budget);
+  const visibleProjectRows = projectRows.slice(0, Math.max(0, budget - visibleSessionRows.length));
+  const hidden =
+    sessionRows.length + projectRows.length - visibleSessionRows.length - visibleProjectRows.length;
+
+  if (goalLine) lines.push(trunc(goalLine));
+  if (sessionTodosHeaderLine) lines.push(trunc(sessionTodosHeaderLine));
+  appendFormattedRows(
+    lines,
+    visibleSessionRows,
+    hidden > 0 && visibleProjectRows.length === 0,
+    theme,
+    trunc,
+  );
+  if (projectHeaderLine) lines.push(trunc(projectHeaderLine));
+  if (backgroundLine) lines.push(trunc(backgroundLine));
+  appendFormattedRows(lines, visibleProjectRows, hidden > 0, theme, trunc);
   if (hidden > 0) {
     lines.push(trunc(`${theme.fg("dim", "└─")} ${theme.fg("dim", `+${hidden} ${l.more}`)}`));
-  } else if (lines.length > 1) {
-    const last = lines.length - 1;
-    lines[last] = lines[last].replace("├─", "└─");
   }
 
   return lines;
@@ -222,15 +246,22 @@ function hasSessionRunningAgent(tasks: TaskEntry[]): boolean {
 function formatGoalLine(
   goal: SparkGoalWidgetEntry | undefined,
   theme: SparkWidgetTheme,
+  animationFrame: number,
 ): string | undefined {
   if (!goal) return undefined;
-  const status = theme.fg(goalStatusColor(goal.status), goalStatusSymbol(goal.status));
+  const status = theme.fg(
+    goalStatusColor(goal.status),
+    goalStatusSymbol(goal.status, animationFrame),
+  );
   const summary = `${theme.fg("dim", "Goal(")}${status}${theme.fg("dim", `): ${goal.objective}`)}`;
   return `${theme.fg("accent", "◆")} ${summary}`;
 }
 
-function goalStatusSymbol(status: SparkGoalWidgetEntry["status"]): string {
-  if (status === "active") return "●";
+function goalStatusSymbol(status: SparkGoalWidgetEntry["status"], animationFrame: number): string {
+  if (status === "active") {
+    const frame = Number.isInteger(animationFrame) ? Math.max(0, animationFrame) : 0;
+    return ACTIVE_GOAL_PULSE_FRAMES[frame % ACTIVE_GOAL_PULSE_FRAMES.length];
+  }
   if (status === "paused") return "⏸";
   return "✓";
 }
@@ -239,6 +270,30 @@ function goalStatusColor(status: SparkGoalWidgetEntry["status"]): string {
   if (status === "active") return "accent";
   if (status === "paused") return "warning";
   return "success";
+}
+
+function formatSessionTodosHeaderLine(
+  todos: SessionTodoEntry[],
+  sessionTodosLabel: string,
+  theme: SparkWidgetTheme,
+): string | undefined {
+  if (todos.length === 0) return undefined;
+  return `${theme.fg("accent", "◆")} ${theme.fg(
+    "dim",
+    `${sessionTodosLabel}(${formatTodoStatusSummary(todos)})`,
+  )}`;
+}
+
+function formatTodoStatusSummary(todos: SessionTodoEntry[]): string {
+  const counts = new Map<SessionTodoStatus, number>();
+  for (const todo of todos) counts.set(todo.status, (counts.get(todo.status) ?? 0) + 1);
+  return (["in_progress", "blocked", "pending"] as const)
+    .map((status) => {
+      const count = counts.get(status) ?? 0;
+      return count > 0 ? `${status}=${count}` : undefined;
+    })
+    .filter((part): part is string => Boolean(part))
+    .join(" ");
 }
 
 function formatBackgroundLine(
@@ -440,17 +495,19 @@ type WidgetRow =
   | { kind: "task-todo"; todo: SessionTodoEntry; fallbackNumber: number }
   | { kind: "independent-todo"; todo: SessionTodoEntry; fallbackNumber: number };
 
-function flattenWidgetRows(tasks: TaskEntry[], independentTodos: SessionTodoEntry[]): WidgetRow[] {
+function flattenSessionTodoRows(independentTodos: SessionTodoEntry[]): WidgetRow[] {
+  return sortTodosForVisibility(independentTodos).map((todo, index) => ({
+    kind: "independent-todo",
+    todo,
+    fallbackNumber: index + 1,
+  }));
+}
+
+function flattenTaskRows(tasks: TaskEntry[]): WidgetRow[] {
   const rows: WidgetRow[] = [];
   let todoIndex = 1;
-  const visibleTasks = sortTasksForVisibility(tasks);
-  const priorityTasks = visibleTasks.filter(taskPrecedesSessionTodos);
-  const lowerPriorityTasks = visibleTasks.filter((task) => !taskPrecedesSessionTodos(task));
-
-  for (const task of priorityTasks) todoIndex = appendTaskRows(rows, task, todoIndex);
-  for (const todo of sortTodosForVisibility(independentTodos))
-    rows.push({ kind: "independent-todo", todo, fallbackNumber: todoIndex++ });
-  for (const task of lowerPriorityTasks) todoIndex = appendTaskRows(rows, task, todoIndex);
+  for (const task of sortTasksForVisibility(tasks))
+    todoIndex = appendTaskRows(rows, task, todoIndex);
   return rows;
 }
 
@@ -460,10 +517,6 @@ function appendTaskRows(rows: WidgetRow[], task: TaskEntry, todoIndex: number): 
   for (const todo of sortTodosForVisibility(task.todos.filter(isVisibleTaskTodo)))
     rows.push({ kind: "task-todo", todo, fallbackNumber: todoIndex++ });
   return todoIndex;
-}
-
-function taskPrecedesSessionTodos(task: TaskEntry): boolean {
-  return task.status === "running" || task.status === "blocked";
 }
 
 function sortTasksForVisibility(tasks: TaskEntry[]): TaskEntry[] {
@@ -503,14 +556,27 @@ function taskActorLabel(task: TaskEntry): string | undefined {
   return undefined;
 }
 
-function formatWidgetRow(row: WidgetRow, theme: SparkWidgetTheme): string {
+function appendFormattedRows(
+  lines: string[],
+  rows: WidgetRow[],
+  hasFollowingRows: boolean,
+  theme: SparkWidgetTheme,
+  trunc: (line: string) => string,
+): void {
+  rows.forEach((row, index) => {
+    const isLast = !hasFollowingRows && index === rows.length - 1;
+    lines.push(trunc(formatWidgetRow(row, theme, isLast ? "└─" : "├─")));
+  });
+}
+
+function formatWidgetRow(row: WidgetRow, theme: SparkWidgetTheme, branch: "├─" | "└─"): string {
   switch (row.kind) {
     case "task":
-      return `${theme.fg("dim", "├─")} ${taskIcon(row.task, theme)} ${formatTaskTitle(row.task, theme)}`;
+      return `${theme.fg("dim", branch)} ${taskIcon(row.task, theme)} ${formatTaskTitle(row.task, theme)}`;
     case "task-todo":
-      return `${theme.fg("dim", "│  ├─")} ${todoIcon(row.todo.status, theme)} #${todoDisplayNumber(row.todo, row.fallbackNumber)} ${formatTodoContent(row.todo, theme)}`;
+      return `${theme.fg("dim", `│  ${branch}`)} ${todoIcon(row.todo.status, theme)} #${todoDisplayNumber(row.todo, row.fallbackNumber)} ${formatTodoContent(row.todo, theme)}`;
     case "independent-todo":
-      return `${theme.fg("dim", "├─")} ${todoIcon(row.todo.status, theme)} #${todoDisplayNumber(row.todo, row.fallbackNumber)} ${formatTodoContent(row.todo, theme)}`;
+      return `${theme.fg("dim", branch)} ${todoIcon(row.todo.status, theme)} #${todoDisplayNumber(row.todo, row.fallbackNumber)} ${formatTodoContent(row.todo, theme)}`;
   }
 }
 
@@ -613,7 +679,7 @@ export class SparkWidget {
   }
 
   private updateSpinnerTimer(state: SparkWidgetState | undefined): void {
-    if (hasAnimatedRunningTask(state)) {
+    if (hasAnimatedWidgetContent(state)) {
       if (this.spinnerTimer) return;
       this.spinnerTimer = setInterval(() => {
         this.animationFrame = (this.animationFrame + 1) % RUNNING_TASK_SPINNER_FRAMES.length;

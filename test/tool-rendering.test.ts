@@ -5,6 +5,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 
 import piAskExtension from "../packages/pi-ask/src/extension.ts";
 import { registerPiCueTools } from "../packages/pi-cue/src/index.ts";
+import piGraftExtension from "../packages/pi-graft/src/extension.ts";
 import { registerPiRolesTools } from "../packages/pi-roles/src/extension.ts";
 import sparkExtension from "../packages/spark/src/extension/index.ts";
 
@@ -35,11 +36,11 @@ void test("Spark extension canonical facade tools render parameter-aware tool ca
   assertAllToolsHaveCallRenderers(tools);
   assert.equal(
     renderCall(tools, "task", { action: "status", view: "full", limit: 5 }),
-    "task status",
+    "task action=status",
   );
   assert.equal(
     renderCall(tools, "task", { action: "project_list", status: "all" }),
-    "task project_list",
+    "task action=project_list",
   );
   assert.equal(
     renderCall(tools, "task", {
@@ -49,9 +50,10 @@ void test("Spark extension canonical facade tools render parameter-aware tool ca
         { name: "implement", title: "Implement rendering", description: "Patch tools" },
       ],
     }),
-    "task plan",
+    "task action=plan",
   );
   assert.equal(renderCall(tools, "goal", { action: "status" }), "goal action=status");
+  assert.equal(tools.has("patch"), false, "patch workflows are owned by pi-graft");
   assert.equal(tools.has("cue_exec"), false, "pi-cue is registered as its own extension");
   assert.deepEqual(
     [...tools.keys()].filter((name) => name.startsWith("spark_")),
@@ -77,30 +79,22 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
     registerTool: (config) => askTools.set(config.name, config),
   });
   assertAllToolsHaveCallRenderers(askTools);
-  assert.deepEqual([...askTools.keys()].sort(), ["ask", "ask_flow", "ask_user"]);
+  assert.deepEqual([...askTools.keys()].sort(), ["ask"]);
   assert.equal(
     renderCall(askTools, "ask", {
       action: "flow",
       title: "Choose scope",
       questions: [{ id: "scope", prompt: "What next?" }],
     }),
-    "ask flow Choose scope 1q",
+    "ask action=flow Choose scope 1q",
   );
   assert.equal(
-    renderCall(askTools, "ask_user", {
+    renderCall(askTools, "ask", {
+      action: "ask",
       title: "Choose scope",
-      mode: "clarification",
       questions: [{ id: "scope", prompt: "What next?" }],
     }),
-    'ask_user title="Choose scope" clarification 1q',
-  );
-  assert.equal(
-    renderCall(askTools, "ask_flow", {
-      title: "Choose scope",
-      mode: "clarification",
-      questions: [{ id: "scope", prompt: "What next?" }],
-    }),
-    'ask_flow title="Choose scope" clarification 1q',
+    "ask action=ask Choose scope 1q",
   );
 
   const cueTools = registerCueToolsForRendering();
@@ -118,15 +112,15 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
   ]);
   assert.equal(
     renderCall(cueTools, "cue_jobs", { action: "status", id: "J12", tail_bytes: 4096 }),
-    "cue_jobs status id=J12 tail=4096",
+    "cue_jobs action=status id=J12 tail=4096",
   );
   assert.equal(
     renderCall(cueTools, "cue_jobs", { action: "list", status: "running", limit: 5 }),
-    "cue_jobs list status=running limit=5",
+    "cue_jobs action=list status=running limit=5",
   );
   assert.equal(
     renderCall(cueTools, "cue_jobs", { action: "wait", id: "J12", timeout: 30, tail_bytes: 4096 }),
-    "cue_jobs wait id=J12 timeout=30s tail=4096",
+    "cue_jobs action=wait id=J12 timeout=30s tail=4096",
   );
   assert.equal(
     renderCall(cueTools, "cue_scope", {
@@ -135,7 +129,7 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
       includeEnv: true,
       tail_bytes: 2048,
     }),
-    "cue_scope list limit=3 include-env tail=2048",
+    "cue_scope action=list limit=3 include-env tail=2048",
   );
   assert.equal(
     renderCall(cueTools, "cue_history", { id: "J12", limit: 10, tail_bytes: 4096 }),
@@ -147,7 +141,7 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
       schedule: "every 5m",
       command: "pnpm test",
     }),
-    'cue_schedule add schedule="every 5m" command="pnpm test"',
+    'cue_schedule action=add schedule="every 5m" command="pnpm test"',
   );
   assert.equal(
     renderCall(cueTools, "cue_run", { path: "scripts/build.cue", timeout: 30, tail_bytes: 4096 }),
@@ -200,36 +194,53 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
     registerTool: (config) => roleTools.set(config.name, config),
   });
   assertAllToolsHaveCallRenderers(roleTools);
-  assert.equal(renderCall(roleTools, "list_roles", { source: "builtin" }), "list_roles builtin");
-  assert.equal(renderCall(roleTools, "get_role", { role: "worker" }), "get_role worker");
+  assert.deepEqual([...roleTools.keys()].sort(), ["role"]);
   assert.equal(
-    renderCall(roleTools, "create_role", {
-      id: "repo-inspector",
-      description: "Inspect repository state before implementation.",
-    }),
-    'create_role id=repo-inspector project "Inspect repository state before implementation."',
+    renderCall(roleTools, "role", { action: "list", source: "builtin" }),
+    "role action=list",
   );
   assert.equal(
-    renderCall(roleTools, "call_role", {
-      role: "worker",
-      instruction: "Inspect the implementation.",
-      mode: "fresh",
-      timeoutMs: 1000,
-    }),
-    "call_role worker fresh timeout=1000",
+    renderCall(roleTools, "role", { action: "get", role: "worker" }),
+    "role action=get worker",
+  );
+  assert.equal(
+    renderCall(roleTools, "role", { action: "create", id: "repo-inspector" }),
+    "role action=create id=repo-inspector",
+  );
+  assert.equal(
+    renderCall(roleTools, "role", { action: "call", role: "worker" }),
+    "role action=call worker",
   );
 
-  const longAskUser = renderCall(
+  const graftTools = registerGraftToolsForRendering();
+  assert.equal(
+    renderCall(graftTools, "graft_patch", {
+      instruction: "Create a narrow candidate for the requested fix.",
+      mode: "forked",
+      model: "test/model",
+    }),
+    'graft_patch "Create a narrow candidate for the requested fix." mode=forked model=test/model',
+  );
+  assert.equal(
+    renderCall(graftTools, "graft_repo", {
+      action: "add",
+      repoId: "pi-spark",
+      url: "https://github.com/zrr1999/pi-spark.git",
+    }),
+    "graft_repo action=add repo=pi-spark url=https://github.com/zrr1999/pi-spark.git",
+  );
+
+  const longAsk = renderCall(
     askTools,
-    "ask_user",
+    "ask",
     {
-      title: "测试一个很长的 ask_user 标题，用来确认中文宽字符不会撑爆 TUI 渲染行",
-      mode: "clarification",
+      action: "ask",
+      title: "测试一个很长的 ask 标题，用来确认中文宽字符不会撑爆 TUI 渲染行",
       questions: [{ id: "scope", prompt: "What next?" }],
     },
     80,
   );
-  assertVisibleWidthAtMost(longAskUser, 80);
+  assertVisibleWidthAtMost(longAsk, 80);
 });
 
 function registerSparkToolsForRendering(): Map<string, RenderableToolConfig> {
@@ -250,6 +261,16 @@ function registerCueToolsForRendering(): Map<string, RenderableToolConfig> {
     on: () => undefined,
     getAllTools: () => [...tools.keys()].map((name) => ({ name })),
     setActiveTools: () => undefined,
+  });
+  return tools;
+}
+
+function registerGraftToolsForRendering(): Map<string, RenderableToolConfig> {
+  const tools = new Map<string, RenderableToolConfig>();
+  piGraftExtension({
+    registerTool: (config) => tools.set(config.name, config),
+    registerCommand: () => undefined,
+    on: () => undefined,
   });
   return tools;
 }

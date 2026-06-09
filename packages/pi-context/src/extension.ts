@@ -206,6 +206,6 @@ function renderContextCall(
   const providers = Array.isArray(args.providerIds)
     ? `${args.providerIds.length} provider(s)`
     : undefined;
-  const text = ["context", action, providers].filter(Boolean).join(" ");
+  const text = ["context", `action=${action}`, providers].filter(Boolean).join(" ");
   return new ToolCallText(theme.bold ? theme.bold(text) : text);
 }

@@ -27,6 +27,7 @@ export type SparkToolRegistrar = (config: SparkRegisteredToolConfig) => void;
 
 export interface SparkToolContext {
   cwd: string;
+  isIdle?: () => boolean;
   sessionManager?: {
     getSessionFile?: () => string | undefined;
     getLeafId?: () => string | undefined;

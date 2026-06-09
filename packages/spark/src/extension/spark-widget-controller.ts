@@ -104,7 +104,12 @@ export class SparkWidgetController {
       dag: sparkDagWidgetEntry(dagStatus, project.ref),
       run: sparkRunWidgetEntry(currentState?.runMode, project.ref),
       goal: sessionGoal
-        ? { status: sessionGoal.status, objective: compactGoalObjective(sessionGoal.objective) }
+        ? {
+            status: sessionGoal.status,
+            scope: sessionGoal.scope,
+            projectRef: sessionGoal.projectRef,
+            objective: compactGoalObjective(sessionGoal.objective),
+          }
         : undefined,
       tasks: allTasks.map((task) => ({
         title: task.title,
@@ -183,7 +188,11 @@ function mapTodoStatus(status: string): SessionTodoEntry["status"] {
 }
 
 function compactGoalObjective(objective: string): string {
-  const normalized = objective.replace(/\s+/gu, " ").trim();
+  const firstLine = objective
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  const normalized = (firstLine ?? objective).replace(/\s+/gu, " ").trim();
   return normalized.length > 96 ? `${normalized.slice(0, 93)}...` : normalized;
 }
 

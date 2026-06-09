@@ -8,19 +8,15 @@ for collecting human input.
 
 ## Tools
 
-- `ask_user`
-- `ask_flow`
+`pi-ask` registers one public/default action tool:
+
+- `ask` — use `action: "ask"` for structured asks and `action: "flow"` when the fullscreen multi-question flow renderer is required.
+
+Focused single-question and fullscreen flow implementations share the same ask semantics behind `ask`, but their historical implementation names are not active public/default tool names.
 
 ## Shared UX contract
 
-`ask_user` and `ask_flow` are peer tools over shared ask semantics:
-
-- `ask_user` is optimized for one focused question with minimal UI ceremony.
-- `ask_flow` is optimized for multi-question and fullscreen review forms.
-- Neither tool is a fallback for the other; both should return the same result
-  envelope for the same logical answer.
-
-Both tools follow these rules:
+Both ask renderers follow these rules:
 
 1. **No automatic timeout decisions.** Asks wait for an answer, explicit
    cancellation, or an explicit no-selection result from the host UI. Time
@@ -49,11 +45,11 @@ Both tools follow these rules:
    custom text is preserved as `answered` + `customText`, but the gate still
    blocks when no required option id was selected.
 7. **Summaries and artifacts are shared.** `summarizeAskResult()` and
-   `summarizeAskAnswers()` provide the label-first human summary for both
-   `ask_user` and `ask_flow`; `createAskArtifactBody()` adds the same `summary`
-   next to the structured `request` and `result` when an ask is persisted by a
-   caller such as Spark.
-8. **Freeform-only UI is valid.** `ask_flow` uses `input` when the request only
+   `summarizeAskAnswers()` provide the label-first human summary for both ask
+   renderers; `createAskArtifactBody()` adds the same `summary` next to the
+   structured `request` and `result` when an ask is persisted by a caller such as
+   Spark.
+8. **Freeform-only UI is valid.** The flow renderer uses `input` when the request only
    needs freeform questions; lack of `select`/`selectWithCustom` must not force
    default answers when an input UI is available. Optional blank freeform
    answers may be submitted as `kind: "skipped"` so forms can advance without
@@ -83,7 +79,7 @@ keeps the useful protocol traits observed in related Pi packages:
 - `oh-my-pi`: currently a placeholder meta package; no ask runtime behavior
   to adopt beyond the atomized/reproducible package philosophy.
 
-`ask_flow` results therefore include an explicit status envelope:
+Flow-rendered ask results therefore include an explicit status envelope:
 
 - `answered` — at least one answer/custom/elaboration result was submitted.
 - `cancelled` — the user cancelled the form.
@@ -162,6 +158,58 @@ Schema and validation:
   `freeform` and cannot reference the UI-only custom sentinel.
 - Single-select questions may contain at most one default value.
 - Spark ask facade question params expose `defaultValues` directly on each question.
+
+Correct request patterns:
+
+```ts
+// Freeform: no defaultValues. Put a suggested answer in prompt/context instead.
+{
+  id: "notes",
+  prompt: "Any implementation notes? Suggested starting point: focus on tests first.",
+  type: "freeform",
+}
+
+// Single-select: one default, matching options[].value exactly.
+{
+  id: "route",
+  prompt: "Which route should run?",
+  type: "single",
+  defaultValues: ["safe"],
+  options: [
+    { value: "fast", label: "Fast" },
+    { value: "safe", label: "Safe" },
+  ],
+}
+
+// Multi-select: multiple defaults are allowed.
+{
+  id: "coverage",
+  prompt: "Which areas should be covered?",
+  type: "multi",
+  defaultValues: ["docs", "tests"],
+  options: [
+    { value: "docs", label: "Docs" },
+    { value: "tests", label: "Tests" },
+    { value: "runtime", label: "Runtime" },
+  ],
+}
+
+// Preview questions also use option values for defaults.
+{
+  id: "plan",
+  prompt: "Which plan should be applied?",
+  type: "preview",
+  defaultValues: ["minimal"],
+  options: [
+    { value: "minimal", label: "Minimal", preview: "Smallest safe patch" },
+    { value: "broad", label: "Broad", preview: "Larger cleanup" },
+  ],
+}
+```
+
+Avoid reserved UI labels such as `Other`, `Skip`, `Type your own`, and
+`Chat about this` as business option labels; these are reserved for host
+interaction affordances.
 
 Runtime semantics:
 

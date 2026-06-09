@@ -124,6 +124,6 @@ function renderAskCall(args: Record<string, unknown>, theme: ToolRenderTheme): T
   const action = typeof args.action === "string" ? args.action : "ask";
   const title = typeof args.title === "string" ? args.title : undefined;
   const questionCount = Array.isArray(args.questions) ? `${args.questions.length}q` : undefined;
-  const text = ["ask", action, title, questionCount].filter(Boolean).join(" ");
+  const text = ["ask", `action=${action}`, title, questionCount].filter(Boolean).join(" ");
   return new ToolCallText(theme.bold ? theme.bold(text) : text);
 }

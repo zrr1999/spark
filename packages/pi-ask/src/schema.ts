@@ -148,6 +148,14 @@ export type PiAskFlowValidationError =
 
 export const RESERVED_OPTION_LABELS = ["Other", "Skip", "Type your own", "Chat about this"];
 
+const RESERVED_LABEL_HINT =
+  "reserved option labels are UI affordances; rename the business option or use a freeform question/custom input instead";
+const FREEFORM_DEFAULT_VALUES_HINT =
+  "freeform questions do not accept defaultValues; remove defaultValues and put suggested text in prompt/context instead";
+const DEFAULT_VALUE_EXACT_MATCH_HINT = "defaultValues must match options[].value exactly";
+const SINGLE_DEFAULT_ONLY_HINT =
+  "single/preview questions accept at most one default value; use type=multi for multiple defaults";
+
 // ---- Sentinels used in the options list ----
 export const SENTINEL_LABELS = {
   other: "Type your own",
@@ -181,7 +189,11 @@ export function validatePiAskFlowRequest(input: unknown): {
     }
 
     if (question.defaultValues?.length && question.type === "freeform") {
-      return { valid: false, error: "invalid_default_value", details: question.id };
+      return {
+        valid: false,
+        error: "invalid_default_value",
+        details: `${question.id}: ${FREEFORM_DEFAULT_VALUES_HINT}`,
+      };
     }
 
     if (opts) {
@@ -195,7 +207,7 @@ export function validatePiAskFlowRequest(input: unknown): {
           return {
             valid: false,
             error: "reserved_label",
-            details: `${question.id}: ${option.label}`,
+            details: `${question.id}: ${option.label}; ${RESERVED_LABEL_HINT}`,
           };
         }
         if (seenValues.has(option.value)) {
@@ -212,7 +224,9 @@ export function validatePiAskFlowRequest(input: unknown): {
           return {
             valid: false,
             error: "invalid_default_value",
-            details: `${question.id}: ${defaultValue}`,
+            details: `${question.id}: ${defaultValue}; ${DEFAULT_VALUE_EXACT_MATCH_HINT}. valid values: ${[
+              ...seenValues,
+            ].join(", ")}`,
           };
         }
       }
@@ -220,7 +234,7 @@ export function validatePiAskFlowRequest(input: unknown): {
         return {
           valid: false,
           error: "invalid_default_value",
-          details: `${question.id}: single-select defaults must contain at most one value`,
+          details: `${question.id}: ${SINGLE_DEFAULT_ONLY_HINT}`,
         };
       }
     }

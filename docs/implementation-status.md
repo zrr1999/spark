@@ -33,8 +33,8 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
    - controlled explicit-scope `user | workspace | repo` recall candidate store and canonical `recall` tool
    - candidate record/list/search/reject lifecycle only; no automatic memory promotion and no `.learnings/` writes
 - `pi-ask`
-   - canonical `ask` action tool that dispatches focused asks to `ask_user` and multi/flow requests to `ask_flow`
-   - peer `ask_user` and `ask_flow` primitives over shared result semantics: explicit envelopes, no automatic timeout decisions, stable option ids in structured values, label/description summaries, consistent decision/approval blocking, and first-class direct custom input
+   - canonical public/default `ask` action tool that dispatches focused asks and multi/flow requests through internal shared implementations
+   - shared result semantics across focused and flow renderers: explicit envelopes, no automatic timeout decisions, stable option ids in structured values, label/description summaries, consistent decision/approval blocking, and first-class direct custom input
 - `pi-cue`
    - migrated cue-shell IPC client and full direct tool surface
    - raw TypeScript imports compatible with Pi / Node strip-types loading
@@ -42,7 +42,7 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
 - `pi-roles`
    - reusable `RoleSpec` definitions with `builtin | project | user` sources
    - builtin roles (`scout`, `planner`, `worker`, `reviewer`, `oracle`) as generic role specs; Spark facade decides how to use them
-   - project/user Markdown role stores, canonical `role` action tool, compatibility role-spec tools, task-agnostic direct `call_role`, fresh/forked run modes, explicit fork source requirements, JSONL parsing, active-run listing/cancellation, timeout signalling
+   - project/user Markdown role stores, canonical public/default `role` action tool, task-agnostic direct `role({ action: "call" })`, fresh/forked run modes, explicit fork source requirements, JSONL parsing, active-run listing/cancellation, timeout signalling
 - `spark-runtime`
    - Spark single-task adapter over `pi-roles`
    - dry-run and real task execution, runtime-created role-run claims, heartbeat loop, artifact persistence, timeout/reconciliation tracking, kill controls, and role-run transcript compaction support
@@ -69,8 +69,9 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
 - `goal({ action })` owns Spark session-bound goal actions.
 - `artifact({ action })` owns evidence/artifact records.
 - `learning({ action })` owns evidence-backed reusable learnings.
-- `ask`, `ask_user`, and `ask_flow` own user-question UX and result semantics.
-- `context({ action })`, `recall`, `workflow({ action })`, `role({ action })`, and `pi-cue` tools remain canonical generic surfaces.
+- `ask({ action })` owns user-question UX and result semantics.
+- `context({ action })`, `recall`, `workflow({ action })`, `role({ action })`, `pi-cue`, and `pi-graft` tools remain canonical generic surfaces; patcher-style child runs belong to `graft_patch`, not the Spark facade.
+- Public/default action tools render as `tool action=<value> ...`; do not keep fragmented compatibility surfaces public when a canonical action tool owns the domain.
 
 ## Deferred by design
 

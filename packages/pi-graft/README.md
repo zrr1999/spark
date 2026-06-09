@@ -44,6 +44,7 @@ These tools do not override Pi built-ins. Each scratch tool accepts either `base
 
 - `graft_help` — show maintained workflow guidance (`agent-workflow`) or command help.
 - `graft_init` — bootstrap or register a workspace through direct `graft init`.
+- `graft_patch` — run a Graft-owned worker child with only Graft-related tools available. If the patch instruction is unclear, the child must request clarification upward instead of editing directly or creating a candidate.
 - `graft_status` — inspect pi-graft convenience state and graftd status.
 - `graft_ps` — show global daemon and registry status.
 - `graft_doctor` — diagnose or repair registry state.

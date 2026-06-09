@@ -26,6 +26,8 @@ import { SparkDagManagerController } from "./spark-dag-manager.ts";
 import { registerSparkModeCycleShortcut } from "./spark-mode-shortcut.ts";
 import type { SparkRegisteredToolConfig, SparkToolContext } from "./spark-tool-registration.ts";
 import { SparkWidgetController } from "./spark-widget-controller.ts";
+import { createSparkRoleRegistry } from "./spark-role-registry.ts";
+import { PiRolesReviewerRunner, type ReviewerRunner } from "./reviewer-runner.ts";
 
 interface SparkExtensionAPI extends SparkCommandApi {
   registerTool?(config: SparkRegisteredToolConfig): void;
@@ -39,6 +41,10 @@ interface SparkExtensionAPI extends SparkCommandApi {
     },
   ): void;
   on?(event: string, handler: (event: unknown, ctx: SparkToolContext) => unknown): void;
+  createReviewerRunner?(
+    cwd: string,
+    ctx: SparkToolContext,
+  ): ReviewerRunner | Promise<ReviewerRunner>;
 }
 
 export default function sparkExtension(pi: SparkExtensionAPI) {
@@ -71,11 +77,21 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     pi.registerInternalTool?.(config);
   };
 
+  async function createReviewerRunner(cwd: string, ctx: SparkToolContext): Promise<ReviewerRunner> {
+    const provided = await pi.createReviewerRunner?.(cwd, ctx);
+    if (provided) return provided;
+    return new PiRolesReviewerRunner({
+      registry: await createSparkRoleRegistry(cwd),
+      cwd,
+    });
+  }
+
   registerSparkCommands(pi, {
     queueSparkAgentInstruction: (ctx, instruction) =>
       eventHandlers.queueSparkAgentInstruction(ctx, instruction),
     refreshSparkWidget,
     ensureDagManager: (cwd, ctx) => dagManagerController.ensure(cwd, ctx),
+    createReviewerRunner,
   });
 
   registerSparkModeCycleShortcut(pi, { refreshSparkWidget });
@@ -86,7 +102,10 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
   registerSparkTodoTools(registerSparkCompatTool, { refreshSparkWidget });
 
-  registerSparkFinishTaskTool(registerSparkCompatTool, { refreshSparkWidget });
+  registerSparkFinishTaskTool(registerSparkCompatTool, {
+    refreshSparkWidget,
+    createReviewerRunner,
+  });
 
   registerSparkProjectTools(registerSparkCompatTool, { refreshSparkWidget });
 

@@ -58,7 +58,7 @@ function renderActiveSparkProjectSummary(
     const reason = sessionGoal.pauseReason ?? sessionGoal.completedReason;
     const reasonText = reason ? `; reason: ${truncateInline(reason, 120)}` : "";
     lines.push(
-      `- Session goal: ${sessionGoal.status}; ${truncateInline(sessionGoal.objective, 180)}${reasonText}`,
+      `- ${formatGoalScopeLabel(sessionGoal)} goal: ${sessionGoal.status}; ${truncateInline(sessionGoal.objective, 180)}${reasonText}`,
     );
   }
 
@@ -113,13 +113,17 @@ function renderNoCurrentSparkProjectSummary(
     const reason = sessionGoal.pauseReason ?? sessionGoal.completedReason;
     const reasonText = reason ? `; reason: ${truncateInline(reason, 120)}` : "";
     lines.push(
-      `- Session goal: ${sessionGoal.status}; ${truncateInline(sessionGoal.objective, 180)}${reasonText}`,
+      `- ${formatGoalScopeLabel(sessionGoal)} goal: ${sessionGoal.status}; ${truncateInline(sessionGoal.objective, 180)}${reasonText}`,
     );
   }
   lines.push(
     '- Use task({ action: "project_use" }) to select or create a current project before planning, claiming, or updating project-bound tasks.',
   );
   return lines.join("\n");
+}
+
+function formatGoalScopeLabel(goal: SparkSessionGoal): string {
+  return goal.scope === "project" ? `Project(${goal.projectRef})` : "Session";
 }
 
 function isActiveSparkTodoStatus(status: string): boolean {

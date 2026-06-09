@@ -53,10 +53,15 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
     true,
   );
   const tools = host.getAllTools().map((tool) => tool.name);
-  assert.ok(tools.includes("ask_user"));
+  assert.ok(tools.includes("ask"));
+  assert.ok(!tools.includes("ask_user"));
+  assert.ok(!tools.includes("ask_flow"));
   assert.ok(tools.includes("cue_exec"));
-  assert.ok(tools.includes("list_roles"));
+  assert.ok(tools.includes("role"));
+  assert.ok(!tools.includes("list_roles"));
   assert.ok(tools.includes("graft_status"));
+  assert.ok(tools.includes("graft_patch"));
+  assert.ok(!tools.includes("patch"));
   assert.ok(tools.includes("task"));
   assert.equal(
     tools.some((tool) => tool.startsWith("spark_")),
@@ -84,7 +89,7 @@ void test("SparkExtensionLoader isolates one extension failure and continues loa
   assert.match(result.outcomes[0]!.error ?? "", /boom/);
   assert.equal(result.outcomes[1]!.ok, true);
   assert.equal(
-    host.getAllTools().some((tool) => tool.name === "ask_user"),
+    host.getAllTools().some((tool) => tool.name === "ask"),
     true,
   );
 });
@@ -109,7 +114,7 @@ void test("loadPlugins default importer is wired to builtin extension imports wh
 
   assert.equal(result.outcomes[0]!.ok, true);
   assert.equal(
-    host.getAllTools().some((tool) => tool.name === "ask_flow"),
+    host.getAllTools().some((tool) => tool.name === "ask"),
     true,
   );
 });

@@ -39,5 +39,6 @@ Pi Spark monorepo: agent-oriented docs for contributors and automation. Product 
 
 ## Notes for agents
 
+- Public/default repo-owned tools should use canonical `tool({ action })` surfaces when operations share one domain/state/permission/render/result contract; do not keep fragmented compatibility aliases public, and render action tools as `tool action=<value> ...`.
 - Prefer `vp fmt` / `vp check` before committing when touching TS/Markdown; pre-commit runs `vp check --fix`.
 - Do not commit secrets or `.env` files.

@@ -6,6 +6,9 @@ import {
   type ArtifactRef,
   type Project,
   type ProjectRef,
+  type ProjectRoadmap,
+  type RoadmapItem,
+  type RoadmapItemRef,
   type RoleRef,
   type Task,
   type TaskClaim,
@@ -16,6 +19,7 @@ import {
   type TaskRun,
   type TaskTodo,
 } from "pi-extension-api";
+import { createDefaultProjectRoadmap, normalizeProjectRoadmap, uniqueTaskRefs } from "./roadmap.ts";
 import type {
   ClaimTaskInput,
   CreateProjectInput,
@@ -96,8 +100,10 @@ export class TaskGraph {
       ref: newRef("proj"),
       title: input.title,
       description: input.description,
+      intent: input.intent?.trim() || undefined,
       status: normalizeProjectStatus(input.status),
       outputLanguage: input.outputLanguage,
+      roadmap: createDefaultProjectRoadmap(input.title, now),
       createdAt: now,
       updatedAt: now,
     };
@@ -651,7 +657,7 @@ export class TaskGraph {
 
   updateProject(
     projectRef: ProjectRef,
-    patch: Partial<Pick<Project, "title" | "description" | "status" | "outputLanguage">>,
+    patch: Partial<Pick<Project, "title" | "description" | "intent" | "status" | "outputLanguage">>,
   ): Project {
     const project = this.getProject(projectRef);
     const title = patch.title ?? project.title;
@@ -662,12 +668,65 @@ export class TaskGraph {
       ...project,
       title,
       description,
+      intent: patch.intent !== undefined ? patch.intent.trim() || undefined : project.intent,
       status: normalizeProjectStatus(patch.status ?? project.status),
       outputLanguage: patch.outputLanguage ?? project.outputLanguage,
       updatedAt: nowIso(),
     };
     this.#projects.set(projectRef, updated);
     return updated;
+  }
+
+  replaceProjectRoadmap(projectRef: ProjectRef, roadmap: ProjectRoadmap): Project {
+    const project = this.getProject(projectRef);
+    const updated: Project = {
+      ...project,
+      roadmap: normalizeProjectRoadmap(roadmap, `project(${projectRef}).roadmap`),
+      updatedAt: nowIso(),
+    };
+    this.#projects.set(projectRef, updated);
+    return updated;
+  }
+
+  activateRoadmapItem(projectRef: ProjectRef, itemRef: RoadmapItemRef): Project {
+    const project = this.getProject(projectRef);
+    const roadmap = project.roadmap;
+    const item = roadmap.items.find((candidate) => candidate.ref === itemRef);
+    if (!item) throw new NotFoundError(`unknown roadmap item: ${itemRef}`);
+    const now = nowIso();
+    const updatedRoadmap: ProjectRoadmap = {
+      ...roadmap,
+      activeItemRef: itemRef,
+      items: roadmap.items.map((candidate) =>
+        candidate.ref === itemRef
+          ? { ...candidate, status: "active" as const, updatedAt: now }
+          : candidate,
+      ),
+      updatedAt: now,
+    };
+    return this.replaceProjectRoadmap(projectRef, updatedRoadmap);
+  }
+
+  attachRoadmapItemTaskRefs(
+    projectRef: ProjectRef,
+    itemRef: RoadmapItemRef,
+    taskRefs: TaskRef[],
+  ): RoadmapItem | undefined {
+    const project = this.getProject(projectRef);
+    const roadmap = project.roadmap;
+    const itemIndex = roadmap.items.findIndex((candidate) => candidate.ref === itemRef);
+    if (itemIndex < 0) return undefined;
+    const item = roadmap.items[itemIndex]!;
+    const now = nowIso();
+    const updatedItem: RoadmapItem = {
+      ...item,
+      taskRefs: uniqueTaskRefs([...(item.taskRefs ?? []), ...taskRefs]),
+      updatedAt: now,
+    };
+    const updatedItems = [...roadmap.items];
+    updatedItems[itemIndex] = updatedItem;
+    this.replaceProjectRoadmap(projectRef, { ...roadmap, items: updatedItems, updatedAt: now });
+    return updatedItem;
   }
 
   getTask(ref: TaskRef): Task {

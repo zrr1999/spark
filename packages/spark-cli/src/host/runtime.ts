@@ -268,6 +268,7 @@ export class SparkHostRuntime implements ExtensionAPI {
       cwd: this.cwd,
       hasUI: this.hasUI,
       ui: this.uiTransport as ExtensionUi,
+      isIdle: () => this.isIdle(),
       sessionManager: this.sessionManager,
       ...extra,
     };

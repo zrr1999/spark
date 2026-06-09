@@ -108,6 +108,86 @@ void test("SparkAgentLoop runs a single-turn stop with one streamed text chunk",
   assert.equal(events.find((event) => event.type === "turn_complete") !== undefined, true);
 });
 
+void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", async () => {
+  const stopAssistant = buildAssistant([{ type: "text", text: "done" }]);
+  const toolUseAssistant = buildAssistant(
+    [{ type: "toolCall", id: "tc-max", name: "missing", arguments: {} }],
+    "toolUse",
+  );
+  const cases: Array<{
+    name: string;
+    streamFunction: SparkAgentStreamFunction;
+    maxRoundtrips?: number;
+    expectedError?: RegExp;
+  }> = [
+    {
+      name: "normal stop",
+      streamFunction: makeFakeStream({
+        rounds: [[{ type: "done", reason: "stop", message: stopAssistant }]],
+      }),
+    },
+    {
+      name: "stream throws",
+      streamFunction: () =>
+        ({
+          [Symbol.asyncIterator]() {
+            return {
+              next: async () => {
+                throw new Error("stream boom");
+              },
+            };
+          },
+          result: async () => stopAssistant,
+        }) as ReturnType<SparkAgentStreamFunction>,
+      expectedError: /stream boom/,
+    },
+    {
+      name: "no assistant",
+      streamFunction: () =>
+        ({
+          [Symbol.asyncIterator]() {
+            return {
+              next: async () => ({ done: true, value: undefined as AssistantMessageEvent }),
+            };
+          },
+          result: async () => undefined as AssistantMessage,
+        }) as ReturnType<SparkAgentStreamFunction>,
+      expectedError: /stream produced no assistant message/,
+    },
+    {
+      name: "max roundtrips",
+      streamFunction: makeFakeStream({
+        rounds: [[{ type: "done", reason: "toolUse", message: toolUseAssistant }]],
+      }),
+      maxRoundtrips: 1,
+    },
+  ];
+
+  for (const entry of cases) {
+    const host = new SparkHostRuntime({ cwd: `/tmp/spark-agent-loop-test-${entry.name}` });
+    const agentEndEvents: unknown[] = [];
+    host.on("agent_end", (event) => agentEndEvents.push(event));
+    const loop = new SparkAgentLoop({
+      host,
+      streamFunction: entry.streamFunction,
+      getModel: () => TEST_MODEL,
+      maxRoundtrips: entry.maxRoundtrips,
+    });
+
+    await loop.submit(entry.name);
+
+    assert.equal(agentEndEvents.length, 1, `${entry.name} should emit agent_end exactly once`);
+    assert.equal(loop.getState(), "idle", `${entry.name} should leave the loop idle`);
+    if (entry.expectedError) {
+      assert.match(
+        (agentEndEvents[0] as { errorMessage?: string }).errorMessage ?? "",
+        entry.expectedError,
+        `${entry.name} should expose the terminal error on agent_end`,
+      );
+    }
+  }
+});
+
 void test("SparkAgentLoop dispatches tool calls and feeds tool results back into the next turn", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-test" });
   let toolCalls = 0;

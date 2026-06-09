@@ -16,7 +16,7 @@ Use the dependency boundary as the naming boundary:
 pi-extension-api       # host/tool contracts, refs, light fs/json/time helpers
 
 pi-artifacts           # artifact/evidence store and canonical artifact tool
-pi-ask                 # ask_user/ask_flow/ask UI and result semantics
+pi-ask                 # canonical ask tool plus shared focused/flow UI semantics
 pi-context             # bounded registered context providers
 pi-cue                 # cue-shell execution tools
 pi-goal                # generic durable goal state/prompt primitives
@@ -40,7 +40,7 @@ Allowed high-level usage:
 - `pi-goal` owns generic goal primitives while Spark owns project-bound `/goal` command/facade behavior. Historical goal entry marker strings remain stable for compatibility.
 - `pi-learnings` owns `.learnings/` evidence-backed learning records and the canonical `learning({ action })` tool.
 - `pi-artifacts` owns artifact metadata/blobs and the canonical `artifact({ action })` tool.
-- `pi-ask` owns ask protocol/UI/result semantics and the canonical ask tools. Spark asks must be context-specific; no canned intake forms.
+- `pi-ask` owns ask protocol/UI/result semantics and the canonical public/default `ask({ action })` tool. Focused and flow implementations are internal dispatch targets behind that surface. Spark asks must be context-specific; no canned intake forms.
 - `pi-context`, `pi-recall`, and `pi-learnings` are separate capabilities: current bounded context, explicit recall candidates, and evidence-backed reusable learnings.
 - `RoleSpec` objects are definition-layer objects; runtime launch mode is `fresh | forked`. Do not expose legacy `managed` as a runtime-facing mode or primary source.
 
@@ -62,7 +62,7 @@ A local `prek` hook and CI static checks run `pnpm run check:boundaries`, which 
 - Background ready-task execution is `task({ action: "run_ready" })`; run inspection/control is `task({ action: "run_status" })` and `task({ action: "run_control" })`.
 - Evidence is `artifact({ action: ... })`.
 - Reusable learnings are `learning({ action: ... })`.
-- User decisions are `ask`, `ask_user`, and `ask_flow`.
+- User decisions are `ask({ action: "ask" | "flow" })`.
 - Saved workflow discovery is `workflow({ action: ... })`; Spark commands decide when/how to execute workflow policy.
 - Execution shell integration is `pi-cue`.
 - Review gates remain Spark initialization/review-flow data, not a separate package boundary.

@@ -2503,6 +2503,14 @@ void test("Spark DAG run store keeps foreground-timeout runs active for late pro
             title: "Project",
             description: "project",
             status: "active",
+            roadmap: {
+              ref: "roadmap:main",
+              title: "Project roadmap",
+              status: "active",
+              items: [],
+              createdAt: "2026-05-28T00:00:00.000Z",
+              updatedAt: "2026-05-28T00:00:00.000Z",
+            },
             createdAt: "2026-05-28T00:00:00.000Z",
             updatedAt: "2026-05-28T00:00:00.000Z",
           },
@@ -3561,6 +3569,156 @@ void test("runSparkTask does not complete real tasks when the role run never sta
     assert.equal(body.stderr?.truncated, false);
     assert.equal(body.jsonEvents?.count, 0);
     assert.deepEqual(body.jsonEvents?.tail, []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("runSparkTask fails blocked Spark mode request jsonEvents instead of completing task", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-blocked-mode-json-"));
+  try {
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Blocked mode task",
+      description: "should not complete on blocked mode request",
+      roleRef: builtinRoleRef("worker"),
+      plan: executionReadyPlan("Blocked mode task"),
+    });
+    const artifactStore = new ArtifactStore({
+      rootDir: join(dir, "artifacts"),
+    });
+    const fakePi = join(dir, "fake-pi.cjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "process.stdout.write(JSON.stringify({",
+        "  type: 'message_start',",
+        "  message: {",
+        "    role: 'custom',",
+        "    customType: 'spark-mode-request',",
+        "    content: 'Spark mode request could not proceed.',",
+        "    details: { status: 'blocked', reason: 'no_selection' },",
+        "  },",
+        "}) + '\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    const run = await runSparkTask({
+      graph,
+      taskRef: task.ref,
+      registry: new RoleRegistry(),
+      artifactStore,
+      cwd: dir,
+      dryRun: false,
+      piCommand: fakePi,
+      claim: { sessionId: "session:parent" },
+    });
+
+    assert.equal(run.status, "failed");
+    assert.equal(run.failureKind, "runtime_error");
+    assert.match(run.errorMessage ?? "", /blocked Spark mode request: no_selection/);
+    assert.equal(run.completionSummary?.status, "failed");
+    assert.match(run.completionSummary?.summary ?? "", /blocked Spark mode request: no_selection/);
+    assert.equal(graph.getTask(task.ref).status, "failed");
+    assert.equal(graph.getTask(task.ref).claim, undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("runSparkTask fails historical blocked Spark mode request text fallback", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-blocked-mode-text-"));
+  try {
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Blocked text task",
+      description: "should not complete on blocked mode request text",
+      roleRef: builtinRoleRef("worker"),
+      plan: executionReadyPlan("Blocked text task"),
+    });
+    const artifactStore = new ArtifactStore({
+      rootDir: join(dir, "artifacts"),
+    });
+    const fakePi = join(dir, "fake-pi.cjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "process.stdout.write('Spark auto mode selection blocked; no_selection\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    const run = await runSparkTask({
+      graph,
+      taskRef: task.ref,
+      registry: new RoleRegistry(),
+      artifactStore,
+      cwd: dir,
+      dryRun: false,
+      piCommand: fakePi,
+      claim: { sessionId: "session:parent" },
+    });
+
+    assert.equal(run.status, "failed");
+    assert.equal(run.failureKind, "runtime_error");
+    assert.match(run.errorMessage ?? "", /Spark auto mode selection blocked/);
+    assert.equal(graph.getTask(task.ref).status, "failed");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("runSparkTask still succeeds ordinary non-empty role output", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-ordinary-role-output-"));
+  try {
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Ordinary output task",
+      description: "ordinary successful output should still complete",
+      roleRef: builtinRoleRef("worker"),
+      plan: executionReadyPlan("Ordinary output task"),
+    });
+    const artifactStore = new ArtifactStore({
+      rootDir: join(dir, "artifacts"),
+    });
+    const fakePi = join(dir, "fake-pi.cjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "process.stdout.write(JSON.stringify({ type: 'done', summary: 'ordinary completion' }) + '\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    const run = await runSparkTask({
+      graph,
+      taskRef: task.ref,
+      registry: new RoleRegistry(),
+      artifactStore,
+      cwd: dir,
+      dryRun: false,
+      piCommand: fakePi,
+      claim: { sessionId: "session:parent" },
+    });
+
+    assert.equal(run.status, "succeeded");
+    assert.equal(run.failureKind, undefined);
+    assert.equal(run.errorMessage, undefined);
+    assert.equal(run.completionSummary?.status, "succeeded");
+    assert.equal(graph.getTask(task.ref).status, "done");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

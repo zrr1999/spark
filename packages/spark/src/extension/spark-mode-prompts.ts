@@ -1,10 +1,8 @@
 import type { ProjectRef } from "pi-extension-api";
 import type { TaskGraph } from "pi-tasks";
-import {
-  renderRoadmapPlanningContext,
-  type RoadmapPlanningContext,
-} from "../flows/roadmap-flow.ts";
 import type { SparkEntryMode } from "./spark-entry.ts";
+import type { RoadmapPlanningContext } from "../flows/roadmap-flow.ts";
+import { renderRoadmapPlanningContext } from "../flows/roadmap-flow.ts";
 import type { SparkExecuteStrategy, SparkPlanningModeSource } from "./session-state.ts";
 import {
   renderSparkWorkflowGuidance,
@@ -44,8 +42,8 @@ export function renderSparkPlanningModePrompt(
   graph: TaskGraph,
   selectedProjectRef: ProjectRef | undefined,
   focus: string | undefined,
-  roadmapContext: RoadmapPlanningContext | undefined,
   source: SparkPlanningModeSource,
+  roadmapContext?: RoadmapPlanningContext,
 ): string {
   const summary = renderExistingSparkSummary(graph, selectedProjectRef);
   const focusLine = focus?.trim() ? `\n\nPlanning focus: ${focus.trim()}` : "";

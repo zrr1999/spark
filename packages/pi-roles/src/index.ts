@@ -75,6 +75,8 @@ export interface RoleRunRequest {
   systemPrompt?: string;
   /** Concrete, user-confirmed Pi model to use for this run. */
   model?: string;
+  /** Optional child Pi tool allowlist. Hosts/presets own which tools are appropriate. */
+  allowedTools?: string[];
   sessionDir?: string;
   forkFromSession?: string;
   /** Adapter-specific guidance appended between the role prompt and instruction. */
@@ -989,6 +991,8 @@ export function buildRoleRunArgs(input: RoleRunCommandInput): string[] {
   const mode = normalizeRoleRunMode(input.mode);
   const args = ["--print", "--mode", "json"];
   if (input.model?.trim()) args.push("--model", input.model.trim());
+  const allowedTools = normalizedToolAllowlist(input.allowedTools);
+  if (allowedTools.length > 0) args.push("--tools", allowedTools.join(","));
   if (input.sessionDir) args.push("--session-dir", input.sessionDir);
   if (mode === "forked") {
     if (!input.forkFromSession?.trim()) throw new Error("forked role run requires forkFromSession");
@@ -996,6 +1000,11 @@ export function buildRoleRunArgs(input: RoleRunCommandInput): string[] {
   }
   args.push("--append-system-prompt", input.systemPrompt, buildRoleRunPrompt(input));
   return args;
+}
+
+function normalizedToolAllowlist(value: readonly string[] | undefined): string[] {
+  if (!value) return [];
+  return value.map((tool) => tool.trim()).filter(Boolean);
 }
 
 export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResult> {
