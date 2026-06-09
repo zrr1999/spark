@@ -246,26 +246,19 @@ export function registerSparkCommands(
       return;
     }
     if (!objective) {
-      const visible = "Spark goal needs a specific objective; /goal did not infer a template goal.";
-      ctx.ui?.notify?.(
-        "Spark goal needs a specific objective. /goal will not infer or overwrite a template goal.",
-        "warning",
-      );
-      deps.queueSparkAgentInstruction(
-        ctx,
-        [
-          "Spark /goal was invoked without a concrete objective.",
-          project ? `Current project: ${project.title}` : undefined,
-          "Do not infer or generate a default project-completion goal template.",
-          'Ask concise context-specific clarification questions to determine the user\'s real goal. Once clarified, start it with /goal <objective> or goal({ action: "start", objective: ... }).',
-        ]
-          .filter((line): line is string => Boolean(line))
-          .join("\n"),
-      );
-      piApi.sendMessage(
-        { customType: "spark-goal-request", content: visible, display: true },
-        { deliverAs: "followUp", triggerTurn: true },
-      );
+      const goal = await startOrInferSessionGoal(ctx.cwd, ctx, graph, undefined);
+      if (!goal) {
+        ctx.ui?.notify?.(
+          "Spark goal could not be inferred because no Spark state is available.",
+          "warning",
+        );
+        return;
+      }
+      await deps.refreshSparkWidget(ctx.cwd, ctx);
+      const projectLabel = project ? ` · project: ${project.title}` : "";
+      const visible = `Spark goal inferred${projectLabel} · goal: ${compactInline(goal.objective)}`;
+      ctx.ui?.notify?.(visible, "info");
+      queueForegroundGoalStartInstruction(piApi, ctx, project?.title, goal, visible);
       return;
     }
     const goal = await startOrInferSessionGoal(ctx.cwd, ctx, graph, objective);

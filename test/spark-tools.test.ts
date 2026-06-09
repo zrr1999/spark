@@ -1012,8 +1012,8 @@ void test("/research, /plan, /execute, /goal, and /workflow selector commands en
     assert.ok(emptyGoalCommand, "missing /goal command");
     assert.equal(emptyRun.commands.get("workflow:goal"), undefined);
     await emptyGoalCommand.handler("", emptyCtx);
-    assert.match(emptyCtx.notifications.at(-1)?.message ?? "", /needs a specific objective/);
-    assert.match(emptyRun.customMessages.at(-1)?.content ?? "", /did not infer a template goal/);
+    assert.match(emptyCtx.notifications.at(-1)?.message ?? "", /could not be inferred/);
+    assert.equal(emptyRun.customMessages.length, 0);
   } finally {
     await rm(existingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
     await rm(initializedDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
@@ -1495,8 +1495,8 @@ void test("/goal sets a durable session goal instead of execute-mode continuatio
   }
 });
 
-void test("/goal without objective asks for clarification instead of inferring a template", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-empty-clarify-"));
+void test("/goal without objective infers from the current project", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-goal-empty-infer-"));
   try {
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
@@ -1506,14 +1506,20 @@ void test("/goal without objective asks for clarification instead of inferring a
 
     await goalCommand.handler("", ctx);
 
-    assert.equal(await loadSessionGoal(dir, ctx), undefined);
-    assert.match(ctx.notifications.at(-1)?.message ?? "", /needs a specific objective/);
-    assert.match(run.customMessages.at(-1)?.content ?? "", /did not infer a template goal/);
+    const goal = await loadSessionGoal(dir, ctx);
+    assert.equal(goal?.status, "active");
+    assert.equal(goal?.source, "inferred");
+    assert.match(goal?.objective ?? "", /Advance this Spark session|Advance project/);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark goal inferred/);
+    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal inferred/);
     const prompt = await consumeSparkModeContext(run, ctx);
-    assert.match(prompt, /without a concrete objective/);
-    assert.match(prompt, /Do not infer or generate a default project-completion goal template/);
-    assert.match(prompt, /clarification questions/);
-    assert.doesNotMatch(prompt, /Advance project/);
+    assert.match(prompt, /Spark session goal is active/);
+    assert.match(prompt, /Advance this Spark session|Advance project/);
+    assert.doesNotMatch(prompt, /without a concrete objective/);
+    assert.doesNotMatch(
+      prompt,
+      /Do not infer or generate a default project-completion goal template/,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
