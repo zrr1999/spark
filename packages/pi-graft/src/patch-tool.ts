@@ -8,6 +8,7 @@ import {
   normalizeRoleRunMode,
   runRole,
   saveValidatedRoleModelBinding,
+  validateRoleModel,
   type RoleRunMode,
   type RoleRunRef,
   type RoleSpec,
@@ -56,8 +57,9 @@ interface GraftPatchParams {
 }
 
 interface RoleCallDeliverySummary {
-  status: "delivered" | "non_json_output" | "empty";
+  status: "delivered" | "error" | "non_json_output" | "empty";
   finalAssistantText?: string;
+  errorMessage?: string;
   stdoutNonJsonTail?: string;
   jsonEventCount: number;
 }
@@ -170,11 +172,16 @@ export function registerPiGraftPatchTool(pi: PiGraftExtensionApi): void {
       const stdoutNonJsonTail = nonJsonStdoutTail(result.stdout, 12_000);
       const delivery = summarizeRoleCallDelivery({
         finalAssistantText: extractFinalAssistantText(result.jsonEvents),
+        errorMessage: extractAssistantErrorText(result.jsonEvents),
         stdoutNonJsonTail,
         jsonEventCount: result.jsonEvents.length,
       });
+      const displayStatus =
+        result.record.status === "succeeded" && delivery.status === "error"
+          ? "failed"
+          : result.record.status;
       const summary = [
-        `Graft patch run ${result.record.status}: ${GRAFT_PATCH_PRESET_ID} via ${role.id} (${role.ref})`,
+        `Graft patch run ${displayStatus}: ${GRAFT_PATCH_PRESET_ID} via ${role.id} (${role.ref})`,
         formatPatchRunIdentity({
           runRef: result.record.ref,
           mode: result.record.mode,
@@ -262,15 +269,19 @@ async function resolvePatchRoleModel(input: {
   ui?: PiGraftToolContext["ui"];
 }): Promise<string | undefined> {
   const store = defaultUserRoleModelBindingStore();
+  const explicit = input.explicitModel?.trim();
+  if (explicit) {
+    await validateRoleModel({ piCommand: input.piCommand, model: explicit, cwd: input.cwd });
+    return explicit;
+  }
+
   const existing = await store.get(input.role.ref);
   if (existing) return existing.model;
 
-  const selected =
-    input.explicitModel?.trim() ||
-    (await input.ui?.input?.(
-      `Choose Pi model for Graft patch role ${input.role.id}`,
-      input.role.defaultModel,
-    ));
+  const selected = await input.ui?.input?.(
+    `Choose Pi model for Graft patch role ${input.role.id}`,
+    input.role.defaultModel,
+  );
   const model = selected?.trim();
   if (!model) {
     throw new Error(
@@ -358,9 +369,18 @@ function formatPatchRunIdentity(input: {
 
 function summarizeRoleCallDelivery(input: {
   finalAssistantText?: string;
+  errorMessage?: string;
   stdoutNonJsonTail?: string;
   jsonEventCount: number;
 }): RoleCallDeliverySummary {
+  if (input.errorMessage) {
+    return {
+      status: "error",
+      errorMessage: input.errorMessage,
+      stdoutNonJsonTail: input.stdoutNonJsonTail,
+      jsonEventCount: input.jsonEventCount,
+    };
+  }
   if (input.finalAssistantText) {
     return {
       status: "delivered",
@@ -382,6 +402,9 @@ function summarizeRoleCallDelivery(input: {
 function renderRoleCallDelivery(delivery: RoleCallDeliverySummary): string | undefined {
   if (delivery.status === "delivered" && delivery.finalAssistantText) {
     return `result:\n${truncateBlock(delivery.finalAssistantText, 12_000)}`;
+  }
+  if (delivery.status === "error" && delivery.errorMessage) {
+    return `delivery error:\n${truncateBlock(delivery.errorMessage, 12_000)}`;
   }
   if (delivery.status === "non_json_output" && delivery.stdoutNonJsonTail) {
     return `output:\n${delivery.stdoutNonJsonTail}`;
@@ -406,6 +429,22 @@ function extractFinalAssistantText(events: unknown[]): string | undefined {
   return undefined;
 }
 
+function extractAssistantErrorText(events: unknown[]): string | undefined {
+  for (const event of [...events].reverse()) {
+    const direct = messageErrorText(eventMessage(event));
+    if (direct) return direct;
+    const eventError = messageErrorText(event);
+    if (eventError) return eventError;
+
+    const messages = eventMessages(event);
+    for (const message of [...messages].reverse()) {
+      const text = messageErrorText(message);
+      if (text) return text;
+    }
+  }
+  return undefined;
+}
+
 function eventMessage(event: unknown): unknown {
   if (!event || typeof event !== "object") return undefined;
   return (event as { message?: unknown }).message;
@@ -421,6 +460,24 @@ function extractAssistantText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") return undefined;
   if ((message as { role?: unknown }).role !== "assistant") return undefined;
   return messageContentText((message as { content?: unknown }).content);
+}
+
+function messageErrorText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") return undefined;
+  const item = message as { stopReason?: unknown; errorMessage?: unknown; diagnostics?: unknown };
+  const direct = typeof item.errorMessage === "string" ? item.errorMessage.trim() : "";
+  if (direct) return direct;
+  if (Array.isArray(item.diagnostics)) {
+    for (const diagnostic of item.diagnostics) {
+      if (!diagnostic || typeof diagnostic !== "object") continue;
+      const error = (diagnostic as { error?: unknown }).error;
+      if (!error || typeof error !== "object") continue;
+      const messageText = (error as { message?: unknown }).message;
+      if (typeof messageText === "string" && messageText.trim()) return messageText.trim();
+    }
+  }
+  if (item.stopReason === "error") return "assistant stopped with error";
+  return undefined;
 }
 
 function messageContentText(content: unknown): string | undefined {

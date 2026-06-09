@@ -97,6 +97,50 @@ void test("graft_patch runs worker with Graft-only tools and upward-clarificatio
   }
 });
 
+void test("graft_patch surfaces real Pi provider errors instead of empty delivery", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "graft-patch-error-"));
+  const previousHome = process.env.PI_ROLES_HOME;
+  process.env.PI_ROLES_HOME = dir;
+  try {
+    const fakePi = join(dir, "fake-pi-error.mjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "const args = process.argv.slice(2);",
+        "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
+        "const message = { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'auth token invalidated' };",
+        "process.stdout.write(JSON.stringify({ type: 'message', message }) + '\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    const tools = registerGraftToolsForTest();
+    const patch = tools.get("graft_patch");
+    assert.ok(patch, "missing graft_patch tool");
+
+    const result = await patch.execute(
+      "tool-call",
+      {
+        instruction: "Create a Graft candidate for the requested change.",
+        piCommand: fakePi,
+        model: "test/model",
+      },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+
+    assert.match(result.content[0]?.text ?? "", /Graft patch run failed: graft_patch via worker/);
+    assert.match(result.content[0]?.text ?? "", /delivery error:\nauth token invalidated/);
+  } finally {
+    if (previousHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousHome;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 function registerGraftToolsForTest(): Map<string, ToolConfig> {
   const tools = new Map<string, ToolConfig>();
   piGraftExtension({
