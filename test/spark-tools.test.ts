@@ -6620,7 +6620,7 @@ void test("spark_status defaults to active view, supports full history, summary,
     assert.doesNotMatch(activeText, /kind=implement/);
     assert.doesNotMatch(activeText, /claimed=session:/);
     assert.doesNotMatch(activeText, new RegExp(project.ref));
-    assert.match(activeText, /Hidden finished tasks: 2 \(use view=full to include\)/);
+    assert.match(activeText, /Completed tasks: 2 total \| done=1 \| cancelled=1/);
     assert.equal(active.details?.view, "active");
     assert.equal(active.details?.limit, 20);
     assert.equal(active.details?.activeProjectRef, project.ref);
@@ -6709,9 +6709,10 @@ void test("spark_status defaults to active view, supports full history, summary,
     const full = await executeSparkTool(tools, "spark_status", ctx, { view: "full" });
     const fullText = toolText(full);
     assert.match(fullText, /Spark tasks \(full view\):/);
-    assert.match(fullText, /Durable tasks:/);
-    assert.match(fullText, /Finished task history/);
-    assert.match(fullText, /Cancelled task history/);
+    assert.match(fullText, /Durable active tasks:/);
+    assert.doesNotMatch(fullText, /Finished task history/);
+    assert.doesNotMatch(fullText, /Cancelled task history/);
+    assert.match(fullText, /Completed tasks: 2 total \| done=1 \| cancelled=1/);
     assert.match(fullText, /Spark state cache:/);
     assert.match(fullText, /sessions: \d+ files/);
     assert.match(fullText, /Protected stores:/);
@@ -6739,7 +6740,8 @@ void test("spark_status defaults to active view, supports full history, summary,
       showFinished: true,
     });
     assert.equal(fullFromLegacyFlag.details?.view, "full");
-    assert.match(toolText(fullFromLegacyFlag), /Finished task history/);
+    assert.doesNotMatch(toolText(fullFromLegacyFlag), /Finished task history/);
+    assert.match(toolText(fullFromLegacyFlag), /Completed tasks: 2 total \| done=1 \| cancelled=1/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

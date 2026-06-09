@@ -187,7 +187,7 @@ export class TaskGraph {
             status: input.status ?? existing.status,
             roleRef: normalizeRoleRef(input.roleRef ?? existing.roleRef),
             supersededBy: input.supersededBy ?? existing.supersededBy,
-            plan: normalizeTaskPlan(input.plan, description, title),
+            plan: normalizeTaskPlan(input.plan ?? existing.plan, description, title),
           })
         : this.createTask({
             projectRef,

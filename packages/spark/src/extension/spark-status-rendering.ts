@@ -1,6 +1,6 @@
 import type { TaskGraph, SessionTodoEntry } from "pi-tasks";
 import { isUnfinishedTaskStatus } from "pi-tasks";
-import type { TaskRunCompletionSummary } from "pi-extension-api";
+import type { TaskRunCompletionSummary, TaskStatus } from "pi-extension-api";
 import type { SparkDagStatusSummary } from "pi-workflows";
 import type { SparkRunModeState } from "./current-project-state.ts";
 import { appendRecentRoleRunCompletionLines } from "./role-run-completions.ts";
@@ -315,7 +315,7 @@ function renderProjectStatusLines(
     const sessionClaimed = claimed.filter((task) => isClaimOwnedBySession(task, input.sessionKey));
     const statusCounts = countTaskStatuses(tasks);
     const allVisibleTasks = sortTasksForStatusVisibility(
-      tasks.filter((task) => input.view === "full" || isImportantStatus(task.status)),
+      tasks.filter((task) => isImportantStatus(task.status)),
     );
     if (
       !shouldRenderProjectInSparkStatus({
@@ -333,7 +333,8 @@ function renderProjectStatusLines(
         : allVisibleTasks;
     const renderedTaskDetails: Array<Record<string, unknown>> = [];
     const lastRunsByTaskRef = latestRunsByTaskRef(input.graph.runs(project.ref));
-    const hiddenByView = tasks.length - allVisibleTasks.length;
+    const completedTaskCount = tasks.filter((task) => !isImportantStatus(task.status)).length;
+    const hiddenByView = completedTaskCount;
     const hiddenByLimit = allVisibleTasks.length - visibleTasks.length;
     const currentSuffix = project.ref === input.currentProject?.ref ? " [current]" : "";
     const isCurrent = project.ref === input.currentProject?.ref;
@@ -352,7 +353,7 @@ function renderProjectStatusLines(
       );
     }
     if (hiddenByView > 0)
-      lines.push(`  Hidden finished tasks: ${hiddenByView} (use view=full to include)`);
+      lines.push(`  Completed tasks: ${formatCompletedTaskCounts(statusCounts)}`);
     if (hiddenByLimit > 0)
       lines.push(
         `  Hidden by limit: ${hiddenByLimit} (increase limit or use view=full without limit)`,
@@ -391,6 +392,16 @@ function renderProjectStatusLines(
   return renderedProjectDetails;
 }
 
+function formatCompletedTaskCounts(counts: Partial<Record<TaskStatus, number>>): string {
+  const done = counts.done ?? 0;
+  const cancelled = counts.cancelled ?? 0;
+  const total = done + cancelled;
+  const parts = [`${total} total`];
+  if (done > 0) parts.push(`done=${done}`);
+  if (cancelled > 0) parts.push(`cancelled=${cancelled}`);
+  return parts.join(" | ");
+}
+
 function appendTaskStatusLines(
   lines: string[],
   input: SparkStatusRenderInput & {
@@ -399,7 +410,7 @@ function appendTaskStatusLines(
     renderedTaskDetails: Array<Record<string, unknown>>;
   },
 ): void {
-  lines.push(input.view === "full" ? "  Durable tasks:" : "  Active tasks:");
+  lines.push(input.view === "full" ? "  Durable active tasks:" : "  Active tasks:");
   for (const task of input.visibleTasks) {
     const owner = deriveTaskRoleLabel({
       task,
