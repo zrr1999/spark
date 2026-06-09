@@ -83,6 +83,50 @@ void test("reviewer verdict parser skips leading JSON protocol events", () => {
   assert.equal(verdict.summary, "verdict after events");
 });
 
+void test("reviewer verdict parser extracts verdict from assistant message content", () => {
+  const input = reviewTaskInput();
+  const verdict = parseReviewerVerdictForInput(
+    input,
+    JSON.stringify({
+      type: "message_start",
+      message: {
+        role: "assistant",
+        content:
+          '{"outcome":"approved","summary":"verdict in content","findings":[],"blockers":[],"confidence":"high"}',
+      },
+    }),
+  );
+
+  assert.equal(verdict.targetKind, "task");
+  assert.equal(verdict.approved, true);
+  assert.equal(verdict.summary, "verdict in content");
+});
+
+void test("reviewer verdict parser extracts verdict from agent_end messages", () => {
+  const input = reviewTaskInput();
+  const verdict = parseReviewerVerdictForInput(
+    input,
+    JSON.stringify({
+      type: "agent_end",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: '{"outcome":"approved","summary":"verdict in final message","findings":[],"blockers":[],"confidence":"high"}',
+            },
+          ],
+        },
+      ],
+    }),
+  );
+
+  assert.equal(verdict.targetKind, "task");
+  assert.equal(verdict.approved, true);
+  assert.equal(verdict.summary, "verdict in final message");
+});
+
 void test("reviewer verdict parser maps goal remaining-work verdicts", () => {
   const verdict = parseReviewerVerdictForInput(
     {
