@@ -191,6 +191,158 @@ void test("cue RunScript request matches the current strict daemon schema", asyn
   );
 });
 
+void test("cue runJob resolves serial chains after a failed leaf skips later leaves", async () => {
+  await withCueServer(
+    (message, socket) => {
+      const id = message.id as number;
+      const payload = requestPayload(message);
+      if ("Subscribe" in payload) {
+        sendFrame(socket, { type: "response", id, payload: { Ok: { Ack: {} } } });
+        return;
+      }
+      if ("Eval" in payload) {
+        sendFrame(socket, {
+          type: "response",
+          id,
+          payload: {
+            Ok: {
+              ChainCreated: {
+                chain_id: "CH1",
+                job_ids: ["J1"],
+                warnings: [],
+                chain: {
+                  id: "CH1",
+                  pipeline: "true -> false -> echo skipped",
+                  total_jobs: 3,
+                  jobs: [
+                    { index: 0, pipeline: "true", status: "Running", job_id: "J1" },
+                    { index: 1, pipeline: "false", status: "Pending" },
+                    { index: 2, pipeline: "echo skipped", status: "Pending" },
+                  ],
+                },
+              },
+            },
+          },
+        });
+        setTimeout(() => {
+          sendFrame(socket, {
+            type: "event",
+            payload: {
+              ChainProgress: {
+                chain: {
+                  id: "CH1",
+                  pipeline: "true -> false -> echo skipped",
+                  total_jobs: 3,
+                  jobs: [
+                    { index: 0, pipeline: "true", status: "Done", job_id: "J1" },
+                    { index: 1, pipeline: "false", status: "Failed", job_id: "J2" },
+                    {
+                      index: 2,
+                      pipeline: "echo skipped",
+                      status: { Cancelled: "ChainAborted" },
+                    },
+                  ],
+                },
+              },
+            },
+          });
+          sendFrame(socket, {
+            type: "event",
+            payload: {
+              JobStateChanged: {
+                job_id: "J1",
+                old_state: "Running",
+                new_state: "Done",
+                end_scope: null,
+                chain_id: "CH1",
+                chain_index: 0,
+              },
+            },
+          });
+          sendFrame(socket, {
+            type: "event",
+            payload: {
+              JobStateChanged: {
+                job_id: "J2",
+                old_state: "Running",
+                new_state: "Failed",
+                end_scope: null,
+                chain_id: "CH1",
+                chain_index: 1,
+              },
+            },
+          });
+        }, 10);
+        return;
+      }
+      if ("ListJobs" in payload) {
+        sendFrame(socket, {
+          type: "response",
+          id,
+          payload: {
+            Ok: {
+              JobListPage: {
+                jobs: [
+                  {
+                    id: "J1",
+                    status: "Done",
+                    pipeline: "true",
+                    exit_code: 0,
+                    start_scope: null,
+                    end_scope: null,
+                    open_hint: "stream",
+                    chain_id: "CH1",
+                    chain_index: 0,
+                    chain_total: 3,
+                  },
+                  {
+                    id: "J2",
+                    status: "Failed",
+                    pipeline: "false",
+                    exit_code: 1,
+                    start_scope: null,
+                    end_scope: null,
+                    open_hint: "stream",
+                    chain_id: "CH1",
+                    chain_index: 1,
+                    chain_total: 3,
+                  },
+                ],
+                page: { total: 2, shown: 2, limit: null, truncated: false },
+              },
+            },
+          },
+        });
+        return;
+      }
+      if ("JobOutput" in payload) {
+        const jobOutput = payload.JobOutput as { id: string };
+        sendFrame(socket, {
+          type: "response",
+          id,
+          payload: {
+            Ok: {
+              JobOutput: {
+                id: jobOutput.id,
+                stdout: { data: "", truncated: false },
+                stderr: { data: "", truncated: false },
+                stderr_pty_merged: false,
+              },
+            },
+          },
+        });
+      }
+    },
+    async (client) => {
+      const result = await client.runJob("true -> false -> echo skipped", { timeout: 2 });
+
+      assert.equal(result.timedOut, false);
+      assert.equal(result.status, "Failed");
+      assert.equal(result.exitCode, 1);
+    },
+  );
+});
+
 void test("cue typed list and output responses are parsed", async () => {
   await withCueServer(
     (message, socket) => {

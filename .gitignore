@@ -19,3 +19,4 @@ package-lock.json
 .pi-lens/
 **/.pi-lens/
 .learnings/
+.graft/

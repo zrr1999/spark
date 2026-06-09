@@ -1756,10 +1756,12 @@ export class CueClient {
 
       const maybeResolve = async () => {
         if (resolved) return;
-        if (chainJobIds.length < expectedJobs) return;
-        for (const jid of chainJobIds) {
+        const trackedJobIds = chainJobIds.slice(0, expectedJobs);
+        if (trackedJobIds.length < expectedJobs) return;
+        for (const jid of trackedJobIds) {
           if (!terminalSet.has(jid)) return;
         }
+        chainJobIds.splice(0, chainJobIds.length, ...trackedJobIds);
         resolved = true;
         clearTimeout(timer);
         if (poll) clearInterval(poll);
@@ -1783,9 +1785,13 @@ export class CueClient {
             for (const job of progress.chain.jobs) {
               if (job.job_id) addChainJob(job.job_id);
             }
-            if (
-              progress.chain.jobs.every((job) => terminal.includes(normalizeJobStatus(job.status)))
-            ) {
+            const terminalJobs = progress.chain.jobs.filter((job) =>
+              terminal.includes(normalizeJobStatus(job.status)),
+            );
+            if (terminalJobs.some((job) => normalizeJobStatus(job.status) !== "Done")) {
+              expectedJobs = terminalJobs.filter((job) => job.job_id).length;
+              void maybeResolve();
+            } else if (terminalJobs.length === progress.chain.jobs.length) {
               expectedJobs = progress.chain.jobs.filter((job) => job.job_id).length;
               void maybeResolve();
             }
@@ -1822,10 +1828,24 @@ export class CueClient {
         if (resolved) return;
         void (async () => {
           try {
+            const observedJobs = isChain && chainId ? await this.listJobs() : [];
+            if (isChain && chainId) {
+              for (const job of observedJobs) {
+                if (job.chain_id != null && String(job.chain_id) === chainId) addChainJob(job.id);
+              }
+            }
             for (const jid of chainJobIds) {
-              const info = await this.jobStatus(jid);
+              const info =
+                observedJobs.find((job) => job.id === jid) ?? (await this.jobStatus(jid));
               if (info && terminal.includes(info.status)) {
                 terminalSet.add(jid);
+                if (isChain && info.status !== "Done") {
+                  const index = typeof info.chain_index === "number" ? info.chain_index : undefined;
+                  expectedJobs = Math.min(
+                    expectedJobs,
+                    index === undefined ? chainJobIds.indexOf(jid) + 1 : index + 1,
+                  );
+                }
               }
             }
             await maybeResolve();
