@@ -33,6 +33,8 @@ export interface GoalReviewInput {
   goalId: string;
   objective: string;
   status: "active" | "paused" | "complete";
+  requestedStatus: "paused" | "complete";
+  reason?: string;
   evidenceRefs: ArtifactRef[];
   sessionKey?: string;
   forkFromSession?: string;
@@ -193,13 +195,17 @@ export function renderReviewerInstruction(input: ReviewInput): string {
           goalId: input.goalId,
           objective: input.objective,
           status: input.status,
+          requestedStatus: input.requestedStatus,
+          reason: input.reason,
           evidenceRefs: input.evidenceRefs,
           sessionKey: input.sessionKey,
         };
   return [
     "Review this Spark state transition request.",
-    "Approve only if the provided evidence and current packet satisfy the stated objective.",
-    "If work remains, use outcome=needs_changes and list concrete blockers/findings.",
+    "Approve only if the provided evidence and current packet satisfy the requested state transition.",
+    "For requestedStatus=complete, approve only when the objective is achieved; set achieved accordingly.",
+    "For requestedStatus=paused, approve only when the pause reason is valid and stopping without completion is appropriate; do not require achieved=true.",
+    "If work remains or the requested transition is not justified, use outcome=needs_changes and list concrete blockers/findings.",
     REVIEWER_JSON_SCHEMA,
     "",
     "Review packet:",
@@ -217,7 +223,10 @@ export function parseReviewerVerdictForInput(input: ReviewInput, text: string): 
       taskRef: input.task.ref,
       approved: parsed.outcome === "approved",
     };
-  const achieved = parsed.outcome === "approved" && (parseBooleanField(value, "achieved") ?? true);
+  const achieved =
+    input.requestedStatus === "complete" &&
+    parsed.outcome === "approved" &&
+    (parseBooleanField(value, "achieved") ?? true);
   const remainingWork = stringField(value, "remainingWork") ?? (achieved ? "" : parsed.summary);
   return {
     ...parsed,

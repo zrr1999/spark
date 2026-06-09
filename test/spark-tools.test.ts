@@ -113,7 +113,10 @@ import {
   normalizeTaskStatus,
 } from "../packages/spark/src/extension/task-plan-tool.ts";
 import { normalizeSparkAskReplayArtifactRef } from "../packages/spark/src/extension/spark-ask-tool-registration.ts";
-import { loadSessionGoal } from "../packages/spark/src/extension/spark-session-goals.ts";
+import {
+  loadSessionGoal,
+  setSessionGoal,
+} from "../packages/spark/src/extension/spark-session-goals.ts";
 import type {
   ReviewInput,
   ReviewerRunResult,
@@ -358,7 +361,7 @@ void test("Spark project normalizers reject invalid explicit parameters", () => 
   assert.deepEqual(normalizeSparkProjectPatch({ title: " Renamed ", status: "active" }), {
     title: "Renamed",
     description: undefined,
-    intent: undefined,
+    purpose: undefined,
     status: "active",
     outputLanguage: undefined,
   });
@@ -369,7 +372,7 @@ void test("Spark project normalizers reject invalid explicit parameters", () => 
     project: "Demo",
     title: "Next",
     description: undefined,
-    intent: undefined,
+    purpose: undefined,
     outputLanguage: undefined,
   });
   assert.throws(() => normalizeSparkNewProjectInput({ project: "" }), /project must be/);
@@ -1542,6 +1545,40 @@ void test("/goal restarts without overwriting an existing goal objective", async
   }
 });
 
+void test("/goal does not continue stale inferred project goal after project is done", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-goal-stale-done-project-"));
+  try {
+    await mkdir(join(dir, ".spark"), { recursive: true });
+    const graph = new TaskGraph();
+    const project = graph.createProject({
+      title: "Done goal project",
+      description: "Already finished project.",
+      status: "done",
+    });
+    await defaultTaskGraphStore(dir).save(graph);
+    const ctx = testSparkContext(dir, "main");
+    const run = registerSparkToolsForTest();
+    const goalCommand = run.commands.get("goal");
+    assert.ok(goalCommand, "missing /goal command");
+    await setSessionGoal(dir, ctx, {
+      objective: `Advance project “${project.title}” to completion.\nUnfinished tasks: 3. Ready tasks: 2.`,
+      source: "inferred",
+      status: "active",
+    });
+
+    await goalCommand.handler("continue stale goal", ctx);
+
+    const goal = await loadSessionGoal(dir, ctx);
+    assert.equal(goal?.status, "paused");
+    assert.match(goal?.pauseReason ?? "", /already done/);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /already done/);
+    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal stale/);
+    assert.equal(run.customMessages.at(-1)?.options?.triggerTurn, undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
 void test("session reset shutdown auto-pauses active foreground goals", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-shutdown-pause-"));
   const originalSetTimeout = globalThis.setTimeout;
@@ -2122,6 +2159,8 @@ void test("goal reviewer state machine covers scope conflict, restart, idle revi
     const reviewerRunner: ReviewerRunner = {
       async review(input: ReviewInput): Promise<ReviewerRunResult> {
         if (input.targetKind === "goal") {
+          if (input.requestedStatus === "paused")
+            return createApprovingReviewerRunner().review(input);
           goalReviewerCalls += 1;
           const outcome = goalOutcomes.shift() ?? "achieved";
           return outcome === "achieved"
@@ -2220,7 +2259,11 @@ void test("goal reviewer state machine covers scope conflict, restart, idle revi
     assert.equal(taskReviewerCalls, 2);
 
     const reviews = await defaultArtifactStore(dir).list({ kind: "review" });
-    assert.equal(reviews.length, 4, "two goal reviews and two task finish reviews are persisted");
+    assert.equal(
+      reviews.length,
+      5,
+      "pause review, two goal reviews, and two task finish reviews are persisted",
+    );
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
@@ -3003,15 +3046,24 @@ void test("spark_claim_task renders plan summary and task TODO hint in claim tex
     assert.match(text, /evidenceRequired: Focused test proves plan fields are rendered/);
     assert.match(text, /steps: Render the plan; Prompt for task TODOs/);
     assert.match(text, /constraints: Keep output compact; Do not remove details\.task/);
+    assert.match(text, /Initial task TODOs are present for this claim/);
     assert.match(text, /task\(\{ action: "todo_update", scope: "task"/);
-    assert.match(text, /op: "append", items: \[\.\.\.\]/);
     assert.ok((claim.details as { task?: unknown } | undefined)?.task);
+    const todoFile = sessionTaskTodoPath(dir, ctx);
+    const afterClaim = JSON.parse(await readFile(todoFile, "utf8")) as TaskTodoStoreFile;
+    assert.deepEqual(
+      afterClaim.todos.map((todo) => [todo.content, todo.status]),
+      [
+        ["Render the plan", "in_progress"],
+        ["Prompt for task TODOs", "pending"],
+      ],
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-void test("spark_claim_task does not ask for task-plan refinement at claim time", async () => {
+void test("spark_claim_task requires a task plan instead of asking at claim time", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-claim-no-plan-ask-"));
   try {
     await writeEmptySparkProject(dir);
@@ -3026,10 +3078,10 @@ void test("spark_claim_task does not ask for task-plan refinement at claim time"
       kind: "implement",
     });
 
-    assert.match(toolText(claim), /Claimed Spark task/);
+    assert.match(toolText(claim), /Cannot claim Claim underspecified plan/);
+    assert.match(toolText(claim), /task\.plan is not allowed/);
+    assert.equal((claim.details as { error?: string }).error, "task_plan_required");
     assert.equal((await defaultArtifactStore(dir).list({ kind: "ask-answer" })).length, 0);
-    const details = claim.details as { planClarification?: unknown } | undefined;
-    assert.equal(details?.planClarification, undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -3048,6 +3100,7 @@ void test("spark_claim_task and spark_update_task_todos persist task TODOs acros
       title: "Persist task TODOs",
       description: "Exercise task-scoped TODO persistence through Spark tools.",
       kind: "implement",
+      plan: executionReadyPlan("Exercise task-scoped TODO persistence through Spark tools."),
       todos: ["Read sources", "Run focused tests"],
     });
     const claimedTask = claim.details?.task as
@@ -3260,6 +3313,9 @@ void test("spark_claim_task creates a new task when multiple generic rename cand
       description:
         "No existing task can be chosen without guessing because multiple generic tasks are present.",
       kind: "implement",
+      plan: executionReadyPlan(
+        "No existing task can be chosen without guessing because multiple generic tasks are present.",
+      ),
     });
     const claimedTask = claim.details?.task as
       | { ref?: TaskRef; name?: string; title?: string }
@@ -4300,7 +4356,7 @@ void test("spark_use_project clarifies generic new project intent", async () => 
       request?: { questions?: Array<{ id: string; prompt?: string }> };
     };
     assert.ok(askBody.request?.questions?.every((question) => question.prompt?.includes("tasks")));
-    assert.ok(traces.some((artifact) => artifact.title === "Project intent clarification"));
+    assert.ok(traces.some((artifact) => artifact.title === "Project purpose clarification"));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -4537,6 +4593,36 @@ void test("spark_goal tool infers and updates durable session goals", async () =
       (completed.details as { error?: string } | undefined)?.error,
       "goal_completion_reviewer_only",
     );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark_goal pause requires reviewer approval and preserves active goal on rejection", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-goal-pause-review-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest({
+      reviewerRunner: createRejectingReviewerRunner("pause reason is not justified"),
+    });
+    await executeSparkTool(tools, "spark_use_project", ctx, { project: "Pause review" });
+
+    await executeSparkTool(tools, "goal", ctx, {
+      action: "start",
+      objective: "Keep working until blocker is real",
+    });
+    const rejected = await executeSparkTool(tools, "goal", ctx, {
+      action: "pause",
+      reason: "maybe stop",
+    });
+
+    assert.equal((rejected.details as { error?: string }).error, "goal_pause_review_failed");
+    assert.match(toolText(rejected), /Goal pause blocked by reviewer/);
+    assert.match(toolText(rejected), /pause reason is not justified/);
+    const goal = await loadSessionGoal(dir, ctx);
+    assert.equal(goal?.status, "active");
+    assert.equal((await defaultArtifactStore(dir).list({ kind: "review" })).length, 1);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -7404,7 +7490,11 @@ void test("spark todo tools reject invalid explicit ops without saving", async (
 
     const loaded = await defaultTaskGraphStore(dir).load();
     assert.equal(loaded?.getTask(taskRef).status, "running");
-    assert.equal(existsSync(sessionTaskTodoPath(dir, ctx)), false);
+    const todoFile = sessionTaskTodoPath(dir, ctx);
+    assert.equal(existsSync(todoFile), true);
+    const todos = JSON.parse(await readFile(todoFile, "utf8")) as TaskTodoStoreFile;
+    assert.equal(todos.todos.length, 1);
+    assert.equal(todos.todos[0]?.content, "Reject invalid TODO ops.");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -7688,6 +7778,7 @@ function createTaskApprovingGoalUnmetReviewerRunner(): ReviewerRunner {
   return {
     async review(input: ReviewInput): Promise<ReviewerRunResult> {
       if (input.targetKind === "task") return createApprovingReviewerRunner().review(input);
+      if (input.requestedStatus === "paused") return createApprovingReviewerRunner().review(input);
       return createRejectingReviewerRunner("goal still has remaining work").review(input);
     },
   };
@@ -7717,7 +7808,7 @@ function createApprovingReviewerRunner(): ReviewerRunner {
                 ...base,
                 targetKind: "goal" as const,
                 goalId: input.goalId,
-                achieved: true,
+                achieved: input.requestedStatus === "complete",
                 remainingWork: "",
               },
         record: {

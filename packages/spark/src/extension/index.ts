@@ -113,7 +113,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
   registerSparkPlanTasksTool(registerSparkCompatTool, { refreshSparkWidget });
 
-  registerSparkGoalTool(registerSparkTool, { refreshSparkWidget });
+  registerSparkGoalTool(registerSparkTool, { refreshSparkWidget, createReviewerRunner });
 
   registerSparkRunReadyTasksTool(registerSparkCompatTool, {
     ensureDagManager: (cwd, ctx) => dagManagerController.ensure(cwd, ctx),

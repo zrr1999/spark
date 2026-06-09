@@ -357,6 +357,7 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
         title: "Widget refresh task",
         description: "Exercise widget refresh after claim.",
         kind: "implement",
+        plan: executionReadyPlan("Exercise widget refresh after claim."),
         todos: ["First child TODO"],
       },
       ctx,

@@ -1,6 +1,13 @@
 import { Type } from "typebox";
+import { defaultArtifactStore } from "pi-artifacts";
 import type { TaskGraph } from "pi-tasks";
-import { clearSparkExecutionMode, currentSparkProject, loadSparkGraph } from "./session-state.ts";
+import { nowIso, type JsonValue, type RoleRef } from "pi-extension-api";
+import {
+  clearSparkExecutionMode,
+  currentSparkProject,
+  loadSparkGraph,
+  sparkSessionKey,
+} from "./session-state.ts";
 import {
   inferSessionGoalObjective,
   loadSessionGoal,
@@ -14,11 +21,22 @@ import {
   type SparkSessionGoalSource,
 } from "./spark-session-goals.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
+import type {
+  GoalReviewInput,
+  GoalReviewVerdict,
+  ReviewerRunResult,
+  ReviewerRunner,
+} from "./reviewer-runner.ts";
+import { withSparkReviewerLease } from "./spark-reviewer-lease.ts";
 
 export type SparkGoalToolAction = "status" | "infer" | "set" | "start" | "pause" | "complete";
 
 interface SparkGoalToolDeps {
   refreshSparkWidget: (cwd: string, ctx?: SparkToolContext) => Promise<void>;
+  createReviewerRunner?: (
+    cwd: string,
+    ctx: SparkToolContext,
+  ) => ReviewerRunner | Promise<ReviewerRunner>;
 }
 
 export function registerSparkGoalTool(
@@ -155,15 +173,30 @@ export function registerSparkGoalTool(
         return reviewerOwnedGoalCompletionResult(existingGoal, action);
       }
       const reason = normalizeOptionalReason(params.reason);
-      const goal = await updateSessionGoalStatus(cwd, ctx, "paused", { reason });
-      if (!goal)
+      const pauseResult = await reviewedPauseCurrentSessionGoal(cwd, ctx, deps, reason, _signal);
+      if (!pauseResult.goal)
         return {
           content: [{ type: "text", text: "No session goal is set." }],
           details: { found: false, action, error: "no_goal" },
         };
-      await clearSparkExecutionMode(cwd, ctx);
-      await deps.refreshSparkWidget(cwd, ctx);
-      return goalResult(goal, action, renderGoalStatus(goal));
+      if (!pauseResult.approved)
+        return {
+          content: [
+            {
+              type: "text",
+              text: renderGoalPauseRejectedMessage(pauseResult.goal, pauseResult),
+            },
+          ],
+          details: {
+            found: true,
+            action,
+            error: "goal_pause_review_failed",
+            goal: pauseResult.goal,
+            review: pauseResult.review?.verdict,
+            reviewArtifact: pauseResult.reviewArtifactRef,
+          },
+        };
+      return goalResult(pauseResult.goal, action, renderGoalStatus(pauseResult.goal));
     },
   });
 }
@@ -214,6 +247,166 @@ export async function pauseCurrentSessionGoal(
 ): Promise<SparkSessionGoal | undefined> {
   await clearSparkExecutionMode(cwd, ctx);
   return updateSessionGoalStatus(cwd, ctx, "paused", { reason });
+}
+
+interface ReviewedGoalPauseResult {
+  goal?: SparkSessionGoal;
+  approved: boolean;
+  review?: ReviewerRunResult;
+  reviewArtifactRef?: string;
+}
+
+export async function reviewedPauseCurrentSessionGoal(
+  cwd: string,
+  ctx: SparkToolContext,
+  deps: SparkGoalToolDeps,
+  reason?: string,
+  signal?: AbortSignal,
+): Promise<ReviewedGoalPauseResult> {
+  const existingGoal = await loadSessionGoal(cwd, ctx);
+  if (!existingGoal) return { approved: false };
+  const reviewerRunner = await deps.createReviewerRunner?.(cwd, ctx);
+  if (!reviewerRunner) throw new Error("goal pause requires a reviewer runner");
+  const reviewInput: GoalReviewInput = {
+    targetKind: "goal",
+    cwd,
+    projectRef: existingGoal.projectRef,
+    goalId: existingGoal.goalId,
+    objective: existingGoal.objective,
+    status: existingGoal.status,
+    requestedStatus: "paused",
+    reason,
+    evidenceRefs: existingGoal.lastReview?.artifactRef
+      ? [existingGoal.lastReview.artifactRef as `artifact:${string}`]
+      : [],
+    sessionKey: sparkSessionKey(ctx),
+    forkFromSession: ctx.sessionManager?.getSessionFile?.(),
+  };
+  const review = await runPauseReviewer(cwd, ctx, reviewerRunner, reviewInput, signal);
+  const verdict = review.verdict as GoalReviewVerdict;
+  const artifact = await recordGoalPauseReviewArtifact(cwd, existingGoal, review, reason);
+  if (verdict.outcome !== "approved")
+    return {
+      goal: existingGoal,
+      approved: false,
+      review,
+      reviewArtifactRef: artifact.ref,
+    };
+  await clearSparkExecutionMode(cwd, ctx);
+  const goal = await updateSessionGoalStatus(cwd, ctx, "paused", {
+    reason,
+    review: {
+      achieved: false,
+      confidence: verdict.confidence,
+      reason: verdict.summary,
+      remainingWork: verdict.remainingWork,
+      blockers: verdict.blockers,
+      artifactRef: artifact.ref,
+      reviewedAt: review.record.finishedAt || nowIso(),
+    },
+  });
+  await deps.refreshSparkWidget(cwd, ctx);
+  return { goal, approved: true, review, reviewArtifactRef: artifact.ref };
+}
+
+async function runPauseReviewer(
+  cwd: string,
+  ctx: SparkToolContext,
+  reviewerRunner: ReviewerRunner,
+  input: GoalReviewInput,
+  signal?: AbortSignal,
+): Promise<ReviewerRunResult> {
+  try {
+    const leasedReview = await withSparkReviewerLease(cwd, ctx, () =>
+      reviewerRunner.review(input, signal),
+    );
+    if (!leasedReview.acquired || !leasedReview.result)
+      return failedGoalPauseReviewerRunResult(
+        input,
+        "another Spark reviewer gate is already running for this session",
+      );
+    return leasedReview.result;
+  } catch (error) {
+    return failedGoalPauseReviewerRunResult(
+      input,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+function failedGoalPauseReviewerRunResult(
+  input: GoalReviewInput,
+  reason: string,
+): ReviewerRunResult {
+  const timestamp = nowIso();
+  return {
+    verdict: {
+      targetKind: "goal",
+      goalId: input.goalId,
+      achieved: false,
+      outcome: "blocked",
+      summary: `reviewer failed: ${reason}`,
+      remainingWork: reason,
+      findings: [],
+      blockers: [reason],
+      confidence: "low",
+    },
+    record: {
+      roleRef: "role:builtin-reviewer" as RoleRef,
+      runName: "goal-pause-reviewer-failed",
+      startedAt: timestamp,
+      finishedAt: timestamp,
+    },
+  };
+}
+
+async function recordGoalPauseReviewArtifact(
+  cwd: string,
+  goal: SparkSessionGoal,
+  review: ReviewerRunResult,
+  reason: string | undefined,
+) {
+  const reviewerRun = {
+    ...(review.record.runRef ? { runRef: review.record.runRef } : {}),
+    roleRef: review.record.roleRef,
+    ...(review.record.runName ? { runName: review.record.runName } : {}),
+    startedAt: review.record.startedAt,
+    finishedAt: review.record.finishedAt,
+  };
+  return defaultArtifactStore(cwd).put({
+    kind: "review",
+    title: `Goal pause review for ${goal.scope} goal: ${oneLine(goal.objective)}`,
+    format: "json",
+    body: {
+      goalId: goal.goalId,
+      scope: goal.scope,
+      ...(goal.projectRef ? { projectRef: goal.projectRef } : {}),
+      objective: goal.objective,
+      requestedStatus: "paused",
+      reason,
+      verdict: review.verdict,
+      reviewerRun,
+      recordedAt: nowIso(),
+    } as unknown as JsonValue,
+    provenance: {
+      producer: "review",
+      projectRef: goal.projectRef,
+      roleRef: review.record.roleRef,
+      runRef: review.record.runRef,
+    },
+    links: goal.projectRef ? [{ to: goal.projectRef, relation: "review-of" }] : undefined,
+  });
+}
+
+function renderGoalPauseRejectedMessage(
+  goal: SparkSessionGoal,
+  result: ReviewedGoalPauseResult,
+): string {
+  const verdict = result.review?.verdict as GoalReviewVerdict | undefined;
+  const summary = verdict?.summary ?? "reviewer did not approve pausing this goal";
+  const blockers = verdict?.blockers?.length ? `\nBlockers: ${verdict.blockers.join("; ")}` : "";
+  const artifact = result.reviewArtifactRef ? `\nReview artifact: ${result.reviewArtifactRef}` : "";
+  return `Goal pause blocked by reviewer for ${renderGoalTarget(goal.scope, goal.projectRef)} goal: ${oneLine(goal.objective)}\nReview outcome: ${verdict?.outcome ?? "blocked"}\nReview summary: ${summary}${blockers}${artifact}`;
 }
 
 async function activeGoalConflict(

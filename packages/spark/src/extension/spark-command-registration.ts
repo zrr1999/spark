@@ -1,5 +1,5 @@
 import { defaultArtifactStore } from "pi-artifacts";
-import { isActiveSessionTodo } from "pi-tasks";
+import { isActiveSessionTodo, type TaskGraph } from "pi-tasks";
 import { nowIso, type JsonValue, type RoleRef } from "pi-extension-api";
 import { type SparkEntryIntent } from "./spark-entry.ts";
 import {
@@ -10,7 +10,7 @@ import { detectSparkProjectState, resolveSparkEntry } from "./spark-entry-resolu
 import { currentSparkProject, loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
 import { loadIndependentTodos } from "./session-todos.ts";
 import {
-  pauseCurrentSessionGoal,
+  reviewedPauseCurrentSessionGoal,
   startOrInferSessionGoal,
 } from "./spark-goal-tool-registration.ts";
 import {
@@ -196,6 +196,28 @@ export function registerSparkCommands(
     const project = graph ? await currentSparkProject(ctx.cwd, ctx, graph) : undefined;
     const existingGoal = await loadSessionGoal(ctx.cwd, ctx);
     if (existingGoal && existingGoal.status !== "complete") {
+      const completedProject = graph
+        ? completedProjectForInferredGoal(existingGoal, graph)
+        : undefined;
+      if (completedProject) {
+        const goal =
+          existingGoal.status === "active"
+            ? await updateSessionGoalStatus(ctx.cwd, ctx, "paused", {
+                reason: completedProjectGoalPauseReason(completedProject.title),
+                retryState: null,
+              })
+            : existingGoal;
+        clearForegroundGoalLoop(ctx.cwd, ctx);
+        await deps.refreshSparkWidget(ctx.cwd, ctx);
+        const visible = `Spark goal stale · project already done: ${completedProject.title}`;
+        ctx.ui?.notify?.(
+          "Spark goal points to a project that is already done; not continuing the stale goal.",
+          "info",
+        );
+        piApi.sendMessage({ customType: "spark-goal-request", content: visible, display: true });
+        if (!goal) return;
+        return;
+      }
       const goal =
         existingGoal.status === "active"
           ? existingGoal
@@ -250,6 +272,33 @@ export function registerSparkCommands(
     queueForegroundGoalStartInstruction(piApi, ctx, project?.title, goal, visible);
   }
 
+  function completedProjectForInferredGoal(
+    goal: SparkSessionGoal,
+    graph: TaskGraph,
+  ): ReturnType<TaskGraph["projects"]>[number] | undefined {
+    if (goal.source !== "inferred") return undefined;
+    const projects = graph.projects();
+    const candidate = goal.projectRef
+      ? projects.find((project) => project.ref === goal.projectRef)
+      : projects.find((project) =>
+          inferredGoalObjectiveNamesProject(goal.objective, project.title),
+        );
+    if (!candidate || candidate.status !== "done") return undefined;
+    return candidate;
+  }
+
+  function inferredGoalObjectiveNamesProject(objective: string, title: string): boolean {
+    return (
+      objective.includes(`Advance project “${title}”`) ||
+      objective.includes(`Advance project "${title}"`) ||
+      objective.includes(`Advance project '${title}'`)
+    );
+  }
+
+  function completedProjectGoalPauseReason(projectTitle: string): string {
+    return `Inferred project goal is stale: project “${projectTitle}” is already done and has no active task frontier.`;
+  }
+
   function queueForegroundGoalStartInstruction(
     piApi: SparkCommandApi,
     ctx: SparkCommandContext,
@@ -285,14 +334,19 @@ export function registerSparkCommands(
     ctx: SparkCommandContext,
     reason: string,
   ): Promise<void> {
-    const goal = await pauseCurrentSessionGoal(ctx.cwd, ctx, reason || undefined);
-    if (!goal) {
+    const result = await reviewedPauseCurrentSessionGoal(ctx.cwd, ctx, deps, reason || undefined);
+    if (!result.goal) {
       ctx.ui?.notify?.("No session goal is set.", "warning");
       return;
     }
+    if (!result.approved) {
+      const visible = `Spark goal pause blocked by reviewer · goal: ${compactInline(result.goal.objective)}`;
+      ctx.ui?.notify?.(visible, "warning");
+      piApi.sendMessage({ customType: "spark-goal-request", content: visible, display: true });
+      return;
+    }
     clearForegroundGoalLoop(ctx.cwd, ctx);
-    await deps.refreshSparkWidget(ctx.cwd, ctx);
-    const visible = `Spark goal paused · goal: ${compactInline(goal.objective)}`;
+    const visible = `Spark goal paused · goal: ${compactInline(result.goal.objective)}`;
     ctx.ui?.notify?.(visible, "info");
     piApi.sendMessage({ customType: "spark-goal-request", content: visible, display: true });
   }
@@ -554,6 +608,19 @@ export function registerSparkCommands(
     const goal = await loadSessionGoal(ctx.cwd, ctx);
     if (!goal || goal.status !== "active") return undefined;
     const graph = await loadSparkGraph(ctx.cwd, ctx);
+    const completedProject = graph ? completedProjectForInferredGoal(goal, graph) : undefined;
+    if (completedProject) {
+      await updateSessionGoalStatus(ctx.cwd, ctx, "paused", {
+        reason: completedProjectGoalPauseReason(completedProject.title),
+        retryState: null,
+      });
+      await deps.refreshSparkWidget(ctx.cwd, ctx);
+      ctx.ui?.notify?.(
+        `Spark goal paused because project is already done: ${compactInline(completedProject.title)}`,
+        "info",
+      );
+      return undefined;
+    }
     const project = graph
       ? goal.scope === "project" && goal.projectRef
         ? graph.projects().find((candidate) => candidate.ref === goal.projectRef)
@@ -581,6 +648,7 @@ export function registerSparkCommands(
       goalId: active.goal.goalId,
       objective: active.goal.objective,
       status: active.goal.status,
+      requestedStatus: "complete",
       evidenceRefs: goalReviewEvidenceRefs(active),
       sessionKey: active.goal.sessionKey,
       forkFromSession: ctx.sessionManager?.getSessionFile?.(),

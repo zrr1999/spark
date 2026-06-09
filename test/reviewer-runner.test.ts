@@ -136,6 +136,7 @@ void test("reviewer verdict parser maps goal remaining-work verdicts", () => {
       goalId: "goal-1",
       objective: "Finish the slice",
       status: "active",
+      requestedStatus: "complete",
       evidenceRefs: [],
     },
     JSON.stringify({
@@ -166,6 +167,18 @@ void test("reviewer instruction and system prompt enforce read-only verdict boun
   assert.match(prompt, /Return verdict JSON only/);
   assert.match(instruction, /Review packet:/);
   assert.match(instruction, /"requestedStatus": "done"/);
+  const goalInstruction = renderReviewerInstruction({
+    targetKind: "goal",
+    cwd: process.cwd(),
+    goalId: "goal-1",
+    objective: "Pause when blocked",
+    status: "active",
+    requestedStatus: "paused",
+    reason: "blocked by missing user decision",
+    evidenceRefs: [],
+  });
+  assert.match(goalInstruction, /"requestedStatus": "paused"/);
+  assert.match(goalInstruction, /"reason": "blocked by missing user decision"/);
   assert.match(instruction, /"outcome": "approved" \| "needs_changes" \| "blocked"/);
   assert.equal(reviewerInputFingerprint(input), reviewerInputFingerprint(input));
 });

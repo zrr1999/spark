@@ -121,6 +121,7 @@ export function registerSparkClaimTaskTool(
           },
         };
       const status = input.requestedStatus ?? (input.roleRef ? "pending" : "running");
+      const providedPlan = input.plan !== undefined;
       const sessionKey = sparkSessionKey(ctx);
       const store = defaultTaskGraphStore(cwd);
       const claimed = await store.update(
@@ -139,6 +140,8 @@ export function registerSparkClaimTaskTool(
           const activeClaim = findActiveSessionClaim(graph, project.ref, sessionKey, existing?.ref);
           if (isUnfinishedTaskStatus(status) && activeClaim)
             return { error: "active_claim_exists" as const, activeTask: activeClaim };
+          if (!providedPlan && (!existing || !existing.plan))
+            return { error: "task_plan_required" as const };
           const requestedName = taskNamePatchForClaim(existing, input.name, input.title);
           const namePatch = requestedName
             ? uniqueTaskNameForExistingTask(tasks, requestedName, existing?.ref)
@@ -167,6 +170,7 @@ export function registerSparkClaimTaskTool(
                 roleRef: input.roleRef,
                 plan: normalizeTaskPlan(input.plan, input.description, input.title),
               });
+          let todosChanged = false;
           if (isUnfinishedTaskStatus(status)) {
             graph.claimTask(task.ref, {
               kind: "main",
@@ -183,8 +187,17 @@ export function registerSparkClaimTaskTool(
                 items: input.todos,
               },
             ]);
-            await sparkTodoStore(cwd, ctx).save(graph);
+            todosChanged = true;
+          } else if (isUnfinishedTaskStatus(status) && graph.taskTodos(task.ref).length === 0) {
+            graph.applyTodoOps(task.ref, [
+              {
+                op: "init",
+                items: initialTodosForTask(graph.getTask(task.ref)),
+              },
+            ]);
+            todosChanged = true;
           }
+          if (todosChanged) await sparkTodoStore(cwd, ctx).save(graph);
           return { task: graph.getTask(task.ref) };
         },
         { createIfMissing: false },
@@ -193,6 +206,16 @@ export function registerSparkClaimTaskTool(
         return {
           content: [{ type: "text", text: "No Spark project found." }],
           details: { found: false },
+        };
+      if (claimed.result.error === "task_plan_required")
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Cannot claim ${input.title}: creating or claiming a task without a bound task.plan is not allowed. Provide a concrete plan with objective, success criteria, evidence requirements, and steps before claiming.`,
+            },
+          ],
+          details: { found: true, error: "task_plan_required" },
         };
       if (
         claimed.result.error === "active_claim_exists" ||
@@ -252,9 +275,17 @@ function renderClaimedTaskText(task: Task): string {
   }
   lines.push(
     "",
-    'Next: execute this plan, and if useful create task-scoped TODOs with task({ action: "todo_update", scope: "task", ops: [{ op: "append", items: [...] }] }).',
+    'Initial task TODOs are present for this claim. Next: execute the task TODOs, and refine them with task({ action: "todo_update", scope: "task", ops: [...] }) if the first breakdown is incomplete.',
   );
   return lines.join("\n");
+}
+
+function initialTodosForTask(task: Task): string[] {
+  const steps = task.plan?.steps.map((step) => step.trim()).filter(Boolean) ?? [];
+  if (steps.length > 0) return steps.slice(0, 3);
+  const objective = task.plan?.objective.trim();
+  if (objective) return [objective];
+  return [`Complete and verify: ${task.title}`];
 }
 
 function renderPlanList(items: readonly string[]): string {
