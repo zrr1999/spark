@@ -31,7 +31,11 @@ export interface SparkModeMessageApi {
 }
 
 export interface SparkModeEntryDeps {
-  queueSparkAgentInstruction: (ctx: SparkToolContext, instruction: string) => void;
+  queueSparkAgentInstruction: (
+    ctx: SparkToolContext,
+    instruction: string,
+    options?: { goalId?: string },
+  ) => void;
   refreshSparkWidget: (cwd: string, ctx?: SparkToolContext) => Promise<void>;
   ensureDagManager: (cwd: string, ctx: SparkToolContext) => void;
 }

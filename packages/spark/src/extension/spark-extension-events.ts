@@ -33,19 +33,27 @@ interface SparkExtensionEventDeps {
 }
 
 export interface SparkExtensionEventHandlers {
-  queueSparkAgentInstruction(ctx: SparkToolContext, instruction: string): void;
+  queueSparkAgentInstruction(
+    ctx: SparkToolContext,
+    instruction: string,
+    options?: { goalId?: string },
+  ): void;
 }
 
 export function registerSparkExtensionEvents(
   pi: SparkExtensionEventApi,
   deps: SparkExtensionEventDeps,
 ): SparkExtensionEventHandlers {
-  const pendingSparkAgentInstructions = new Map<string, string>();
+  const pendingSparkAgentInstructions = new Map<string, { instruction: string; goalId?: string }>();
   const goalToolBaselines = new Map<string, string[]>();
 
-  function queueSparkAgentInstruction(ctx: SparkToolContext, instruction: string): void {
+  function queueSparkAgentInstruction(
+    ctx: SparkToolContext,
+    instruction: string,
+    options: { goalId?: string } = {},
+  ): void {
     const sessionKey = sparkSessionOwnerKey(ctx);
-    pendingSparkAgentInstructions.set(sessionKey, instruction);
+    pendingSparkAgentInstructions.set(sessionKey, { instruction, goalId: options.goalId });
   }
 
   pi.on?.("input", async (event: unknown, ctx: SparkToolContext) =>
@@ -64,12 +72,15 @@ export function registerSparkExtensionEvents(
   pi.on?.("before_agent_start", async (_event: unknown, ctx: SparkToolContext) => {
     await syncGoalInteractiveToolAvailability(pi, ctx, goalToolBaselines);
     const sessionKey = sparkSessionOwnerKey(ctx);
-    const pendingInstruction = pendingSparkAgentInstructions.get(sessionKey);
+    const pendingEntry = pendingSparkAgentInstructions.get(sessionKey);
+    const pendingInstruction = await activePendingInstruction(ctx, pendingEntry);
+    if (pendingEntry && !pendingInstruction) pendingSparkAgentInstructions.delete(sessionKey);
     const inbox = await collectUnreadHiddenRoleRunInbox(ctx.cwd, ctx);
     if (!pendingInstruction && inbox.summaries.length === 0) {
+      pendingSparkAgentInstructions.delete(sessionKey);
       return undefined;
     }
-    const contentParts = pendingInstruction ? [pendingInstruction] : [];
+    const contentParts = pendingInstruction ? [pendingInstruction.instruction] : [];
     if (inbox.summaries.length > 0) contentParts.push(formatHiddenRoleRunInbox(inbox));
     if (inbox.summaries.length > 0)
       await markHiddenRoleRunInboxDelivered(ctx.cwd, ctx, inbox.summaries);
@@ -129,6 +140,17 @@ export function registerSparkExtensionEvents(
 }
 
 const GOAL_DISABLED_INTERACTIVE_TOOLS = new Set(["ask", "ask_user", "ask_flow"]);
+
+type PendingSparkAgentInstruction = { instruction: string; goalId?: string };
+
+async function activePendingInstruction(
+  ctx: SparkToolContext,
+  pending: PendingSparkAgentInstruction | undefined,
+): Promise<PendingSparkAgentInstruction | undefined> {
+  if (!pending?.goalId) return pending;
+  const goal = await loadSessionGoal(ctx.cwd, ctx);
+  return goal?.status === "active" && goal.goalId === pending.goalId ? pending : undefined;
+}
 
 async function syncGoalInteractiveToolAvailability(
   pi: SparkExtensionEventApi,

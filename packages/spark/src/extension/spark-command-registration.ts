@@ -1,4 +1,5 @@
 import { defaultArtifactStore } from "pi-artifacts";
+import { isActiveSessionTodo } from "pi-tasks";
 import { nowIso, type JsonValue, type RoleRef } from "pi-extension-api";
 import { type SparkEntryIntent } from "./spark-entry.ts";
 import {
@@ -7,6 +8,7 @@ import {
 } from "./spark-entry-application.ts";
 import { detectSparkProjectState, resolveSparkEntry } from "./spark-entry-resolution.ts";
 import { currentSparkProject, loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
+import { loadIndependentTodos } from "./session-todos.ts";
 import {
   pauseCurrentSessionGoal,
   startOrInferSessionGoal,
@@ -264,10 +266,11 @@ export function registerSparkCommands(
           : "Spark session goal is active.",
         projectTitle ? `Current project: ${projectTitle}` : undefined,
         `Goal: ${goal.objective}`,
-        'Spark has started the foreground goal loop for this session. It will wait for the main agent to become idle, then continue at the goal interval. Goal completion is reviewer-owned: the main agent cannot mark goals complete. The Spark reviewer loop will mark the goal complete internally only after an achieved verdict. Use task({ action: "status" }) when the task graph is relevant. If all tasks are complete but the objective is not achieved, create new concrete tasks with task({ action: "plan" }) instead of completing or pausing just because the queue is empty. Goal mode is non-interactive: do not call ask/ask_flow. If task decomposition is wrong or missing, create or revise concrete tasks with task({ action: "plan" }); if the goal itself is ambiguous or blocked, stop and report or pause the goal with goal({ action: "pause" }).',
+        'Spark has started the foreground goal loop for this session. It waits until the main agent has been idle for the goal interval before each tick. Goal completion is reviewer-owned: the main agent cannot mark goals complete. The Spark reviewer loop will mark the goal complete internally only after an achieved verdict. A session goal with active session TODOs is never complete; finish or disposition those TODOs first. Use task({ action: "status" }) when the task graph is relevant. If all tasks are complete but the objective is not achieved, create new concrete tasks with task({ action: "plan" }) instead of completing or pausing just because the task list is empty. Goal mode is non-interactive: do not call ask/ask_flow. If task decomposition is wrong or missing, create or revise concrete tasks with task({ action: "plan" }); if the goal itself is ambiguous or blocked, stop and report or pause the goal with goal({ action: "pause" }).',
       ]
         .filter((line): line is string => Boolean(line))
         .join("\n"),
+      { goalId: goal.goalId },
     );
     piApi.sendMessage(
       { customType: "spark-goal-request", content: visible, display: true },
@@ -310,12 +313,13 @@ export function registerSparkCommands(
     piApi: SparkCommandApi,
     ctx: SparkGoalLoopContext,
     delayMs = FOREGROUND_GOAL_LOOP_INTERVAL_MS,
+    options: { idleGateSatisfied?: boolean } = {},
   ): void {
     const key = foregroundGoalLoopKey(ctx.cwd, ctx);
     clearForegroundGoalLoop(ctx.cwd, ctx);
     const timer = setTimeout(() => {
       foregroundGoalTimers.delete(key);
-      void runForegroundGoalLoopTick(piApi, ctx).catch(reportGoalLoopError);
+      void runForegroundGoalLoopTick(piApi, ctx, options).catch(reportGoalLoopError);
     }, delayMs);
     timer.unref?.();
     foregroundGoalTimers.set(key, timer);
@@ -340,6 +344,7 @@ export function registerSparkCommands(
   async function runForegroundGoalLoopTick(
     piApi: SparkCommandApi,
     ctx: SparkGoalLoopContext,
+    options: { idleGateSatisfied?: boolean } = {},
   ): Promise<void> {
     const initial = await loadActiveForegroundGoal(ctx);
     if (!initial) return;
@@ -347,7 +352,15 @@ export function registerSparkCommands(
       scheduleForegroundGoalLoop(piApi, ctx);
       return;
     }
-    if (!ctx.isIdle) await ctx.waitForIdle?.();
+    if (!ctx.isIdle && ctx.waitForIdle && !options.idleGateSatisfied) {
+      await ctx.waitForIdle();
+      if (await loadActiveForegroundGoal(ctx)) {
+        scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+          idleGateSatisfied: true,
+        });
+      }
+      return;
+    }
     const active = await loadActiveForegroundGoal(ctx);
     if (!active) return;
     if (isSparkReviewerLeaseActive(ctx.cwd, ctx)) {
@@ -362,10 +375,11 @@ export function registerSparkCommands(
     deps.queueSparkAgentInstruction(
       ctx,
       renderForegroundGoalTickInstruction(project?.title, goal.objective),
+      { goalId: goal.goalId },
     );
     piApi.sendMessage(
-      { customType: "spark-goal-request", content: visible, display: true },
-      { deliverAs: "followUp", triggerTurn: true },
+      { customType: "spark-goal-request", content: visible, display: false },
+      { deliverAs: "nextTurn", triggerTurn: true },
     );
     markForegroundGoalAwaitingTurn(piApi, ctx);
   }
@@ -552,6 +566,12 @@ export function registerSparkCommands(
     ctx: SparkGoalLoopContext,
     active: NonNullable<Awaited<ReturnType<typeof loadActiveForegroundGoal>>>,
   ): Promise<boolean> {
+    const todoBlocker = await sessionTodoGoalBlocker(ctx, active.goal);
+    if (todoBlocker) {
+      await updateSessionGoalStatus(ctx.cwd, ctx, "active", { review: todoBlocker });
+      await deps.refreshSparkWidget(ctx.cwd, ctx);
+      return true;
+    }
     const reviewerRunner = await deps.createReviewerRunner?.(ctx.cwd, ctx);
     if (!reviewerRunner) return true;
     const reviewInput: GoalReviewInput = {
@@ -598,6 +618,26 @@ export function registerSparkCommands(
     await updateSessionGoalStatus(ctx.cwd, ctx, "active", { review: reviewSummary });
     await deps.refreshSparkWidget(ctx.cwd, ctx);
     return true;
+  }
+
+  async function sessionTodoGoalBlocker(
+    ctx: SparkGoalLoopContext,
+    goal: SparkSessionGoal,
+  ): Promise<SparkSessionGoal["lastReview"] | undefined> {
+    if (goal.scope !== "session") return undefined;
+    const activeTodos = (await loadIndependentTodos(ctx.cwd, ctx)).filter(isActiveSessionTodo);
+    if (activeTodos.length === 0) return undefined;
+    const labels = activeTodos
+      .slice(0, 5)
+      .map((todo) => `${todo.status}: ${compactInline(todo.content)}`);
+    return {
+      achieved: false,
+      confidence: "deterministic-session-todos",
+      reason: `Session goal cannot complete while ${activeTodos.length} active session TODO(s) remain.`,
+      remainingWork: `Finish or explicitly disposition active session TODOs before completing the session goal: ${labels.join("; ")}`,
+      blockers: labels,
+      reviewedAt: nowIso(),
+    };
   }
 
   async function runGoalReviewer(
@@ -687,7 +727,7 @@ export function registerSparkCommands(
       "Spark foreground goal loop tick.",
       projectTitle ? `Current project: ${projectTitle}` : undefined,
       `Goal: ${objective}`,
-      'Goal completion is reviewer-owned: the main agent cannot mark goals complete. The Spark reviewer loop already checked whether the objective is achieved before sending this continuation; if it was achieved, this prompt would not be sent. Use task({ action: "status" }) when the task graph is relevant. If all existing tasks are complete but the objective is not achieved, create new concrete tasks with task({ action: "plan" }) instead of completing or pausing just because the queue is empty. If a concrete ready task is obvious, claim and complete one verified task in the foreground, then finish it with evidence. Goal mode is non-interactive: do not call ask/ask_flow. If task decomposition is wrong, missing, empty, or blocks the goal, create or revise concrete tasks with task({ action: "plan" }) and continue from the updated ready work. If no ready path remains because of a real blocker, validation fails, or the goal itself is ambiguous, stop and report or pause the goal with goal({ action: "pause" }). Do not spawn background workflow execution from the goal loop.',
+      'Goal completion is reviewer-owned: the main agent cannot mark goals complete. The Spark reviewer loop already checked whether the objective is achieved before sending this continuation; if it was achieved, this prompt would not be sent. A session goal with active session TODOs is never complete; finish or disposition those TODOs first. Use task({ action: "status" }) when the task graph is relevant. If all existing tasks are complete but the objective is not achieved, create new concrete tasks with task({ action: "plan" }) instead of completing or pausing just because the task list is empty. If a concrete ready task is obvious, claim and complete one verified task in the foreground, then finish it with evidence. Goal mode is non-interactive: do not call ask/ask_flow. If task decomposition is wrong, missing, empty, or blocks the goal, create or revise concrete tasks with task({ action: "plan" }) and continue from the updated ready work. If no ready path remains because of a real blocker, validation fails, or the goal itself is ambiguous, stop and report or pause the goal with goal({ action: "pause" }). Do not spawn background workflow execution from the goal loop.',
     ]
       .filter((line): line is string => Boolean(line))
       .join("\n");

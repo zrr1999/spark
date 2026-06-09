@@ -1674,6 +1674,8 @@ void test("/goal foreground loop reschedules active goal on session_start", asyn
 
     assert.ok(restartedRun.customMessages.length > messageCountBeforeTick);
     assert.match(restartedRun.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
+    assert.equal(restartedRun.customMessages.at(-1)?.display, false);
+    assert.equal(restartedRun.customMessages.at(-1)?.options?.deliverAs, "nextTurn");
     const tickPrompt = await consumeSparkModeContext(restartedRun, ctx);
     assert.match(tickPrompt, /Spark foreground goal loop tick/);
     assert.match(tickPrompt, /Goal completion is reviewer-owned/);
@@ -1685,6 +1687,70 @@ void test("/goal foreground loop reschedules active goal on session_start", asyn
         await handler({}, ctx);
       }
     }
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("/goal foreground loop drops stale tick context after pause", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-drop-stale-tick-"));
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  type FakeTimer = {
+    callback: () => void;
+    delay: number | undefined;
+    cleared: boolean;
+    unref: () => FakeTimer;
+  };
+  const timers: FakeTimer[] = [];
+  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
+    const timer: FakeTimer = {
+      callback: () => {
+        if (typeof callback === "function") callback();
+      },
+      delay,
+      cleared: false,
+      unref: () => timer,
+    };
+    timers.push(timer);
+    return timer as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
+    const fake = timer as unknown as FakeTimer | undefined;
+    if (fake) fake.cleared = true;
+  }) as typeof clearTimeout;
+  async function flushAsyncWork(): Promise<void> {
+    for (let index = 0; index < 20; index += 1) {
+      await new Promise((resolve) => originalSetTimeout(resolve, 0));
+    }
+  }
+
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const run = registerSparkToolsForTest();
+    await useOnlySparkProject(run.tools, ctx);
+    await executeSparkTool(run.tools, "goal", ctx, {
+      action: "start",
+      objective: "Drop stale tick after pause",
+    });
+    for (const handler of run.eventHandlers.get("session_start") ?? []) {
+      await handler({}, ctx);
+    }
+    timers[0]?.callback();
+    await flushAsyncWork();
+    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
+    assert.equal(run.customMessages.at(-1)?.display, false);
+    assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "nextTurn");
+
+    await executeSparkTool(run.tools, "goal", ctx, {
+      action: "pause",
+      reason: "stop before hidden tick context is consumed",
+    });
+
+    assert.equal(await tryConsumeSparkModeContext(run, ctx), undefined);
+  } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
@@ -1822,11 +1888,90 @@ void test("/goal foreground loop records unmet reviewer verdict before continuat
     assert.equal(reviewerCalls, 1);
     assert.ok(run.customMessages.length > messagesBefore);
     assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
+    assert.equal(run.customMessages.at(-1)?.display, false);
+    assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "nextTurn");
     const goal = await loadSessionGoal(dir, ctx);
     assert.equal(goal?.status, "active");
     assert.equal(goal?.lastReview?.achieved, false);
     assert.match(goal?.lastReview?.remainingWork ?? "", /goal needs one more verified task/);
     assert.equal((await defaultArtifactStore(dir).list({ kind: "review" })).length, 1);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("/goal foreground loop treats active session TODOs as deterministic unmet state", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-session-todo-blocker-"));
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  type FakeTimer = {
+    callback: () => void;
+    delay: number | undefined;
+    cleared: boolean;
+    unref: () => FakeTimer;
+  };
+  const timers: FakeTimer[] = [];
+  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
+    const timer: FakeTimer = {
+      callback: () => {
+        if (typeof callback === "function") callback();
+      },
+      delay,
+      cleared: false,
+      unref: () => timer,
+    };
+    timers.push(timer);
+    return timer as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
+    const fake = timer as unknown as FakeTimer | undefined;
+    if (fake) fake.cleared = true;
+  }) as typeof clearTimeout;
+  async function flushAsyncWork(): Promise<void> {
+    for (let index = 0; index < 20; index += 1) {
+      await new Promise((resolve) => originalSetTimeout(resolve, 0));
+    }
+  }
+
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    await saveIndependentTodos(dir, ctx, [
+      { id: "todo-1", content: "Resolve session blocker", status: "pending" },
+    ]);
+    let reviewerCalls = 0;
+    const run = registerSparkToolsForTest({
+      reviewerRunner: {
+        async review(input: ReviewInput): Promise<ReviewerRunResult> {
+          reviewerCalls += 1;
+          return createApprovingReviewerRunner().review(input);
+        },
+      },
+    });
+    await useOnlySparkProject(run.tools, ctx);
+    await executeSparkTool(run.tools, "goal", ctx, {
+      action: "start",
+      objective: "Finish only after session TODOs clear",
+    });
+    for (const handler of run.eventHandlers.get("session_start") ?? []) {
+      await handler({}, ctx);
+    }
+    const messagesBefore = run.customMessages.length;
+    timers[0]?.callback();
+    await flushAsyncWork();
+
+    assert.equal(reviewerCalls, 0);
+    assert.ok(run.customMessages.length > messagesBefore);
+    assert.equal(run.customMessages.at(-1)?.display, false);
+    assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "nextTurn");
+    const goal = await loadSessionGoal(dir, ctx);
+    assert.equal(goal?.status, "active");
+    assert.equal(goal?.lastReview?.achieved, false);
+    assert.match(goal?.lastReview?.reason ?? "", /active session TODO/);
+    assert.match(goal?.lastReview?.remainingWork ?? "", /Resolve session blocker/);
+    assert.equal((await defaultArtifactStore(dir).list({ kind: "review" })).length, 0);
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
@@ -2034,6 +2179,8 @@ void test("goal reviewer state machine covers scope conflict, restart, idle revi
     await flushAsyncWork();
     assert.equal(goalReviewerCalls, 1);
     assert.ok(restarted.customMessages.length > messagesBeforeUnmet);
+    assert.equal(restarted.customMessages.at(-1)?.display, false);
+    assert.equal(restarted.customMessages.at(-1)?.options?.deliverAs, "nextTurn");
     let goal = await loadSessionGoal(dir, ctx);
     assert.equal(goal?.status, "active");
     assert.equal(goal?.lastReview?.achieved, false);
@@ -2360,45 +2507,58 @@ void test("/goal foreground loop waits for idle and stops after pause", async ()
     await flushAsyncWork();
 
     assert.equal(idleWaits, 1);
+    assert.equal(run.customMessages.length, messageCountBeforeTick);
+    assert.equal(timers.length, 2);
+    assert.equal(timers[1]?.delay, 30_000);
+
+    timers[1]?.callback();
+    await flushAsyncWork();
     assert.ok(run.customMessages.length > messageCountBeforeTick);
     assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
+    assert.equal(run.customMessages.at(-1)?.display, false);
+    assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "nextTurn");
     assert.match(await consumeSparkModeContext(run, ctx), /Spark foreground goal loop tick/);
-    assert.equal(timers.length, 1);
+    assert.equal(timers.length, 2);
 
     for (const handler of run.eventHandlers.get("turn_end") ?? []) {
       await handler({ message: { role: "assistant", stopReason: "stop" } }, ctx);
     }
-    assert.equal(timers.length, 1);
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-    assert.equal(timers.length, 2);
-    assert.equal(timers[1]?.delay, 30_000);
-
-    await pauseGoalCommand.handler("waiting for review", ctx);
-    assert.equal(timers[1]?.cleared, true);
-    const messageCountAfterPause = run.customMessages.length;
-    timers[1]?.callback();
-    await flushAsyncWork();
-
-    assert.equal(run.customMessages.length, messageCountAfterPause);
-    assert.equal(idleWaits, 1);
-    assert.equal(timers.length, 2);
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-    assert.equal(timers.length, 2);
-
-    await goalCommand.handler("finish failed goal work", ctx);
     assert.equal(timers.length, 2);
     for (const handler of run.eventHandlers.get("agent_end") ?? []) {
       await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
     }
     assert.equal(timers.length, 3);
+    assert.equal(timers[2]?.delay, 30_000);
+
+    await pauseGoalCommand.handler("waiting for review", ctx);
+    assert.equal(timers[2]?.cleared, true);
+    const messageCountAfterPause = run.customMessages.length;
     timers[2]?.callback();
     await flushAsyncWork();
+
+    assert.equal(run.customMessages.length, messageCountAfterPause);
+    assert.equal(idleWaits, 1);
+    assert.equal(timers.length, 3);
+    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
+      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    }
+    assert.equal(timers.length, 3);
+
+    await goalCommand.handler("finish failed goal work", ctx);
+    assert.equal(timers.length, 3);
+    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
+      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    }
+    assert.equal(timers.length, 4);
+    timers[3]?.callback();
+    await flushAsyncWork();
     assert.equal(idleWaits, 2);
+    assert.equal(timers.length, 5);
+    timers[4]?.callback();
+    await flushAsyncWork();
     assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
+    assert.equal(run.customMessages.at(-1)?.display, false);
+    assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "nextTurn");
     assert.match(await consumeSparkModeContext(run, ctx), /Spark foreground goal loop tick/);
     for (const handler of run.eventHandlers.get("turn_end") ?? []) {
       await handler(
@@ -2441,26 +2601,27 @@ void test("/goal foreground loop waits for idle and stops after pause", async ()
       failedGoalState.goal?.lastReview?.blockers?.join("\n") ?? "",
       /Context overflow recovery failed: invalidated oauth token/,
     );
-    assert.equal(timers.length, 4);
-    assert.equal(timers[3]?.delay, 30_000);
+    assert.equal(timers.length, 6);
+    assert.equal(timers[5]?.delay, 30_000);
 
     await goalCommand.handler("finish complete goal work", ctx);
-    assert.equal(timers.length, 4);
+    assert.equal(timers.length, 6);
     for (const handler of run.eventHandlers.get("agent_end") ?? []) {
       await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
     }
-    assert.equal(timers.length, 5);
+    assert.equal(timers.length, 7);
+    assert.equal(timers[5]?.cleared, true);
     await executeSparkTool(run.tools, "goal", ctx, {
       action: "pause",
       reason: "verified stop after test",
     });
     const messageCountAfterComplete = run.customMessages.length;
-    timers[4]?.callback();
+    timers[6]?.callback();
     await flushAsyncWork();
 
     assert.equal(run.customMessages.length, messageCountAfterComplete);
     assert.equal(idleWaits, 2);
-    assert.equal(timers.length, 5);
+    assert.equal(timers.length, 7);
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
@@ -7616,7 +7777,12 @@ function createRejectingReviewerRunner(
 function registerSparkToolsForTest(options: { reviewerRunner?: ReviewerRunner } = {}): {
   tools: Map<string, SparkToolConfig>;
   messages: string[];
-  customMessages: Array<{ customType: string; content: string; display?: boolean }>;
+  customMessages: Array<{
+    customType: string;
+    content: string;
+    display?: boolean;
+    options?: { deliverAs?: string; triggerTurn?: boolean };
+  }>;
   commands: Map<string, Parameters<SparkExtensionApiForTest["registerCommand"]>[1]>;
   shortcuts: Map<string, Parameters<NonNullable<SparkExtensionApiForTest["registerShortcut"]>>[1]>;
   eventHandlers: Map<string, Array<(event: unknown, ctx: TestSparkContext) => unknown>>;
@@ -7625,7 +7791,12 @@ function registerSparkToolsForTest(options: { reviewerRunner?: ReviewerRunner } 
   const tools = new Map<string, SparkToolConfig>();
   const activeToolNames = new Set<string>();
   const messages: string[] = [];
-  const customMessages: Array<{ customType: string; content: string; display?: boolean }> = [];
+  const customMessages: Array<{
+    customType: string;
+    content: string;
+    display?: boolean;
+    options?: { deliverAs?: string; triggerTurn?: boolean };
+  }> = [];
   const commands = new Map<string, Parameters<SparkExtensionApiForTest["registerCommand"]>[1]>();
   const shortcuts = new Map<
     string,
@@ -7658,8 +7829,8 @@ function registerSparkToolsForTest(options: { reviewerRunner?: ReviewerRunner } 
       handlers.push(handler as (event: unknown, ctx: TestSparkContext) => unknown);
       eventHandlers.set(event, handlers);
     },
-    sendMessage: (message) => {
-      customMessages.push(message);
+    sendMessage: (message, options) => {
+      customMessages.push({ ...message, options });
     },
     getAllTools: () => [...activeToolNames].map((name) => ({ name })),
     setActiveTools: (names) => {

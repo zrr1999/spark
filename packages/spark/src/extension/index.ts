@@ -87,8 +87,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   }
 
   registerSparkCommands(pi, {
-    queueSparkAgentInstruction: (ctx, instruction) =>
-      eventHandlers.queueSparkAgentInstruction(ctx, instruction),
+    queueSparkAgentInstruction: (ctx, instruction, options) =>
+      eventHandlers.queueSparkAgentInstruction(ctx, instruction, options),
     refreshSparkWidget,
     ensureDagManager: (cwd, ctx) => dagManagerController.ensure(cwd, ctx),
     createReviewerRunner,
