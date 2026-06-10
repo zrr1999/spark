@@ -153,6 +153,52 @@ function quoteModeParamValue(value: string): string {
   return JSON.stringify(value);
 }
 
+const RESOURCE_NEED_KEY_PATTERN = /^[A-Za-z0-9_.:-]+$/;
+
+function resourceNeedModeParams(needs: ResourceNeeds | undefined): string[] {
+  if (!needs) return [];
+  return Object.entries(needs)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([rawKey, rawValue]) => {
+      const key = rawKey.trim();
+      if (!key) throw new CueError("INVALID_NEED", "resource need key must be non-empty");
+      if (key.startsWith("need.")) {
+        throw new CueError(
+          "INVALID_NEED",
+          `resource need key \`${key}\` must omit the need. prefix`,
+        );
+      }
+      if (!RESOURCE_NEED_KEY_PATTERN.test(key)) {
+        throw new CueError(
+          "INVALID_NEED",
+          `resource need key \`${key}\` may contain only letters, numbers, _, ., :, and -`,
+        );
+      }
+
+      if (typeof rawValue === "number") {
+        if (!Number.isFinite(rawValue) || !Number.isInteger(rawValue) || rawValue < 0) {
+          throw new CueError(
+            "INVALID_NEED",
+            `resource need \`${key}\` must be a non-negative integer count or string quantity`,
+          );
+        }
+        return `need.${key}=${rawValue}`;
+      }
+
+      if (typeof rawValue !== "string") {
+        throw new CueError(
+          "INVALID_NEED",
+          `resource need \`${key}\` must be a string quantity or non-negative integer count`,
+        );
+      }
+      const value = rawValue.trim();
+      if (!value) {
+        throw new CueError("INVALID_NEED", `resource need \`${key}\` must be non-empty`);
+      }
+      return `need.${key}=${quoteModeParamValue(value)}`;
+    });
+}
+
 // ── IPC message types (mirrors cue_core::ipc) ──────────────────────────────
 
 export type Mode = "Job" | "Cron";
@@ -331,6 +377,7 @@ export interface JobInfo {
   chain_id?: number | string | null;
   chain_index?: number;
   chain_total?: number;
+  pending_reason?: string | null;
 }
 
 export interface ScopeInfo {
@@ -555,6 +602,7 @@ export class CueClient {
     const modeParams: string[] = [];
     if (opts.pty !== undefined) modeParams.push(`pty=${opts.pty ? "true" : "false"}`);
     if (opts.cwd) modeParams.push(`cwd=${quoteModeParamValue(opts.cwd)}`);
+    modeParams.push(...resourceNeedModeParams(opts.needs));
     const modeParamText = modeParams.length > 0 ? `(${modeParams.join(",")})` : "";
     return this.#send({ Eval: { input: `:run${modeParamText} ${input}`, mode } });
   }
@@ -600,13 +648,14 @@ export class CueClient {
     const timeoutMs = (opts?.timeout ?? 300) * 1000;
     const cwd = opts?.cwd;
     const pty = opts?.pty ?? false;
+    const needs = opts?.needs;
 
     // Subscribe to global jobs channel before issuing the command.
     await this.#ensureSubscribed("jobs");
 
     // Issue the eval.  The daemon sends job/chain events before the
     // response for successful runs.
-    const requestId = await this.eval(command, "Job", { cwd, pty });
+    const requestId = await this.eval(command, "Job", { cwd, pty, needs });
     const response = await this.#waitForResponse(requestId);
 
     if ("Err" in response) {
@@ -671,7 +720,11 @@ export class CueClient {
   async startJob(command: string, opts?: StartJobOptions): Promise<StartJobResult> {
     await this.#ensureSubscribed("jobs");
 
-    const requestId = await this.eval(command, "Job", { cwd: opts?.cwd, pty: opts?.pty ?? false });
+    const requestId = await this.eval(command, "Job", {
+      cwd: opts?.cwd,
+      pty: opts?.pty ?? false,
+      needs: opts?.needs,
+    });
     const response = await this.#waitForResponse(requestId);
 
     if ("Err" in response) {
@@ -1873,11 +1926,15 @@ export class CueClient {
 
 // ── Public types ───────────────────────────────────────────────────────────
 
+export type ResourceNeeds = Record<string, string | number>;
+
 export interface RunEvalOptions {
   /** Working directory override. */
   cwd?: string;
   /** Whether to allocate a PTY. Defaults to false for API/tool runs. */
   pty?: boolean;
+  /** Resource quantities to reserve before spawning, encoded as `need.<key>=<quantity>`. */
+  needs?: ResourceNeeds;
 }
 
 export interface RunJobOptions extends RunEvalOptions {

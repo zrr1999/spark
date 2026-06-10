@@ -9,6 +9,7 @@ import {
   normalizeCueStderrForDisplay,
   normalizeCueTerminalOutput,
   normalizeCueLimit,
+  normalizeCueResourceNeeds,
   normalizeCueTailBytes,
   normalizeCueTimeoutSeconds,
   renderCueChainStatus,
@@ -265,6 +266,16 @@ void test("pi-cue numeric and boolean normalizers reject invalid explicit values
     () => normalizeCueBoolean("true", false, "cue_exec background"),
     /must be a boolean/,
   );
+
+  assert.deepEqual(normalizeCueResourceNeeds({ gpu: 1, gpu_mem: "24GiB" }), {
+    gpu: 1,
+    gpu_mem: "24GiB",
+  });
+  assert.equal(normalizeCueResourceNeeds({}), undefined);
+  assert.throws(() => normalizeCueResourceNeeds(["gpu"]), /must be an object/);
+  assert.throws(() => normalizeCueResourceNeeds({ "need.gpu": 1 }), /omit the need\. prefix/);
+  assert.throws(() => normalizeCueResourceNeeds({ gpu: -1 }), /non-negative integer/);
+  assert.throws(() => normalizeCueResourceNeeds({ gpu: " " }), /non-empty string/);
 });
 
 void test("resolveCueWorkingDirectory anchors explicit relative cwd to the Pi context cwd", () => {
@@ -292,10 +303,12 @@ void test("pi-cue tools validate bad parameters before connecting to cued", asyn
   const runTool = tools.get("cue_run");
   const scriptTool = tools.get("cue_script");
   const scopeTool = tools.get("cue_scope");
+  const resourceTool = tools.get("cue_resources");
   assert.ok(execTool);
   assert.ok(runTool);
   assert.ok(scriptTool);
   assert.ok(scopeTool);
+  assert.ok(resourceTool);
 
   await assert.rejects(
     () =>
@@ -331,6 +344,18 @@ void test("pi-cue tools validate bad parameters before connecting to cued", asyn
         {},
       ),
     /cue_scope env_tail_bytes is no longer supported; use tail_bytes/,
+  );
+
+  await assert.rejects(
+    () =>
+      execTool.execute(
+        "call-3b",
+        { command: "echo ok", needs: { "need.gpu": 1 } },
+        new AbortController().signal,
+        () => undefined,
+        {},
+      ),
+    /cue_exec needs keys must omit the need\. prefix/,
   );
 
   await assert.rejects(

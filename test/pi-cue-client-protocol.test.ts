@@ -191,6 +191,26 @@ void test("cue RunScript request matches the current strict daemon schema", asyn
   );
 });
 
+void test("cue eval encodes resource needs as run mode params", async () => {
+  await withCueServer(
+    () => undefined,
+    async (client, requests) => {
+      await client.eval("echo ok", "Job", {
+        cwd: "/tmp/work dir",
+        needs: { gpu: 1, gpu_mem: "24GiB" },
+        pty: false,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const payload = requestPayload(requests[0]!);
+      assert.deepEqual(payload.Eval, {
+        input: ':run(pty=false,cwd="/tmp/work dir",need.gpu=1,need.gpu_mem=24GiB) echo ok',
+        mode: "Job",
+      });
+    },
+  );
+});
+
 void test("cue runJob resolves serial chains after a failed leaf skips later leaves", async () => {
   await withCueServer(
     (message, socket) => {
@@ -367,6 +387,7 @@ void test("cue typed list, output, and log responses are parsed", async () => {
                     chain_id: null,
                     chain_index: null,
                     chain_total: null,
+                    pending_reason: "license: busy",
                   },
                 ],
                 page: { total: 1, shown: 1, limit: 1, truncated: false },
@@ -409,6 +430,7 @@ void test("cue typed list, output, and log responses are parsed", async () => {
         "listJobs should use typed ListJobs",
       );
       assert.equal(jobs[0]?.id, "J1");
+      assert.equal(jobs[0]?.pending_reason, "license: busy");
 
       const output = await client.jobOutput("J1", 1024);
       assert.deepEqual(requestPayload(requests[1]!).JobOutput, {

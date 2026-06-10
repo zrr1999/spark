@@ -5,8 +5,8 @@ description: |
    cue-shell uses direct-exec with its own composition operators:
    |> pipes stdout, -> runs in serial on success, || runs in parallel,
    ~> runs in serial ignoring failures.
-   Use cue_exec for direct commands; use cue_run for .cue files, cue_script for inline .cue scripts, and script_run/script_eval for explicit-language generic scripts.
-   cue_jobs to list/status/wait/stop, cue_schedule for scheduled tasks.
+   Use cue_exec for direct commands; pass resource requirements with cue_exec needs={...}, not embedded :run(need...). Use cue_run for .cue files, cue_script for inline .cue scripts, and script_run/script_eval for explicit-language generic scripts.
+   cue_jobs to list/status/wait/stop, cue_resources to inspect providers/resources, cue_schedule for scheduled tasks.
    cue-shell has its own grammar — not bash-compatible.
 ---
 
@@ -19,16 +19,17 @@ builds, test suites, dev servers, and long-running background processes.
 The extension automatically passes the current working directory (cwd) to
 each command via `:run(cwd=...)` mode param.
 
-## Tool reference (9 resource-oriented tools)
+## Tool reference (10 resource-oriented tools)
 
 | Category     | Tool           | Purpose                                     | Key parameters                                                                          |
 | ------------ | -------------- | ------------------------------------------- | --------------------------------------------------------------------------------------- |
-| **Exec**     | `cue_exec`     | Execute a direct command and create a job   | `command`, `background?`, `timeout?`, `cwd?`, `pty?`, `tail_bytes?`                     |
+| **Exec**     | `cue_exec`     | Execute a direct command and create a job   | `command`, `background?`, `timeout?`, `cwd?`, `pty?`, `needs?`, `tail_bytes?`           |
 | **Script**   | `cue_run`      | Run a `.cue` file (`cue run <file.cue>`)    | `path`, `timeout?`, `tail_bytes?`                                                       |
 | **Script**   | `cue_script`   | Run an inline `.cue` script body            | `script`, `pathLabel?`, `timeout?`, `tail_bytes?`                                       |
 | **Script**   | `script_run`   | Run a script file with explicit language    | `path`, `language`, `timeout?`, `tail_bytes?`                                           |
 | **Script**   | `script_eval`  | Run an inline script with explicit language | `script`, `language`, `pathLabel?`, `timeout?`, `tail_bytes?`                           |
 | **Jobs**     | `cue_jobs`     | List/status/wait/stop jobs                  | `action` (list/status/wait/stop), `id?`, `status?`, `limit?`, `timeout?`, `tail_bytes?` |
+| **Resources**| `cue_resources`| Inspect providers and resource snapshots    | `action?` (providers/resources)                                                        |
 | **Schedule** | `cue_schedule` | Add/list/pause/resume/remove scheduled jobs | `action` (add/list/pause/resume/remove), `schedule?`, `command?`, `id?`, `limit?`       |
 | **Scope**    | `cue_scope`    | Inspect scopes, env, or config              | `action` (list/env/config), `limit?`, `includeEnv?`, `tail_bytes?`                      |
 | **History**  | `cue_history`  | Show recent history for a job/cron or all   | `id?`, `limit?`, `tail_bytes?`                                                          |
@@ -36,6 +37,8 @@ each command via `:run(cwd=...)` mode param.
 Tool names are resource-oriented: `cue_exec` is for direct commands, `cue_run` is for real `.cue` files, `cue_script` is for inline `.cue` script bodies, and `script_run`/`script_eval` are generic explicit-language script runners. Compact managers cover jobs, schedules, scopes, and history.
 
 `cue_exec` runs without a PTY by default (`pty=false`) so non-interactive commands get separate stdout/stderr and do not trigger terminal capability probes. Use `pty=true` only when a command genuinely needs terminal semantics; for sustained interactive work, use the cue TUI and `:fg` instead.
+
+For resource-gated jobs, pass `needs` as an object whose keys omit the `need.` prefix. Examples: `needs={ gpu: 1, gpu_mem: "24GiB" }` or `needs={ license: 1 }`. **Do not** put `:run(need.gpu=1)` inside `command`; `pi-cue` already wraps `command` in `:run(...)` and encodes `needs` as mode params.
 
 ## How cue-shell works
 
@@ -134,6 +137,17 @@ cue_exec(command="pip install -r requirements.txt")
 ```text
 cue_exec(command="npm run dev", background=true)
 cue_exec(command="python -m http.server 8080", background=true)
+```
+
+### Resource-gated commands
+
+```text
+cue_resources(action="providers")
+cue_resources(action="resources")
+cue_exec(command="python train.py", needs={ gpu: 1, gpu_mem: "24GiB" }, background=true)
+cue_exec(command="run-licensed-tool", needs={ license: 1 })
+cue_jobs(action="list")          # pending jobs show resource pending reasons
+cue_jobs(action="status", id="J42")
 ```
 
 ---

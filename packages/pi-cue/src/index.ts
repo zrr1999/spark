@@ -91,6 +91,7 @@ export type {
   JobInfo,
   JobResult,
   JobStatus,
+  ResourceNeeds,
   ScriptItemSummary,
   ScriptResult,
   StartJobResult,
@@ -111,6 +112,7 @@ import {
   type CueResolvedTransport,
   type JobInfo,
   type JobStatus,
+  type ResourceNeeds,
   type ScriptResult,
   resolveCueTransport,
 } from "./cue-client.ts";
@@ -222,6 +224,8 @@ const SHORT_TIMEOUT_S = 10;
 const DEFAULT_CUE_TAIL_BYTES = 16 * 1024;
 const DEFAULT_LIST_LIMIT = 20;
 const CUE_JOB_ACTIONS = ["list", "status", "wait", "stop"] as const;
+const CUE_RESOURCE_ACTIONS = ["providers", "resources"] as const;
+const CUE_RESOURCE_NEED_KEY_PATTERN = /^[A-Za-z0-9_.:-]+$/;
 const CUE_JOB_STATUS_FILTERS = [
   "all",
   "running",
@@ -481,6 +485,26 @@ function chainStatus(jobs: JobInfo[]): JobStatus {
   return "Pending";
 }
 
+function jobPendingReason(job: JobInfo): string | undefined {
+  return typeof job.pending_reason === "string" && job.pending_reason.trim()
+    ? job.pending_reason.trim()
+    : undefined;
+}
+
+function appendPendingReason(job: JobInfo, lines: string[]): void {
+  const reason = jobPendingReason(job);
+  if (reason) lines.push(`Pending reason: ${reason}`);
+}
+
+function formatJobListLine(job: JobInfo): string {
+  let line = `${job.id}  ${statusLabel(job.status)}  ${job.pipeline}`;
+  if (job.exit_code != null) line += ` (exit ${job.exit_code})`;
+  if (job.chain_id) line += ` [${job.chain_id}]`;
+  const reason = jobPendingReason(job);
+  if (reason) line += ` — pending: ${reason}`;
+  return line;
+}
+
 type CueJobOutputReader = Pick<CueClient, "jobOutput" | "jobError">;
 
 async function collectJobOutputLines(
@@ -540,6 +564,7 @@ export async function renderCueChainStatus(
     const leafLabel = `Leaf ${(job.chain_index ?? 0) + 1}/${job.chain_total ?? jobs.length}`;
     const lines = [`${leafLabel}: ${statusLabel(job.status)} — ${job.pipeline}`];
     if (job.exit_code != null) lines.push(`Exit code: ${job.exit_code}`);
+    appendPendingReason(job, lines);
     lines.push(...output.lines);
     leafDisplays.push({
       job,
@@ -672,6 +697,37 @@ function normalizeOptionalCueString(value: unknown, field: string): string | und
   return value.trim();
 }
 
+export function normalizeCueResourceNeeds(
+  value: unknown,
+  field = "needs",
+): ResourceNeeds | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${field} must be an object mapping resource keys to quantities`);
+  }
+  const needs: ResourceNeeds = {};
+  for (const [rawKey, rawValue] of Object.entries(value as Record<string, unknown>)) {
+    const key = rawKey.trim();
+    if (!key) throw new Error(`${field} keys must be non-empty`);
+    if (key.startsWith("need.")) throw new Error(`${field} keys must omit the need. prefix`);
+    if (!CUE_RESOURCE_NEED_KEY_PATTERN.test(key)) {
+      throw new Error(`${field}.${key} may contain only letters, numbers, _, ., :, and -`);
+    }
+    if (typeof rawValue === "number") {
+      if (!Number.isFinite(rawValue) || !Number.isInteger(rawValue) || rawValue < 0) {
+        throw new Error(`${field}.${key} must be a non-negative integer count or string quantity`);
+      }
+      needs[key] = rawValue;
+      continue;
+    }
+    if (typeof rawValue !== "string" || !rawValue.trim()) {
+      throw new Error(`${field}.${key} must be a non-empty string or non-negative integer`);
+    }
+    needs[key] = rawValue.trim();
+  }
+  return Object.keys(needs).length > 0 ? needs : undefined;
+}
+
 function quoteCueWord(value: string): string {
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
   return JSON.stringify(value);
@@ -783,6 +839,17 @@ function formatNumberArg(
   return `${options.prefix ?? ""}${value}${options.suffix ?? ""}`;
 }
 
+function formatNeedsArg(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0) return undefined;
+  const text = entries
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, quantity]) => `${key}=${String(quantity)}`)
+    .join(",");
+  return `needs=${truncateInline(text, 80)}`;
+}
+
 function needsQuoting(value: string): boolean {
   return /\s|["'`]/.test(value);
 }
@@ -809,6 +876,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       "Its composition operators are: |> pipes stdout, -> runs in serial on success, || runs in parallel (not OR), ~> runs in serial ignoring failure. " +
       "Prefer direct-exec commands and Pi file tools; use separate tool calls or explicit /bin/sh -lc '...' only when shell semantics are genuinely required. " +
       "Set background=true to start without waiting; track with cue_jobs action=status/wait, stop with cue_jobs action=stop. " +
+      "For resource-gated jobs, pass needs={ gpu: 1, gpu_mem: '24GiB' } instead of embedding :run(need...) in command. " +
       "Runs without a PTY by default; set pty=true only for commands that genuinely need terminal semantics. " +
       "File-system commands (mv, cp, rm, ls, cat, find, ...) get a short 10s timeout by default.",
     parameters: Type.Object({
@@ -841,6 +909,12 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           default: false,
         }),
       ),
+      needs: Type.Optional(
+        Type.Record(Type.String(), Type.Union([Type.String(), Type.Number()]), {
+          description:
+            "Resource requirements to reserve before spawn, encoded as cue-shell mode params need.<key>=<quantity>. Examples: { gpu: 1, gpu_mem: '24GiB' } or { license: 1 }. Keys omit the need. prefix.",
+        }),
+      ),
       tail_bytes: Type.Optional(
         Type.Number({
           description:
@@ -857,6 +931,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
           formatStringArg(args.cwd, { prefix: "cwd=" }),
           args.pty === true ? "pty=true" : undefined,
+          formatNeedsArg(args.needs),
           formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
         ],
         theme,
@@ -882,6 +957,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         DEFAULT_CUE_TAIL_BYTES,
         "cue_exec tail_bytes",
       );
+      const needs = normalizeCueResourceNeeds(params.needs, "cue_exec needs");
       const effectiveTimeout = normalizeCueTimeoutSeconds(
         params.timeout,
         isFileOp(command) ? SHORT_TIMEOUT_S : 300,
@@ -890,7 +966,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       const cued = await getClient(ctx);
 
       if (background) {
-        const result = await cued.startJob(command, { cwd, pty });
+        const result = await cued.startJob(command, { cwd, pty, needs });
         const lines: string[] = [];
         if (result.kind === "chain" && result.chain) {
           const chain = result.chain;
@@ -920,6 +996,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         timeout: effectiveTimeout,
         cwd,
         pty,
+        needs,
       });
 
       if (result.timedOut) {
@@ -1477,12 +1554,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             content: [{ type: "text" as const, text: "No matching jobs." }],
             details: { count: 0, shown: 0, jobs: [] },
           };
-        const lines = jobs.map((j) => {
-          let s = `${j.id}  ${statusLabel(j.status)}  ${j.pipeline}`;
-          if (j.exit_code != null) s += ` (exit ${j.exit_code})`;
-          if (j.chain_id) s += ` [${j.chain_id}]`;
-          return s;
-        });
+        const lines = jobs.map(formatJobListLine);
         if (total > jobs.length) lines.push(`… ${total - jobs.length} more job(s)`);
         return {
           content: [{ type: "text" as const, text: lines.join("\n") }],
@@ -1556,6 +1628,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
 
         const parts = [`${statusLabel(job.status)} — ${job.pipeline}`];
         if (job.exit_code != null) parts.push(`Exit code: ${job.exit_code}`);
+        appendPendingReason(job, parts);
         if (job.chain_id)
           parts.push(
             `Chain: ${job.chain_id} (leaf ${(job.chain_index ?? 0) + 1}/${job.chain_total ?? "?"})`,
@@ -1570,6 +1643,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             status: job.status,
             exitCode: job.exit_code,
             pipeline: job.pipeline,
+            pendingReason: jobPendingReason(job) ?? null,
           },
         };
       }
@@ -1638,6 +1712,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           ) {
             const lines = [`${statusLabel(job.status)} — ${job.pipeline}`];
             if (job.exit_code != null) lines.push(`Exit code: ${job.exit_code}`);
+            appendPendingReason(job, lines);
             await appendJobOutput(cued, job, lines, tailBytes);
             const text = `Job ${id} completed\n\n${lines.join("\n")}`;
             if (job.status === "Failed") throw new Error(text);
@@ -1649,6 +1724,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
                 jobId: job.id,
                 status: job.status,
                 exitCode: job.exit_code,
+                pendingReason: jobPendingReason(job) ?? null,
               },
             };
           }
@@ -1666,6 +1742,52 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         };
       }
       throw new Error("Unhandled cue_jobs action");
+    },
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  cue_resources — inspect resource providers and capacity
+  // ═══════════════════════════════════════════════════════════════════
+
+  pi.registerTool({
+    name: "cue_resources",
+    label: "Cue Resources",
+    description:
+      "Inspect cue-shell resource scheduling state. action='providers' lists registered providers, routed resource keys, and active reservations; action='resources' shows current provider snapshots/units when providers support probing.",
+    parameters: Type.Object({
+      action: Type.Optional(
+        Type.String({
+          description: "Action: providers or resources. Default: providers.",
+        }),
+      ),
+    }),
+    renderCall(args, theme) {
+      return renderToolCall(
+        "cue_resources",
+        [formatStringArg(args.action, { prefix: "action=", fallback: "providers" })],
+        theme,
+      );
+    },
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal: AbortSignal,
+      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
+      ctx: PiCueToolContext,
+    ) {
+      const action = normalizeCueEnum(
+        params.action,
+        "providers",
+        CUE_RESOURCE_ACTIONS,
+        "cue_resources action",
+      );
+      const cued = await getClient(ctx);
+      const command = action === "providers" ? ":providers" : ":resources";
+      const text = await cued.evalText(command);
+      return {
+        content: [{ type: "text" as const, text }],
+        details: { action, command },
+      };
     },
   });
 
