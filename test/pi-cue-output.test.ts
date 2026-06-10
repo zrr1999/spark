@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  type JobInfo,
   type ScriptResult,
   type PiCueExtensionApi,
   normalizeCueBoolean,
@@ -10,6 +11,7 @@ import {
   normalizeCueLimit,
   normalizeCueTailBytes,
   normalizeCueTimeoutSeconds,
+  renderCueChainStatus,
   renderCueScriptResult,
   registerPiCueTools,
   resolveCueWorkingDirectory,
@@ -106,6 +108,138 @@ void test("renderCueScriptResult includes source, timeout, item identity, and st
   assert.match(rendered, /--- item 1: run test \[job J1\] .*failed \(exit 2\)/);
   assert.match(rendered, /\[stderr\]\nbad/);
 });
+
+void test("renderCueScriptResult compacts clean successful items", () => {
+  const result = {
+    scriptId: "script:clean",
+    source: { kind: "file", path: "build.cue" },
+    status: "done",
+    exitCode: 0,
+    failedItemIndex: null,
+    timedOut: false,
+    items: [
+      {
+        index: 0,
+        source: "true",
+        kind: "job",
+        jobIds: ["J1"],
+        chainId: null,
+        cronId: null,
+        stdout: "",
+        stderr: "",
+        status: "Done",
+        exitCode: 0,
+        jobs: [],
+      },
+      {
+        index: 1,
+        source: "echo hidden-clean",
+        kind: "chain",
+        jobIds: ["J2", "J3"],
+        chainId: "CH1",
+        cronId: null,
+        stdout: "\r",
+        stderr: "",
+        status: "Done",
+        exitCode: null,
+        jobs: [],
+      },
+      {
+        index: 2,
+        source: "echo visible",
+        kind: "job",
+        jobIds: ["J4"],
+        chainId: null,
+        cronId: null,
+        stdout: "visible\n",
+        stderr: "",
+        status: "Done",
+        exitCode: 0,
+        jobs: [],
+      },
+    ],
+  } satisfies ScriptResult;
+
+  const rendered = renderCueScriptResult(result, {
+    pathLabel: "build.cue",
+    timeout: 300,
+    tailBytes: 1024,
+  }).join("\n");
+
+  assert.match(
+    rendered,
+    /--- 2 clean item\(s\) done with no output \(0:job J1, 1:chain CH1 \(J2,J3\)\)/,
+  );
+  assert.doesNotMatch(rendered, /--- item 0:/);
+  assert.doesNotMatch(rendered, /--- item 1:/);
+  assert.match(rendered, /--- item 2: echo visible \[job J4\] .*done/);
+  assert.match(rendered, /visible/);
+});
+
+void test("renderCueChainStatus prioritizes non-clean leaves and compacts clean leaves", async () => {
+  const outputRequests: Array<{ id: string; tailBytes?: number }> = [];
+  const errorRequests: Array<{ id: string; tailBytes?: number }> = [];
+  const reader = {
+    async jobOutput(id: string, tailBytes?: number) {
+      outputRequests.push({ id, tailBytes });
+      return {
+        stdout: id === "J3" ? "done output\n" : id === "J4" ? "failed output\n" : "",
+        stderr: "",
+        truncated: false,
+      };
+    },
+    async jobError(id: string, tailBytes?: number) {
+      errorRequests.push({ id, tailBytes });
+      return { stderr: id === "J4" ? "failed stderr\n" : "", truncated: false };
+    },
+  };
+  const jobs = [
+    chainJob("J1", 0, "setup", "Done", 0),
+    chainJob("J2", 1, "build", "Done", 0),
+    chainJob("J3", 2, "test", "Done", 0),
+    chainJob("J4", 3, "deploy", "Failed", 1),
+  ];
+
+  const rendered = (await renderCueChainStatus(reader, "CH1", jobs, 2048)).join("\n");
+
+  assert.match(rendered, /^❌ failed — chain CH1/);
+  assert.match(
+    rendered,
+    /Leaf 4\/4: ❌ failed — deploy\nExit code: 1\n\nfailed output\n\n\[stderr\]\nfailed stderr/,
+  );
+  assert.match(rendered, /Leaf 3\/4: ✅ done — test\nExit code: 0\n\ndone output/);
+  assert.match(
+    rendered,
+    /--- 2 clean successful leaf\(s\) done with no output \(leaf 1:J1, leaf 2:J2\)/,
+  );
+  assert.equal(rendered.includes("Leaf 1/4: ✅ done — setup"), false);
+  assert.deepEqual(outputRequests, [
+    { id: "J1", tailBytes: 2048 },
+    { id: "J2", tailBytes: 2048 },
+    { id: "J3", tailBytes: 2048 },
+    { id: "J4", tailBytes: 2048 },
+  ]);
+  assert.deepEqual(errorRequests, outputRequests);
+});
+
+function chainJob(
+  id: string,
+  chainIndex: number,
+  pipeline: string,
+  status: JobInfo["status"],
+  exitCode: number | null,
+): JobInfo {
+  return {
+    id,
+    status,
+    pipeline,
+    exit_code: exitCode,
+    open_hint: "stream",
+    chain_id: "CH1",
+    chain_index: chainIndex,
+    chain_total: 4,
+  };
+}
 
 void test("pi-cue numeric and boolean normalizers reject invalid explicit values", () => {
   assert.equal(normalizeCueTailBytes(undefined, 128), 128);

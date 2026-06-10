@@ -296,7 +296,19 @@ export function renderCueScriptResult(
     );
   }
 
+  let cleanItems: Array<ScriptResult["items"][number]> = [];
+  const flushCleanItems = () => {
+    if (cleanItems.length === 0) return;
+    lines.push("", renderCleanCueScriptItems(cleanItems));
+    cleanItems = [];
+  };
+
   for (const item of result.items) {
+    if (isCleanCueScriptItem(item)) {
+      cleanItems.push(item);
+      continue;
+    }
+    flushCleanItems();
     const idLabel = renderCueScriptItemId(item);
     const statusBadge = item.kind === "message" ? "ℹ️ message" : statusLabel(item.status);
     const exitSuffix =
@@ -329,7 +341,27 @@ export function renderCueScriptResult(
       }
     }
   }
+  flushCleanItems();
   return lines;
+}
+
+function isCleanCueScriptItem(item: ScriptResult["items"][number]): boolean {
+  if (item.kind === "message") return false;
+  if (item.status !== "Done") return false;
+  if (item.exitCode !== null && item.exitCode !== 0) return false;
+  const stdout = normalizeCueTerminalOutput(item.stdout);
+  const stderr = normalizeCueStderrForDisplay(item.stderr, stdout);
+  return !stdout.trim() && !stderr.trim();
+}
+
+function renderCleanCueScriptItems(items: Array<ScriptResult["items"][number]>): string {
+  const sampleLimit = 8;
+  const sample = items
+    .slice(0, sampleLimit)
+    .map((item) => `${item.index}:${renderCueScriptItemId(item)}`)
+    .join(", ");
+  const more = items.length > sampleLimit ? `, +${items.length - sampleLimit} more` : "";
+  return `--- ${items.length} clean item(s) done with no output (${sample}${more})`;
 }
 
 function renderCueScriptItemId(item: ScriptResult["items"][number]): string {
@@ -449,15 +481,17 @@ function chainStatus(jobs: JobInfo[]): JobStatus {
   return "Pending";
 }
 
-async function appendJobOutput(
-  cued: CueClient,
+type CueJobOutputReader = Pick<CueClient, "jobOutput" | "jobError">;
+
+async function collectJobOutputLines(
+  cued: CueJobOutputReader,
   job: JobInfo,
-  lines: string[],
   tailBytes: number,
-): Promise<void> {
+): Promise<{ lines: string[]; hasOutput: boolean }> {
+  const lines: string[] = [];
   let stdout = "";
   try {
-    const out = await cued.jobOutput(job.id);
+    const out = await cued.jobOutput(job.id, tailBytes);
     stdout = normalizeCueTerminalOutput(out.stdout);
     const display = tailStr(stdout, tailBytes);
     if (display.text.trim()) lines.push("", display.text.trimEnd());
@@ -467,13 +501,76 @@ async function appendJobOutput(
   }
 
   try {
-    const errOut = await cued.jobError(job.id);
+    const errOut = await cued.jobError(job.id, tailBytes);
     const err = tailStr(normalizeCueStderrForDisplay(errOut.stderr, stdout), tailBytes);
     if (err.text.trim()) lines.push("", "[stderr]", err.text.trimEnd());
     if (err.truncated || errOut.truncated) lines.push("[stderr truncated]");
   } catch {
     /* stderr may not be ready */
   }
+  return { lines, hasOutput: lines.length > 0 };
+}
+
+async function appendJobOutput(
+  cued: CueJobOutputReader,
+  job: JobInfo,
+  lines: string[],
+  tailBytes: number,
+): Promise<void> {
+  const output = await collectJobOutputLines(cued, job, tailBytes);
+  lines.push(...output.lines);
+}
+
+interface ChainLeafDisplay {
+  job: JobInfo;
+  lines: string[];
+  clean: boolean;
+}
+
+export async function renderCueChainStatus(
+  cued: CueJobOutputReader,
+  chainId: string,
+  jobs: JobInfo[],
+  tailBytes: number,
+): Promise<string[]> {
+  const status = chainStatus(jobs);
+  const leafDisplays: ChainLeafDisplay[] = [];
+  for (const job of jobs) {
+    const output = await collectJobOutputLines(cued, job, tailBytes);
+    const leafLabel = `Leaf ${(job.chain_index ?? 0) + 1}/${job.chain_total ?? jobs.length}`;
+    const lines = [`${leafLabel}: ${statusLabel(job.status)} — ${job.pipeline}`];
+    if (job.exit_code != null) lines.push(`Exit code: ${job.exit_code}`);
+    lines.push(...output.lines);
+    leafDisplays.push({
+      job,
+      lines,
+      clean:
+        job.status === "Done" &&
+        (job.exit_code == null || job.exit_code === 0) &&
+        !output.hasOutput,
+    });
+  }
+
+  const lines = [`${statusLabel(status)} — chain ${chainId}`];
+  const important = leafDisplays.filter((leaf) => !leaf.clean && leaf.job.status !== "Done");
+  const doneWithOutput = leafDisplays.filter((leaf) => !leaf.clean && leaf.job.status === "Done");
+  const clean = leafDisplays.filter((leaf) => leaf.clean);
+
+  for (const leaf of [...important, ...doneWithOutput]) {
+    lines.push("", ...leaf.lines);
+  }
+  if (clean.length > 0) lines.push("", renderCleanCueChainLeaves(clean));
+  return lines;
+}
+
+function renderCleanCueChainLeaves(leaves: ChainLeafDisplay[]): string {
+  const sampleLimit = 8;
+  const sample = leaves
+    .slice(0, sampleLimit)
+    .map((leaf) => `leaf ${(leaf.job.chain_index ?? 0) + 1}:${leaf.job.id}`)
+    .join(", ");
+  const more = leaves.length > sampleLimit ? `, +${leaves.length - sampleLimit} more` : "";
+  return `--- ${leaves.length} clean successful leaf(s) done with no output (${sample}${more})`;
 }
 
 function formatValidValues(values: readonly string[]): string {
@@ -1416,13 +1513,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
               details: { found: false },
             };
 
-          const lines = [`${statusLabel(chainStatus(jobs))} — chain ${id}`];
-          for (const job of jobs) {
-            const leafLabel = `Leaf ${(job.chain_index ?? 0) + 1}/${job.chain_total ?? jobs.length}`;
-            lines.push("", `${leafLabel}: ${statusLabel(job.status)} — ${job.pipeline}`);
-            if (job.exit_code != null) lines.push(`Exit code: ${job.exit_code}`);
-            await appendJobOutput(cued, job, lines, tailBytes);
-          }
+          const lines = await renderCueChainStatus(cued, id, jobs, tailBytes);
           return {
             content: [{ type: "text" as const, text: lines.join("\n") }],
             details: {
@@ -1503,13 +1594,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
               jobs.every((job) => isTerminalJob(job.status))
             ) {
               const status = chainStatus(jobs);
-              const lines = [`${statusLabel(status)} — chain ${id}`];
-              for (const job of jobs) {
-                const leafLabel = `Leaf ${(job.chain_index ?? 0) + 1}/${job.chain_total ?? jobs.length}`;
-                lines.push("", `${leafLabel}: ${statusLabel(job.status)} — ${job.pipeline}`);
-                if (job.exit_code != null) lines.push(`Exit code: ${job.exit_code}`);
-                await appendJobOutput(cued, job, lines, tailBytes);
-              }
+              const lines = await renderCueChainStatus(cued, id, jobs, tailBytes);
               const text = `Chain ${id} completed\n\n${lines.join("\n")}`;
               if (status === "Failed") throw new Error(text);
               if (status === "Killed") throw new Error(`Chain ${id} was killed`);
@@ -1926,7 +2011,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         "cue_history tail_bytes",
       );
       const cued = await getClient(ctx);
-      const raw = await cued.showLog(id);
+      const raw = await cued.showLog(id, limit, tailBytes);
       const tailed = tailStr(raw, tailBytes);
       const limited = limitLines(tailed.text, limit);
       const messages: string[] = [];

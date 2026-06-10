@@ -343,7 +343,7 @@ void test("cue runJob resolves serial chains after a failed leaf skips later lea
   );
 });
 
-void test("cue typed list and output responses are parsed", async () => {
+void test("cue typed list, output, and log responses are parsed", async () => {
   await withCueServer(
     (message, socket) => {
       const id = message.id as number;
@@ -391,6 +391,14 @@ void test("cue typed list and output responses are parsed", async () => {
             },
           },
         });
+        return;
+      }
+      if ("ShowLog" in payload) {
+        sendFrame(socket, {
+          type: "response",
+          id,
+          payload: { Ok: { TextOutput: { text: "recent log\n", truncated: false } } },
+        });
       }
     },
     async (client, requests) => {
@@ -409,6 +417,22 @@ void test("cue typed list and output responses are parsed", async () => {
         stderr_bytes: 1024,
       });
       assert.deepEqual(output, { stdout: "ok\n", stderr: "warn\n", truncated: false });
+
+      const log = await client.showLog("J1", 10, 2048);
+      assert.deepEqual(requestPayload(requests[2]!).ShowLog, {
+        id: "J1",
+        limit: 10,
+        tail_bytes: 2048,
+      });
+      assert.equal(log, "recent log\n");
+
+      const stderr = await client.jobError("J1", 512);
+      assert.deepEqual(requestPayload(requests[3]!).JobOutput, {
+        id: "J1",
+        stdout_bytes: null,
+        stderr_bytes: 512,
+      });
+      assert.deepEqual(stderr, { stderr: "warn\n", truncated: true });
     },
   );
 });

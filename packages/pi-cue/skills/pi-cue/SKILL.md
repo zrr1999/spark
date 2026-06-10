@@ -152,7 +152,8 @@ cue_jobs(action="stop", id="J42")                        → stop if needed
 ```
 
 For chain tasks, each leaf job gets its own ID (e.g., J42, J43, J44).
-Check them individually with `cue_jobs(action="status")`. Use `cue_jobs(action="list")` when you need
+`cue_jobs(action="status"/"wait", id="CH...")` prioritizes failed, running, or output-producing leaves and summarizes clean successful leaves.
+Check individual leaf IDs when you need every successful no-output step. Use `cue_jobs(action="list")` when you need
 a broader overview first.
 
 ### Scope / env inspection
@@ -286,7 +287,9 @@ cued status
 - Default timeout: 300 seconds (5 min)
 - File-system commands (mv, cp, rm, ls, cat, find, ...): 10 seconds
 - **`cue_exec`**: runs with `pty=false` by default; stdout/stderr are tailed to 16 KiB per stream by default. Pass `tail_bytes=0` for full output.
-- **`cue_jobs(action="status")` / `cue_jobs(action="wait")`**: default to 16 KiB per stream. Pass `tail_bytes=0` for full output.
+- **Cue-shell scripts** (`cue_run`, `cue_script`, `script_run language=cue-shell`, `script_eval language=cue-shell`): successful no-output items are summarized; failed/message/output-producing items remain expanded.
+- **`cue_jobs(action="status")` / `cue_jobs(action="wait")`**: default to 16 KiB per stream. Chain output summarizes clean successful leaves and prioritizes failed/running/non-clean leaves. Pass `tail_bytes=0` for full output.
+- **`cue_history`**: passes `limit` and `tail_bytes` to the daemon when supported, then applies client-side safety trimming.
 
 ---
 

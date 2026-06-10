@@ -1235,10 +1235,13 @@ export class CueClient {
   }
 
   /** Get buffered stderr from the daemon. */
-  async jobError(jobId: string): Promise<{ stderr: string; truncated?: boolean }> {
+  async jobError(
+    jobId: string,
+    tailBytes?: number,
+  ): Promise<{ stderr: string; truncated?: boolean }> {
     try {
       const requestId = await this.#send({
-        JobOutput: { id: jobId, stdout_bytes: null, stderr_bytes: null },
+        JobOutput: { id: jobId, stdout_bytes: null, stderr_bytes: tailBytes ?? null },
       });
       const ok = okRecord(await this.#waitForResponse(requestId));
       if (ok && "JobOutput" in ok) {
