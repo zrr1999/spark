@@ -4,6 +4,11 @@ import { isActiveSessionTodo, type SessionTodoEntry } from "pi-tasks";
 import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 import type { SparkSessionGoal } from "./spark-session-goals.ts";
 import { truncateInline } from "./tool-rendering.ts";
+import {
+  activeSparkContextStrings,
+  sparkLanguageForProject,
+  type SparkLanguage,
+} from "./spark-i18n.ts";
 
 const SPARK_CONTEXT_TODO_LIMIT = 3;
 const SPARK_CONTEXT_CLAIMED_TASK_LIMIT = 1;
@@ -19,7 +24,16 @@ export function renderActiveSparkContext(input: {
   independentTodos: SessionTodoEntry[];
   sessionGoal?: SparkSessionGoal;
   sparkMd?: string;
+  language?: SparkLanguage;
 }): string | undefined {
+  const language =
+    input.language ??
+    sparkLanguageForProject({
+      project: input.project,
+      goal: input.sessionGoal,
+      fallbackText: input.sparkMd,
+    });
+  const strings = activeSparkContextStrings(language);
   const stateLines = input.project
     ? renderActiveSparkProjectSummary(
         input.graph,
@@ -27,11 +41,14 @@ export function renderActiveSparkContext(input: {
         input.sessionKey,
         input.independentTodos,
         input.sessionGoal,
+        strings,
       )
-    : renderNoCurrentSparkProjectSummary(input.graph, input.sessionGoal);
-  const sparkMdExcerpt = input.sparkMd ? renderSparkMdActiveExcerpt(input.sparkMd) : undefined;
+    : renderNoCurrentSparkProjectSummary(input.graph, input.sessionGoal, strings);
+  const sparkMdExcerpt = input.sparkMd
+    ? renderSparkMdActiveExcerpt(input.sparkMd, strings.sparkMdReadFull)
+    : undefined;
   const lines = [
-    sparkMdExcerpt ? ["SPARK.md (active intent excerpt):", sparkMdExcerpt].join("\n") : undefined,
+    sparkMdExcerpt ? [strings.sparkMdHeader, sparkMdExcerpt].join("\n") : undefined,
     stateLines,
   ].filter((line): line is string => Boolean(line));
   return lines.length ? lines.join("\n\n") : undefined;
@@ -42,36 +59,47 @@ function renderActiveSparkProjectSummary(
   project: SparkProject,
   sessionKey: string,
   independentTodos: SessionTodoEntry[],
-  sessionGoal?: SparkSessionGoal,
+  sessionGoal: SparkSessionGoal | undefined,
+  strings: ReturnType<typeof activeSparkContextStrings>,
 ): string {
   const tasks = graph.tasks(project.ref);
   const unfinishedTasks = tasks.filter((task) => isUnfinishedTaskStatus(task.status));
   const claimed = unfinishedTasks.filter((task) => taskClaimedBy(task));
   const sessionClaimed = claimed.filter((task) => isClaimOwnedBySession(task, sessionKey));
   const lines = [
-    "Active Spark context:",
-    `- Current project: ${project.title} (${project.ref})`,
-    `- Unfinished tasks: ${unfinishedTasks.length} / claimed: ${claimed.length} / current_session_claimed: ${sessionClaimed.length} (${tasks.length} total)`,
+    strings.header,
+    strings.currentProjectLine(project.title, project.ref),
+    strings.taskCountsLine({
+      unfinished: unfinishedTasks.length,
+      claimed: claimed.length,
+      sessionClaimed: sessionClaimed.length,
+      total: tasks.length,
+    }),
   ];
 
   if (sessionGoal) {
-    const reason = sessionGoal.pauseReason ?? sessionGoal.completedReason;
-    const reasonText = reason ? `; reason: ${truncateInline(reason, 120)}` : "";
+    const reasonText = sessionGoal.pauseReason ?? sessionGoal.completedReason;
     lines.push(
-      `- ${formatGoalScopeLabel(sessionGoal)} goal: ${sessionGoal.status}; ${truncateInline(sessionGoal.objective, 180)}${reasonText}`,
+      strings.goalLine({
+        scope: sessionGoal.scope,
+        projectRef: sessionGoal.projectRef,
+        status: sessionGoal.status,
+        objective: truncateInline(sessionGoal.objective, 180),
+        reason: reasonText ? truncateInline(reasonText, 120) : undefined,
+      }),
     );
   }
 
   const activeIndependentTodos = independentTodos.filter(isActiveSessionTodo);
   if (activeIndependentTodos.length > 0) {
     const visibleTodos = activeIndependentTodos.slice(0, SPARK_CONTEXT_TODO_LIMIT);
-    lines.push(`- Independent TODOs (session priority): ${activeIndependentTodos.length} active`);
+    lines.push(strings.independentTodosHeader(activeIndependentTodos.length));
     for (const todo of visibleTodos) {
       const id = todo.id ? `${todo.id} ` : "";
       lines.push(`  - [${todo.status}] ${id}${truncateInline(todo.content, 160)}`);
     }
     const hidden = activeIndependentTodos.length - visibleTodos.length;
-    if (hidden > 0) lines.push(`  - … ${hidden} more active TODOs`);
+    if (hidden > 0) lines.push(strings.independentTodosHidden(hidden));
   }
 
   const visibleSessionClaimed = sessionClaimed.slice(0, SPARK_CONTEXT_CLAIMED_TASK_LIMIT);
@@ -80,58 +108,63 @@ function renderActiveSparkProjectSummary(
       .taskTodos(task.ref)
       .filter((todo) => isActiveSparkTodoStatus(todo.status));
     const visibleTodos = activeTodos.slice(0, SPARK_CONTEXT_TODO_LIMIT);
-    const todoSuffix = activeTodos.length > 0 ? `; ${activeTodos.length} active TODOs` : "";
     lines.push(
-      `- My claimed task: [${task.status}] @${task.name}: ${task.title} (${task.ref})${todoSuffix}`,
+      strings.myClaimedTaskLine({
+        status: task.status,
+        name: task.name,
+        title: task.title,
+        ref: task.ref,
+        activeTodos: activeTodos.length,
+      }),
     );
     for (const todo of visibleTodos) {
       lines.push(`  - [${todo.status}] ${todo.id} ${truncateInline(todo.content, 160)}`);
     }
     const hidden = activeTodos.length - visibleTodos.length;
-    if (hidden > 0) lines.push(`  - … ${hidden} more active TODOs`);
+    if (hidden > 0) lines.push(strings.myClaimedTodosHidden(hidden));
   }
   const hiddenSessionClaimed = sessionClaimed.length - visibleSessionClaimed.length;
-  if (hiddenSessionClaimed > 0)
-    lines.push(
-      `- … ${hiddenSessionClaimed} more claimed task(s); use task({ action: "status" }) for details`,
-    );
+  if (hiddenSessionClaimed > 0) lines.push(strings.hiddenSessionClaimed(hiddenSessionClaimed));
 
   return lines.join("\n");
 }
 
 function renderNoCurrentSparkProjectSummary(
   graph: TaskGraph,
-  sessionGoal?: SparkSessionGoal,
+  sessionGoal: SparkSessionGoal | undefined,
+  strings: ReturnType<typeof activeSparkContextStrings>,
 ): string {
   const projects = graph.projects();
   const activeProjects = projects.filter((project) => project.status !== "done");
   const lines = [
-    "Spark available: no project selected for this session.",
-    `- Projects: ${projects.length} total / ${activeProjects.length} active`,
+    strings.noProjectHeader,
+    strings.projectsCountsLine(projects.length, activeProjects.length),
   ];
   if (sessionGoal) {
-    const reason = sessionGoal.pauseReason ?? sessionGoal.completedReason;
-    const reasonText = reason ? `; reason: ${truncateInline(reason, 120)}` : "";
+    const reasonText = sessionGoal.pauseReason ?? sessionGoal.completedReason;
     lines.push(
-      `- ${formatGoalScopeLabel(sessionGoal)} goal: ${sessionGoal.status}; ${truncateInline(sessionGoal.objective, 180)}${reasonText}`,
+      strings.goalLine({
+        scope: sessionGoal.scope,
+        projectRef: sessionGoal.projectRef,
+        status: sessionGoal.status,
+        objective: truncateInline(sessionGoal.objective, 180),
+        reason: reasonText ? truncateInline(reasonText, 120) : undefined,
+      }),
     );
   }
-  lines.push(
-    '- Use task({ action: "project_use" }) to select or create a current project before planning, claiming, or updating project-bound tasks.',
-  );
+  lines.push(strings.noProjectGuidance);
   return lines.join("\n");
-}
-
-function formatGoalScopeLabel(goal: SparkSessionGoal): string {
-  return goal.scope === "project" ? `Project(${goal.projectRef})` : "Session";
 }
 
 function isActiveSparkTodoStatus(status: string): boolean {
   return status !== "done" && status !== "cancelled" && status !== "deleted";
 }
 
-export function renderSparkMdActiveExcerpt(markdown: string): string | undefined {
-  return truncateSparkContextBlock(stripFinishedSparkMdSections(markdown));
+export function renderSparkMdActiveExcerpt(
+  markdown: string,
+  readFullSuffix = "… (read SPARK.md for full intent)",
+): string | undefined {
+  return truncateSparkContextBlock(stripFinishedSparkMdSections(markdown), readFullSuffix);
 }
 
 function stripFinishedSparkMdSections(markdown: string): string {
@@ -157,7 +190,7 @@ function isFinishedSparkMdHeading(heading: string): boolean {
   );
 }
 
-function truncateSparkContextBlock(value: string): string | undefined {
+function truncateSparkContextBlock(value: string, readFullSuffix: string): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
   const lines = trimmed.split(/\r?\n/);
@@ -168,5 +201,5 @@ function truncateSparkContextBlock(value: string): string | undefined {
     text = `${text.slice(0, SPARK_MD_CONTEXT_MAX_CHARS - 1).trimEnd()}…`;
     truncated = true;
   }
-  return truncated ? `${text}\n… (read SPARK.md for full intent)` : text;
+  return truncated ? `${text}\n${readFullSuffix}` : text;
 }

@@ -3,6 +3,7 @@ import { defaultLearningStore, type LearningLocation, type LearningRecord } from
 import { defaultArtifactStore, type Artifact } from "pi-artifacts";
 import {
   DependencyError,
+  isRef,
   nowIso,
   type ArtifactRef,
   type JsonValue,
@@ -10,6 +11,7 @@ import {
   type RoleRef,
   type Task,
   type TaskCompletionReadiness,
+  type TaskTodo,
 } from "pi-extension-api";
 import { defaultTaskGraphStore, taskCompletionReadiness } from "pi-tasks";
 import {
@@ -47,6 +49,7 @@ interface NormalizedSparkFinishTaskInput {
   task?: string;
   status: "done" | "failed" | "cancelled";
   summary?: string;
+  evidenceRefs: ArtifactRef[];
 }
 
 interface FinishTaskSuccessResult {
@@ -102,7 +105,39 @@ export function normalizeSparkFinishTaskInput(
     task: normalizeOptionalToolString(params.task, "task"),
     status: normalizeSparkFinishStatus(params.status),
     summary: normalizeOptionalToolString(params.summary, "summary"),
+    evidenceRefs: normalizeFinishEvidenceRefs(params.evidenceRefs),
   };
+}
+
+function normalizeFinishEvidenceRefs(value: unknown): ArtifactRef[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string"))
+    throw new Error("evidenceRefs must be an array of artifact refs");
+  return value.map((ref, index) => {
+    if (!isRef(ref, "artifact")) throw new Error(`evidenceRefs[${index}] must be an artifact: ref`);
+    return ref;
+  });
+}
+
+function taskWithFinishEvidenceRefs(task: Task, evidenceRefs: ArtifactRef[]): Task {
+  if (evidenceRefs.length === 0) return task;
+  const outputArtifacts = [...task.outputArtifacts];
+  for (const evidenceRef of evidenceRefs) {
+    if (!outputArtifacts.includes(evidenceRef)) outputArtifacts.push(evidenceRef);
+  }
+  if (outputArtifacts.length === task.outputArtifacts.length) return task;
+  return { ...task, outputArtifacts };
+}
+
+function attachFinishEvidenceRefs(
+  graph: { attachOutputArtifact(taskRef: Task["ref"], artifactRef: ArtifactRef): Task },
+  task: Task,
+  evidenceRefs: ArtifactRef[],
+): Task {
+  let updated = task;
+  for (const evidenceRef of evidenceRefs)
+    updated = graph.attachOutputArtifact(updated.ref, evidenceRef);
+  return updated;
 }
 
 export function registerSparkFinishTaskTool(
@@ -125,6 +160,9 @@ export function registerSparkFinishTaskTool(
         Type.String({ description: "done | failed | cancelled. Default: done." }),
       ),
       summary: Type.Optional(Type.String({ description: "Short completion/failure summary." })),
+      evidenceRefs: Type.Optional(
+        Type.Array(Type.String({ description: "Artifact refs that evidence completion." })),
+      ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd;
@@ -165,6 +203,29 @@ export function registerSparkFinishTaskTool(
               error: "followup_disposition_required",
               task: compactTaskDetail(candidate.task),
               followUpDisposition,
+            },
+          };
+        }
+        const todoReadiness = taskCompletionReadiness(candidate.task, {
+          openTodos: candidate.openTodos,
+        });
+        const openTodoIssue = todoReadiness.issues.find(
+          (entry) => entry.kind === "open_task_todos",
+        );
+        if (openTodoIssue) {
+          await deps.refreshSparkWidget(cwd, ctx);
+          return {
+            content: [
+              {
+                type: "text",
+                text: renderOpenTaskTodoBlockedMessage(candidate.task, todoReadiness),
+              },
+            ],
+            details: {
+              found: true,
+              error: "open_task_todos",
+              task: compactTaskDetail(candidate.task),
+              completionReadiness: todoReadiness,
             },
           };
         }
@@ -325,15 +386,25 @@ async function checkResearchFollowUpDisposition(
     }
   }
 
-  const undispositioned = sources.flatMap(({ source, text }) =>
-    inspectFollowUpDispositionSource(source, text),
-  );
+  const summaryText = summary ?? "";
+  const undispositioned = sources.flatMap(({ source, text }) => {
+    const signals = inspectFollowUpDispositionSource(source, text);
+    if (source !== "finish summary" && sourceDispositionedInSummary(source, summaryText)) return [];
+    return signals;
+  });
   return {
     checked: true,
     ready: undispositioned.length === 0,
     allowedDispositions: [...FOLLOW_UP_DISPOSITIONS],
     undispositioned,
   };
+}
+
+function sourceDispositionedInSummary(source: string, summary: string): boolean {
+  if (!summary || !isRef(source, "artifact")) return false;
+  return summary
+    .split(/\r?\n/)
+    .some((line) => line.includes(source) && FOLLOW_UP_DISPOSITION_PATTERN.test(line));
 }
 
 function inspectFollowUpDispositionSource(
@@ -383,6 +454,13 @@ function renderFollowUpDispositionBlockedMessage(
   return `Task finish blocked by follow-up disposition gate: @${task.name}: ${task.title}\nResearch/review output contains follow-up signals that are not explicitly dispositioned. Mark each follow-up as one of: ${check.allowedDispositions.join(", ")}.\nUndispositioned signals:\n${signals}${hidden}\nThe task was not marked done. Create/confirm/defer/reject/scope follow-up work, then call task({ action: "finish" }) again.`;
 }
 
+function renderOpenTaskTodoBlockedMessage(task: Task, readiness: TaskCompletionReadiness): string {
+  const issue = readiness.issues.find((entry) => entry.kind === "open_task_todos");
+  const todos = issue?.openTodos ?? [];
+  const list = todos.length > 0 ? todos.map((label) => `- ${label}`).join("\n") : "- (no detail)";
+  return `Task finish blocked by open task TODOs: @${task.name}: ${task.title}\nFinish or disposition (cancel/delete/done) the remaining task TODOs before marking the task done.\nOpen TODOs:\n${list}\nThe task was not marked done. Update task TODOs with task({ action: "todo_update", scope: "task", ops: [...] }), then call task({ action: "finish" }) again.`;
+}
+
 function unknownErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -425,7 +503,7 @@ async function resolveFinishReviewCandidate(
   input: NormalizedSparkFinishTaskInput,
 ): Promise<
   | { error: "no_project" | "no_matching_claimed_task" }
-  | { error?: undefined; projectRef: ProjectRef; task: Task }
+  | { error?: undefined; projectRef: ProjectRef; task: Task; openTodos: TaskTodo[] }
 > {
   const updated = await store.update(
     async (graph) => {
@@ -434,14 +512,15 @@ async function resolveFinishReviewCandidate(
       if (!project) return { error: "no_project" as const };
       const task = resolveSessionClaimedTask(graph, project.ref, sparkSessionKey(ctx), input.task);
       if (!task) return { error: "no_matching_claimed_task" as const };
-      return { projectRef: project.ref, task };
+      const candidateTask = taskWithFinishEvidenceRefs(task, input.evidenceRefs);
+      return { projectRef: project.ref, task: candidateTask, openTodos: graph.taskTodos(task.ref) };
     },
     { createIfMissing: false },
   );
   if (!updated.graph) return { error: "no_project" };
   return updated.result as
     | { error: "no_project" | "no_matching_claimed_task" }
-    | { error?: undefined; projectRef: ProjectRef; task: Task };
+    | { error?: undefined; projectRef: ProjectRef; task: Task; openTodos: TaskTodo[] };
 }
 
 async function commitFinishedTask(
@@ -456,11 +535,16 @@ async function commitFinishedTask(
       const project = await currentSparkProject(cwd, ctx, graph);
       if (!project) return { error: "no_project" as const };
       const sessionKey = sparkSessionKey(ctx);
-      const task = resolveSessionClaimedTask(graph, project.ref, sessionKey, input.task);
+      let task = resolveSessionClaimedTask(graph, project.ref, sessionKey, input.task);
       if (!task) return { error: "no_matching_claimed_task" as const };
+      task = attachFinishEvidenceRefs(graph, task, input.evidenceRefs);
       const finished = graph.setTaskStatus(task.ref, input.status);
       const completionReadiness =
-        input.status === "done" ? taskCompletionReadiness(finished) : undefined;
+        input.status === "done"
+          ? taskCompletionReadiness(finished, {
+              openTodos: graph.taskTodos(finished.ref),
+            })
+          : undefined;
       const nextReady = input.status === "done" ? graph.readyTasks(project.ref)[0] : undefined;
       await sparkTodoStore(cwd, ctx).save(graph);
       return {

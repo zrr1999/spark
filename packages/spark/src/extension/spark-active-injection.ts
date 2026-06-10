@@ -18,6 +18,11 @@ import {
 } from "./session-state.ts";
 import { loadIndependentTodos } from "./session-todos.ts";
 import { loadSessionGoal } from "./spark-session-goals.ts";
+import {
+  sparkLanguageForProject,
+  sparkSystemPromptLanguageDirective,
+  type SparkLanguage,
+} from "./spark-i18n.ts";
 import type { SparkModeEntryDeps, SparkModeMessageApi } from "./spark-mode-entry.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
@@ -51,39 +56,60 @@ export async function injectSparkHints(event: unknown, ctx: SparkToolContext): P
   const activation = await detectSparkActivation(ctx.cwd);
   if (!activation.active) return undefined;
   await ensureSparkStateForActiveWorkspace(ctx.cwd, ctx);
-  const contextSummary = await renderActiveSparkContextSummary(ctx.cwd, ctx);
+  const summary = await renderActiveSparkContextWithLanguage(ctx.cwd, ctx);
   const mode = (await loadSparkMode(ctx.cwd, ctx)).mode;
   const sparkPrompt = renderSparkActiveSystemPrompt(
     eventSystemPrompt(event),
     activation.reason,
     mode,
+    summary?.language,
   );
   return {
-    systemPrompt: contextSummary ? `${sparkPrompt}\n\n${contextSummary}` : sparkPrompt,
+    systemPrompt: summary?.content ? `${sparkPrompt}\n\n${summary.content}` : sparkPrompt,
   };
 }
 
-export async function renderActiveSparkContextSummary(
+export interface ActiveSparkContextSummary {
+  content: string;
+  language: SparkLanguage;
+}
+
+async function renderActiveSparkContextWithLanguage(
   cwd: string,
   ctx?: SparkSessionContext,
-): Promise<string | undefined> {
-  const store = defaultTaskGraphStore(cwd);
+): Promise<ActiveSparkContextSummary | undefined> {
   const graph = await loadSparkGraph(cwd, ctx);
   if (!graph) return undefined;
+  const store = defaultTaskGraphStore(cwd);
   if (ensureSparkGraphInvariants(graph)) await saveSparkGraphAndTodos(cwd, graph, ctx, store);
   const sparkMd = await readActiveSparkMd(cwd);
   const project = await currentSparkProject(cwd, ctx, graph);
   const sessionKey = sparkSessionKey(ctx);
   const independentTodos = await loadIndependentTodos(cwd, ctx);
   const sessionGoal = await loadSessionGoal(cwd, ctx);
-  return renderActiveSparkContext({
+  const language = sparkLanguageForProject({
+    project,
+    goal: sessionGoal,
+    fallbackText: sparkMd,
+  });
+  const content = renderActiveSparkContext({
     graph,
     project,
     sessionKey,
     independentTodos,
     sessionGoal,
     sparkMd,
+    language,
   });
+  if (!content) return undefined;
+  return { content, language };
+}
+
+export async function renderActiveSparkContextSummary(
+  cwd: string,
+  ctx?: SparkSessionContext,
+): Promise<string | undefined> {
+  return (await renderActiveSparkContextWithLanguage(cwd, ctx))?.content;
 }
 
 export async function ensureSparkStateForActiveWorkspace(
@@ -101,9 +127,12 @@ export function renderSparkActiveSystemPrompt(
   basePrompt: string,
   reason: string,
   mode: SparkSessionMode = "auto",
+  language?: SparkLanguage,
 ): string {
   const sparkPrompt = `Spark active (${reason}); mode: ${mode}. Spark is the mode facade; use task, artifact, ask, role, learning, context, recall, workflow, patch. ≤1 task; no canned asks; no guessing: ask unless user says infer/research.`;
-  return basePrompt ? `${basePrompt}\n\n${sparkPrompt}` : sparkPrompt;
+  const lines = [basePrompt, sparkPrompt];
+  if (language) lines.push(sparkSystemPromptLanguageDirective(language));
+  return lines.filter((line) => Boolean(line)).join("\n\n");
 }
 
 function isSparkInputEvent(event: unknown): event is SparkInputEvent {

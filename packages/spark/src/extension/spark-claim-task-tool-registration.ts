@@ -142,6 +142,15 @@ export function registerSparkClaimTaskTool(
             return { error: "active_claim_exists" as const, activeTask: activeClaim };
           if (!providedPlan && (!existing || !existing.plan))
             return { error: "task_plan_required" as const };
+          const willStartUnfinished = isUnfinishedTaskStatus(status);
+          const hasInputTodos = input.todos.length > 0;
+          const existingTodos = existing ? graph.taskTodos(existing.ref) : [];
+          const hasExistingActiveTodos = existingTodos.some(
+            (todo) =>
+              todo.status !== "done" && todo.status !== "cancelled" && todo.status !== "deleted",
+          );
+          if (willStartUnfinished && !hasInputTodos && !hasExistingActiveTodos)
+            return { error: "task_todos_required" as const };
           const requestedName = taskNamePatchForClaim(existing, input.name, input.title);
           const namePatch = requestedName
             ? uniqueTaskNameForExistingTask(tasks, requestedName, existing?.ref)
@@ -188,14 +197,6 @@ export function registerSparkClaimTaskTool(
               },
             ]);
             todosChanged = true;
-          } else if (isUnfinishedTaskStatus(status) && graph.taskTodos(task.ref).length === 0) {
-            graph.applyTodoOps(task.ref, [
-              {
-                op: "init",
-                items: initialTodosForTask(graph.getTask(task.ref)),
-              },
-            ]);
-            todosChanged = true;
           }
           if (todosChanged) await sparkTodoStore(cwd, ctx).save(graph);
           return { task: graph.getTask(task.ref) };
@@ -216,6 +217,16 @@ export function registerSparkClaimTaskTool(
             },
           ],
           details: { found: true, error: "task_plan_required" },
+        };
+      if (claimed.result.error === "task_todos_required")
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Cannot claim ${input.title}: claimed tasks must have at least one task-local TODO. Provide todos in the claim call, or seed them first with task({ action: "todo_update", scope: "task", ops: [{ op: "init", items: [...] }] }).`,
+            },
+          ],
+          details: { found: true, error: "task_todos_required" },
         };
       if (
         claimed.result.error === "active_claim_exists" ||
@@ -278,14 +289,6 @@ function renderClaimedTaskText(task: Task): string {
     'Initial task TODOs are present for this claim. Next: execute the task TODOs, and refine them with task({ action: "todo_update", scope: "task", ops: [...] }) if the first breakdown is incomplete.',
   );
   return lines.join("\n");
-}
-
-function initialTodosForTask(task: Task): string[] {
-  const steps = task.plan?.steps.map((step) => step.trim()).filter(Boolean) ?? [];
-  if (steps.length > 0) return steps.slice(0, 3);
-  const objective = task.plan?.objective.trim();
-  if (objective) return [objective];
-  return [`Complete and verify: ${task.title}`];
 }
 
 function renderPlanList(items: readonly string[]): string {

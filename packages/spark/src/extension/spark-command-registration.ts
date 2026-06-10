@@ -1,6 +1,12 @@
 import { defaultArtifactStore } from "pi-artifacts";
-import { isActiveSessionTodo, type TaskGraph } from "pi-tasks";
-import { nowIso, type JsonValue, type RoleRef } from "pi-extension-api";
+import { isActiveSessionTodo, isUnfinishedTaskStatus, type TaskGraph } from "pi-tasks";
+import {
+  nowIso,
+  type ArtifactRef,
+  type JsonValue,
+  type ProjectRef,
+  type RoleRef,
+} from "pi-extension-api";
 import { type SparkEntryIntent } from "./spark-entry.ts";
 import {
   applySparkEntryResolution,
@@ -19,6 +25,15 @@ import {
   updateSessionGoalStatus,
   type SparkSessionGoal,
 } from "./spark-session-goals.ts";
+import {
+  goalContextStrings,
+  goalInstructions,
+  goalNotifications,
+  sparkLanguageForProject,
+  type SparkLanguage,
+} from "./spark-i18n.ts";
+
+type SparkProjectLike = ReturnType<TaskGraph["projects"]>[number];
 import type {
   GoalReviewInput,
   GoalReviewVerdict,
@@ -79,11 +94,18 @@ export function registerSparkCommands(
   deps: SparkCommandRegistrationDeps,
 ): void {
   pi.on?.("session_start", async (_event, ctx) => {
+    await clearStaleForegroundGoalRetryState(ctx);
     await scheduleForegroundGoalLoopIfActive(pi, ctx);
   });
   pi.on?.("session_shutdown", async (event, ctx) => {
     clearForegroundGoalLoop(ctx.cwd, ctx);
     await pauseActiveGoalForSessionReset(ctx, event);
+  });
+  pi.on?.("input", (_event, ctx) => {
+    clearForegroundGoalTimer(ctx.cwd, ctx);
+  });
+  pi.on?.("turn_start", (_event, ctx) => {
+    clearForegroundGoalTimer(ctx.cwd, ctx);
   });
   pi.on?.("turn_end", async (event, ctx) => {
     handleForegroundGoalTurnEnd(ctx, event);
@@ -196,6 +218,12 @@ export function registerSparkCommands(
     const graph = await loadSparkGraph(ctx.cwd, ctx);
     const project = graph ? await currentSparkProject(ctx.cwd, ctx, graph) : undefined;
     const existingGoal = await loadSessionGoal(ctx.cwd, ctx);
+    const language = sparkLanguageForProject({
+      project,
+      goal: existingGoal,
+      fallbackText: objective,
+    });
+    const notifications = goalNotifications(language);
     if (existingGoal && existingGoal.status !== "complete") {
       const completedProject = graph
         ? completedProjectForInferredGoal(existingGoal, graph)
@@ -207,18 +235,25 @@ export function registerSparkCommands(
           if (!goal) return;
           await deps.refreshSparkWidget(ctx.cwd, ctx);
           const projectLabel = project ? ` · project: ${project.title}` : "";
-          const visible = `Spark goal active${projectLabel} · goal: ${compactInline(goal.objective)}`;
-          ctx.ui?.notify?.(
-            "Spark goal replaced a stale completed-project goal with the new objective.",
-            "info",
+          const visible = notifications.goalActiveHeader(
+            compactInline(goal.objective),
+            projectLabel,
           );
-          queueForegroundGoalStartInstruction(piApi, ctx, project?.title, goal, visible);
+          ctx.ui?.notify?.(notifications.staleReplaced, "info");
+          await queueForegroundGoalStartInstruction(
+            piApi,
+            ctx,
+            project?.title,
+            goal,
+            visible,
+            language,
+          );
           return;
         }
         await clearSessionGoal(ctx.cwd, ctx);
         await deps.refreshSparkWidget(ctx.cwd, ctx);
         ctx.ui?.notify?.(
-          `Cleared stale Spark goal for completed project: ${compactInline(completedProject.title)}`,
+          notifications.staleClearedFor(compactInline(completedProject.title)),
           "info",
         );
         return;
@@ -233,41 +268,88 @@ export function registerSparkCommands(
       if (!goal) return;
       await deps.refreshSparkWidget(ctx.cwd, ctx);
       const projectLabel = project ? ` · project: ${project.title}` : "";
-      const visible = `Spark goal already active${projectLabel} · continuing existing goal: ${compactInline(goal.objective)}`;
-      ctx.ui?.notify?.(
-        objective
-          ? "Spark goal already exists; /goal does not overwrite active or paused goals. Continuing the existing goal."
-          : "Spark goal already exists; continuing the existing goal.",
-        "info",
+      const visible = notifications.goalContinuingHeader(
+        compactInline(goal.objective),
+        projectLabel,
       );
-      queueForegroundGoalStartInstruction(piApi, ctx, project?.title, goal, visible, {
-        alreadyExisting: true,
-      });
+      ctx.ui?.notify?.(visible, "info");
+      await runForegroundGoalLoopTick(piApi, ctx, { idleGateSatisfied: true });
       return;
     }
     if (!objective) {
-      const goal = await startOrInferSessionGoal(ctx.cwd, ctx, graph, undefined);
-      if (!goal) {
-        ctx.ui?.notify?.(
-          "Spark goal could not be inferred because no Spark state is available.",
-          "warning",
-        );
-        return;
-      }
       await deps.refreshSparkWidget(ctx.cwd, ctx);
-      const projectLabel = project ? ` · project: ${project.title}` : "";
-      const visible = `Spark goal inferred${projectLabel} · goal: ${compactInline(goal.objective)}`;
-      ctx.ui?.notify?.(visible, "info");
-      queueForegroundGoalStartInstruction(piApi, ctx, project?.title, goal, visible);
+      const summary = renderEmptyGoalInferContext(graph, project, language);
+      ctx.ui?.notify?.(notifications.noActiveGoal, "info");
+      const instructions = goalInstructions(language);
+      deps.queueSparkAgentInstruction(
+        ctx,
+        [
+          instructions.emptyGoalNotSet,
+          instructions.emptyGoalReadContext,
+          instructions.emptyGoalWriteHint,
+          instructions.emptyGoalNoCounts,
+          summary,
+        ]
+          .filter((line): line is string => Boolean(line))
+          .join("\n"),
+      );
+      piApi.sendMessage(
+        {
+          customType: "spark-goal-request",
+          content: notifications.inferDispatched,
+          display: false,
+        },
+        { deliverAs: "followUp", triggerTurn: true },
+      );
       return;
     }
     const goal = await startOrInferSessionGoal(ctx.cwd, ctx, graph, objective);
     if (!goal) return;
     await deps.refreshSparkWidget(ctx.cwd, ctx);
     const projectLabel = project ? ` · project: ${project.title}` : "";
-    const visible = `Spark goal active${projectLabel} · goal: ${compactInline(goal.objective)}`;
+    const goalLanguage = sparkLanguageForProject({ project, goal, fallbackText: objective });
+    const goalNotificationsForLang = goalNotifications(goalLanguage);
+    const visible = goalNotificationsForLang.goalActiveHeader(
+      compactInline(goal.objective),
+      projectLabel,
+    );
     ctx.ui?.notify?.(visible, "info");
-    queueForegroundGoalStartInstruction(piApi, ctx, project?.title, goal, visible);
+    await queueForegroundGoalStartInstruction(
+      piApi,
+      ctx,
+      project?.title,
+      goal,
+      visible,
+      goalLanguage,
+    );
+  }
+
+  function renderEmptyGoalInferContext(
+    graph: TaskGraph | null,
+    project: SparkProjectLike | undefined,
+    language: SparkLanguage,
+  ): string {
+    const strings = goalContextStrings(language);
+    if (!graph) return strings.notInitialized;
+    const lines: string[] = [];
+    if (project) {
+      const tasks = graph.tasks(project.ref);
+      const unfinished = tasks.filter((task) => isUnfinishedTaskStatus(task.status));
+      const ready = graph.readyTasks(project.ref);
+      lines.push(strings.currentProjectLine(project.title, project.status));
+      lines.push(strings.unfinishedReadyLine(unfinished.length, ready.length));
+      const readyTitles = ready.slice(0, 5).map((task) => task.title);
+      if (readyTitles.length > 0) lines.push(strings.readyFrontierLine(readyTitles));
+    } else {
+      const projects = graph.projects();
+      lines.push(strings.noActiveProject(projects.length));
+      const activeTitles = projects
+        .filter((candidate) => candidate.status !== "done")
+        .slice(0, 5)
+        .map((candidate) => candidate.title);
+      if (activeTitles.length > 0) lines.push(strings.activeProjectCandidates(activeTitles));
+    }
+    return lines.join("\n");
   }
 
   function completedProjectForInferredGoal(
@@ -293,34 +375,54 @@ export function registerSparkCommands(
     );
   }
 
-  function queueForegroundGoalStartInstruction(
+  async function queueForegroundGoalStartInstruction(
     piApi: SparkCommandApi,
     ctx: SparkCommandContext,
     projectTitle: string | undefined,
     goal: SparkSessionGoal,
     visible: string,
-    options: { alreadyExisting?: boolean } = {},
-  ): void {
+    language: SparkLanguage,
+  ): Promise<void> {
+    const sweep = await renderSessionTodoSweepLines(ctx, language);
+    const instructions = goalInstructions(language);
     deps.queueSparkAgentInstruction(
       ctx,
       [
-        options.alreadyExisting
-          ? "Spark session goal is already active; /goal did not overwrite the existing objective."
-          : "Spark session goal is active.",
-        projectTitle ? `Current project: ${projectTitle}` : undefined,
-        `Goal: ${goal.objective}`,
-        'Spark has started the foreground goal loop for this session. It waits until the main agent has been idle for the goal interval before each tick. Goal completion is reviewer-owned: the main agent cannot mark goals complete. The Spark reviewer loop will mark the goal complete internally only after an achieved verdict. A session goal with active session TODOs is never complete; finish or disposition those TODOs first. Use task({ action: "status" }) when the task graph is relevant. If all tasks are complete but the objective is not achieved, create new concrete tasks with task({ action: "plan" }) instead of completing or pausing just because the task list is empty. Goal mode is non-interactive: do not call ask/ask_flow. If task decomposition is wrong or missing, create or revise concrete tasks with task({ action: "plan" }); if the goal itself is ambiguous or blocked, stop and report or pause the goal with goal({ action: "pause" }).',
+        instructions.goalActiveHeader,
+        projectTitle ? instructions.currentProject(projectTitle) : undefined,
+        instructions.goalLine(goal.objective),
+        ...sweep,
+        instructions.pauseLineForeground,
+        instructions.loopReviewerOwnership,
       ]
         .filter((line): line is string => Boolean(line))
         .join("\n"),
       { goalId: goal.goalId },
     );
     piApi.sendMessage(
-      { customType: "spark-goal-request", content: visible, display: true },
+      { customType: "spark-goal-request", content: visible, display: false },
       { deliverAs: "followUp", triggerTurn: true },
     );
     markForegroundGoalAwaitingTurn(piApi, ctx);
     if (!piApi.on) scheduleForegroundGoalLoop(piApi, ctx);
+  }
+
+  async function renderSessionTodoSweepLines(
+    ctx: SparkCommandContext,
+    language: SparkLanguage,
+  ): Promise<string[]> {
+    const instructions = goalInstructions(language);
+    const todos = (await loadIndependentTodos(ctx.cwd, ctx)).filter(isActiveSessionTodo);
+    if (todos.length === 0) return [instructions.todoSweepNoneActive];
+    const labels = todos
+      .slice(0, 8)
+      .map((todo) => `- [${todo.status}] ${compactInline(todo.content)}`);
+    const more = todos.length > 8 ? instructions.todoSweepMore(todos.length - 8) : "";
+    return [
+      instructions.todoSweepHeader(todos.length),
+      `${labels.join("\n")}${more}`,
+      instructions.todoSweepDisposition,
+    ];
   }
 
   async function handleSparkPauseGoalCommand(
@@ -329,20 +431,34 @@ export function registerSparkCommands(
     reason: string,
   ): Promise<void> {
     const result = await reviewedPauseCurrentSessionGoal(ctx.cwd, ctx, deps, reason || undefined);
+    const project = await currentSparkProjectForCtx(ctx);
+    const language = sparkLanguageForProject({
+      project,
+      goal: result.goal,
+      fallbackText: reason,
+    });
+    const notifications = goalNotifications(language);
     if (!result.goal) {
-      ctx.ui?.notify?.("No session goal is set.", "warning");
+      ctx.ui?.notify?.(notifications.noSessionGoal, "warning");
       return;
     }
     if (!result.approved) {
-      const visible = `Spark goal pause blocked by reviewer · goal: ${compactInline(result.goal.objective)}`;
+      const visible = notifications.pauseBlocked(compactInline(result.goal.objective));
       ctx.ui?.notify?.(visible, "warning");
       piApi.sendMessage({ customType: "spark-goal-request", content: visible, display: true });
       return;
     }
     clearForegroundGoalLoop(ctx.cwd, ctx);
-    const visible = `Spark goal paused · goal: ${compactInline(result.goal.objective)}`;
+    const visible = notifications.paused(compactInline(result.goal.objective));
     ctx.ui?.notify?.(visible, "info");
     piApi.sendMessage({ customType: "spark-goal-request", content: visible, display: true });
+  }
+
+  async function currentSparkProjectForCtx(
+    ctx: SparkCommandContext,
+  ): Promise<SparkProjectLike | undefined> {
+    const graph = await loadSparkGraph(ctx.cwd, ctx);
+    return graph ? await currentSparkProject(ctx.cwd, ctx, graph) : undefined;
   }
 
   async function scheduleForegroundGoalLoopIfActive(
@@ -373,11 +489,16 @@ export function registerSparkCommands(
     foregroundGoalTimers.set(key, timer);
   }
 
-  function clearForegroundGoalLoop(cwd: string, ctx: SparkGoalLoopContext): void {
+  function clearForegroundGoalTimer(cwd: string, ctx: SparkGoalLoopContext): void {
     const key = foregroundGoalLoopKey(cwd, ctx);
     const timer = foregroundGoalTimers.get(key);
     if (timer) clearTimeout(timer);
     foregroundGoalTimers.delete(key);
+  }
+
+  function clearForegroundGoalLoop(cwd: string, ctx: SparkGoalLoopContext): void {
+    const key = foregroundGoalLoopKey(cwd, ctx);
+    clearForegroundGoalTimer(cwd, ctx);
     foregroundGoalAwaitingTurns.delete(key);
   }
 
@@ -396,17 +517,19 @@ export function registerSparkCommands(
   ): Promise<void> {
     const initial = await loadActiveForegroundGoal(ctx);
     if (!initial) return;
-    if (ctx.isIdle?.() === false) {
-      scheduleForegroundGoalLoop(piApi, ctx);
-      return;
-    }
-    if (!ctx.isIdle && ctx.waitForIdle && !options.idleGateSatisfied) {
+    if (ctx.waitForIdle && !options.idleGateSatisfied) {
       await ctx.waitForIdle();
       if (await loadActiveForegroundGoal(ctx)) {
         scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
           idleGateSatisfied: true,
         });
       }
+      return;
+    }
+    if (ctx.isIdle?.() === false) {
+      scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+        idleGateSatisfied: false,
+      });
       return;
     }
     const active = await loadActiveForegroundGoal(ctx);
@@ -419,15 +542,23 @@ export function registerSparkCommands(
     const shouldContinue = await reviewActiveForegroundGoal(ctx, active);
     if (!shouldContinue) return;
     const projectLabel = project ? ` · project: ${project.title}` : "";
-    const visible = `Spark goal tick${projectLabel} · goal: ${compactInline(goal.objective)}`;
+    const language = sparkLanguageForProject({ project, goal });
+    const notifications = goalNotifications(language);
+    const visible = notifications.goalTickHeader(compactInline(goal.objective), projectLabel);
     deps.queueSparkAgentInstruction(
       ctx,
-      renderForegroundGoalTickInstruction(project?.title, goal.objective),
+      renderForegroundGoalTickInstruction(
+        project?.title,
+        goal.objective,
+        active.graph,
+        project,
+        language,
+      ),
       { goalId: goal.goalId },
     );
     piApi.sendMessage(
       { customType: "spark-goal-request", content: visible, display: false },
-      { deliverAs: "nextTurn", triggerTurn: true },
+      { deliverAs: "followUp", triggerTurn: true },
     );
     markForegroundGoalAwaitingTurn(piApi, ctx);
   }
@@ -446,12 +577,22 @@ export function registerSparkCommands(
     event: unknown,
   ): Promise<void> {
     const pending = foregroundGoalAwaitingTurnsForSession(ctx);
+    if (pending.length === 0) {
+      const agentOutcome = foregroundGoalAgentOutcome(event);
+      if (!agentOutcome.failure && agentOutcome.hasAssistantMessage)
+        await scheduleForegroundGoalLoopIfActive(piApi, ctx);
+      return;
+    }
     for (const [key, awaiting] of pending) {
       foregroundGoalAwaitingTurns.delete(key);
       const agentOutcome = foregroundGoalAgentOutcome(event);
       const failure =
         agentOutcome.failure ?? (!agentOutcome.hasAssistantMessage ? awaiting.failure : undefined);
       if (failure) {
+        if (isForegroundGoalAbortFailure(failure)) {
+          await recordForegroundGoalAbortedTurn(awaiting.ctx, failure);
+          continue;
+        }
         const retry = await recordForegroundGoalFailedTurn(awaiting.ctx, failure);
         if (!retry.paused)
           scheduleForegroundGoalLoop(awaiting.piApi ?? piApi, awaiting.ctx, retry.delayMs);
@@ -469,6 +610,28 @@ export function registerSparkCommands(
   ): Array<[string, ForegroundGoalAwaitingTurn]> {
     const currentKey = foregroundGoalLoopKey(ctx.cwd, ctx);
     return [...foregroundGoalAwaitingTurns.entries()].filter(([key]) => key === currentKey);
+  }
+
+  async function recordForegroundGoalAbortedTurn(
+    ctx: SparkGoalLoopContext,
+    failure: string,
+  ): Promise<void> {
+    const existing = await loadSessionGoal(ctx.cwd, ctx);
+    if (!existing || existing.status !== "active") return;
+    const reviewedAt = nowIso();
+    await updateSessionGoalStatus(ctx.cwd, ctx, "paused", {
+      reason: `foreground goal loop stopped after manual abort: ${failure}`,
+      review: {
+        achieved: false,
+        confidence: "user-aborted",
+        reason: `Foreground goal loop stopped because the turn was manually aborted: ${failure}`,
+        remainingWork: "Resume the goal when ready; manual aborts are not retried automatically.",
+        blockers: [failure],
+        reviewedAt,
+      },
+      retryState: null,
+    });
+    await deps.refreshSparkWidget(ctx.cwd, ctx);
   }
 
   async function recordForegroundGoalFailedTurn(
@@ -508,16 +671,16 @@ export function registerSparkCommands(
     if (!goal) return { paused: true, delayMs: FOREGROUND_GOAL_LOOP_INTERVAL_MS };
     await deps.refreshSparkWidget(ctx.cwd, ctx);
     if (exhausted) {
-      ctx.ui?.notify?.(
-        `Spark goal paused after retry budget exhausted: ${compactInline(failure)}`,
-        "warning",
-      );
+      const active = await loadActiveForegroundGoal(ctx);
+      const language = sparkLanguageForProject({
+        project: active?.project,
+        goal,
+        fallbackText: failure,
+      });
+      const notifications = goalNotifications(language);
+      ctx.ui?.notify?.(notifications.pauseRetryExhausted(compactInline(failure)), "warning");
       return { paused: true, delayMs: retryState.nextDelayMs };
     }
-    ctx.ui?.notify?.(
-      `Spark goal turn failed; retry ${consecutiveFailures}/${FOREGROUND_GOAL_RETRY_BUDGET} in ${Math.round(retryState.nextDelayMs / 1000)}s: ${compactInline(failure)}`,
-      "warning",
-    );
     return { paused: false, delayMs: retryState.nextDelayMs };
   }
 
@@ -528,6 +691,25 @@ export function registerSparkCommands(
     if (!goal.retryState || goal.retryState.consecutiveFailures === 0) return;
     await updateSessionGoalStatus(ctx.cwd, ctx, "active", { retryState: null });
     await deps.refreshSparkWidget(ctx.cwd, ctx);
+  }
+
+  async function clearStaleForegroundGoalRetryState(ctx: SparkGoalLoopContext): Promise<void> {
+    const goal = await loadSessionGoal(ctx.cwd, ctx);
+    if (!goal) return;
+    if (!goal.retryState || goal.retryState.consecutiveFailures === 0) return;
+    if (goal.status === "complete") return;
+    await updateSessionGoalStatus(ctx.cwd, ctx, goal.status, {
+      reason: goal.pauseReason,
+      review: goal.lastReview,
+      retryState: null,
+    });
+    await deps.refreshSparkWidget(ctx.cwd, ctx);
+  }
+
+  function isForegroundGoalAbortFailure(failure: string): boolean {
+    return /\b(?:operation aborted|assistant turn was aborted|user_abort|aborterror)\b/i.test(
+      failure,
+    );
   }
 
   function foregroundGoalRetryDelayMs(consecutiveFailures: number): number {
@@ -606,8 +788,13 @@ export function registerSparkCommands(
     if (completedProject) {
       await clearSessionGoal(ctx.cwd, ctx);
       await deps.refreshSparkWidget(ctx.cwd, ctx);
+      const language = sparkLanguageForProject({
+        project: completedProject,
+        goal,
+      });
+      const notifications = goalNotifications(language);
       ctx.ui?.notify?.(
-        `Cleared stale Spark goal for completed project: ${compactInline(completedProject.title)}`,
+        notifications.staleClearedFor(compactInline(completedProject.title)),
         "info",
       );
       return undefined;
@@ -624,23 +811,20 @@ export function registerSparkCommands(
     ctx: SparkGoalLoopContext,
     active: NonNullable<Awaited<ReturnType<typeof loadActiveForegroundGoal>>>,
   ): Promise<boolean> {
-    const todoBlocker = await sessionTodoGoalBlocker(ctx, active.goal);
-    if (todoBlocker) {
-      await updateSessionGoalStatus(ctx.cwd, ctx, "active", { review: todoBlocker });
-      await deps.refreshSparkWidget(ctx.cwd, ctx);
-      return true;
-    }
     const reviewerRunner = await deps.createReviewerRunner?.(ctx.cwd, ctx);
     if (!reviewerRunner) return true;
+    const reviewContext = goalReviewContext(active);
     const reviewInput: GoalReviewInput = {
       targetKind: "goal",
       cwd: ctx.cwd,
-      projectRef: active.goal.scope === "project" ? active.goal.projectRef : active.project?.ref,
+      projectRef:
+        active.goal.scope === "project" ? active.goal.projectRef : reviewContext.projectRef,
+      projectStatus: reviewContext.projectStatus,
       goalId: active.goal.goalId,
       objective: active.goal.objective,
       status: active.goal.status,
       requestedStatus: "complete",
-      evidenceRefs: goalReviewEvidenceRefs(active),
+      evidenceRefs: reviewContext.evidenceRefs,
       sessionKey: active.goal.sessionKey,
       forkFromSession: ctx.sessionManager?.getSessionFile?.(),
     };
@@ -650,7 +834,7 @@ export function registerSparkCommands(
     if (!leasedReview.acquired || !leasedReview.result) return false;
     const review = leasedReview.result;
     const verdict = review.verdict as GoalReviewVerdict;
-    const artifact = await recordGoalReviewArtifact(ctx.cwd, active, review);
+    const artifact = await recordGoalReviewArtifact(ctx.cwd, active, review, reviewInput);
     const reviewedAt = review.record.finishedAt || nowIso();
     const reviewSummary = {
       achieved: verdict.achieved,
@@ -668,35 +852,21 @@ export function registerSparkCommands(
         retryState: null,
       });
       await deps.refreshSparkWidget(ctx.cwd, ctx);
-      ctx.ui?.notify?.(
-        `Spark goal completed by reviewer: ${compactInline(verdict.summary)}`,
-        "info",
-      );
+      const completionLanguage = sparkLanguageForProject({
+        project: active.project,
+        goal: active.goal,
+        fallbackText: verdict.summary,
+      });
+      const completionLabel =
+        completionLanguage === "zh"
+          ? `Spark 目标已由 reviewer 完成：${compactInline(verdict.summary)}`
+          : `Spark goal completed by reviewer: ${compactInline(verdict.summary)}`;
+      ctx.ui?.notify?.(completionLabel, "info");
       return false;
     }
     await updateSessionGoalStatus(ctx.cwd, ctx, "active", { review: reviewSummary });
     await deps.refreshSparkWidget(ctx.cwd, ctx);
     return true;
-  }
-
-  async function sessionTodoGoalBlocker(
-    ctx: SparkGoalLoopContext,
-    goal: SparkSessionGoal,
-  ): Promise<SparkSessionGoal["lastReview"] | undefined> {
-    if (goal.scope !== "session") return undefined;
-    const activeTodos = (await loadIndependentTodos(ctx.cwd, ctx)).filter(isActiveSessionTodo);
-    if (activeTodos.length === 0) return undefined;
-    const labels = activeTodos
-      .slice(0, 5)
-      .map((todo) => `${todo.status}: ${compactInline(todo.content)}`);
-    return {
-      achieved: false,
-      confidence: "deterministic-session-todos",
-      reason: `Session goal cannot complete while ${activeTodos.length} active session TODO(s) remain.`,
-      remainingWork: `Finish or explicitly disposition active session TODOs before completing the session goal: ${labels.join("; ")}`,
-      blockers: labels,
-      reviewedAt: nowIso(),
-    };
   }
 
   async function runGoalReviewer(
@@ -730,20 +900,77 @@ export function registerSparkCommands(
     }
   }
 
-  function goalReviewEvidenceRefs(
+  function goalReviewContext(
     active: NonNullable<Awaited<ReturnType<typeof loadActiveForegroundGoal>>>,
-  ) {
-    if (!active.graph || !active.project) return [];
-    return active.graph
-      .tasks(active.project.ref)
-      .flatMap((task) => task.outputArtifacts)
-      .slice(-20);
+  ): {
+    projectRef?: ProjectRef;
+    projectStatus?: GoalReviewInput["projectStatus"];
+    evidenceRefs: ArtifactRef[];
+  } {
+    const project = goalReviewEvidenceProject(active);
+    return {
+      projectRef: project?.ref,
+      projectStatus:
+        project && active.graph ? projectGoalReviewStatus(active.graph, project) : undefined,
+      evidenceRefs:
+        project && active.graph ? projectTaskEvidenceRefs(active.graph, project.ref) : [],
+    };
+  }
+
+  function goalReviewEvidenceProject(
+    active: NonNullable<Awaited<ReturnType<typeof loadActiveForegroundGoal>>>,
+  ): SparkProjectLike | undefined {
+    if (!active.graph) return active.project;
+    if (active.project) return active.project;
+    if (active.goal.scope === "project" && active.goal.projectRef)
+      return active.graph.projects().find((project) => project.ref === active.goal.projectRef);
+    const projectsWithEvidence = active.graph
+      .projects()
+      .filter((project) => projectTaskEvidenceRefs(active.graph!, project.ref).length > 0);
+    const completedProjects = projectsWithEvidence.filter((project) => project.status === "done");
+    return (
+      mostRecentlyUpdatedProject(completedProjects) ??
+      mostRecentlyUpdatedProject(projectsWithEvidence)
+    );
+  }
+
+  function projectTaskEvidenceRefs(graph: TaskGraph, projectRef: ProjectRef): ArtifactRef[] {
+    return [...new Set(graph.tasks(projectRef).flatMap((task) => task.outputArtifacts))].slice(-20);
+  }
+
+  function projectGoalReviewStatus(
+    graph: TaskGraph,
+    project: SparkProjectLike,
+  ): GoalReviewInput["projectStatus"] {
+    const tasks = graph.tasks(project.ref);
+    const statusCounts = tasks.reduce<Record<string, number>>((counts, task) => {
+      counts[task.status] = (counts[task.status] ?? 0) + 1;
+      return counts;
+    }, {});
+    return {
+      ref: project.ref,
+      title: project.title,
+      status: project.status,
+      taskCounts: {
+        total: tasks.length,
+        unfinished: tasks.filter((task) => isUnfinishedTaskStatus(task.status)).length,
+        claimed: tasks.filter((task) => Boolean(task.claim)).length,
+        statusCounts,
+      },
+    };
+  }
+
+  function mostRecentlyUpdatedProject(projects: SparkProjectLike[]): SparkProjectLike | undefined {
+    return [...projects].sort(
+      (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
+    )[0];
   }
 
   async function recordGoalReviewArtifact(
     cwd: string,
     active: NonNullable<Awaited<ReturnType<typeof loadActiveForegroundGoal>>>,
     review: ReviewerRunResult,
+    input: GoalReviewInput,
   ) {
     const verdict = review.verdict as GoalReviewVerdict;
     const reviewerRun = {
@@ -760,36 +987,58 @@ export function registerSparkCommands(
       body: {
         goalId: active.goal.goalId,
         scope: active.goal.scope,
-        ...(active.goal.projectRef ? { projectRef: active.goal.projectRef } : {}),
+        ...(input.projectRef ? { projectRef: input.projectRef } : {}),
         objective: active.goal.objective,
+        reviewPacket: {
+          ...(input.projectRef ? { projectRef: input.projectRef } : {}),
+          ...(input.projectStatus ? { projectStatus: input.projectStatus } : {}),
+          evidenceRefs: input.evidenceRefs,
+        },
         verdict,
         reviewerRun,
         recordedAt: nowIso(),
       } as unknown as JsonValue,
       provenance: {
         producer: "review",
-        projectRef: active.goal.projectRef ?? active.project?.ref,
+        projectRef: input.projectRef,
         roleRef: review.record.roleRef,
         runRef: review.record.runRef,
       },
-      links: active.goal.projectRef
-        ? [{ to: active.goal.projectRef, relation: "review-of" }]
-        : undefined,
+      links: input.projectRef ? [{ to: input.projectRef, relation: "review-of" }] : undefined,
     });
   }
 
   function renderForegroundGoalTickInstruction(
     projectTitle: string | undefined,
     objective: string,
+    graph: TaskGraph | null | undefined,
+    project: SparkProjectLike | undefined,
+    language: SparkLanguage,
   ): string {
+    const instructions = goalInstructions(language);
+    const status = renderForegroundGoalTickStatus(graph, project, language);
     return [
-      "Spark foreground goal loop tick.",
-      projectTitle ? `Current project: ${projectTitle}` : undefined,
-      `Goal: ${objective}`,
-      'Goal completion is reviewer-owned: the main agent cannot mark goals complete. The Spark reviewer loop already checked whether the objective is achieved before sending this continuation; if it was achieved, this prompt would not be sent. A session goal with active session TODOs is never complete; finish or disposition those TODOs first. Use task({ action: "status" }) when the task graph is relevant. If all existing tasks are complete but the objective is not achieved, create new concrete tasks with task({ action: "plan" }) instead of completing or pausing just because the task list is empty. If a concrete ready task is obvious, claim and complete one verified task in the foreground, then finish it with evidence. Goal mode is non-interactive: do not call ask/ask_flow. If task decomposition is wrong, missing, empty, or blocks the goal, create or revise concrete tasks with task({ action: "plan" }) and continue from the updated ready work. If no ready path remains because of a real blocker, validation fails, or the goal itself is ambiguous, stop and report or pause the goal with goal({ action: "pause" }). Do not spawn background workflow execution from the goal loop.',
+      instructions.loopTickHeader,
+      projectTitle ? instructions.currentProject(projectTitle) : undefined,
+      instructions.goalLine(objective),
+      status,
+      instructions.loopReviewerOwnership,
     ]
       .filter((line): line is string => Boolean(line))
       .join("\n");
+  }
+
+  function renderForegroundGoalTickStatus(
+    graph: TaskGraph | null | undefined,
+    project: SparkProjectLike | undefined,
+    language: SparkLanguage,
+  ): string | undefined {
+    if (!graph || !project) return undefined;
+    const tasks = graph.tasks(project.ref);
+    const unfinished = tasks.filter((task) => isUnfinishedTaskStatus(task.status));
+    const ready = graph.readyTasks(project.ref);
+    const readyHead = ready.slice(0, 3).map((task) => task.title);
+    return goalContextStrings(language).projectStatus(unfinished.length, ready.length, readyHead);
   }
 
   function foregroundGoalLoopKey(cwd: string, ctx: SparkToolContext): string {
