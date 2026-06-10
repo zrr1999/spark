@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 import { nowIso, type ProjectRef } from "pi-extension-api";
-import { isUnfinishedTaskStatus, type TaskGraph } from "pi-tasks";
+import type { TaskGraph } from "pi-tasks";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {
   sanitizeStoreScope,
@@ -108,6 +108,26 @@ export async function clearSessionGoal(
   await saveSessionGoalSnapshot(cwd, ctx, { version: 1 });
 }
 
+export async function editSessionGoalObjective(
+  cwd: string,
+  ctx: SparkSessionContext | undefined,
+  objective: string,
+): Promise<SparkSessionGoal | undefined> {
+  const snapshot = await loadSessionGoalSnapshot(cwd, ctx);
+  const existing = snapshot.goal;
+  if (!existing) return undefined;
+  const goal: SparkSessionGoal = {
+    ...existing,
+    objective: normalizeGoalObjective(objective),
+    source: "explicit",
+    lastReview: undefined,
+    retryState: undefined,
+    updatedAt: nowIso(),
+  };
+  await saveSessionGoalSnapshot(cwd, ctx, { version: 1, goal });
+  return goal;
+}
+
 export async function updateSessionGoalStatus(
   cwd: string,
   ctx: SparkSessionContext | undefined,
@@ -137,28 +157,7 @@ export async function updateSessionGoalStatus(
 
 export function inferSessionGoalObjective(graph: TaskGraph, project?: SparkProject): string {
   if (project) return inferProjectBackedSessionGoalObjective(graph, project);
-
-  const activeProjects = graph.projects().filter((candidate) => candidate.status !== "done");
-  const unfinished = activeProjects.flatMap((candidate) =>
-    graph.tasks(candidate.ref).filter((task) => isUnfinishedTaskStatus(task.status)),
-  );
-  const ready = activeProjects.flatMap((candidate) => graph.readyTasks(candidate.ref));
-  const lines = [
-    "Advance this Spark session to the next verified outcome.",
-    `Active projects: ${activeProjects.length}. Unfinished tasks: ${unfinished.length}. Ready tasks: ${ready.length}.`,
-  ];
-  const projectTitles = activeProjects.slice(0, 5).map((candidate) => candidate.title);
-  if (projectTitles.length > 0)
-    lines.push(`Active project candidates: ${projectTitles.join("; ")}.`);
-  const readyTitles = ready.slice(0, 5).map((task) => task.title);
-  if (readyTitles.length > 0) lines.push(`Ready frontier: ${readyTitles.join("; ")}.`);
-  const blockedCount = unfinished.filter((task) => task.status === "blocked").length;
-  if (blockedCount > 0)
-    lines.push(`Blocked tasks: ${blockedCount}; clarify blockers before claiming work.`);
-  lines.push(
-    "Goal policy: claim and complete concrete ready tasks, verify required evidence, revise task decomposition when it is missing or wrong, and pause or report when a user decision is needed.",
-  );
-  return lines.join("\n");
+  return "Advance this Spark session to the next verified outcome.";
 }
 
 export function normalizeGoalObjective(value: unknown): string {
@@ -193,24 +192,8 @@ function normalizeGoalProjectRef(
   return projectRef;
 }
 
-function inferProjectBackedSessionGoalObjective(graph: TaskGraph, project: SparkProject): string {
-  const tasks = graph.tasks(project.ref);
-  const unfinished = tasks.filter((task) => isUnfinishedTaskStatus(task.status));
-  const ready = graph.readyTasks(project.ref);
-  const lines = [
-    `Advance project “${project.title}” to completion.`,
-    `Project description: ${project.description}`,
-    `Unfinished tasks: ${unfinished.length}. Ready tasks: ${ready.length}.`,
-  ];
-  const readyTitles = ready.slice(0, 5).map((task) => task.title);
-  if (readyTitles.length > 0) lines.push(`Ready frontier: ${readyTitles.join("; ")}.`);
-  const blockedCount = unfinished.filter((task) => task.status === "blocked").length;
-  if (blockedCount > 0)
-    lines.push(`Blocked tasks: ${blockedCount}; clarify blockers before claiming work.`);
-  lines.push(
-    "Goal policy: claim and complete concrete ready tasks, verify required evidence, revise task decomposition when it is missing or wrong, and pause or report when a user decision is needed.",
-  );
-  return lines.join("\n");
+function inferProjectBackedSessionGoalObjective(_graph: TaskGraph, project: SparkProject): string {
+  return `Advance project “${project.title}” to completion.`;
 }
 
 async function loadSessionGoalSnapshot(

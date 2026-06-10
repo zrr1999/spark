@@ -4,9 +4,9 @@ import type { Goal } from "./types.ts";
 const CONTINUATION_MARKER_PREFIX = '<spark_goal_continuation goal_id="';
 
 export const GOAL_TOOL_NAME_GUIDANCE =
-  'Call the canonical goal action tool by the name exposed in your available tool list. In pi that is goal({ action: "status" | "start" | "pause" | "complete" }); bridged MCP runs may expose a namespaced equivalent. Do not assume display, history, or transcript tool names are callable unless they appear in your tool list.';
+  'Call the canonical goal action tool by the name exposed in your available tool list. In pi that is goal({ action: "status" | "start" | "pause" | "resume" | "clear" | "edit" | "complete" }); bridged MCP runs may expose a namespaced equivalent. Do not assume display, history, or transcript tool names are callable unless they appear in your tool list.';
 
-type GoalToolAction = "status" | "start" | "pause" | "complete";
+type GoalToolAction = "status" | "start" | "pause" | "resume" | "clear" | "edit" | "complete";
 
 export function goalToolReference(action: GoalToolAction): string {
   return `goal({ action: "${action}" })`;
@@ -16,6 +16,9 @@ export const TOOL_PROMPT_GUIDELINES = [
   GOAL_TOOL_NAME_GUIDANCE,
   `Use ${goalToolReference("status")} when you need to inspect the current long-running user objective.`,
   `Use ${goalToolReference("start")} only when the user explicitly asks you to start tracking a concrete goal; do not infer goals from ordinary tasks and do not create a second goal while a non-complete goal already exists. After a goal is complete, ${goalToolReference("start")} replaces it with a new active goal.`,
+  `Use ${goalToolReference("resume")} only to continue a paused goal that is still valid.`,
+  `Use ${goalToolReference("clear")} only when the user explicitly wants to forget the current goal instead of completing it.`,
+  `Use ${goalToolReference("edit")} only when the user explicitly changes the current goal objective; do not silently redefine a goal to make it easier.`,
   `Use ${goalToolReference("complete")} only after a completion audit proves the objective is actually achieved and no required work remains.`,
   `Before using ${goalToolReference("complete")}, map every explicit requirement in the goal to concrete evidence from files, command output, test results, PR state, or other real artifacts; uncertainty means the goal is not complete.`,
   `Do not use ${goalToolReference("complete")} merely because work is stopping, substantial progress was made, tests passed without covering every requirement, or the token budget is nearly exhausted.`,

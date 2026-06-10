@@ -9,6 +9,8 @@ import {
   sparkSessionKey,
 } from "./session-state.ts";
 import {
+  clearSessionGoal,
+  editSessionGoalObjective,
   inferSessionGoalObjective,
   loadSessionGoal,
   normalizeGoalObjective,
@@ -29,7 +31,16 @@ import type {
 } from "./reviewer-runner.ts";
 import { withSparkReviewerLease } from "./spark-reviewer-lease.ts";
 
-export type SparkGoalToolAction = "status" | "infer" | "set" | "start" | "pause" | "complete";
+export type SparkGoalToolAction =
+  | "status"
+  | "infer"
+  | "set"
+  | "start"
+  | "pause"
+  | "resume"
+  | "clear"
+  | "edit"
+  | "complete";
 
 interface SparkGoalToolDeps {
   refreshSparkWidget: (cwd: string, ctx?: SparkToolContext) => Promise<void>;
@@ -47,15 +58,15 @@ export function registerSparkGoalTool(
     name: "goal",
     label: "Spark Goal",
     description:
-      "Manage the current Pi session's durable goal state. Actions: status, infer, set, start, pause. Goal completion is reviewer-owned; legacy complete requests are rejected for the main agent.",
+      "Manage the current Pi session's durable goal state. Actions: status, infer, set, start, pause, resume, clear, edit. Goal completion is reviewer-owned; legacy complete requests are rejected for the main agent.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({
           description:
-            "status | infer | set | start | pause. Defaults to status. Completion is reviewer-owned.",
+            "status | infer | set | start | pause | resume | clear | edit. Defaults to status. Completion is reviewer-owned.",
         }),
       ),
-      objective: Type.Optional(Type.String({ description: "Goal objective for set/start." })),
+      objective: Type.Optional(Type.String({ description: "Goal objective for set/start/edit." })),
       reason: Type.Optional(Type.String({ description: "Reason for pause." })),
       scope: Type.Optional(
         Type.String({ description: "Goal scope: session or project. Defaults to session." }),
@@ -164,13 +175,48 @@ export function registerSparkGoalTool(
         !sameGoalTarget(existingGoal, requestedScope, requestedProjectRef)
       )
         return goalConflictResult(existingGoal, action, requestedScope, requestedProjectRef);
-      if (action === "complete") {
-        if (!existingGoal)
+      if (!existingGoal)
+        return {
+          content: [{ type: "text", text: "No session goal is set." }],
+          details: { found: false, action, error: "no_goal" },
+        };
+      if (action === "complete") return reviewerOwnedGoalCompletionResult(existingGoal, action);
+      if (action === "clear") {
+        await clearSparkExecutionMode(cwd, ctx);
+        await clearSessionGoal(cwd, ctx);
+        await deps.refreshSparkWidget(cwd, ctx);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Cleared Spark ${renderGoalTarget(existingGoal.scope, existingGoal.projectRef)} goal: ${oneLine(existingGoal.objective)}`,
+            },
+          ],
+          details: { found: true, action, clearedGoal: existingGoal, goal: null },
+        };
+      }
+      if (action === "resume") {
+        if (existingGoal.status === "complete")
           return {
-            content: [{ type: "text", text: "No session goal is set." }],
-            details: { found: false, action, error: "no_goal" },
+            content: [
+              {
+                type: "text" as const,
+                text: `Cannot resume completed Spark ${renderGoalTarget(existingGoal.scope, existingGoal.projectRef)} goal: ${oneLine(existingGoal.objective)}. Start a new goal instead.`,
+              },
+            ],
+            details: { found: true, action, error: "goal_already_complete", goal: existingGoal },
           };
-        return reviewerOwnedGoalCompletionResult(existingGoal, action);
+        await clearSparkExecutionMode(cwd, ctx);
+        const resumed = await updateSessionGoalStatus(cwd, ctx, "active", { retryState: null });
+        await deps.refreshSparkWidget(cwd, ctx);
+        return goalResult(resumed, action, renderGoalStatus(resumed ?? existingGoal));
+      }
+      if (action === "edit") {
+        const objective = normalizeGoalObjective(params.objective);
+        await clearSparkExecutionMode(cwd, ctx);
+        const edited = await editSessionGoalObjective(cwd, ctx, objective);
+        await deps.refreshSparkWidget(cwd, ctx);
+        return goalResult(edited, action, renderGoalStatus(edited ?? existingGoal));
       }
       const reason = normalizeOptionalReason(params.reason);
       const pauseResult = await reviewedPauseCurrentSessionGoal(cwd, ctx, deps, reason, _signal);
@@ -209,11 +255,16 @@ export function normalizeSparkGoalAction(value: unknown): SparkGoalToolAction {
     value === "set" ||
     value === "start" ||
     value === "pause" ||
+    value === "resume" ||
+    value === "clear" ||
+    value === "edit" ||
     value === "complete"
   ) {
     return value;
   }
-  throw new Error("goal action must be status, infer, set, start, pause, or complete");
+  throw new Error(
+    "goal action must be status, infer, set, start, pause, resume, clear, edit, or complete",
+  );
 }
 
 export function normalizeSparkGoalScope(value: unknown): SparkGoalScope {
