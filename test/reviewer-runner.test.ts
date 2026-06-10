@@ -157,6 +157,38 @@ void test("reviewer verdict parser maps goal remaining-work verdicts", () => {
   assert.equal(verdict.outcome, "needs_changes");
 });
 
+void test("reviewer verdict parser normalizes common outcome aliases", () => {
+  const input = reviewTaskInput();
+  const verdict = parseReviewerVerdictForInput(
+    input,
+    JSON.stringify({
+      outcome: "changes-requested",
+      summary: "needs edits",
+      findings: [],
+      blockers: ["missing evidence"],
+      confidence: "high",
+    }),
+  );
+
+  assert.equal(verdict.targetKind, "task");
+  assert.equal(verdict.outcome, "needs_changes");
+  assert.equal(verdict.approved, false);
+  assert.throws(
+    () =>
+      parseReviewerVerdictForInput(
+        input,
+        JSON.stringify({
+          outcome: "unclear",
+          summary: "cannot decide",
+          findings: [],
+          blockers: [],
+          confidence: "low",
+        }),
+      ),
+    /got "unclear"/u,
+  );
+});
+
 void test("reviewer instruction and system prompt enforce read-only verdict boundary", () => {
   const input = reviewTaskInput();
   const prompt = buildReadOnlyReviewerSystemPrompt("Base reviewer prompt.");

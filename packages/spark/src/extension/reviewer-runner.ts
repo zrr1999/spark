@@ -30,6 +30,17 @@ export interface GoalReviewInput {
   targetKind: "goal";
   cwd: string;
   projectRef?: ProjectRef;
+  projectStatus?: {
+    ref: ProjectRef;
+    title: string;
+    status: string;
+    taskCounts: {
+      total: number;
+      unfinished: number;
+      claimed: number;
+      statusCounts: Record<string, number>;
+    };
+  };
   goalId: string;
   objective: string;
   status: "active" | "paused" | "complete";
@@ -192,6 +203,7 @@ export function renderReviewerInstruction(input: ReviewInput): string {
       : {
           targetKind: input.targetKind,
           projectRef: input.projectRef,
+          projectStatus: input.projectStatus,
           goalId: input.goalId,
           objective: input.objective,
           status: input.status,
@@ -449,7 +461,37 @@ function findJsonObjectEnd(text: string, start: number): number | undefined {
 
 function normalizeReviewOutcome(value: unknown): ReviewVerdictOutcome {
   if (value === "approved" || value === "needs_changes" || value === "blocked") return value;
-  throw new Error("reviewer verdict outcome must be approved, needs_changes, or blocked");
+  if (typeof value === "string") {
+    const normalized = value
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/gu, "_");
+    if (["approve", "approved", "accept", "accepted", "pass", "passed"].includes(normalized))
+      return "approved";
+    if (
+      [
+        "change_requested",
+        "changes_requested",
+        "need_changes",
+        "needs_change",
+        "needs_changes",
+        "not_approved",
+        "not_met",
+        "not_ready",
+        "reject",
+        "rejected",
+        "revise",
+        "revision_required",
+      ].includes(normalized)
+    )
+      return "needs_changes";
+    if (["block", "blocked", "blocking"].includes(normalized)) return "blocked";
+  }
+  throw new Error(
+    `reviewer verdict outcome must be approved, needs_changes, or blocked; got ${JSON.stringify(
+      value,
+    )}`,
+  );
 }
 
 function normalizeReviewConfidence(value: unknown): "low" | "medium" | "high" {
