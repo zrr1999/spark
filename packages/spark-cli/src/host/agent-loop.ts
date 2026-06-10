@@ -90,6 +90,7 @@ export class SparkAgentLoop {
   private readonly messages: Message[] = [];
   private state: SparkAgentLoopState = "idle";
   private currentAbort: AbortController | undefined;
+  private triggerTurnRunning = false;
   private readonly subscribers = new Set<(event: SparkAgentLoopEvent) => void>();
 
   constructor(options: SparkAgentLoopOptions) {
@@ -98,6 +99,7 @@ export class SparkAgentLoop {
     this.getModel = options.getModel;
     this.systemPrompt = options.systemPrompt ?? "";
     this.maxRoundtrips = options.maxRoundtrips ?? 16;
+    this.host.setTriggerTurnHandler(() => this.triggerNextTurn());
   }
 
   // ── Public API ─────────────────────────────────────────────────────────
@@ -137,7 +139,7 @@ export class SparkAgentLoop {
    * assistant message, or the aborted/error message envelope.
    */
   async submit(content: string): Promise<AssistantMessage | undefined> {
-    if (this.state !== "idle") {
+    if (this.state !== "idle" || this.triggerTurnRunning) {
       // The TUI handles queueing; the loop refuses to interleave.
       throw new Error(
         `SparkAgentLoop.submit refused: agent is not idle (state=${this.state}). ` +
@@ -166,7 +168,22 @@ export class SparkAgentLoop {
 
   // ── Internal turn loop ─────────────────────────────────────────────────
 
-  private async runTurns(): Promise<AssistantMessage | undefined> {
+  private async triggerNextTurn(): Promise<void> {
+    if (this.state !== "idle" || this.triggerTurnRunning) return;
+    this.triggerTurnRunning = true;
+    try {
+      await this.host.emit("turn_start", { source: "triggerTurn" });
+      const injected = await this.injectBeforeAgentStartMessages();
+      if (injected === 0) return;
+      await this.runTurns({ skipInitialLifecycle: true });
+    } finally {
+      this.triggerTurnRunning = false;
+    }
+  }
+
+  private async runTurns(
+    options: { skipInitialLifecycle?: boolean } = {},
+  ): Promise<AssistantMessage | undefined> {
     let lastAssistant: AssistantMessage | undefined;
     let roundtrips = 0;
     let agentEndPayload: { messages: AssistantMessage[]; errorMessage?: string } | undefined;
@@ -178,8 +195,14 @@ export class SparkAgentLoop {
     };
 
     try {
+      let skipLifecycle = options.skipInitialLifecycle ?? false;
       while (roundtrips < this.maxRoundtrips) {
         if (this.state === "aborting") break;
+        if (!skipLifecycle) {
+          await this.host.emit("turn_start", { source: "agentLoop" });
+          await this.injectBeforeAgentStartMessages();
+        }
+        skipLifecycle = false;
         this.transition("streaming");
 
         const abortController = new AbortController();
@@ -320,6 +343,19 @@ export class SparkAgentLoop {
       .map((entry) => toToolDefinition(entry.config));
   }
 
+  private async injectBeforeAgentStartMessages(): Promise<number> {
+    const results = await this.host.emit("before_agent_start", {});
+    let injected = 0;
+    for (const result of results) {
+      const message = beforeAgentStartMessage(result);
+      if (!message) continue;
+      this.messages.push(message);
+      this.publish({ type: "user_message", message });
+      injected += 1;
+    }
+    return injected;
+  }
+
   /**
    * Drain the host outbox between turns and convert each envelope into a
    * Message that the next stream call will see.
@@ -345,7 +381,7 @@ export class SparkAgentLoop {
         // because pi-ai's Message union doesn't include "system" runtime
         // entries. Display-only custom messages set `display: true` and may
         // be filtered out by the future TUI renderer.
-        if (envelope.options.deliverAs === "nextTurn") continue;
+        if (envelope.options.deliverAs === "nextTurn" || envelope.display === false) continue;
         const message: Message = {
           role: "user",
           content:
@@ -374,6 +410,20 @@ export class SparkAgentLoop {
       }
     }
   }
+}
+
+function beforeAgentStartMessage(result: unknown): Message | undefined {
+  if (!result || typeof result !== "object") return undefined;
+  const message = (result as { message?: unknown }).message;
+  if (!message || typeof message !== "object") return undefined;
+  const content = (message as { content?: unknown }).content;
+  if (typeof content !== "string" || !content.trim()) return undefined;
+  const customType = (message as { customType?: unknown }).customType;
+  return {
+    role: "user",
+    content: typeof customType === "string" && customType ? `[${customType}] ${content}` : content,
+    timestamp: Date.now(),
+  };
 }
 
 function collectToolCalls(message: AssistantMessage): ToolCall[] {

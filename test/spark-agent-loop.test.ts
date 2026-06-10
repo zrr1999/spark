@@ -12,6 +12,7 @@ type AssistantMessage = any;
 type AssistantMessageEvent = any;
 type Context = any;
 type Model = any;
+type Message = any;
 type ToolCall = any;
 
 const TEST_MODEL: Model = {
@@ -304,6 +305,51 @@ void test("SparkAgentLoop drainOutboxIntoMessages turns sendUserMessage envelope
   assert.equal(messages[2]!.role, "user");
   assert.match(JSON.stringify(messages[2]!.content), /follow up/);
   assert.equal((messages[3] as AssistantMessage).content[0]!.type, "text");
+});
+
+void test("SparkAgentLoop triggerTurn runs hidden before_agent_start context", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-trigger-turn-test" });
+  const finalAssistant = buildAssistant([{ type: "text", text: "goal tick executed" }]);
+  let streamCalls = 0;
+  let contextMessages: Message[] = [];
+  host.on("before_agent_start", () => ({
+    message: {
+      customType: "spark-mode-context",
+      content: "Spark foreground goal loop tick.",
+      display: false,
+    },
+  }));
+  const fake: SparkAgentStreamFunction = (_model, context) => {
+    streamCalls += 1;
+    contextMessages = [...context.messages];
+    return {
+      async *[Symbol.asyncIterator]() {
+        yield { type: "done", reason: "stop", message: finalAssistant };
+      },
+      result: async () => finalAssistant,
+    } as ReturnType<SparkAgentStreamFunction>;
+  };
+  const loop = new SparkAgentLoop({ host, streamFunction: fake, getModel: () => TEST_MODEL });
+  const completed = new Promise<void>((resolve) => {
+    loop.onEvent((event) => {
+      if (event.type === "turn_complete") resolve();
+    });
+  });
+
+  host.sendMessage(
+    { customType: "spark-goal-request", content: "Spark goal tick", display: false },
+    { deliverAs: "followUp", triggerTurn: true },
+  );
+
+  await completed;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(streamCalls, 1);
+  assert.equal(loop.getState(), "idle");
+  assert.equal(contextMessages.length, 1);
+  assert.equal(contextMessages[0]?.role, "user");
+  assert.match(String(contextMessages[0]?.content), /\[spark-mode-context\]/);
+  assert.match(String(contextMessages[0]?.content), /Spark foreground goal loop tick/);
+  assert.doesNotMatch(JSON.stringify(loop.getMessages()), /spark-goal-request/);
 });
 
 void test("SparkAgentLoop abort cancels the in-flight stream and returns to idle", async () => {

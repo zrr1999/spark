@@ -79,6 +79,7 @@ export class SparkHostRuntime implements ExtensionAPI {
   private readonly commands: RegisteredCommandMap = new Map();
   private readonly listeners: EventListenerMap = new Map();
   private readonly outbox: OutboxEnvelope[] = [];
+  private triggerTurnHandler: (() => void | Promise<void>) | undefined;
   private readonly messageRenderers = new Map<string, SparkHostMessageRenderer>();
   private readonly toolRegistrationListeners = new Set<ToolRegistrationListener>();
   private uiTransport: SparkHostUiTransport;
@@ -154,6 +155,7 @@ export class SparkHostRuntime implements ExtensionAPI {
       options: { deliverAs: options?.deliverAs, triggerTurn: options?.triggerTurn },
       enqueuedAt: Date.now(),
     });
+    if (options?.triggerTurn) queueMicrotask(() => void this.triggerTurnHandler?.());
   };
 
   sendUserMessage = (
@@ -254,6 +256,11 @@ export class SparkHostRuntime implements ExtensionAPI {
   /** Snapshot the outbox without consuming it (handy for tests). */
   peekOutbox(): readonly OutboxEnvelope[] {
     return this.outbox;
+  }
+
+  /** Register the agent-loop wakeup used by extension-triggered next turns. */
+  setTriggerTurnHandler(handler: (() => void | Promise<void>) | undefined): void {
+    this.triggerTurnHandler = handler;
   }
 
   /**
