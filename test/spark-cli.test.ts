@@ -53,6 +53,7 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
       ["claude-opus-4.6", true, undefined],
       ["claude-opus-4.7", true, undefined],
       ["claude-opus-4.8", true, undefined],
+      ["claude-fable-5", true, undefined],
       ["gpt-5.5", true, "openai-responses"],
       ["gpt-5.5-coding-plan", true, "openai-responses"],
     ],
@@ -67,6 +68,13 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
       xhigh: "xhigh",
     },
   );
+  assert.deepEqual(config.models.find((model) => model.id === "claude-fable-5")?.thinkingLevelMap, {
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+  });
   assert.equal(
     config.models.find((model) => model.id === "gpt-5.5")?.baseUrl,
     "https://oneapi-comate.baidu-int.com/v1",
@@ -74,10 +82,13 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
 });
 
 void test("Baidu OneAPI payload keeps gateway model spelling", () => {
-  assert.deepEqual(remapBaiduOneApiPayload({ model: "claude-opus-4.8", x: 1 }, "Claude Opus 4.8"), {
-    model: "Claude Opus 4.8",
-    x: 1,
-  });
+  assert.deepEqual(
+    remapBaiduOneApiPayload({ model: "claude-fable-5", x: 1 }, "Fable 5-R7M41BBSGB"),
+    {
+      model: "Fable 5-R7M41BBSGB",
+      x: 1,
+    },
+  );
 });
 
 void test("Baidu OneAPI payload forces adaptive thinking for gateway Opus models", () => {
@@ -87,11 +98,11 @@ void test("Baidu OneAPI payload forces adaptive thinking for gateway Opus models
         model: "claude-opus-4.8",
         thinking: { type: "enabled", budget_tokens: 1024, display: "summarized" },
       },
-      "Claude Opus 4.8",
+      "Opus 4.8 Coding Plan",
       "xhigh",
     ),
     {
-      model: "Claude Opus 4.8",
+      model: "Opus 4.8 Coding Plan",
       thinking: { type: "adaptive", display: "summarized" },
       output_config: { effort: "xhigh" },
     },

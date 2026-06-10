@@ -95,7 +95,7 @@ Shared extension behavior should stay in extension packages and target `pi-exten
 
 ## Baidu OneAPI provider
 
-The package contains the standalone `baidu-oneapi` provider implementation for Spark's native model runtime. It exposes local adaptive-friendly model ids (`claude-opus-4.6`, `claude-opus-4.7`, `claude-opus-4.8`) while rewriting outbound Anthropic payloads back to the gateway-required spelling (`Claude Opus 4.6`, `Claude Opus 4.7`, `Claude Opus 4.8`).
+The package contains the standalone `baidu-oneapi` provider implementation for Spark's native model runtime. It exposes local adaptive-friendly model ids (`claude-opus-4.6`, `claude-opus-4.7`, `claude-opus-4.8`, `claude-fable-5`) while rewriting outbound Anthropic payloads back to the gateway-required spelling (`Claude Opus 4.6`, `Claude Opus 4.7`, `Opus 4.8 Coding Plan`, `Fable 5-R7M41BBSGB`).
 
 Authentication:
 

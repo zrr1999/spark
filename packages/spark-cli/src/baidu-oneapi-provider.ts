@@ -15,7 +15,8 @@ const BAIDU_ONEAPI_OPENAI_BASE_URL = `${BAIDU_ONEAPI_BASE_URL}/v1`;
 const GATEWAY_MODEL_BY_ID: Record<string, string> = {
   "claude-opus-4.6": "Claude Opus 4.6",
   "claude-opus-4.7": "Claude Opus 4.7",
-  "claude-opus-4.8": "Claude Opus 4.8",
+  "claude-opus-4.8": "Opus 4.8 Coding Plan",
+  "claude-fable-5": "Fable 5-R7M41BBSGB",
   "gpt-5.5": "gpt-5.5-coding-plan",
   "gpt-5.5-coding-plan": "gpt-5.5-coding-plan",
 };
@@ -183,13 +184,29 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
       },
       {
         id: "claude-opus-4.8",
-        name: "Claude Opus 4.8 (Baidu OneAPI)",
+        name: "Opus 4.8 Coding Plan (Baidu OneAPI)",
         reasoning: true,
         thinkingLevelMap: {
           minimal: null,
           low: null,
           medium: null,
           high: null,
+          xhigh: "xhigh",
+        },
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 32000,
+      },
+      {
+        id: "claude-fable-5",
+        name: "Fable 5 (Baidu OneAPI)",
+        reasoning: true,
+        thinkingLevelMap: {
+          minimal: "low",
+          low: "low",
+          medium: "medium",
+          high: "high",
           xhigh: "xhigh",
         },
         input: ["text", "image"],
