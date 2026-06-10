@@ -195,14 +195,21 @@ export function taskLookup(tasks: Task[]): Map<string, TaskRef> {
 
 export function normalizeProject(project: Project): Project {
   const now = nowIso();
+  const input = project as Project & { intent?: unknown };
+  const rawPurpose = typeof project.purpose === "string" ? project.purpose : input.intent;
   return {
-    ...project,
+    ref: project.ref,
+    title: project.title,
+    description: project.description,
+    purpose: typeof rawPurpose === "string" ? rawPurpose.trim() || undefined : undefined,
     status: normalizeProjectStatus(project.status),
+    outputLanguage: project.outputLanguage,
     currentTaskRef: project.currentTaskRef,
-    intent: typeof project.intent === "string" ? project.intent.trim() || undefined : undefined,
     roadmap: project.roadmap
       ? normalizeProjectRoadmap(project.roadmap, `project(${project.ref}).roadmap`)
       : createDefaultProjectRoadmap(project.title, project.createdAt ?? now),
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
   };
 }
 
@@ -431,20 +438,32 @@ export function taskPlanIssue(kind: TaskPlanIssueKind, message?: string): TaskPl
 
 export function taskCompletionReadiness(
   task: Pick<Task, "plan" | "outputArtifacts" | "status">,
+  options: { openTodos?: ReadonlyArray<{ status: TaskTodo["status"]; content: string }> } = {},
 ): TaskCompletionReadiness {
   if (task.status === "cancelled") return { ready: true, issues: [] };
+  const issues: TaskCompletionIssue[] = [];
   const evidenceRequired = task.plan?.evidenceRequired ?? [];
-  if (evidenceRequired.length === 0) return { ready: true, issues: [] };
-  if (task.outputArtifacts.length > 0) return { ready: true, issues: [] };
-  const issues: TaskCompletionIssue[] = [
-    {
+  if (evidenceRequired.length > 0 && task.outputArtifacts.length === 0) {
+    issues.push({
       kind: "missing_completion_evidence",
       severity: "blocking",
       evidenceRequired,
       message: `Task completion needs evidence artifacts: ${evidenceRequired.join("; ")}`,
-    },
-  ];
-  return { ready: false, issues };
+    });
+  }
+  const openTodos = (options.openTodos ?? []).filter(
+    (todo) => todo.status !== "done" && todo.status !== "cancelled" && todo.status !== "deleted",
+  );
+  if (openTodos.length > 0) {
+    const labels = openTodos.slice(0, 5).map((todo) => `${todo.status}: ${todo.content}`);
+    issues.push({
+      kind: "open_task_todos",
+      severity: "blocking",
+      openTodos: labels,
+      message: `Task completion needs all task TODOs done or dispositioned; ${openTodos.length} still open: ${labels.join("; ")}`,
+    });
+  }
+  return { ready: issues.every((issue) => issue.severity !== "blocking"), issues };
 }
 
 export function cloneTaskPlan(plan: TaskPlan): TaskPlan {

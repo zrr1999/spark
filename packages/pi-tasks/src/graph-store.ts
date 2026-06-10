@@ -9,6 +9,7 @@ import {
   parseJsonFileText,
   stableId,
   writeJsonFileAtomic,
+  type Project,
 } from "pi-extension-api";
 import { TaskGraph } from "./graph.ts";
 import type {
@@ -86,7 +87,7 @@ export class TaskGraphStore {
   }
 
   private async saveUnlocked(graph: TaskGraph): Promise<void> {
-    const snapshot = graph.snapshot();
+    const snapshot = serializeTaskGraphStoreSnapshot(graph.snapshot());
     const data = formatJsonFile(snapshot);
     await writeJsonFileAtomic(this.filePath, snapshot);
     taskGraphSourceHashes.set(graph, stableId(data));
@@ -103,7 +104,7 @@ export class TaskGraphStore {
     const snapshot = parseTaskGraphStoreJson(data, this.filePath);
     let graph: TaskGraph;
     try {
-      graph = TaskGraph.fromSnapshot(snapshot as TaskGraphSnapshot);
+      graph = TaskGraph.fromSnapshot(deserializeTaskGraphStoreSnapshot(snapshot));
     } catch (error) {
       throw new TaskGraphStoreFormatError(
         this.filePath,
@@ -173,6 +174,42 @@ function parseTaskGraphStoreJson(text: string, filePath: string): unknown {
     throw new TaskGraphStoreFormatError(filePath, "JSON root must be an object");
   }
   return raw;
+}
+
+interface PersistedProject extends Omit<Project, "purpose"> {
+  intent?: string;
+  purpose?: string;
+}
+
+interface PersistedTaskGraphSnapshot extends Omit<TaskGraphSnapshot, "projects"> {
+  projects: PersistedProject[];
+}
+
+function serializeTaskGraphStoreSnapshot(snapshot: TaskGraphSnapshot): PersistedTaskGraphSnapshot {
+  return {
+    ...snapshot,
+    projects: snapshot.projects.map((project) => {
+      const { purpose, ...rest } = project;
+      return {
+        ...rest,
+        intent: purpose,
+      };
+    }),
+  };
+}
+
+function deserializeTaskGraphStoreSnapshot(raw: unknown): TaskGraphSnapshot {
+  const snapshot = raw as PersistedTaskGraphSnapshot;
+  return {
+    ...snapshot,
+    projects: snapshot.projects.map((project) => {
+      const { intent, purpose, ...rest } = project;
+      return {
+        ...rest,
+        purpose: purpose ?? intent,
+      };
+    }),
+  } as TaskGraphSnapshot;
 }
 
 async function acquireTaskGraphStoreLock(

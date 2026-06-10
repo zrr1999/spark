@@ -23,7 +23,7 @@ import type {
 export interface CreateProjectInput {
   title: string;
   description: string;
-  intent?: string;
+  purpose?: string;
   status?: ProjectStatus;
   outputLanguage?: "zh" | "en";
 }

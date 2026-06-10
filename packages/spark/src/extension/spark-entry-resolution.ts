@@ -211,7 +211,7 @@ async function inferExistingProjectFocusFromContext(cwd: string): Promise<string
   if (hints.signals.length > 0)
     lines.push(`Detected project signals: ${hints.signals.join(", ")}.`);
   lines.push(
-    "Planning focus: inspect the repository context, infer the current project intent, and plan only concrete next work after any context-specific clarification needed.",
+    "Planning focus: inspect the repository context, infer the current project purpose, and plan only concrete next work after any context-specific clarification needed.",
   );
   return lines.join("\n");
 }

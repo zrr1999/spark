@@ -432,8 +432,8 @@ export interface Project {
   ref: ProjectRef;
   title: string;
   description: string;
-  /** Durable project intent; distinct from session goal pursuit. */
-  intent?: string;
+  /** Durable project purpose; distinct from session goal pursuit. */
+  purpose?: string;
   status: ProjectStatus;
   outputLanguage?: "zh" | "en";
   currentTaskRef?: TaskRef;
@@ -494,7 +494,7 @@ export type TaskPlanIssueKind =
   | "missing_steps"
   | "open_questions";
 
-export type TaskCompletionIssueKind = "missing_completion_evidence";
+export type TaskCompletionIssueKind = "missing_completion_evidence" | "open_task_todos";
 
 export interface TaskPlanIssue {
   kind: TaskPlanIssueKind;
@@ -513,6 +513,7 @@ export interface TaskCompletionIssue {
   severity: "warning" | "blocking";
   message: string;
   evidenceRequired?: string[];
+  openTodos?: string[];
 }
 
 export interface TaskCompletionReadiness {

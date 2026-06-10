@@ -100,7 +100,7 @@ export class TaskGraph {
       ref: newRef("proj"),
       title: input.title,
       description: input.description,
-      intent: input.intent?.trim() || undefined,
+      purpose: input.purpose?.trim() || undefined,
       status: normalizeProjectStatus(input.status),
       outputLanguage: input.outputLanguage,
       roadmap: createDefaultProjectRoadmap(input.title, now),
@@ -657,7 +657,9 @@ export class TaskGraph {
 
   updateProject(
     projectRef: ProjectRef,
-    patch: Partial<Pick<Project, "title" | "description" | "intent" | "status" | "outputLanguage">>,
+    patch: Partial<
+      Pick<Project, "title" | "description" | "purpose" | "status" | "outputLanguage">
+    >,
   ): Project {
     const project = this.getProject(projectRef);
     const title = patch.title ?? project.title;
@@ -668,7 +670,7 @@ export class TaskGraph {
       ...project,
       title,
       description,
-      intent: patch.intent !== undefined ? patch.intent.trim() || undefined : project.intent,
+      purpose: patch.purpose !== undefined ? patch.purpose.trim() || undefined : project.purpose,
       status: normalizeProjectStatus(patch.status ?? project.status),
       outputLanguage: patch.outputLanguage ?? project.outputLanguage,
       updatedAt: nowIso(),

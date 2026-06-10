@@ -1,13 +1,13 @@
 import { defaultArtifactStore } from "pi-artifacts";
 import type { ArtifactRef, JsonValue, ProjectRef } from "pi-extension-api";
 import type { TaskGraph } from "pi-tasks";
-import type { clarifyProjectIntentIfNeeded } from "../flows/project-intent-flow.ts";
+import type { clarifyProjectPurposeIfNeeded } from "../flows/project-purpose-flow.ts";
 import { isImportantStatus, type SparkProjectListStatus } from "./spark-status.ts";
 
 export interface SparkProjectPatch {
   title?: string;
   description?: string;
-  intent?: string;
+  purpose?: string;
   status?: "active" | "done";
   outputLanguage?: "zh" | "en";
 }
@@ -16,7 +16,7 @@ export interface SparkNewProjectInput {
   project?: string;
   title?: string;
   description?: string;
-  intent?: string;
+  purpose?: string;
   outputLanguage?: "zh" | "en";
 }
 
@@ -61,7 +61,7 @@ export function normalizeSparkProjectPatch(params: Record<string, unknown>): Spa
   return {
     title: normalizeSparkProjectOptionalString(params.title, "title"),
     description: normalizeSparkProjectOptionalString(params.description, "description"),
-    intent: normalizeSparkProjectOptionalString(params.intent, "intent"),
+    purpose: normalizeSparkProjectOptionalString(params.purpose, "purpose"),
     status: normalizeSparkProjectStatus(params.status),
     outputLanguage: normalizeSparkProjectOutputLanguage(params.outputLanguage),
   };
@@ -74,14 +74,14 @@ export function normalizeSparkNewProjectInput(
     project: normalizeSparkProjectOptionalString(params.project, "project"),
     title: normalizeSparkProjectOptionalString(params.title, "title"),
     description: normalizeSparkProjectOptionalString(params.description, "description"),
-    intent: normalizeSparkProjectOptionalString(params.intent, "intent"),
+    purpose: normalizeSparkProjectOptionalString(params.purpose, "purpose"),
     outputLanguage: normalizeSparkProjectOutputLanguage(params.outputLanguage),
   };
 }
 
 export function hasSparkProjectPatch(patch: SparkProjectPatch): boolean {
   return Boolean(
-    patch.title || patch.description || patch.intent || patch.status || patch.outputLanguage,
+    patch.title || patch.description || patch.purpose || patch.status || patch.outputLanguage,
   );
 }
 
@@ -245,15 +245,15 @@ export function collectSparkProjectSummaries(input: {
     });
 }
 
-export async function saveProjectIntentTrace(
+export async function saveProjectPurposeTrace(
   cwd: string,
   projectRef: ProjectRef,
-  clarification: Awaited<ReturnType<typeof clarifyProjectIntentIfNeeded>>,
+  clarification: Awaited<ReturnType<typeof clarifyProjectPurposeIfNeeded>>,
 ): Promise<void> {
   if (!clarification.asked || !clarification.artifactRef) return;
   await defaultArtifactStore(cwd).put({
     kind: "run-trace",
-    title: "Project intent clarification",
+    title: "Project purpose clarification",
     format: "json",
     body: {
       projectRef,

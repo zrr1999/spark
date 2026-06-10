@@ -154,7 +154,11 @@ void test("task graph store keeps TODOs out of projects.json and todo store rest
     const store = new TaskGraphStore(file);
     const todoStore = new TaskTodoStore(todoFile);
     const graph = new TaskGraph();
-    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const project = graph.createProject({
+      title: "Demo",
+      description: "demo",
+      purpose: "Ship focused task storage",
+    });
     const task = graph.createTask({
       projectRef: project.ref,
       title: "Plan",
@@ -168,12 +172,16 @@ void test("task graph store keeps TODOs out of projects.json and todo store rest
     assert.ok(loaded);
     await todoStore.hydrate(loaded);
     assert.equal(loaded.projects()[0]?.title, "Demo");
+    assert.equal(loaded.projects()[0]?.purpose, "Ship focused task storage");
     assert.equal(loaded.tasks(project.ref).length, 1);
     assert.equal(loaded.currentTask(project.ref), undefined);
     assert.equal(loaded.tasks(project.ref)[0]?.title, "Plan");
     assert.equal(loaded.taskTodos(task.ref).length, 2);
     assert.equal(loaded.todoSummary(task.ref).inProgress, 1);
-    assert.doesNotMatch(await readFile(file, "utf8"), /"todos"/);
+    const projectJson = await readFile(file, "utf8");
+    assert.doesNotMatch(projectJson, /"todos"/);
+    assert.match(projectJson, /"intent": "Ship focused task storage"/);
+    assert.doesNotMatch(projectJson, /"purpose"/);
     assert.match(await readFile(todoFile, "utf8"), /"Read inputs"/);
     assert.deepEqual(
       (await readdir(dir)).filter((entry) => entry.endsWith(".tmp")),

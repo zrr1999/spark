@@ -93,6 +93,7 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
       taskRef: Type.Optional(Type.String({ description: "Task ref/name/title selector." })),
       title: Type.Optional(Type.String({ description: "Project/task title." })),
       description: Type.Optional(Type.String({ description: "Project/task description." })),
+      purpose: Type.Optional(Type.String({ description: "Project purpose." })),
       name: Type.Optional(Type.String({ description: "Stable @task name for claim/plan." })),
       kind: Type.Optional(Type.String({ description: "Task kind." })),
       status: Type.Optional(
@@ -114,6 +115,9 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
         Type.String({ description: "TODO note/free text or completion summary." }),
       ),
       summary: Type.Optional(Type.String({ description: "Task completion/failure summary." })),
+      evidenceRefs: Type.Optional(
+        Type.Array(Type.String({ description: "Artifact refs that evidence task completion." })),
+      ),
       dryRun: Type.Optional(
         Type.Boolean({ description: "Dry-run for scheduling/cleanup actions." }),
       ),

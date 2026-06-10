@@ -5,14 +5,14 @@ import {
   type SparkAskToolUi,
 } from "../extension/spark-ask-tool.ts";
 
-export interface ProjectIntentClarificationResult {
+export interface ProjectPurposeClarificationResult {
   asked: boolean;
   artifactRef?: ArtifactRef;
   summary?: string;
   blocked: boolean;
 }
 
-export function shouldClarifyProjectIntent(input: {
+export function shouldClarifyProjectPurpose(input: {
   title: string;
   description?: string;
   explicitProject?: string;
@@ -25,19 +25,19 @@ export function shouldClarifyProjectIntent(input: {
   return isGenericProjectTitle(title);
 }
 
-export async function clarifyProjectIntentIfNeeded(input: {
+export async function clarifyProjectPurposeIfNeeded(input: {
   cwd: string;
   title: string;
   description?: string;
   explicitProject?: string;
   ui?: SparkAskToolUi;
-}): Promise<ProjectIntentClarificationResult> {
-  if (!shouldClarifyProjectIntent(input)) return { asked: false, blocked: false };
-  const copy = projectIntentAskCopy(input.title, input.description);
+}): Promise<ProjectPurposeClarificationResult> {
+  if (!shouldClarifyProjectPurpose(input)) return { asked: false, blocked: false };
+  const copy = projectPurposeAskCopy(input.title, input.description);
   const request: SparkAskToolParams = {
     mode: "clarification",
-    flow: "project-intent-refinement",
-    title: `Clarify project intent for “${copy.title}”`,
+    flow: "project-purpose-refinement",
+    title: `Clarify project purpose for “${copy.title}”`,
     context: [
       `Proposed project title: ${copy.title}`,
       `Current description: ${copy.description}`,
@@ -45,7 +45,7 @@ export async function clarifyProjectIntentIfNeeded(input: {
     ].join("\n"),
     questions: [
       {
-        id: "intent",
+        id: "purpose",
         prompt: `For the placeholder project “${copy.title}”, which concrete workstream, feature, bug, or decision family should its tasks belong to?`,
         type: "freeform",
         required: false,
@@ -72,7 +72,7 @@ export async function clarifyProjectIntentIfNeeded(input: {
   };
 }
 
-function projectIntentAskCopy(
+function projectPurposeAskCopy(
   title: string,
   description: string | undefined,
 ): { title: string; description: string } {

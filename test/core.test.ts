@@ -160,8 +160,8 @@ void test("task graph rejects cycles and cross-project dependencies", () => {
 
 void test("task graph bootstraps one roadmap per project", () => {
   const graph = new TaskGraph();
-  const project = graph.createProject({ title: "Demo", description: "demo", intent: "Ship v0" });
-  assert.equal(project.intent, "Ship v0");
+  const project = graph.createProject({ title: "Demo", description: "demo", purpose: "Ship v0" });
+  assert.equal(project.purpose, "Ship v0");
   assert.equal(project.roadmap.ref, "roadmap:main");
   assert.equal(project.roadmap.items.length, 0);
   const reloaded = TaskGraph.fromSnapshot(graph.snapshot());

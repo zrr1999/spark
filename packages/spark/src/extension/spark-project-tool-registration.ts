@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { defaultTaskGraphStore } from "pi-tasks";
-import { clarifyProjectIntentIfNeeded } from "../flows/project-intent-flow.ts";
+import { clarifyProjectPurposeIfNeeded } from "../flows/project-purpose-flow.ts";
 import {
   clearCurrentProjectRef,
   currentSparkProject,
@@ -17,7 +17,7 @@ import {
   normalizeSparkProjectPatch,
   normalizeSparkProjectOptionalString,
   resolveSparkProject,
-  saveProjectIntentTrace,
+  saveProjectPurposeTrace,
 } from "./spark-project-tools.ts";
 import { normalizeSparkProjectListStatus } from "./spark-status.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
@@ -77,7 +77,7 @@ export function registerSparkProjectTools(
       ),
       title: Type.Optional(Type.String({ description: "New project title." })),
       description: Type.Optional(Type.String({ description: "New project description." })),
-      intent: Type.Optional(Type.String({ description: "Durable project intent." })),
+      purpose: Type.Optional(Type.String({ description: "Durable project purpose." })),
       status: Type.Optional(Type.String({ description: "active | done" })),
       outputLanguage: Type.Optional(Type.String({ description: "zh | en" })),
     }),
@@ -90,7 +90,7 @@ export function registerSparkProjectTools(
           content: [
             {
               type: "text",
-              text: "Provide title, description, intent, status, or outputLanguage to update the Spark project.",
+              text: "Provide title, description, purpose, status, or outputLanguage to update the Spark project.",
             },
           ],
           details: { found: true, error: "missing_project_patch" },
@@ -196,7 +196,7 @@ export function registerSparkProjectTools(
               guidance: duplicateGate.guidance,
             },
           };
-        const clarification = await clarifyProjectIntentIfNeeded({
+        const clarification = await clarifyProjectPurposeIfNeeded({
           cwd,
           title: input.title,
           description,
@@ -206,12 +206,12 @@ export function registerSparkProjectTools(
         project = graph.createProject({
           title: input.title,
           description,
-          intent: input.intent,
+          purpose: input.purpose,
           outputLanguage: input.outputLanguage,
         });
         created = true;
         await store.save(graph);
-        await saveProjectIntentTrace(cwd, project.ref, clarification);
+        await saveProjectPurposeTrace(cwd, project.ref, clarification);
       }
       await saveCurrentProjectRef(cwd, ctx, project.ref);
       await deps.refreshSparkWidget(cwd, ctx);
