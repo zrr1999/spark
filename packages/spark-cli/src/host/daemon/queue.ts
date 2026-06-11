@@ -54,7 +54,7 @@ export class SparkDaemonQueue {
     await this.init();
     const dir = this.dirForState(state);
     if (!existsSync(dir)) return [];
-    return (await readdir(dir)).filter((entry) => entry.endsWith(".json")).sort();
+    return (await readdir(dir)).filter((entry) => entry.endsWith(".json")).sort(compareStrings);
   }
 
   async listEntries(state: SparkDaemonQueueState = "inbox"): Promise<SparkDaemonQueueEntry[]> {
@@ -130,6 +130,10 @@ export class SparkDaemonQueue {
         return this.failedDir;
     }
   }
+}
+
+function compareStrings(left: string, right: string): number {
+  return left.localeCompare(right);
 }
 
 function normalizeQueueFileName(fileName: string): string {

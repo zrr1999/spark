@@ -38,7 +38,7 @@ export async function discoverSparkSavedWorkflows(
   }
   const workflows: SparkSavedWorkflowDescriptor[] = [];
   const errors: SparkSavedWorkflowError[] = [];
-  for (const entry of entries.filter((name) => name.endsWith(".js")).sort()) {
+  for (const entry of entries.filter((name) => name.endsWith(".js")).sort(compareStrings)) {
     const path = join(dir, entry);
     try {
       const script = await readFile(path, "utf8");
@@ -119,6 +119,10 @@ function renderSavedWorkflowCatalog(saved: SparkSavedWorkflowDiscovery): string 
     "Ask with ask before selecting a saved workflow unless the focus clearly names it; discovery never executes saved workflow bodies.",
   );
   return "\n" + lines.join("\n");
+}
+
+function compareStrings(left: string, right: string): number {
+  return left.localeCompare(right);
 }
 
 function renderWorkflowBudgetCatalog(): string {

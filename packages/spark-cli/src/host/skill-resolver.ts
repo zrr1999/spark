@@ -283,13 +283,36 @@ function parseSimpleYaml(raw: string): SparkSkillFrontmatter {
   const out: SparkSkillFrontmatter = {};
   for (const line of raw.split(/\r?\n/)) {
     if (!line.trim() || line.trimStart().startsWith("#")) continue;
-    const match = /^(\w[\w-]*):\s*(.*)$/.exec(line);
-    if (!match) continue;
-    const key = match[1]!;
-    const value = parseYamlScalar(match[2]!.trim());
+    const parsedLine = parseYamlLine(line);
+    if (!parsedLine) continue;
+    const value = parseYamlScalar(parsedLine.rest.trim());
+    const key = parsedLine.key;
     out[key] = value;
   }
   return out;
+}
+
+function parseYamlLine(line: string): { key: string; rest: string } | undefined {
+  const colonIndex = line.indexOf(":");
+  if (colonIndex <= 0) return undefined;
+  const key = line.slice(0, colonIndex);
+  if (!isYamlKey(key)) return undefined;
+  return { key, rest: line.slice(colonIndex + 1) };
+}
+
+function isYamlKey(value: string): boolean {
+  const first = value[0];
+  if (!first || !isYamlKeyStart(first)) return false;
+  for (const char of value.slice(1)) if (!isYamlKeyChar(char)) return false;
+  return true;
+}
+
+function isYamlKeyStart(char: string): boolean {
+  return (char >= "A" && char <= "Z") || (char >= "a" && char <= "z") || char === "_";
+}
+
+function isYamlKeyChar(char: string): boolean {
+  return isYamlKeyStart(char) || (char >= "0" && char <= "9") || char === "-";
 }
 
 function parseYamlScalar(value: string): unknown {
@@ -319,16 +342,28 @@ function isValidSkillName(name: string): boolean {
 
 function scoreSkillMatch(skill: SparkSkill, request: string): number {
   const haystack = `${skill.name} ${skill.description}`.toLowerCase();
-  const words = request
-    .toLowerCase()
-    .split(/[^a-z0-9-]+/)
-    .filter((word) => word.length >= 3);
+  const words = skillSearchWords(request);
   let score = 0;
   for (const word of new Set(words)) {
     if (skill.name.includes(word)) score += 4;
     if (haystack.includes(word)) score += 1;
   }
   return score;
+}
+
+function skillSearchWords(request: string): string[] {
+  const words: string[] = [];
+  let current = "";
+  for (const char of request.toLowerCase()) {
+    if ((char >= "a" && char <= "z") || (char >= "0" && char <= "9") || char === "-") {
+      current += char;
+    } else {
+      if (current.length >= 3) words.push(current);
+      current = "";
+    }
+  }
+  if (current.length >= 3) words.push(current);
+  return words;
 }
 
 function skillLayerSpecs(

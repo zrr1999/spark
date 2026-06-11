@@ -1990,17 +1990,32 @@ export default function (pi: ExtensionAPI) {
 
   function parseOverlayBtwCommand(value: string): { name: string; args: string } | null {
     const trimmed = value.trim();
-    const match = trimmed.match(
-      /^\/(btw:(?:new|tangent|clear|inject|summarize|model|thinking))(?:\s+(.*))?$/,
-    );
-    if (!match) {
-      return null;
-    }
-
+    if (!trimmed.startsWith("/")) return null;
+    const withoutSlash = trimmed.slice(1);
+    const separator = firstWhitespaceIndex(withoutSlash);
+    const name = separator < 0 ? withoutSlash : withoutSlash.slice(0, separator);
+    if (!OVERLAY_BTW_COMMANDS.has(name)) return null;
     return {
-      name: match[1],
-      args: match[2]?.trim() ?? "",
+      name,
+      args: separator < 0 ? "" : withoutSlash.slice(separator + 1).trim(),
     };
+  }
+
+  const OVERLAY_BTW_COMMANDS = new Set([
+    "btw:new",
+    "btw:tangent",
+    "btw:clear",
+    "btw:inject",
+    "btw:summarize",
+    "btw:model",
+    "btw:thinking",
+  ]);
+
+  function firstWhitespaceIndex(value: string): number {
+    for (let index = 0; index < value.length; index += 1) {
+      if (value[index]?.trim() === "") return index;
+    }
+    return -1;
   }
 
   async function submitFromOverlay(

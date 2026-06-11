@@ -180,7 +180,7 @@ export function registerSparkPlanTasksTool(
         throw error;
       }
       const changedForDecision = [...result.created, ...result.updated];
-      const planDecisions = changedForDecision.map(decideTaskPlanBeforeCreate);
+      const planDecisions = changedForDecision.map((task) => decideTaskPlanBeforeCreate(task));
       const rejectedIndex = planDecisions.findIndex((decision) => !decision.accepted);
       if (rejectedIndex >= 0) {
         const task = changedForDecision[rejectedIndex];

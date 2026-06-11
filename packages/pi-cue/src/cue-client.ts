@@ -562,7 +562,8 @@ export class CueClient {
 
   /** Resolved when the connection closes. */
   get closed(): Promise<void> {
-    return this.#closePromise;
+    if (!this.#closed) return this.#closePromise;
+    return Promise.resolve();
   }
 
   get isClosed(): boolean {

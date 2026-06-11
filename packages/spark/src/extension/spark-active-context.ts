@@ -172,22 +172,41 @@ function stripFinishedSparkMdSections(markdown: string): string {
   const kept: string[] = [];
   let skipping = false;
   for (const line of lines) {
-    const heading = /^##\s+(.+?)\s*$/.exec(line);
-    if (heading) skipping = isFinishedSparkMdHeading(heading[1] ?? "");
+    const heading = markdownLevelTwoHeading(line);
+    if (heading) skipping = isFinishedSparkMdHeading(heading);
     if (!skipping) kept.push(line);
   }
   return kept.join("\n").trim();
 }
 
+function markdownLevelTwoHeading(line: string): string | undefined {
+  if (!line.startsWith("##")) return undefined;
+  if (line.startsWith("###")) return undefined;
+  return line.slice(2).trim() || undefined;
+}
+
 function isFinishedSparkMdHeading(heading: string): boolean {
-  const normalized = heading
-    .replaceAll(/[#*_`]/g, "")
-    .trim()
-    .toLowerCase();
-  if (/^(修订记录|变更记录|历史|完成|已完成)/.test(normalized)) return true;
-  return /^(revision history|revisions?|changelog|change log|history|completed|finished|done)\b/i.test(
-    normalized,
-  );
+  const normalized = stripMarkdownHeadingMarkers(heading).toLowerCase();
+  const zhPrefixes = ["修订记录", "变更记录", "历史", "完成", "已完成"];
+  if (zhPrefixes.some((prefix) => normalized.startsWith(prefix))) return true;
+  return [
+    "revision history",
+    "revision",
+    "revisions",
+    "changelog",
+    "change log",
+    "history",
+    "completed",
+    "finished",
+    "done",
+  ].some((prefix) => normalized === prefix || normalized.startsWith(prefix + " "));
+}
+
+function stripMarkdownHeadingMarkers(value: string): string {
+  let output = "";
+  for (const char of value)
+    if (char !== "#" && char !== "*" && char !== "_" && char !== "`") output += char;
+  return output.trim();
 }
 
 function truncateSparkContextBlock(value: string, readFullSuffix: string): string | undefined {

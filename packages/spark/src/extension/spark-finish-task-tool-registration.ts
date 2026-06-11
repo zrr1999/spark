@@ -88,15 +88,36 @@ const FOLLOW_UP_DISPOSITIONS = [
   "out_of_scope",
 ] as const;
 const FOLLOW_UP_RESEARCH_KINDS = new Set(["research", "review", "plan"]);
-const FOLLOW_UP_SIGNAL_PATTERN =
-  /\b(?:P0|P1|P2|TODO)\b|follow[- ]?ups?|recommended[- ]route|recommended route|next actions?|action items?/i;
-const FOLLOW_UP_DISPOSITION_PATTERN =
-  /\b(?:created_task|created task|already_covered|already covered|deferred|rejected|out_of_scope|out of scope)\b/i;
-const NO_FOLLOW_UP_PATTERN =
-  /\b(?:no|none|without)\s+(?:open\s+)?(?:P0|P1|P2|TODOs?|follow[- ]?ups?|recommended[- ]routes?|next actions?|action items?)\b/i;
-const FOLLOW_UP_HEADING_PATTERN =
-  /^\s*(?:#{1,6}\s*)?(?:follow[- ]?ups?|recommended[- ]route|recommended route|next actions?|action items?|TODOs?)\s*:?\s*$/i;
-const FOLLOW_UP_SECTION_ITEM_PATTERN = /^\s*(?:[-*+]\s+|\d+[.)]\s+)\S/;
+const FOLLOW_UP_SIGNAL_TERMS = [
+  "p0",
+  "p1",
+  "p2",
+  "todo",
+  "todos",
+  "follow-up",
+  "follow-ups",
+  "follow up",
+  "follow ups",
+  "recommended-route",
+  "recommended-routes",
+  "recommended route",
+  "recommended routes",
+  "next action",
+  "next actions",
+  "action item",
+  "action items",
+];
+const FOLLOW_UP_DISPOSITION_TERMS = [
+  "created_task",
+  "created task",
+  "already_covered",
+  "already covered",
+  "deferred",
+  "rejected",
+  "out_of_scope",
+  "out of scope",
+];
+const NO_FOLLOW_UP_PREFIXES = ["no", "none", "without"];
 
 export function normalizeSparkFinishTaskInput(
   params: Record<string, unknown>,
@@ -404,7 +425,7 @@ function sourceDispositionedInSummary(source: string, summary: string): boolean 
   if (!summary || !isRef(source, "artifact")) return false;
   return summary
     .split(/\r?\n/)
-    .some((line) => line.includes(source) && FOLLOW_UP_DISPOSITION_PATTERN.test(line));
+    .some((line) => line.includes(source) && hasFollowUpDisposition(line));
 }
 
 function inspectFollowUpDispositionSource(
@@ -420,23 +441,85 @@ function inspectFollowUpDispositionSource(
       inFollowUpSection = false;
       continue;
     }
-    if (FOLLOW_UP_HEADING_PATTERN.test(line)) {
+    if (isFollowUpHeading(line)) {
       inFollowUpSection = true;
       continue;
     }
-    const sectionItem = inFollowUpSection && FOLLOW_UP_SECTION_ITEM_PATTERN.test(line);
-    const signalMatch = FOLLOW_UP_SIGNAL_PATTERN.exec(line);
-    const hasSignal = Boolean(signalMatch);
-    if (!hasSignal && !sectionItem) continue;
-    if (NO_FOLLOW_UP_PATTERN.test(line) || FOLLOW_UP_DISPOSITION_PATTERN.test(line)) continue;
+    const sectionItem = inFollowUpSection && isMarkdownListItem(line);
+    const signal = firstFollowUpSignal(line);
+    if (!signal && !sectionItem) continue;
+    if (hasNoFollowUpSignal(line) || hasFollowUpDisposition(line)) continue;
     signals.push({
       source,
       line: index + 1,
-      signal: signalMatch?.[0] ?? "follow-up section item",
+      signal: signal ?? "follow-up section item",
       excerpt: truncateInline(trimmed, 180),
     });
   }
   return signals;
+}
+
+function firstFollowUpSignal(line: string): string | undefined {
+  const normalized = normalizeFollowUpText(line);
+  return FOLLOW_UP_SIGNAL_TERMS.find((term) => includesFollowUpTerm(normalized, term));
+}
+
+function hasFollowUpDisposition(line: string): boolean {
+  const normalized = normalizeFollowUpText(line);
+  return FOLLOW_UP_DISPOSITION_TERMS.some((term) => includesFollowUpTerm(normalized, term));
+}
+
+function hasNoFollowUpSignal(line: string): boolean {
+  const normalized = normalizeFollowUpText(line).trimStart();
+  const prefix = NO_FOLLOW_UP_PREFIXES.find((candidate) => normalized.startsWith(candidate + " "));
+  if (!prefix) return false;
+  const rest = normalized.slice(prefix.length).trimStart();
+  const withoutOpen = rest.startsWith("open ") ? rest.slice("open ".length) : rest;
+  return FOLLOW_UP_SIGNAL_TERMS.some((term) => includesFollowUpTerm(withoutOpen, term));
+}
+
+function isFollowUpHeading(line: string): boolean {
+  let text = line.trim();
+  while (text.startsWith("#")) text = text.slice(1).trimStart();
+  if (text.endsWith(":")) text = text.slice(0, -1).trimEnd();
+  return FOLLOW_UP_SIGNAL_TERMS.some((term) => normalizeFollowUpText(text) === term);
+}
+
+function isMarkdownListItem(line: string): boolean {
+  const text = line.trimStart();
+  if (!text) return false;
+  const marker = text[0];
+  if ((marker === "-" || marker === "*" || marker === "+") && text[1]?.trim() === "") {
+    return text.slice(2).trim().length > 0;
+  }
+  let index = 0;
+  while (index < text.length && text[index] >= "0" && text[index] <= "9") index += 1;
+  if (index === 0) return false;
+  const separator = text[index];
+  if (separator !== "." && separator !== ")") return false;
+  return text.slice(index + 1).trim().length > 0;
+}
+
+function normalizeFollowUpText(value: string): string {
+  return value
+    .toLowerCase()
+    .replaceAll("‐", "-")
+    .replaceAll("‑", "-")
+    .replaceAll("–", "-")
+    .replaceAll("—", "-");
+}
+
+function includesFollowUpTerm(value: string, term: string): boolean {
+  const index = value.indexOf(term);
+  if (index < 0) return false;
+  return isFollowUpBoundary(value[index - 1]) && isFollowUpBoundary(value[index + term.length]);
+}
+
+function isFollowUpBoundary(char: string | undefined): boolean {
+  return (
+    !char ||
+    !((char >= "a" && char <= "z") || (char >= "0" && char <= "9") || char === "_" || char === "-")
+  );
 }
 
 function renderFollowUpDispositionBlockedMessage(

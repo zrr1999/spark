@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import net from "node:net";
@@ -465,7 +466,7 @@ async function requestGraftd(
 ): Promise<JsonValue> {
   const socketPath =
     options.spawnIfMissing === false ? workspaceSocketPath(cwd) : await ensureGraftd(cwd);
-  const id = `pi-graft-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const id = `pi-graft-${Date.now()}-${randomUUID()}`;
   const requestParams = GLOBAL_GRAFTD_OPS.has(op)
     ? params
     : { workspace_id: await workspaceIdForRequest(cwd), workspace_root: cwd, ...params };
@@ -760,13 +761,51 @@ function parseAnchorRef(ref: unknown, field: string): ParsedAnchor {
   if (typeof ref !== "string" || ref.trim().length === 0) {
     throw new Error(`${field} must be a LINE#HASH anchor from graft read output.`);
   }
-  const match = /^\s*[>+-]*\s*(\d+)\s*#\s*([^\s:]+)(?:\s*:(.*))?$/s.exec(ref.trimEnd());
-  if (!match) throw new Error(`${field} must use LINE#HASH, got ${JSON.stringify(ref)}.`);
-  const line = Number.parseInt(match[1]!, 10);
-  const hash = match[2]!;
+  const parsed = parseLineHashAnchor(ref);
+  if (!parsed) throw new Error(`${field} must use LINE#HASH, got ${JSON.stringify(ref)}.`);
+  const line = Number.parseInt(parsed.lineText, 10);
+  const hash = parsed.hash;
   if (!Number.isInteger(line) || line < 1) throw new Error(`${field} line must be >= 1.`);
   if (hash.length !== 2) throw new Error(`${field} hash must be exactly 2 characters.`);
-  return match[3] === undefined ? { line, hash } : { line, hash, textHint: match[3] };
+  return parsed.textHint === undefined ? { line, hash } : { line, hash, textHint: parsed.textHint };
+}
+
+function parseLineHashAnchor(
+  ref: string,
+): { lineText: string; hash: string; textHint?: string } | undefined {
+  const value = ref.trimEnd();
+  let index = 0;
+  while (index < value.length && isWhitespace(value[index]!)) index += 1;
+  while (index < value.length && isAnchorPrefix(value[index]!)) index += 1;
+  while (index < value.length && isWhitespace(value[index]!)) index += 1;
+  const lineStart = index;
+  while (index < value.length && isDigit(value[index]!)) index += 1;
+  const lineText = value.slice(lineStart, index);
+  if (!lineText) return undefined;
+  while (index < value.length && isWhitespace(value[index]!)) index += 1;
+  if (value[index] !== "#") return undefined;
+  index += 1;
+  while (index < value.length && isWhitespace(value[index]!)) index += 1;
+  const hashStart = index;
+  while (index < value.length && !isWhitespace(value[index]!) && value[index] !== ":") index += 1;
+  const hash = value.slice(hashStart, index);
+  if (!hash) return undefined;
+  while (index < value.length && isWhitespace(value[index]!)) index += 1;
+  if (index >= value.length) return { lineText, hash };
+  if (value[index] !== ":") return undefined;
+  return { lineText, hash, textHint: value.slice(index + 1) };
+}
+
+function isAnchorPrefix(char: string): boolean {
+  return char === ">" || char === "+" || char === "-";
+}
+
+function isDigit(char: string): boolean {
+  return char >= "0" && char <= "9";
+}
+
+function isWhitespace(char: string): boolean {
+  return char.trim() === "";
 }
 
 function normalizeEditLines(value: unknown, field: string): string[] {

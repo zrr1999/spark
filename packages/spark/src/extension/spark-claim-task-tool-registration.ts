@@ -353,11 +353,22 @@ export function isGenericTaskNameForTitle(name: string, title: string): boolean 
 }
 
 function taskNameFromTitleForPrompt(title: string): string {
-  const ascii = title
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .replace(/-{2,}/g, "-");
+  const ascii = slugifyTaskName(title);
   return ascii || `task-${stableId(title)}`;
+}
+
+function slugifyTaskName(value: string): string {
+  let output = "";
+  let previousDash = false;
+  for (const char of value.trim().toLowerCase()) {
+    const allowed = (char >= "a" && char <= "z") || (char >= "0" && char <= "9") || char === "_";
+    if (allowed) {
+      output += char;
+      previousDash = false;
+    } else if (output && !previousDash) {
+      output += "-";
+      previousDash = true;
+    }
+  }
+  return output.endsWith("-") ? output.slice(0, -1) : output;
 }

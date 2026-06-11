@@ -281,14 +281,23 @@ export function createRoleRunName(roleRef: RoleRef, runRef: RunRef, roleId?: str
 }
 
 function sanitizeRoleRunName(value: string): string {
-  return (
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .replace(/-{2,}/g, "-") || "role"
-  );
+  return slugifyRoleRunPart(value) || "role";
+}
+
+function slugifyRoleRunPart(value: string): string {
+  let output = "";
+  let previousDash = false;
+  for (const char of value.trim().toLowerCase()) {
+    const allowed = (char >= "a" && char <= "z") || (char >= "0" && char <= "9") || char === "_";
+    if (allowed) {
+      output += char;
+      previousDash = false;
+    } else if (output && !previousDash) {
+      output += "-";
+      previousDash = true;
+    }
+  }
+  return output.endsWith("-") ? output.slice(0, -1) : output;
 }
 
 export function createRoleRunClaimId(sessionId: string | undefined, runName: string): string {
@@ -298,7 +307,18 @@ export function createRoleRunClaimId(sessionId: string | undefined, runName: str
 }
 
 function sanitizeClaimPart(value: string): string {
-  return value.replace(/\+/g, "-").replace(/\s+/g, "-") || "unknown";
+  let output = "";
+  let previousDash = false;
+  for (const char of value) {
+    if (char === "+" || char.trim() === "") {
+      if (output && !previousDash) output += "-";
+      previousDash = true;
+    } else {
+      output += char;
+      previousDash = false;
+    }
+  }
+  return output || "unknown";
 }
 
 export interface PiRoleCommandInput {

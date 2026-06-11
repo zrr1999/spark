@@ -229,7 +229,7 @@ async function collectLegacyLearningMarkdownFiles(rootPath: string): Promise<str
   for (const entry of await readdir(rootPath, { withFileTypes: true }))
     if (entry.isDirectory() && categoryDirs.has(entry.name))
       await collectMarkdownFiles(join(rootPath, entry.name), files);
-  return files.sort();
+  return files.sort(compareStrings);
 }
 
 async function collectMarkdownFiles(dir: string, files: string[]): Promise<void> {
@@ -239,6 +239,10 @@ async function collectMarkdownFiles(dir: string, files: string[]): Promise<void>
     else if (entry.isFile() && entry.name.endsWith(".md") && entry.name !== "README.md")
       files.push(entryPath);
   }
+}
+
+function compareStrings(left: string, right: string): number {
+  return left.localeCompare(right);
 }
 
 function displaySourcePath(cwd: string, filePath: string): string {

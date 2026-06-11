@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
@@ -622,7 +622,7 @@ function isNoMatchingModelOutput(output: string): boolean {
 async function atomicWriteFile(filePath: string, data: string): Promise<void> {
   const tempPath = join(
     dirname(filePath),
-    `.${basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
+    `.${basename(filePath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
   );
   try {
     await writeFile(tempPath, data, "utf8");
@@ -701,13 +701,23 @@ function stableId(input: string): string {
 }
 
 function sanitizeRoleRefPart(value: string): string {
-  return (
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "role"
-  );
+  return slugifyRoleRefPart(value) || "role";
+}
+
+function slugifyRoleRefPart(value: string): string {
+  let output = "";
+  let previousDash = false;
+  for (const char of value.trim().toLowerCase()) {
+    const allowed = (char >= "a" && char <= "z") || (char >= "0" && char <= "9") || char === "_";
+    if (allowed) {
+      output += char;
+      previousDash = false;
+    } else if (output && !previousDash) {
+      output += "-";
+      previousDash = true;
+    }
+  }
+  return output.endsWith("-") ? output.slice(0, -1) : output;
 }
 
 async function findMarkdownFiles(rootDir: string): Promise<string[]> {
@@ -729,7 +739,11 @@ async function findMarkdownFiles(rootDir: string): Promise<string[]> {
     }
   }
   await visit(rootDir);
-  return result.sort();
+  return result.sort(compareStrings);
+}
+
+function compareStrings(left: string, right: string): number {
+  return left.localeCompare(right);
 }
 
 function idFromMarkdownPath(rootDir: string, filePath: string): string {
@@ -805,9 +819,9 @@ function parseSimpleYaml(raw: string): Record<string, unknown> {
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     if (!line.trim() || line.trimStart().startsWith("#")) continue;
-    const match = /^(\w[\w-]*):\s*(.*)$/.exec(line);
-    if (!match) continue;
-    const [, key, rest] = match;
+    const parsedLine = parseYamlLine(line);
+    if (!parsedLine) continue;
+    const { key, rest } = parsedLine;
     if (key === "defaultModel" || key === "model")
       throw new Error("role spec model fields are not supported; use role model settings");
     if (!ROLE_FRONTMATTER_KEYS.has(key)) continue;
@@ -821,8 +835,8 @@ function parseSimpleYaml(raw: string): Record<string, unknown> {
         const trimmed = next.trim();
         if (trimmed.startsWith("- ")) values.push(unquoteYaml(trimmed.slice(2).trim()));
         else {
-          const nested = /^(\w[\w-]*):\s*(.*)$/.exec(trimmed);
-          if (nested) object[nested[1]] = unquoteYaml(nested[2].trim());
+          const nested = parseYamlLine(trimmed);
+          if (nested) object[nested.key] = unquoteYaml(nested.rest.trim());
         }
       }
       out[key] = values.length > 0 ? values : Object.keys(object).length > 0 ? object : "";
@@ -831,6 +845,29 @@ function parseSimpleYaml(raw: string): Record<string, unknown> {
     out[key] = parseYamlScalar(rest.trim());
   }
   return out;
+}
+
+function parseYamlLine(line: string): { key: string; rest: string } | undefined {
+  const colonIndex = line.indexOf(":");
+  if (colonIndex <= 0) return undefined;
+  const key = line.slice(0, colonIndex);
+  if (!isYamlKey(key)) return undefined;
+  return { key, rest: line.slice(colonIndex + 1).trimStart() };
+}
+
+function isYamlKey(value: string): boolean {
+  const first = value[0];
+  if (!first || !isYamlKeyStart(first)) return false;
+  for (const char of value.slice(1)) if (!isYamlKeyChar(char)) return false;
+  return true;
+}
+
+function isYamlKeyStart(char: string): boolean {
+  return (char >= "A" && char <= "Z") || (char >= "a" && char <= "z") || char === "_";
+}
+
+function isYamlKeyChar(char: string): boolean {
+  return isYamlKeyStart(char) || (char >= "0" && char <= "9") || char === "-";
 }
 
 function parseYamlScalar(value: string): unknown {

@@ -202,23 +202,59 @@ export function registerSparkCommands(
   function parseWorkflowCommandArgs(args: string): { selector?: string; focus: string } {
     const trimmed = args.trim();
     if (!trimmed) return { focus: "" };
-    const match = /^(?:(workspace|user):)?([a-z0-9][a-z0-9-]*)(?:\s+([\s\S]*))?$/u.exec(trimmed);
-    if (!match) return { focus: trimmed };
-    const source = match[1];
-    const id = match[2];
-    const rest = match[3]?.trim() ?? "";
-    if (source) return { selector: source + ":" + id, focus: rest };
+    const firstWhitespace = firstWhitespaceIndex(trimmed);
+    const candidate = firstWhitespace < 0 ? trimmed : trimmed.slice(0, firstWhitespace);
+    const rest = firstWhitespace < 0 ? "" : trimmed.slice(firstWhitespace + 1).trim();
+    const separator = candidate.indexOf(":");
+    if (separator < 0) return { focus: trimmed };
+    const source = candidate.slice(0, separator);
+    const id = candidate.slice(separator + 1);
+    if ((source === "workspace" || source === "user") && isWorkflowId(id)) {
+      return { selector: source + ":" + id, focus: rest };
+    }
     return { focus: trimmed };
   }
 
   function parseGoalCommandArgs(args: string): { objective: string; tokenBudget: number | null } {
     const trimmed = args.trim();
-    const match = /^--(?:tokens|token-budget)=(\d+)\s*([\s\S]*)$/u.exec(trimmed);
-    if (!match) return { objective: trimmed, tokenBudget: null };
+    const tokenPrefixes = ["--tokens=", "--token-budget="];
+    const prefix = tokenPrefixes.find((candidate) => trimmed.startsWith(candidate));
+    if (!prefix) return { objective: trimmed, tokenBudget: null };
+    const afterPrefix = trimmed.slice(prefix.length);
+    const tokenEnd = firstWhitespaceIndex(afterPrefix);
+    const tokenText = tokenEnd < 0 ? afterPrefix : afterPrefix.slice(0, tokenEnd);
+    if (!isDecimalDigits(tokenText)) return { objective: trimmed, tokenBudget: null };
     return {
-      objective: match[2]?.trim() ?? "",
-      tokenBudget: normalizeSparkGoalTokenBudget(match[1]),
+      objective: (tokenEnd < 0 ? "" : afterPrefix.slice(tokenEnd + 1)).trim(),
+      tokenBudget: normalizeSparkGoalTokenBudget(tokenText),
     };
+  }
+
+  function firstWhitespaceIndex(value: string): number {
+    for (let index = 0; index < value.length; index += 1) {
+      if (value[index]?.trim() === "") return index;
+    }
+    return -1;
+  }
+
+  function isWorkflowId(value: string): boolean {
+    if (!value) return false;
+    const first = value[0];
+    if (!first || !isLowerAlphaNumeric(first)) return false;
+    for (const char of value.slice(1)) {
+      if (!isLowerAlphaNumeric(char) && char !== "-") return false;
+    }
+    return true;
+  }
+
+  function isLowerAlphaNumeric(char: string): boolean {
+    return (char >= "a" && char <= "z") || (char >= "0" && char <= "9");
+  }
+
+  function isDecimalDigits(value: string): boolean {
+    if (!value) return false;
+    for (const char of value) if (char < "0" || char > "9") return false;
+    return true;
   }
 
   async function handleSparkEntryCommand(

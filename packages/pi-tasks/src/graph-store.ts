@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -220,7 +221,7 @@ async function acquireTaskGraphStoreLock(
   const retryIntervalMs = Math.max(1, options.retryIntervalMs ?? 25);
   const staleMs = options.staleMs ?? 60_000;
   const started = Date.now();
-  const ownerId = stableId(`${process.pid}:${started}:${Math.random()}`);
+  const ownerId = stableId(`${process.pid}:${started}:${randomUUID()}`);
   const ownerPath = join(lockPath, "owner.json");
   const ownerJson = () =>
     `${JSON.stringify(
@@ -271,7 +272,7 @@ async function acquireTaskGraphStoreLock(
 }
 
 async function writeLockOwnerFile(ownerPath: string, data: string): Promise<void> {
-  const tempPath = `${ownerPath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+  const tempPath = `${ownerPath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   try {
     await writeFile(tempPath, data, "utf8");
     await rename(tempPath, ownerPath);

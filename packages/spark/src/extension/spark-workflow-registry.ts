@@ -80,7 +80,7 @@ async function discoverScriptWorkflowDir(
   }
   const workflows: SparkWorkflowDescriptor[] = [];
   const errors: SparkWorkflowRegistryError[] = [];
-  for (const entry of entries.filter((name) => name.endsWith(".js")).sort()) {
+  for (const entry of entries.filter((name) => name.endsWith(".js")).sort(compareStrings)) {
     const path = join(dir, entry);
     const id = entry.replace(/\.js$/u, "");
     try {
@@ -104,4 +104,8 @@ async function discoverScriptWorkflowDir(
 
 function isNodeErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && "code" in error && (error as { code?: unknown }).code === code;
+}
+
+function compareStrings(left: string, right: string): number {
+  return left.localeCompare(right);
 }
