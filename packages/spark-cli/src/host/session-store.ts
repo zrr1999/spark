@@ -214,7 +214,7 @@ export class SparkSessionStore {
         // Match Pi list behavior: ignore invalid/corrupt session files.
       }
     }
-    return infos.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+    return infos.sort(compareSessionInfoByMostRecent);
   }
 
   async findMostRecent(): Promise<SparkSessionInfo | undefined> {
@@ -323,6 +323,14 @@ function toSessionInfo(record: SparkSessionRecord, statsMtime: Date): SparkSessi
     allMessagesText: textMessages.join("\n"),
     name: latestSessionInfo?.name?.trim() || undefined,
   };
+}
+
+function compareSessionInfoByMostRecent(left: SparkSessionInfo, right: SparkSessionInfo): number {
+  return (
+    right.modified.getTime() - left.modified.getTime() ||
+    right.created.getTime() - left.created.getTime() ||
+    right.path.localeCompare(left.path)
+  );
 }
 
 function getSessionModifiedDate(record: SparkSessionRecord, statsMtime: Date): Date {
