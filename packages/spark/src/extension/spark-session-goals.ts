@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 import { nowIso, type ProjectRef } from "pi-extension-api";
-import type { TaskGraph } from "pi-tasks";
+import { isActiveSessionTodo, type SessionTodoEntry, type TaskGraph } from "pi-tasks";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {
   sanitizeStoreScope,
@@ -10,9 +10,14 @@ import {
   type SparkSessionContext,
 } from "./session-identity.ts";
 
-export type SparkSessionGoalStatus = "active" | "paused" | "complete";
+export type SparkSessionGoalStatus = "active" | "paused" | "budgetLimited" | "complete";
 export type SparkSessionGoalSource = "explicit" | "inferred" | "agent" | "reviewer";
 export type SparkGoalScope = "session" | "project";
+
+export interface SparkSessionGoalUsage {
+  tokensUsed: number;
+  activeSeconds: number;
+}
 
 export interface SparkSessionGoalReviewSummary {
   achieved: boolean;
@@ -40,7 +45,10 @@ export interface SparkSessionGoal {
   objective: string;
   status: SparkSessionGoalStatus;
   source: SparkSessionGoalSource;
+  tokenBudget: number | null;
+  usage: SparkSessionGoalUsage;
   pauseReason?: string;
+  budgetLimitedReason?: string;
   completedReason?: string;
   lastReview?: SparkSessionGoalReviewSummary;
   retryState?: SparkSessionGoalRetryState;
@@ -76,6 +84,7 @@ export async function setSessionGoal(
     status?: SparkSessionGoalStatus;
     scope?: SparkGoalScope;
     projectRef?: ProjectRef;
+    tokenBudget?: number | null;
   },
 ): Promise<SparkSessionGoal> {
   const objective = normalizeGoalObjective(input.objective);
@@ -94,6 +103,8 @@ export async function setSessionGoal(
     objective,
     status: input.status ?? "active",
     source: input.source,
+    tokenBudget: normalizeTokenBudget(input.tokenBudget),
+    usage: emptyGoalUsage(),
     createdAt: existing && sameTarget ? existing.createdAt : now,
     updatedAt: now,
   };
@@ -136,15 +147,19 @@ export async function updateSessionGoalStatus(
     reason?: string;
     review?: SparkSessionGoalReviewSummary;
     retryState?: SparkSessionGoalRetryState | null;
+    expectedGoalId?: string;
   } = {},
 ): Promise<SparkSessionGoal | undefined> {
   const snapshot = await loadSessionGoalSnapshot(cwd, ctx);
   const existing = snapshot.goal;
   if (!existing) return undefined;
+  if (options.expectedGoalId && existing.goalId !== options.expectedGoalId) return undefined;
   const goal: SparkSessionGoal = {
     ...existing,
     status,
     pauseReason: status === "paused" ? normalizeOptionalReason(options.reason) : undefined,
+    budgetLimitedReason:
+      status === "budgetLimited" ? normalizeOptionalReason(options.reason) : undefined,
     completedReason: status === "complete" ? normalizeOptionalReason(options.reason) : undefined,
     lastReview: options.review ?? existing.lastReview,
     retryState:
@@ -155,9 +170,99 @@ export async function updateSessionGoalStatus(
   return goal;
 }
 
-export function inferSessionGoalObjective(graph: TaskGraph, project?: SparkProject): string {
+export async function updateSessionGoalTokenBudget(
+  cwd: string,
+  ctx: SparkSessionContext | undefined,
+  tokenBudget: number | null,
+): Promise<SparkSessionGoal | undefined> {
+  const snapshot = await loadSessionGoalSnapshot(cwd, ctx);
+  const existing = snapshot.goal;
+  if (!existing) return undefined;
+  const normalizedBudget = normalizeTokenBudget(tokenBudget);
+  const budgetExhausted = isSessionGoalBudgetExhausted({
+    ...existing,
+    tokenBudget: normalizedBudget,
+  });
+  const goal: SparkSessionGoal = {
+    ...existing,
+    tokenBudget: normalizedBudget,
+    status:
+      existing.status === "complete"
+        ? "complete"
+        : budgetExhausted
+          ? "budgetLimited"
+          : existing.status === "budgetLimited"
+            ? "active"
+            : existing.status,
+    budgetLimitedReason: budgetExhausted
+      ? (existing.budgetLimitedReason ??
+        `token budget exhausted (${existing.usage.tokensUsed}/${normalizedBudget})`)
+      : undefined,
+    updatedAt: nowIso(),
+  };
+  await saveSessionGoalSnapshot(cwd, ctx, { version: 1, goal });
+  return goal;
+}
+
+export async function applySessionGoalUsage(
+  cwd: string,
+  ctx: SparkSessionContext | undefined,
+  input: {
+    goalId?: string;
+    tokensUsedDelta?: number;
+    activeSecondsDelta?: number;
+  },
+): Promise<{ goal?: SparkSessionGoal; changed: boolean; crossedBudget: boolean }> {
+  const snapshot = await loadSessionGoalSnapshot(cwd, ctx);
+  const existing = snapshot.goal;
+  if (!existing) return { changed: false, crossedBudget: false };
+  if (input.goalId && existing.goalId !== input.goalId)
+    return { goal: existing, changed: false, crossedBudget: false };
+  if (existing.status !== "active") return { goal: existing, changed: false, crossedBudget: false };
+  const tokensUsedDelta = normalizeUsageDelta(input.tokensUsedDelta);
+  const activeSecondsDelta = normalizeUsageDelta(input.activeSecondsDelta);
+  if (tokensUsedDelta === 0 && activeSecondsDelta === 0)
+    return { goal: existing, changed: false, crossedBudget: false };
+  const usage = {
+    tokensUsed: existing.usage.tokensUsed + tokensUsedDelta,
+    activeSeconds: existing.usage.activeSeconds + activeSecondsDelta,
+  };
+  const wasUnderBudget = !isSessionGoalBudgetExhausted(existing);
+  const crossedBudget =
+    wasUnderBudget && existing.tokenBudget !== null && usage.tokensUsed >= existing.tokenBudget;
+  const goal: SparkSessionGoal = {
+    ...existing,
+    status: crossedBudget ? "budgetLimited" : existing.status,
+    usage,
+    budgetLimitedReason: crossedBudget
+      ? `token budget exhausted (${usage.tokensUsed}/${existing.tokenBudget})`
+      : undefined,
+    retryState: crossedBudget ? undefined : existing.retryState,
+    updatedAt: nowIso(),
+  };
+  await saveSessionGoalSnapshot(cwd, ctx, { version: 1, goal });
+  return { goal, changed: true, crossedBudget };
+}
+
+export function isSessionGoalBudgetExhausted(
+  goal: Pick<SparkSessionGoal, "tokenBudget" | "usage">,
+): boolean {
+  return goal.tokenBudget !== null && goal.usage.tokensUsed >= goal.tokenBudget;
+}
+
+export function inferSessionGoalObjective(
+  graph: TaskGraph,
+  project?: SparkProject,
+  independentTodos: SessionTodoEntry[] = [],
+): string | undefined {
+  const activeTodos = independentTodos.filter(isActiveSessionTodo);
+  if (activeTodos.length > 0)
+    return "处理当前 active session TODO：逐项完成、取消、删除或明确等待条件，直到没有 active session TODO 阻塞 goal completion review。";
   if (project) return inferProjectBackedSessionGoalObjective(graph, project);
-  return "Advance this Spark session to the next verified outcome.";
+  const activeSessionProjects = graph.projects().filter((candidate) => candidate.status !== "done");
+  if (activeSessionProjects.length === 1)
+    return inferProjectBackedSessionGoalObjective(graph, activeSessionProjects[0]!);
+  return undefined;
 }
 
 export function normalizeGoalObjective(value: unknown): string {
@@ -242,7 +347,14 @@ function normalizeSessionGoal(
     objective: requireString(value.objective, filePath, "goal.objective"),
     status,
     source,
+    tokenBudget: normalizeStoredTokenBudget(value.tokenBudget, filePath),
+    usage: normalizeGoalUsage(value.usage, filePath),
     pauseReason: optionalString(value.pauseReason, filePath, "goal.pauseReason"),
+    budgetLimitedReason: optionalString(
+      value.budgetLimitedReason,
+      filePath,
+      "goal.budgetLimitedReason",
+    ),
     completedReason: optionalString(value.completedReason, filePath, "goal.completedReason"),
     lastReview:
       value.lastReview === undefined ? undefined : normalizeGoalReview(value.lastReview, filePath),
@@ -288,8 +400,12 @@ function normalizeGoalRetryState(value: unknown, filePath: string): SparkSession
 }
 
 function normalizeGoalStatus(value: unknown, filePath: string): SparkSessionGoalStatus {
-  if (value === "active" || value === "paused" || value === "complete") return value;
-  throw new JsonStoreFormatError(filePath, "goal.status must be active, paused, or complete");
+  if (value === "active" || value === "paused" || value === "budgetLimited" || value === "complete")
+    return value;
+  throw new JsonStoreFormatError(
+    filePath,
+    "goal.status must be active, paused, budgetLimited, or complete",
+  );
 }
 
 function normalizeGoalSource(value: unknown, filePath: string): SparkSessionGoalSource {
@@ -305,6 +421,43 @@ function normalizeGoalScope(value: unknown, filePath: string): SparkGoalScope {
   if (value === undefined) return "session";
   if (value === "session" || value === "project") return value;
   throw new JsonStoreFormatError(filePath, "goal.scope must be session or project");
+}
+
+function normalizeStoredTokenBudget(value: unknown, filePath: string): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0)
+    throw new JsonStoreFormatError(filePath, "goal.tokenBudget must be a positive integer or null");
+  return value;
+}
+
+function normalizeTokenBudget(value: number | null | undefined): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0)
+    throw new Error("goal tokenBudget must be a positive integer");
+  return value;
+}
+
+function emptyGoalUsage(): SparkSessionGoalUsage {
+  return { tokensUsed: 0, activeSeconds: 0 };
+}
+
+function normalizeGoalUsage(value: unknown, filePath: string): SparkSessionGoalUsage {
+  if (value === undefined) return emptyGoalUsage();
+  if (!isRecord(value)) throw new JsonStoreFormatError(filePath, "goal.usage must be an object");
+  return {
+    tokensUsed: requireNonNegativeInteger(value.tokensUsed, filePath, "goal.usage.tokensUsed"),
+    activeSeconds: requireNonNegativeInteger(
+      value.activeSeconds,
+      filePath,
+      "goal.usage.activeSeconds",
+    ),
+  };
+}
+
+function normalizeUsageDelta(value: number | undefined): number {
+  if (value === undefined) return 0;
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.trunc(value));
 }
 
 function normalizeStoredGoalProjectRef(

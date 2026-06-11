@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { ArtifactStore, ArtifactStoreFormatError } from "pi-artifacts";
+import { ArtifactStore, ArtifactStoreFormatError, defaultArtifactStore } from "pi-artifacts";
+import { registerPiArtifactTool } from "pi-artifacts/extension";
 import {
   AskConfigStoreFormatError,
   askUser,
@@ -65,6 +66,84 @@ void test("artifact store writes hashes, blobs, and lineage links", async () => 
     assert.deepEqual(
       (await readdir(join(dir, "blobs"))).filter((entry) => entry.endsWith(".tmp")),
       [],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("artifact record tool stores top-level refs as provenance shortcuts", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-artifact-record-shortcuts-"));
+  try {
+    const tools = new Map<string, { execute: Function }>();
+    registerPiArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
+    const tool = tools.get("artifact");
+    assert.ok(tool);
+    const projectRef = newRef("proj", "shortcut-project");
+    const taskRef = newRef("task", "shortcut-task");
+
+    const recorded = await tool.execute(
+      "artifact-record-shortcuts",
+      {
+        action: "record",
+        kind: "review",
+        title: "Shortcut provenance",
+        format: "markdown",
+        body: "# Review\n",
+        provenance: { producer: "review" },
+        projectRef,
+        taskRef,
+      },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+
+    const recordedArtifactRef = recorded.details.refs.artifactRef as `artifact:${string}`;
+    const recordedArtifact = await defaultArtifactStore(dir).get(recordedArtifactRef);
+    assert.equal(recordedArtifact.provenance.projectRef, projectRef);
+    assert.equal(recordedArtifact.provenance.taskRef, taskRef);
+
+    const listed = await tool.execute(
+      "artifact-list-shortcuts",
+      { action: "list", projectRef, view: "full" },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+    assert.equal(listed.details.count, 1);
+    assert.equal(listed.details.artifacts[0]?.provenance?.projectRef, projectRef);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("artifact record rejects conflicting top-level provenance shortcuts", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-artifact-record-shortcut-conflict-"));
+  try {
+    const tools = new Map<string, { execute: Function }>();
+    registerPiArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
+    const tool = tools.get("artifact");
+    assert.ok(tool);
+
+    await assert.rejects(
+      () =>
+        tool.execute(
+          "artifact-record-shortcut-conflict",
+          {
+            action: "record",
+            kind: "review",
+            title: "Shortcut conflict",
+            format: "markdown",
+            body: "# Review\n",
+            provenance: { producer: "review", projectRef: newRef("proj", "nested") },
+            projectRef: newRef("proj", "top-level"),
+          },
+          new AbortController().signal,
+          () => undefined,
+          { cwd: dir },
+        ),
+      /projectRef conflicts with provenance\.projectRef/,
     );
   } finally {
     await rm(dir, { recursive: true, force: true });

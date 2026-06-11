@@ -165,9 +165,9 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
       'Goal completion is reviewer-owned; pause via goal({ action: "pause" }) when blocked.',
     emptyGoalNotSet: "Spark session goal is not set.",
     emptyGoalReadContext:
-      "Read the Spark project/task context below and decide a concrete, stable session goal.",
+      "Read the Spark project/task context below and decide a concrete, stable session goal. Default to completing all unfinished work in the selected project; use planning/readiness-only wording only when the user explicitly asked for that scope.",
     emptyGoalWriteHint:
-      'Write it with goal({ action: "set", objective: "<one short stable line>" }).',
+      'Write it with goal({ action: "set", objective: "<one short stable line that targets project completion unless explicitly planning-only>" }).',
     emptyGoalNoCounts:
       "Do not include task counts or ready-frontier text inside the objective; those are recomputed each tick.",
     todoSweepNoneActive: "Session TODO sweep: no active session TODOs. Continue to the goal work.",
@@ -188,8 +188,10 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
     loopReviewerOwnership:
       '目标完成由 reviewer 决定；遇到阻塞时通过 goal({ action: "pause" }) 暂停。',
     emptyGoalNotSet: "尚未设置 Spark 会话目标。",
-    emptyGoalReadContext: "阅读下方 Spark 项目/任务上下文，给出一个具体且稳定的会话目标。",
-    emptyGoalWriteHint: '用 goal({ action: "set", objective: "<一句稳定的短描述>" }) 写入。',
+    emptyGoalReadContext:
+      "阅读下方 Spark 项目/任务上下文，给出一个具体且稳定的会话目标。默认目标应推进所选项目的全部未完成工作；只有用户明确要求仅规划/仅就绪时才写成 planning-only/readiness-only。",
+    emptyGoalWriteHint:
+      '用 goal({ action: "set", objective: "<一句稳定短描述，默认指向项目完成，除非明确仅规划>" }) 写入。',
     emptyGoalNoCounts: "目标里不要写任务计数或 ready 边界等动态信息；这些会在每个节拍重新计算。",
     todoSweepNoneActive: "会话 TODO 巡检：当前没有活动的会话 TODO，继续推进目标工作。",
     todoSweepHeader: (count) => `会话 TODO 巡检：第一个目标节拍前有 ${count} 条活动会话 TODO：`,

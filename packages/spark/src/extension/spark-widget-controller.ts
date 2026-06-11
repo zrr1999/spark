@@ -76,10 +76,12 @@ export class SparkWidgetController {
     }));
     const project = await currentSparkProject(cwd, ctx, graph);
     const currentState = await loadCurrentProjectState(cwd, ctx);
+    const sessionGoal = await loadSessionGoal(cwd, ctx);
     if (!project) {
       this.state = {
         dag: sparkDagWidgetEntry(dagStatus),
         run: sparkRunWidgetEntry(currentState?.runMode),
+        goal: sparkGoalWidgetEntry(sessionGoal),
         tasks: [],
         independentTodos: numberedIndependentTodos,
         taskCountTotal: 0,
@@ -93,7 +95,6 @@ export class SparkWidgetController {
       return;
     }
 
-    const sessionGoal = await loadSessionGoal(cwd, ctx);
     const allTasks = graph.tasks(project.ref);
     const claimedTasks = allTasks.filter((task) => taskClaimedBy(task));
     const sessionTasks = claimedTasks.filter((task) => isClaimOwnedBySession(task, sessionKey));
@@ -103,14 +104,7 @@ export class SparkWidgetController {
       projectTitle: isPlaceholderProjectTitle(project.title) ? undefined : project.title,
       dag: sparkDagWidgetEntry(dagStatus, project.ref),
       run: sparkRunWidgetEntry(currentState?.runMode, project.ref),
-      goal: sessionGoal
-        ? {
-            status: sessionGoal.status,
-            scope: sessionGoal.scope,
-            projectRef: sessionGoal.projectRef,
-            objective: compactGoalObjective(sessionGoal.objective),
-          }
-        : undefined,
+      goal: sparkGoalWidgetEntry(sessionGoal),
       tasks: allTasks.map((task) => ({
         title: task.title,
         status: mapTaskStatus(task.status),
@@ -185,6 +179,19 @@ function mapTodoStatus(status: string): SessionTodoEntry["status"] {
     default:
       return "pending";
   }
+}
+
+function sparkGoalWidgetEntry(sessionGoal: Awaited<ReturnType<typeof loadSessionGoal>>) {
+  return sessionGoal
+    ? {
+        status: sessionGoal.status,
+        scope: sessionGoal.scope,
+        projectRef: sessionGoal.projectRef,
+        objective: compactGoalObjective(sessionGoal.objective),
+        tokenBudget: sessionGoal.tokenBudget,
+        tokensUsed: sessionGoal.usage.tokensUsed,
+      }
+    : undefined;
 }
 
 function compactGoalObjective(objective: string): string {

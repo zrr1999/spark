@@ -8,16 +8,19 @@ import {
   loadSparkGraph,
   sparkSessionKey,
 } from "./session-state.ts";
+import { loadIndependentTodos } from "./session-todos.ts";
 import {
   clearSessionGoal,
   editSessionGoalObjective,
   inferSessionGoalObjective,
+  isSessionGoalBudgetExhausted,
   loadSessionGoal,
   normalizeGoalObjective,
   normalizeOptionalReason,
   sameGoalTarget,
   setSessionGoal,
   updateSessionGoalStatus,
+  updateSessionGoalTokenBudget,
   type SparkGoalScope,
   type SparkSessionGoal,
   type SparkSessionGoalSource,
@@ -71,12 +74,19 @@ export function registerSparkGoalTool(
       scope: Type.Optional(
         Type.String({ description: "Goal scope: session or project. Defaults to session." }),
       ),
+      tokenBudget: Type.Optional(
+        Type.Number({
+          description:
+            "Optional positive integer token budget for start/set/edit/resume. Budget exhaustion stops automatic continuation without marking the goal complete.",
+        }),
+      ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const action = normalizeSparkGoalAction(params.action);
       const cwd = ctx.cwd;
       const graph = await loadSparkGraph(cwd, ctx);
       const project = graph ? await currentSparkProject(cwd, ctx, graph) : undefined;
+      const independentTodos = await loadIndependentTodos(cwd, ctx);
 
       const requestedScope = normalizeSparkGoalScope(params.scope);
       const requestedProjectRef = requestedScope === "project" ? project?.ref : undefined;
@@ -102,7 +112,17 @@ export function registerSparkGoalTool(
             ],
             details: { found: false, action, error: "no_current_project", scope: requestedScope },
           };
-        const objective = inferSessionGoalObjective(graph, project);
+        const objective = inferSessionGoalObjective(graph, project, independentTodos);
+        if (!objective)
+          return {
+            content: [
+              {
+                type: "text",
+                text: "No current Spark project or active session TODOs are available to infer a concrete session goal.",
+              },
+            ],
+            details: { found: false, action, error: "no_inferable_goal" },
+          };
         return {
           content: [{ type: "text", text: objective }],
           details: {
@@ -119,6 +139,8 @@ export function registerSparkGoalTool(
         const goal = await loadSessionGoal(cwd, ctx);
         return goalResult(goal, action, goal ? renderGoalStatus(goal) : "No session goal is set.");
       }
+
+      const requestedTokenBudget = normalizeSparkGoalTokenBudget(params.tokenBudget);
 
       if (action === "set" || action === "start") {
         if (requestedScope === "project" && !requestedProjectRef)
@@ -139,7 +161,13 @@ export function registerSparkGoalTool(
         );
         if (activeConflict)
           return goalConflictResult(activeConflict, action, requestedScope, requestedProjectRef);
-        const objective = resolveGoalObjective(action, params.objective, graph, project);
+        const objective = resolveGoalObjective(
+          action,
+          params.objective,
+          graph,
+          project,
+          independentTodos,
+        );
         if (!objective)
           return {
             content: [
@@ -158,6 +186,7 @@ export function registerSparkGoalTool(
           status: "active",
           scope: requestedScope,
           projectRef: requestedProjectRef,
+          tokenBudget: requestedTokenBudget,
         });
         await clearSparkExecutionMode(cwd, ctx);
         await deps.refreshSparkWidget(cwd, ctx);
@@ -207,16 +236,44 @@ export function registerSparkGoalTool(
             details: { found: true, action, error: "goal_already_complete", goal: existingGoal },
           };
         await clearSparkExecutionMode(cwd, ctx);
+        const budgeted =
+          params.tokenBudget === undefined
+            ? existingGoal
+            : await updateSessionGoalTokenBudget(cwd, ctx, requestedTokenBudget);
+        const goalBeforeResume = budgeted ?? existingGoal;
+        if (isSessionGoalBudgetExhausted(goalBeforeResume))
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Cannot resume Spark ${renderGoalTarget(goalBeforeResume.scope, goalBeforeResume.projectRef)} goal because its token budget is exhausted (${goalBeforeResume.usage.tokensUsed}/${goalBeforeResume.tokenBudget}). Increase tokenBudget or start a new goal.`,
+              },
+            ],
+            details: {
+              found: true,
+              action,
+              error: "goal_budget_exhausted",
+              goal: goalBeforeResume,
+            },
+          };
         const resumed = await updateSessionGoalStatus(cwd, ctx, "active", { retryState: null });
         await deps.refreshSparkWidget(cwd, ctx);
-        return goalResult(resumed, action, renderGoalStatus(resumed ?? existingGoal));
+        return goalResult(resumed, action, renderGoalStatus(resumed ?? goalBeforeResume));
       }
       if (action === "edit") {
         const objective = normalizeGoalObjective(params.objective);
         await clearSparkExecutionMode(cwd, ctx);
-        const edited = await editSessionGoalObjective(cwd, ctx, objective);
+        const editedObjective = await editSessionGoalObjective(cwd, ctx, objective);
+        const edited =
+          params.tokenBudget === undefined
+            ? editedObjective
+            : await updateSessionGoalTokenBudget(cwd, ctx, requestedTokenBudget);
         await deps.refreshSparkWidget(cwd, ctx);
-        return goalResult(edited, action, renderGoalStatus(edited ?? existingGoal));
+        return goalResult(
+          edited,
+          action,
+          renderGoalStatus(edited ?? editedObjective ?? existingGoal),
+        );
       }
       const reason = normalizeOptionalReason(params.reason);
       const pauseResult = await reviewedPauseCurrentSessionGoal(cwd, ctx, deps, reason, _signal);
@@ -273,21 +330,35 @@ export function normalizeSparkGoalScope(value: unknown): SparkGoalScope {
   throw new Error("goal scope must be session or project");
 }
 
+export function normalizeSparkGoalTokenBudget(value: unknown): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
+  if (typeof value === "string" && /^\d+$/u.test(value.trim())) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+  }
+  throw new Error("goal tokenBudget must be a positive integer");
+}
+
 export async function startOrInferSessionGoal(
   cwd: string,
   ctx: SparkToolContext,
   graph: TaskGraph | null,
   explicitObjective?: string,
+  tokenBudget?: number | null,
 ): Promise<SparkSessionGoal | undefined> {
   const project = graph ? await currentSparkProject(cwd, ctx, graph) : undefined;
+  const independentTodos = await loadIndependentTodos(cwd, ctx);
   const objective =
-    explicitObjective?.trim() || (graph ? inferSessionGoalObjective(graph, project) : undefined);
+    explicitObjective?.trim() ||
+    (graph ? inferSessionGoalObjective(graph, project, independentTodos) : undefined);
   if (!objective) return undefined;
   await clearSparkExecutionMode(cwd, ctx);
   return setSessionGoal(cwd, ctx, {
     objective,
     source: explicitObjective?.trim() ? "explicit" : "inferred",
     status: "active",
+    tokenBudget,
   });
 }
 
@@ -467,7 +538,7 @@ async function activeGoalConflict(
   requestedProjectRef: SparkSessionGoal["projectRef"],
 ): Promise<SparkSessionGoal | undefined> {
   const existing = await loadSessionGoal(cwd, ctx);
-  if (!existing || existing.status !== "active") return undefined;
+  if (!existing || existing.status === "complete" || existing.status === "paused") return undefined;
   return sameGoalTarget(existing, requestedScope, requestedProjectRef) ? undefined : existing;
 }
 
@@ -527,9 +598,10 @@ function resolveGoalObjective(
   value: unknown,
   graph: TaskGraph | null,
   project: Awaited<ReturnType<typeof currentSparkProject>>,
+  independentTodos: Awaited<ReturnType<typeof loadIndependentTodos>>,
 ): string | undefined {
   if (value !== undefined || action === "set") return normalizeGoalObjective(value);
-  return graph ? inferSessionGoalObjective(graph, project) : undefined;
+  return graph ? inferSessionGoalObjective(graph, project, independentTodos) : undefined;
 }
 
 function goalResult(goal: SparkSessionGoal | undefined, action: string, text: string) {
@@ -540,9 +612,46 @@ function goalResult(goal: SparkSessionGoal | undefined, action: string, text: st
 }
 
 function renderGoalStatus(goal: SparkSessionGoal): string {
-  const reason = goal.pauseReason ?? goal.completedReason;
-  const reasonText = reason ? ` Reason: ${reason}` : "";
-  return `Spark ${renderGoalTarget(goal.scope, goal.projectRef)} goal ${goal.status}: ${oneLine(goal.objective)}${reasonText}`;
+  const lines = [
+    `Spark ${renderGoalTarget(goal.scope, goal.projectRef)} goal ${goal.status}`,
+    `Goal: ${oneLine(goal.objective)}`,
+    `Usage: ${goalUsageStatusText(goal)}`,
+  ];
+  const reason = goal.pauseReason ?? goal.budgetLimitedReason ?? goal.completedReason;
+  if (reason) lines.push(`Reason: ${reason}`);
+  if (goal.status === "budgetLimited")
+    lines.push("Budget limit: automatic continuation is stopped; this is not completion.");
+  if (goal.lastReview)
+    lines.push(
+      `Last review: achieved=${goal.lastReview.achieved} confidence=${goal.lastReview.confidence ?? "unknown"} at ${goal.lastReview.reviewedAt}; ${oneLine(goal.lastReview.reason)}`,
+    );
+  if (goal.retryState?.consecutiveFailures)
+    lines.push(
+      `Retry state: ${goal.retryState.consecutiveFailures} failure(s), nextDelayMs=${goal.retryState.nextDelayMs ?? "unknown"}.`,
+    );
+  lines.push(
+    'Actions: goal({ action: "status" }), goal({ action: "pause" }), goal({ action: "resume" }), goal({ action: "edit" }), goal({ action: "clear" }), goal({ action: "start" }); completion is reviewer-owned.',
+  );
+  return lines.join("\n");
+}
+
+function goalUsageStatusText(goal: SparkSessionGoal): string {
+  const usedText = formatCompactTokenCount(goal.usage.tokensUsed);
+  if (goal.tokenBudget === null)
+    return `${usedText} tokens used, ${goal.usage.activeSeconds}s active`;
+  const budgetText = formatCompactTokenCount(goal.tokenBudget);
+  const remainingText = formatCompactTokenCount(
+    Math.max(0, goal.tokenBudget - goal.usage.tokensUsed),
+  );
+  return `${usedText}/${budgetText} tokens (${remainingText} remaining), ${goal.usage.activeSeconds}s active`;
+}
+
+function formatCompactTokenCount(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  const count = Math.max(0, Math.round(value));
+  if (count < 10_000) return count.toLocaleString("en-US");
+  if (count < 1_000_000) return `${Math.round(count / 1_000).toLocaleString("en-US")}k`;
+  return `${(count / 1_000_000).toFixed(count < 10_000_000 ? 1 : 0)}M`;
 }
 
 function renderGoalTarget(

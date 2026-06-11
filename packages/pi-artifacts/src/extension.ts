@@ -84,10 +84,21 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
         Type.String({ description: "Provenance producer filter for action=list." }),
       ),
       projectRef: Type.Optional(
-        Type.String({ description: "Project ref filter for action=list." }),
+        Type.String({
+          description:
+            "Project ref filter for action=list, or provenance shortcut for action=record.",
+        }),
       ),
-      taskRef: Type.Optional(Type.String({ description: "Task ref filter for action=list." })),
-      roleRef: Type.Optional(Type.String({ description: "Role ref filter for action=list." })),
+      taskRef: Type.Optional(
+        Type.String({
+          description: "Task ref filter for action=list, or provenance shortcut for action=record.",
+        }),
+      ),
+      roleRef: Type.Optional(
+        Type.String({
+          description: "Role ref filter for action=list, or provenance shortcut for action=record.",
+        }),
+      ),
       linkedTo: Type.Optional(Type.String({ description: "Target ref filter for action=list." })),
       limit: Type.Optional(
         Type.Number({ description: "Maximum rows for action=list. Default: 20." }),
@@ -190,7 +201,7 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
         const title = normalizeRequiredString(params.title, "title");
         const format = normalizeArtifactFormat(params.format, "format");
         const body = normalizeArtifactBody(params.body, format);
-        const provenance = normalizeProvenance(params.provenance);
+        const provenance = normalizeRecordProvenance(params);
         const links = normalizeArtifactLinks(params.links);
         const artifact = await store.put({ kind, title, format, body, provenance, links });
         return toolResult(
@@ -418,6 +429,48 @@ function normalizeArtifactBody(value: unknown, format: ArtifactFormat): JsonValu
   }
   if (!isJsonValue(value)) throw new Error("body must be a JSON value for json artifacts");
   return value;
+}
+
+function normalizeRecordProvenance(params: Record<string, unknown>): Provenance {
+  const provenance = normalizeProvenance(params.provenance);
+  const projectRef = normalizeOptionalRefOfKind(params.projectRef, "proj", "projectRef");
+  const taskRef = normalizeOptionalRefOfKind(params.taskRef, "task", "taskRef");
+  const roleRef = normalizeOptionalRefOfKind(params.roleRef, "role", "roleRef");
+  return {
+    ...provenance,
+    ...(projectRef
+      ? {
+          projectRef: mergeProvenanceRef(
+            provenance.projectRef,
+            projectRef,
+            "projectRef",
+          ) as Provenance["projectRef"],
+        }
+      : {}),
+    ...(taskRef
+      ? {
+          taskRef: mergeProvenanceRef(
+            provenance.taskRef,
+            taskRef,
+            "taskRef",
+          ) as Provenance["taskRef"],
+        }
+      : {}),
+    ...(roleRef
+      ? {
+          roleRef: mergeProvenanceRef(
+            provenance.roleRef,
+            roleRef,
+            "roleRef",
+          ) as Provenance["roleRef"],
+        }
+      : {}),
+  };
+}
+
+function mergeProvenanceRef(existing: string | undefined, shortcut: string, field: string): string {
+  if (!existing || existing === shortcut) return shortcut;
+  throw new Error(`${field} conflicts with provenance.${field}`);
 }
 
 function normalizeProvenance(value: unknown): Provenance {

@@ -144,6 +144,8 @@ function compactSparkStatusDetails(
           scope: input.sessionGoal.scope,
           projectRef: input.sessionGoal.projectRef,
           objective: truncateInline(input.sessionGoal.objective, 180),
+          tokenBudget: input.sessionGoal.tokenBudget,
+          usage: input.sessionGoal.usage,
         }
       : undefined,
     hints: [
@@ -346,10 +348,14 @@ function renderProjectStatusLines(
       `  Tasks: ${tasks.length} total | ${claimed.length} claimed | ${sessionClaimed.length} current_session_claimed | ${formatTaskStatusCounts(statusCounts)}`,
     );
     if (isCurrent && input.sessionGoal) {
-      const reason = input.sessionGoal.pauseReason ?? input.sessionGoal.completedReason;
+      const reason =
+        input.sessionGoal.pauseReason ??
+        input.sessionGoal.budgetLimitedReason ??
+        input.sessionGoal.completedReason;
       const reasonText = reason ? ` | reason: ${truncateInline(reason, 120)}` : "";
+      const usageText = ` | usage: ${formatSessionGoalUsage(input.sessionGoal)}`;
       lines.push(
-        `  ${formatGoalScopeLabel(input.sessionGoal)} goal: ${input.sessionGoal.status} | ${truncateInline(input.sessionGoal.objective, 180)}${reasonText}`,
+        `  ${formatGoalScopeLabel(input.sessionGoal)} goal: ${input.sessionGoal.status} | ${truncateInline(input.sessionGoal.objective, 180)}${usageText}${reasonText}`,
       );
     }
     if (hiddenByView > 0)
@@ -390,6 +396,21 @@ function renderProjectStatusLines(
     renderedProjectDetails.push(renderedProjectDetail);
   }
   return renderedProjectDetails;
+}
+
+function formatSessionGoalUsage(goal: NonNullable<SparkStatusRenderInput["sessionGoal"]>): string {
+  const usedText = formatCompactTokenCount(goal.usage.tokensUsed);
+  if (goal.tokenBudget === null)
+    return `${usedText} tokens used, ${goal.usage.activeSeconds}s active`;
+  return `${usedText}/${formatCompactTokenCount(goal.tokenBudget)} tokens, ${goal.usage.activeSeconds}s active`;
+}
+
+function formatCompactTokenCount(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  const count = Math.max(0, Math.round(value));
+  if (count < 10_000) return count.toLocaleString("en-US");
+  if (count < 1_000_000) return `${Math.round(count / 1_000).toLocaleString("en-US")}k`;
+  return `${(count / 1_000_000).toFixed(count < 10_000_000 ? 1 : 0)}M`;
 }
 
 function formatCompletedTaskCounts(counts: Partial<Record<TaskStatus, number>>): string {

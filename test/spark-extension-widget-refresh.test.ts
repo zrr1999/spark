@@ -15,6 +15,10 @@ import {
 } from "spark-runtime";
 import type { RunRef, TaskPlan } from "pi-extension-api";
 import { TaskGraph, defaultTaskGraphStore } from "pi-tasks";
+import {
+  setSessionGoal,
+  updateSessionGoalStatus,
+} from "../packages/spark/src/extension/spark-session-goals.ts";
 
 type SparkPi = Parameters<typeof sparkExtension>[0];
 type SparkToolConfig = Parameters<NonNullable<SparkPi["registerTool"]>>[0];
@@ -292,6 +296,58 @@ void test("Spark extension widget reconciles stale DAG records when an owned chi
       });
     await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
     await runPromise?.catch(() => undefined);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark extension widget shows session goal without current project", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-extension-widget-goal-no-project-"));
+  try {
+    await mkdir(join(dir, ".spark"), { recursive: true });
+    await defaultTaskGraphStore(dir).save(new TaskGraph());
+
+    const handlers = new Map<string, SparkEventHandler>();
+    let widgetComponent: WidgetComponent | undefined;
+    const widgetTui: SparkWidgetTui = {
+      terminal: { columns: 160 },
+      requestRender() {},
+    };
+    const ctx: TestSparkContext = {
+      cwd: dir,
+      hasUI: true,
+      sessionManager: {
+        getSessionFile: () => join(dir, "session.json"),
+        getLeafId: () => "leaf-widget-goal-no-project",
+      },
+      ui: {
+        setWidget(_key, cb) {
+          widgetComponent = isWidgetFactory(cb) ? cb(widgetTui, theme) : undefined;
+        },
+      },
+    };
+    const pi: SparkPi = {
+      registerCommand() {},
+      registerTool() {},
+      on(event, handler) {
+        handlers.set(event, handler);
+      },
+      sendMessage() {},
+    };
+    sparkExtension(pi);
+
+    await setSessionGoal(dir, ctx, {
+      objective: "Completed standalone goal remains visible",
+      source: "explicit",
+      status: "active",
+    });
+    await updateSessionGoalStatus(dir, ctx, "complete", { reason: "review passed" });
+    await handlers.get("session_tree")?.({}, ctx);
+
+    assert.ok(widgetComponent);
+    const rendered = widgetComponent.render().join("\n");
+    assert.match(rendered, /Goal\(✓\): Completed standalone goal remains visible/);
+    assert.doesNotMatch(rendered, /Task/);
+  } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });

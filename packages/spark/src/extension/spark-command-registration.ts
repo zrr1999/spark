@@ -1,5 +1,10 @@
 import { defaultArtifactStore } from "pi-artifacts";
-import { isActiveSessionTodo, isUnfinishedTaskStatus, type TaskGraph } from "pi-tasks";
+import {
+  isActiveSessionTodo,
+  isUnfinishedTaskStatus,
+  type SessionTodoEntry,
+  type TaskGraph,
+} from "pi-tasks";
 import {
   nowIso,
   type ArtifactRef,
@@ -16,10 +21,12 @@ import { detectSparkProjectState, resolveSparkEntry } from "./spark-entry-resolu
 import { currentSparkProject, loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
 import { loadIndependentTodos } from "./session-todos.ts";
 import {
+  normalizeSparkGoalTokenBudget,
   reviewedPauseCurrentSessionGoal,
   startOrInferSessionGoal,
 } from "./spark-goal-tool-registration.ts";
 import {
+  applySessionGoalUsage,
   clearSessionGoal,
   loadSessionGoal,
   updateSessionGoalStatus,
@@ -80,12 +87,17 @@ interface SparkCommandRegistrationDeps extends SparkEntryApplicationDeps {
 const FOREGROUND_GOAL_LOOP_INTERVAL_MS = 30_000;
 const FOREGROUND_GOAL_RETRY_BACKOFF_MS = [30_000, 60_000, 120_000, 120_000, 120_000] as const;
 const FOREGROUND_GOAL_RETRY_BUDGET = 5;
+const GOAL_COMPLETION_TODO_BLOCKER_LIMIT = 3;
 const foregroundGoalTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const foregroundGoalAwaitingTurns = new Map<string, ForegroundGoalAwaitingTurn>();
+const foregroundGoalLoopGenerations = new Map<string, number>();
 
 interface ForegroundGoalAwaitingTurn {
   piApi: SparkCommandApi;
   ctx: SparkGoalLoopContext;
+  goalId: string;
+  generation: number;
+  startedAtMs: number;
   failure?: string;
 }
 
@@ -199,6 +211,16 @@ export function registerSparkCommands(
     return { focus: trimmed };
   }
 
+  function parseGoalCommandArgs(args: string): { objective: string; tokenBudget: number | null } {
+    const trimmed = args.trim();
+    const match = /^--(?:tokens|token-budget)=(\d+)\s*([\s\S]*)$/u.exec(trimmed);
+    if (!match) return { objective: trimmed, tokenBudget: null };
+    return {
+      objective: match[2]?.trim() ?? "",
+      tokenBudget: normalizeSparkGoalTokenBudget(match[1]),
+    };
+  }
+
   async function handleSparkEntryCommand(
     piApi: SparkCommandApi,
     ctx: SparkCommandContext,
@@ -213,8 +235,11 @@ export function registerSparkCommands(
   async function handleSparkGoalCommand(
     piApi: SparkCommandApi,
     ctx: SparkCommandContext,
-    objective: string,
+    rawArgs: string,
   ): Promise<void> {
+    const parsedGoalArgs = parseGoalCommandArgs(rawArgs);
+    const objective = parsedGoalArgs.objective;
+    const tokenBudget = parsedGoalArgs.tokenBudget;
     const graph = await loadSparkGraph(ctx.cwd, ctx);
     const project = graph ? await currentSparkProject(ctx.cwd, ctx, graph) : undefined;
     const existingGoal = await loadSessionGoal(ctx.cwd, ctx);
@@ -231,7 +256,7 @@ export function registerSparkCommands(
       if (completedProject) {
         clearForegroundGoalLoop(ctx.cwd, ctx);
         if (objective.trim()) {
-          const goal = await startOrInferSessionGoal(ctx.cwd, ctx, graph, objective);
+          const goal = await startOrInferSessionGoal(ctx.cwd, ctx, graph, objective, tokenBudget);
           if (!goal) return;
           await deps.refreshSparkWidget(ctx.cwd, ctx);
           const projectLabel = project ? ` · project: ${project.title}` : "";
@@ -258,6 +283,15 @@ export function registerSparkCommands(
         );
         return;
       }
+      if (existingGoal.status === "budgetLimited") {
+        const budget =
+          existingGoal.tokenBudget === null ? "unlimited" : String(existingGoal.tokenBudget);
+        ctx.ui?.notify?.(
+          `Spark goal cannot continue because its token budget is exhausted (${existingGoal.usage.tokensUsed}/${budget}). Start a new /goal or raise the budget with the goal tool.`,
+          "warning",
+        );
+        return;
+      }
       const goal =
         existingGoal.status === "active"
           ? existingGoal
@@ -273,7 +307,10 @@ export function registerSparkCommands(
         projectLabel,
       );
       ctx.ui?.notify?.(visible, "info");
-      await runForegroundGoalLoopTick(piApi, ctx, { idleGateSatisfied: true });
+      await runForegroundGoalLoopTick(piApi, ctx, {
+        idleGateSatisfied: true,
+        goalId: goal.goalId,
+      });
       return;
     }
     if (!objective) {
@@ -303,7 +340,7 @@ export function registerSparkCommands(
       );
       return;
     }
-    const goal = await startOrInferSessionGoal(ctx.cwd, ctx, graph, objective);
+    const goal = await startOrInferSessionGoal(ctx.cwd, ctx, graph, objective, tokenBudget);
     if (!goal) return;
     await deps.refreshSparkWidget(ctx.cwd, ctx);
     const projectLabel = project ? ` · project: ${project.title}` : "";
@@ -403,8 +440,11 @@ export function registerSparkCommands(
       { customType: "spark-goal-request", content: visible, display: false },
       { deliverAs: "followUp", triggerTurn: true },
     );
-    markForegroundGoalAwaitingTurn(piApi, ctx);
-    if (!piApi.on) scheduleForegroundGoalLoop(piApi, ctx);
+    markForegroundGoalAwaitingTurn(piApi, ctx, goal.goalId);
+    if (!piApi.on)
+      scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+        goalId: goal.goalId,
+      });
   }
 
   async function renderSessionTodoSweepLines(
@@ -470,20 +510,29 @@ export function registerSparkCommands(
       clearForegroundGoalLoop(ctx.cwd, ctx);
       return;
     }
-    scheduleForegroundGoalLoop(piApi, ctx);
+    const key = foregroundGoalLoopKey(ctx.cwd, ctx);
+    const awaiting = foregroundGoalAwaitingTurns.get(key);
+    if (awaiting?.goalId === active.goal.goalId) return;
+    scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+      goalId: active.goal.goalId,
+    });
   }
 
   function scheduleForegroundGoalLoop(
     piApi: SparkCommandApi,
     ctx: SparkGoalLoopContext,
     delayMs = FOREGROUND_GOAL_LOOP_INTERVAL_MS,
-    options: { idleGateSatisfied?: boolean } = {},
+    options: { idleGateSatisfied?: boolean; goalId?: string } = {},
   ): void {
     const key = foregroundGoalLoopKey(ctx.cwd, ctx);
-    clearForegroundGoalLoop(ctx.cwd, ctx);
+    const generation = nextForegroundGoalLoopGeneration(key);
+    clearForegroundGoalLoop(ctx.cwd, ctx, { preserveGeneration: true });
     const timer = setTimeout(() => {
+      if (foregroundGoalLoopGenerations.get(key) !== generation) return;
       foregroundGoalTimers.delete(key);
-      void runForegroundGoalLoopTick(piApi, ctx, options).catch(reportGoalLoopError);
+      void runForegroundGoalLoopTick(piApi, ctx, { ...options, generation }).catch(
+        reportGoalLoopError,
+      );
     }, delayMs);
     timer.unref?.();
     foregroundGoalTimers.set(key, timer);
@@ -496,32 +545,62 @@ export function registerSparkCommands(
     foregroundGoalTimers.delete(key);
   }
 
-  function clearForegroundGoalLoop(cwd: string, ctx: SparkGoalLoopContext): void {
+  function clearForegroundGoalLoop(
+    cwd: string,
+    ctx: SparkGoalLoopContext,
+    options: { preserveGeneration?: boolean } = {},
+  ): void {
     const key = foregroundGoalLoopKey(cwd, ctx);
     clearForegroundGoalTimer(cwd, ctx);
     foregroundGoalAwaitingTurns.delete(key);
+    if (!options.preserveGeneration) nextForegroundGoalLoopGeneration(key);
   }
 
-  function markForegroundGoalAwaitingTurn(piApi: SparkCommandApi, ctx: SparkGoalLoopContext): void {
+  function nextForegroundGoalLoopGeneration(key: string): number {
+    const generation = (foregroundGoalLoopGenerations.get(key) ?? 0) + 1;
+    foregroundGoalLoopGenerations.set(key, generation);
+    return generation;
+  }
+
+  function markForegroundGoalAwaitingTurn(
+    piApi: SparkCommandApi,
+    ctx: SparkGoalLoopContext,
+    goalId: string,
+  ): void {
     const key = foregroundGoalLoopKey(ctx.cwd, ctx);
     const timer = foregroundGoalTimers.get(key);
     if (timer) clearTimeout(timer);
     foregroundGoalTimers.delete(key);
-    foregroundGoalAwaitingTurns.set(key, { piApi, ctx });
+    const generation = nextForegroundGoalLoopGeneration(key);
+    foregroundGoalAwaitingTurns.set(key, {
+      piApi,
+      ctx,
+      goalId,
+      generation,
+      startedAtMs: Date.now(),
+    });
   }
 
   async function runForegroundGoalLoopTick(
     piApi: SparkCommandApi,
     ctx: SparkGoalLoopContext,
-    options: { idleGateSatisfied?: boolean } = {},
+    options: { idleGateSatisfied?: boolean; goalId?: string; generation?: number } = {},
   ): Promise<void> {
+    const key = foregroundGoalLoopKey(ctx.cwd, ctx);
+    if (
+      options.generation !== undefined &&
+      foregroundGoalLoopGenerations.get(key) !== options.generation
+    )
+      return;
     const initial = await loadActiveForegroundGoal(ctx);
-    if (!initial) return;
+    if (!initial || (options.goalId && initial.goal.goalId !== options.goalId)) return;
     if (ctx.waitForIdle && !options.idleGateSatisfied) {
       await ctx.waitForIdle();
-      if (await loadActiveForegroundGoal(ctx)) {
+      const active = await loadActiveForegroundGoal(ctx);
+      if (active && (!options.goalId || active.goal.goalId === options.goalId)) {
         scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
           idleGateSatisfied: true,
+          goalId: active.goal.goalId,
         });
       }
       return;
@@ -529,13 +608,16 @@ export function registerSparkCommands(
     if (ctx.isIdle?.() === false) {
       scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
         idleGateSatisfied: false,
+        goalId: initial.goal.goalId,
       });
       return;
     }
     const active = await loadActiveForegroundGoal(ctx);
-    if (!active) return;
+    if (!active || (options.goalId && active.goal.goalId !== options.goalId)) return;
     if (isSparkReviewerLeaseActive(ctx.cwd, ctx)) {
-      scheduleForegroundGoalLoop(piApi, ctx);
+      scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+        goalId: active.goal.goalId,
+      });
       return;
     }
     const { project, goal } = active;
@@ -560,7 +642,7 @@ export function registerSparkCommands(
       { customType: "spark-goal-request", content: visible, display: false },
       { deliverAs: "followUp", triggerTurn: true },
     );
-    markForegroundGoalAwaitingTurn(piApi, ctx);
+    markForegroundGoalAwaitingTurn(piApi, ctx, goal.goalId);
   }
 
   function handleForegroundGoalTurnEnd(ctx: SparkToolContext, event: unknown): void {
@@ -585,23 +667,36 @@ export function registerSparkCommands(
     }
     for (const [key, awaiting] of pending) {
       foregroundGoalAwaitingTurns.delete(key);
+      if (foregroundGoalLoopGenerations.get(key) !== awaiting.generation) continue;
+      const active = await loadActiveForegroundGoal(awaiting.ctx);
+      if (!active || active.goal.goalId !== awaiting.goalId) continue;
       const agentOutcome = foregroundGoalAgentOutcome(event);
       const failure =
         agentOutcome.failure ?? (!agentOutcome.hasAssistantMessage ? awaiting.failure : undefined);
       if (failure) {
         if (isForegroundGoalAbortFailure(failure)) {
-          await recordForegroundGoalAbortedTurn(awaiting.ctx, failure);
+          await recordForegroundGoalAbortedTurn(awaiting.ctx, awaiting.goalId, failure);
           continue;
         }
-        const retry = await recordForegroundGoalFailedTurn(awaiting.ctx, failure);
+        const retry = await recordForegroundGoalFailedTurn(awaiting.ctx, awaiting.goalId, failure);
         if (!retry.paused)
-          scheduleForegroundGoalLoop(awaiting.piApi ?? piApi, awaiting.ctx, retry.delayMs);
+          scheduleForegroundGoalLoop(awaiting.piApi ?? piApi, awaiting.ctx, retry.delayMs, {
+            goalId: awaiting.goalId,
+          });
         continue;
       }
-      const active = await loadActiveForegroundGoal(awaiting.ctx);
-      if (!active) continue;
-      await resetForegroundGoalRetryState(awaiting.ctx, active.goal);
-      scheduleForegroundGoalLoop(awaiting.piApi ?? piApi, awaiting.ctx);
+      const accounting = await recordForegroundGoalSuccessfulTurn(awaiting.ctx, awaiting, event);
+      await resetForegroundGoalRetryState(awaiting.ctx, accounting.goal ?? active.goal);
+      if (accounting.crossedBudget) {
+        await notifyForegroundGoalBudgetLimited(awaiting.ctx, accounting.goal ?? active.goal);
+        continue;
+      }
+      scheduleForegroundGoalLoop(
+        awaiting.piApi ?? piApi,
+        awaiting.ctx,
+        FOREGROUND_GOAL_LOOP_INTERVAL_MS,
+        { goalId: awaiting.goalId },
+      );
     }
   }
 
@@ -614,10 +709,11 @@ export function registerSparkCommands(
 
   async function recordForegroundGoalAbortedTurn(
     ctx: SparkGoalLoopContext,
+    goalId: string,
     failure: string,
   ): Promise<void> {
     const existing = await loadSessionGoal(ctx.cwd, ctx);
-    if (!existing || existing.status !== "active") return;
+    if (!existing || existing.status !== "active" || existing.goalId !== goalId) return;
     const reviewedAt = nowIso();
     await updateSessionGoalStatus(ctx.cwd, ctx, "paused", {
       reason: `foreground goal loop stopped after manual abort: ${failure}`,
@@ -630,16 +726,18 @@ export function registerSparkCommands(
         reviewedAt,
       },
       retryState: null,
+      expectedGoalId: goalId,
     });
     await deps.refreshSparkWidget(ctx.cwd, ctx);
   }
 
   async function recordForegroundGoalFailedTurn(
     ctx: SparkGoalLoopContext,
+    goalId: string,
     failure: string,
   ): Promise<{ paused: boolean; delayMs: number }> {
     const existing = await loadSessionGoal(ctx.cwd, ctx);
-    if (!existing || existing.status !== "active") {
+    if (!existing || existing.status !== "active" || existing.goalId !== goalId) {
       return { paused: true, delayMs: FOREGROUND_GOAL_LOOP_INTERVAL_MS };
     }
     const consecutiveFailures = (existing.retryState?.consecutiveFailures ?? 0) + 1;
@@ -667,6 +765,7 @@ export function registerSparkCommands(
         : undefined,
       review,
       retryState: exhausted ? { ...retryState, exhaustedAt: reviewedAt } : retryState,
+      expectedGoalId: goalId,
     });
     if (!goal) return { paused: true, delayMs: FOREGROUND_GOAL_LOOP_INTERVAL_MS };
     await deps.refreshSparkWidget(ctx.cwd, ctx);
@@ -684,13 +783,104 @@ export function registerSparkCommands(
     return { paused: false, delayMs: retryState.nextDelayMs };
   }
 
+  async function recordForegroundGoalSuccessfulTurn(
+    ctx: SparkGoalLoopContext,
+    awaiting: ForegroundGoalAwaitingTurn,
+    event: unknown,
+  ): Promise<{
+    goal?: NonNullable<Awaited<ReturnType<typeof loadSessionGoal>>>;
+    changed: boolean;
+    crossedBudget: boolean;
+  }> {
+    const tokensUsedDelta = foregroundGoalEventTokensUsed(event);
+    const activeSecondsDelta = Math.max(0, Math.floor((Date.now() - awaiting.startedAtMs) / 1000));
+    const result = await applySessionGoalUsage(ctx.cwd, ctx, {
+      goalId: awaiting.goalId,
+      tokensUsedDelta,
+      activeSecondsDelta,
+    });
+    if (result.changed) await deps.refreshSparkWidget(ctx.cwd, ctx);
+    return result;
+  }
+
+  async function notifyForegroundGoalBudgetLimited(
+    ctx: SparkGoalLoopContext,
+    goal: NonNullable<Awaited<ReturnType<typeof loadSessionGoal>>>,
+  ): Promise<void> {
+    clearForegroundGoalLoop(ctx.cwd, ctx);
+    const project = await currentSparkProjectForCtx(ctx);
+    const language = sparkLanguageForProject({ project, goal });
+    const message =
+      language === "zh"
+        ? `Spark 目标因 token budget 耗尽而停止自动续跑：${goal.usage.tokensUsed}/${goal.tokenBudget}`
+        : `Spark goal stopped after token budget was exhausted: ${goal.usage.tokensUsed}/${goal.tokenBudget}`;
+    ctx.ui?.notify?.(message, "warning");
+  }
+
+  function foregroundGoalEventTokensUsed(event: unknown): number {
+    const usage = findTokenUsage(event);
+    if (!usage) return 0;
+    return usage.totalTokens ?? usage.inputTokens + usage.outputTokens;
+  }
+
+  function findTokenUsage(
+    event: unknown,
+  ): { inputTokens: number; outputTokens: number; totalTokens?: number } | undefined {
+    if (!event || typeof event !== "object") return undefined;
+    const record = event as Record<string, unknown>;
+    const direct = normalizeTokenUsageRecord(record.usage);
+    if (direct) return direct;
+    const message = normalizeTokenUsageRecord(record.message);
+    if (message) return message;
+    const messages = record.messages;
+    if (Array.isArray(messages)) {
+      for (const candidate of [...messages].reverse()) {
+        const usage = normalizeTokenUsageRecord(candidate);
+        if (usage) return usage;
+      }
+    }
+    return undefined;
+  }
+
+  function normalizeTokenUsageRecord(
+    value: unknown,
+  ): { inputTokens: number; outputTokens: number; totalTokens?: number } | undefined {
+    if (!value || typeof value !== "object") return undefined;
+    const record = value as Record<string, unknown>;
+    const usage = record.usage && typeof record.usage === "object" ? record.usage : record;
+    const usageRecord = usage as Record<string, unknown>;
+    const inputTokens = optionalTokenCount(
+      usageRecord.inputTokens ?? usageRecord.input_tokens ?? usageRecord.promptTokens,
+    );
+    const outputTokens = optionalTokenCount(
+      usageRecord.outputTokens ?? usageRecord.output_tokens ?? usageRecord.completionTokens,
+    );
+    const totalTokens = optionalTokenCount(usageRecord.totalTokens ?? usageRecord.total_tokens);
+    if (totalTokens === undefined && inputTokens === undefined && outputTokens === undefined)
+      return undefined;
+    return {
+      inputTokens: inputTokens ?? 0,
+      outputTokens: outputTokens ?? 0,
+      ...(totalTokens !== undefined ? { totalTokens } : {}),
+    };
+  }
+
+  function optionalTokenCount(value: unknown): number | undefined {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+    return Math.trunc(value);
+  }
+
   async function resetForegroundGoalRetryState(
     ctx: SparkGoalLoopContext,
     goal: NonNullable<Awaited<ReturnType<typeof loadSessionGoal>>>,
   ): Promise<void> {
     if (!goal.retryState || goal.retryState.consecutiveFailures === 0) return;
-    await updateSessionGoalStatus(ctx.cwd, ctx, "active", { retryState: null });
-    await deps.refreshSparkWidget(ctx.cwd, ctx);
+    if (goal.status !== "active") return;
+    const updated = await updateSessionGoalStatus(ctx.cwd, ctx, "active", {
+      retryState: null,
+      expectedGoalId: goal.goalId,
+    });
+    if (updated) await deps.refreshSparkWidget(ctx.cwd, ctx);
   }
 
   async function clearStaleForegroundGoalRetryState(ctx: SparkGoalLoopContext): Promise<void> {
@@ -699,7 +889,7 @@ export function registerSparkCommands(
     if (!goal.retryState || goal.retryState.consecutiveFailures === 0) return;
     if (goal.status === "complete") return;
     await updateSessionGoalStatus(ctx.cwd, ctx, goal.status, {
-      reason: goal.pauseReason,
+      reason: goal.pauseReason ?? goal.budgetLimitedReason,
       review: goal.lastReview,
       retryState: null,
     });
@@ -811,9 +1001,31 @@ export function registerSparkCommands(
     ctx: SparkGoalLoopContext,
     active: NonNullable<Awaited<ReturnType<typeof loadActiveForegroundGoal>>>,
   ): Promise<boolean> {
+    const independentTodos = await loadIndependentTodos(ctx.cwd, ctx);
+    const unresolvedSessionTodos = independentTodos
+      .filter(isActiveSessionTodo)
+      .filter(isUnresolvedSessionTodoBlocker);
+    if (unresolvedSessionTodos.length > 0) {
+      const reviewedAt = nowIso();
+      const blockers = activeSessionTodoBlockers(unresolvedSessionTodos);
+      const reason = `Goal completion blocked by ${unresolvedSessionTodos.length} unresolved session TODO(s).`;
+      const updated = await updateSessionGoalStatus(ctx.cwd, ctx, "active", {
+        review: {
+          achieved: false,
+          confidence: "deterministic-blocker",
+          reason,
+          remainingWork: `${reason} Resolve or disposition them before completing the goal.`,
+          blockers,
+          reviewedAt,
+        },
+        expectedGoalId: active.goal.goalId,
+      });
+      await deps.refreshSparkWidget(ctx.cwd, ctx);
+      return Boolean(updated);
+    }
     const reviewerRunner = await deps.createReviewerRunner?.(ctx.cwd, ctx);
     if (!reviewerRunner) return true;
-    const reviewContext = goalReviewContext(active);
+    const reviewContext = await goalReviewContext(ctx, active, independentTodos);
     const reviewInput: GoalReviewInput = {
       targetKind: "goal",
       cwd: ctx.cwd,
@@ -836,18 +1048,20 @@ export function registerSparkCommands(
     const verdict = review.verdict as GoalReviewVerdict;
     const artifact = await recordGoalReviewArtifact(ctx.cwd, active, review, reviewInput);
     const reviewedAt = review.record.finishedAt || nowIso();
+    const deterministicBlocker = goalCompletionDeterministicBlocker(active, reviewInput);
+    const effectiveAchieved = verdict.achieved && !deterministicBlocker;
     const reviewSummary = {
-      achieved: verdict.achieved,
-      confidence: verdict.confidence,
-      reason: verdict.summary,
-      remainingWork: verdict.remainingWork,
-      blockers: verdict.blockers,
+      achieved: effectiveAchieved,
+      confidence: deterministicBlocker ? "deterministic-blocker" : verdict.confidence,
+      reason: deterministicBlocker?.reason ?? verdict.summary,
+      remainingWork: deterministicBlocker?.remainingWork ?? verdict.remainingWork,
+      blockers: deterministicBlocker?.blockers ?? verdict.blockers,
       artifactRef: artifact.ref,
       reviewedAt,
     };
-    if (verdict.achieved) {
+    if (effectiveAchieved) {
       await updateSessionGoalStatus(ctx.cwd, ctx, "complete", {
-        reason: verdict.summary,
+        reason: reviewSummary.reason,
         review: reviewSummary,
         retryState: null,
       });
@@ -867,6 +1081,48 @@ export function registerSparkCommands(
     await updateSessionGoalStatus(ctx.cwd, ctx, "active", { review: reviewSummary });
     await deps.refreshSparkWidget(ctx.cwd, ctx);
     return true;
+  }
+
+  function goalCompletionDeterministicBlocker(
+    active: NonNullable<Awaited<ReturnType<typeof loadActiveForegroundGoal>>>,
+    reviewInput: GoalReviewInput,
+  ): { reason: string; remainingWork: string; blockers: string[] } | undefined {
+    const unfinished = reviewInput.projectStatus?.taskCounts.unfinished ?? 0;
+    if (unfinished <= 0) return undefined;
+    if (isPlanningOnlyGoalObjective(active.goal.objective)) return undefined;
+    const readyTasks = reviewInput.projectStatus?.readyTasks ?? [];
+    const readyText = readyTasks.length
+      ? readyTasks.map((task) => `@${task.name ?? task.ref}: ${task.title}`).join("; ")
+      : "no ready task; inspect dependencies";
+    const reason = `Goal completion blocked by ${unfinished} unfinished project task(s).`;
+    return {
+      reason,
+      remainingWork: `${reason} Next ready frontier: ${readyText}. Continue by claiming a ready task with task-local TODOs, or narrow the goal objective if only planning readiness is intended.`,
+      blockers: [`unfinished_project_tasks=${unfinished}`, `ready_frontier=${readyText}`],
+    };
+  }
+
+  function isPlanningOnlyGoalObjective(objective: string): boolean {
+    return (
+      /\b(planning-only|readiness-only|plan-only)\b/i.test(objective) ||
+      /仅规划|只规划|计划就绪|规划就绪/u.test(objective)
+    );
+  }
+
+  function isUnresolvedSessionTodoBlocker(todo: SessionTodoEntry): boolean {
+    if (todo.status === "blocked") return !todo.blockedBy?.length;
+    return true;
+  }
+
+  function activeSessionTodoBlockers(
+    todos: Awaited<ReturnType<typeof loadIndependentTodos>>,
+  ): string[] {
+    const visible = todos.slice(0, GOAL_COMPLETION_TODO_BLOCKER_LIMIT).map((todo) => {
+      const id = todo.id ? `${todo.id}: ` : "";
+      return `${id}${todo.content} [${todo.status}]`;
+    });
+    const hidden = todos.length - visible.length;
+    return hidden > 0 ? [...visible, `… ${hidden} more unresolved session TODO(s)`] : visible;
   }
 
   async function runGoalReviewer(
@@ -900,20 +1156,82 @@ export function registerSparkCommands(
     }
   }
 
-  function goalReviewContext(
+  async function goalReviewContext(
+    ctx: SparkGoalLoopContext,
     active: NonNullable<Awaited<ReturnType<typeof loadActiveForegroundGoal>>>,
-  ): {
+    independentTodos: SessionTodoEntry[],
+  ): Promise<{
     projectRef?: ProjectRef;
     projectStatus?: GoalReviewInput["projectStatus"];
     evidenceRefs: ArtifactRef[];
-  } {
+  }> {
+    if (isSessionTodoDispositionGoal(active.goal)) {
+      const evidence = await recordSessionTodoDispositionEvidence(
+        ctx.cwd,
+        active.goal,
+        independentTodos,
+      );
+      return { evidenceRefs: [evidence.ref] };
+    }
     const project = goalReviewEvidenceProject(active);
     return {
       projectRef: project?.ref,
       projectStatus:
         project && active.graph ? projectGoalReviewStatus(active.graph, project) : undefined,
       evidenceRefs:
-        project && active.graph ? projectTaskEvidenceRefs(active.graph, project.ref) : [],
+        project && active.graph
+          ? await projectGoalEvidenceRefs(ctx.cwd, active.graph, project.ref)
+          : [],
+    };
+  }
+
+  function isSessionTodoDispositionGoal(goal: SparkSessionGoal): boolean {
+    return goal.scope === "session" && /session TODO/i.test(goal.objective);
+  }
+
+  async function recordSessionTodoDispositionEvidence(
+    cwd: string,
+    goal: SparkSessionGoal,
+    todos: SessionTodoEntry[],
+  ): Promise<{ ref: ArtifactRef }> {
+    const unresolvedBlockers = todos
+      .filter(isActiveSessionTodo)
+      .filter(isUnresolvedSessionTodoBlocker);
+    const statusCounts = todos.reduce<Record<string, number>>((counts, todo) => {
+      counts[todo.status] = (counts[todo.status] ?? 0) + 1;
+      return counts;
+    }, {});
+    const artifact = await defaultArtifactStore(cwd).put({
+      kind: "review",
+      title: `Session TODO disposition snapshot for goal: ${compactInline(goal.objective)}`,
+      format: "json",
+      body: {
+        goalId: goal.goalId,
+        scope: goal.scope,
+        objective: goal.objective,
+        sessionKey: goal.sessionKey,
+        recordedAt: nowIso(),
+        statusCounts,
+        unresolvedBlockerCount: unresolvedBlockers.length,
+        unresolvedBlockers: unresolvedBlockers.map(sessionTodoEvidenceEntry),
+        todos: todos.map(sessionTodoEvidenceEntry),
+      } as unknown as JsonValue,
+      provenance: {
+        producer: "spark",
+        note: "Current session TODO disposition evidence for goal completion review.",
+      },
+    });
+    return { ref: artifact.ref };
+  }
+
+  function sessionTodoEvidenceEntry(todo: SessionTodoEntry): JsonValue {
+    return {
+      ...(todo.id ? { id: todo.id } : {}),
+      content: todo.content,
+      status: todo.status,
+      ...(todo.blockedBy?.length ? { blockedBy: [...todo.blockedBy] } : {}),
+      ...(todo.notes?.length ? { notes: [...todo.notes] } : {}),
+      ...(todo.updatedAt ? { updatedAt: todo.updatedAt } : {}),
     };
   }
 
@@ -932,6 +1250,28 @@ export function registerSparkCommands(
       mostRecentlyUpdatedProject(completedProjects) ??
       mostRecentlyUpdatedProject(projectsWithEvidence)
     );
+  }
+
+  function compactProjectTaskForGoalReview(task: ReturnType<TaskGraph["tasks"]>[number]) {
+    return {
+      ref: task.ref,
+      name: task.name,
+      title: task.title,
+      status: task.status,
+      kind: task.kind,
+    };
+  }
+
+  async function projectGoalEvidenceRefs(
+    cwd: string,
+    graph: TaskGraph,
+    projectRef: ProjectRef,
+  ): Promise<ArtifactRef[]> {
+    const taskEvidenceRefs = projectTaskEvidenceRefs(graph, projectRef);
+    const projectReviewRefs = (
+      await defaultArtifactStore(cwd).list({ kind: "review", projectRef })
+    ).map((artifact) => artifact.ref);
+    return [...new Set([...taskEvidenceRefs, ...projectReviewRefs])].slice(-20);
   }
 
   function projectTaskEvidenceRefs(graph: TaskGraph, projectRef: ProjectRef): ArtifactRef[] {
@@ -957,6 +1297,11 @@ export function registerSparkCommands(
         claimed: tasks.filter((task) => Boolean(task.claim)).length,
         statusCounts,
       },
+      readyTasks: graph.readyTasks(project.ref).slice(0, 5).map(compactProjectTaskForGoalReview),
+      unfinishedTasks: tasks
+        .filter((task) => isUnfinishedTaskStatus(task.status))
+        .slice(0, 10)
+        .map(compactProjectTaskForGoalReview),
     };
   }
 
@@ -980,7 +1325,21 @@ export function registerSparkCommands(
       startedAt: review.record.startedAt,
       finishedAt: review.record.finishedAt,
     };
-    return defaultArtifactStore(cwd).put({
+    const store = defaultArtifactStore(cwd);
+    const ref = goalReviewArtifactRef(active.goal.goalId);
+    const recordedAt = nowIso();
+    const reviewPacket = {
+      ...(input.projectRef ? { projectRef: input.projectRef } : {}),
+      ...(input.projectStatus ? { projectStatus: input.projectStatus } : {}),
+      evidenceRefs: input.evidenceRefs,
+    };
+    const previous = await store.tryGet(ref);
+    const reviews = [
+      ...goalReviewHistoryEntries(previous?.body).slice(-9),
+      { verdict, reviewerRun, reviewPacket, recordedAt } as unknown as JsonValue,
+    ];
+    return store.put({
+      ref,
       kind: "review",
       title: `Goal review for ${active.goal.scope} goal: ${compactInline(active.goal.objective)}`,
       format: "json",
@@ -989,14 +1348,11 @@ export function registerSparkCommands(
         scope: active.goal.scope,
         ...(input.projectRef ? { projectRef: input.projectRef } : {}),
         objective: active.goal.objective,
-        reviewPacket: {
-          ...(input.projectRef ? { projectRef: input.projectRef } : {}),
-          ...(input.projectStatus ? { projectStatus: input.projectStatus } : {}),
-          evidenceRefs: input.evidenceRefs,
-        },
+        reviewPacket,
         verdict,
         reviewerRun,
-        recordedAt: nowIso(),
+        reviews,
+        recordedAt,
       } as unknown as JsonValue,
       provenance: {
         producer: "review",
@@ -1006,6 +1362,16 @@ export function registerSparkCommands(
       },
       links: input.projectRef ? [{ to: input.projectRef, relation: "review-of" }] : undefined,
     });
+  }
+
+  function goalReviewArtifactRef(goalId: string): ArtifactRef {
+    return `artifact:goal-review-${goalId.replace(/[^a-zA-Z0-9_-]/gu, "-")}` as ArtifactRef;
+  }
+
+  function goalReviewHistoryEntries(value: unknown): JsonValue[] {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const reviews = (value as { reviews?: unknown }).reviews;
+    return Array.isArray(reviews) ? (reviews as JsonValue[]) : [];
   }
 
   function renderForegroundGoalTickInstruction(

@@ -46,10 +46,12 @@ export interface SparkRunWidgetEntry {
 }
 
 export interface SparkGoalWidgetEntry {
-  status: "active" | "paused" | "complete";
+  status: "active" | "paused" | "budgetLimited" | "complete";
   scope?: "session" | "project";
   projectRef?: string;
   objective: string;
+  tokenBudget?: number | null;
+  tokensUsed?: number;
 }
 
 export interface SparkWidgetState {
@@ -253,8 +255,24 @@ function formatGoalLine(
     goalStatusColor(goal.status),
     goalStatusSymbol(goal.status, animationFrame),
   );
-  const summary = `${theme.fg("dim", "Goal(")}${status}${theme.fg("dim", `): ${goal.objective}`)}`;
+  const usage = formatGoalUsageSuffix(goal);
+  const summary = `${theme.fg("dim", "Goal(")}${status}${theme.fg("dim", `): ${goal.objective}${usage}`)}`;
   return `${theme.fg("accent", "◆")} ${summary}`;
+}
+
+function formatGoalUsageSuffix(goal: SparkGoalWidgetEntry): string {
+  if (goal.tokensUsed === undefined && goal.tokenBudget === undefined) return "";
+  const used = formatCompactTokenCount(goal.tokensUsed ?? 0);
+  if (goal.tokenBudget === null || goal.tokenBudget === undefined) return ` (${used} tokens used)`;
+  return ` (${used}/${formatCompactTokenCount(goal.tokenBudget)} tokens)`;
+}
+
+function formatCompactTokenCount(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  const count = Math.max(0, Math.round(value));
+  if (count < 10_000) return count.toLocaleString("en-US");
+  if (count < 1_000_000) return `${Math.round(count / 1_000).toLocaleString("en-US")}k`;
+  return `${(count / 1_000_000).toFixed(count < 10_000_000 ? 1 : 0)}M`;
 }
 
 function goalStatusSymbol(status: SparkGoalWidgetEntry["status"], animationFrame: number): string {
@@ -263,12 +281,13 @@ function goalStatusSymbol(status: SparkGoalWidgetEntry["status"], animationFrame
     return ACTIVE_GOAL_PULSE_FRAMES[frame % ACTIVE_GOAL_PULSE_FRAMES.length];
   }
   if (status === "paused") return "⏸";
+  if (status === "budgetLimited") return "◼";
   return "✓";
 }
 
 function goalStatusColor(status: SparkGoalWidgetEntry["status"]): string {
   if (status === "active") return "accent";
-  if (status === "paused") return "warning";
+  if (status === "paused" || status === "budgetLimited") return "warning";
   return "success";
 }
 
