@@ -103,6 +103,7 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
     "cue_exec",
     "cue_history",
     "cue_jobs",
+    "cue_resources",
     "cue_run",
     "cue_schedule",
     "cue_scope",

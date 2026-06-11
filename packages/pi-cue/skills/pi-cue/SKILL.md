@@ -1,13 +1,13 @@
 ---
 name: pi-cue
 description: |
-  Use cue-shell as the only execution backend (bash is disabled).
-  cue-shell uses direct-exec with its own composition operators:
-  |> pipes stdout, -> runs in serial on success, || runs in parallel,
-  ~> runs in serial ignoring failures.
-  Use cue_exec for direct commands; pass resource requirements with cue_exec needs={...}, not embedded :run(need...). Use cue_run for .cue files, cue_script for inline .cue scripts, and script_run/script_eval for explicit-language generic scripts.
-  cue_jobs to list/status/wait/stop, cue_resources to inspect providers/resources, cue_schedule for scheduled tasks.
-  cue-shell has its own grammar — not bash-compatible.
+   Use cue-shell as the only execution backend (bash is disabled).
+   cue-shell uses direct-exec with its own composition operators:
+   |> pipes stdout, -> runs in serial on success, || runs in parallel,
+   ~> runs in serial ignoring failures.
+   Use cue_exec for direct commands; pass resource requirements with cue_exec needs={...}, not embedded :run(need...). Use cue_run for .cue files, cue_script for inline .cue scripts, and script_run/script_eval for explicit-language generic scripts.
+   cue_jobs to list/status/wait/stop, cue_resources to inspect providers/resources, cue_schedule for scheduled tasks.
+   cue-shell has its own grammar — not bash-compatible.
 ---
 
 # pi-cue
