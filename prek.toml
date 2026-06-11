@@ -50,6 +50,6 @@ hooks = [
     name = "vp check --fix",
     entry = "env NO_COLOR=1 vp check --fix",
     language = "system",
-    pass_filenames = false
+    pass_filenames = true
   },
 ]

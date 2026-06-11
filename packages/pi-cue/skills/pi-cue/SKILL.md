@@ -1,13 +1,13 @@
 ---
 name: pi-cue
 description: |
-   Use cue-shell as the only execution backend (bash is disabled).
-   cue-shell uses direct-exec with its own composition operators:
-   |> pipes stdout, -> runs in serial on success, || runs in parallel,
-   ~> runs in serial ignoring failures.
-   Use cue_exec for direct commands; pass resource requirements with cue_exec needs={...}, not embedded :run(need...). Use cue_run for .cue files, cue_script for inline .cue scripts, and script_run/script_eval for explicit-language generic scripts.
-   cue_jobs to list/status/wait/stop, cue_resources to inspect providers/resources, cue_schedule for scheduled tasks.
-   cue-shell has its own grammar — not bash-compatible.
+  Use cue-shell as the only execution backend (bash is disabled).
+  cue-shell uses direct-exec with its own composition operators:
+  |> pipes stdout, -> runs in serial on success, || runs in parallel,
+  ~> runs in serial ignoring failures.
+  Use cue_exec for direct commands; pass resource requirements with cue_exec needs={...}, not embedded :run(need...). Use cue_run for .cue files, cue_script for inline .cue scripts, and script_run/script_eval for explicit-language generic scripts.
+  cue_jobs to list/status/wait/stop, cue_resources to inspect providers/resources, cue_schedule for scheduled tasks.
+  cue-shell has its own grammar — not bash-compatible.
 ---
 
 # pi-cue
@@ -21,18 +21,18 @@ each command via `:run(cwd=...)` mode param.
 
 ## Tool reference (10 resource-oriented tools)
 
-| Category     | Tool           | Purpose                                     | Key parameters                                                                          |
-| ------------ | -------------- | ------------------------------------------- | --------------------------------------------------------------------------------------- |
-| **Exec**     | `cue_exec`     | Execute a direct command and create a job   | `command`, `background?`, `timeout?`, `cwd?`, `pty?`, `needs?`, `tail_bytes?`           |
-| **Script**   | `cue_run`      | Run a `.cue` file (`cue run <file.cue>`)    | `path`, `timeout?`, `tail_bytes?`                                                       |
-| **Script**   | `cue_script`   | Run an inline `.cue` script body            | `script`, `pathLabel?`, `timeout?`, `tail_bytes?`                                       |
-| **Script**   | `script_run`   | Run a script file with explicit language    | `path`, `language`, `timeout?`, `tail_bytes?`                                           |
-| **Script**   | `script_eval`  | Run an inline script with explicit language | `script`, `language`, `pathLabel?`, `timeout?`, `tail_bytes?`                           |
-| **Jobs**     | `cue_jobs`     | List/status/wait/stop jobs                  | `action` (list/status/wait/stop), `id?`, `status?`, `limit?`, `timeout?`, `tail_bytes?` |
-| **Resources**| `cue_resources`| Inspect providers and resource snapshots    | `action?` (providers/resources)                                                        |
-| **Schedule** | `cue_schedule` | Add/list/pause/resume/remove scheduled jobs | `action` (add/list/pause/resume/remove), `schedule?`, `command?`, `id?`, `limit?`       |
-| **Scope**    | `cue_scope`    | Inspect scopes, env, or config              | `action` (list/env/config), `limit?`, `includeEnv?`, `tail_bytes?`                      |
-| **History**  | `cue_history`  | Show recent history for a job/cron or all   | `id?`, `limit?`, `tail_bytes?`                                                          |
+| Category      | Tool            | Purpose                                     | Key parameters                                                                          |
+| ------------- | --------------- | ------------------------------------------- | --------------------------------------------------------------------------------------- |
+| **Exec**      | `cue_exec`      | Execute a direct command and create a job   | `command`, `background?`, `timeout?`, `cwd?`, `pty?`, `needs?`, `tail_bytes?`           |
+| **Script**    | `cue_run`       | Run a `.cue` file (`cue run <file.cue>`)    | `path`, `timeout?`, `tail_bytes?`                                                       |
+| **Script**    | `cue_script`    | Run an inline `.cue` script body            | `script`, `pathLabel?`, `timeout?`, `tail_bytes?`                                       |
+| **Script**    | `script_run`    | Run a script file with explicit language    | `path`, `language`, `timeout?`, `tail_bytes?`                                           |
+| **Script**    | `script_eval`   | Run an inline script with explicit language | `script`, `language`, `pathLabel?`, `timeout?`, `tail_bytes?`                           |
+| **Jobs**      | `cue_jobs`      | List/status/wait/stop jobs                  | `action` (list/status/wait/stop), `id?`, `status?`, `limit?`, `timeout?`, `tail_bytes?` |
+| **Resources** | `cue_resources` | Inspect providers and resource snapshots    | `action?` (providers/resources)                                                         |
+| **Schedule**  | `cue_schedule`  | Add/list/pause/resume/remove scheduled jobs | `action` (add/list/pause/resume/remove), `schedule?`, `command?`, `id?`, `limit?`       |
+| **Scope**     | `cue_scope`     | Inspect scopes, env, or config              | `action` (list/env/config), `limit?`, `includeEnv?`, `tail_bytes?`                      |
+| **History**   | `cue_history`   | Show recent history for a job/cron or all   | `id?`, `limit?`, `tail_bytes?`                                                          |
 
 Tool names are resource-oriented: `cue_exec` is for direct commands, `cue_run` is for real `.cue` files, `cue_script` is for inline `.cue` script bodies, and `script_run`/`script_eval` are generic explicit-language script runners. Compact managers cover jobs, schedules, scopes, and history.
 
