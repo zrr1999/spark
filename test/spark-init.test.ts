@@ -130,12 +130,13 @@ void test("initializeSparkIdea does not overwrite an existing initialized projec
   }
 });
 
-void test("active Spark prompt preserves base prompt and stays a single-line state marker", () => {
-  const prompt = renderSparkActiveSystemPrompt("Base prompt", "SPARK.md");
-  assert.match(prompt, /^Base prompt\n\nSpark active \(SPARK\.md\); mode: auto\./);
-  assert.match(prompt, /Spark is the mode facade/);
+void test("Spark prompt preserves base prompt and stays a single-line mode marker", () => {
+  const prompt = renderSparkActiveSystemPrompt("Base prompt");
+  assert.match(prompt, /^Base prompt\n\nSpark mode: auto\./);
+  assert.match(prompt, /Spark tools are available/);
   assert.match(prompt, /task, artifact, ask, role, learning, context, recall, workflow, patch/);
   assert.match(prompt, /no guessing: ask unless user says infer\/research/);
+  assert.doesNotMatch(prompt, /Spark active/);
   assert.doesNotMatch(prompt, /spark skill/);
   assert.doesNotMatch(prompt, /standing project state/);
   assert.doesNotMatch(prompt, /workflow-run\/ask state/);
@@ -311,10 +312,10 @@ void test("active Spark context omits finished history and finished TODOs", asyn
     const summary = await renderActiveSparkContextSummary(dir, ctx);
 
     assert.ok(summary);
-    assert.match(summary, /SPARK\.md \(active intent excerpt\)/);
+    assert.match(summary, /SPARK\.md \(intent excerpt\)/);
     assert.match(summary, /Keep the active prompt compact/);
     assert.doesNotMatch(summary, /Finished historical note/);
-    assert.match(summary, /Active Spark context/);
+    assert.match(summary, /Spark context/);
     assert.match(
       summary,
       /Unfinished tasks: 1 \/ claimed: 1 \/ current_session_claimed: 1 \(2 total\)/,

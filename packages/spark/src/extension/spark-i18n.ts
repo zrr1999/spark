@@ -279,7 +279,7 @@ export interface ActiveSparkContextStrings {
 
 const ACTIVE_CONTEXT: Record<SparkLanguage, ActiveSparkContextStrings> = {
   en: {
-    header: "Active Spark context:",
+    header: "Spark context:",
     noProjectHeader: "Spark available: no project selected for this session.",
     noProjectGuidance:
       '- Use task({ action: "project_use" }) to select or create a current project before planning, claiming, or updating project-bound tasks.',
@@ -301,11 +301,11 @@ const ACTIVE_CONTEXT: Record<SparkLanguage, ActiveSparkContextStrings> = {
     hiddenSessionClaimed: (hidden) =>
       `- … ${hidden} more claimed task(s); use task({ action: "status" }) for details`,
     projectsCountsLine: (total, active) => `- Projects: ${total} total / ${active} active`,
-    sparkMdHeader: "SPARK.md (active intent excerpt):",
+    sparkMdHeader: "SPARK.md (intent excerpt):",
     sparkMdReadFull: "… (read SPARK.md for full intent)",
   },
   zh: {
-    header: "Spark 活跃上下文：",
+    header: "Spark 上下文：",
     noProjectHeader: "Spark 可用：当前会话尚未选择项目。",
     noProjectGuidance:
       '- 在规划、认领或更新项目内任务前，先用 task({ action: "project_use" }) 选择或创建当前项目。',
@@ -327,7 +327,7 @@ const ACTIVE_CONTEXT: Record<SparkLanguage, ActiveSparkContextStrings> = {
     hiddenSessionClaimed: (hidden) =>
       `- … 还有 ${hidden} 条已认领任务；用 task({ action: "status" }) 查看详情`,
     projectsCountsLine: (total, active) => `- 项目：${total} 个 / ${active} 个活跃`,
-    sparkMdHeader: "SPARK.md（活跃 intent 摘录）：",
+    sparkMdHeader: "SPARK.md（intent 摘录）：",
     sparkMdReadFull: "…（完整 intent 见 SPARK.md）",
   },
 };

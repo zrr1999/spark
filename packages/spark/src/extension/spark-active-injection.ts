@@ -1,10 +1,6 @@
 import { defaultTaskGraphStore, type TaskGraph } from "pi-tasks";
 import { renderActiveSparkContext } from "./spark-active-context.ts";
-import {
-  detectSparkActivation,
-  hasLocalSparkDirectory,
-  readActiveSparkMd,
-} from "./spark-activation.ts";
+import { hasLocalSparkDirectory, readActiveSparkMd } from "./spark-activation.ts";
 import { ensureSparkClaimReaper, sweepExpiredSparkClaims } from "./spark-claim-reaper.ts";
 import { ensureSparkGraphInvariants } from "./spark-graph-invariants.ts";
 import {
@@ -38,29 +34,23 @@ export interface SparkInputModeRouter {
 
 export async function handleSparkInput(
   event: unknown,
-  ctx: SparkToolContext,
+  _ctx: SparkToolContext,
   _router?: SparkInputModeRouter,
 ): Promise<unknown> {
   if (!isSparkInputEvent(event)) return { action: "continue" };
   if (event.source === "extension") return { action: "continue" };
   const text = event.text.trim();
   if (!text || text.startsWith("/")) return { action: "continue" };
-  const activation = await detectSparkActivation(ctx.cwd);
-  if (!activation.active) return { action: "continue" };
-  const mode = await loadSparkMode(ctx.cwd, ctx);
-  if (mode.mode !== "auto") return { action: "continue" };
   return { action: "continue" };
 }
 
 export async function injectSparkHints(event: unknown, ctx: SparkToolContext): Promise<unknown> {
-  const activation = await detectSparkActivation(ctx.cwd);
-  if (!activation.active) return undefined;
-  await ensureSparkStateForActiveWorkspace(ctx.cwd, ctx);
+  const graph = await ensureSparkStateForActiveWorkspace(ctx.cwd, ctx);
+  if (!graph) return undefined;
   const summary = await renderActiveSparkContextWithLanguage(ctx.cwd, ctx);
   const mode = (await loadSparkMode(ctx.cwd, ctx)).mode;
   const sparkPrompt = renderSparkActiveSystemPrompt(
     eventSystemPrompt(event),
-    activation.reason,
     mode,
     summary?.language,
   );
@@ -125,11 +115,10 @@ export async function ensureSparkStateForActiveWorkspace(
 
 export function renderSparkActiveSystemPrompt(
   basePrompt: string,
-  reason: string,
   mode: SparkSessionMode = "auto",
   language?: SparkLanguage,
 ): string {
-  const sparkPrompt = `Spark active (${reason}); mode: ${mode}. Spark is the mode facade; use task, artifact, ask, role, learning, context, recall, workflow, patch. ≤1 task; no canned asks; no guessing: ask unless user says infer/research.`;
+  const sparkPrompt = `Spark mode: ${mode}. Spark tools are available: task, artifact, ask, role, learning, context, recall, workflow, patch. Use project/task/TODO/SPARK.md context when present; ≤1 task; no canned asks; no guessing: ask unless user says infer/research.`;
   const lines = [basePrompt, sparkPrompt];
   if (language) lines.push(sparkSystemPromptLanguageDirective(language));
   return lines.filter((line) => Boolean(line)).join("\n\n");

@@ -656,12 +656,8 @@ void test("/spark command detects empty, existing, and initialized project modes
     await emptyCommand.handler("Build a contextual Spark cockpit", emptyCtx);
     assert.ok(existsSync(join(emptyDir, ".spark", "projects.json")));
     assert.equal(emptyRun.messages.length, 0);
-    const emptyMessage = emptyRun.customMessages[0]?.content ?? "";
-    assert.match(emptyMessage, /Spark initialized|Spark 已初始化/);
-    const emptyHidden = await consumeSparkModeContext(emptyRun, emptyCtx);
-    assert.match(emptyHidden, /minimal local state/);
-    assert.match(emptyHidden, /task\(\{ action: "project_update" \}\)/);
-    assert.match(emptyHidden, /do not create tasks merely because Spark just initialized/);
+    assert.equal(emptyRun.customMessages.length, 0);
+    assert.equal(await tryConsumeSparkModeContext(emptyRun, emptyCtx), undefined);
 
     await mkdir(join(existingDir, ".git"));
     await writeFile(join(existingDir, "README.md"), "# Existing project\n", "utf8");
@@ -678,17 +674,13 @@ void test("/spark command detects empty, existing, and initialized project modes
     assert.doesNotMatch(existingRun.customMessages[0]?.content ?? "", /Spark initialized/);
     assert.match(existingRun.customMessages[0]?.content ?? "", /Spark plan mode requested/);
     const existingMessage = await consumeSparkModeContext(existingRun, existingCtx);
-    assert.match(existingMessage, /Enter Spark planning mode/);
+    assert.match(existingMessage, /## Spark project summary/);
+    assert.match(existingMessage, /## Planning mode requirements/);
     assert.match(existingMessage, /Audit existing project structure/);
-    assert.match(existingMessage, /answer directly for a simple research\/read-and-comment turn/);
-    assert.match(
-      existingMessage,
-      /task\(\{ action: "plan" \}\) only when there are concrete plan-bound tasks/,
-    );
+    assert.match(existingMessage, /Answer directly for a simple research\/read-and-comment turn/);
+    assert.match(existingMessage, /task\(\{ action: "plan" \}\) only for concrete executable/);
     assert.match(existingMessage, /context-specific ask questions/);
-    assert.match(existingMessage, /Do not use generic intake templates/);
-    assert.match(existingMessage, /Reminder for planning mode/);
-    assert.match(existingMessage, /plan\.openQuestions/);
+    assert.match(existingMessage, /do not use canned intake templates/);
     const existingProjectJson = await readFile(
       join(existingDir, ".spark", "projects.json"),
       "utf8",
@@ -723,7 +715,7 @@ void test("/spark command detects empty, existing, and initialized project modes
     assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /Spark plan mode requested/);
     assert.match(
       await consumeSparkModeContext(initializedRun, initializedCtx),
-      /Enter Spark planning mode/,
+      /## Planning mode requirements/,
     );
 
     await initializedCommand.handler("investigate current context", initializedCtx);
@@ -733,7 +725,7 @@ void test("/spark command detects empty, existing, and initialized project modes
     );
     {
       const researchMsg = await consumeSparkModeContext(initializedRun, initializedCtx);
-      assert.match(researchMsg, /Enter Spark research mode/);
+      assert.match(researchMsg, /## Research mode requirements/);
       assert.match(researchMsg, /Do not call task\(\{ action: "plan" \| "claim" \| "finish" \}\)/);
     }
 
@@ -746,7 +738,7 @@ void test("/spark command detects empty, existing, and initialized project modes
     );
     assert.match(
       await consumeSparkModeContext(initializedRun, initializedCtx),
-      /Enter Spark execution mode/,
+      /## Execution mode requirements/,
     );
   } finally {
     await rm(emptyDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
@@ -811,24 +803,15 @@ void test("/research, /plan, /execute, /goal, and /workflow selector commands en
     assert.match(existingRun.customMessages[0]?.content ?? "", /Spark plan mode requested/);
     assert.match(existingRun.customMessages[0]?.content ?? "", /Audit current task flow/);
     const planMessage = await consumeSparkModeContext(existingRun, existingCtx);
-    assert.match(planMessage, /Enter Spark planning mode from \/plan/);
+    assert.match(planMessage, /## Spark project summary/);
+    assert.match(planMessage, /## Planning mode requirements/);
     assert.match(planMessage, /not as a permission gate/);
     assert.match(planMessage, /Audit current task flow/);
     assert.match(planMessage, /context-specific ask questions/);
-    assert.match(planMessage, /target project selection/);
-    assert.match(planMessage, /design options only, durable task planning, or eventual execution/);
-    assert.match(
-      planMessage,
-      /Do not call task\(\{ action: "plan" \}\) while those choices remain unresolved/,
-    );
-    assert.match(planMessage, /do not leave them as prose/);
+    assert.match(planMessage, /design options only, durable task planning, or execution/);
+    assert.match(planMessage, /task\(\{ action: "plan" \}\) only for concrete executable/);
     assert.match(planMessage, /do not use canned intake templates/);
-    assert.match(planMessage, /Reminder for planning mode/);
-    assert.match(planMessage, /call ask with context-specific questions/);
-    assert.match(
-      planMessage,
-      /Once planning-affecting uncertainty is resolved, call task\(\{ action: "plan" \}\) directly/,
-    );
+    assert.match(planMessage, /call task\(\{ action: "plan" \}\) directly/);
     assert.doesNotMatch(
       planMessage,
       /answer directly for a simple research\/read-and-comment turn/,
@@ -875,14 +858,14 @@ void test("/research, /plan, /execute, /goal, and /workflow selector commands en
       /Finish the direct execution task/,
     );
     const executeMessage = await consumeSparkModeContext(initializedRun, initializedCtx);
-    assert.match(executeMessage, /Enter Spark execution mode/);
-    assert.match(executeMessage, /Execution focus: Finish the direct execution task/);
+    assert.match(executeMessage, /## Execution mode requirements/);
+    assert.match(executeMessage, /## Execution focus\nFinish the direct execution task/);
     assert.match(executeMessage, /Claim at most one concrete task/);
     assert.match(executeMessage, /Stop after that task finishes/);
     assert.match(executeMessage, /suggest \/goal/);
     assert.match(executeMessage, /suggest \/workflow/);
-    assert.match(executeMessage, /missing user decision blocks execution/);
-    assert.match(executeMessage, /do not guess user intent/);
+    assert.match(executeMessage, /user-facing open question or decision/);
+    assert.match(executeMessage, /Do not guess user intent/);
     assert.doesNotMatch(executeMessage, /continue by auto-claiming/);
     assert.equal(
       initializedCtx.notifications.at(-1)?.message,
@@ -1078,10 +1061,10 @@ void test("latest direct Spark mode replaces older pending hidden mode context",
     await planCommand.handler("revise the failed task plan", ctx);
 
     const hidden = await consumeSparkModeContext(run, ctx);
-    assert.match(hidden, /Enter Spark planning mode from \/plan/);
+    assert.match(hidden, /## Planning mode requirements/);
     assert.match(hidden, /revise the failed task plan/);
-    assert.doesNotMatch(hidden, /Enter Spark research mode/);
-    assert.doesNotMatch(hidden, /Enter Spark execution mode/);
+    assert.doesNotMatch(hidden, /## Research mode requirements/);
+    assert.doesNotMatch(hidden, /## Execution mode requirements/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -1553,7 +1536,7 @@ void test("/goal sets a durable session goal instead of execute-mode continuatio
     assert.match(goalPrompt, /Spark session goal is active/);
     assert.match(goalPrompt, /goal completion is reviewer-owned/);
     assert.doesNotMatch(goalPrompt, /goal\(\{ action: "complete" \}\).*concise verified reason/);
-    assert.doesNotMatch(goalPrompt, /Enter Spark execution mode/);
+    assert.doesNotMatch(goalPrompt, /## Execution mode requirements/);
     assert.doesNotMatch(run.customMessages.at(-1)?.content ?? "", /strategy: goal/);
     assert.doesNotMatch(run.customMessages.at(-1)?.content ?? "", /workflow: builtin:goal/);
     const goalState = JSON.parse(
@@ -5141,7 +5124,7 @@ void test("task tool dispatches canonical project, plan, claim, TODO, and finish
       providerIds: ["spark.active"],
       budgetChars: 1_000,
     });
-    assert.match(toolText(contextPreview), /Spark active state/);
+    assert.match(toolText(contextPreview), /Spark context/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -141,8 +141,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       providers: [
         {
           id: "spark.active",
-          label: "Spark active state",
-          description: "Bounded active Spark project/task/TODO/SPARK.md context.",
+          label: "Spark context",
+          description: "Bounded Spark project/task/TODO/SPARK.md context.",
           defaultBudgetChars: 4_000,
           priority: 100,
           async render(ctx) {

@@ -3,7 +3,6 @@ import type { ProjectRef } from "pi-extension-api";
 import type { TaskGraph } from "pi-tasks";
 import type { SparkEntryResolution } from "./spark-entry.ts";
 import { titleFromIdea, type SparkInitClarificationData } from "./spark-md-rendering.ts";
-import { renderSparkInitFollowUp, renderSparkInitSummary } from "./spark-init-rendering.ts";
 import { initializeSparkIdea } from "./spark-initialization.ts";
 import {
   loadSparkGraph,
@@ -11,7 +10,6 @@ import {
   type SparkPlanningModeSource,
 } from "./session-state.ts";
 import {
-  dispatchSparkAgentInstruction,
   enterSparkExecutionMode,
   enterSparkPlanningMode,
   enterSparkResearchMode,
@@ -32,13 +30,14 @@ export async function applySparkEntryResolution(
   switch (resolution.action) {
     case "initialize_new_project":
       await startSparkNewProject(piApi, deps, ctx, resolution.idea, {
-        enterPlanning: resolution.enterPlanning,
+        enterMode: resolution.enterPlanning ? "plan" : undefined,
         planningSource: resolution.planningSource,
+        materializeSparkMd: true,
       });
       return;
     case "initialize_existing_project":
       await startSparkNewProject(piApi, deps, ctx, resolution.idea, {
-        enterPlanning: true,
+        enterMode: "plan",
         planningSource: resolution.planningSource,
         materializeSparkMd: resolution.planningSource !== "direct",
       });
@@ -84,18 +83,16 @@ async function startSparkNewProject(
   ctx: SparkToolContext,
   idea: string,
   options: {
-    enterPlanning?: boolean;
+    enterMode?: "plan";
     planningSource?: SparkPlanningModeSource;
     materializeSparkMd?: boolean;
   } = {},
 ): Promise<void> {
   const existing = await loadSparkGraph(ctx.cwd, ctx);
   if (existing) {
-    ctx.ui?.notify?.(
-      "Spark is already initialized for this workspace; entering planning mode instead.",
-      "info",
-    );
-    await enterSparkPlanningMode(piApi, deps, ctx, existing, idea, options.planningSource);
+    await deps.refreshSparkWidget(ctx.cwd, ctx);
+    if (options.enterMode === "plan")
+      await enterSparkPlanningMode(piApi, deps, ctx, existing, idea, options.planningSource);
     return;
   }
 
@@ -116,25 +113,11 @@ async function startSparkNewProject(
     materializeSparkMd: options.materializeSparkMd,
   });
 
-  ctx.ui?.notify?.(
-    language === "zh" ? "Spark 项目已初始化" : "Spark project initialized",
-    "success",
-  );
-  if (!options.enterPlanning) {
-    dispatchSparkAgentInstruction(
-      piApi,
-      deps,
-      ctx,
-      renderSparkInitFollowUp(result),
-      renderSparkInitSummary(result),
-    );
-  }
-
   await saveCurrentProjectRef(ctx.cwd, ctx, result.projectRef as ProjectRef);
   await deps.refreshSparkWidget(ctx.cwd, ctx);
   deps.ensureDagManager(ctx.cwd, ctx);
 
-  if (options.enterPlanning) {
+  if (options.enterMode === "plan") {
     const graph = await loadSparkGraph(ctx.cwd, ctx);
     if (graph) await enterSparkPlanningMode(piApi, deps, ctx, graph, idea, options.planningSource);
   }

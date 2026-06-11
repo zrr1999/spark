@@ -312,25 +312,26 @@ void test("task role labels prefer active claim, finished attribution, then late
   );
 });
 
-void test("active Spark prompt is a one-line state marker with the current mode", () => {
-  const prompt = renderSparkActiveSystemPrompt("", "SPARK.md");
-  assert.match(prompt, /^Spark active \(SPARK\.md\); mode: auto\./);
-  assert.match(prompt, /Spark is the mode facade/);
+void test("Spark prompt is a one-line mode marker", () => {
+  const prompt = renderSparkActiveSystemPrompt("");
+  assert.match(prompt, /^Spark mode: auto\./);
+  assert.match(prompt, /Spark tools are available/);
   assert.match(prompt, /task, artifact, ask, role, learning, context, recall, workflow, patch/);
   assert.match(prompt, /no guessing: ask unless user says infer\/research/);
+  assert.doesNotMatch(prompt, /Spark active/);
   assert.doesNotMatch(prompt, /read SPARK\.md or the spark skill/);
   assert.doesNotMatch(prompt, /spark skill/);
   assert.doesNotMatch(prompt, /standing project state/);
   assert.doesNotMatch(prompt, /Active Spark context/);
   assert.doesNotMatch(prompt, /spark_use_project/);
   assert.doesNotMatch(prompt, /Do not spawn nested pi CLI sessions/);
-  assert.ok(prompt.length < 220, `expected short standing prompt, got ${prompt.length}`);
+  assert.ok(prompt.length < 260, `expected short standing prompt, got ${prompt.length}`);
 });
 
-void test("active Spark prompt threads the current session mode into the marker", () => {
-  const planPrompt = renderSparkActiveSystemPrompt("", ".spark/projects.json", "plan");
-  assert.match(planPrompt, /^Spark active \(\.spark\/projects\.json\); mode: plan\./);
-  const executePrompt = renderSparkActiveSystemPrompt("", "SPARK.md", "execute");
+void test("Spark prompt threads the current session mode into the marker", () => {
+  const planPrompt = renderSparkActiveSystemPrompt("", "plan");
+  assert.match(planPrompt, /^Spark mode: plan\./);
+  const executePrompt = renderSparkActiveSystemPrompt("", "execute");
   assert.match(executePrompt, /mode: execute/);
 });
 
