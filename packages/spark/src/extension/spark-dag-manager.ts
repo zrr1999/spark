@@ -13,7 +13,7 @@ import {
 } from "pi-workflows";
 import { defaultTaskGraphStore, isUnfinishedTaskStatus, type TaskGraph } from "pi-tasks";
 import { reconcileSparkDagRunsWithActiveProcesses } from "./background-runs.ts";
-import { ensureRoleModelBindingsForProject } from "./role-model-bindings.ts";
+import { ensureRoleModelSettingsForProject } from "./role-model-settings.ts";
 import { hasLocalSparkDirectory } from "./spark-activation.ts";
 import {
   currentSparkProject,
@@ -107,17 +107,17 @@ export class SparkDagManagerController {
         );
       return { continuePolling: false };
     }
-    const bindingResult = await ensureRoleModelBindingsForProject({
+    const settingsResult = await ensureRoleModelSettingsForProject({
       graph,
       projectRef: currentProject.ref,
       registry,
       cwd,
       ctx,
     });
-    if (!bindingResult.ready) {
+    if (!settingsResult.ready) {
       if (runMode && currentProject.ref === runMode.projectRef)
         await updateSparkRunModeStatus(cwd, ctx, "blocked");
-      ctx.ui?.notify?.(bindingResult.message, "warning");
+      ctx.ui?.notify?.(settingsResult.message, "warning");
       return { continuePolling: false };
     }
     const ownerSessionId = sparkSessionOwnerKey(ctx);

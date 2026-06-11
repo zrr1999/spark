@@ -6,7 +6,7 @@ import {
 } from "pi-extension-api";
 import { runReadySparkTasks } from "pi-workflows";
 import { defaultTaskGraphStore } from "pi-tasks";
-import { ensureRoleModelBindingsForProject } from "./role-model-bindings.ts";
+import { ensureRoleModelSettingsForProject } from "./role-model-settings.ts";
 import {
   currentSparkProject,
   loadSparkGraph,
@@ -109,17 +109,17 @@ export function registerSparkRunReadyTasksTool(
         };
       const registry = await createSparkRoleRegistry(cwd);
       if (!dryRun) {
-        const bindingResult = await ensureRoleModelBindingsForProject({
+        const settingsResult = await ensureRoleModelSettingsForProject({
           graph,
           projectRef: project.ref,
           registry,
           cwd,
           ctx,
         });
-        if (!bindingResult.ready) {
+        if (!settingsResult.ready) {
           return {
-            content: [{ type: "text", text: bindingResult.message }],
-            details: bindingResult as unknown as Record<string, unknown>,
+            content: [{ type: "text", text: settingsResult.message }],
+            details: settingsResult as unknown as Record<string, unknown>,
           };
         }
         const existingRunMode = await loadSparkRunMode(cwd, ctx);

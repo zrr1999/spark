@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { RoleRegistry, builtinRoleRef, defaultUserRoleModelBindingStore } from "pi-roles";
+import { RoleRegistry, builtinRoleRef, defaultUserRoleModelSettingsStore } from "pi-roles";
 import { ArtifactStore } from "pi-artifacts";
 import {
   DependencyError,
@@ -2191,14 +2191,7 @@ void test("Spark DAG manager reports widget refresh failures without failing com
     await chmod(fakePi, 0o755);
     process.env.PATH = `${binDir}${previousPath ? `:${previousPath}` : ""}`;
     process.env.PI_ROLES_HOME = dir;
-    await defaultUserRoleModelBindingStore(dir).save({
-      roleRef: builtinRoleRef("worker"),
-      model: "test-model",
-      source: "user",
-      validatedAt: "2026-05-20T00:00:00.000Z",
-      updatedAt: "2026-05-20T00:00:00.000Z",
-      validationCommand: "test",
-    });
+    await defaultUserRoleModelSettingsStore(dir).save(builtinRoleRef("worker"), "test-model");
 
     const graph = new TaskGraph();
     const project = graph.createProject({ title: "Demo", description: "demo" });
