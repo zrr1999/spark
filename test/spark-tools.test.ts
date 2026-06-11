@@ -1723,8 +1723,8 @@ void test("/goal handles stale inferred project goals after the project is done"
   }
 });
 
-void test("session reset shutdown auto-pauses active foreground goals", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-shutdown-pause-"));
+void test("session shutdown clears foreground timers without pausing active goals", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-goal-shutdown-active-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
   type FakeTimer = {
@@ -1765,26 +1765,17 @@ void test("session reset shutdown auto-pauses active foreground goals", async ()
       await handler({ reason: "reload" }, ctx);
     }
 
-    const paused = await loadSessionGoal(dir, ctx);
-    assert.equal(paused?.status, "paused");
-    assert.match(paused?.pauseReason ?? "", /Auto-paused before session reload/);
+    const reloadedGoal = await loadSessionGoal(dir, ctx);
+    assert.equal(reloadedGoal?.status, "active");
+    assert.equal(reloadedGoal?.pauseReason, undefined);
     assert.ok(timers.every((timer) => timer.cleared));
-
-    await goalCommand.handler("survive until revert", ctx);
-    assert.equal((await loadSessionGoal(dir, ctx))?.status, "active");
-    for (const handler of run.eventHandlers.get("session_shutdown") ?? []) {
-      await handler({ reason: "revert" }, ctx);
-    }
-    const revertPaused = await loadSessionGoal(dir, ctx);
-    assert.equal(revertPaused?.status, "paused");
-    assert.match(revertPaused?.pauseReason ?? "", /Auto-paused before session revert/);
 
     const reloadedRun = registerSparkToolsForTest();
     const before = timers.length;
     for (const handler of reloadedRun.eventHandlers.get("session_start") ?? []) {
       await handler({ reason: "reload" }, ctx);
     }
-    assert.equal(timers.length, before, "paused goals must not reschedule after reload");
+    assert.ok(timers.length > before, "active goals should reschedule after reload");
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;

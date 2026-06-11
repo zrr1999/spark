@@ -109,9 +109,8 @@ export function registerSparkCommands(
     await clearStaleForegroundGoalRetryState(ctx);
     await scheduleForegroundGoalLoopIfActive(pi, ctx);
   });
-  pi.on?.("session_shutdown", async (event, ctx) => {
+  pi.on?.("session_shutdown", async (_event, ctx) => {
     clearForegroundGoalLoop(ctx.cwd, ctx);
-    await pauseActiveGoalForSessionReset(ctx, event);
   });
   pi.on?.("input", (_event, ctx) => {
     clearForegroundGoalTimer(ctx.cwd, ctx);
@@ -1451,39 +1450,6 @@ export function registerSparkCommands(
     const normalized = value.replace(/\s+/gu, " ").trim();
     return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized;
   }
-}
-
-async function pauseActiveGoalForSessionReset(
-  ctx: SparkGoalLoopContext,
-  event: unknown,
-): Promise<void> {
-  const reason = shutdownReason(event);
-  if (!isGoalResetShutdownReason(reason)) return;
-  const existing = await loadSessionGoal(ctx.cwd, ctx);
-  if (!existing || existing.status !== "active") return;
-  await updateSessionGoalStatus(ctx.cwd, ctx, "paused", {
-    reason: `Auto-paused before session ${reason}; restart /goal explicitly to continue after the reset.`,
-    retryState: null,
-  });
-}
-
-function isGoalResetShutdownReason(reason: string): boolean {
-  return (
-    reason === "reload" ||
-    reason === "resume" ||
-    reason === "new" ||
-    reason === "fork" ||
-    reason === "revert" ||
-    reason === "reset"
-  );
-}
-
-function shutdownReason(event: unknown): string {
-  return event &&
-    typeof event === "object" &&
-    typeof (event as { reason?: unknown }).reason === "string"
-    ? (event as { reason: string }).reason
-    : "unknown";
 }
 
 function reportGoalLoopError(error: unknown): void {
