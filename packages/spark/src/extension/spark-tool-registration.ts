@@ -20,6 +20,7 @@ export interface SparkRegisteredToolConfig {
   ) => Promise<{
     content: Array<{ type: "text"; text: string }>;
     details?: Record<string, unknown>;
+    isError?: boolean;
   }>;
 }
 

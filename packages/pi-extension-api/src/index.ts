@@ -83,6 +83,7 @@ export interface ToolConfig {
   ): Promise<{
     content: Array<{ type: "text"; text: string }>;
     details?: Record<string, unknown>;
+    isError?: boolean;
   }>;
 }
 

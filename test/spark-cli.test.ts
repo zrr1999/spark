@@ -82,13 +82,10 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
 });
 
 void test("Baidu OneAPI payload keeps gateway model spelling", () => {
-  assert.deepEqual(
-    remapBaiduOneApiPayload({ model: "claude-fable-5", x: 1 }, "Fable 5-R7M41BBSGB"),
-    {
-      model: "Fable 5-R7M41BBSGB",
-      x: 1,
-    },
-  );
+  assert.deepEqual(remapBaiduOneApiPayload({ model: "claude-fable-5", x: 1 }, "Fable 5"), {
+    model: "Fable 5",
+    x: 1,
+  });
 });
 
 void test("Baidu OneAPI payload forces adaptive thinking for gateway Opus models", () => {

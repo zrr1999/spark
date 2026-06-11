@@ -327,7 +327,7 @@ export class SparkAgentLoop {
         toolName: toolCall.name,
         content: result.content,
         details: result.details,
-        isError: false,
+        isError: result.isError ?? false,
         timestamp: Date.now(),
       };
     } catch (error) {

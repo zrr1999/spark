@@ -148,9 +148,11 @@ void test("SparkProviderRegistry accepts the production baidu-oneapi-provider pl
   const model = registry.buildModel("baidu-oneapi", "claude-opus-4.6");
   assert.equal(model.provider, "baidu-oneapi");
   assert.equal(model.contextWindow, 200_000);
+  const opus48Model = registry.buildModel("baidu-oneapi", "claude-opus-4.8");
+  assert.equal(opus48Model.contextWindow, 300_000);
   const fableModel = registry.buildModel("baidu-oneapi", "claude-fable-5");
   assert.equal(fableModel.name, "Fable 5 (Baidu OneAPI)");
-  assert.equal(fableModel.contextWindow, 200_000);
+  assert.equal(fableModel.contextWindow, 300_000);
   assert.equal(fableModel.maxTokens, 32_000);
   const gptModel = registry.buildModel("baidu-oneapi", "gpt-5.5");
   assert.equal(gptModel.api, "openai-responses");

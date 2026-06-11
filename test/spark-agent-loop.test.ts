@@ -243,6 +243,44 @@ void test("SparkAgentLoop dispatches tool calls and feeds tool results back into
   assert.equal(toolResultEvent !== undefined, true);
 });
 
+void test("SparkAgentLoop preserves tool-returned isError results", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-test" });
+  host.registerTool({
+    name: "business_error",
+    description: "returns an explicit tool error",
+    parameters: { type: "object" },
+    async execute() {
+      return {
+        content: [{ type: "text", text: "business rule failed" }],
+        details: { error: "business_rule_failed" },
+        isError: true,
+      };
+    },
+  });
+  const toolCallEnvelope: ToolCall = {
+    type: "toolCall",
+    id: "tc-business-error",
+    name: "business_error",
+    arguments: {},
+  };
+  const firstAssistant = buildAssistant([toolCallEnvelope], "toolUse");
+  const finalAssistant = buildAssistant([{ type: "text", text: "handled" }]);
+  const fake = makeFakeStream({
+    rounds: [
+      [{ type: "done", reason: "toolUse", message: firstAssistant }],
+      [{ type: "done", reason: "stop", message: finalAssistant }],
+    ],
+  });
+  const loop = new SparkAgentLoop({ host, streamFunction: fake, getModel: () => TEST_MODEL });
+
+  await loop.submit("trigger business error");
+
+  const toolResult = loop.getMessages().find((message) => message.role === "toolResult");
+  assert.equal(toolResult !== undefined, true);
+  assert.equal((toolResult as { isError: boolean }).isError, true);
+  assert.match(JSON.stringify(toolResult), /business_rule_failed/);
+});
+
 void test("SparkAgentLoop unknown tool returns an isError tool result without throwing", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-test" });
   const toolCallEnvelope: ToolCall = {

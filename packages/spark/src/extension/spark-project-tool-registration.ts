@@ -94,6 +94,7 @@ export function registerSparkProjectTools(
             },
           ],
           details: { found: true, error: "missing_project_patch" },
+          isError: true,
         };
 
       const store = defaultTaskGraphStore(cwd);
@@ -112,6 +113,7 @@ export function registerSparkProjectTools(
         return {
           content: [{ type: "text", text: "No matching Spark project found." }],
           details: { found: false, error: "no_project" },
+          isError: true,
         };
       const currentProjectRef = await loadCurrentProjectRef(cwd, ctx);
       if (

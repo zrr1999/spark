@@ -4319,6 +4319,30 @@ void test("spark rename tools improve obvious placeholder project and generic ta
   }
 });
 
+void test("task project_update marks missing projects as tool errors", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-project-update-error-"));
+  try {
+    await mkdir(join(dir, ".spark"), { recursive: true });
+    const graph = new TaskGraph();
+    graph.createProject({ title: "Existing project", description: "Only project in graph." });
+    await defaultTaskGraphStore(dir).save(graph);
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+
+    const missing = await executeSparkTool(tools, "task", ctx, {
+      action: "project_update",
+      project: "Missing project",
+      title: "Better project title",
+    });
+
+    assert.equal(missing.isError, true);
+    assert.equal((missing.details as { error?: string }).error, "no_project");
+    assert.match(toolText(missing), /No matching Spark project found/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("spark_claim_task preserves intentional task names when only the title improves", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-intentional-name-"));
   try {

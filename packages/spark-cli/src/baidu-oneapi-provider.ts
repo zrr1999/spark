@@ -16,7 +16,7 @@ const GATEWAY_MODEL_BY_ID: Record<string, string> = {
   "claude-opus-4.6": "Claude Opus 4.6",
   "claude-opus-4.7": "Claude Opus 4.7",
   "claude-opus-4.8": "Opus 4.8 Coding Plan",
-  "claude-fable-5": "Fable 5-R7M41BBSGB",
+  "claude-fable-5": "Fable 5",
   "gpt-5.5": "gpt-5.5-coding-plan",
   "gpt-5.5-coding-plan": "gpt-5.5-coding-plan",
 };
@@ -195,7 +195,7 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
         },
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
+        contextWindow: 300000,
         maxTokens: 32000,
       },
       {
@@ -211,7 +211,7 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
         },
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
+        contextWindow: 300000,
         maxTokens: 32000,
       },
       {
