@@ -28,6 +28,7 @@ import {
   normalizeTaskPlanPatch,
   normalizeTaskStatus,
   normalizeToolStringArray,
+  taskKindDescription,
   taskPlanSchema,
 } from "./task-plan-tool.ts";
 
@@ -69,6 +70,15 @@ export function registerSparkPlanTasksTool(
       SPARK_PLAN_TASKS_READINESS_RULES,
     ].join("\n"),
     parameters: Type.Object({
+      project: Type.Optional(
+        Type.String({
+          description:
+            "Optional project selector/ref/title. Prefer project=proj:... when planning outside the current project.",
+        }),
+      ),
+      projectRef: Type.Optional(
+        Type.String({ description: "Optional project ref/selector; alias for project." }),
+      ),
       tasks: Type.Array(
         Type.Object({
           name: Type.Optional(
@@ -81,8 +91,7 @@ export function registerSparkPlanTasksTool(
           }),
           kind: Type.Optional(
             Type.String({
-              description:
-                "research | plan | implement | review | ask | cue | interaction | generic",
+              description: taskKindDescription(),
             }),
           ),
           status: Type.Optional(
@@ -120,11 +129,24 @@ export function registerSparkPlanTasksTool(
           content: [{ type: "text", text: "No Spark project found." }],
           details: { found: false },
         };
-      const project = await currentSparkProject(cwd, ctx, graph);
+      const projectSelector = normalizeOptionalToolString(
+        params.projectRef ?? params.project,
+        "project",
+      );
+      const project = projectSelector
+        ? resolveSparkPlanProject(graph, projectSelector)
+        : await currentSparkProject(cwd, ctx, graph);
       if (!project)
         return {
-          content: [{ type: "text", text: "No Spark project found." }],
-          details: { found: false },
+          content: [
+            {
+              type: "text",
+              text: projectSelector
+                ? `No Spark project matched ${projectSelector}. Use project=proj:... or select a current project first.`
+                : "No Spark project found.",
+            },
+          ],
+          details: { found: false, error: projectSelector ? "project_not_found" : undefined },
         };
       const registry = await createSparkRoleRegistry(cwd);
       const normalizedTasks = normalizeSparkPlanTaskInputs(params, registry);
@@ -214,6 +236,14 @@ export function registerSparkPlanTasksTool(
       };
     },
   });
+}
+
+function resolveSparkPlanProject(
+  graph: TaskGraph,
+  selector: string,
+): ReturnType<TaskGraph["projects"]>[number] | undefined {
+  const projects = graph.projects();
+  return projects.find((project) => project.ref === selector || project.title === selector);
 }
 
 function normalizeSparkPlanTaskInput(

@@ -29,22 +29,26 @@ export function taskPlanSchema() {
   });
 }
 
+const PUBLIC_TASK_KIND_DESCRIPTION =
+  "research | implement | review; omit kind for normal implementation work";
+
+export function taskKindDescription(): string {
+  return PUBLIC_TASK_KIND_DESCRIPTION;
+}
+
 export function normalizeTaskKind(value: unknown): TaskKind | undefined {
   if (value === undefined || value === null) return undefined;
-  if (
-    value === "research" ||
-    value === "plan" ||
-    value === "implement" ||
-    value === "review" ||
-    value === "ask" ||
-    value === "cue" ||
-    value === "interaction" ||
-    value === "generic"
-  )
-    return value;
-  throw new Error(
-    "kind must be research, plan, implement, review, ask, cue, interaction, or generic",
-  );
+  if (value === "research" || value === "implement" || value === "review") return value;
+  if (value === "generic") return value;
+  if (typeof value === "string" && value.startsWith("proj:"))
+    throw new Error(
+      `kind received a project ref (${value}); pass it as project/projectRef, e.g. task({ action: "plan", project: "${value}", tasks: [...] })`,
+    );
+  if (value === "plan" || value === "ask" || value === "cue" || value === "interaction")
+    throw new Error(
+      `kind=${value} is internal/reserved; omit kind or use research, implement, or review`,
+    );
+  throw new Error("kind must be research, implement, or review; omit kind for normal work");
 }
 
 export function normalizeTaskStatus(value: unknown): TaskStatus | undefined {

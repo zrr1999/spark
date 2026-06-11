@@ -95,7 +95,12 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
       description: Type.Optional(Type.String({ description: "Project/task description." })),
       purpose: Type.Optional(Type.String({ description: "Project purpose." })),
       name: Type.Optional(Type.String({ description: "Stable @task name for claim/plan." })),
-      kind: Type.Optional(Type.String({ description: "Task kind." })),
+      kind: Type.Optional(
+        Type.String({
+          description:
+            "Optional task executor hint: research | implement | review. Omit for normal work.",
+        }),
+      ),
       status: Type.Optional(
         Type.String({ description: "Task/project/status view depending on action." }),
       ),

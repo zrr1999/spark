@@ -21,6 +21,7 @@ import {
   normalizeTaskPlanPatch,
   normalizeTaskStatus,
   normalizeToolStringArray,
+  taskKindDescription,
   taskPlanSchema,
 } from "./task-plan-tool.ts";
 import { currentSparkProject, sparkSessionKey, sparkTodoStore } from "./session-state.ts";
@@ -85,7 +86,7 @@ export function registerSparkClaimTaskTool(
       description: Type.String({ description: "What the claimed task will accomplish." }),
       kind: Type.Optional(
         Type.String({
-          description: "research | plan | implement | review | ask | cue | interaction | generic",
+          description: taskKindDescription(),
         }),
       ),
       status: Type.Optional(
