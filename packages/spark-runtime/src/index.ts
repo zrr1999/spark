@@ -3,8 +3,10 @@ export * from "./workflow-role-run-adapter.ts";
 import type { ChildProcess } from "node:child_process";
 import {
   buildRoleRunArgs as buildGenericRoleRunArgs,
-  defaultUserRoleModelBindingStore,
+  defaultProjectRoleModelSettingsStore,
+  defaultUserRoleModelSettingsStore,
   parsePiJsonlEvents,
+  resolveRoleModelSetting,
   RoleRunCancelledError,
   RoleRunTimeoutError as PiRoleRunTimeoutError,
   runRole,
@@ -995,17 +997,21 @@ async function runPiJsonRole(
 ): Promise<SparkRoleRunResult> {
   let tracked: TrackedSparkRoleRunProcess | undefined;
   try {
-    const modelBinding = await defaultUserRoleModelBindingStore().get(role.ref);
-    if (!modelBinding && options.piCommand === "pi") {
+    const roleModel = await resolveRoleModelSetting({
+      roleRef: role.ref,
+      projectStore: defaultProjectRoleModelSettingsStore(options.cwd),
+      userStore: defaultUserRoleModelSettingsStore(),
+    });
+    if (!roleModel && options.piCommand === "pi") {
       throw new Error(
-        `role model binding required for ${role.ref}; run the role once interactively or bind a model before dispatch`,
+        `role model setting required for ${role.ref}; save one with role({ action: "model_set" }) before dispatch`,
       );
     }
     const result = await runRole({
       runRef: runRef as `run:${string}`,
       roleRef: role.ref as `role:${string}`,
       systemPrompt: role.systemPrompt,
-      model: modelBinding?.model,
+      model: roleModel?.model,
       instruction: instruction.instruction,
       runGuidance: sparkRoleRunGuidance(),
       sessionDir: options.sessionDir,
