@@ -2,7 +2,7 @@ import { defineConfig } from "vite-plus";
 
 export default defineConfig({
   fmt: {
-    ignorePatterns: ["prek.toml", "_typos.toml"],
+    ignorePatterns: ["**/*.md", "prek.toml", "_typos.toml"],
   },
   lint: {
     plugins: ["typescript"],
