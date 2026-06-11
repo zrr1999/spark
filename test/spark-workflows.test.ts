@@ -31,6 +31,32 @@ void test("pi-workflows package stays isolated from runtime execution packages",
   }
 });
 
+void test("pi-workflows parses metadata without executing expressions", () => {
+  assert.throws(
+    () =>
+      parseSparkWorkflowScript(`export const meta = {
+  name: (() => { throw new Error('meta executed') })(),
+  description: 'Demo workflow',
+}`),
+    /unsupported identifier|expected identifier/,
+  );
+
+  const parsed = parseSparkWorkflowScript(`export const meta = {
+  name: 'demo { literal }',
+  description: "Demo // workflow",
+  phases: [
+    // braces in comments should not terminate metadata: { }
+    { title: 'Scan' },
+  ],
+}
+return 'ok'`);
+
+  assert.equal(parsed.meta.name, "demo { literal }");
+  assert.equal(parsed.meta.description, "Demo // workflow");
+  assert.deepEqual(parsed.meta.phases, [{ title: "Scan" }]);
+  assert.equal(parsed.body, "return 'ok'");
+});
+
 void test("pi-workflows parses metadata and runs sandbox primitives with journal", async () => {
   const script = `export const meta = {
   name: 'demo',

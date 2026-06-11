@@ -140,7 +140,6 @@ export async function runSparkWorkflowScript<T = unknown>(
     return value;
   };
 
-  const wrapped = "(async () => {\n" + parsed.body + "\n})()";
   const context = vm.createContext({
     args: options.args,
     agent,
@@ -152,8 +151,13 @@ export async function runSparkWorkflowScript<T = unknown>(
     setTimeout,
     clearTimeout,
   });
-  const result = (await new vm.Script(wrapped).runInContext(context, { timeout: 1000 })) as T;
+  const result = (await runTrustedWorkflowScriptInVm<T>(parsed.body, context)) as T;
   return { meta: parsed.meta, result, phases, agentCount: callIndex, journal };
+}
+
+function runTrustedWorkflowScriptInVm<T>(body: string, context: vm.Context): Promise<T> {
+  const wrapped = "(async () => {\n" + body + "\n})()";
+  return new vm.Script(wrapped).runInContext(context, { timeout: 1000 }) as Promise<T>; // NOSONAR saved Spark workflows are local workspace/user scripts run in a capability-limited VM context.
 }
 
 export function normalizeSparkWorkflowAgentOptions(
