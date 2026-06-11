@@ -23,6 +23,15 @@ Primary Markdown role paths:
 Legacy agent-shaped paths and refs are not compatibility inputs. Repair stale
 local state explicitly before loading it; new writes use Markdown role files.
 
+Role specs do not carry model policy. Markdown frontmatter with `model` or
+`defaultModel` is rejected; store model choices separately instead:
+
+- project: `.spark/role-model-settings.json`
+- user: `~/.agents/role-model-settings.json`
+
+Resolution order is explicit run model, then project settings, then user
+settings. There is no legacy binding fallback.
+
 ## Runtime scope
 
 `runRole()` launches a single Pi child process with `fresh | forked` mode,
@@ -35,6 +44,7 @@ in `pi-workflows` above this package.
 `pi-roles` registers one public/default action tool:
 
 - `role` — use `action: "list" | "get" | "create" | "call"` to list roles, inspect a role, create a role, or run one direct role call.
+- `role` — use `action: "model_list" | "model_get" | "model_set" | "model_delete"` to inspect, save, or delete project/user role model settings.
 
 Historical fragmented implementation functions may remain internal dispatch targets behind `role`, but they are not active public/default tools.
 

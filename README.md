@@ -51,6 +51,16 @@ A root `SPARK.md` is only materialized by `/spark` initialization, and only when
 
 `.spark/` is local runtime state and should be ignored by Git. Spark learnings live separately under the ignored local `.learnings/` directory for repo/workspace-scoped recall or under the user learning directory for personal cross-project knowledge; share them through explicit Markdown exports instead of committing the local artifact store by default. Use canonical owner tools for maintenance (`task({ action: "cache_cleanup" })`, `artifact({ action: "compact" })`, and workflow-run retention actions as they land); cleanup remains dry-run by default and must never target protected stores such as project graph, artifacts, notes, workflow runs, or review-gate state.
 
+## Role model settings
+
+Reusable role specs and model policy are intentionally separate. Role Markdown defines prompt, tools, rationale, and expected uses only; role-spec `model` and `defaultModel` fields are rejected. Model choices live in role model settings:
+
+- project-local settings: `.spark/role-model-settings.json`
+- user settings: `~/.agents/role-model-settings.json`
+- resolution precedence: explicit run model, then project settings, then user settings
+
+Manage settings through the canonical role tool actions: `role({ action: "model_list" })`, `role({ action: "model_get" })`, `role({ action: "model_set" })`, and `role({ action: "model_delete" })`. Spark ready-task dispatch resolves each executor role through those settings; non-interactive dispatch fails with guidance when a required role has no model, while interactive hosts may prompt for a model and save it as a user setting.
+
 `GitHub` repo/issue creation is intentionally deferred.
 
 ## Packages
@@ -68,7 +78,7 @@ A root `SPARK.md` is only materialized by `/spark` initialization, and only when
 - `pi-recall` — controlled explicit-scope recall candidate store/tool, separate from `.learnings/` and automatic memory.
 - `pi-cue` — reusable Pi/cue-shell execution substrate.
 - `pi-ask` — canonical public/default `ask` action tool with shared focused/flow protocol, state, renderer, and direct custom input handling behind that surface.
-- `pi-roles` — canonical `role` action tool plus reusable `RoleSpec` definitions, builtin/project/user role discovery, Markdown stores, and task-agnostic direct role calls. It owns fresh/forked CLI launch, timeout/cancel, stdout/stderr capture, and tolerant JSONL parsing; it does not own Spark task DAGs, asks, artifacts, review gates, or package-specific role semantics.
+- `pi-roles` — canonical `role` action tool plus reusable `RoleSpec` definitions, builtin/project/user role discovery, Markdown stores, role model settings, and task-agnostic direct role calls. It owns fresh/forked CLI launch, timeout/cancel, stdout/stderr capture, model-setting resolution, and tolerant JSONL parsing; it does not own Spark task DAGs, asks, artifacts, review gates, or package-specific role semantics.
 
 Retired migration packages (`spark-core`, `spark-tasks`, `spark-learnings`, `spark-goal`, and `spark-workflows`) are no longer workspaces. No compatibility packages, long-lived `spark_*` tool aliases, or dual public/default tool surfaces are planned. Public action tools render as `tool action=<value> ...`. `spark-github` is intentionally deferred.
 

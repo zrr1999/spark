@@ -32,7 +32,6 @@ export interface RoleSpec {
    description: string;
    systemPrompt: string;
    allowedTools?: string[];
-   defaultModel?: string;
    origin?: { kind: RoleOriginKind; note?: string; artifactRef?: string };
    createdAt: string;
    updatedAt: string;
@@ -46,7 +45,6 @@ export interface RoleSpecProposal {
    rationale?: string;
    expectedUses?: string[];
    allowedTools?: string[];
-   defaultModel?: string;
    origin?: { kind: RoleOriginKind; note?: string; artifactRef?: string };
 }
 
@@ -75,6 +73,8 @@ host or Spark preset code may consume it, but `pi-roles` does not own tool
 activation or package-specific preset policy.
 
 Runtime role loading does not read old agent-shaped paths. If a repository still has `.pi/agents`, `~/.pi/agent/agents`, or `.spark/agents/*.json` data, migrate it explicitly into `.agents/roles` before relying on `pi-roles`.
+
+Do **not** use role-spec `model` or `defaultModel` fields. Role specs define prompt, tools, rationale, and expected use; model policy lives in role model settings.
 
 Do **not** use legacy `managed` as a source or runtime mode. It only described that Spark persisted a file; it did not tell the user where the role came from or how a run is launched.
 
@@ -117,6 +117,12 @@ Helpers provide default stores:
 
 - `defaultProjectRoleStore(cwd)` → `.agents/roles`.
 - `defaultUserRoleStore(home)` → `~/.agents/roles`.
+
+Role model settings are stored separately from role specs:
+
+- `defaultProjectRoleModelSettingsStore(cwd)` → `.spark/role-model-settings.json`.
+- `defaultUserRoleModelSettingsStore(home)` → `~/.agents/role-model-settings.json`.
+- Resolution precedence is explicit run model, then project settings, then user settings.
 
 ## Helper API
 

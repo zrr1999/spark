@@ -21,7 +21,7 @@ Tools:
 - `context` — canonical registered context-provider tool. Use `action: "list"` or `action: "preview"` with optional `providerIds`/`budgetChars`; content must come from registered providers such as `spark.active`, not arbitrary prompt text.
 - `recall` — canonical controlled recall-candidate tool. Use explicit `scope: "user" | "workspace" | "repo"` with `record_candidate`, `list`, `search`, and `reject`; recall candidates are not `.learnings/` and are not automatic memory.
 - `workflow` — canonical saved-script workflow discovery/preview tool. Use `action: "list"` or `action: "read"` with `workspace:<id>` / `user:<id>` selectors; inline workflows and arbitrary paths are rejected. Execution remains through `/workflow[:selector]` host runtime policy.
-- `role` — canonical role action tool. Use `action: "list" | "get" | "create" | "call"`; Spark task execution should prefer `task({ action: "run_ready" })` so task claims, run records, and evidence attribution stay coherent.
+- `role` — canonical role action tool. Use `action: "list" | "get" | "create" | "call" | "model_list" | "model_get" | "model_set" | "model_delete"`; Spark task execution should prefer `task({ action: "run_ready" })` so task claims, run records, and evidence attribution stay coherent.
 - `pi-cue` tools (`cue_exec`, `cue_run`, `cue_script`, `script_run`, `script_eval`, `cue_jobs`, `cue_schedule`, `cue_scope`, `cue_history`) — cue-shell execution and job/scope/history management.
 - `pi-graft` tools (`graft_patch`, `graft_read`, `graft_write`, `graft_edit`, `graft_delete`, `graft_candidate_from_scratch`, `graft_validate`, `graft_admit`, `graft_show`, `graft_evidence`, `graft_candidates`, `graft_search`, `graft_materialize`, `graft_repo`, ...) — Graft scratch/candidate/patch workflows. `graft_patch` owns patcher-style child runs and exposes only Graft-related tools to the child; unclear patch instructions must be escalated upward instead of applied.
 
@@ -233,9 +233,9 @@ allow_dirs = [
 
 ## `pi-roles`
 
-- `role` — canonical role action tool. Use `action: "list" | "get" | "create" | "call"` instead of adding fragmented role tool names.
+- `role` — canonical role action tool. Use `action: "list" | "get" | "create" | "call" | "model_list" | "model_get" | "model_set" | "model_delete"` instead of adding fragmented role tool names.
 
-The public/default extension surface is `role` only. Historical fragmented role implementations may exist internally behind the canonical adapter, but they are not user-facing APIs and must not be enabled as active default tools.
+The public/default extension surface is `role` only. Historical fragmented role implementations may exist internally behind the canonical adapter, but they are not user-facing APIs and must not be enabled as active default tools. Role specs do not carry model policy: `model` and `defaultModel` frontmatter are rejected, and model choices are stored in `.spark/role-model-settings.json` or `~/.agents/role-model-settings.json`.
 
 `role({ action: "call" })` is intentionally minimal and task-agnostic:
 
@@ -243,7 +243,7 @@ The public/default extension surface is `role` only. Historical fragmented role 
 - `mode: "forked"` requires explicit `forkFromSession` and shares that parent context;
 - it does not claim Spark tasks, write Spark artifacts, or schedule DAG work.
 
-Use `task({ action: "run_ready" })` instead when a Spark task should be claimed, attributed, persisted, and tracked by Spark workflow-run state.
+Use `task({ action: "run_ready" })` instead when a Spark task should be claimed, attributed, persisted, and tracked by Spark workflow-run state. Ready-task dispatch resolves role models from explicit run input, project settings, then user settings; non-interactive dispatch blocks with guidance when a role model setting is missing.
 
 ## `pi-ask`
 
