@@ -3293,12 +3293,14 @@ void test("/goal foreground loop backs off and pauses after retry budget", async
       }
     }
 
-    const failedGoalState = JSON.parse(
-      await readFile(
-        join(dir, ".spark", "session-goals", `${ctxSessionStoreScope(ctx)}.json`),
-        "utf8",
-      ),
-    ) as {
+    const goalStatePath = join(dir, ".spark", "session-goals", `${ctxSessionStoreScope(ctx)}.json`);
+    await waitFor(async () => {
+      const state = JSON.parse(await readFile(goalStatePath, "utf8")) as {
+        goal?: { status?: string; retryState?: { consecutiveFailures?: number } };
+      };
+      return state.goal?.status === "paused" && state.goal.retryState?.consecutiveFailures === 5;
+    });
+    const failedGoalState = JSON.parse(await readFile(goalStatePath, "utf8")) as {
       goal?: {
         status?: string;
         pauseReason?: string;
@@ -9474,7 +9476,7 @@ async function waitFor(
     if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  assert.ok(predicate(), "timed out waiting for condition");
+  assert.ok(await predicate(), "timed out waiting for condition");
 }
 
 function ctxSessionKey(ctx: TestSparkContext): string {
