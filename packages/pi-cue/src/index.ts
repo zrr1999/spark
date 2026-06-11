@@ -874,7 +874,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       "Execute a command in cue-shell. " +
       "cue-shell is direct-exec (execvp), not bash: do not use shell-only syntax such as &&, semicolon command lists, redirection, subshell tests, or bash-style ||. " +
       "Its composition operators are: |> pipes stdout, -> runs in serial on success, || runs in parallel (not OR), ~> runs in serial ignoring failure. " +
-      "Prefer direct-exec commands and Pi file tools; use separate tool calls or explicit /bin/sh -lc '...' only when shell semantics are genuinely required. " +
+      "Prefer direct-exec commands and Pi file tools; do not use shell wrappers for shell-only syntax. " +
       "Set background=true to start without waiting; track with cue_jobs action=status/wait, stop with cue_jobs action=stop. " +
       "For resource-gated jobs, pass needs={ gpu: 1, gpu_mem: '24GiB' } instead of embedding :run(need...) in command. " +
       "Runs without a PTY by default; set pty=true only for commands that genuinely need terminal semantics. " +
@@ -882,7 +882,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     parameters: Type.Object({
       command: Type.String({
         description:
-          "Command to execute in cue-shell, not bash. Use cue operators: '|>' pipe, '->' serial on success, '~>' serial ignoring failure, '||' parallel. Do not use bash-style && or || for logical control; prefer separate tool calls/Pi file tools and use /bin/sh -lc '...' only if shell syntax is required. Examples: 'cargo build |> grep error -> cargo test', '(cargo build || cargo audit) -> cargo test'.",
+          "Command to execute in cue-shell, not bash. Use cue operators: '|>' pipe, '->' serial on success, '~>' serial ignoring failure, '||' parallel. Do not use bash-style && or || for logical control; prefer separate tool calls/Pi file tools and avoid shell wrappers for shell-only syntax. Examples: 'cargo build |> grep error -> cargo test', '(cargo build || cargo audit) -> cargo test'.",
       }),
       background: Type.Optional(
         Type.Boolean({

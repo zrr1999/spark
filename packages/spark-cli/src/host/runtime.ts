@@ -176,6 +176,14 @@ export class SparkHostRuntime implements ExtensionAPI {
     });
   };
 
+  getActiveTools = (): string[] => {
+    const names: string[] = [];
+    for (const [name, tool] of this.tools) {
+      if (tool.active) names.push(name);
+    }
+    return names;
+  };
+
   getAllTools = (): ToolInfo[] => {
     const infos: ToolInfo[] = [];
     for (const [name, tool] of this.tools) {

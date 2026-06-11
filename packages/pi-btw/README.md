@@ -9,7 +9,7 @@ A small [pi](https://github.com/earendil-works/pi-mono) extension that adds a `/
 ## What it does
 
 - opens a parallel side conversation without interrupting the main run
-- runs that side conversation as a real pi sub-session with `read` / `bash` / `edit` / `write` tool access
+- runs that side conversation as a real pi sub-session with `read` / `edit` / `write` file-tool access
 - keeps a continuous BTW thread by default
 - supports `/btw:tangent` for a contextless side thread that does not inherit the current main-session conversation
 - opens a focused BTW modal shell with its own composer and transcript

@@ -1680,8 +1680,8 @@ export default function (pi: ExtensionAPI) {
       model: settings.model,
       modelRegistry: ctx.modelRegistry as AgentSession["modelRegistry"],
       thinkingLevel: settings.thinkingLevel,
-      // Match pi's default coding-agent toolset (read/bash/edit/write).
-      tools: ["read", "bash", "edit", "write"],
+      // Keep BTW side sessions aligned with pi-cue's no-bash command policy.
+      tools: ["read", "edit", "write"],
       resourceLoader: createBtwResourceLoader(ctx),
     });
 

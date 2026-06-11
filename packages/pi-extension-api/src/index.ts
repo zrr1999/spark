@@ -29,6 +29,9 @@ export interface ExtensionAPI {
   registerTool?(config: ToolConfig): void;
   registerShortcut?(shortcut: string, options: ShortcutConfig): void;
   on?(event: string, handler: (event: unknown, ctx: ExtensionContext) => unknown): void;
+  /** Names of the tools currently active for the agent (a subset of getAllTools). */
+  getActiveTools?(): string[];
+  /** All configured tools, including ones that are currently inactive. */
   getAllTools?(): ToolInfo[];
   setActiveTools?(names: string[]): void;
   sendMessage?(

@@ -23,7 +23,7 @@ import type { SparkToolContext } from "./spark-tool-registration.ts";
 
 interface SparkExtensionEventApi extends SparkModeMessageApi {
   on?(event: string, handler: (event: unknown, ctx: SparkToolContext) => unknown): void;
-  getAllTools?(): Array<{ name: string }>;
+  getActiveTools?(): string[];
   setActiveTools?(names: string[]): void;
 }
 
@@ -157,11 +157,15 @@ async function syncGoalInteractiveToolAvailability(
   ctx: SparkToolContext,
   baselines: Map<string, string[]>,
 ): Promise<void> {
-  if (!pi.getAllTools || !pi.setActiveTools) return;
+  if (!pi.getActiveTools || !pi.setActiveTools) return;
   const key = `${ctx.cwd}:${sparkSessionOwnerKey(ctx)}`;
   const activeGoal = await hasActiveCurrentSessionGoal(ctx);
   if (activeGoal) {
-    const baseline = baselines.get(key) ?? pi.getAllTools().map((tool) => tool.name);
+    // Snapshot the currently *active* tools, not every registered tool. Using
+    // getAllTools() here would re-activate tools that other extensions disabled
+    // on purpose (e.g. pi-cue removes `bash` at session start), silently
+    // re-enabling them for the rest of the session when the goal toggles.
+    const baseline = baselines.get(key) ?? pi.getActiveTools();
     baselines.set(key, baseline);
     pi.setActiveTools(baseline.filter((name) => !GOAL_DISABLED_INTERACTIVE_TOOLS.has(name)));
     return;

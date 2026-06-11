@@ -5355,6 +5355,46 @@ void test("active session goal disables ask-like tools before agent turns", asyn
   }
 });
 
+void test("active session goal preserves tools disabled by other extensions", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-goal-preserve-disabled-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const run = registerSparkToolsForTest();
+    await executeSparkTool(run.tools, "spark_use_project", ctx, { project: "Preserve disabled" });
+
+    // Simulate another extension (pi-cue) that registers `bash` and then
+    // deactivates it at session start, leaving it registered-but-inactive.
+    run.registerActiveTool("bash");
+    run.setActiveTools(run.getActiveToolNames().filter((name) => name !== "bash"));
+    assert.ok(!run.getActiveToolNames().includes("bash"), "bash starts disabled");
+
+    await executeSparkTool(run.tools, "goal", ctx, {
+      action: "start",
+      objective: "Run without re-enabling bash",
+    });
+    for (const handler of run.eventHandlers.get("before_agent_start") ?? []) {
+      await handler({}, ctx);
+    }
+    assert.ok(
+      !run.getActiveToolNames().includes("bash"),
+      "goal activation must not re-enable an externally disabled tool",
+    );
+
+    await executeSparkTool(run.tools, "goal", ctx, { action: "pause", reason: "waiting" });
+    for (const handler of run.eventHandlers.get("before_agent_start") ?? []) {
+      await handler({}, ctx);
+    }
+    assert.ok(
+      !run.getActiveToolNames().includes("bash"),
+      "goal deactivation must not re-enable an externally disabled tool",
+    );
+    assert.ok(run.getActiveToolNames().includes("ask"), "ask is restored after goal ends");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("spark project tools reject invalid explicit parameters", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-project-invalid-params-"));
   try {
@@ -8444,6 +8484,8 @@ function registerSparkToolsForTest(options: { reviewerRunner?: ReviewerRunner } 
   shortcuts: Map<string, Parameters<NonNullable<SparkExtensionApiForTest["registerShortcut"]>>[1]>;
   eventHandlers: Map<string, Array<(event: unknown, ctx: TestSparkContext) => unknown>>;
   getActiveToolNames: () => string[];
+  registerActiveTool: (name: string) => void;
+  setActiveTools: (names: string[]) => void;
 } {
   const tools = new Map<string, SparkToolConfig>();
   const activeToolNames = new Set<string>();
@@ -8464,6 +8506,7 @@ function registerSparkToolsForTest(options: { reviewerRunner?: ReviewerRunner } 
     Array<(event: unknown, ctx: TestSparkContext) => unknown>
   >();
   const pi: SparkExtensionApiForTest & {
+    getActiveTools: () => string[];
     getAllTools: () => Array<{ name: string }>;
     setActiveTools: (names: string[]) => void;
     createReviewerRunner: NonNullable<SparkExtensionApiForTest["createReviewerRunner"]>;
@@ -8489,7 +8532,11 @@ function registerSparkToolsForTest(options: { reviewerRunner?: ReviewerRunner } 
     sendMessage: (message, options) => {
       customMessages.push({ ...message, options });
     },
-    getAllTools: () => [...activeToolNames].map((name) => ({ name })),
+    getActiveTools: () => [...activeToolNames],
+    // Mirror the real host: getAllTools() reports every registered tool,
+    // including ones that are currently inactive. getActiveTools() reports
+    // only the active subset.
+    getAllTools: () => [...tools.keys()].map((name) => ({ name })),
     setActiveTools: (names) => {
       activeToolNames.clear();
       for (const name of names) {
@@ -8515,6 +8562,21 @@ function registerSparkToolsForTest(options: { reviewerRunner?: ReviewerRunner } 
     shortcuts,
     eventHandlers,
     getActiveToolNames: () => [...activeToolNames],
+    // Register a no-op tool and mark it active, simulating a tool contributed
+    // by another extension (e.g. pi-cue's `bash`) so tests can verify Spark
+    // goal toggling never silently re-activates externally disabled tools.
+    registerActiveTool: (name: string) => {
+      tools.set(name, {
+        name,
+        description: `synthetic ${name}`,
+        parameters: { type: "object" },
+        async execute() {
+          return { content: [{ type: "text" as const, text: "" }] };
+        },
+      } as SparkToolConfig);
+      activeToolNames.add(name);
+    },
+    setActiveTools: (names: string[]) => pi.setActiveTools(names),
   };
 }
 
