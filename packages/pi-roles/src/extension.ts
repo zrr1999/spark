@@ -5,13 +5,18 @@ import { Type } from "typebox";
 import {
   createDefaultRoleRegistry,
   createRoleSpec,
+  defaultProjectRoleModelSettingsStore,
   defaultProjectRoleStore,
-  defaultUserRoleModelBindingStore,
+  defaultUserRoleModelSettingsStore,
   defaultUserRoleStore,
   hydrateDefaultRoleRegistry,
   normalizeRoleRunMode,
+  resolveRoleModelSetting,
   runRole,
-  saveValidatedRoleModelBinding,
+  validateRoleModel,
+  type ResolvedRoleModelSetting,
+  type RoleModelSettingsEntry,
+  type RoleModelSettingsSource,
   type RoleRunMode,
   type RoleRunRef,
   type RoleSource,
@@ -193,13 +198,15 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         "get_role includePrompt",
       );
       const promptPreview = truncateInline(role.systemPrompt, 240);
-      const modelBinding = await defaultUserRoleModelBindingStore().get(role.ref);
+      const effectiveModel = await resolveRoleModelForRole(cwd, role);
+      const effectiveModelText = effectiveModel
+        ? `${effectiveModel.model} (${effectiveModel.source}${effectiveModel.selector ? ` selector=${effectiveModel.selector}` : ""})`
+        : `not set; save one with role({ action: "model_set" }) before non-interactive runs`;
       const lines = [
         `${role.id} (${role.ref})`,
         `source: ${role.source}`,
         `description: ${role.description}`,
-        `defaultModel: ${role.defaultModel ?? "none"}`,
-        `modelBinding: ${modelBinding ? `${modelBinding.model} (validated ${modelBinding.validatedAt})` : "not set; first actual run will ask for a model"}`,
+        `effectiveModel: ${effectiveModelText}`,
         `systemPrompt: ${role.systemPrompt.length} chars${includePrompt ? "" : `; preview=${JSON.stringify(promptPreview)}`}`,
       ];
       if (includePrompt) lines.push("", role.systemPrompt);
@@ -207,8 +214,8 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         content: [{ type: "text", text: lines.join("\n") }],
         details: {
           role: includePrompt
-            ? { ...compactRole(role), modelBinding, systemPrompt: role.systemPrompt }
-            : { ...compactRole(role), modelBinding },
+            ? { ...compactRole(role), effectiveModel, systemPrompt: role.systemPrompt }
+            : { ...compactRole(role), effectiveModel },
         },
       };
     },
@@ -226,7 +233,6 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       expectedUses: Type.Array(Type.String()),
       source: Type.Optional(Type.String({ description: "project | user. Defaults to project." })),
       allowedTools: Type.Optional(Type.Array(Type.String())),
-      defaultModel: Type.Optional(Type.String()),
     }),
     renderCall(args, theme) {
       return renderToolCall(
@@ -241,6 +247,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = requiredPiRolesCwd(ctx, "create_role");
+      rejectRoleSpecModelFields(params, "create_role");
       const source = normalizeWritableRoleSource(params.source);
       const proposal: RoleSpecProposal = {
         id: normalizeRequiredString(params.id, "create_role id"),
@@ -250,7 +257,6 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         rationale: normalizeRequiredString(params.rationale, "create_role rationale"),
         expectedUses: normalizeRequiredStringArray(params.expectedUses, "create_role expectedUses"),
         allowedTools: normalizeOptionalStringArray(params.allowedTools, "create_role allowedTools"),
-        defaultModel: normalizeOptionalString(params.defaultModel, "create_role defaultModel"),
         origin: { kind: "manual" },
       };
       const role = createRoleSpec(proposal);
@@ -393,13 +399,147 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     },
   });
 
+  registerRoleActionTool({
+    name: "model_list_roles",
+    label: "List Role Models",
+    description: "List persisted project/user role model settings.",
+    parameters: Type.Object({
+      source: Type.Optional(Type.String({ description: "project | user. Omit to list both." })),
+    }),
+    renderCall(args, theme) {
+      return renderToolCall(
+        "role_model_list",
+        [formatStringArg(args.source, { prefix: "source=" })],
+        theme,
+      );
+    },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = requiredPiRolesCwd(ctx, "role model_list");
+      const source = normalizeOptionalRoleModelSettingsSource(
+        params.source,
+        "role model_list source",
+      );
+      const entries = await loadRoleModelSettingEntries(cwd, source);
+      const lines = entries.map(
+        (entry) => `- [${entry.source}] ${entry.selector} -> ${entry.model}`,
+      );
+      return {
+        content: [
+          { type: "text", text: lines.length ? lines.join("\n") : "No role model settings." },
+        ],
+        details: { count: entries.length, entries },
+      };
+    },
+  });
+
+  registerRoleActionTool({
+    name: "model_get_role",
+    label: "Get Role Model",
+    description: "Resolve the effective model setting for one role.",
+    parameters: Type.Object({
+      role: Type.String({ description: "Role id or full role ref." }),
+      includeUser: Type.Optional(Type.Boolean({ description: "Also load user roles." })),
+    }),
+    renderCall(args, theme) {
+      return renderToolCall("role_model_get", [formatStringArg(args.role)], theme);
+    },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = requiredPiRolesCwd(ctx, "role model_get");
+      const role = await selectRoleForModelAction(cwd, params, "role model_get");
+      const resolved = await resolveRoleModelForRole(cwd, role);
+      const text = resolved
+        ? `Role model for ${role.id} (${role.ref}): ${resolved.model} source=${resolved.source}${resolved.selector ? ` selector=${resolved.selector}` : ""}`
+        : `No role model setting for ${role.id} (${role.ref}).`;
+      return {
+        content: [{ type: "text", text }],
+        details: { role: compactRole(role), model: resolved },
+      };
+    },
+  });
+
+  registerRoleActionTool({
+    name: "model_set_role",
+    label: "Set Role Model",
+    description: "Validate and save a project/user role model setting.",
+    parameters: Type.Object({
+      role: Type.String({ description: "Role id or full role ref." }),
+      model: Type.String({ description: "Concrete Pi model to validate and save." }),
+      source: Type.Optional(Type.String({ description: "project | user. Defaults to project." })),
+      includeUser: Type.Optional(Type.Boolean({ description: "Also load user roles." })),
+      piCommand: Type.Optional(Type.String({ description: "Pi executable for model validation." })),
+    }),
+    renderCall(args, theme) {
+      return renderToolCall(
+        "role_model_set",
+        [formatStringArg(args.role), formatStringArg(args.source, { fallback: "project" })],
+        theme,
+      );
+    },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = requiredPiRolesCwd(ctx, "role model_set");
+      const role = await selectRoleForModelAction(cwd, params, "role model_set");
+      const model = normalizeRequiredString(params.model, "role model_set model");
+      await validateRoleModel({
+        piCommand: normalizeOptionalString(params.piCommand, "role model_set piCommand") ?? "pi",
+        model,
+        cwd,
+      });
+      const source = normalizeRoleModelSettingsSource(params.source, "role model_set source");
+      const store = roleModelSettingsStoreForSource(cwd, source);
+      const entry = await store.save(role.ref, model);
+      const text = `Saved ${source} role model setting for ${role.id} (${role.ref}): ${entry.model}`;
+      return {
+        content: [{ type: "text", text }],
+        details: { role: compactRole(role), setting: entry },
+      };
+    },
+  });
+
+  registerRoleActionTool({
+    name: "model_delete_role",
+    label: "Delete Role Model",
+    description: "Delete project/user role model setting(s) for one role.",
+    parameters: Type.Object({
+      role: Type.String({ description: "Role id or full role ref." }),
+      source: Type.Optional(Type.String({ description: "project | user. Defaults to project." })),
+      includeUser: Type.Optional(Type.Boolean({ description: "Also load user roles." })),
+    }),
+    renderCall(args, theme) {
+      return renderToolCall(
+        "role_model_delete",
+        [formatStringArg(args.role), formatStringArg(args.source, { fallback: "project" })],
+        theme,
+      );
+    },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = requiredPiRolesCwd(ctx, "role model_delete");
+      const role = await selectRoleForModelAction(cwd, params, "role model_delete");
+      const source = normalizeRoleModelSettingsSource(params.source, "role model_delete source");
+      const store = roleModelSettingsStoreForSource(cwd, source);
+      const deleted: string[] = [];
+      for (const selector of roleModelActionSelectors(role)) {
+        if (await store.delete(selector)) deleted.push(selector);
+      }
+      const text = deleted.length
+        ? `Deleted ${source} role model setting(s) for ${role.id}: ${deleted.join(", ")}`
+        : `No ${source} role model settings matched ${role.id} (${role.ref}).`;
+      return {
+        content: [{ type: "text", text }],
+        details: { role: compactRole(role), source, deleted },
+      };
+    },
+  });
+
   registerPublicRoleTool({
     name: "role",
     label: "Role",
     description:
-      "Canonical role capability. Use action=list, get, create, or call instead of fragmented role tool names.",
+      "Canonical role capability. Use action=list, get, create, call, model_list, model_get, model_set, or model_delete instead of fragmented role tool names.",
     parameters: Type.Object({
-      action: Type.String({ description: "list | get | create | call" }),
+      action: Type.String({
+        description:
+          "list | get | create | call | model_list | model_get | model_set | model_delete",
+      }),
       role: Type.Optional(Type.String({ description: "Role id or ref for get/call." })),
       source: Type.Optional(Type.String({ description: "builtin | project | user." })),
       includeUser: Type.Optional(Type.Boolean({ description: "Also load user roles." })),
@@ -413,7 +553,6 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       rationale: Type.Optional(Type.String({ description: "Role creation rationale." })),
       expectedUses: Type.Optional(Type.Array(Type.String())),
       allowedTools: Type.Optional(Type.Array(Type.String())),
-      defaultModel: Type.Optional(Type.String()),
       instruction: Type.Optional(Type.String({ description: "Instruction for call." })),
       mode: Type.Optional(Type.String({ description: "fresh | forked for call." })),
       piCommand: Type.Optional(Type.String()),
@@ -444,25 +583,127 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
   });
 }
 
-type RoleAction = "list" | "get" | "create" | "call";
+type RoleAction =
+  | "list"
+  | "get"
+  | "create"
+  | "call"
+  | "model_list"
+  | "model_get"
+  | "model_set"
+  | "model_delete";
 
 function normalizeRoleAction(value: unknown): RoleAction {
-  if (value === "list" || value === "get" || value === "create" || value === "call") return value;
-  throw new Error("role.action must be list, get, create, or call");
+  if (
+    value === "list" ||
+    value === "get" ||
+    value === "create" ||
+    value === "call" ||
+    value === "model_list" ||
+    value === "model_get" ||
+    value === "model_set" ||
+    value === "model_delete"
+  )
+    return value;
+  throw new Error(
+    "role.action must be list, get, create, call, model_list, model_get, model_set, or model_delete",
+  );
 }
 
 function roleToolNameForAction(
   action: RoleAction,
-): "list_roles" | "get_role" | "create_role" | "call_role" {
+):
+  | "list_roles"
+  | "get_role"
+  | "create_role"
+  | "call_role"
+  | "model_list_roles"
+  | "model_get_role"
+  | "model_set_role"
+  | "model_delete_role" {
   if (action === "list") return "list_roles";
   if (action === "get") return "get_role";
   if (action === "create") return "create_role";
-  return "call_role";
+  if (action === "call") return "call_role";
+  if (action === "model_list") return "model_list_roles";
+  if (action === "model_get") return "model_get_role";
+  if (action === "model_set") return "model_set_role";
+  return "model_delete_role";
 }
 
 function stripRoleAction(params: Record<string, unknown>): Record<string, unknown> {
   const { action: _action, ...rest } = params;
   return Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined));
+}
+
+async function selectRoleForModelAction(
+  cwd: string,
+  params: Record<string, unknown>,
+  fieldPrefix: string,
+): Promise<RoleSpec> {
+  const registry = createDefaultRoleRegistry();
+  const includeUser = normalizeOptionalBoolean(
+    params.includeUser,
+    false,
+    `${fieldPrefix} includeUser`,
+  );
+  await hydrateDefaultRoleRegistry(registry, cwd, { includeUser });
+  return registry.select(normalizeRequiredString(params.role, `${fieldPrefix} role`));
+}
+
+async function loadRoleModelSettingEntries(
+  cwd: string,
+  source: RoleModelSettingsSource | undefined,
+): Promise<RoleModelSettingsEntry[]> {
+  const stores = source
+    ? [roleModelSettingsStoreForSource(cwd, source)]
+    : [defaultProjectRoleModelSettingsStore(cwd), defaultUserRoleModelSettingsStore()];
+  const entries = await Promise.all(stores.map((store) => store.loadAll()));
+  return entries.flat();
+}
+
+function roleModelSettingsStoreForSource(cwd: string, source: RoleModelSettingsSource) {
+  return source === "project"
+    ? defaultProjectRoleModelSettingsStore(cwd)
+    : defaultUserRoleModelSettingsStore();
+}
+
+async function resolveRoleModelForRole(
+  cwd: string,
+  role: RoleSpec,
+): Promise<ResolvedRoleModelSetting | undefined> {
+  return resolveRoleModelSetting({
+    roleRef: role.ref,
+    roleId: role.id,
+    roleName: role.id,
+    projectStore: defaultProjectRoleModelSettingsStore(cwd),
+    userStore: defaultUserRoleModelSettingsStore(),
+  });
+}
+
+function roleModelActionSelectors(role: RoleSpec): string[] {
+  return [...new Set([role.ref, role.ref.slice("role:".length), role.id])];
+}
+
+function normalizeRoleModelSettingsSource(value: unknown, field: string): RoleModelSettingsSource {
+  const source = normalizeOptionalRoleModelSettingsSource(value, field) ?? "project";
+  return source;
+}
+
+function normalizeOptionalRoleModelSettingsSource(
+  value: unknown,
+  field: string,
+): RoleModelSettingsSource | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value === "project" || value === "user") return value;
+  throw new Error(`${field} must be project or user`);
+}
+
+function rejectRoleSpecModelFields(params: Record<string, unknown>, toolName: string): void {
+  for (const field of ["defaultModel", "model"]) {
+    if (Object.hasOwn(params, field))
+      throw new Error(`${toolName} ${field} is not supported; use role model settings`);
+  }
 }
 
 function requiredPiRolesCwd(ctx: { cwd?: string }, toolName: string): string {
@@ -481,29 +722,36 @@ async function resolveRoleModelForCall(input: {
     input?: (title: string, defaultValue?: string) => Promise<string | undefined>;
   };
 }): Promise<string | undefined> {
-  const store = defaultUserRoleModelBindingStore();
-  const existing = await store.get(input.role.ref);
-  if (existing) return existing.model;
-  if (!input.actualRun) return input.explicitModel?.trim() || undefined;
+  const resolved = await resolveRoleModelSetting({
+    explicitModel: input.explicitModel,
+    roleRef: input.role.ref,
+    roleId: input.role.id,
+    roleName: input.role.id,
+    projectStore: defaultProjectRoleModelSettingsStore(input.cwd),
+    userStore: defaultUserRoleModelSettingsStore(),
+  });
+  if (resolved) {
+    if (resolved.source === "explicit")
+      await validateRoleModel({
+        piCommand: input.piCommand,
+        model: resolved.model,
+        cwd: input.cwd,
+      });
+    return resolved.model;
+  }
+  if (!input.actualRun) return undefined;
 
-  const selected =
-    input.explicitModel?.trim() ||
-    (await input.ui?.input?.(`Choose Pi model for role ${input.role.id}`, input.role.defaultModel));
+  const selected = await input.ui?.input?.(`Choose Pi model for role ${input.role.id}`);
   const model = selected?.trim();
   if (!model) {
     throw new Error(
-      `role model binding required for ${input.role.id} (${input.role.ref}); provide model or rerun with an interactive UI`,
+      `role model setting required for ${input.role.id} (${input.role.ref}); provide model or save one with role({ action: "model_set" })`,
     );
   }
-  const binding = await saveValidatedRoleModelBinding({
-    store,
-    roleRef: input.role.ref,
-    model,
-    piCommand: input.piCommand,
-    cwd: input.cwd,
-  });
-  input.ui?.notify?.(`Saved model binding for role ${input.role.id}: ${binding.model}`, "success");
-  return binding.model;
+  await validateRoleModel({ piCommand: input.piCommand, model, cwd: input.cwd });
+  const entry = await defaultUserRoleModelSettingsStore().save(input.role.ref, model);
+  input.ui?.notify?.(`Saved model setting for role ${input.role.id}: ${entry.model}`, "success");
+  return entry.model;
 }
 
 function normalizeCallRoleToolParams(params: Record<string, unknown>): CallRoleToolParams {
@@ -612,7 +860,6 @@ function compactRole(role: RoleSpec) {
     description: role.description,
     systemPromptChars: role.systemPrompt.length,
     allowedTools: role.allowedTools,
-    defaultModel: role.defaultModel,
   };
 }
 

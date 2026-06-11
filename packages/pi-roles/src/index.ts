@@ -23,7 +23,6 @@ export interface RoleSpec {
   description: string;
   systemPrompt: string;
   allowedTools?: string[];
-  defaultModel?: string;
   origin?: RoleOrigin;
   createdAt: string;
   updatedAt: string;
@@ -38,7 +37,6 @@ export interface RoleSpecProposal {
   rationale: string;
   expectedUses: string[];
   allowedTools?: string[];
-  defaultModel?: string;
   origin?: RoleOrigin;
 }
 
@@ -146,8 +144,6 @@ const ROLE_FRONTMATTER_KEYS = new Set([
   "source",
   "allowedTools",
   "tools",
-  "defaultModel",
-  "model",
   "origin",
   "createdAt",
   "updatedAt",
@@ -370,38 +366,46 @@ export function defaultUserRoleStore(home = homedir()): MarkdownRoleStore {
   return new MarkdownRoleStore({ rootDir: join(home, ".agents", "roles"), source: "user" });
 }
 
-export interface RoleModelBinding {
-  roleRef: RoleRef;
+export type RoleModelSettingsSource = "project" | "user";
+export type ResolvedRoleModelSource = "explicit" | RoleModelSettingsSource;
+
+export interface RoleModelSettingsEntry {
+  selector: string;
   model: string;
-  source: "user";
-  validatedAt: string;
-  updatedAt: string;
-  validationCommand: string;
+  source: RoleModelSettingsSource;
 }
 
-interface RoleModelBindingFile {
+interface RoleModelSettingsFile {
   version: 1;
-  bindings: RoleModelBinding[];
+  roleModels: Record<string, string>;
 }
 
-export class RoleModelBindingStoreFormatError extends Error {
+export interface ResolvedRoleModelSetting {
+  model: string;
+  source: ResolvedRoleModelSource;
+  selector?: string;
+}
+
+export class RoleModelSettingsStoreFormatError extends Error {
   readonly filePath: string;
 
   constructor(filePath: string, message: string) {
-    super(`invalid role model binding store: ${filePath}: ${message}`);
-    this.name = "RoleModelBindingStoreFormatError";
+    super(`invalid role model settings store: ${filePath}: ${message}`);
+    this.name = "RoleModelSettingsStoreFormatError";
     this.filePath = filePath;
   }
 }
 
-export class RoleModelBindingStore {
+export class RoleModelSettingsStore {
   readonly filePath: string;
+  readonly source: RoleModelSettingsSource;
 
-  constructor(filePath: string) {
+  constructor(filePath: string, source: RoleModelSettingsSource) {
     this.filePath = filePath;
+    this.source = source;
   }
 
-  async loadAll(): Promise<RoleModelBinding[]> {
+  async loadAll(): Promise<RoleModelSettingsEntry[]> {
     let raw: string;
     try {
       raw = await readFile(this.filePath, "utf8");
@@ -409,38 +413,159 @@ export class RoleModelBindingStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
     }
-    const parsed = parseRoleModelBindingFileJson(raw, this.filePath);
-    assertRoleModelBindingFile(parsed, this.filePath);
-    return parsed.bindings;
+    const parsed = parseRoleModelSettingsFileJson(raw, this.filePath);
+    assertRoleModelSettingsFile(parsed, this.filePath);
+    return Object.entries(parsed.roleModels)
+      .map(([selector, model]) => ({ selector, model, source: this.source }))
+      .sort((left, right) => left.selector.localeCompare(right.selector));
   }
 
-  async get(roleRef: string): Promise<RoleModelBinding | undefined> {
-    const normalized = normalizeRoleRef(roleRef);
-    return (await this.loadAll()).find((binding) => binding.roleRef === normalized);
+  async get(selector: string): Promise<RoleModelSettingsEntry | undefined> {
+    const normalized = normalizeRoleModelSelector(selector, "selector");
+    return (await this.loadAll()).find((entry) => entry.selector === normalized);
   }
 
-  async save(binding: RoleModelBinding): Promise<void> {
-    if (!binding.model.trim()) throw new Error("role model binding model is required");
-    const normalized: RoleModelBinding = {
-      ...binding,
-      roleRef: normalizeRoleRef(binding.roleRef),
-      model: binding.model.trim(),
-    };
-    const bindings = (await this.loadAll()).filter((entry) => entry.roleRef !== normalized.roleRef);
-    bindings.push(normalized);
-    bindings.sort((a, b) => a.roleRef.localeCompare(b.roleRef));
-    await mkdir(dirname(this.filePath), { recursive: true });
-    await atomicWriteRoleModelBindingFile(
-      this.filePath,
-      `${JSON.stringify({ version: 1, bindings } satisfies RoleModelBindingFile, null, 2)}\n`,
+  async save(selector: string, model: string): Promise<RoleModelSettingsEntry> {
+    const normalizedSelector = normalizeRoleModelSelector(selector, "selector");
+    const normalizedModel = normalizeRoleModelName(model, "model");
+    const entries = await this.loadAll();
+    const roleModels: Record<string, string> = {};
+    for (const entry of entries) roleModels[entry.selector] = entry.model;
+    roleModels[normalizedSelector] = normalizedModel;
+    await writeRoleModelSettingsFile(this.filePath, roleModels);
+    return { selector: normalizedSelector, model: normalizedModel, source: this.source };
+  }
+
+  async delete(selector: string): Promise<boolean> {
+    const normalizedSelector = normalizeRoleModelSelector(selector, "selector");
+    const entries = await this.loadAll();
+    const roleModels: Record<string, string> = {};
+    let deleted = false;
+    for (const entry of entries) {
+      if (entry.selector === normalizedSelector) {
+        deleted = true;
+        continue;
+      }
+      roleModels[entry.selector] = entry.model;
+    }
+    if (deleted) await writeRoleModelSettingsFile(this.filePath, roleModels);
+    return deleted;
+  }
+}
+
+export function defaultProjectRoleModelSettingsStore(cwd: string): RoleModelSettingsStore {
+  return new RoleModelSettingsStore(join(cwd, ".spark", "role-model-settings.json"), "project");
+}
+
+export function defaultUserRoleModelSettingsStore(
+  home = process.env.PI_ROLES_HOME || homedir(),
+): RoleModelSettingsStore {
+  return new RoleModelSettingsStore(join(home, ".agents", "role-model-settings.json"), "user");
+}
+
+export async function resolveRoleModelSetting(input: {
+  explicitModel?: string;
+  roleRef: string;
+  roleId?: string;
+  roleName?: string;
+  projectStore?: RoleModelSettingsStore;
+  userStore?: RoleModelSettingsStore;
+}): Promise<ResolvedRoleModelSetting | undefined> {
+  const explicitModel = input.explicitModel?.trim();
+  if (explicitModel) return { model: explicitModel, source: "explicit" };
+  const roleRef = normalizeRoleRef(input.roleRef);
+  const selectors = roleModelSelectors({ roleRef, roleId: input.roleId, roleName: input.roleName });
+  for (const store of [input.projectStore, input.userStore]) {
+    if (!store) continue;
+    const entries = await store.loadAll();
+    for (const selector of selectors) {
+      const entry = entries.find((candidate) => candidate.selector === selector);
+      if (entry) return { model: entry.model, source: entry.source, selector: entry.selector };
+    }
+  }
+  return undefined;
+}
+
+function roleModelSelectors(input: {
+  roleRef: RoleRef;
+  roleId?: string;
+  roleName?: string;
+}): string[] {
+  const candidates = [
+    input.roleRef,
+    input.roleRef.slice("role:".length),
+    input.roleId,
+    input.roleName,
+  ];
+  return [
+    ...new Set(
+      candidates.map((value) => value?.trim()).filter((value): value is string => Boolean(value)),
+    ),
+  ];
+}
+
+function normalizeRoleModelSelector(value: string, field: string): string {
+  if (typeof value !== "string" || !value.trim())
+    throw new Error(`role model ${field} is required`);
+  return value.trim();
+}
+
+function normalizeRoleModelName(value: string, field: string): string {
+  if (typeof value !== "string" || !value.trim())
+    throw new Error(`role model ${field} is required`);
+  return value.trim();
+}
+
+function parseRoleModelSettingsFileJson(text: string, filePath: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new RoleModelSettingsStoreFormatError(
+      filePath,
+      `not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }
 
-export function defaultUserRoleModelBindingStore(
-  home = process.env.PI_ROLES_HOME || homedir(),
-): RoleModelBindingStore {
-  return new RoleModelBindingStore(join(home, ".agents", "role-model-bindings.json"));
+function assertRoleModelSettingsFile(
+  value: unknown,
+  filePath: string,
+): asserts value is RoleModelSettingsFile {
+  if (!isRecord(value)) {
+    throw new RoleModelSettingsStoreFormatError(filePath, "JSON root must be an object");
+  }
+  if (value.version !== 1) {
+    throw new RoleModelSettingsStoreFormatError(filePath, "version must be 1");
+  }
+  if (!isRecord(value.roleModels)) {
+    throw new RoleModelSettingsStoreFormatError(filePath, "roleModels must be an object");
+  }
+  for (const [selector, model] of Object.entries(value.roleModels)) {
+    if (!selector.trim())
+      throw new RoleModelSettingsStoreFormatError(
+        filePath,
+        "roleModels selectors must be non-empty",
+      );
+    if (typeof model !== "string" || !model.trim())
+      throw new RoleModelSettingsStoreFormatError(
+        filePath,
+        `roleModels.${selector} must be a non-empty string`,
+      );
+  }
+}
+
+async function writeRoleModelSettingsFile(
+  filePath: string,
+  roleModels: Record<string, string>,
+): Promise<void> {
+  const sorted = Object.fromEntries(
+    Object.entries(roleModels).sort(([left], [right]) => left.localeCompare(right)),
+  );
+  await mkdir(dirname(filePath), { recursive: true });
+  await atomicWriteFile(
+    filePath,
+    `${JSON.stringify({ version: 1, roleModels: sorted } satisfies RoleModelSettingsFile, null, 2)}\n`,
+  );
 }
 
 export async function validateRoleModel(input: {
@@ -494,18 +619,7 @@ function isNoMatchingModelOutput(output: string): boolean {
   return /no\s+models?\s+(?:found\s+)?matching\b/i.test(output);
 }
 
-function parseRoleModelBindingFileJson(text: string, filePath: string): unknown {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch (error) {
-    throw new RoleModelBindingStoreFormatError(
-      filePath,
-      `not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-}
-
-async function atomicWriteRoleModelBindingFile(filePath: string, data: string): Promise<void> {
+async function atomicWriteFile(filePath: string, data: string): Promise<void> {
   const tempPath = join(
     dirname(filePath),
     `.${basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
@@ -533,89 +647,6 @@ function unknownErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function assertRoleModelBindingFile(
-  value: unknown,
-  filePath: string,
-): asserts value is RoleModelBindingFile {
-  if (!isRecord(value)) {
-    throw new RoleModelBindingStoreFormatError(filePath, "JSON root must be an object");
-  }
-  if (value.version !== 1) {
-    throw new RoleModelBindingStoreFormatError(filePath, "version must be 1");
-  }
-  if (!Array.isArray(value.bindings)) {
-    throw new RoleModelBindingStoreFormatError(filePath, "bindings must be an array");
-  }
-  value.bindings.forEach((binding, index) => {
-    assertRoleModelBinding(binding, filePath, index);
-  });
-}
-
-function assertRoleModelBinding(
-  value: unknown,
-  filePath: string,
-  index: number,
-): asserts value is RoleModelBinding {
-  if (!isRecord(value)) {
-    throw new RoleModelBindingStoreFormatError(filePath, `bindings[${index}] must be an object`);
-  }
-  if (typeof value.roleRef !== "string" || !value.roleRef.startsWith("role:")) {
-    throw new RoleModelBindingStoreFormatError(
-      filePath,
-      `bindings[${index}].roleRef must be a role ref`,
-    );
-  }
-  if (typeof value.model !== "string" || !value.model.trim()) {
-    throw new RoleModelBindingStoreFormatError(
-      filePath,
-      `bindings[${index}].model must be a non-empty string`,
-    );
-  }
-  if (value.source !== "user") {
-    throw new RoleModelBindingStoreFormatError(filePath, `bindings[${index}].source must be user`);
-  }
-  if (typeof value.validatedAt !== "string") {
-    throw new RoleModelBindingStoreFormatError(
-      filePath,
-      `bindings[${index}].validatedAt must be a string`,
-    );
-  }
-  if (typeof value.updatedAt !== "string") {
-    throw new RoleModelBindingStoreFormatError(
-      filePath,
-      `bindings[${index}].updatedAt must be a string`,
-    );
-  }
-  if (typeof value.validationCommand !== "string") {
-    throw new RoleModelBindingStoreFormatError(
-      filePath,
-      `bindings[${index}].validationCommand must be a string`,
-    );
-  }
-}
-
-export async function saveValidatedRoleModelBinding(input: {
-  store?: RoleModelBindingStore;
-  roleRef: RoleRef;
-  model: string;
-  piCommand: string;
-  cwd?: string;
-  now?: () => string;
-}): Promise<RoleModelBinding> {
-  await validateRoleModel({ piCommand: input.piCommand, model: input.model, cwd: input.cwd });
-  const now = input.now?.() ?? nowIso();
-  const binding: RoleModelBinding = {
-    roleRef: normalizeRoleRef(input.roleRef),
-    model: input.model.trim(),
-    source: "user",
-    validatedAt: now,
-    updatedAt: now,
-    validationCommand: `${input.piCommand} --list-models ${input.model.trim()}`,
-  };
-  await (input.store ?? defaultUserRoleModelBindingStore()).save(binding);
-  return binding;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -641,7 +672,6 @@ export function createRoleSpec(proposal: RoleSpecProposal, now = nowIso()): Role
     description: proposal.description,
     systemPrompt: proposal.systemPrompt,
     allowedTools: proposal.allowedTools,
-    defaultModel: proposal.defaultModel,
     origin: proposal.origin,
     createdAt: now,
     updatedAt: now,
@@ -738,8 +768,6 @@ export function parseRoleSpecMarkdown(
     systemPrompt,
     allowedTools:
       arrayFrontmatter(frontmatter, "allowedTools") ?? arrayFrontmatter(frontmatter, "tools"),
-    defaultModel:
-      stringFrontmatter(frontmatter, "defaultModel") ?? stringFrontmatter(frontmatter, "model"),
     origin,
     createdAt: stringFrontmatter(frontmatter, "createdAt") ?? now,
     updatedAt: stringFrontmatter(frontmatter, "updatedAt") ?? now,
@@ -756,7 +784,6 @@ export function serializeRoleSpecMarkdown(role: RoleSpec): string {
     source: role.source,
   };
   if (role.allowedTools?.length) frontmatter.allowedTools = role.allowedTools;
-  if (role.defaultModel) frontmatter.defaultModel = role.defaultModel;
   if (role.origin) frontmatter.origin = role.origin;
   frontmatter.createdAt = role.createdAt;
   frontmatter.updatedAt = role.updatedAt;
@@ -781,6 +808,8 @@ function parseSimpleYaml(raw: string): Record<string, unknown> {
     const match = /^(\w[\w-]*):\s*(.*)$/.exec(line);
     if (!match) continue;
     const [, key, rest] = match;
+    if (key === "defaultModel" || key === "model")
+      throw new Error("role spec model fields are not supported; use role model settings");
     if (!ROLE_FRONTMATTER_KEYS.has(key)) continue;
     if (!rest) {
       const values: string[] = [];

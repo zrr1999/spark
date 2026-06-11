@@ -7,22 +7,25 @@ import test from "node:test";
 import {
   cancelRoleRun,
   createRoleSpec,
+  defaultProjectRoleModelSettingsStore,
   defaultProjectRoleStore,
-  defaultUserRoleModelBindingStore,
+  defaultUserRoleModelSettingsStore,
   hydrateDefaultRoleRegistry,
   listActiveRoleRuns,
   normalizeRoleRef,
   normalizeRoleRunMode,
   normalizeRoleSource,
   parsePiJsonlEvents,
+  parseRoleSpecMarkdown,
   RoleRegistry,
-  RoleModelBindingStoreFormatError,
+  resolveRoleModelSetting,
+  RoleModelSettingsStoreFormatError,
   RoleRunCancelledError,
   RoleRunTimeoutError,
   runRole,
-  saveValidatedRoleModelBinding,
+  validateRoleModel,
 } from "pi-roles";
-import { buildRoleRunArgs } from "spark-runtime";
+import { buildRoleRunArgs, runRoleInstructionOnly } from "spark-runtime";
 
 void test("pi-roles builds fresh JSON Pi role args without accidental fork session reuse", () => {
   const args = buildRoleRunArgs({
@@ -147,8 +150,8 @@ void test("pi-roles default registry ignores legacy agent-shaped role stores", a
   }
 });
 
-void test("pi-roles validates and persists user role model bindings", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-roles-model-binding-"));
+void test("pi-roles validates model names before saving settings", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-model-validation-"));
   try {
     const fakePi = join(dir, "fake-pi.cjs");
     await writeFile(
@@ -163,116 +166,152 @@ void test("pi-roles validates and persists user role model bindings", async () =
       "utf8",
     );
     await chmod(fakePi, 0o755);
-    const store = defaultUserRoleModelBindingStore(dir);
 
-    const binding = await saveValidatedRoleModelBinding({
-      store,
-      roleRef: "role:builtin-worker",
-      model: "openai/gpt-5.5",
-      piCommand: fakePi,
-      cwd: dir,
-      now: () => "2026-05-26T00:00:00.000Z",
-    });
-
-    assert.equal(binding.model, "openai/gpt-5.5");
-    assert.equal((await store.get("role:builtin-worker"))?.model, "openai/gpt-5.5");
+    await validateRoleModel({ piCommand: fakePi, model: "openai/gpt-5.5", cwd: dir });
     await assert.rejects(
-      saveValidatedRoleModelBinding({
-        store,
-        roleRef: "role:builtin-reviewer",
-        model: "missing/model",
-        piCommand: fakePi,
-        cwd: dir,
-      }),
+      validateRoleModel({ piCommand: fakePi, model: "missing/model", cwd: dir }),
       /model validation failed/,
     );
-    assert.equal(await store.get("role:builtin-reviewer"), undefined);
     await assert.rejects(
-      saveValidatedRoleModelBinding({
-        store,
-        roleRef: "role:builtin-planner",
-        model: "missing-zero/model",
-        piCommand: fakePi,
-        cwd: dir,
-      }),
+      validateRoleModel({ piCommand: fakePi, model: "missing-zero/model", cwd: dir }),
       /No models matching missing-zero\/model/,
     );
-    assert.equal(await store.get("role:builtin-planner"), undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-void test("pi-roles rejects malformed role model binding stores", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-roles-model-binding-invalid-"));
+void test("pi-roles resolves role model settings with project and user precedence", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-model-settings-"));
   try {
-    const store = defaultUserRoleModelBindingStore(dir);
+    const userHome = join(dir, "home");
+    const projectStore = defaultProjectRoleModelSettingsStore(dir);
+    const userStore = defaultUserRoleModelSettingsStore(userHome);
+
+    await userStore.save("role:builtin-worker", "user-model");
+    await userStore.save("reviewer", "user-reviewer-model");
+    await projectStore.save("builtin-worker", "project-model");
+
+    assert.deepEqual(
+      await resolveRoleModelSetting({
+        roleRef: "role:builtin-worker",
+        projectStore,
+        userStore,
+      }),
+      { model: "project-model", source: "project", selector: "builtin-worker" },
+    );
+    assert.deepEqual(
+      await resolveRoleModelSetting({
+        roleRef: "role:builtin-reviewer",
+        roleName: "reviewer",
+        projectStore,
+        userStore,
+      }),
+      { model: "user-reviewer-model", source: "user", selector: "reviewer" },
+    );
+    assert.equal(
+      await resolveRoleModelSetting({
+        roleRef: "role:builtin-planner",
+        projectStore,
+        userStore,
+      }),
+      undefined,
+    );
+    assert.deepEqual(
+      await resolveRoleModelSetting({
+        explicitModel: "explicit-model",
+        roleRef: "role:builtin-worker",
+        projectStore,
+        userStore,
+      }),
+      { model: "explicit-model", source: "explicit" },
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark runtime role dispatch fails loudly without model settings", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-runtime-missing-model-"));
+  const previousHome = process.env.PI_ROLES_HOME;
+  process.env.PI_ROLES_HOME = join(dir, "home");
+  try {
+    const registry = new RoleRegistry();
+    await assert.rejects(
+      () =>
+        runRoleInstructionOnly(
+          registry,
+          { roleRef: "role:builtin-worker", instruction: "Run without a model setting." },
+          { dryRun: false, cwd: dir, piCommand: "pi", timeoutMs: 5_000 },
+        ),
+      /role model setting required for role:builtin-worker/,
+    );
+  } finally {
+    if (previousHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousHome;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("pi-roles rejects malformed role model settings stores", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-model-settings-invalid-"));
+  try {
+    const store = defaultProjectRoleModelSettingsStore(dir);
     assert.deepEqual(await store.loadAll(), []);
-    await mkdir(join(dir, ".agents"), { recursive: true });
+    await mkdir(join(dir, ".spark"), { recursive: true });
 
     await writeFile(store.filePath, "{not-json", "utf8");
     await assert.rejects(
       () => store.loadAll(),
       (error) =>
-        error instanceof RoleModelBindingStoreFormatError &&
+        error instanceof RoleModelSettingsStoreFormatError &&
         error.filePath === store.filePath &&
         /not valid JSON/.test(error.message),
     );
 
-    await writeFile(store.filePath, "[]\n", "utf8");
+    await writeFile(store.filePath, `${JSON.stringify({ version: 1, roleModels: [] })}\n`, "utf8");
     await assert.rejects(
       () => store.loadAll(),
       (error) =>
-        error instanceof RoleModelBindingStoreFormatError &&
+        error instanceof RoleModelSettingsStoreFormatError &&
         error.filePath === store.filePath &&
-        /JSON root must be an object/.test(error.message),
-    );
-
-    await writeFile(store.filePath, `${JSON.stringify({ version: 2, bindings: [] })}\n`, "utf8");
-    await assert.rejects(
-      () => store.loadAll(),
-      (error) =>
-        error instanceof RoleModelBindingStoreFormatError &&
-        error.filePath === store.filePath &&
-        /version must be 1/.test(error.message),
-    );
-
-    await writeFile(store.filePath, `${JSON.stringify({ version: 1, bindings: {} })}\n`, "utf8");
-    await assert.rejects(
-      () => store.loadAll(),
-      (error) =>
-        error instanceof RoleModelBindingStoreFormatError &&
-        error.filePath === store.filePath &&
-        /bindings must be an array/.test(error.message),
+        /roleModels must be an object/.test(error.message),
     );
 
     await writeFile(
       store.filePath,
-      `${JSON.stringify({
-        version: 1,
-        bindings: [
-          {
-            roleRef: "role:builtin-worker",
-            model: "",
-            source: "user",
-            validatedAt: "2026-05-28T00:00:00.000Z",
-            updatedAt: "2026-05-28T00:00:00.000Z",
-            validationCommand: "pi --list-models ",
-          },
-        ],
-      })}\n`,
+      `${JSON.stringify({ version: 1, roleModels: { worker: "" } })}\n`,
       "utf8",
     );
     await assert.rejects(
       () => store.loadAll(),
       (error) =>
-        error instanceof RoleModelBindingStoreFormatError &&
+        error instanceof RoleModelSettingsStoreFormatError &&
         error.filePath === store.filePath &&
-        /bindings\[0\]\.model must be a non-empty string/.test(error.message),
+        /roleModels\.worker must be a non-empty string/.test(error.message),
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+void test("pi-roles rejects role spec model frontmatter", () => {
+  assert.throws(
+    () =>
+      parseRoleSpecMarkdown(
+        "---\nid: model-role\ndescription: Invalid model field\ndefaultModel: test/model\n---\n\nYou are invalid.",
+        { source: "project", id: "model-role" },
+      ),
+    /role spec model fields are not supported; use role model settings/,
+  );
+  assert.throws(
+    () =>
+      parseRoleSpecMarkdown(
+        "---\nid: model-role\ndescription: Invalid model field\nmodel: test/model\n---\n\nYou are invalid.",
+        { source: "project", id: "model-role" },
+      ),
+    /role spec model fields are not supported; use role model settings/,
+  );
 });
 
 void test("pi-roles launches Pi, captures JSONL events, and records run metadata", async () => {

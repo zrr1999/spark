@@ -91,6 +91,109 @@ void test("role action tool dispatches canonical list, get, and create actions",
   }
 });
 
+void test("role action tool manages role model settings", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-model-action-tool-"));
+  const previousBindingHome = process.env.PI_ROLES_HOME;
+  process.env.PI_ROLES_HOME = dir;
+  try {
+    const fakePi = join(dir, "fake-pi.cjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "const args = process.argv.slice(2);",
+        "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
+        "if (!args.includes('--print')) process.exit(10);",
+        "if (!args.includes('--model') || args[args.indexOf('--model') + 1] !== 'test/model') process.exit(11);",
+        "process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Fake worker result.' }] }, args }) + '\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+    const tools = registerRoleToolsForTest();
+
+    const saved = await executeRoleTool(
+      tools,
+      "role",
+      {
+        action: "model_set",
+        role: "worker",
+        model: "test/model",
+        source: "project",
+        piCommand: fakePi,
+      },
+      dir,
+    );
+    assert.match(saved.content[0]?.text ?? "", /Saved project role model setting for worker/);
+
+    const got = await executeRoleTool(tools, "role", { action: "model_get", role: "worker" }, dir);
+    assert.match(got.content[0]?.text ?? "", /test\/model source=project/);
+    assert.equal(
+      (got.details?.model as { selector?: string } | undefined)?.selector,
+      "role:builtin-worker",
+    );
+
+    const listed = await executeRoleTool(
+      tools,
+      "role",
+      { action: "model_list", source: "project" },
+      dir,
+    );
+    assert.match(listed.content[0]?.text ?? "", /role:builtin-worker -> test\/model/);
+
+    const called = await executeRoleTool(
+      tools,
+      "role",
+      {
+        action: "call",
+        role: "worker",
+        instruction: "Run with the saved project role model setting.",
+        piCommand: fakePi,
+        timeoutMs: 5_000,
+      },
+      dir,
+    );
+    assert.match(called.content[0]?.text ?? "", /Role call succeeded: worker/);
+    assert.match(called.content[0]?.text ?? "", /model=test\/model/);
+
+    const deleted = await executeRoleTool(
+      tools,
+      "role",
+      { action: "model_delete", role: "worker", source: "project" },
+      dir,
+    );
+    assert.match(deleted.content[0]?.text ?? "", /Deleted project role model setting/);
+
+    const afterDelete = await executeRoleTool(
+      tools,
+      "role",
+      { action: "model_get", role: "worker" },
+      dir,
+    );
+    assert.match(afterDelete.content[0]?.text ?? "", /No role model setting/);
+
+    await assert.rejects(
+      executeRoleTool(
+        tools,
+        "role",
+        {
+          action: "model_set",
+          role: "worker",
+          model: "missing/model",
+          source: "project",
+          piCommand: fakePi,
+        },
+        dir,
+      ),
+      /model validation failed/,
+    );
+  } finally {
+    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousBindingHome;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("role spec tools keep patch presets out of builtin role lookup", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-roles-no-patcher-"));
   try {
@@ -429,13 +532,24 @@ void test("pi-roles tools reject invalid explicit parameters instead of using de
   await assert.rejects(
     executeRoleTool(tools, "create_role", {
       id: "bad-model",
-      description: "Invalid model should fail.",
+      description: "Model fields belong in role model settings.",
       systemPrompt: "Do not write this role.",
       rationale: "Parameter validation should be explicit.",
       expectedUses: ["validation"],
-      defaultModel: 42,
+      defaultModel: "test/model",
     }),
-    /create_role defaultModel must be a string/,
+    /create_role defaultModel is not supported; use role model settings/,
+  );
+  await assert.rejects(
+    executeRoleTool(tools, "create_role", {
+      id: "bad-model-alias",
+      description: "Model fields belong in role model settings.",
+      systemPrompt: "Do not write this role.",
+      rationale: "Parameter validation should be explicit.",
+      expectedUses: ["validation"],
+      model: "test/model",
+    }),
+    /create_role model is not supported; use role model settings/,
   );
   await assert.rejects(
     executeCallRole(tools, {
@@ -566,6 +680,14 @@ function canonicalRoleToolCall(
       return { name: "role", params: { action: "create", ...params } };
     case "call_role":
       return { name: "role", params: { action: "call", ...params } };
+    case "model_list_roles":
+      return { name: "role", params: { action: "model_list", ...params } };
+    case "model_get_role":
+      return { name: "role", params: { action: "model_get", ...params } };
+    case "model_set_role":
+      return { name: "role", params: { action: "model_set", ...params } };
+    case "model_delete_role":
+      return { name: "role", params: { action: "model_delete", ...params } };
     default:
       throw new Error(`unknown test role tool: ${name}`);
   }
