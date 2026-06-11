@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { builtinRoleRef, runRole, type RoleRegistry, type RoleRunResult } from "pi-roles";
+import {
+  builtinRoleRef,
+  defaultProjectRoleModelSettingsStore,
+  defaultUserRoleModelSettingsStore,
+  resolveRoleModelSetting,
+  runRole,
+  type RoleRegistry,
+  type RoleRunResult,
+} from "pi-roles";
 import {
   newRef,
   nowIso,
@@ -40,10 +48,18 @@ export interface GoalReviewInput {
       claimed: number;
       statusCounts: Record<string, number>;
     };
+    readyTasks?: Array<{ ref: string; name?: string; title: string; status: string; kind: string }>;
+    unfinishedTasks?: Array<{
+      ref: string;
+      name?: string;
+      title: string;
+      status: string;
+      kind: string;
+    }>;
   };
   goalId: string;
   objective: string;
-  status: "active" | "paused" | "complete";
+  status: "active" | "paused" | "budgetLimited" | "complete";
   requestedStatus: "paused" | "complete";
   reason?: string;
   evidenceRefs: ArtifactRef[];
@@ -146,11 +162,22 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
     const role = this.#registry.get(this.#reviewerRoleRef);
     const runRef = newRef("run");
     const startedAt = this.#now();
+    const resolvedModel =
+      this.#model ??
+      (
+        await resolveRoleModelSetting({
+          roleRef: role.ref,
+          roleId: role.id,
+          roleName: role.id,
+          projectStore: defaultProjectRoleModelSettingsStore(input.cwd || this.#cwd),
+          userStore: defaultUserRoleModelSettingsStore(),
+        })
+      )?.model;
     const result = await runRole({
       runRef: runRef as `run:${string}`,
       roleRef: role.ref as `role:${string}`,
       systemPrompt: buildReadOnlyReviewerSystemPrompt(role.systemPrompt),
-      model: this.#model,
+      model: resolvedModel,
       instruction: renderReviewerInstruction(input),
       runGuidance: REVIEWER_JSON_SCHEMA,
       mode: input.forkFromSession ? "forked" : "fresh",
@@ -216,6 +243,8 @@ export function renderReviewerInstruction(input: ReviewInput): string {
     "Review this Spark state transition request.",
     "Approve only if the provided evidence and current packet satisfy the requested state transition.",
     "For requestedStatus=complete, approve only when the objective is achieved; set achieved accordingly.",
+    "If projectStatus.taskCounts.unfinished > 0, default to needs_changes unless the objective explicitly says this is planning-only/readiness-only and does not ask for project/task implementation completion.",
+    "When unfinished project work remains, include concrete remainingWork using projectStatus.readyTasks and unfinishedTasks instead of treating planning evidence as implementation completion.",
     "For requestedStatus=paused, approve only when the pause reason is valid and stopping without completion is appropriate; do not require achieved=true.",
     "If work remains or the requested transition is not justified, use outcome=needs_changes and list concrete blockers/findings.",
     REVIEWER_JSON_SCHEMA,

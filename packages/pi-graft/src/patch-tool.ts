@@ -3,11 +3,12 @@ import { randomUUID } from "node:crypto";
 import {
   builtinRoleRef,
   createDefaultRoleRegistry,
-  defaultUserRoleModelBindingStore,
+  defaultProjectRoleModelSettingsStore,
+  defaultUserRoleModelSettingsStore,
   hydrateDefaultRoleRegistry,
   normalizeRoleRunMode,
+  resolveRoleModelSetting,
   runRole,
-  saveValidatedRoleModelBinding,
   validateRoleModel,
   type RoleRunMode,
   type RoleRunRef,
@@ -113,7 +114,7 @@ export function registerPiGraftPatchTool(pi: PiGraftExtensionApi): void {
       model: Type.Optional(
         Type.String({
           description:
-            "Concrete Pi model to validate and bind for the worker role when no binding exists.",
+            "Concrete Pi model to validate for this run. Saved defaults live in role model settings.",
         }),
       ),
     }),
@@ -268,39 +269,39 @@ async function resolvePatchRoleModel(input: {
   cwd: string;
   ui?: PiGraftToolContext["ui"];
 }): Promise<string | undefined> {
-  const store = defaultUserRoleModelBindingStore();
-  const explicit = input.explicitModel?.trim();
-  if (explicit) {
-    await validateRoleModel({ piCommand: input.piCommand, model: explicit, cwd: input.cwd });
-    return explicit;
+  const resolved = await resolveRoleModelSetting({
+    explicitModel: input.explicitModel,
+    roleRef: input.role.ref,
+    roleId: input.role.id,
+    roleName: input.role.id,
+    projectStore: defaultProjectRoleModelSettingsStore(input.cwd),
+    userStore: defaultUserRoleModelSettingsStore(),
+  });
+  if (resolved) {
+    if (resolved.source === "explicit")
+      await validateRoleModel({
+        piCommand: input.piCommand,
+        model: resolved.model,
+        cwd: input.cwd,
+      });
+    return resolved.model;
   }
 
-  const existing = await store.get(input.role.ref);
-  if (existing) return existing.model;
-
-  const selected = await input.ui?.input?.(
-    `Choose Pi model for Graft patch role ${input.role.id}`,
-    input.role.defaultModel,
-  );
+  const selected = await input.ui?.input?.(`Choose Pi model for Graft patch role ${input.role.id}`);
   const model = selected?.trim();
   if (!model) {
     throw new Error(
-      `graft_patch role model binding required for ${input.role.id} (${input.role.ref}); ` +
-        "provide model or rerun with an interactive UI",
+      `graft_patch role model setting required for ${input.role.id} (${input.role.ref}); ` +
+        'provide model or save one with role({ action: "model_set" })',
     );
   }
-  const binding = await saveValidatedRoleModelBinding({
-    store,
-    roleRef: input.role.ref,
-    model,
-    piCommand: input.piCommand,
-    cwd: input.cwd,
-  });
+  await validateRoleModel({ piCommand: input.piCommand, model, cwd: input.cwd });
+  const entry = await defaultUserRoleModelSettingsStore().save(input.role.ref, model);
   input.ui?.notify?.(
-    `Saved model binding for Graft patch role ${input.role.id}: ${binding.model}`,
+    `Saved model setting for Graft patch role ${input.role.id}: ${entry.model}`,
     "success",
   );
-  return binding.model;
+  return entry.model;
 }
 
 function normalizeOptionalMode(value: unknown, field: string): RoleRunMode | undefined {
@@ -344,7 +345,6 @@ function compactRole(role: RoleSpec) {
     description: role.description,
     systemPromptChars: role.systemPrompt.length,
     allowedTools: role.allowedTools,
-    defaultModel: role.defaultModel,
   };
 }
 

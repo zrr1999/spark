@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { RoleRegistry } from "pi-roles";
+import { defaultProjectRoleModelSettingsStore, RoleRegistry } from "pi-roles";
 import { TaskGraph } from "pi-tasks";
 import {
   PiRolesReviewerRunner,
@@ -213,6 +213,43 @@ void test("reviewer instruction and system prompt enforce read-only verdict boun
   assert.match(goalInstruction, /"reason": "blocked by missing user decision"/);
   assert.match(instruction, /"outcome": "approved" \| "needs_changes" \| "blocked"/);
   assert.equal(reviewerInputFingerprint(input), reviewerInputFingerprint(input));
+});
+
+void test("PiRolesReviewerRunner resolves reviewer model from role model settings", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-reviewer-runner-model-settings-"));
+  try {
+    const argsPath = join(dir, "args.json");
+    const fakePi = join(dir, "fake-pi.cjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "const { writeFileSync } = require('node:fs');",
+        `writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(process.argv.slice(2)));`,
+        "process.stdout.write(JSON.stringify({ outcome: 'approved', summary: 'approved by fake reviewer', findings: [], blockers: [], confidence: 'high' }) + '\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+    await defaultProjectRoleModelSettingsStore(dir).save("role:builtin-reviewer", "test/reviewer");
+
+    const input = { ...reviewTaskInput(), cwd: dir };
+    const runner = new PiRolesReviewerRunner({
+      registry: new RoleRegistry(),
+      cwd: dir,
+      piCommand: fakePi,
+      timeoutMs: 5_000,
+    });
+
+    const result = await runner.review(input);
+
+    assert.equal(result.verdict.outcome, "approved");
+    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
+    assert.ok(args.includes("--model"));
+    assert.equal(args[args.indexOf("--model") + 1], "test/reviewer");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 void test("PiRolesReviewerRunner runs reviewer through forked pi-roles adapter", async () => {
