@@ -4,9 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { ArtifactRef } from "pi-extension-api";
-import { defaultArtifactStore } from "pi-artifacts";
-import { createElaborationResult, createPiAskFlowRequest, replayablePiAskFlow } from "pi-ask";
+import type { ArtifactRef } from "@zendev-lab/pi-extension-api";
+import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
+import {
+  createElaborationResult,
+  createPiAskFlowRequest,
+  replayablePiAskFlow,
+} from "@zendev-lab/pi-ask";
 import {
   createSparkAskToolRequest,
   runSparkAskTool,

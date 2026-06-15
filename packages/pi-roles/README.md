@@ -1,6 +1,6 @@
 # pi-roles
 
-`pi-roles` owns reusable Pi coding role definitions and simple single-role runs.
+`@zendev-lab/pi-roles` owns reusable Pi coding role definitions and simple single-role runs.
 
 It deliberately does **not** own managed task graphs, task claims, artifacts,
 reviews, asks, scheduler policy, capabilities, or delegation topology.
@@ -41,7 +41,7 @@ stays outside this package.
 
 ## Tool surface
 
-`pi-roles` registers one public/default action tool:
+`@zendev-lab/pi-roles` registers one public/default action tool:
 
 - `role` — use `action: "list" | "get" | "create" | "call"` to list roles, inspect a role, create a role, or run one direct role call.
 - `role` — use `action: "model_list" | "model_get" | "model_set" | "model_delete"` to inspect, save, or delete project/user role model settings.
@@ -50,7 +50,7 @@ Historical fragmented implementation functions may remain internal dispatch targ
 
 Builtin roles are the core five role shapes: `scout`, `planner`, `worker`,
 `reviewer`, and `oracle`. Their `allowedTools` fields are declarative tool
-profiles for hosts or presets to consume; `pi-roles` itself does not own
+profiles for hosts or presets to consume; `@zendev-lab/pi-roles` itself does not own
 host-level tool activation policy.
 
 `role({ action: "call" })` modes:

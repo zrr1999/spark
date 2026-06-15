@@ -1,6 +1,6 @@
 /** Builtin extension loader for the native Spark CLI host. */
 
-import type { ExtensionAPI } from "pi-extension-api";
+import type { ExtensionAPI } from "@zendev-lab/pi-extension-api";
 
 import piAskExtension from "../../../pi-ask/src/extension.ts";
 import piCueExtension from "../../../pi-cue/src/index.ts";
@@ -8,7 +8,12 @@ import piGraftExtension from "../../../pi-graft/src/extension.ts";
 import piRolesExtension from "../../../pi-roles/src/extension.ts";
 import sparkExtension from "../../../spark/src/extension/index.ts";
 
-export type SparkBuiltinExtensionName = "pi-ask" | "pi-cue" | "pi-graft" | "pi-roles" | "spark";
+export type SparkBuiltinExtensionName =
+  | "@zendev-lab/pi-ask"
+  | "@zendev-lab/pi-cue"
+  | "@zendev-lab/pi-graft"
+  | "@zendev-lab/pi-roles"
+  | "spark";
 
 export type SparkExtensionFactory = (api: ExtensionAPI) => void | Promise<void>;
 
@@ -37,35 +42,39 @@ export interface SparkExtensionLoaderOptions {
 }
 
 export const DEFAULT_SPARK_EXTENSION_SPECS = [
-  "pi-ask/extension",
-  "pi-cue/extension",
-  "pi-roles/extension",
-  "pi-graft/extension",
-  "spark/extension",
+  "@zendev-lab/pi-ask/extension",
+  "@zendev-lab/pi-cue/extension",
+  "@zendev-lab/pi-roles/extension",
+  "@zendev-lab/pi-graft/extension",
+  "@zendev-lab/spark/extension",
 ] as const;
 
 const BUILTIN_EXTENSION_FACTORIES: readonly SparkBuiltinExtensionFactory[] = [
   {
-    name: "pi-ask",
-    specifier: "pi-ask/extension",
+    name: "@zendev-lab/pi-ask",
+    specifier: "@zendev-lab/pi-ask/extension",
     factory: piAskExtension as SparkExtensionFactory,
   },
   {
-    name: "pi-cue",
-    specifier: "pi-cue/extension",
+    name: "@zendev-lab/pi-cue",
+    specifier: "@zendev-lab/pi-cue/extension",
     factory: piCueExtension as SparkExtensionFactory,
   },
   {
-    name: "pi-roles",
-    specifier: "pi-roles/extension",
+    name: "@zendev-lab/pi-roles",
+    specifier: "@zendev-lab/pi-roles/extension",
     factory: piRolesExtension as SparkExtensionFactory,
   },
   {
-    name: "pi-graft",
-    specifier: "pi-graft/extension",
+    name: "@zendev-lab/pi-graft",
+    specifier: "@zendev-lab/pi-graft/extension",
     factory: piGraftExtension as SparkExtensionFactory,
   },
-  { name: "spark", specifier: "spark/extension", factory: sparkExtension as SparkExtensionFactory },
+  {
+    name: "spark",
+    specifier: "@zendev-lab/spark/extension",
+    factory: sparkExtension as SparkExtensionFactory,
+  },
 ];
 
 export class SparkExtensionLoader {

@@ -1,4 +1,9 @@
-import { nowIso, type RunRef, type TaskRun, type TaskRunCompletionSummary } from "pi-extension-api";
+import {
+  nowIso,
+  type RunRef,
+  type TaskRun,
+  type TaskRunCompletionSummary,
+} from "@zendev-lab/pi-extension-api";
 
 import type {
   WorkflowRunCompletionFollowUp,

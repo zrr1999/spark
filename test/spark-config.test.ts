@@ -42,7 +42,7 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
     const path = join(dir, "config.json");
     await saveSparkConfig(
       {
-        extensions: ["spark/extension", "pi-cue", "my-extension"],
+        extensions: ["@zendev-lab/spark/extension", "@zendev-lab/pi-cue", "my-extension"],
         providers: ["spark-cli/baidu-oneapi-provider", "my-provider"],
         activeProvider: "baidu-oneapi",
         activeModel: "claude-opus-4.7",
@@ -51,7 +51,11 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
       path,
     );
     const config = await loadSparkConfig(path);
-    assert.deepEqual(config.extensions, ["spark/extension", "pi-cue", "my-extension"]);
+    assert.deepEqual(config.extensions, [
+      "@zendev-lab/spark/extension",
+      "@zendev-lab/pi-cue",
+      "my-extension",
+    ]);
     assert.deepEqual(config.providers, ["spark-cli/baidu-oneapi-provider", "my-provider"]);
     assert.equal(config.activeProvider, "baidu-oneapi");
     assert.equal(config.activeModel, "claude-opus-4.7");
@@ -67,14 +71,14 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
 
 void test("mergeSparkConfigWithDefault tolerates missing keys, partial inputs, and bogus arrays", () => {
   const merged = mergeSparkConfigWithDefault({
-    extensions: ["pi-cue", 42, ""],
+    extensions: ["@zendev-lab/pi-cue", 42, ""],
     providers: undefined,
     activeProvider: 7,
     activeModel: "claude-opus-4.6",
     activeThinkingLevel: "fast",
   });
   // 42 and "" are filtered out because the schema only accepts non-empty strings
-  assert.deepEqual(merged.extensions, ["pi-cue"]);
+  assert.deepEqual(merged.extensions, ["@zendev-lab/pi-cue"]);
   assert.deepEqual(merged.providers, DEFAULT_SPARK_CONFIG.providers);
   assert.equal(merged.activeProvider, undefined);
   assert.equal(merged.activeModel, "claude-opus-4.6");

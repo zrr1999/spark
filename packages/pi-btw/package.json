@@ -1,6 +1,6 @@
 {
-  "name": "pi-btw",
-  "version": "0.4.0",
+  "name": "@zendev-lab/pi-btw",
+  "version": "0.1.0",
   "description": "A pi extension for parallel side conversations with /btw",
   "keywords": [
     "agent",
@@ -14,7 +14,10 @@
     "url": "https://github.com/dbachelder/pi-btw/issues"
   },
   "license": "MIT",
-  "author": "Dan Bachelder",
+  "author": "Zhan Rongrui",
+  "contributors": [
+    "Dan Bachelder"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/dbachelder/pi-btw.git"

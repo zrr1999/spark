@@ -1,5 +1,5 @@
-import type { ProjectRef } from "pi-extension-api";
-import type { TaskGraph } from "pi-tasks";
+import type { ProjectRef } from "@zendev-lab/pi-extension-api";
+import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import type { SparkExecuteStrategy, SparkPlanningModeSource } from "./session-state.ts";
 
 export type SparkCommandProjectStateKind = "empty_project" | "existing_project" | "initialized";
@@ -10,7 +10,7 @@ export interface SparkCommandProjectState {
   unfinishedTaskCount: number;
 }
 
-export type SparkEntryMode = "research" | "plan" | "execute";
+export type SparkEntryMode = "research" | "plan" | "implement";
 export type SparkEntryModeChoice = SparkEntryMode | "new_project";
 export type SparkEntryConfidence = "high" | "ambiguous" | "conflicting";
 
@@ -116,7 +116,7 @@ export function analyzeSparkEntryMode(
       confidence: "high",
       reasons: [
         ...reasons,
-        "The prompt asks for a fix or execution, but no pending/ready project task exists, so Spark should first plan a concrete task.",
+        "The prompt asks for a fix or implementation, but no pending/ready project task exists, so Spark should first plan a concrete task.",
       ],
       prompt: normalizedPrompt,
       currentProjectTitle,
@@ -142,11 +142,11 @@ export function analyzeSparkEntryMode(
     };
   if (hasRunSignal)
     return {
-      recommendation: "execute",
+      recommendation: "implement",
       confidence: "conflicting",
       reasons: [
         ...reasons,
-        "The prompt asks for continuous or until-done progress, so Spark should enter execution and keep broader goal/workflow scope explicit.",
+        "The prompt asks for continuous or until-done progress, so Spark should enter implementation and keep broader goal/workflow scope explicit.",
       ],
       prompt: normalizedPrompt,
       currentProjectTitle,
@@ -157,11 +157,11 @@ export function analyzeSparkEntryMode(
     };
   if (hasResearchSignal && hasExecutionSignal)
     return {
-      recommendation: readyTaskCount > 0 ? "execute" : "research",
+      recommendation: readyTaskCount > 0 ? "implement" : "research",
       confidence: "conflicting",
       reasons: [
         ...reasons,
-        "The prompt contains both research and execution signals; Spark should choose the safest route from current task readiness.",
+        "The prompt contains both research and implementation signals; Spark should choose the safest route from current task readiness.",
       ],
       prompt: normalizedPrompt,
       currentProjectTitle,
@@ -172,11 +172,11 @@ export function analyzeSparkEntryMode(
     };
   if (hasPlanningSignal && hasExecutionSignal)
     return {
-      recommendation: readyTaskCount > 0 ? "execute" : "plan",
+      recommendation: readyTaskCount > 0 ? "implement" : "plan",
       confidence: "conflicting",
       reasons: [
         ...reasons,
-        "The prompt contains both planning and execution signals; Spark should choose the safest route from current task readiness.",
+        "The prompt contains both planning and implementation signals; Spark should choose the safest route from current task readiness.",
       ],
       prompt: normalizedPrompt,
       currentProjectTitle,
@@ -202,9 +202,9 @@ export function analyzeSparkEntryMode(
     };
   if (hasExecutionSignal)
     return {
-      recommendation: "execute",
+      recommendation: "implement",
       confidence: "high",
-      reasons: [...reasons, "The prompt asks to execute, claim, dispatch, run, or finish work."],
+      reasons: [...reasons, "The prompt asks to implement, claim, dispatch, run, or finish work."],
       prompt: normalizedPrompt,
       currentProjectTitle,
       projectCount: graph.projects().length,
@@ -252,7 +252,7 @@ export function analyzeSparkEntryMode(
       pendingTaskCount,
     };
   return {
-    recommendation: readyTaskCount > 0 ? "execute" : "plan",
+    recommendation: readyTaskCount > 0 ? "implement" : "plan",
     confidence: "ambiguous",
     reasons: [
       ...reasons,

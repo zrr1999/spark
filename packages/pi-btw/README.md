@@ -24,7 +24,7 @@ A small [pi](https://github.com/earendil-works/pi-mono) extension that adds a `/
 ### From npm (after publish)
 
 ```bash
-pi install npm:pi-btw
+pi install npm:@zendev-lab/pi-btw
 ```
 
 ### From git
@@ -200,4 +200,4 @@ pi -e /path/to/pi-btw
 
 ## License
 
-MIT
+MIT. This package is derived from the original `pi-btw` by Dan Bachelder; modifications are maintained by Zhan Rongrui.

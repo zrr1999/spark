@@ -1,5 +1,5 @@
 {
-  "name": "pi-cue",
+  "name": "@zendev-lab/pi-cue",
   "version": "0.1.0",
   "description": "Pi extension that adds cue-shell as a durable, observable execution backend.",
   "license": "MIT",
@@ -14,12 +14,15 @@
     ".": "./src/index.ts",
     "./extension": "./src/extension/index.ts"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.74.1",
-    "pi-extension-api": "file:../pi-extension-api",
+    "@zendev-lab/pi-extension-api": "workspace:^",
     "typebox": "^1.1.38"
   },
   "pi": {

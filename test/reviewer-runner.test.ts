@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { defaultProjectRoleModelSettingsStore, RoleRegistry } from "pi-roles";
-import { TaskGraph } from "pi-tasks";
+import { defaultProjectRoleModelSettingsStore, RoleRegistry } from "@zendev-lab/pi-roles";
+import { TaskGraph } from "@zendev-lab/pi-tasks";
 import {
   PiRolesReviewerRunner,
   buildReadOnlyReviewerSystemPrompt,
@@ -197,6 +197,7 @@ void test("reviewer instruction and system prompt enforce read-only verdict boun
   assert.match(prompt, /Read-only verdict role/);
   assert.match(prompt, /Do not mutate tasks, goals, files, artifacts, recall, learning, asks/);
   assert.match(prompt, /Return verdict JSON only/);
+  assert.match(prompt, /Never ask interactively/);
   assert.match(instruction, /Review packet:/);
   assert.match(instruction, /"requestedStatus": "done"/);
   const goalInstruction = renderReviewerInstruction({
@@ -211,8 +212,23 @@ void test("reviewer instruction and system prompt enforce read-only verdict boun
   });
   assert.match(goalInstruction, /"requestedStatus": "paused"/);
   assert.match(goalInstruction, /"reason": "blocked by missing user decision"/);
-  assert.match(instruction, /"outcome": "approved" \| "needs_changes" \| "blocked"/);
+  assert.doesNotMatch(instruction, /Return ONLY one valid JSON object/);
   assert.equal(reviewerInputFingerprint(input), reviewerInputFingerprint(input));
+});
+
+void test("reviewer verdict parser reports missing verdict objects clearly", () => {
+  const input = reviewTaskInput();
+  assert.throws(
+    () =>
+      parseReviewerVerdictForInput(
+        input,
+        [
+          '{"type":"session","id":"leading-event"}',
+          '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"I need more evidence."}]}}',
+        ].join("\n"),
+      ),
+    /did not contain a verdict JSON object with outcome/u,
+  );
 });
 
 void test("PiRolesReviewerRunner resolves reviewer model from role model settings", async () => {
@@ -247,12 +263,17 @@ void test("PiRolesReviewerRunner resolves reviewer model from role model setting
     const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
     assert.ok(args.includes("--model"));
     assert.equal(args[args.indexOf("--model") + 1], "test/reviewer");
+    assert.ok(args.includes("--tools"));
+    const tools = args[args.indexOf("--tools") + 1]?.split(",") ?? [];
+    assert.ok(tools.includes("learning"));
+    assert.ok(tools.includes("cue_exec"));
+    assert.equal(tools.includes("ask"), false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-void test("PiRolesReviewerRunner runs reviewer through forked pi-roles adapter", async () => {
+void test("PiRolesReviewerRunner runs reviewer gates in fresh mode even with parent session context", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reviewer-runner-"));
   try {
     const argsPath = join(dir, "args.json");
@@ -285,10 +306,15 @@ void test("PiRolesReviewerRunner runs reviewer through forked pi-roles adapter",
     assert.equal(result.verdict.summary, "approved by fake reviewer");
     assert.equal(result.record.roleRef, "role:builtin-reviewer");
     const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
-    assert.ok(args.includes("--fork"));
-    assert.equal(args[args.indexOf("--fork") + 1], "session:parent");
+    assert.equal(args.includes("--fork"), false);
+    assert.ok(args.includes("--tools"));
+    const tools = args[args.indexOf("--tools") + 1]?.split(",") ?? [];
+    assert.ok(tools.includes("learning"));
+    assert.ok(tools.includes("cue_exec"));
+    assert.equal(tools.includes("ask"), false);
     assert.match(args.join("\n"), /Read-only verdict role/);
-    assert.match(args.join("\n"), /Return ONLY compact JSON/);
+    assert.match(args.join("\n"), /Never ask interactively/);
+    assert.match(args.join("\n"), /Return ONLY one valid JSON object/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -1,5 +1,5 @@
-import type { WorkflowRunPruneResult } from "pi-workflows";
-import type { RoleRunArtifactRetentionPlan } from "spark-runtime";
+import type { WorkflowRunPruneResult } from "@zendev-lab/pi-workflows";
+import type { RoleRunArtifactRetentionPlan } from "@zendev-lab/spark-runtime";
 import type {
   SparkProtectedStoreReason,
   SparkStateCacheKind,

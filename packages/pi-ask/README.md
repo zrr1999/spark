@@ -2,13 +2,13 @@
 
 Minimal structured ask primitives for Pi.
 
-`pi-ask` is infrastructure: it does not depend on
+`@zendev-lab/pi-ask` is infrastructure: it does not depend on
 `spark-*` packages and focuses on a small, stable protocol
 for collecting human input.
 
 ## Tools
 
-`pi-ask` registers one public/default action tool:
+`@zendev-lab/pi-ask` registers one public/default action tool:
 
 - `ask` — use `action: "ask"` for structured asks and `action: "flow"` when the fullscreen multi-question flow renderer is required.
 
@@ -57,12 +57,12 @@ Both ask renderers follow these rules:
 Host-specific wrappers build on this contract. A host facade may require each
 option to provide a stable id, a short label, and a clear human-readable
 description of what choosing that option means. Keep host/model-facing
-option-description validation in the host package; `pi-ask` only owns generic
+option-description validation in the host package; `@zendev-lab/pi-ask` only owns generic
 structural validation, reserved UI labels, and ask runtime semantics.
 
 ## Behavior comparison and adopted affordances
 
-The local `pi-ask` flow is intentionally small, but it now
+The local `@zendev-lab/pi-ask` flow is intentionally small, but it now
 keeps the useful protocol traits observed in related Pi packages:
 
 - `@eko24ive/pi-ask`: review tab, elaborate/re-ask flow, replay of the
@@ -89,7 +89,7 @@ blocked, not as implicit approval.
 ## Copilot-style ask UX review
 
 The Copilot ask screenshot is useful because it shows a form as an explicit
-information gate, not just a select menu. Current `pi-ask` now adopts the parts
+information gate, not just a select menu. Current `@zendev-lab/pi-ask` now adopts the parts
 that fit a terminal-first UI:
 
 Concrete observations from the current renderer/tests:
@@ -145,7 +145,7 @@ Reject / defer:
 ## Default selections as recommendations
 
 The Copilot-style checklist pattern is useful when an agent wants to propose
-likely choices for the user to confirm. `pi-ask` supports this with
+likely choices for the user to confirm. `@zendev-lab/pi-ask` supports this with
 question-level `defaultValues?: string[]`. Defaults are **recommendations**, not
 implicit answers.
 
@@ -251,7 +251,7 @@ Regression coverage:
 
 ## Result and persistence helpers
 
-`pi-ask` exports shared helpers so callers do not reimplement subtly different
+`@zendev-lab/pi-ask` exports shared helpers so callers do not reimplement subtly different
 summaries:
 
 - `summarizeAskResult(request, result, { blocked? })` — returns a stable,

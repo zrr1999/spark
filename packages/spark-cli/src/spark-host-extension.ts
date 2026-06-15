@@ -1,10 +1,5 @@
 interface SparkCliHostApi {
   on?(event: string, handler: (event: unknown, ctx: unknown) => unknown): void;
-  sendUserMessage?(
-    content: string,
-    options?: { deliverAs?: "steer" | "followUp"; streamingBehavior?: "steer" | "followUp" },
-  ): void;
-  isIdle?(): boolean;
 }
 
 interface SparkCliHostContext {
@@ -31,18 +26,6 @@ export default function sparkCliHostExtension(pi: SparkCliHostApi): void {
     const input = event as SparkCliInputEvent;
     if (input.source === "extension") return { action: "continue" };
     if (typeof input.text !== "string") return { action: "continue" };
-
-    const text = input.text.trim();
-    if (!text || text.startsWith("/") || text.startsWith("!")) {
-      return { action: "continue" };
-    }
-
-    // Always provide queueing semantics. Some runtimes expose the lower-level
-    // `streamingBehavior` option directly, while Pi extension `sendUserMessage`
-    // maps `deliverAs` to that option internally. Supplying both avoids the
-    // "Agent is already processing" path even when idle state is stale or absent.
-    const delivery = { deliverAs: "followUp" as const, streamingBehavior: "followUp" as const };
-    pi.sendUserMessage?.(`/spark ${text}`, delivery);
-    return { action: "handled" };
+    return { action: "continue" };
   });
 }

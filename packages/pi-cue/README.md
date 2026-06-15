@@ -2,19 +2,19 @@
 
 Reusable Pi extension that exposes cue-shell as a durable, observable execution substrate.
 
-`pi-cue` is infrastructure: it does not depend on `spark-*` packages and can be used by Spark, future `pi-warp`, or any other Pi package.
+`@zendev-lab/pi-cue` is infrastructure: it does not depend on `spark-*` packages and can be used by Spark, future `pi-warp`, or any other Pi package.
 
 ## Transport profiles
 
-`pi-cue` uses cue-shell's client transport resolver (`cue-client target resolve --json`, falling back to `cue client target resolve --json`). It supports both local Unix socket profiles and SSH profiles.
+`@zendev-lab/pi-cue` uses cue-shell's client transport resolver (`cue-client target resolve --json`, falling back to `cue client target resolve --json`). It supports both local Unix socket profiles and SSH profiles.
 
-For SSH profiles, `pi-cue` spawns the system OpenSSH client as:
+For SSH profiles, `@zendev-lab/pi-cue` spawns the system OpenSSH client as:
 
 ```text
 ssh <destination> <gateway_command>
 ```
 
-The gateway command is usually `cued gateway --stdio`, so the Node client speaks the same length-prefixed IPC protocol through the SSH stdio stream. Remote daemon startup remains explicit: `pi-cue` does not run `start_command` or auto-start remote `cued`; start it separately, for example with `ssh host "cued start"`. If the remote gateway is unavailable, the tool fails loudly with bounded trailing SSH stderr diagnostics.
+The gateway command is usually `cued gateway --stdio`, so the Node client speaks the same length-prefixed IPC protocol through the SSH stdio stream. Remote daemon startup remains explicit: `@zendev-lab/pi-cue` does not run `start_command` or auto-start remote `cued`; start it separately, for example with `ssh host "cued start"`. If the remote gateway is unavailable, the tool fails loudly with bounded trailing SSH stderr diagnostics.
 
 When an SSH profile is active, daemon-side paths such as `cwd`, `cue_run.path`, and script paths must exist on the remote host. Pi file tools still operate on the local workspace.
 
@@ -37,11 +37,11 @@ The extension also disables the built-in `bash` tool on session start so command
 
 ## Transport profiles
 
-`pi-cue` honors cue-shell client transport resolution through `cue-client target resolve --json` or `cue client target resolve --json`.
+`@zendev-lab/pi-cue` honors cue-shell client transport resolution through `cue-client target resolve --json` or `cue client target resolve --json`.
 
-- Unix profiles connect to the resolved daemon socket. If the local daemon is not reachable, `pi-cue` may auto-start `cued` for that Unix socket.
+- Unix profiles connect to the resolved daemon socket. If the local daemon is not reachable, `@zendev-lab/pi-cue` may auto-start `cued` for that Unix socket.
 - SSH profiles connect through the configured gateway command, equivalent to `ssh <destination> <gateway_command>`, and then speak the same cue-shell IPC framing over stdio.
-- Remote daemon startup remains explicit. `pi-cue` does not run `start_command` for SSH profiles; start the remote daemon yourself, for example `ssh user@example.com "cued start"`.
+- Remote daemon startup remains explicit. `@zendev-lab/pi-cue` does not run `start_command` for SSH profiles; start the remote daemon yourself, for example `ssh user@example.com "cued start"`.
 
 ## Resource-gated commands
 
@@ -52,4 +52,4 @@ cue_exec(command="python train.py", needs={ gpu: 1, gpu_mem: "24GiB" }, backgrou
 cue_exec(command="run-licensed-tool", needs={ license: 1 })
 ```
 
-Use `needs` for resource requirements. Do not include `:run(need.gpu=1)` in `command`; `pi-cue` already wraps `command` in `:run(...)` and encodes `needs` as `need.<key>=<quantity>` mode params.
+Use `needs` for resource requirements. Do not include `:run(need.gpu=1)` in `command`; `@zendev-lab/pi-cue` already wraps `command` in `:run(...)` and encodes `needs` as `need.<key>=<quantity>` mode params.

@@ -1,8 +1,12 @@
-import type { Task, ProjectRef } from "pi-extension-api";
-import type { WorkflowRunStatusSummary } from "pi-workflows";
+import type { Task, ProjectRef } from "@zendev-lab/pi-extension-api";
+import type { WorkflowRunStatusSummary } from "@zendev-lab/pi-workflows";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
-import { defaultTaskGraphStore } from "pi-tasks";
-import { independentTodoDisplayKey, isActiveSessionTodo, type SessionTodoEntry } from "pi-tasks";
+import { defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
+import {
+  independentTodoDisplayKey,
+  isActiveSessionTodo,
+  type SessionTodoEntry,
+} from "@zendev-lab/pi-tasks";
 import { SparkWidget, type SparkWidgetState, type TaskEntry } from "../ui/spark-widget.ts";
 import { ensureLocalSparkDirectory } from "./spark-activation.ts";
 import { activeSparkRoleRunProcessesForCwd } from "./background-runs.ts";

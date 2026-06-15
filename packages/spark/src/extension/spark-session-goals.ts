@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
-import { nowIso } from "pi-extension-api";
-import { isActiveSessionTodo, type SessionTodoEntry, type TaskGraph } from "pi-tasks";
+import { nowIso } from "@zendev-lab/pi-extension-api";
+import { isActiveSessionTodo, type SessionTodoEntry, type TaskGraph } from "@zendev-lab/pi-tasks";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {
   sanitizeStoreScope,

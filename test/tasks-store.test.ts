@@ -14,8 +14,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { RoleRegistry, builtinRoleRef, defaultUserRoleModelSettingsStore } from "pi-roles";
-import { ArtifactStore } from "pi-artifacts";
+import {
+  RoleRegistry,
+  builtinRoleRef,
+  defaultUserRoleModelSettingsStore,
+} from "@zendev-lab/pi-roles";
+import { ArtifactStore } from "@zendev-lab/pi-artifacts";
 import {
   DependencyError,
   newRef,
@@ -24,7 +28,7 @@ import {
   type RunRef,
   type TaskPlan,
   type TaskRef,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 import {
   SparkDagRunStoreFormatError,
   defaultSparkDagRunStore,
@@ -42,7 +46,7 @@ import {
   runSparkTask,
   sparkTaskExecutorRoleRef,
   sweepExpiredTaskClaims,
-} from "spark-runtime";
+} from "@zendev-lab/spark-runtime";
 import {
   TaskGraph,
   TaskGraphStore,
@@ -64,7 +68,7 @@ import {
   taskCompletionReadiness,
   taskPlanReadiness,
   type SessionTodoEntry,
-} from "pi-tasks";
+} from "@zendev-lab/pi-tasks";
 import {
   cleanupOwnedBackgroundSubroles,
   resumeOwnedBackgroundSubroles,

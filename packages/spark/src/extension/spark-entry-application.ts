@@ -1,6 +1,6 @@
-import { detectCopyLanguage, type CopyLanguage } from "pi-extension-api";
-import type { ProjectRef } from "pi-extension-api";
-import type { TaskGraph } from "pi-tasks";
+import { detectCopyLanguage, type CopyLanguage } from "@zendev-lab/pi-extension-api";
+import type { ProjectRef } from "@zendev-lab/pi-extension-api";
+import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import type { SparkEntryResolution } from "./spark-entry.ts";
 import { titleFromIdea, type SparkInitClarificationData } from "./spark-md-rendering.ts";
 import { initializeSparkIdea } from "./spark-initialization.ts";
@@ -10,7 +10,7 @@ import {
   type SparkPlanningModeSource,
 } from "./session-state.ts";
 import {
-  enterSparkExecutionMode,
+  enterSparkImplementationMode,
   enterSparkPlanningMode,
   enterSparkResearchMode,
   type SparkModeEntryDeps,
@@ -59,7 +59,7 @@ export async function applySparkEntryResolution(
           resolution.planningSource,
         );
       else
-        await enterSparkExecutionMode(
+        await enterSparkImplementationMode(
           piApi,
           deps,
           ctx,

@@ -6,15 +6,15 @@ import test from "node:test";
 
 import sparkExtension from "../packages/spark/src/extension/index.ts";
 import type { SparkWidgetTheme, SparkWidgetTui } from "../packages/spark/src/ui/spark-widget.ts";
-import { RoleRegistry, builtinRoleRef } from "pi-roles";
+import { RoleRegistry, builtinRoleRef } from "@zendev-lab/pi-roles";
 import { defaultSparkDagRunStore } from "../packages/pi-workflows/src/index.ts";
 import {
   killActiveSparkRoleRunProcesses,
   listActiveSparkRoleRunProcesses,
   runSparkTask,
-} from "spark-runtime";
-import type { RunRef, TaskPlan } from "pi-extension-api";
-import { TaskGraph, defaultTaskGraphStore } from "pi-tasks";
+} from "@zendev-lab/spark-runtime";
+import type { RunRef, TaskPlan } from "@zendev-lab/pi-extension-api";
+import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
 import {
   setSessionGoal,
   updateSessionGoalStatus,

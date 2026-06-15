@@ -1,5 +1,5 @@
-import type { RunRef, TaskRef, ProjectRef } from "pi-extension-api";
-import type { WorkflowRunRecord } from "pi-workflows";
+import type { RunRef, TaskRef, ProjectRef } from "@zendev-lab/pi-extension-api";
+import type { WorkflowRunRecord } from "@zendev-lab/pi-workflows";
 import type {
   SparkBackgroundChildRunView,
   SparkBackgroundDagRunView,

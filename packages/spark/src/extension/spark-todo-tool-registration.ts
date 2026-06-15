@@ -1,5 +1,9 @@
 import { Type } from "typebox";
-import { applyIndependentTodoOps, defaultTaskGraphStore, type TaskTodoOp } from "pi-tasks";
+import {
+  applyIndependentTodoOps,
+  defaultTaskGraphStore,
+  type TaskTodoOp,
+} from "@zendev-lab/pi-tasks";
 import { currentSparkProject, sparkSessionKey, sparkTodoStore } from "./session-state.ts";
 import { loadIndependentTodos, saveIndependentTodos } from "./session-todos.ts";
 import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";

@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defaultTaskGraphStore } from "pi-tasks";
+import { defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
 import { clarifyProjectPurposeIfNeeded } from "../flows/project-purpose-flow.ts";
 import {
   clearCurrentProjectRef,

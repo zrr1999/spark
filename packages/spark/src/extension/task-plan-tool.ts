@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 
-import type { Task, TaskKind, TaskPlan, TaskStatus } from "pi-extension-api";
-import { type TaskPlanResult } from "pi-tasks";
+import type { Task, TaskKind, TaskPlan, TaskStatus } from "@zendev-lab/pi-extension-api";
+import { type TaskPlanResult } from "@zendev-lab/pi-tasks";
 
 export function taskPlanSchema() {
   return Type.Object({

@@ -23,7 +23,7 @@ import {
   type TaskRun,
   type TaskTodo,
   type TaskTodoStatus,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 import type {
   CreateTaskTodoInput,
   NonConcreteTaskIssue,

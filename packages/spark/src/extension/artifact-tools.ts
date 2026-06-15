@@ -1,5 +1,5 @@
-import { type Artifact } from "pi-artifacts";
-import { isRef, type ArtifactRef } from "pi-extension-api";
+import { type Artifact } from "@zendev-lab/pi-artifacts";
+import { isRef, type ArtifactRef } from "@zendev-lab/pi-extension-api";
 
 export function normalizeArtifactLimit(value: unknown, fallback: number, field = "limit"): number {
   if (value === undefined || value === null) return fallback;

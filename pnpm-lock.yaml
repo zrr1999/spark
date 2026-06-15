@@ -13,47 +13,47 @@ importers:
 
   .:
     dependencies:
-      pi-artifacts:
-        specifier: file:packages/pi-artifacts
+      '@zendev-lab/pi-artifacts':
+        specifier: workspace:^
         version: link:packages/pi-artifacts
-      pi-ask:
-        specifier: file:packages/pi-ask
+      '@zendev-lab/pi-ask':
+        specifier: workspace:^
         version: link:packages/pi-ask
-      pi-btw:
-        specifier: file:packages/pi-btw
-        version: file:packages/pi-btw
-      pi-context:
-        specifier: file:packages/pi-context
+      '@zendev-lab/pi-btw':
+        specifier: workspace:^
+        version: link:packages/pi-btw
+      '@zendev-lab/pi-context':
+        specifier: workspace:^
         version: link:packages/pi-context
-      pi-cue:
-        specifier: file:packages/pi-cue
+      '@zendev-lab/pi-cue':
+        specifier: workspace:^
         version: link:packages/pi-cue
-      pi-extension-api:
-        specifier: file:packages/pi-extension-api
+      '@zendev-lab/pi-extension-api':
+        specifier: workspace:^
         version: link:packages/pi-extension-api
-      pi-goal:
-        specifier: file:packages/pi-goal
+      '@zendev-lab/pi-goal':
+        specifier: workspace:^
         version: link:packages/pi-goal
-      pi-graft:
-        specifier: file:packages/pi-graft
+      '@zendev-lab/pi-graft':
+        specifier: workspace:^
         version: link:packages/pi-graft
-      pi-learnings:
-        specifier: file:packages/pi-learnings
+      '@zendev-lab/pi-learnings':
+        specifier: workspace:^
         version: link:packages/pi-learnings
-      pi-recall:
-        specifier: file:packages/pi-recall
+      '@zendev-lab/pi-recall':
+        specifier: workspace:^
         version: link:packages/pi-recall
-      pi-roles:
-        specifier: file:packages/pi-roles
+      '@zendev-lab/pi-roles':
+        specifier: workspace:^
         version: link:packages/pi-roles
-      pi-tasks:
-        specifier: file:packages/pi-tasks
+      '@zendev-lab/pi-tasks':
+        specifier: workspace:^
         version: link:packages/pi-tasks
-      pi-workflows:
-        specifier: file:packages/pi-workflows
+      '@zendev-lab/pi-workflows':
+        specifier: workspace:^
         version: link:packages/pi-workflows
-      spark-runtime:
-        specifier: file:packages/spark-runtime
+      '@zendev-lab/spark-runtime':
+        specifier: workspace:^
         version: link:packages/spark-runtime
       typebox:
         specifier: ^1.1.38
@@ -63,7 +63,7 @@ importers:
         specifier: ^0.74.1
         version: 0.74.1
       '@types/node':
-        specifier: ^25.6.0
+        specifier: ^25.8.0
         version: 25.8.0
       oxlint:
         specifier: 1.61.0
@@ -80,8 +80,8 @@ importers:
 
   packages/pi-artifacts:
     dependencies:
-      pi-extension-api:
-        specifier: file:../pi-extension-api
+      '@zendev-lab/pi-extension-api':
+        specifier: workspace:^
         version: link:../pi-extension-api
       typebox:
         specifier: ^1.1.38
@@ -92,8 +92,8 @@ importers:
       '@earendil-works/pi-tui':
         specifier: ^0.74.1
         version: 0.74.1
-      pi-extension-api:
-        specifier: file:../pi-extension-api
+      '@zendev-lab/pi-extension-api':
+        specifier: workspace:^
         version: link:../pi-extension-api
       typebox:
         specifier: ^1.1.38
@@ -113,8 +113,8 @@ importers:
 
   packages/pi-context:
     dependencies:
-      pi-extension-api:
-        specifier: file:../pi-extension-api
+      '@zendev-lab/pi-extension-api':
+        specifier: workspace:^
         version: link:../pi-extension-api
       typebox:
         specifier: ^1.1.38
@@ -125,8 +125,8 @@ importers:
       '@earendil-works/pi-tui':
         specifier: ^0.74.1
         version: 0.74.1
-      pi-extension-api:
-        specifier: file:../pi-extension-api
+      '@zendev-lab/pi-extension-api':
+        specifier: workspace:^
         version: link:../pi-extension-api
       typebox:
         specifier: ^1.1.38
@@ -138,8 +138,8 @@ importers:
 
   packages/pi-graft:
     dependencies:
-      pi-roles:
-        specifier: file:../pi-roles
+      '@zendev-lab/pi-roles':
+        specifier: workspace:^
         version: link:../pi-roles
       typebox:
         specifier: ^1.1.38
@@ -147,11 +147,11 @@ importers:
 
   packages/pi-learnings:
     dependencies:
-      pi-artifacts:
-        specifier: file:../pi-artifacts
+      '@zendev-lab/pi-artifacts':
+        specifier: workspace:^
         version: link:../pi-artifacts
-      pi-extension-api:
-        specifier: file:../pi-extension-api
+      '@zendev-lab/pi-extension-api':
+        specifier: workspace:^
         version: link:../pi-extension-api
       typebox:
         specifier: ^1.1.38
@@ -159,8 +159,8 @@ importers:
 
   packages/pi-recall:
     dependencies:
-      pi-extension-api:
-        specifier: file:../pi-extension-api
+      '@zendev-lab/pi-extension-api':
+        specifier: workspace:^
         version: link:../pi-extension-api
       typebox:
         specifier: ^1.1.38
@@ -177,8 +177,8 @@ importers:
 
   packages/pi-tasks:
     dependencies:
-      pi-extension-api:
-        specifier: file:../pi-extension-api
+      '@zendev-lab/pi-extension-api':
+        specifier: workspace:^
         version: link:../pi-extension-api
       typebox:
         specifier: ^1.1.38
@@ -186,11 +186,11 @@ importers:
 
   packages/pi-workflows:
     dependencies:
-      pi-extension-api:
-        specifier: file:../pi-extension-api
+      '@zendev-lab/pi-extension-api':
+        specifier: workspace:^
         version: link:../pi-extension-api
-      pi-tasks:
-        specifier: file:../pi-tasks
+      '@zendev-lab/pi-tasks':
+        specifier: workspace:^
         version: link:../pi-tasks
       typebox:
         specifier: ^1.1.38
@@ -201,32 +201,32 @@ importers:
       '@earendil-works/pi-tui':
         specifier: ^0.74.1
         version: 0.74.1
-      pi-artifacts:
-        specifier: file:../pi-artifacts
+      '@zendev-lab/pi-artifacts':
+        specifier: workspace:^
         version: link:../pi-artifacts
-      pi-context:
-        specifier: file:../pi-context
+      '@zendev-lab/pi-context':
+        specifier: workspace:^
         version: link:../pi-context
-      pi-extension-api:
-        specifier: file:../pi-extension-api
+      '@zendev-lab/pi-extension-api':
+        specifier: workspace:^
         version: link:../pi-extension-api
-      pi-goal:
-        specifier: file:../pi-goal
+      '@zendev-lab/pi-goal':
+        specifier: workspace:^
         version: link:../pi-goal
-      pi-learnings:
-        specifier: file:../pi-learnings
+      '@zendev-lab/pi-learnings':
+        specifier: workspace:^
         version: link:../pi-learnings
-      pi-roles:
-        specifier: file:../pi-roles
+      '@zendev-lab/pi-roles':
+        specifier: workspace:^
         version: link:../pi-roles
-      pi-tasks:
-        specifier: file:../pi-tasks
+      '@zendev-lab/pi-tasks':
+        specifier: workspace:^
         version: link:../pi-tasks
-      pi-workflows:
-        specifier: file:../pi-workflows
+      '@zendev-lab/pi-workflows':
+        specifier: workspace:^
         version: link:../pi-workflows
-      spark-runtime:
-        specifier: file:../spark-runtime
+      '@zendev-lab/spark-runtime':
+        specifier: workspace:^
         version: link:../spark-runtime
       typebox:
         specifier: ^1.1.38
@@ -240,26 +240,26 @@ importers:
       '@earendil-works/pi-tui':
         specifier: ^0.74.1
         version: 0.74.1
-      pi-extension-api:
-        specifier: file:../pi-extension-api
+      '@zendev-lab/pi-extension-api':
+        specifier: workspace:^
         version: link:../pi-extension-api
 
   packages/spark-runtime:
     dependencies:
-      pi-artifacts:
-        specifier: file:../pi-artifacts
+      '@zendev-lab/pi-artifacts':
+        specifier: workspace:^
         version: link:../pi-artifacts
-      pi-extension-api:
-        specifier: file:../pi-extension-api
+      '@zendev-lab/pi-extension-api':
+        specifier: workspace:^
         version: link:../pi-extension-api
-      pi-roles:
-        specifier: file:../pi-roles
+      '@zendev-lab/pi-roles':
+        specifier: workspace:^
         version: link:../pi-roles
-      pi-tasks:
-        specifier: file:../pi-tasks
+      '@zendev-lab/pi-tasks':
+        specifier: workspace:^
         version: link:../pi-tasks
-      pi-workflows:
-        specifier: file:../pi-workflows
+      '@zendev-lab/pi-workflows':
+        specifier: workspace:^
         version: link:../pi-workflows
 
 packages:
@@ -1443,9 +1443,6 @@ packages:
   path-scurry@2.0.2:
     resolution: {integrity: sha512-3O/iVVsJAPsOnpwWIeD+d6z/7PmqApyQePUtCndjatj/9I5LylHvt5qluFaBT3I5h3r1ejfR056c+FCv+NnNXg==}
     engines: {node: 18 || 20 || >=22}
-
-  pi-btw@file:packages/pi-btw:
-    resolution: {directory: packages/pi-btw, type: directory}
 
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
@@ -2642,19 +2639,6 @@ snapshots:
     dependencies:
       lru-cache: 11.5.1
       minipass: 7.1.3
-
-  pi-btw@file:packages/pi-btw:
-    dependencies:
-      '@earendil-works/pi-ai': 0.74.1(ws@8.20.1)(zod@4.4.3)
-      '@earendil-works/pi-coding-agent': 0.74.1(ws@8.20.1)(zod@4.4.3)
-      '@earendil-works/pi-tui': 0.74.1
-    transitivePeerDependencies:
-      - '@modelcontextprotocol/sdk'
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-      - ws
-      - zod
 
   picocolors@1.1.1: {}
 

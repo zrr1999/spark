@@ -1,5 +1,5 @@
 {
-  "name": "pi-learnings",
+  "name": "@zendev-lab/pi-learnings",
   "version": "0.1.0",
   "description": "Generic evidence-backed learning capability and canonical learning tool for Pi extensions.",
   "license": "MIT",
@@ -13,12 +13,15 @@
     ".": "./src/index.ts",
     "./extension": "./src/extension.ts"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
-    "pi-artifacts": "file:../pi-artifacts",
-    "pi-extension-api": "file:../pi-extension-api",
+    "@zendev-lab/pi-artifacts": "workspace:^",
+    "@zendev-lab/pi-extension-api": "workspace:^",
     "typebox": "^1.1.38"
   }
 }

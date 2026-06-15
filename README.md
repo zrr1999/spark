@@ -1,6 +1,6 @@
-# pi-spark
+# spark
 
-`pi-spark` is the Spark suite for Pi: a controlled agentic development system where the Pi extension entry point is `/spark`, and lower-level capabilities are kept as Spark primitives.
+`spark` is the Spark suite for Pi: a controlled agentic development system where the Pi extension entry point is `/spark`, and lower-level capabilities are kept as Spark primitives.
 
 The repository also contains an MVP standalone Spark-first TUI host:
 
@@ -9,16 +9,16 @@ spark
 spark <initial goal>
 ```
 
-The standalone `spark` command is built directly on `@earendil-works/pi-tui`. It owns the terminal loop, editor, transcript, follow-up queue, host runtime, provider registry, model selection, session store, and explicit Spark extension loading instead of embedding Pi SDK `InteractiveMode`. It also now has a local-only `spark daemon ...` surface for file-queued detached `session.run` work. The daemon is intentionally not a gateway: no HTTP server, bearer token, remote job API, service installer, or Pi RPC wrapper. Child/background role-runs still use the existing `pi --print --mode json` runner, so `pi` must remain installed and authenticated for workflow execution until Spark gets its own non-TUI role executor.
+The standalone `spark` command is published by `@zendev-lab/spark-cli` and built directly on `@earendil-works/pi-tui`. It owns the terminal loop, editor, transcript, follow-up queue, host runtime, provider registry, model selection, session store, and explicit Spark extension loading instead of embedding Pi SDK `InteractiveMode`. It also now has a local-only `spark daemon ...` surface for file-queued detached `session.run` work. The daemon is intentionally not a gateway: no HTTP server, bearer token, remote job API, service installer, or Pi RPC wrapper. Child/background role-runs still use the existing `pi --print --mode json` runner, so `pi` must remain installed and authenticated for workflow execution until Spark gets its own non-TUI role executor.
 
 ## Spark CLI native host vs Pi extension
 
 Spark now has two supported host targets:
 
 - **Pi extension host**: `packages/spark/src/extension/` is loaded by `@earendil-works/pi-coding-agent` through Pi's normal extension/package discovery. This remains the canonical `/spark`, `/research`, `/plan`, `/execute`, `/workflow`, and Spark tool surface inside Pi.
-- **Spark CLI native host**: `packages/spark-cli` starts `SparkHostRuntime` directly on `@earendil-works/pi-tui`, loads retained builtin extensions through explicit factories (`pi-ask`, `pi-cue`, `pi-roles`, `pi-graft`, `spark`), registers providers such as `baidu-oneapi`, discovers Spark skills from builtin/workspace/user layers, and runs turns through `@earendil-works/pi-ai`.
+- **Spark CLI native host**: `packages/spark-cli` starts `SparkHostRuntime` directly on `@earendil-works/pi-tui`, loads retained builtin extensions through explicit factories (`@zendev-lab/pi-ask`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-graft`, `@zendev-lab/spark`), registers providers such as `baidu-oneapi`, discovers Spark skills from builtin/workspace/user layers, and runs turns through `@earendil-works/pi-ai`.
 
-The extension packages depend on the shared `pi-extension-api` contract, not on Pi's concrete SDK package. Host-specific code belongs under `packages/spark-cli/src/host/` and TUI wrappers under `packages/spark-cli/src/tui/`; the Pi extension implementation should stay usable by Pi without importing spark-cli.
+The extension packages depend on the shared `@zendev-lab/pi-extension-api` contract, not on Pi's concrete SDK package. Host-specific code belongs under `packages/spark-cli/src/host/` and TUI wrappers under `packages/spark-cli/src/tui/`; the Pi extension implementation should stay usable by Pi without importing spark-cli.
 
 ## User-facing entry point
 
@@ -65,24 +65,24 @@ Manage settings through the canonical role tool actions: `role({ action: "model_
 
 ## Packages
 
-- `spark` — high-level `/spark`, `/research`, `/plan`, `/execute`, `/goal`, and `/workflow[:selector]` mode facade that composes generic `pi-*` capabilities with Spark-owned orchestration policy, widget state, builtin Spark roles, and active-context provider registration.
-- `spark-cli` — standalone Spark-first native TUI host built directly on `@earendil-works/pi-tui`; starts directly with `spark`, owns its local transcript/follow-up queue, and provides a local daemon queue for detached session-run tasks.
-- `spark-runtime` — Spark single-task runtime adapter that executes one task through `pi-roles`, writes artifacts, and owns task/run/timeout mapping above `RoleRun`.
-- `pi-extension-api` — shared extension host/tool contract, refs, errors, and light JSON/fs/time helpers.
-- `pi-artifacts` — reusable artifact/evidence store, durable artifact metadata/blobs, provenance/lineage contracts, and the canonical `artifact` action tool.
-- `pi-tasks` — generic project/task/TODO/run graph capability and canonical `task({ action })` tool; owns readiness, claims, TODO stores, and `.spark/projects.json` graph state without depending on Spark packages.
-- `pi-learnings` — generic evidence-backed learning capability and canonical `learning({ action })` tool; owns `.learnings/` local/user learning stores.
-- `pi-goal` — generic durable goal primitives and continuation prompt helpers; Spark owns the project-bound `/goal` facade while preserving historical serialized marker strings.
-- `pi-workflows` — saved-script workflow discovery/runtime primitives plus workflow/DAG run-store support for `.spark/workflow-runs.json`.
-- `pi-context` — registered context-provider capability with bounded list/preview actions and no freeform prompt injection.
-- `pi-recall` — controlled explicit-scope recall candidate store/tool, separate from `.learnings/` and automatic memory.
-- `pi-cue` — reusable Pi/cue-shell execution substrate.
-- `pi-ask` — canonical public/default `ask` action tool with shared focused/flow protocol, state, renderer, and direct custom input handling behind that surface.
-- `pi-roles` — canonical `role` action tool plus reusable `RoleSpec` definitions, builtin/project/user role discovery, Markdown stores, role model settings, and task-agnostic direct role calls. It owns fresh/forked CLI launch, timeout/cancel, stdout/stderr capture, model-setting resolution, and tolerant JSONL parsing; it does not own Spark task DAGs, asks, artifacts, review gates, or package-specific role semantics.
+- `@zendev-lab/spark` — high-level `/spark`, `/research`, `/plan`, `/execute`, `/goal`, and `/workflow[:selector]` mode facade that composes generic `pi-*` capabilities with Spark-owned orchestration policy, widget state, builtin Spark roles, and active-context provider registration.
+- `@zendev-lab/spark-cli` — standalone Spark-first native TUI host built directly on `@earendil-works/pi-tui`; starts the `spark` command, owns its local transcript/follow-up queue, and provides a local daemon queue for detached session-run tasks.
+- `@zendev-lab/spark-runtime` — Spark single-task runtime adapter that executes one task through `@zendev-lab/pi-roles`, writes artifacts, and owns task/run/timeout mapping above `RoleRun`.
+- `@zendev-lab/pi-extension-api` — shared extension host/tool contract, refs, errors, and light JSON/fs/time helpers.
+- `@zendev-lab/pi-artifacts` — reusable artifact/evidence store, durable artifact metadata/blobs, provenance/lineage contracts, and the canonical `artifact` action tool.
+- `@zendev-lab/pi-tasks` — generic project/task/TODO/run graph capability and canonical `task({ action })` tool; owns readiness, claims, TODO stores, and `.spark/projects.json` graph state without depending on Spark packages.
+- `@zendev-lab/pi-learnings` — generic evidence-backed learning capability and canonical `learning({ action })` tool; owns `.learnings/` local/user learning stores.
+- `@zendev-lab/pi-goal` — generic durable goal primitives and continuation prompt helpers; Spark owns the project-bound `/goal` facade while preserving historical serialized marker strings.
+- `@zendev-lab/pi-workflows` — saved-script workflow discovery/runtime primitives plus workflow/DAG run-store support for `.spark/workflow-runs.json`.
+- `@zendev-lab/pi-context` — registered context-provider capability with bounded list/preview actions and no freeform prompt injection.
+- `@zendev-lab/pi-recall` — controlled explicit-scope recall candidate store/tool, separate from `.learnings/` and automatic memory.
+- `@zendev-lab/pi-cue` — reusable Pi/cue-shell execution substrate.
+- `@zendev-lab/pi-ask` — canonical public/default `ask` action tool with shared focused/flow protocol, state, renderer, and direct custom input handling behind that surface.
+- `@zendev-lab/pi-roles` — canonical `role` action tool plus reusable `RoleSpec` definitions, builtin/project/user role discovery, Markdown stores, role model settings, and task-agnostic direct role calls. It owns fresh/forked CLI launch, timeout/cancel, stdout/stderr capture, model-setting resolution, and tolerant JSONL parsing; it does not own Spark task DAGs, asks, artifacts, review gates, or package-specific role semantics.
 
 Retired migration packages (`spark-core`, `spark-tasks`, `spark-learnings`, `spark-goal`, and `spark-workflows`) are no longer workspaces. No compatibility packages, long-lived `spark_*` tool aliases, or dual public/default tool surfaces are planned. Public action tools render as `tool action=<value> ...`. `spark-github` is intentionally deferred.
 
-Pi package loading is manifest-first: the root `pi` manifest explicitly lists each user-visible extension entry (`pi-ask`, `pi-artifacts`, `pi-cue`, `pi-roles`, `pi-recall`, `pi-workflows`, `pi-graft`, the Baidu OneAPI provider, and `spark`). Library-only packages stay as dependencies. `pi-* -> spark-*` regressions are guarded by `pnpm run check:boundaries`, a `prek` hook, and the CI static-check workflow.
+Pi package loading is manifest-first: the root `pi` manifest explicitly lists each user-visible extension entry (`@zendev-lab/pi-ask`, `@zendev-lab/pi-artifacts`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-recall`, `@zendev-lab/pi-workflows`, `@zendev-lab/pi-graft`, the Baidu OneAPI provider, and `@zendev-lab/spark`). Library-only packages stay as dependencies. `pi-* -> spark-*` regressions are guarded by `pnpm run check:boundaries`, a `prek` hook, and the CI static-check workflow.
 
 ## Development
 

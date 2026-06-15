@@ -1,7 +1,7 @@
 import { join, relative } from "node:path";
 
-import { nowIso } from "pi-extension-api";
-import type { TaskGraph } from "pi-tasks";
+import { nowIso } from "@zendev-lab/pi-extension-api";
+import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import {
   collectSparkProtectedStoreSummaries,
   collectSparkStateCacheSummaries,

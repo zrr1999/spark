@@ -1,5 +1,5 @@
 {
-  "name": "pi-roles",
+  "name": "@zendev-lab/pi-roles",
   "version": "0.1.0",
   "description": "Reusable Pi role specs, role registry/storage, and single RoleRun launch helpers.",
   "license": "MIT",
@@ -12,6 +12,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./extension": "./src/extension.ts"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"

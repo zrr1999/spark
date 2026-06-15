@@ -16,7 +16,7 @@
  * (`pi-cue`, `spark/extension`) and absolute file URLs.
  */
 
-import type { ExtensionAPI } from "pi-extension-api";
+import type { ExtensionAPI } from "@zendev-lab/pi-extension-api";
 
 import { createSparkExtensionImporter } from "./extension-loader.ts";
 import type { ProviderRegistrationAPI } from "./provider-registry.ts";

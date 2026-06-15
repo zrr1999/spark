@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { validateArtifact } from "pi-artifacts";
+import { validateArtifact } from "@zendev-lab/pi-artifacts";
 import {
   formatJsonFile,
   newRef,
@@ -15,9 +15,9 @@ import {
   writeJsonFileAtomic,
   writeTextFileAtomic,
   type TaskPlan,
-} from "pi-extension-api";
-import { builtinRoleRef, createBuiltinRoles } from "pi-roles";
-import { TaskGraph } from "pi-tasks";
+} from "@zendev-lab/pi-extension-api";
+import { builtinRoleRef, createBuiltinRoles } from "@zendev-lab/pi-roles";
+import { TaskGraph } from "@zendev-lab/pi-tasks";
 import { renderSparkActiveSystemPrompt } from "../packages/spark/src/extension/spark-active-injection.ts";
 import { isGenericTaskNameForTitle } from "../packages/spark/src/extension/spark-claim-task-tool-registration.ts";
 import { isPlaceholderProjectTitle } from "../packages/spark/src/extension/spark-graph-invariants.ts";
@@ -314,7 +314,7 @@ void test("task role labels prefer active claim, finished attribution, then late
 
 void test("Spark prompt is a one-line mode marker", () => {
   const prompt = renderSparkActiveSystemPrompt("");
-  assert.match(prompt, /^Spark mode: auto\./);
+  assert.match(prompt, /^Spark mode: research\./);
   assert.match(prompt, /Spark tools are available/);
   assert.match(prompt, /task, artifact, ask, role, learning, context, recall, workflow, patch/);
   assert.match(prompt, /no guessing: ask unless user says infer\/research/);
@@ -331,13 +331,19 @@ void test("Spark prompt is a one-line mode marker", () => {
 void test("Spark prompt threads the current session mode into the marker", () => {
   const planPrompt = renderSparkActiveSystemPrompt("", "plan");
   assert.match(planPrompt, /^Spark mode: plan\./);
-  const executePrompt = renderSparkActiveSystemPrompt("", "execute");
-  assert.match(executePrompt, /mode: execute/);
+  const implementPrompt = renderSparkActiveSystemPrompt("", "implement");
+  assert.match(implementPrompt, /mode: implement/);
 });
 
-void test("builtin Pi roles are instructed to use ask tools for blockers", () => {
+void test("builtin Pi roles separate interactive blockers from reviewer verdicts", () => {
   for (const role of createBuiltinRoles()) {
-    assert.match(role.systemPrompt, /use the available ask tool/i);
+    if (role.id === "reviewer") {
+      assert.equal((role.allowedTools ?? []).includes("ask"), false);
+      assert.match(role.systemPrompt, /Do not ask interactively/);
+      assert.match(role.systemPrompt, /findings\/blockers/);
+    } else {
+      assert.match(role.systemPrompt, /use the available ask tool/i);
+    }
     assert.match(role.systemPrompt, /block|ambigu/i);
     assert.doesNotMatch(role.systemPrompt, /Spark ask tools/i);
   }

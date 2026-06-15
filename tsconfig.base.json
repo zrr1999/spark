@@ -15,18 +15,33 @@
     "rootDir": ".",
     "ignoreDeprecations": "6.0",
     "paths": {
-      "pi-extension-api": ["./packages/pi-extension-api/src/index.ts"],
-      "pi-roles": ["./packages/pi-roles/src/index.ts"],
-      "pi-roles/extension": ["./packages/pi-roles/src/extension.ts"],
-      "pi-graft": ["./packages/pi-graft/src/index.ts"],
-      "pi-graft/extension": ["./packages/pi-graft/src/extension.ts"],
-      "pi-ask": ["./packages/pi-ask/src/index.ts"],
-      "pi-ask/extension": ["./packages/pi-ask/src/extension.ts"],
-      "pi-cue": ["./packages/pi-cue/src/index.ts"],
-      "pi-cue/extension": ["./packages/pi-cue/src/extension/index.ts"],
-      "spark/extension": ["./packages/spark/src/extension/index.ts"],
-      "pi-goal": ["./packages/pi-goal/src/index.ts"],
-      "pi-workflows": ["./packages/pi-workflows/src/index.ts"]
+      "@zendev-lab/pi-artifacts": ["./packages/pi-artifacts/src/index.ts"],
+      "@zendev-lab/pi-artifacts/extension": ["./packages/pi-artifacts/src/extension.ts"],
+      "@zendev-lab/pi-ask": ["./packages/pi-ask/src/index.ts"],
+      "@zendev-lab/pi-ask/extension": ["./packages/pi-ask/src/extension.ts"],
+      "@zendev-lab/pi-context": ["./packages/pi-context/src/index.ts"],
+      "@zendev-lab/pi-context/extension": ["./packages/pi-context/src/extension.ts"],
+      "@zendev-lab/pi-cue": ["./packages/pi-cue/src/index.ts"],
+      "@zendev-lab/pi-cue/extension": ["./packages/pi-cue/src/extension/index.ts"],
+      "@zendev-lab/pi-extension-api": ["./packages/pi-extension-api/src/index.ts"],
+      "@zendev-lab/pi-goal": ["./packages/pi-goal/src/index.ts"],
+      "@zendev-lab/pi-graft": ["./packages/pi-graft/src/index.ts"],
+      "@zendev-lab/pi-graft/extension": ["./packages/pi-graft/src/extension.ts"],
+      "@zendev-lab/pi-learnings": ["./packages/pi-learnings/src/index.ts"],
+      "@zendev-lab/pi-learnings/extension": ["./packages/pi-learnings/src/extension.ts"],
+      "@zendev-lab/pi-recall": ["./packages/pi-recall/src/index.ts"],
+      "@zendev-lab/pi-recall/extension": ["./packages/pi-recall/src/extension.ts"],
+      "@zendev-lab/pi-roles": ["./packages/pi-roles/src/index.ts"],
+      "@zendev-lab/pi-roles/extension": ["./packages/pi-roles/src/extension.ts"],
+      "@zendev-lab/pi-tasks": ["./packages/pi-tasks/src/index.ts"],
+      "@zendev-lab/pi-tasks/extension": ["./packages/pi-tasks/src/extension.ts"],
+      "@zendev-lab/pi-workflows": ["./packages/pi-workflows/src/index.ts"],
+      "@zendev-lab/pi-workflows/extension": ["./packages/pi-workflows/src/extension.ts"],
+      "@zendev-lab/spark-cli/baidu-oneapi-provider": [
+        "./packages/spark-cli/src/baidu-oneapi-provider.ts"
+      ],
+      "@zendev-lab/spark-runtime": ["./packages/spark-runtime/src/index.ts"],
+      "@zendev-lab/spark/extension": ["./packages/spark/src/extension/index.ts"]
     }
   }
 }

@@ -6,8 +6,8 @@ import {
   createPiAskFlowResult,
   isPiAskFlowGateBlocked,
   runPiAskFlow,
-} from "pi-ask";
-import { detectCopyLanguage } from "pi-extension-api";
+} from "@zendev-lab/pi-ask";
+import { detectCopyLanguage } from "@zendev-lab/pi-extension-api";
 
 void test("Spark asks are built from caller-provided context-specific questions", () => {
   const request = createPiAskFlowRequest({

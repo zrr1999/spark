@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { builtinRoleIds, createBuiltinRoles } from "pi-roles";
+import { builtinRoleIds, createBuiltinRoles } from "@zendev-lab/pi-roles";
 import { createSparkRoleRegistry } from "../packages/spark/src/extension/spark-role-registry.ts";
 
 void test("Spark role registries keep patcher out of builtin roles", async () => {

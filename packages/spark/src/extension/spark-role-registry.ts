@@ -1,4 +1,8 @@
-import { createDefaultRoleRegistry, hydrateDefaultRoleRegistry, type RoleRegistry } from "pi-roles";
+import {
+  createDefaultRoleRegistry,
+  hydrateDefaultRoleRegistry,
+  type RoleRegistry,
+} from "@zendev-lab/pi-roles";
 
 export async function createSparkRoleRegistry(cwd: string): Promise<RoleRegistry> {
   const registry = createDefaultRoleRegistry();

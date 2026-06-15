@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ExtensionContext } from "pi-extension-api";
+import type { ExtensionContext } from "@zendev-lab/pi-extension-api";
 
 import { SparkHostRuntime } from "../packages/spark-cli/src/host/runtime.ts";
 

@@ -1,7 +1,7 @@
 import { Type } from "typebox";
-import type { RunRef } from "pi-extension-api";
+import type { RunRef } from "@zendev-lab/pi-extension-api";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
-import { killActiveSparkRoleRunProcesses } from "spark-runtime";
+import { killActiveSparkRoleRunProcesses } from "@zendev-lab/spark-runtime";
 import {
   acknowledgeBackgroundDagRuns,
   buildSparkBackgroundDetails,

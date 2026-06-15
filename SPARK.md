@@ -1,5 +1,5 @@
 ---
-description: "pi-spark：面向 Pi 的 Spark 工作流套件"
+description: "spark：面向 Pi 的 Spark 工作流套件"
 owner: zrr1999
 created: 2026-05-18
 updated: 2026-06-15
@@ -10,15 +10,15 @@ inspired_by:
    - pi-roles
 ---
 
-# `pi-spark` 项目意图
+# `spark` 项目意图
 
 ## 起源
 
-`pi-spark` 是面向 Pi 的 Spark 工作流套件。它以 `/spark <idea>` 作为兼容入口，将项目意图、项目与任务有向无环图、结构化提问、审查、证据制品、角色执行以及 `cue-shell` 执行能力组织为可追溯的本地工作流。早期 `SPARK.md` 由占位意图生成；当前文件依据已经落地的包边界、历史任务审查和实现状态重新整理。
+`spark` 是面向 Pi 的 Spark 工作流套件。它以 `/spark <idea>` 作为兼容入口，将项目意图、项目与任务有向无环图、结构化提问、审查、证据制品、角色执行以及 `cue-shell` 执行能力组织为可追溯的本地工作流。早期 `SPARK.md` 由占位意图生成；当前文件依据已经落地的包边界、历史任务审查和实现状态重新整理。
 
 ## 当前工作标题
 
-- Pi Spark 工作流套件
+- Spark 工作流套件
 - 面向 Pi 的本地智能开发编排
 
 ## 目标

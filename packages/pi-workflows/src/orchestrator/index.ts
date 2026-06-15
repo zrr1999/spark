@@ -10,8 +10,8 @@ import {
   type TaskRunCompletionSummary,
   type ProjectRef,
   writeJsonFileAtomic,
-} from "pi-extension-api";
-import type { TaskGraph } from "pi-tasks";
+} from "@zendev-lab/pi-extension-api";
+import type { TaskGraph } from "@zendev-lab/pi-tasks";
 
 import {
   collectWorkflowRunNextSteps,
@@ -37,7 +37,7 @@ import { emptyWorkflowRunSnapshot, loadWorkflowRunStoreSnapshot } from "./dag-ru
 export {
   DEFAULT_READY_TASK_MAX_CONCURRENCY,
   DEFAULT_READY_TASK_TIMEOUT_MS,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 export { workflowRunNextSteps, sparkDagRunNextSteps } from "./dag-run-completion.ts";
 export {
   WorkflowRunStoreFormatError,

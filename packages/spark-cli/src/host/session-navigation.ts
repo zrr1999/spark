@@ -8,7 +8,7 @@
  * a child of that selected entry.
  */
 
-import type { CommandConfig, ExtensionCommandContext } from "pi-extension-api";
+import type { CommandConfig, ExtensionCommandContext } from "@zendev-lab/pi-extension-api";
 
 import type {
   SparkLabelEntry,

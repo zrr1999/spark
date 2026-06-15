@@ -1,6 +1,9 @@
-import { registerPiContextTool } from "pi-context/extension";
-import { registerPiLearningTool, type PiLearningToolHandlers } from "pi-learnings/extension";
-import { registerPiTaskTool, type PiTaskToolHandlers } from "pi-tasks/extension";
+import { registerPiContextTool } from "@zendev-lab/pi-context/extension";
+import {
+  registerPiLearningTool,
+  type PiLearningToolHandlers,
+} from "@zendev-lab/pi-learnings/extension";
+import { registerPiTaskTool, type PiTaskToolHandlers } from "@zendev-lab/pi-tasks/extension";
 import { renderSparkToolCall } from "./tool-rendering.ts";
 import { registerSparkAskTools } from "./spark-ask-tool-registration.ts";
 import { registerSparkDagManagerTool } from "./spark-dag-manager-tool-registration.ts";

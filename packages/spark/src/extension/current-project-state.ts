@@ -8,8 +8,8 @@ import {
   nowIso,
   type RunRef,
   type ProjectRef,
-} from "pi-extension-api";
-import type { TaskGraph } from "pi-tasks";
+} from "@zendev-lab/pi-extension-api";
+import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import {
   normalizeCurrentProjectStoreSnapshot,
   type CurrentProjectStoreSnapshot,
@@ -100,7 +100,7 @@ export async function saveSparkExecutionMode(
   ctx: SparkSessionContext | undefined,
   projectRef: ProjectRef,
   focus: string | undefined,
-  mode: SparkAgentMode = "execute",
+  mode: SparkAgentMode = "implement",
   strategy?: SparkExecuteStrategy,
   options?: {
     workflowName?: string;
@@ -117,7 +117,7 @@ export async function saveSparkExecutionMode(
       projectRef,
       focus: focus?.trim() || undefined,
       mode,
-      strategy: mode === "execute" ? (strategy ?? "default") : undefined,
+      strategy: mode === "implement" ? (strategy ?? "default") : undefined,
       workflowName: options?.workflowName?.trim() || undefined,
       inlineScript: options?.inlineScript?.trim() || undefined,
       workflowArgs: options?.workflowArgs,

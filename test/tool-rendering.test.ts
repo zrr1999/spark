@@ -184,7 +184,7 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
     {
       command:
         "pnpm exec node -e \"import('@earendil-works/pi-tui').then(m=>console.log(m.visibleWidth('你好'))).catch(e=>{console.error(e);process.exit(1)})\"",
-      cwd: "/Users/zhanrongrui/workspace/zrr1999/pi-spark",
+      cwd: "/Users/zhanrongrui/workspace/zrr1999/spark",
     },
     80,
   );
@@ -225,10 +225,10 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
   assert.equal(
     renderCall(graftTools, "graft_repo", {
       action: "add",
-      repoId: "pi-spark",
-      url: "https://github.com/zrr1999/pi-spark.git",
+      repoId: "spark",
+      url: "https://github.com/zrr1999/spark.git",
     }),
-    "graft_repo action=add repo=pi-spark url=https://github.com/zrr1999/pi-spark.git",
+    "graft_repo action=add repo=spark url=https://github.com/zrr1999/spark.git",
   );
 
   const longAsk = renderCall(

@@ -1,7 +1,6 @@
 {
-  "name": "pi-goal",
+  "name": "@zendev-lab/pi-goal",
   "version": "0.1.0",
-  "private": true,
   "description": "Generic goal state, usage accounting, and continuation prompt primitives for Pi extensions.",
   "license": "MIT",
   "author": "zrr1999",
@@ -13,6 +12,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"

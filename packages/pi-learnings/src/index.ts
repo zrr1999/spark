@@ -9,7 +9,7 @@ import {
   type ArtifactKind,
   type ArtifactLink,
   type Provenance,
-} from "pi-artifacts";
+} from "@zendev-lab/pi-artifacts";
 import {
   type ArtifactRef,
   type JsonValue,
@@ -18,7 +18,7 @@ import {
   newRef,
   nowIso,
   stableId,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 
 export type LearningCategory = "pattern" | "gotcha" | "decision" | "workflow" | "tool" | "project";
 export type LearningLocation = "user" | "workspace" | "repo";

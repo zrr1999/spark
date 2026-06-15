@@ -8,7 +8,6 @@ extend-ignore-re = [
 [default.extend-words]
 agentic = "agentic"
 earendil = "earendil"
-pi-spark = "pi-spark"
 spark-md = "spark-md"
 sixbones = "sixbones"
 typebox = "typebox"

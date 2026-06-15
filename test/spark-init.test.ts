@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { TaskGraph, defaultTaskGraphStore, defaultTaskTodoStore } from "pi-tasks";
+import { TaskGraph, defaultTaskGraphStore, defaultTaskTodoStore } from "@zendev-lab/pi-tasks";
 import sparkExtension from "../packages/spark/src/extension/index.ts";
 import {
   renderActiveSparkContextSummary,
@@ -119,7 +119,7 @@ void test("initializeSparkIdea does not overwrite an existing initialized projec
 
 void test("Spark prompt preserves base prompt and stays a single-line mode marker", () => {
   const prompt = renderSparkActiveSystemPrompt("Base prompt");
-  assert.match(prompt, /^Base prompt\n\nSpark mode: auto\./);
+  assert.match(prompt, /^Base prompt\n\nSpark mode: research\./);
   assert.match(prompt, /Spark tools are available/);
   assert.match(prompt, /task, artifact, ask, role, learning, context, recall, workflow, patch/);
   assert.match(prompt, /no guessing: ask unless user says infer\/research/);

@@ -6,8 +6,8 @@ import {
   type TaskRef,
   type TaskRun,
   type ProjectRef,
-} from "pi-extension-api";
-import type { TaskGraph } from "pi-tasks";
+} from "@zendev-lab/pi-extension-api";
+import type { TaskGraph } from "@zendev-lab/pi-tasks";
 
 export interface ReadyTaskRunInput {
   graph: TaskGraph;

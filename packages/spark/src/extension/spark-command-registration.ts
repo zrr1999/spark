@@ -1,18 +1,18 @@
-import { defaultArtifactStore } from "pi-artifacts";
+import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
 import {
   isActiveSessionTodo,
   isUnfinishedTaskStatus,
   type SessionTodoEntry,
   type TaskGraph,
-} from "pi-tasks";
+} from "@zendev-lab/pi-tasks";
 import {
   nowIso,
   type ArtifactRef,
   type JsonValue,
   type ProjectRef,
   type RoleRef,
-} from "pi-extension-api";
-import { type SparkEntryIntent } from "./spark-entry.ts";
+} from "@zendev-lab/pi-extension-api";
+import type { SparkEntryIntent } from "./spark-entry.ts";
 import {
   applySparkEntryResolution,
   type SparkEntryApplicationDeps,
@@ -154,13 +154,13 @@ export function registerSparkCommands(
     },
   });
 
-  pi.registerCommand("execute", {
+  pi.registerCommand("implement", {
     description:
-      "Enter Spark execute mode for one bounded task; use /goal or /workflow for broader progress.",
+      "Enter Spark implement mode for one bounded task; use /goal or /workflow for broader progress.",
     async handler(args, ctx) {
       await handleSparkEntryCommand(pi, ctx, {
         kind: "direct",
-        mode: "execute",
+        mode: "implement",
         prompt: args.trim(),
         executeStrategy: "default",
       });
@@ -181,7 +181,7 @@ export function registerSparkCommands(
       const parsed = parseWorkflowCommandArgs(args);
       await handleSparkEntryCommand(pi, ctx, {
         kind: "direct",
-        mode: "execute",
+        mode: "implement",
         prompt: parsed.focus,
         executeStrategy: "workflow",
         workflowSelector: parsed.selector,

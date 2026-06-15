@@ -1,5 +1,5 @@
 {
-  "name": "spark",
+  "name": "@zendev-lab/spark",
   "version": "0.1.0",
   "description": "High-level /spark facade for Pi.",
   "license": "MIT",
@@ -13,20 +13,23 @@
   "exports": {
     "./extension": "./src/extension/index.ts"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.74.1",
-    "pi-artifacts": "file:../pi-artifacts",
-    "pi-context": "file:../pi-context",
-    "pi-extension-api": "file:../pi-extension-api",
-    "pi-goal": "file:../pi-goal",
-    "pi-learnings": "file:../pi-learnings",
-    "pi-roles": "file:../pi-roles",
-    "pi-tasks": "file:../pi-tasks",
-    "pi-workflows": "file:../pi-workflows",
-    "spark-runtime": "file:../spark-runtime",
+    "@zendev-lab/pi-artifacts": "workspace:^",
+    "@zendev-lab/pi-context": "workspace:^",
+    "@zendev-lab/pi-extension-api": "workspace:^",
+    "@zendev-lab/pi-goal": "workspace:^",
+    "@zendev-lab/pi-learnings": "workspace:^",
+    "@zendev-lab/pi-roles": "workspace:^",
+    "@zendev-lab/pi-tasks": "workspace:^",
+    "@zendev-lab/pi-workflows": "workspace:^",
+    "@zendev-lab/spark-runtime": "workspace:^",
     "typebox": "^1.1.38"
   }
 }

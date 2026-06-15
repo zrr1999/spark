@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Pi Spark monorepo: agent-oriented docs for contributors and automation. Product overview lives in [README.md](./README.md).
+Spark monorepo: agent-oriented docs for contributors and automation. Product overview lives in [README.md](./README.md).
 
 ## Layout
 

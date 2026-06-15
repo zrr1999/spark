@@ -79,6 +79,7 @@ export const LEGACY_ARTIFACT_KIND_ALIASES: Readonly<Record<string, ArtifactKind>
   plan: "document",
   "task-breakdown": "document",
   "role-plan": "document",
+  "agent-plan": "document",
   handoff: "document",
   "role-spec-proposal": "document",
   "learning-export": "document",

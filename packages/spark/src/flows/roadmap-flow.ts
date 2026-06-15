@@ -5,8 +5,8 @@ import {
   type RoadmapItemRef,
   type TaskPlan,
   type TaskRef,
-} from "pi-extension-api";
-import { type TaskPlanInput, type TaskGraph } from "pi-tasks";
+} from "@zendev-lab/pi-extension-api";
+import { type TaskPlanInput, type TaskGraph } from "@zendev-lab/pi-tasks";
 
 export type { ProjectRoadmap, RoadmapItem, RoadmapItemRef };
 export type RoadmapRef = ProjectRoadmap["ref"];

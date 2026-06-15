@@ -22,9 +22,9 @@ import {
   type PiAskFlowQuestionTypeVal,
   type PiAskFlowRequest,
   type PiAskFlowResult,
-} from "pi-ask";
-import { defaultArtifactStore } from "pi-artifacts";
-import type { ArtifactRef, JsonValue } from "pi-extension-api";
+} from "@zendev-lab/pi-ask";
+import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
+import type { ArtifactRef, JsonValue } from "@zendev-lab/pi-extension-api";
 
 export const MIN_SPARK_ASK_OPTION_DESCRIPTION_LENGTH = 12;
 

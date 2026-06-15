@@ -1,5 +1,5 @@
 {
-  "name": "pi-recall",
+  "name": "@zendev-lab/pi-recall",
   "version": "0.1.0",
   "description": "Controlled scoped recall candidate capability for Pi extensions.",
   "license": "MIT",
@@ -13,11 +13,14 @@
     ".": "./src/index.ts",
     "./extension": "./src/extension.ts"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
-    "pi-extension-api": "file:../pi-extension-api",
+    "@zendev-lab/pi-extension-api": "workspace:^",
     "typebox": "^1.1.38"
   },
   "pi": {

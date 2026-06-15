@@ -13,7 +13,7 @@ import {
   type RoleRunMode,
   type RoleRunRef,
   type RoleSpec,
-} from "pi-roles";
+} from "@zendev-lab/pi-roles";
 import { Type } from "typebox";
 
 import type {

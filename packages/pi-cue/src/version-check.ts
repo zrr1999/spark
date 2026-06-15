@@ -217,7 +217,7 @@ function cacheFilePath(): string {
     process.env.XDG_CACHE_HOME && process.env.XDG_CACHE_HOME.length > 0
       ? process.env.XDG_CACHE_HOME
       : join(homedir(), ".cache");
-  return join(base, "pi-cue", "cued-version.json");
+  return join(base, "@zendev-lab/pi-cue", "cued-version.json");
 }
 
 async function readCache(path: string): Promise<CacheEntry | null> {

@@ -16,8 +16,8 @@ void test("pi-workflows package stays isolated from runtime execution packages",
     dependencies?: Record<string, string>;
   };
 
-  assert.equal(pkg.dependencies?.["spark-runtime"], undefined);
-  assert.equal(pkg.dependencies?.["pi-roles"], undefined);
+  assert.equal(pkg.dependencies?.["@zendev-lab/spark-runtime"], undefined);
+  assert.equal(pkg.dependencies?.["@zendev-lab/pi-roles"], undefined);
   assert.equal(pkg.dependencies?.["spark-goal"], undefined);
 
   const sourceFiles = await listTypeScriptFiles("packages/pi-workflows/src");

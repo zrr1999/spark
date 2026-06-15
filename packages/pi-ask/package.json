@@ -1,5 +1,5 @@
 {
-  "name": "pi-ask",
+  "name": "@zendev-lab/pi-ask",
   "version": "0.1.0",
   "description": "Structured ask_user and ask_flow primitives for Pi.",
   "license": "MIT",
@@ -13,12 +13,15 @@
     ".": "./src/index.ts",
     "./extension": "./src/extension.ts"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.74.1",
-    "pi-extension-api": "file:../pi-extension-api",
+    "@zendev-lab/pi-extension-api": "workspace:^",
     "typebox": "^1.1.38"
   },
   "pi": {

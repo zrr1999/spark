@@ -1,5 +1,5 @@
-import type { Task, TaskRef } from "pi-extension-api";
-import { isUnfinishedTaskStatus } from "pi-tasks";
+import type { Task, TaskRef } from "@zendev-lab/pi-extension-api";
+import { isUnfinishedTaskStatus } from "@zendev-lab/pi-tasks";
 
 export function todoStatus(todo: unknown): string | undefined {
   return todo && typeof todo === "object" && "status" in todo

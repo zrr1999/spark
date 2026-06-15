@@ -5,13 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { ArtifactStore } from "pi-artifacts";
-import type { JsonValue, RoleRef, RunRef, TaskRef, ProjectRef } from "pi-extension-api";
+import { ArtifactStore } from "@zendev-lab/pi-artifacts";
+import type { JsonValue, RoleRef, RunRef, TaskRef, ProjectRef } from "@zendev-lab/pi-extension-api";
 import {
   collectRoleRunArtifactRetentionPlan,
   isRoleRunArtifactBody,
   readRoleRunArtifactPreview,
-} from "spark-runtime";
+} from "@zendev-lab/spark-runtime";
 
 void test("runtime role-run artifact body guard owns compact artifact shape", () => {
   const valid = {

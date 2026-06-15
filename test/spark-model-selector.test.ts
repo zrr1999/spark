@@ -46,7 +46,7 @@ function provider(name: string, models: ProviderModelDefinition[]): ProviderConf
 }
 
 function configSeed(): SparkConfig {
-  return { extensions: ["spark/extension"], providers: ["fake-provider"] };
+  return { extensions: ["@zendev-lab/spark/extension"], providers: ["fake-provider"] };
 }
 
 function cloneConfig(config: SparkConfig): SparkConfig {
@@ -107,7 +107,7 @@ void test("SparkModelSelector select validates through registry and persists Spa
   assert.equal(config.activeModel, "model-z");
   assert.deepEqual(saved, [
     {
-      extensions: ["spark/extension"],
+      extensions: ["@zendev-lab/spark/extension"],
       providers: ["fake-provider"],
       activeProvider: "other",
       activeModel: "model-z",

@@ -12,8 +12,8 @@ import {
   runRole,
   type RoleRegistry,
   type RoleRunMode,
-} from "pi-roles";
-import type { ArtifactStore } from "pi-artifacts";
+} from "@zendev-lab/pi-roles";
+import type { ArtifactStore } from "@zendev-lab/pi-artifacts";
 import {
   DependencyError,
   type ArtifactRef,
@@ -28,14 +28,14 @@ import {
   type TaskRun,
   type TaskRunCompletionSummary,
   type TaskTodo,
-} from "pi-extension-api";
-import type { RoleInstruction, RoleRunRecord, RoleRunStatus } from "pi-roles";
+} from "@zendev-lab/pi-extension-api";
+import type { RoleInstruction, RoleRunRecord, RoleRunStatus } from "@zendev-lab/pi-roles";
 import {
   taskCompletionReadiness,
   type TaskGraph,
   type TaskGraphStore,
   type TaskGraphStoreUpdateOptions,
-} from "pi-tasks";
+} from "@zendev-lab/pi-tasks";
 import {
   type RoleRunArtifactBody,
   type RoleRunJsonEventsTail,
@@ -72,7 +72,7 @@ export interface SparkRoleRunResult {
   jsonEvents: unknown[];
 }
 
-export { type RoleRunMode } from "pi-roles";
+export { type RoleRunMode } from "@zendev-lab/pi-roles";
 
 export interface ActiveSparkRoleRunProcess {
   runRef: RunRef;

@@ -1,4 +1,4 @@
-import { defaultTaskGraphStore } from "pi-tasks";
+import { defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
 import {
   ensureSparkStateForActiveWorkspace,
   handleSparkInput,

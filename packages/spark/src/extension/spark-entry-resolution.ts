@@ -1,6 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { isUnfinishedTaskStatus, type TaskGraph } from "pi-tasks";
+import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
 import { hasNonSparkProjectFiles } from "./spark-activation.ts";
 import {
   analyzeSparkEntryMode,
@@ -62,7 +62,7 @@ export async function resolveSparkEntry(
       ? { action: "initialize_new_project", idea, enterPlanning: true, planningSource: "auto" }
       : { action: "none" };
   }
-  const executeStrategy = mode === "execute" ? resolveExecuteStrategy(intent) : undefined;
+  const executeStrategy = mode === "implement" ? resolveExecuteStrategy(intent) : undefined;
   const workflowSelector =
     executeStrategy === "workflow"
       ? await resolveWorkflowSelector(ctx, graph, intent.prompt, intent)

@@ -226,7 +226,7 @@ Example allowlist:
 [activation]
 enabled = true
 allow_dirs = [
-  "/Users/zhanrongrui/workspace/zrr1999/loom-dev/pi-spark",
+  "/Users/zhanrongrui/workspace/zrr1999/loom-dev/spark",
   "~/workspace/spore-lang"
 ]
 ```

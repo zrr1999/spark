@@ -1,4 +1,4 @@
-import { defaultTaskGraphStore, type TaskGraph } from "pi-tasks";
+import { defaultTaskGraphStore, type TaskGraph } from "@zendev-lab/pi-tasks";
 import { renderActiveSparkContext } from "./spark-active-context.ts";
 import { ensureLocalSparkDirectory, readActiveSparkMd } from "./spark-activation.ts";
 import { ensureSparkClaimReaper, sweepExpiredSparkClaims } from "./spark-claim-reaper.ts";
@@ -45,10 +45,12 @@ export async function handleSparkInput(
 }
 
 export async function injectSparkHints(event: unknown, ctx: SparkToolContext): Promise<unknown> {
-  const graph = await ensureSparkStateForActiveWorkspace(ctx.cwd, ctx);
-  if (!graph) return undefined;
-  const summary = await renderActiveSparkContextWithLanguage(ctx.cwd, ctx);
+  // Spark is always available: inject the standing mode marker even when no
+  // local .spark/ state exists yet. The richer active-context block is only
+  // appended once a task graph is present.
   const mode = (await loadSparkMode(ctx.cwd, ctx)).mode;
+  const graph = await ensureSparkStateForActiveWorkspace(ctx.cwd, ctx);
+  const summary = graph ? await renderActiveSparkContextWithLanguage(ctx.cwd, ctx) : undefined;
   const sparkPrompt = renderSparkActiveSystemPrompt(
     eventSystemPrompt(event),
     mode,
@@ -115,7 +117,7 @@ export async function ensureSparkStateForActiveWorkspace(
 
 export function renderSparkActiveSystemPrompt(
   basePrompt: string,
-  mode: SparkSessionMode = "auto",
+  mode: SparkSessionMode = "research",
   language?: SparkLanguage,
 ): string {
   const sparkPrompt = `Spark mode: ${mode}. Spark tools are available: task, artifact, ask, role, learning, context, recall, workflow, patch. Use project/task/TODO/SPARK.md context when present; ≤1 task; no canned asks; no guessing: ask unless user says infer/research.`;

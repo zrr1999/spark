@@ -9,7 +9,7 @@ import type {
   ExtensionUiNotifyLevel,
   ToolConfig,
   ToolInfo,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 
 import { SparkHostRuntime } from "../packages/spark-cli/src/host/runtime.ts";
 import type {

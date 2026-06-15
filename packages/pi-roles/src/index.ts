@@ -127,7 +127,9 @@ export interface DefaultRoleRegistryOptions {
   now?: string;
 }
 
-const ROLE_CONTEXT_TOOLS = ["context", "learning", "artifact", "task", "ask"] as const;
+const ROLE_OBSERVATION_TOOLS = ["context", "learning", "artifact", "task"] as const;
+const ROLE_INTERACTIVE_TOOLS = ["ask"] as const;
+const ROLE_CONTEXT_TOOLS = [...ROLE_OBSERVATION_TOOLS, ...ROLE_INTERACTIVE_TOOLS] as const;
 const ROLE_EXECUTION_TOOLS = [
   "cue_exec",
   "cue_run",
@@ -207,9 +209,9 @@ export function createBuiltinRoles(now = nowIso()): RoleSpec[] {
     builtin(
       "reviewer",
       "Reviews results and artifacts against task intent.",
-      "You are a Pi reviewer. Verify claims from fresh context, return actionable findings, use the available ask tool for blocking ambiguous intent instead of silently assuming it, and call out placeholder/generic/stale project or task names only when a safe improvement is obvious and would preserve refs.",
+      "You are a Pi reviewer. Verify claims from fresh context and return actionable findings. Do not ask interactively; when intent or evidence is ambiguous, reject with concrete questions in findings/blockers instead of silently assuming an answer. Call out placeholder/generic/stale project or task names only when a safe improvement is obvious and would preserve refs.",
       now,
-      [...ROLE_CONTEXT_TOOLS, ...ROLE_EXECUTION_TOOLS],
+      [...ROLE_OBSERVATION_TOOLS, ...ROLE_EXECUTION_TOOLS],
     ),
     builtin(
       "oracle",

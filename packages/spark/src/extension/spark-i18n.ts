@@ -1,5 +1,5 @@
-import { detectCopyLanguage, type CopyLanguage } from "pi-extension-api";
-import type { TaskGraph } from "pi-tasks";
+import { detectCopyLanguage, type CopyLanguage } from "@zendev-lab/pi-extension-api";
+import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import type { SparkSessionGoal } from "./spark-session-goals.ts";
 
 type SparkProjectLike = ReturnType<TaskGraph["projects"]>[number];
@@ -163,9 +163,9 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
     goalLine: (objective) => `Goal: ${objective}`,
     loopTickHeader: "Spark foreground goal loop tick.",
     loopModeDecisionContract:
-      "Main session mode decision required: choose exactly one of research, plan, or execute for this tick; state the mode and whether you are staying or switching, with a brief reason. Goal, workflow, subagent role, and role-run are not modes.",
+      "Main session mode decision required: choose exactly one of research, plan, or implement for this tick; state the mode and whether you are staying or switching, with a brief reason. Goal, workflow, subagent role, and role-run are not modes.",
     loopReviewerOwnership:
-      "Goal is a meta-mode over research/plan/execute. Use research for investigation (prefer subagent role + main-agent summary when parallel inspection helps), plan for task decomposition, execute for bounded work (prefer saved workflow runtime or task run_ready for parallelizable execution when it fits). These are strategy recommendations, not mandatory steps. Goal completion is reviewer-owned; when blocked, resolve the blocking work instead of pausing or weakening the goal.",
+      "Goal is a meta-mode over research/plan/implement. Use research for investigation (prefer subagent role + main-agent summary when parallel inspection helps), plan for task decomposition, implement for bounded work (prefer saved workflow runtime or task run_ready for parallelizable execution when it fits). These are strategy recommendations, not mandatory steps. Goal completion is reviewer-owned; when blocked, resolve the blocking work instead of pausing or weakening the goal.",
     emptyGoalNotSet: "Spark session goal is not set.",
     emptyGoalReadContext:
       "Read the Spark project/task context below and decide a concrete, stable session goal. Default to the substantive project outcome described by the project purpose/description/title; use planning/readiness-only wording only when the user explicitly asked for that scope.",
@@ -189,9 +189,9 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
     goalLine: (objective) => `目标：${objective}`,
     loopTickHeader: "Spark 前台目标循环节拍。",
     loopModeDecisionContract:
-      "必须选择本 tick 的主 session 模式：只能从 research、plan、execute 中选一个；说明本 tick 的模式，以及是保持还是切换，并给出简短理由。goal、workflow、subagent role、role-run 都不是模式。",
+      "必须选择本 tick 的主 session 模式：只能从 research、plan、implement 中选一个；说明本 tick 的模式，以及是保持还是切换，并给出简短理由。goal、workflow、subagent role、role-run 都不是模式。",
     loopReviewerOwnership:
-      "goal 是覆盖 research/plan/execute 的元模式。research 用于调查（并行检查有帮助时优先 subagent role + 主 agent 汇总），plan 用于任务拆解，execute 用于有边界的执行（适合并行且匹配时优先 saved workflow runtime 或 task run_ready）。这些是策略建议，不是强制步骤。目标完成由 reviewer 决定；遇到阻塞时先解决阻塞工作，不要自主暂停或降低目标难度。",
+      "goal 是覆盖 research/plan/implement 的元模式。research 用于调查（并行检查有帮助时优先 subagent role + 主 agent 汇总），plan 用于任务拆解，implement 用于有边界的执行（适合并行且匹配时优先 saved workflow runtime 或 task run_ready）。这些是策略建议，不是强制步骤。目标完成由 reviewer 决定；遇到阻塞时先解决阻塞工作，不要自主暂停或降低目标难度。",
     emptyGoalNotSet: "尚未设置 Spark 会话目标。",
     emptyGoalReadContext:
       "阅读下方 Spark 项目/任务上下文，给出一个具体且稳定的会话目标。默认目标应表达 project purpose/description/title 所描述的实质成果；只有用户明确要求仅规划/仅就绪时才写成 planning-only/readiness-only。",

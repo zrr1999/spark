@@ -3,7 +3,7 @@ import {
   DEFAULT_READY_TASK_TIMEOUT_MS,
   type ProjectRef,
   type RunRef,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 import { JsonStoreFormatError } from "./json-store.ts";
 
 export type SparkRunStrategy = "sequential" | "parallel";
@@ -17,7 +17,7 @@ export interface SparkPlanningModeState {
   enteredAt: string;
 }
 
-export type SparkAgentMode = "research" | "plan" | "execute";
+export type SparkAgentMode = "research" | "plan" | "implement";
 export type SparkExecuteStrategy = "default" | "goal" | "workflow";
 
 export interface SparkExecutionBudget {
@@ -120,10 +120,10 @@ function normalizeSparkExecutionModeState(
     mode.strategy === undefined
       ? undefined
       : normalizeSparkExecuteStrategy(mode.strategy, filePath);
-  if (agentMode !== "execute" && strategy !== undefined) {
+  if (agentMode !== "implement" && strategy !== undefined) {
     throw new JsonStoreFormatError(
       filePath,
-      "executionMode.strategy is only valid when executionMode.mode is execute",
+      "executionMode.strategy is only valid when executionMode.mode is implement",
     );
   }
   return {
@@ -131,7 +131,7 @@ function normalizeSparkExecutionModeState(
     projectRef: requireString(mode.projectRef, filePath, "executionMode.projectRef") as ProjectRef,
     focus: optionalTrimmedString(mode.focus, filePath, "executionMode.focus"),
     mode: agentMode,
-    strategy: agentMode === "execute" ? (strategy ?? "default") : undefined,
+    strategy: agentMode === "implement" ? (strategy ?? "default") : undefined,
     workflowName: optionalTrimmedString(mode.workflowName, filePath, "executionMode.workflowName"),
     inlineScript: optionalTrimmedString(mode.inlineScript, filePath, "executionMode.inlineScript"),
     workflowArgs: mode.workflowArgs,
@@ -142,8 +142,13 @@ function normalizeSparkExecutionModeState(
 }
 
 function normalizeSparkAgentMode(value: unknown, filePath: string): SparkAgentMode {
-  if (value === "research" || value === "plan" || value === "execute") return value;
-  throw new JsonStoreFormatError(filePath, "executionMode.mode must be research, plan, or execute");
+  if (value === "research" || value === "plan" || value === "implement") return value;
+  // Legacy sessions persisted the third mode as "execute"; normalize to "implement".
+  if (value === "execute") return "implement";
+  throw new JsonStoreFormatError(
+    filePath,
+    "executionMode.mode must be research, plan, or implement",
+  );
 }
 
 function normalizeSparkExecuteStrategy(value: unknown, filePath: string): SparkExecuteStrategy {

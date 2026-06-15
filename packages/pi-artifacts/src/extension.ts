@@ -4,7 +4,7 @@ import type {
   ToolConfig,
   ToolRenderComponent,
   ToolRenderTheme,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 import {
   ARTIFACT_FORMATS,
   ARTIFACT_KINDS,

@@ -18,7 +18,7 @@ import type {
   TaskRun,
   TaskTodo,
   TaskTodoStatus,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 
 export interface CreateProjectInput {
   title: string;

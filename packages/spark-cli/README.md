@@ -20,8 +20,8 @@ spark --help
 
 The CLI boot path constructs Spark-owned host services before opening the TUI:
 
-- `SparkHostRuntime` for the shared `pi-extension-api` surface.
-- `SparkExtensionLoader` for explicit builtin extension factories: `pi-ask`, `pi-cue`, `pi-roles`, `pi-graft`, and `spark`.
+- `SparkHostRuntime` for the shared `@zendev-lab/pi-extension-api` surface.
+- `SparkExtensionLoader` for explicit builtin extension factories: `@zendev-lab/pi-ask`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-graft`, and `@zendev-lab/spark`.
 - `SparkProviderRegistry` plus provider plugins from `~/.spark/config.json#providers[]`.
 - `SparkModelSelector` and `SparkKeybindings` for active model persistence and shortcuts.
 - `SparkSessionStore` for Pi-compatible JSONL sessions under `~/.spark/sessions/<workspaceHash>/`.
@@ -44,13 +44,13 @@ Default shape:
 ```json
 {
    "extensions": [
-      "pi-ask/extension",
-      "pi-cue/extension",
-      "pi-roles/extension",
-      "pi-graft/extension",
-      "spark/extension"
+      "@zendev-lab/pi-ask/extension",
+      "@zendev-lab/pi-cue/extension",
+      "@zendev-lab/pi-roles/extension",
+      "@zendev-lab/pi-graft/extension",
+      "@zendev-lab/spark/extension"}]} –––– err1 + no corr? Wait JSON malformed due extra. Need resend proper. Need not mention? Use commentary tool call only. The previous malformed not executed? We need call correct. –––– (analysis) }        (analysis) Need produce correct tool call.        (commentary to=functions.edit )      (json)      {
    ],
-   "providers": ["spark-cli/baidu-oneapi-provider"],
+   "providers": ["@zendev-lab/spark-cli/baidu-oneapi-provider"],
    "activeProvider": "baidu-oneapi",
    "activeModel": "claude-opus-4.8"
 }
@@ -91,7 +91,7 @@ These features are native Spark CLI responsibilities and should not be added to 
 - Spark CLI skill discovery rooted at builtin/workspace/user `skills` directories.
 - Explicit builtin extension loading for the native host.
 
-Shared extension behavior should stay in extension packages and target `pi-extension-api` so the same extension can run on both hosts.
+Shared extension behavior should stay in extension packages and target `@zendev-lab/pi-extension-api` so the same extension can run on both hosts.
 
 ## Baidu OneAPI provider
 
@@ -106,9 +106,9 @@ Spark CLI does not alias `oneapi` credentials or `OPENAI_API_KEY` into `baidu-on
 
 ## Child role-run policy
 
-For now, child role-runs launched by existing Spark task/workflow packages continue to use the existing Pi JSON runner policy from `spark-runtime` / `pi-roles`:
+For now, child role-runs launched by existing Spark task/workflow packages continue to use the existing Pi JSON runner policy from `@zendev-lab/spark-runtime` / `@zendev-lab/pi-roles`:
 
-- `spark-runtime` defaults role execution to `piCommand: "pi"`.
-- `pi-roles` builds child role-run args as `pi --print --mode json ...`.
+- `@zendev-lab/spark-runtime` defaults role execution to `piCommand: "pi"`.
+- `@zendev-lab/pi-roles` builds child role-run args as `pi --print --mode json ...`.
 
 That policy is separate from the `spark` TUI host. A future native Spark executor can replace it once Spark CLI has a non-TUI child execution backend.

@@ -1,5 +1,9 @@
 import { Type } from "typebox";
-import type { ToolConfig, ToolRenderComponent, ToolRenderTheme } from "pi-extension-api";
+import type {
+  ToolConfig,
+  ToolRenderComponent,
+  ToolRenderTheme,
+} from "@zendev-lab/pi-extension-api";
 
 export type PiLearningAction =
   | "record"

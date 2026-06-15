@@ -8,7 +8,7 @@ import {
   createGoal,
   goalToolResponse,
   validateObjective,
-} from "pi-goal";
+} from "@zendev-lab/pi-goal";
 
 void test("pi-goal package stays isolated from workflow packages", async () => {
   const pkg = JSON.parse(await readFile("packages/pi-goal/package.json", "utf8")) as {

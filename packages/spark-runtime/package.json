@@ -1,5 +1,5 @@
 {
-  "name": "spark-runtime",
+  "name": "@zendev-lab/spark-runtime",
   "version": "0.1.0",
   "description": "Spark runtime execution for single tasks and active child role-runs.",
   "license": "MIT",
@@ -12,14 +12,17 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
-    "pi-artifacts": "file:../pi-artifacts",
-    "pi-extension-api": "file:../pi-extension-api",
-    "pi-roles": "file:../pi-roles",
-    "pi-tasks": "file:../pi-tasks",
-    "pi-workflows": "file:../pi-workflows"
+    "@zendev-lab/pi-artifacts": "workspace:^",
+    "@zendev-lab/pi-extension-api": "workspace:^",
+    "@zendev-lab/pi-roles": "workspace:^",
+    "@zendev-lab/pi-tasks": "workspace:^",
+    "@zendev-lab/pi-workflows": "workspace:^"
   }
 }

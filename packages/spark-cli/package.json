@@ -1,5 +1,5 @@
 {
-  "name": "spark-cli",
+  "name": "@zendev-lab/spark-cli",
   "version": "0.1.0",
   "description": "Standalone Spark-first TUI host built directly on pi-tui.",
   "license": "MIT",
@@ -16,12 +16,15 @@
   "exports": {
     "./baidu-oneapi-provider": "./src/baidu-oneapi-provider.ts"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.74.1",
     "@earendil-works/pi-tui": "^0.74.1",
-    "pi-extension-api": "file:../pi-extension-api"
+    "@zendev-lab/pi-extension-api": "workspace:^"
   }
 }

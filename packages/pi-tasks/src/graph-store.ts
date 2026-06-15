@@ -11,7 +11,7 @@ import {
   stableId,
   writeJsonFileAtomic,
   type Project,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 import { TaskGraph } from "./graph.ts";
 import type {
   TaskGraphSnapshot,

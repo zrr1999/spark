@@ -1,6 +1,10 @@
 import { Type } from "typebox";
-import { defaultLearningStore, type LearningLocation, type LearningRecord } from "pi-learnings";
-import { defaultArtifactStore, type Artifact } from "pi-artifacts";
+import {
+  defaultLearningStore,
+  type LearningLocation,
+  type LearningRecord,
+} from "@zendev-lab/pi-learnings";
+import { defaultArtifactStore, type Artifact } from "@zendev-lab/pi-artifacts";
 import {
   DependencyError,
   isRef,
@@ -12,8 +16,8 @@ import {
   type Task,
   type TaskCompletionReadiness,
   type TaskTodo,
-} from "pi-extension-api";
-import { defaultTaskGraphStore, taskCompletionReadiness } from "pi-tasks";
+} from "@zendev-lab/pi-extension-api";
+import { defaultTaskGraphStore, taskCompletionReadiness } from "@zendev-lab/pi-tasks";
 import {
   currentSparkProject,
   loadSparkExecutionMode,
@@ -655,6 +659,12 @@ async function recordTaskReviewArtifact(
     ...(review.record.runName ? { runName: review.record.runName } : {}),
     startedAt: review.record.startedAt,
     finishedAt: review.record.finishedAt,
+    ...(review.record.stdout
+      ? { stdoutPreview: truncateReviewRunOutput(review.record.stdout, 4_000) }
+      : {}),
+    ...(review.record.stderr
+      ? { stderrPreview: truncateReviewRunOutput(review.record.stderr, 4_000) }
+      : {}),
   };
   return defaultArtifactStore(cwd).put({
     kind: "record",
@@ -676,6 +686,11 @@ async function recordTaskReviewArtifact(
     },
     links: [{ to: task.ref, relation: "review-of" }],
   });
+}
+
+function truncateReviewRunOutput(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `…${value.slice(value.length - Math.max(0, maxChars - 1)).trimStart()}`;
 }
 
 function renderTaskReviewRejectedMessage(
@@ -719,12 +734,12 @@ function renderExecutionModeFinishSuffix(
           continuation;
   }
   return nextReady
-    ? "\nExecution mode stopped after one task. Next ready task: @" +
+    ? "\nImplementation mode stopped after one task. Next ready task: @" +
         nextReady.name +
         ": " +
         nextReady.title +
-        ". Run /execute to take one more step, or /goal to continue autonomously."
-    : "\nExecution mode stopped after one task. No ready task remains; inspect blockers or finish the project.";
+        ". Run /implement to take one more step, or /goal to continue autonomously."
+    : "\nImplementation mode stopped after one task. No ready task remains; inspect blockers or finish the project.";
 }
 function normalizeSparkFinishStatus(value: unknown): "done" | "failed" | "cancelled" {
   if (value === undefined || value === null) return "done";

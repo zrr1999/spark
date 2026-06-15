@@ -1,4 +1,4 @@
-import { stableId } from "pi-extension-api";
+import { stableId } from "@zendev-lab/pi-extension-api";
 
 export interface SparkSessionContext {
   cwd?: string;

@@ -4,7 +4,7 @@ import {
   newRef,
   nowIso,
   readJsonFileOptional,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 
 import { normalizeTaskRunCompletionSummaries } from "./dag-run-completion.ts";
 import { reconcileDagRunCounters } from "./dag-run-counters.ts";

@@ -1,5 +1,5 @@
-import type { TaskRef } from "pi-extension-api";
-import type { TaskGraph, TaskGraphStore } from "pi-tasks";
+import type { TaskRef } from "@zendev-lab/pi-extension-api";
+import type { TaskGraph, TaskGraphStore } from "@zendev-lab/pi-tasks";
 
 export async function mergeTaskProgressIntoStore(
   store: TaskGraphStore,

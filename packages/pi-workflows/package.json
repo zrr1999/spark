@@ -1,5 +1,5 @@
 {
-  "name": "pi-workflows",
+  "name": "@zendev-lab/pi-workflows",
   "version": "0.1.0",
   "description": "Generic saved workflow discovery, script runtime, and workflow/DAG run-store capability for Pi extensions.",
   "license": "MIT",
@@ -13,12 +13,15 @@
     ".": "./src/index.ts",
     "./extension": "./src/extension.ts"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
-    "pi-extension-api": "file:../pi-extension-api",
-    "pi-tasks": "file:../pi-tasks",
+    "@zendev-lab/pi-extension-api": "workspace:^",
+    "@zendev-lab/pi-tasks": "workspace:^",
     "typebox": "^1.1.38"
   },
   "pi": {

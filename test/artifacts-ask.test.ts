@@ -4,8 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { ArtifactStore, ArtifactStoreFormatError, defaultArtifactStore } from "pi-artifacts";
-import { registerPiArtifactTool } from "pi-artifacts/extension";
+import {
+  ArtifactStore,
+  ArtifactStoreFormatError,
+  defaultArtifactStore,
+  readArtifactMetadataFile,
+} from "@zendev-lab/pi-artifacts";
+import { registerPiArtifactTool } from "@zendev-lab/pi-artifacts/extension";
 import {
   AskConfigStoreFormatError,
   askUser,
@@ -25,8 +30,8 @@ import {
   summarizeAskResult,
   type PiAskUi,
   type StoredAskPayload,
-} from "pi-ask";
-import { newRef, type JsonValue } from "pi-extension-api";
+} from "@zendev-lab/pi-ask";
+import { newRef, type JsonValue } from "@zendev-lab/pi-extension-api";
 
 void test("artifact store writes hashes, blobs, and lineage links", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-core-artifacts-"));
@@ -67,6 +72,39 @@ void test("artifact store writes hashes, blobs, and lineage links", async () => 
       (await readdir(join(dir, "blobs"))).filter((entry) => entry.endsWith(".tmp")),
       [],
     );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("artifact store reads legacy agent-plan artifacts as documents", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-core-artifact-legacy-kind-"));
+  try {
+    const filePath = join(dir, "legacy-agent-plan.json");
+    await writeFile(
+      filePath,
+      JSON.stringify(
+        {
+          ref: "artifact:legacy-agent-plan",
+          kind: "agent-plan",
+          title: "Initial agent plan",
+          format: "markdown",
+          body: "# Initial Agent Plan\n",
+          hash: "legacy-hash",
+          provenance: { producer: "spark" },
+          links: [],
+          createdAt: "2026-05-17T10:10:34.895Z",
+          updatedAt: "2026-05-17T10:10:34.895Z",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const artifact = await readArtifactMetadataFile(filePath);
+
+    assert.equal(artifact.kind, "document");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

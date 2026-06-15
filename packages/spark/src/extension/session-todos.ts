@@ -1,7 +1,11 @@
 import { join } from "node:path";
 
-import { nowIso, type TaskRef } from "pi-extension-api";
-import { isDeletedSessionTodo, type SessionTodoEntry, type SessionTodoStatus } from "pi-tasks";
+import { nowIso, type TaskRef } from "@zendev-lab/pi-extension-api";
+import {
+  isDeletedSessionTodo,
+  type SessionTodoEntry,
+  type SessionTodoStatus,
+} from "@zendev-lab/pi-tasks";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {
   sanitizeStoreScope,

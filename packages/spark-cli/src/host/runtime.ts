@@ -35,7 +35,7 @@ import type {
   ExtensionUi,
   ToolConfig,
   ToolInfo,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 
 import {
   SparkKeybindings,

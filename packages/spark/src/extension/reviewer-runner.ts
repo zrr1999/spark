@@ -7,7 +7,7 @@ import {
   runRole,
   type RoleRegistry,
   type RoleRunResult,
-} from "pi-roles";
+} from "@zendev-lab/pi-roles";
 import {
   newRef,
   nowIso,
@@ -17,7 +17,7 @@ import {
   type RunRef,
   type Task,
   type TaskRef,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 
 export type ReviewTargetKind = "task" | "goal";
 export type ReviewVerdictOutcome = "approved" | "needs_changes" | "blocked";
@@ -109,6 +109,8 @@ export interface ReviewerRunResult {
   record: ReviewerRunRecord;
 }
 
+const REVIEWER_INTERACTIVE_TOOLS = new Set(["ask", "ask_user", "ask_flow"]);
+
 export interface AskAutoAnswerInput {
   cwd: string;
   request: unknown;
@@ -144,16 +146,14 @@ export interface PiRolesReviewerRunnerOptions {
 
 const DEFAULT_REVIEWER_TIMEOUT_MS = 600_000;
 const REVIEWER_JSON_SCHEMA = [
-  "Return ONLY compact JSON with this shape:",
-  "{",
-  '  "outcome": "approved" | "needs_changes" | "blocked",',
-  '  "summary": "one sentence",',
-  '  "findings": ["actionable finding"],',
-  '  "blockers": ["blocking issue"],',
-  '  "confidence": "low" | "medium" | "high",',
-  '  "achieved": true | false, // goal reviews only',
-  '  "remainingWork": "what remains" // goal reviews only',
-  "}",
+  "Return ONLY one valid JSON object. Do not include markdown, prose, comments, or tool calls.",
+  'Use outcome exactly one of: "approved", "needs_changes", "blocked".',
+  'Use confidence exactly one of: "low", "medium", "high".',
+  "For task reviews, omit achieved and remainingWork. For goal reviews, include both.",
+  "Task review example:",
+  '{"outcome":"approved","summary":"one sentence","findings":[],"blockers":[],"confidence":"high"}',
+  "Goal review example:",
+  '{"outcome":"needs_changes","summary":"one sentence","findings":["actionable finding"],"blockers":["blocking issue"],"confidence":"medium","achieved":false,"remainingWork":"what remains"}',
 ].join("\n");
 
 const ASK_AUTO_ANSWER_JSON_SCHEMA = [
@@ -208,8 +208,8 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
       model: resolvedModel,
       instruction: renderReviewerInstruction(input),
       runGuidance: REVIEWER_JSON_SCHEMA,
-      mode: input.forkFromSession ? "forked" : "fresh",
-      forkFromSession: input.forkFromSession,
+      allowedTools: reviewerGateAllowedTools(role.allowedTools),
+      mode: "fresh",
       sessionDir: this.#sessionDir,
       piCommand: this.#piCommand,
       cwd: input.cwd || this.#cwd,
@@ -222,10 +222,21 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
         verdict: failedReviewerRunVerdict(input, `reviewer role run ${result.record.status}`),
         record: roleRunRecord(result, startedAt, finishedAt),
       };
-    return {
-      verdict: parseReviewerVerdictForInput(input, result.stdout),
-      record: roleRunRecord(result, startedAt, finishedAt),
-    };
+    const record = roleRunRecord(result, startedAt, finishedAt);
+    try {
+      return {
+        verdict: parseReviewerVerdictForInput(input, result.stdout),
+        record,
+      };
+    } catch (error) {
+      return {
+        verdict: failedReviewerRunVerdict(
+          input,
+          `reviewer verdict parse failed: ${unknownErrorMessage(error)}`,
+        ),
+        record,
+      };
+    }
   }
 
   async answerAsk(input: AskAutoAnswerInput, signal?: AbortSignal): Promise<AskAutoAnswerResult> {
@@ -246,8 +257,8 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
       model: resolvedModel,
       instruction: renderAskAutoAnswerInstruction(input),
       runGuidance: ASK_AUTO_ANSWER_JSON_SCHEMA,
-      mode: input.forkFromSession ? "forked" : "fresh",
-      forkFromSession: input.forkFromSession,
+      allowedTools: reviewerGateAllowedTools(role.allowedTools),
+      mode: "fresh",
       sessionDir: this.#sessionDir,
       piCommand: this.#piCommand,
       cwd: input.cwd || this.#cwd,
@@ -267,7 +278,8 @@ export function buildReadOnlyReviewerSystemPrompt(basePrompt: string): string {
     "Spark reviewer gate constraints:",
     "- Read-only verdict role: inspect the provided state/evidence only.",
     "- Do not mutate tasks, goals, files, artifacts, recall, learning, asks, or project state.",
-    "- Do not call task.finish, task.plan, task.claim, goal update, file edit, write, memory, recall, or learning mutation tools.",
+    "- Do not call task.finish, task.plan, task.claim, goal update, file edit, write, memory, recall, ask, or learning mutation tools.",
+    "- Never ask interactively. If a question is required, return outcome=needs_changes or outcome=blocked and put the concrete question in findings/blockers.",
     "- Return verdict JSON only; the Spark tool that invoked you will apply any state transition.",
   ]
     .filter(Boolean)
@@ -308,8 +320,7 @@ export function renderReviewerInstruction(input: ReviewInput): string {
     "For requestedStatus=paused, reject main-agent autonomous pauses; blockers should be resolved by doing or planning blocking work, not by pausing the goal.",
     "For requestedStatus=edited, approve only when the proposed objective corrects a material description error or wrong direction in the current objective and does not reduce difficulty, remove required outcomes, narrow scope, or turn implementation work into planning-only/readiness-only work.",
     "If work remains or the requested transition is not justified, use outcome=needs_changes and list concrete blockers/findings.",
-    REVIEWER_JSON_SCHEMA,
-    "",
+    "Always return the required compact JSON verdict, even when rejecting.",
     "Review packet:",
     JSON.stringify(packet, null, 2),
   ].join("\n");
@@ -320,8 +331,7 @@ export function renderAskAutoAnswerInstruction(input: AskAutoAnswerInput): strin
     "Answer this ask packet as a read-only reviewer for an autonomous goal turn.",
     "Choose only when the request context and options make the next action clear.",
     "Return option values, not labels. Do not mutate state or call tools.",
-    ASK_AUTO_ANSWER_JSON_SCHEMA,
-    "",
+    "Always return the required compact JSON answer packet, even when blocked.",
     "Ask packet:",
     JSON.stringify({ request: input.request, sessionKey: input.sessionKey }, null, 2),
   ].join("\n");
@@ -351,7 +361,7 @@ export function parseAskAutoAnswerResult(text: string): AskAutoAnswerResult {
 }
 
 export function parseReviewerVerdictForInput(input: ReviewInput, text: string): ReviewerVerdict {
-  const value = parseJsonObjectFromText(text);
+  const value = parseJsonObjectFromText(text, { requireReviewerVerdict: true });
   const parsed = normalizeReviewerVerdictObject(value);
   if (input.targetKind === "task")
     return {
@@ -387,6 +397,10 @@ function normalizeReviewerVerdictObject(value: Record<string, unknown>): ReviewV
     blockers: stringArrayField(value, "blockers"),
     confidence: normalizeReviewConfidence(value.confidence),
   };
+}
+
+function reviewerGateAllowedTools(allowedTools: string[] | undefined): string[] | undefined {
+  return allowedTools?.filter((tool) => !REVIEWER_INTERACTIVE_TOOLS.has(tool));
 }
 
 function roleRunRecord(
@@ -425,6 +439,10 @@ function failedReviewerRunVerdict(input: ReviewInput, reason: string): ReviewerV
   };
 }
 
+function unknownErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function compactTaskForReview(task: Task): Record<string, unknown> {
   return {
     ref: task.ref,
@@ -438,7 +456,10 @@ function compactTaskForReview(task: Task): Record<string, unknown> {
   };
 }
 
-function parseJsonObjectFromText(text: string): Record<string, unknown> {
+function parseJsonObjectFromText(
+  text: string,
+  options: { requireReviewerVerdict?: boolean } = {},
+): Record<string, unknown> {
   const trimmed = text.trim();
   if (!trimmed) throw new Error("reviewer verdict must be non-empty JSON");
   let fallback: Record<string, unknown> | undefined;
@@ -463,7 +484,11 @@ function parseJsonObjectFromText(text: string): Record<string, unknown> {
       // Keep scanning later objects; role stdout can contain protocol JSON and text fragments.
     }
   }
-  if (fallback) return fallback;
+  if (fallback) {
+    if (options.requireReviewerVerdict)
+      throw new Error("reviewer output did not contain a verdict JSON object with outcome");
+    return fallback;
+  }
   throw new Error("reviewer verdict must be a JSON object");
 }
 

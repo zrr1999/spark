@@ -1,5 +1,5 @@
-import type { Task, TaskRun } from "pi-extension-api";
-import { isUnfinishedTaskStatus } from "pi-tasks";
+import type { Task, TaskRun } from "@zendev-lab/pi-extension-api";
+import { isUnfinishedTaskStatus } from "@zendev-lab/pi-tasks";
 
 export function taskClaimedBy(task: Task): string | undefined {
   return task.claim?.claimedBy;

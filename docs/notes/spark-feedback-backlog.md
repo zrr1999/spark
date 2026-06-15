@@ -1,6 +1,6 @@
 # Spark feedback backlog
 
-Lower-priority feedback captured from the pi-spark UX triage project. These items are intentionally documented for future grooming; this note does not implement them.
+Lower-priority feedback captured from the Spark UX triage project. These items are intentionally documented for future grooming; this note does not implement them.
 
 | Feedback ID | Item                                        | Code pointers                                                                                                                  | Proposed shape                                                                                                                                                                                                           |
 | ----------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

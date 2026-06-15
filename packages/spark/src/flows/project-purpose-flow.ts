@@ -1,4 +1,4 @@
-import type { ArtifactRef } from "pi-extension-api";
+import type { ArtifactRef } from "@zendev-lab/pi-extension-api";
 import {
   runSparkAskTool,
   type SparkAskToolParams,

@@ -7,7 +7,12 @@
  * inside SparkHostRuntime. Extension authors should not import from this file.
  */
 
-import type { ExtensionContext, ExtensionUi, ToolConfig, ToolInfo } from "pi-extension-api";
+import type {
+  ExtensionContext,
+  ExtensionUi,
+  ToolConfig,
+  ToolInfo,
+} from "@zendev-lab/pi-extension-api";
 
 export interface RegisteredTool {
   config: ToolConfig;

@@ -18,7 +18,7 @@ import {
   type TaskRef,
   type TaskRun,
   type TaskTodo,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 import { createDefaultProjectRoadmap, normalizeProjectRoadmap, uniqueTaskRefs } from "./roadmap.ts";
 import type {
   ClaimTaskInput,

@@ -32,14 +32,18 @@ function assistant(text: string): Record<string, unknown> {
   };
 }
 
-function fakeProviderModule() {
+function fakeProviderModule(captured: { systemPrompt?: string } = {}) {
   return {
     default(api: { registerProvider(name: string, config: unknown): void }) {
       api.registerProvider("fake-provider", {
         name: "Fake Provider",
         baseUrl: "https://fake.test",
         api: "openai-completions",
-        streamSimple: (_model: unknown, context: { messages?: unknown[] }) => {
+        streamSimple: (
+          _model: unknown,
+          context: { messages?: unknown[]; systemPrompt?: string },
+        ) => {
+          captured.systemPrompt = context.systemPrompt;
           const message = assistant(`boot ok:${context.messages?.length ?? 0}`);
           return {
             async *[Symbol.asyncIterator]() {
@@ -91,16 +95,17 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
     );
 
     const config: SparkConfig = {
-      extensions: ["pi-ask/extension"],
+      extensions: ["@zendev-lab/pi-ask/extension"],
       providers: ["fake-provider"],
     };
+    const captured: { systemPrompt?: string } = {};
     const services = await createSparkCliHostServices({
       cwd,
       sparkHome,
       config,
       extensions: config.extensions,
       providers: config.providers,
-      providerImporter: async () => fakeProviderModule(),
+      providerImporter: async () => fakeProviderModule(captured),
     });
 
     assert.equal(services.runtime.cwd, cwd);
@@ -127,6 +132,8 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
 
     const response = await submitToSparkAgent(services, "hello");
     assert.equal(response, "boot ok:1");
+    assert.match(captured.systemPrompt ?? "", /Spark mode: research\./);
+    assert.match(captured.systemPrompt ?? "", /workspace-skill/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

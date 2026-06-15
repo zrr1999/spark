@@ -6,10 +6,10 @@ import {
   type ResolvedRoleModelSetting,
   type RoleRegistry,
   type RoleSpec,
-} from "pi-roles";
-import type { RoleRef, ProjectRef } from "pi-extension-api";
-import { sparkTaskExecutorRoleRef } from "spark-runtime";
-import type { TaskGraph } from "pi-tasks";
+} from "@zendev-lab/pi-roles";
+import type { RoleRef, ProjectRef } from "@zendev-lab/pi-extension-api";
+import { sparkTaskExecutorRoleRef } from "@zendev-lab/spark-runtime";
+import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import { sessionModelName } from "./session-model.ts";
 
 export interface RoleModelSettingsPreflightResult {

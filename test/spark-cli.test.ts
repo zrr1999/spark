@@ -131,24 +131,15 @@ void test("Baidu OneAPI key resolver uses only dedicated auth identity", () => {
   }
 });
 
-void test("Spark CLI host routes ordinary input through /spark with follow-up queueing", () => {
+void test("Spark CLI host lets ordinary input reach the agent without /spark wrapping", () => {
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
-  const sent: Array<{ content: string; options: unknown }> = [];
   sparkCliHostExtension({
     on: (event, handler) => handlers.set(event, handler),
-    sendUserMessage: (content, options) => sent.push({ content, options }),
-    isIdle: () => true,
   });
 
   const result = handlers.get("input")?.({ text: "build the CLI", source: "interactive" }, {});
 
-  assert.deepEqual(result, { action: "handled" });
-  assert.deepEqual(sent, [
-    {
-      content: "/spark build the CLI",
-      options: { deliverAs: "followUp", streamingBehavior: "followUp" },
-    },
-  ]);
+  assert.deepEqual(result, { action: "continue" });
 });
 
 void test("Spark native session queues follow-ups while processing", async () => {
@@ -183,11 +174,8 @@ void test("Spark native session queues follow-ups while processing", async () =>
 
 void test("Spark CLI host preserves slash commands and shell input", () => {
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
-  const sent: string[] = [];
   sparkCliHostExtension({
     on: (event, handler) => handlers.set(event, handler),
-    sendUserMessage: (content) => sent.push(content),
-    isIdle: () => true,
   });
 
   assert.deepEqual(handlers.get("input")?.({ text: "/plan x", source: "interactive" }, {}), {
@@ -196,5 +184,4 @@ void test("Spark CLI host preserves slash commands and shell input", () => {
   assert.deepEqual(handlers.get("input")?.({ text: "!git status", source: "interactive" }, {}), {
     action: "continue",
   });
-  assert.deepEqual(sent, []);
 });

@@ -3,8 +3,11 @@
 import { mkdir } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import type { AssistantMessageEvent, Context, Model, StreamOptions } from "@earendil-works/pi-ai";
-import { stableId, type ExtensionAPI } from "pi-extension-api";
+import { stableId, type ExtensionAPI } from "@zendev-lab/pi-extension-api";
 
+import { renderSparkActiveSystemPrompt } from "../../../spark/src/extension/spark-active-injection.ts";
+import { loadSparkMode } from "../../../spark/src/extension/session-state.ts";
+import type { SparkSessionContext } from "../../../spark/src/extension/session-identity.ts";
 import { SparkAgentLoop, type SparkAgentStreamFunction } from "./agent-loop.ts";
 import {
   type SparkConfig,
@@ -153,6 +156,7 @@ export async function createSparkCliHostServices(
   );
   const skillResolver = new SparkSkillResolver({ cwd, sparkHome: options.sparkHome });
   const skillsPrompt = await skillResolver.formatAvailableSkillsForPrompt();
+  const baseSystemPrompt = options.systemPrompt ?? DEFAULT_SPARK_SYSTEM_PROMPT;
   const streamFunction = createProviderRegistryStreamFunction(providerRegistry);
   const agentLoop = new SparkAgentLoop({
     host: runtime,
@@ -162,9 +166,17 @@ export async function createSparkCliHostServices(
       if (!model) throw new Error("No active Spark model selected");
       return model as Model<string>;
     },
-    systemPrompt: [options.systemPrompt ?? DEFAULT_SPARK_SYSTEM_PROMPT, skillsPrompt]
-      .filter(Boolean)
-      .join("\n"),
+    systemPrompt: await renderSparkCliAgentSystemPrompt(
+      cwd,
+      runtime.makeContext(),
+      baseSystemPrompt,
+      skillsPrompt,
+    ),
+  });
+  runtime.on("before_agent_start", async (_event, ctx) => {
+    agentLoop.setSystemPrompt(
+      await renderSparkCliAgentSystemPrompt(cwd, ctx, baseSystemPrompt, skillsPrompt),
+    );
   });
 
   return {
@@ -181,6 +193,18 @@ export async function createSparkCliHostServices(
     providerLoadResult,
     diagnostics,
   };
+}
+
+async function renderSparkCliAgentSystemPrompt(
+  cwd: string,
+  ctx: SparkSessionContext,
+  baseSystemPrompt: string,
+  skillsPrompt: string,
+): Promise<string> {
+  const mode = (await loadSparkMode(cwd, ctx)).mode;
+  return [renderSparkActiveSystemPrompt(baseSystemPrompt, mode), skillsPrompt]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function createProviderRegistryStreamFunction(

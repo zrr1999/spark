@@ -20,10 +20,10 @@ async function readPackageJson(path: string): Promise<PackageJson> {
 void test("root Pi manifest exposes vendored pi-btw without enabling it in spark-cli defaults", async () => {
   const root = await readPackageJson("package.json");
 
-  assert.equal(root.dependencies?.["pi-btw"], "file:packages/pi-btw");
+  assert.equal(root.dependencies?.["@zendev-lab/pi-btw"], "workspace:^");
   assert.ok(root.pi?.extensions?.includes("./packages/pi-btw/extensions/btw.ts"));
   assert.ok(root.pi?.skills?.includes("./packages/pi-btw/skills"));
-  assert.ok(!DEFAULT_SPARK_CONFIG.extensions.includes("pi-btw/extension"));
+  assert.ok(!DEFAULT_SPARK_CONFIG.extensions.includes("@zendev-lab/pi-btw/extension"));
   assert.ok(!DEFAULT_SPARK_CONFIG.extensions.includes("./packages/pi-btw/extensions/btw.ts"));
 });
 

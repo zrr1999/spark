@@ -48,7 +48,7 @@ import type {
   ToolResultMessage,
 } from "@earendil-works/pi-ai";
 
-import type { ExtensionContext, ToolConfig } from "pi-extension-api";
+import type { ExtensionContext, ToolConfig } from "@zendev-lab/pi-extension-api";
 
 import type { SparkHostRuntime } from "./runtime.ts";
 

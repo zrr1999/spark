@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
-import { killActiveSparkRoleRunProcesses } from "spark-runtime";
-import type { RunRef } from "pi-extension-api";
+import { killActiveSparkRoleRunProcesses } from "@zendev-lab/spark-runtime";
+import type { RunRef } from "@zendev-lab/pi-extension-api";
 import { loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
 import { activeSparkRoleRunProcessesForCwd } from "./background-runs.ts";
 import { appendSparkDagRunPruneLines } from "./state-housekeeping-rendering.ts";

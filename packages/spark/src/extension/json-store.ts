@@ -1,7 +1,7 @@
 import {
   readJsonFileOptional as readCoreJsonFileOptional,
   writeJsonFileAtomic as writeCoreJsonFileAtomic,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 
 export class JsonStoreFormatError extends Error {
   readonly filePath: string;

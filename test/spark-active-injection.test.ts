@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { defaultArtifactStore } from "pi-artifacts";
-import { TaskGraph, defaultTaskGraphStore } from "pi-tasks";
+import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
+import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
 import {
   handleSparkInput,
+  injectSparkHints,
   type SparkInputModeRouter,
 } from "../packages/spark/src/extension/spark-active-injection.ts";
 import { analyzeSparkEntryMode } from "../packages/spark/src/extension/spark-entry.ts";
@@ -49,7 +50,23 @@ async function withActiveSparkInputProject<T>(
   }
 }
 
-void test("handleSparkInput lets active auto mode continue without canned route ask", async () => {
+void test("injectSparkHints injects research mode without initialized Spark graph", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-active-input-no-graph-"));
+  try {
+    const ctx = testSparkInputContext(dir);
+    const result = await injectSparkHints({ systemPrompt: "Base prompt." }, ctx);
+
+    assert.equal(typeof result, "object");
+    const prompt = (result as { systemPrompt?: string }).systemPrompt ?? "";
+    assert.match(prompt, /Spark mode: research\./);
+    assert.doesNotMatch(prompt, /Active Spark context/);
+    assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("handleSparkInput lets active research mode continue without canned route ask", async () => {
   await withActiveSparkInputProject(
     async ({ dir, ctx, router, customMessages, queuedInstructions }) => {
       const result = await handleSparkInput(
@@ -63,7 +80,7 @@ void test("handleSparkInput lets active auto mode continue without canned route 
       assert.equal(customMessages.length, 0);
       assert.equal(queuedInstructions.length, 0);
       assert.equal((await defaultArtifactStore(dir).list({ producer: "ask" })).length, 0);
-      assert.equal((await loadSparkMode(dir, ctx)).mode, "auto");
+      assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
     },
   );
 });
@@ -82,12 +99,12 @@ void test("handleSparkInput does not turn until-done input into a template ask",
       assert.equal(customMessages.length, 0);
       assert.equal(queuedInstructions.length, 0);
       assert.equal((await defaultArtifactStore(dir).list({ producer: "ask" })).length, 0);
-      assert.equal((await loadSparkMode(dir, ctx)).mode, "auto");
+      assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
     },
   );
 });
 
-void test("handleSparkInput lets active goal input bypass auto route ask", async () => {
+void test("handleSparkInput lets active goal input bypass research route ask", async () => {
   await withActiveSparkInputProject(
     async ({ dir, ctx, router, customMessages, queuedInstructions }) => {
       await setSessionGoal(dir, ctx, {
@@ -107,7 +124,7 @@ void test("handleSparkInput lets active goal input bypass auto route ask", async
       assert.equal(customMessages.length, 0);
       assert.equal(queuedInstructions.length, 0);
       assert.equal((await defaultArtifactStore(dir).list({ producer: "ask" })).length, 0);
-      assert.equal((await loadSparkMode(dir, ctx)).mode, "auto");
+      assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
     },
   );
 });
@@ -137,7 +154,7 @@ void test("analyzeSparkEntryMode treats stack-trace bugfix with no tasks as plan
   assert.match(analysis.reasons.join("\n"), /no pending\/ready project task exists/);
 });
 
-void test("handleSparkInput lets slash commands bypass the auto-mode ask", async () => {
+void test("handleSparkInput lets slash commands bypass the research-mode ask", async () => {
   await withActiveSparkInputProject(
     async ({ dir, ctx, router, customMessages, queuedInstructions }) => {
       ctx.selectedPrefix = "Research";
@@ -153,7 +170,7 @@ void test("handleSparkInput lets slash commands bypass the auto-mode ask", async
       assert.equal(customMessages.length, 0);
       assert.equal(queuedInstructions.length, 0);
       assert.equal((await defaultArtifactStore(dir).list({ producer: "ask" })).length, 0);
-      assert.equal((await loadSparkMode(dir, ctx)).mode, "auto");
+      assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
     },
   );
 });

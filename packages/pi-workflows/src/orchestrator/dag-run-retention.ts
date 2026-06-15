@@ -1,4 +1,4 @@
-import { nowIso, type RunRef, type ProjectRef } from "pi-extension-api";
+import { nowIso, type RunRef, type ProjectRef } from "@zendev-lab/pi-extension-api";
 
 import type { WorkflowRunRecord, WorkflowRunStoreSnapshot } from "./index.ts";
 import { isAcknowledgeableDagRun, isTerminalDagRunStatus } from "./dag-run-status.ts";

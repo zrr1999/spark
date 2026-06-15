@@ -1,5 +1,5 @@
 {
-  "name": "pi-graft",
+  "name": "@zendev-lab/pi-graft",
   "version": "0.1.0",
   "description": "Pi extension package for graft daemon scratch and candidate workflows.",
   "keywords": [
@@ -18,11 +18,14 @@
     ".": "./src/index.ts",
     "./extension": "./src/extension.ts"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
-    "pi-roles": "file:../pi-roles",
+    "@zendev-lab/pi-roles": "workspace:^",
     "typebox": "^1.1.38"
   },
   "pi": {

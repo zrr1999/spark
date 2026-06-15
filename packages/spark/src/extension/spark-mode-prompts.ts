@@ -1,5 +1,5 @@
-import type { ProjectRef } from "pi-extension-api";
-import type { TaskGraph } from "pi-tasks";
+import type { ProjectRef } from "@zendev-lab/pi-extension-api";
+import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import type { SparkEntryMode } from "./spark-entry.ts";
 import type { RoadmapPlanningContext } from "../flows/roadmap-flow.ts";
 import { renderRoadmapPlanningContext } from "../flows/roadmap-flow.ts";
@@ -69,7 +69,7 @@ export function renderSparkPlanningModePrompt(
   return renderModePrompt(graph, selectedProjectRef, focus, "Planning", requirements, roadmapLine);
 }
 
-export function renderSparkExecutionModePrompt(
+export function renderSparkImplementationModePrompt(
   graph: TaskGraph,
   selectedProjectRef: ProjectRef | undefined,
   focus: string | undefined,
@@ -91,7 +91,7 @@ export function renderSparkExecutionModePrompt(
           ? renderGoalAction(Boolean(focus?.trim()))
           : strategy === "workflow"
             ? renderWorkflowAction(workflowSelector)
-            : 'Read the current project/task plan and inspect ready tasks with task({ action: "status" }). Claim at most one concrete task with task({ action: "claim" }), execute it, verify the required evidence with artifact/learning/context as needed, then call task({ action: "finish" }). Stop after that task finishes; do not auto-claim another task or dispatch continuous work from /execute.',
+            : 'Read the current project/task plan and inspect ready tasks with task({ action: "status" }). Claim at most one concrete task with task({ action: "claim" }), execute it, verify the required evidence with artifact/learning/context as needed, then call task({ action: "finish" }). Stop after that task finishes; do not auto-claim another task or dispatch continuous work from /implement.',
         strategy === "goal"
           ? "Goal mode is non-interactive: do not call ask_user/ask_flow. Canonical ask may be used only when the host supplies reviewer auto-answer. If a blocker appears, resolve the blocker by doing or planning the blocking work; do not pause or weaken the goal autonomously."
           : "If the user wants autonomous completion of all ready work, suggest /goal. If the user wants a scripted saved workflow, suggest /workflow.",
@@ -105,7 +105,7 @@ export function renderSparkExecutionModePrompt(
         "Do not claim project-bound work until a current project is selected.",
         ASK_BEFORE_GUESSING,
       ];
-  return renderModePrompt(graph, selectedProjectRef, focus, "Execution", requirements);
+  return renderModePrompt(graph, selectedProjectRef, focus, "Implementation", requirements);
 }
 
 const SPARK_GOAL_DECISION_RULE = `Goal objectives should normally describe the selected project's substantive intended outcome from its purpose, description, title, task plans, evidence requirements, and blockers; do not reduce the goal to task counts or merely stopping at a plan unless the user explicitly says planning-only/readiness-only/仅规划. Autonomous goal edits require a strong reason and may only correct materially wrong description or direction; never lower difficulty, narrow required outcomes, or convert implementation work into planning-only/readiness-only work. If task decomposition is wrong, missing, or blocks the goal, create or revise concrete tasks with task({ action: "plan" }); if a missing user decision would change ${PLANNING_AFFECTING_CHOICES} and cannot be inferred from context, use canonical ask only when reviewer auto-answer is available; otherwise stop and report the blocker without pausing or weakening the goal.`;
@@ -132,7 +132,7 @@ function renderModePrompt(
   graph: TaskGraph,
   selectedProjectRef: ProjectRef | undefined,
   focus: string | undefined,
-  mode: "Research" | "Planning" | "Execution",
+  mode: "Research" | "Planning" | "Implementation",
   requirements: string[],
   extraContext?: string,
 ): string {
@@ -187,11 +187,11 @@ export function renderSparkModeVisibleMessage(
       ? "Spark research mode requested"
       : mode === "plan"
         ? "Spark plan mode requested"
-        : "Spark execute mode requested";
+        : "Spark implement mode requested";
   const parts = [title];
   if (projectTitle?.trim()) parts.push(`project: ${projectTitle.trim()}`);
-  if (mode === "execute" && executeStrategy) parts.push("strategy: " + executeStrategy);
-  if (mode === "execute" && executeStrategy === "workflow" && workflowSelector)
+  if (mode === "implement" && executeStrategy) parts.push("strategy: " + executeStrategy);
+  if (mode === "implement" && executeStrategy === "workflow" && workflowSelector)
     parts.push("workflow: " + workflowSelector);
   if (focus?.trim()) parts.push(`focus: ${focus.trim()}`);
   return parts.join(" · ");

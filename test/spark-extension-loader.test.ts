@@ -16,21 +16,21 @@ void test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin 
   assert.deepEqual(
     loadBuiltinExtensionFactories().map((entry) => entry.specifier),
     [
-      "pi-ask/extension",
-      "pi-cue/extension",
-      "pi-roles/extension",
-      "pi-graft/extension",
-      "spark/extension",
+      "@zendev-lab/pi-ask/extension",
+      "@zendev-lab/pi-cue/extension",
+      "@zendev-lab/pi-roles/extension",
+      "@zendev-lab/pi-graft/extension",
+      "@zendev-lab/spark/extension",
     ],
   );
   assert.deepEqual(
     [...DEFAULT_SPARK_EXTENSION_SPECS],
     [
-      "pi-ask/extension",
-      "pi-cue/extension",
-      "pi-roles/extension",
-      "pi-graft/extension",
-      "spark/extension",
+      "@zendev-lab/pi-ask/extension",
+      "@zendev-lab/pi-cue/extension",
+      "@zendev-lab/pi-roles/extension",
+      "@zendev-lab/pi-graft/extension",
+      "@zendev-lab/spark/extension",
     ],
   );
 });
@@ -40,11 +40,11 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
   const result = await new SparkExtensionLoader({
     api: host,
     extensions: [
-      "pi-ask/extension",
-      "pi-cue/extension",
-      "pi-roles/extension",
-      "pi-graft/extension",
-      "spark/extension",
+      "@zendev-lab/pi-ask/extension",
+      "@zendev-lab/pi-cue/extension",
+      "@zendev-lab/pi-roles/extension",
+      "@zendev-lab/pi-graft/extension",
+      "@zendev-lab/spark/extension",
     ],
   }).load();
 
@@ -76,7 +76,7 @@ void test("SparkExtensionLoader isolates one extension failure and continues loa
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-extension-loader-failure" });
   const result = await loadSparkExtensions({
     api: host,
-    extensions: ["bad-extension", "pi-ask/extension"],
+    extensions: ["bad-extension", "@zendev-lab/pi-ask/extension"],
     importer: async () => ({
       default: () => {
         throw new Error("boom");
@@ -98,7 +98,7 @@ void test("createSparkExtensionImporter resolves builtins without calling fallba
   const importer = createSparkExtensionImporter(async () => {
     throw new Error("fallback should not be used for builtins");
   });
-  const mod = await importer("pi-ask/extension");
+  const mod = await importer("@zendev-lab/pi-ask/extension");
   assert.equal(typeof (mod as { default?: unknown }).default, "function");
 });
 
@@ -108,7 +108,7 @@ void test("loadPlugins default importer is wired to builtin extension imports wh
   const result = await loadPlugins({
     extensionApi: host,
     providerApi: registry,
-    extensions: ["pi-ask/extension"],
+    extensions: ["@zendev-lab/pi-ask/extension"],
     providers: [],
   });
 

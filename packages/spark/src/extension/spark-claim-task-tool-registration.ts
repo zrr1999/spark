@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import type { RoleRegistry } from "pi-roles";
+import type { RoleRegistry } from "@zendev-lab/pi-roles";
 import {
   stableId,
   type RoleRef,
@@ -7,13 +7,13 @@ import {
   type TaskPlan,
   type ProjectRef,
   type TaskTodo,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 import {
   defaultTaskGraphStore,
   isUnfinishedTaskStatus,
   normalizeTaskPlan,
   type TaskGraph,
-} from "pi-tasks";
+} from "@zendev-lab/pi-tasks";
 import {
   compactTaskDetail,
   normalizeOptionalToolString,

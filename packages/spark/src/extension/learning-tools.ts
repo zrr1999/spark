@@ -10,8 +10,8 @@ import {
   type LearningStatus,
   parseLearningExportMarkdown,
   parseLegacyCompoundLearningMarkdown,
-} from "pi-learnings";
-import type { Artifact } from "pi-artifacts";
+} from "@zendev-lab/pi-learnings";
+import type { Artifact } from "@zendev-lab/pi-artifacts";
 
 const LEARNING_STATUSES = ["candidate", "active", "stale", "superseded", "rejected"] as const;
 const LEARNING_LOCATIONS = ["user", "workspace", "repo"] as const;

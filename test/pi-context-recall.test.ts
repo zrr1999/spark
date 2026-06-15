@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { registerPiContextTool } from "pi-context/extension";
-import { registerPiRecallTool } from "pi-recall/extension";
+import { registerPiContextTool } from "@zendev-lab/pi-context/extension";
+import { registerPiRecallTool } from "@zendev-lab/pi-recall/extension";
 
 type ToolResult = {
   content: Array<{ type: "text"; text: string }>;

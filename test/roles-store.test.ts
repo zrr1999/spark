@@ -10,7 +10,7 @@ import {
   createRoleSpec,
   createBuiltinRoles,
   builtinRoleIds,
-} from "pi-roles";
+} from "@zendev-lab/pi-roles";
 
 void test("builtin Pi roles are instructed to implement concrete repo behavior feedback", () => {
   const roles = createBuiltinRoles();
@@ -42,21 +42,32 @@ void test("builtin Pi roles expose minimal sufficient tool profiles", () => {
     ]);
   }
 
-  for (const id of ["worker", "reviewer"]) {
-    assert.deepEqual(byId.get(id)?.allowedTools, [
-      "context",
-      "learning",
-      "artifact",
-      "task",
-      "ask",
-      "cue_exec",
-      "cue_run",
-      "cue_script",
-      "script_run",
-      "script_eval",
-      "cue_jobs",
-    ]);
-  }
+  assert.deepEqual(byId.get("worker")?.allowedTools, [
+    "context",
+    "learning",
+    "artifact",
+    "task",
+    "ask",
+    "cue_exec",
+    "cue_run",
+    "cue_script",
+    "script_run",
+    "script_eval",
+    "cue_jobs",
+  ]);
+
+  assert.deepEqual(byId.get("reviewer")?.allowedTools, [
+    "context",
+    "learning",
+    "artifact",
+    "task",
+    "cue_exec",
+    "cue_run",
+    "cue_script",
+    "script_run",
+    "script_eval",
+    "cue_jobs",
+  ]);
 });
 
 void test("project role spec store persists and hydrates registry", async () => {

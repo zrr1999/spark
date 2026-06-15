@@ -1,8 +1,8 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
-import type { SessionTodoEntry, SessionTodoStatus } from "pi-tasks";
+import type { SessionTodoEntry, SessionTodoStatus } from "@zendev-lab/pi-tasks";
 
-export type { SessionTodoEntry, SessionTodoStatus } from "pi-tasks";
+export type { SessionTodoEntry, SessionTodoStatus } from "@zendev-lab/pi-tasks";
 
 /**
  * spark-widget.ts — Above-editor widget showing durable Spark project/task state plus

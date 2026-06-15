@@ -1,6 +1,6 @@
-import type { TaskGraph } from "pi-tasks";
+import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import {
-  renderSparkExecutionModePrompt,
+  renderSparkImplementationModePrompt,
   renderSparkResearchModePrompt,
   renderSparkModeVisibleMessage,
   renderSparkPlanningModePrompt,
@@ -19,6 +19,7 @@ import {
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
 export interface SparkModeMessageApi {
+  isIdle?(): boolean;
   sendMessage(
     message: {
       customType: string;
@@ -48,13 +49,14 @@ export function dispatchSparkAgentInstruction(
   visibleMessage: string,
 ): void {
   deps.queueSparkAgentInstruction(ctx, instruction);
+  const idle = piApi.isIdle?.() ?? false;
   piApi.sendMessage(
     {
       customType: "spark-mode-request",
       content: visibleMessage,
       display: true,
     },
-    { deliverAs: "followUp", triggerTurn: true },
+    idle ? { triggerTurn: true } : { deliverAs: "followUp", triggerTurn: true },
   );
 }
 
@@ -103,7 +105,7 @@ export async function enterSparkPlanningMode(
   );
 }
 
-export async function enterSparkExecutionMode(
+export async function enterSparkImplementationMode(
   piApi: SparkModeMessageApi,
   deps: SparkModeEntryDeps,
   ctx: SparkToolContext,
@@ -116,19 +118,19 @@ export async function enterSparkExecutionMode(
   const persistedWorkflowSelector =
     workflowSelector === "agent:auto" ? undefined : workflowSelector;
   if (project)
-    await saveSparkExecutionMode(ctx.cwd, ctx, project.ref, focus, "execute", strategy, {
+    await saveSparkExecutionMode(ctx.cwd, ctx, project.ref, focus, "implement", strategy, {
       workflowName: persistedWorkflowSelector,
     });
   else await clearSparkExecutionMode(ctx.cwd, ctx);
   await deps.refreshSparkWidget(ctx.cwd, ctx);
-  ctx.ui?.notify?.("Spark execute mode: " + strategy + " strategy selected.", "info");
+  ctx.ui?.notify?.("Spark implement mode: " + strategy + " strategy selected.", "info");
   const savedWorkflows =
     strategy === "workflow" ? await discoverSparkSavedWorkflows(ctx.cwd) : undefined;
   dispatchSparkAgentInstruction(
     piApi,
     deps,
     ctx,
-    renderSparkExecutionModePrompt(
+    renderSparkImplementationModePrompt(
       graph,
       project?.ref,
       focus,
@@ -137,7 +139,7 @@ export async function enterSparkExecutionMode(
       workflowSelector,
     ),
     renderSparkModeVisibleMessage(
-      "execute",
+      "implement",
       project?.title,
       focus,
       strategy,

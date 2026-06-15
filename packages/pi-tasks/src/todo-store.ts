@@ -5,7 +5,7 @@ import {
   writeJsonFileAtomic,
   type TaskTodo,
   type TaskTodoStatus,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 import { TaskGraph } from "./graph.ts";
 import type {
   LoadableTaskTodoStoreSnapshot,

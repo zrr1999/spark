@@ -26,7 +26,7 @@ export function registerSparkModeCycleShortcut(
   deps: { refreshSparkWidget: (cwd: string, ctx?: SparkToolContext) => Promise<void> },
 ): void {
   pi.registerShortcut?.("shift+tab", {
-    description: "Cycle Spark session mode (auto → research → plan → execute).",
+    description: "Cycle Spark session mode (research → plan → implement).",
     isActive: (ctx) => Boolean(ctx.cwd && existsSync(join(ctx.cwd, ".spark"))),
     async handler(ctx) {
       const cwd = ctx.cwd;
@@ -37,12 +37,6 @@ export function registerSparkModeCycleShortcut(
       }
       const current = await loadSparkMode(cwd, ctx);
       const next = nextSparkSessionMode(current.mode);
-      if (next === "auto") {
-        await saveSparkMode(cwd, ctx, { mode: "auto" });
-        await deps.refreshSparkWidget(cwd, ctx);
-        ctx.ui?.notify?.("Spark mode: auto", "info");
-        return;
-      }
       const project = await currentSparkProject(cwd, ctx, graph);
       if (!project) {
         ctx.ui?.notify?.("Spark mode cycle needs a current project.", "warning");
@@ -51,7 +45,7 @@ export function registerSparkModeCycleShortcut(
       await saveSparkMode(cwd, ctx, {
         mode: next,
         projectRef: project.ref,
-        executeStrategy: next === "execute" ? "default" : undefined,
+        executeStrategy: next === "implement" ? "default" : undefined,
         planningSource: next === "plan" ? "direct" : undefined,
       });
       await deps.refreshSparkWidget(cwd, ctx);

@@ -1,5 +1,5 @@
-import type { RoleRef } from "pi-extension-api";
-import type { WorkflowAgentOptions, WorkflowAgentRunner } from "pi-workflows";
+import type { RoleRef } from "@zendev-lab/pi-extension-api";
+import type { WorkflowAgentOptions, WorkflowAgentRunner } from "@zendev-lab/pi-workflows";
 
 export interface SparkWorkflowRoleRunRequest {
   roleRef: RoleRef;

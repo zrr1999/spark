@@ -1,4 +1,4 @@
-import type { RoleRunJsonEventsTail, RoleRunTextTail } from "spark-runtime";
+import type { RoleRunJsonEventsTail, RoleRunTextTail } from "@zendev-lab/spark-runtime";
 import type { SparkBackgroundChildRunView, SparkBackgroundRunsDetails } from "./background-runs.ts";
 import { shortRoleLabel } from "./task-ownership.ts";
 

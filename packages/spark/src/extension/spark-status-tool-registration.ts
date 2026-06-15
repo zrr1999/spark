@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
-import { defaultTaskGraphStore } from "pi-tasks";
+import { defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
 import { reconcileSparkDagRunsWithActiveProcesses } from "./background-runs.ts";
 import { collectRecentRoleRunCompletions } from "./role-run-completions.ts";
 import {

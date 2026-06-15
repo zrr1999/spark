@@ -2,13 +2,13 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import { Type } from "typebox";
-import { defaultArtifactStore } from "pi-artifacts";
+import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
 import {
   defaultLearningStore,
   renderLearningExportMarkdown,
   type LearningRecord,
-} from "pi-learnings";
-import type { Artifact } from "pi-artifacts";
+} from "@zendev-lab/pi-learnings";
+import type { Artifact } from "@zendev-lab/pi-artifacts";
 import { compactArtifactDetail } from "./artifact-tools.ts";
 import {
   compactLearningDetail,

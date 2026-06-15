@@ -1,5 +1,5 @@
-import type { RunRef } from "pi-extension-api";
-import type { TaskGraph } from "pi-tasks";
+import type { RunRef } from "@zendev-lab/pi-extension-api";
+import type { TaskGraph } from "@zendev-lab/pi-tasks";
 
 import {
   completionDigestFromTaskRuns,

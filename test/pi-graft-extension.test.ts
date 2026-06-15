@@ -410,7 +410,7 @@ void test("graft_repo list uses the direct CLI route", async () => {
   process.env.PI_GRAFT_MOCK_ARGV = argvFile;
   process.env.GRAFT_BIN = await writeMockGraft(
     dir,
-    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\nprintf 'pi-spark\\tpresent\\t.graft/repos/pi-spark\\tlocal\\n'`,
+    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\nprintf 'spark\\tpresent\\t.graft/repos/spark\\tlocal\\n'`,
   );
 
   try {
@@ -422,7 +422,7 @@ void test("graft_repo list uses the direct CLI route", async () => {
       { action: "list" },
       { cwd: dir },
     );
-    assert.match(result.content[0].text, /pi-spark/);
+    assert.match(result.content[0].text, /spark/);
     assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
       "--cwd",
       dir,
@@ -455,15 +455,15 @@ void test("graft_repo add uses daemon-owned cli_exec routing", async () => {
           project,
           "repo",
           "add",
-          "pi-spark",
-          "/repos/pi-spark",
+          "spark",
+          "/repos/spark",
           "--default-branch",
           "main",
         ]);
         return {
           id: request.id,
           ok: true,
-          result: { message: "added repo pi-spark" },
+          result: { message: "added repo spark" },
         };
       },
       async (home) => {
@@ -476,13 +476,13 @@ void test("graft_repo add uses daemon-owned cli_exec routing", async () => {
           "graft_repo",
           {
             action: "add",
-            repoId: "pi-spark",
-            url: "/repos/pi-spark",
+            repoId: "spark",
+            url: "/repos/spark",
             defaultBranch: "main",
           },
           { cwd: project },
         );
-        assert.match(result.content[0].text, /added repo pi-spark/);
+        assert.match(result.content[0].text, /added repo spark/);
       },
     );
   } finally {

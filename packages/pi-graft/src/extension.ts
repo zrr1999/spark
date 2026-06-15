@@ -1447,7 +1447,9 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         scratch,
         expected: normalizeStringList(params.expected) as JsonValue[],
         producer:
-          typeof params.producer === "string" && params.producer ? params.producer : "pi-graft",
+          typeof params.producer === "string" && params.producer
+            ? params.producer
+            : "@zendev-lab/pi-graft",
         message: typeof params.message === "string" ? params.message : null,
       });
       const candidate = stringField(result, "candidate");

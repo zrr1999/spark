@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { registerPiWorkflowTool } from "pi-workflows/extension";
-import { workspaceWorkflowDir } from "pi-workflows";
+import { registerPiWorkflowTool } from "@zendev-lab/pi-workflows/extension";
+import { workspaceWorkflowDir } from "@zendev-lab/pi-workflows";
 
 type ToolResult = {
   content: Array<{ type: "text"; text: string }>;

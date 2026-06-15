@@ -1,7 +1,7 @@
-import type { TaskGraph, SessionTodoEntry } from "pi-tasks";
-import { isUnfinishedTaskStatus } from "pi-tasks";
-import type { TaskRunCompletionSummary, TaskStatus } from "pi-extension-api";
-import type { WorkflowRunStatusSummary } from "pi-workflows";
+import type { TaskGraph, SessionTodoEntry } from "@zendev-lab/pi-tasks";
+import { isUnfinishedTaskStatus } from "@zendev-lab/pi-tasks";
+import type { TaskRunCompletionSummary, TaskStatus } from "@zendev-lab/pi-extension-api";
+import type { WorkflowRunStatusSummary } from "@zendev-lab/pi-workflows";
 import type { SparkRunModeState } from "./current-project-state.ts";
 import { appendRecentRoleRunCompletionLines } from "./role-run-completions.ts";
 import type { SparkSessionGoal } from "./spark-session-goals.ts";

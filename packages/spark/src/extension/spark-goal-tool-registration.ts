@@ -1,7 +1,7 @@
 import { Type } from "typebox";
-import { defaultArtifactStore } from "pi-artifacts";
-import type { TaskGraph } from "pi-tasks";
-import { nowIso, type JsonValue, type RoleRef } from "pi-extension-api";
+import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
+import type { TaskGraph } from "@zendev-lab/pi-tasks";
+import { nowIso, type JsonValue, type RoleRef } from "@zendev-lab/pi-extension-api";
 import {
   clearSparkExecutionMode,
   currentSparkProject,

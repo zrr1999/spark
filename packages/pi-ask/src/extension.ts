@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ToolConfig } from "pi-extension-api";
+import type { ExtensionAPI, ToolConfig } from "@zendev-lab/pi-extension-api";
 
 import { registerPiAskActionTool } from "./action-tool.ts";
 import { registerPiAskFlowTool } from "./flow.ts";

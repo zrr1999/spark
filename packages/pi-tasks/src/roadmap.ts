@@ -5,7 +5,7 @@ import {
   type RoadmapItemRef,
   type RoadmapRef,
   type TaskRef,
-} from "pi-extension-api";
+} from "@zendev-lab/pi-extension-api";
 
 export function createDefaultProjectRoadmap(title: string, now = nowIso()): ProjectRoadmap {
   return {

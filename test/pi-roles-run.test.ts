@@ -24,8 +24,8 @@ import {
   RoleRunTimeoutError,
   runRole,
   validateRoleModel,
-} from "pi-roles";
-import { buildRoleRunArgs, runRoleInstructionOnly } from "spark-runtime";
+} from "@zendev-lab/pi-roles";
+import { buildRoleRunArgs, runRoleInstructionOnly } from "@zendev-lab/spark-runtime";
 
 void test("pi-roles builds fresh JSON Pi role args without accidental fork session reuse", () => {
   const args = buildRoleRunArgs({
