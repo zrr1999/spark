@@ -888,7 +888,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     name: "cue_exec",
     label: "Run Command",
     description:
-      "Execute a command in cue-shell. " +
+      "Execute a command in cue-shell using the active cue-client transport profile (Unix socket or SSH gateway). " +
+      "SSH profiles connect through the configured remote `cued gateway --stdio`; pi-cue does not auto-start remote daemons. " +
       "cue-shell is direct-exec (execvp), not bash: do not use shell-only syntax such as &&, semicolon command lists, redirection, subshell tests, or bash-style ||. " +
       "Its composition operators are: |> pipes stdout, -> runs in serial on success, || runs in parallel (not OR), ~> runs in serial ignoring failure. " +
       "Prefer direct-exec commands and Pi file tools; do not use shell wrappers for shell-only syntax. " +
@@ -916,7 +917,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       ),
       cwd: Type.Optional(
         Type.String({
-          description: "Working directory. Defaults to the current Pi session working directory.",
+          description:
+            "Working directory for the daemon-side job. Defaults to the current Pi session working directory; with SSH profiles this must be valid on the remote host.",
         }),
       ),
       pty: Type.Optional(

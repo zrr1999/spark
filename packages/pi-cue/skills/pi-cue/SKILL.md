@@ -16,8 +16,12 @@ description: |
 
 Use `cue_exec` for ALL commands — quick filesystem operations (ls, cat, grep),
 builds, test suites, dev servers, and long-running background processes.
-The extension automatically passes the current working directory (cwd) to
-each command via `:run(cwd=...)` mode param.
+The extension uses the active cue-shell client transport profile. Local Unix
+profiles connect to the daemon socket; SSH profiles connect through the
+configured `ssh <destination> <gateway_command>` stdio gateway and do not
+auto-start remote daemons. The extension automatically passes the current
+working directory (cwd) to each command via `:run(cwd=...)` mode param; with
+SSH profiles, that cwd must be valid on the remote host.
 
 ## Tool reference (10 resource-oriented tools)
 

@@ -4,11 +4,25 @@ Reusable Pi extension that exposes cue-shell as a durable, observable execution 
 
 `pi-cue` is infrastructure: it does not depend on `spark-*` packages and can be used by Spark, future `pi-warp`, or any other Pi package.
 
+## Transport profiles
+
+`pi-cue` uses cue-shell's client transport resolver (`cue-client target resolve --json`, falling back to `cue client target resolve --json`). It supports both local Unix socket profiles and SSH profiles.
+
+For SSH profiles, `pi-cue` spawns the system OpenSSH client as:
+
+```text
+ssh <destination> <gateway_command>
+```
+
+The gateway command is usually `cued gateway --stdio`, so the Node client speaks the same length-prefixed IPC protocol through the SSH stdio stream. Remote daemon startup remains explicit: `pi-cue` does not run `start_command` or auto-start remote `cued`; start it separately, for example with `ssh host "cued start"`. If the remote gateway is unavailable, the tool fails loudly with bounded trailing SSH stderr diagnostics.
+
+When an SSH profile is active, daemon-side paths such as `cwd`, `cue_run.path`, and script paths must exist on the remote host. Pi file tools still operate on the local workspace.
+
 ## Tools
 
 Resource-oriented tools:
 
-- `cue_exec` — execute commands and create cue-shell jobs. Tool/API runs use the current Pi session working directory by default and pipe mode (`pty: false`) by default; set `pty: true` only when a command genuinely needs terminal semantics. Foreground output is tailed to 16 KiB per stream by default (`tail_bytes: 0` for full output). Pass resource requirements with `needs` (for example `{ gpu: 1, gpu_mem: "24GiB" }`) instead of embedding `:run(need...)` in the command string.
+- `cue_exec` — execute commands and create cue-shell jobs through the active transport profile. Tool/API runs use the current Pi session working directory by default and pipe mode (`pty: false`) by default; with SSH profiles the working directory must be valid on the remote host. Set `pty: true` only when a command genuinely needs terminal semantics. Foreground output is tailed to 16 KiB per stream by default (`tail_bytes: 0` for full output). Pass resource requirements with `needs` (for example `{ gpu: 1, gpu_mem: "24GiB" }`) instead of embedding `:run(need...)` in the command string.
 - `cue_run` — run a `.cue` file via cue-shell script mode, mirroring `cue run <file.cue>`. Top-level items execute sequentially and fail fast; successful no-output items are summarized instead of expanded one-by-one.
 - `cue_script` — run an inline `.cue` script body. Use this when the script content is generated in the Pi session; prefer `cue_run` when a real `.cue` file exists on disk.
 - `script_run` — run a script file with an explicit `language`. First batch supports `cue-shell` and `python`; `cue-shell` delegates to RunScript, while `python` runs `python3` through cue-shell job execution.
