@@ -27,8 +27,8 @@ Rules:
 
 1. A task must belong to a project.
 2. Do not create placeholder tasks or projects for display; tasks are model-claimed only when concrete work exists, and a main session should have at most one unfinished claimed task at a time.
-3. Use `task({ action: "plan" })` to梳理/organize multiple tasks before assigning roles; planning tasks must not be represented by claiming many unfinished tasks in the current session. Planning writes directly after readiness checks pass and can be used whenever the actual request requires durable task planning; `/plan` only injects stronger planning guidance, not an authorization gate.
-4. Tasks must be concrete executable/review/validation/research work. Do not create standalone “design”, “规划”, or “planning” tasks; discuss design/architecture decisions with the user first, then embed the chosen design, rationale, constraints, alternatives, and evidence requirements inside each concrete `task.plan`.
+3. Use `task({ action: "plan" })` to organize multiple tasks before assigning roles; planning tasks must not be represented by claiming many unfinished tasks in the current session. Planning writes directly after readiness checks pass and can be used whenever the actual request requires durable task planning; `/plan` only injects stronger planning guidance, not an authorization gate.
+4. Tasks must be concrete executable/review/validation/research work. Do not create standalone “design” or “planning” tasks; discuss design/architecture decisions with the user first, then embed the chosen design, rationale, constraints, alternatives, and evidence requirements inside each concrete `task.plan`.
 5. Do not cancel a task while any non-cancelled task depends on it; cancel or revise downstream dependents first, or leave the prerequisite pending/blocked.
 6. Executable tasks must bind to a builtin, project, or user role spec via `roleRef`.
 7. Running a role only accepts an instruction; no runtime system-prompt patching.

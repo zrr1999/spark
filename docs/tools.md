@@ -196,7 +196,7 @@ Automatic behavior:
      project codename, or changing a title that could affect
      external reporting
 9. Process guardrails are part of the active prompt and skill:
-   - use `task({ action: "plan" })` to梳理/organize multiple tasks before
+   - use `task({ action: "plan" })` to organize multiple tasks before
      assigning roles instead of claiming many unfinished tasks in
      one session; task planning writes directly after readiness
      checks pass, and `/plan` only injects stronger planning
