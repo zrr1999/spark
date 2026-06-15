@@ -1,10 +1,10 @@
 import { Type } from "typebox";
 import { defaultArtifactStore } from "pi-artifacts";
 import {
-  DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
-  DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
+  DEFAULT_READY_TASK_MAX_CONCURRENCY,
+  DEFAULT_READY_TASK_TIMEOUT_MS,
 } from "pi-extension-api";
-import { runReadySparkTasks } from "pi-workflows";
+import { runReadyTasks } from "pi-workflows";
 import { defaultTaskGraphStore } from "pi-tasks";
 import { ensureRoleModelSettingsForProject } from "./role-model-settings.ts";
 import {
@@ -15,7 +15,9 @@ import {
   saveSparkRunMode,
   sparkRunStrategyForMaxConcurrency,
 } from "./session-state.ts";
+import { sessionModelName } from "./session-model.ts";
 import { ensureSparkGraphInvariants } from "./spark-graph-invariants.ts";
+import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
 import { createSparkRuntimeReadyTaskRunner } from "./spark-ready-task-runtime.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
@@ -59,15 +61,15 @@ export function registerSparkRunReadyTasksTool(
       dryRun: Type.Optional(Type.Boolean({ default: true })),
       maxConcurrency: Type.Optional(
         Type.Number({
-          default: DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
-          description: "Maximum number of role runs running at once. Default: 4.",
+          default: DEFAULT_READY_TASK_MAX_CONCURRENCY,
+          description: "Maximum number of child runs running at once. Default: 4.",
         }),
       ),
       timeoutMs: Type.Optional(
         Type.Number({
-          default: DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
+          default: DEFAULT_READY_TASK_TIMEOUT_MS,
           description:
-            "Foreground wait budget in milliseconds for this tool call; active background role-runs continue after it expires.",
+            "Foreground wait budget in milliseconds for this tool call; active background child runs continue after it expires.",
         }),
       ),
     }),
@@ -80,19 +82,19 @@ export function registerSparkRunReadyTasksTool(
       );
       const maxConcurrency = normalizeSparkRunReadyTasksPositiveInteger(
         params.maxConcurrency,
-        DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
+        DEFAULT_READY_TASK_MAX_CONCURRENCY,
         "spark_run_ready_tasks maxConcurrency",
       );
       const timeoutMs = normalizeSparkRunReadyTasksPositiveInteger(
         params.timeoutMs,
-        DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
+        DEFAULT_READY_TASK_TIMEOUT_MS,
         "spark_run_ready_tasks timeoutMs",
       );
       const store = defaultTaskGraphStore(cwd);
       const graph = await loadSparkGraph(cwd, ctx);
       if (!graph)
         return {
-          content: [{ type: "text", text: "No Spark project found." }],
+          content: [{ type: "text", text: NO_SPARK_PROJECT_FOUND_HINT }],
           details: { found: false },
         };
       if (ensureSparkGraphInvariants(graph)) await saveSparkGraphAndTodos(cwd, graph, ctx, store);
@@ -142,7 +144,7 @@ export function registerSparkRunReadyTasksTool(
           content: [
             {
               type: "text",
-              text: `Spark workflow-run scheduler started for current project “${project.title}”. Progress appears in the Spark widget; inspect with task({ action: "run_status" }), or stop explicit stuck child role-runs with task({ action: "run_control", control: "kill" }).`,
+              text: `Spark workflow-run scheduler started for current project “${project.title}”. Progress appears in the Spark widget; inspect with task({ action: "run_status" }), or stop explicit stuck child runs with task({ action: "run_control", control: "kill" }).`,
             },
           ],
           details: {
@@ -160,8 +162,9 @@ export function registerSparkRunReadyTasksTool(
         registry,
         artifactStore,
         cwd,
+        sessionModel: sessionModelName(ctx.model),
       });
-      const result = await runReadySparkTasks({
+      const result = await runReadyTasks({
         graph,
         ...runtimeRunner,
         projectRef: project.ref,
@@ -171,7 +174,7 @@ export function registerSparkRunReadyTasksTool(
       });
       const runLabels = result.runs.map((run) => run.runName ?? run.roleRef ?? run.ref);
       const timeoutSuffix = result.foregroundTimedOut
-        ? " Foreground wait expired; active role-runs remain detached in the background."
+        ? " Foreground wait expired; active child runs remain detached in the background."
         : "";
       return {
         content: [

@@ -50,7 +50,7 @@ void test("runtime role-run artifact preview owns bounded metadata reads", async
     const runRef = "run:preview" as RunRef;
     const taskRef = "task:preview" as TaskRef;
     const artifact = await store.put({
-      kind: "role-run",
+      kind: "trace",
       title: "Previewable role run",
       format: "json",
       body: {
@@ -78,14 +78,14 @@ void test("runtime role-run artifact preview owns bounded metadata reads", async
     assert.match(tooLarge.skippedReason ?? "", /metadata_too_large/);
 
     const nonRoleRun = await store.put({
-      kind: "research",
+      kind: "document",
       title: "Research artifact",
       format: "text",
       body: "not a role-run",
       provenance: { producer: "spark" },
     });
     const skipped = await readRoleRunArtifactPreview(dir, nonRoleRun.ref);
-    assert.match(skipped.skippedReason ?? "", /not_role_run_artifact: research/);
+    assert.match(skipped.skippedReason ?? "", /not_role_run_artifact: document/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -163,7 +163,7 @@ void test("runtime role-run retention compacts historical transcript blobs witho
       payload: `${"x".repeat(4096)}tail-marker`,
     };
     const artifact = await store.put({
-      kind: "role-run",
+      kind: "trace",
       title: "Large runtime role run",
       format: "json",
       body: body as unknown as JsonValue,

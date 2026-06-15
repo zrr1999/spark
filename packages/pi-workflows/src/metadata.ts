@@ -1,11 +1,14 @@
-import type { SparkWorkflowMeta } from "./types.ts";
+import type { WorkflowMeta } from "./types.ts";
 
-export interface ParsedSparkWorkflowScript {
-  meta: SparkWorkflowMeta;
+export interface ParsedWorkflowScript {
+  meta: WorkflowMeta;
   body: string;
 }
 
-export function parseSparkWorkflowScript(script: string): ParsedSparkWorkflowScript {
+/** @deprecated Spark-named alias kept for compatibility. Prefer ParsedWorkflowScript. */
+export type ParsedSparkWorkflowScript = ParsedWorkflowScript;
+
+export function parseWorkflowScript(script: string): ParsedWorkflowScript {
   const marker = "export const meta";
   const markerIndex = script.indexOf(marker);
   if (markerIndex < 0) throw new Error("Workflow script must export literal meta");
@@ -54,9 +57,12 @@ function findBalancedObjectEnd(source: string, start: number): number {
   throw new Error("Workflow meta object is not balanced");
 }
 
-export function parseMetaLiteral(source: string): SparkWorkflowMeta {
+/** @deprecated Spark-named alias kept for compatibility. Prefer parseWorkflowScript. */
+export const parseSparkWorkflowScript = parseWorkflowScript;
+
+export function parseMetaLiteral(source: string): WorkflowMeta {
   try {
-    return normalizeSparkWorkflowMeta(new WorkflowMetaLiteralParser(source).parse());
+    return normalizeWorkflowMeta(new WorkflowMetaLiteralParser(source).parse());
   } catch (error) {
     throw new Error(
       "Invalid workflow meta literal: " + (error instanceof Error ? error.message : String(error)),
@@ -262,14 +268,14 @@ function isDigit(char: string | undefined): boolean {
   return char !== undefined && char >= "0" && char <= "9";
 }
 
-export function normalizeSparkWorkflowMeta(value: unknown): SparkWorkflowMeta {
+export function normalizeWorkflowMeta(value: unknown): WorkflowMeta {
   if (!value || typeof value !== "object") throw new Error("workflow meta must be an object");
   const raw = value as Record<string, unknown>;
   if (typeof raw.name !== "string" || !raw.name.trim())
     throw new Error("workflow meta.name must be a non-empty string");
   if (typeof raw.description !== "string" || !raw.description.trim())
     throw new Error("workflow meta.description must be a non-empty string");
-  const meta: SparkWorkflowMeta = { name: raw.name.trim(), description: raw.description.trim() };
+  const meta: WorkflowMeta = { name: raw.name.trim(), description: raw.description.trim() };
   if (typeof raw.whenToUse === "string" && raw.whenToUse.trim())
     meta.whenToUse = raw.whenToUse.trim();
   if (raw.phases !== undefined) {
@@ -293,3 +299,6 @@ export function normalizeSparkWorkflowMeta(value: unknown): SparkWorkflowMeta {
   }
   return meta;
 }
+
+/** @deprecated Spark-named alias kept for compatibility. Prefer normalizeWorkflowMeta. */
+export const normalizeSparkWorkflowMeta = normalizeWorkflowMeta;

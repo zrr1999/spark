@@ -19,6 +19,7 @@ import {
   resolveSparkProject,
   saveProjectPurposeTrace,
 } from "./spark-project-tools.ts";
+import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
 import { normalizeSparkProjectListStatus } from "./spark-status.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 
@@ -159,7 +160,7 @@ export function registerSparkProjectTools(
       const graph = await loadSparkGraph(cwd, ctx);
       if (!graph)
         return {
-          content: [{ type: "text", text: "No Spark project found." }],
+          content: [{ type: "text", text: NO_SPARK_PROJECT_FOUND_HINT }],
           details: { found: false },
         };
       const input = normalizeSparkNewProjectInput(params);

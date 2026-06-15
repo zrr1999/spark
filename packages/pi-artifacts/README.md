@@ -2,6 +2,6 @@
 
 Reusable artifact/evidence storage for Pi extensions.
 
-`pi-artifacts` owns content-addressed artifact metadata, blobs, provenance, links, and the canonical `artifact` tool. Spark uses this package for task/run/ask/learning evidence instead of owning a separate artifact tool namespace.
+`pi-artifacts` owns content-addressed artifact metadata, blobs, provenance, links, and the canonical `artifact` tool for Pi capability packages and host facades.
 
-Current default project storage remains `.spark/artifacts/` to avoid migrating existing local evidence during the capability split.
+Prefer constructing `ArtifactStore` with an explicit `rootDir` owned by the host package. The exported `defaultArtifactStore(cwd)` still reads `.spark/artifacts/` as a compatibility default for existing local evidence.

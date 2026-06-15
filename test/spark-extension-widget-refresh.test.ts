@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -300,11 +300,10 @@ void test("Spark extension widget reconciles stale DAG records when an owned chi
   }
 });
 
-void test("Spark extension widget shows session goal without current project", async () => {
+void test("Spark extension widget shows session goal without project state", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-extension-widget-goal-no-project-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
-    await defaultTaskGraphStore(dir).save(new TaskGraph());
 
     const handlers = new Map<string, SparkEventHandler>();
     let widgetComponent: WidgetComponent | undefined;
@@ -352,6 +351,56 @@ void test("Spark extension widget shows session goal without current project", a
   }
 });
 
+void test("Spark session_start creates .spark and shows session goal", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-extension-session-start-goal-"));
+  try {
+    const handlers = new Map<string, SparkEventHandler[]>();
+    let widgetComponent: WidgetComponent | undefined;
+    const widgetTui: SparkWidgetTui = {
+      terminal: { columns: 160 },
+      requestRender() {},
+    };
+    const ctx: TestSparkContext = {
+      cwd: dir,
+      hasUI: true,
+      sessionManager: {
+        getSessionFile: () => join(dir, "session.json"),
+        getLeafId: () => "leaf-session-start-goal",
+      },
+      ui: {
+        setWidget(_key, cb) {
+          widgetComponent = isWidgetFactory(cb) ? cb(widgetTui, theme) : undefined;
+        },
+      },
+    };
+    const pi: SparkPi = {
+      registerCommand() {},
+      registerTool() {},
+      on(event, handler) {
+        handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+      },
+      sendMessage() {},
+    };
+    sparkExtension(pi);
+
+    for (const handler of handlers.get("session_start") ?? []) await handler({}, ctx);
+    assert.ok(await stat(join(dir, ".spark")));
+
+    await setSessionGoal(dir, ctx, {
+      objective: "Session goal survives an empty workspace",
+      source: "explicit",
+      status: "active",
+    });
+    for (const handler of handlers.get("session_tree") ?? []) await handler({}, ctx);
+
+    assert.ok(widgetComponent);
+    const rendered = widgetComponent.render().join("\n");
+    assert.match(rendered, /Goal\([●◉]\): Session goal survives an empty workspace/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("Spark extension refreshes SparkWidget after claim and TODO tools", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-extension-widget-refresh-"));
   try {
@@ -361,7 +410,7 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     await defaultTaskGraphStore(dir).save(graph);
 
     const tools = new Map<string, SparkToolConfig>();
-    const handlers = new Map<string, SparkEventHandler>();
+    const handlers = new Map<string, SparkEventHandler[]>();
     const widgetCalls: WidgetCall[] = [];
     let widgetComponent: WidgetComponent | undefined;
     let renderRequests = 0;
@@ -391,7 +440,7 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
         tools.set(config.name, config);
       },
       on(event, handler) {
-        handlers.set(event, handler);
+        handlers.set(event, [...(handlers.get(event) ?? []), handler]);
       },
       sendMessage() {},
     };
@@ -414,7 +463,6 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
         description: "Exercise widget refresh after claim.",
         kind: "implement",
         plan: executionReadyPlan("Exercise widget refresh after claim."),
-        todos: ["First child TODO"],
       },
       ctx,
     );
@@ -423,9 +471,10 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     assert.deepEqual(widgetCalls[0]?.opts, { placement: "aboveEditor" });
     assert.equal(renderRequests, 1);
     assert.match(widgetComponent.render().join("\n"), /→ @me Widget refresh task/);
-    assert.match(widgetComponent.render().join("\n"), /First child TODO/);
+    assert.doesNotMatch(widgetComponent.render().join("\n"), /First child TODO/);
 
-    await handlers.get("tool_execution_end")?.({ toolName: "task" }, ctx);
+    for (const handler of handlers.get("tool_execution_end") ?? [])
+      await handler({ toolName: "task" }, ctx);
     assert.equal(renderRequests, 2);
 
     await executeTool(
@@ -434,6 +483,7 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
         action: "todo_update",
         scope: "task",
         ops: [
+          { op: "init", items: ["First child TODO"] },
           { op: "done", item: "First child TODO" },
           { op: "append", items: ["Second child TODO"] },
         ],
@@ -445,7 +495,8 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     assert.match(widgetComponent.render().join("\n"), /First child TODO/);
     assert.match(widgetComponent.render().join("\n"), /Second child TODO/);
 
-    await handlers.get("tool_execution_end")?.({ toolName: "task" }, ctx);
+    for (const handler of handlers.get("tool_execution_end") ?? [])
+      await handler({ toolName: "task" }, ctx);
     assert.equal(renderRequests, 4);
 
     await executeTool(
@@ -461,7 +512,8 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     assert.equal(renderRequests, 5);
     assert.match(widgetComponent.render().join("\n"), /Independent session TODO/);
 
-    await handlers.get("tool_execution_end")?.({ toolName: "task" }, ctx);
+    for (const handler of handlers.get("tool_execution_end") ?? [])
+      await handler({ toolName: "task" }, ctx);
     assert.equal(renderRequests, 6);
   } finally {
     await rm(dir, { recursive: true, force: true });

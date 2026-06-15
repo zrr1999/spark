@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { applyIndependentTodoOps, defaultTaskGraphStore, type TaskTodoOp } from "pi-tasks";
 import { currentSparkProject, sparkSessionKey, sparkTodoStore } from "./session-state.ts";
 import { loadIndependentTodos, saveIndependentTodos } from "./session-todos.ts";
+import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
 import { resolveSessionClaimedTask } from "./task-claim-selection.ts";
 import { normalizeOptionalToolString, normalizeToolStringArray } from "./task-plan-tool.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
@@ -115,12 +116,12 @@ export function registerSparkTodoTools(
       );
       if (!updated.graph)
         return {
-          content: [{ type: "text", text: "No Spark project found." }],
+          content: [{ type: "text", text: NO_SPARK_PROJECT_FOUND_HINT }],
           details: { found: false },
         };
       if (updated.result.error === "no_project")
         return {
-          content: [{ type: "text", text: "No Spark project found." }],
+          content: [{ type: "text", text: NO_SPARK_PROJECT_FOUND_HINT }],
           details: { found: false },
         };
       if (updated.result.error === "no_matching_claimed_task")

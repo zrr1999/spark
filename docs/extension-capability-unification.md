@@ -51,7 +51,7 @@ Domain-specific command families that are not duplicated by Spark, such as `pi-c
 
 Spark should not own generic mechanisms. It should provide:
 
-- `/spark`, `/research`, `/plan`, `/execute`, `/goal`, `/workflow` commands.
+- Spark compatibility entry plus `/research`, `/plan`, `/execute`, `/goal`, `/workflow` commands.
 - Spark mode prompt and activation rules.
 - Spark context providers over active project/task/workflow state.
 - Spark function/workflow presets and orchestration policy.
@@ -322,7 +322,7 @@ Actions:
 
 `packages/spark` should register Spark commands and Spark-specific providers/policy only:
 
-- `/spark`
+- Spark compatibility entry
 - `/research`
 - `/plan`
 - `/execute`
@@ -373,7 +373,7 @@ It should not register duplicate canonical tools for task, artifact, ask, role, 
 | `spark_learning_reject`                   | `learning({ action: "reject" })`                                                                   | No                 | Generic evidence-backed learning.                                       |
 | `spark_learning_export_markdown`          | `learning({ action: "export_markdown" })`                                                          | No                 | Generic export.                                                         |
 | `spark_learning_import_markdown`          | `learning({ action: "import_markdown" })`                                                          | No                 | Generic import.                                                         |
-| `/spark`                                  | `/spark`                                                                                           | Yes                | Spark mode command.                                                     |
+| Spark compatibility entry                 | Spark compatibility entry                                                                          | Yes                | Retained for existing callers; new guidance should prefer canonical tools and explicit mode commands. |
 | `/research`, `/plan`, `/execute`, `/goal` | same                                                                                               | Yes                | Spark mode commands.                                                    |
 | `/workflow`                               | `/workflow` delegating to `workflow({ action: "run" })`                                            | Yes                | Saved scripts only.                                                     |
 | `/workflow:goal`                          | none                                                                                               | No                 | Goal is not workflow.                                                   |

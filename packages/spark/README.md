@@ -1,6 +1,6 @@
 # spark
 
-High-level `/spark` facade for Pi.
+High-level Spark mode facade for Pi. The legacy compatibility command remains registered for existing callers; new guidance should prefer canonical tools and explicit mode commands.
 
 It wires together Spark mode/policy code and generic `pi-*` capabilities, while package-specific ownership stays below:
 

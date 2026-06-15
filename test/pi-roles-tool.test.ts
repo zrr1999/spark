@@ -5,17 +5,19 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { registerPiRolesTools } from "../packages/pi-roles/src/extension.ts";
+import { createDefaultRoleRegistry } from "../packages/pi-roles/src/index.ts";
 
 const DEFAULT_TEST_CWD = "/tmp/pi-roles-tool-default-cwd";
 
 interface ToolConfig {
   name: string;
+  description?: string;
   execute: (
     toolCallId: string,
     params: Record<string, unknown>,
     signal: AbortSignal,
     onUpdate: (update: { content: Array<{ type: "text"; text: string }> }) => void,
-    ctx: { cwd?: string },
+    ctx: { cwd?: string; model?: { provider: string; id: string; api?: string } },
   ) => Promise<{
     content: Array<{ type: "text"; text: string }>;
     details?: Record<string, unknown>;
@@ -152,6 +154,7 @@ void test("role action tool manages role model settings", async () => {
         timeoutMs: 5_000,
       },
       dir,
+      { model: { provider: "ignored", id: "session", api: "openai-responses" } },
     );
     assert.match(called.content[0]?.text ?? "", /Role call succeeded: worker/);
     assert.match(called.content[0]?.text ?? "", /model=test\/model/);
@@ -192,6 +195,23 @@ void test("role action tool manages role model settings", async () => {
     else process.env.PI_ROLES_HOME = previousBindingHome;
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+void test("builtin role prompts and direct-call tool copy stay host-neutral", () => {
+  const tools = registerRoleToolsForTest();
+  const roleToolDescription = tools.get("role")?.description ?? "";
+  assert.doesNotMatch(roleToolDescription, /Spark tasks or DAG runs/);
+
+  const registry = createDefaultRoleRegistry({ now: "2026-01-01T00:00:00.000Z" });
+  const prompts = registry
+    .list({ source: "builtin" })
+    .map((role) => role.systemPrompt)
+    .join("\n");
+  assert.match(prompts, /You are a Pi scout/);
+  assert.match(prompts, /available ask tool/);
+  assert.doesNotMatch(prompts, /You are a Spark/);
+  assert.doesNotMatch(prompts, /Spark ask tools/);
+  assert.doesNotMatch(prompts, /Spark project or task/);
 });
 
 void test("role spec tools keep patch presets out of builtin role lookup", async () => {
@@ -284,6 +304,37 @@ void test("call_role launches fresh role runs", async () => {
       dir,
     );
     assert.match(canonical.content[0]?.text ?? "", /Role call succeeded: worker/);
+  } finally {
+    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousBindingHome;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("call_role inherits the active session model when no role model is saved", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-session-model-"));
+  const previousBindingHome = process.env.PI_ROLES_HOME;
+  process.env.PI_ROLES_HOME = dir;
+  try {
+    const fakePi = await writeFakePi(dir);
+    const tools = registerRoleToolsForTest();
+
+    const result = await executeRoleTool(
+      tools,
+      "role",
+      {
+        action: "call",
+        role: "worker",
+        instruction: "Run with the inherited session model.",
+        piCommand: fakePi,
+        timeoutMs: 5_000,
+      },
+      dir,
+      { model: { provider: "test", id: "model", api: "openai-responses" } },
+    );
+
+    assert.match(result.content[0]?.text ?? "", /Role call succeeded: worker/);
+    assert.match(result.content[0]?.text ?? "", /model=test\/model/);
   } finally {
     if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
     else process.env.PI_ROLES_HOME = previousBindingHome;
@@ -645,12 +696,14 @@ function executeRoleTool(
   name: string,
   params: Record<string, unknown>,
   cwd = DEFAULT_TEST_CWD,
+  ctxExtra: { model?: { provider: string; id: string; api?: string } } = {},
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }> {
   const call = canonicalRoleToolCall(name, params);
   const tool = tools.get(call.name);
   assert.ok(tool, `missing ${call.name} tool`);
   return tool.execute("tool-call", call.params, new AbortController().signal, () => undefined, {
     cwd,
+    ...ctxExtra,
   });
 }
 

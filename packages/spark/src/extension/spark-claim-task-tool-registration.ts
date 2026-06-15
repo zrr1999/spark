@@ -6,6 +6,7 @@ import {
   type Task,
   type TaskPlan,
   type ProjectRef,
+  type TaskTodo,
 } from "pi-extension-api";
 import {
   defaultTaskGraphStore,
@@ -16,11 +17,9 @@ import {
 import {
   compactTaskDetail,
   normalizeOptionalToolString,
-  normalizeRequiredToolString,
   normalizeTaskKind,
   normalizeTaskPlanPatch,
   normalizeTaskStatus,
-  normalizeToolStringArray,
   taskKindDescription,
   taskPlanSchema,
 } from "./task-plan-tool.ts";
@@ -31,6 +30,7 @@ import { taskClaimSummary } from "./task-display.ts";
 import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 import { truncateInline } from "./tool-rendering.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
+import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 
 const MAIN_TASK_CLAIM_LEASE_MS = 10 * 60 * 1_000;
@@ -41,13 +41,12 @@ interface SparkClaimTaskToolDependencies {
 
 export interface NormalizedSparkClaimTaskInput {
   name?: string;
-  title: string;
-  description: string;
-  kind: NonNullable<ReturnType<typeof normalizeTaskKind>>;
+  title?: string;
+  description?: string;
+  kind?: NonNullable<ReturnType<typeof normalizeTaskKind>>;
   requestedStatus?: ReturnType<typeof normalizeTaskStatus>;
   roleRef?: RoleRef;
   plan?: Partial<TaskPlan>;
-  todos: string[];
 }
 
 export function normalizeSparkClaimTaskInput(
@@ -57,13 +56,12 @@ export function normalizeSparkClaimTaskInput(
   const roleRefInput = normalizeOptionalToolString(params.roleRef, "roleRef");
   return {
     name: normalizeOptionalToolString(params.name, "name"),
-    title: normalizeRequiredToolString(params.title, "title"),
-    description: normalizeRequiredToolString(params.description, "description"),
-    kind: normalizeTaskKind(params.kind) ?? "interaction",
+    title: normalizeOptionalToolString(params.title, "title"),
+    description: normalizeOptionalToolString(params.description, "description"),
+    kind: normalizeTaskKind(params.kind),
     requestedStatus: normalizeTaskStatus(params.status),
     roleRef: roleRefInput ? registry.select(roleRefInput).ref : undefined,
     plan: normalizeTaskPlanPatch(params.plan, "plan"),
-    todos: normalizeToolStringArray(params.todos, "todos") ?? [],
   };
 }
 
@@ -82,8 +80,18 @@ export function registerSparkClaimTaskTool(
           description: "Simple @name handle for this task (lowercase, digits, - or _).",
         }),
       ),
-      title: Type.String({ description: "Human-readable task title shown as @name: title." }),
-      description: Type.String({ description: "What the claimed task will accomplish." }),
+      title: Type.Optional(
+        Type.String({
+          description:
+            "Human-readable task title. Optional when claiming an existing task by name.",
+        }),
+      ),
+      description: Type.Optional(
+        Type.String({
+          description:
+            "What the claimed task will accomplish. Optional when an existing task or concrete plan already provides it.",
+        }),
+      ),
       kind: Type.Optional(
         Type.String({
           description: taskKindDescription(),
@@ -101,7 +109,6 @@ export function registerSparkClaimTaskTool(
         }),
       ),
       plan: Type.Optional(taskPlanSchema()),
-      todos: Type.Optional(Type.Array(Type.String({ description: "Task-local TODO item." }))),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd;
@@ -112,7 +119,7 @@ export function registerSparkClaimTaskTool(
           content: [
             {
               type: "text",
-              text: `Cannot claim ${input.title}: task({ action: "claim" }) only accepts unfinished statuses (pending, ready, running, blocked). Use task completion/failure/cancellation flows instead of claiming with terminal status ${input.requestedStatus}.`,
+              text: `Cannot claim ${claimInputLabel(input)}: task({ action: "claim" }) only accepts unfinished statuses (pending, ready, running, blocked). Use task completion/failure/cancellation flows instead of claiming with terminal status ${input.requestedStatus}.`,
             },
           ],
           details: {
@@ -125,6 +132,12 @@ export function registerSparkClaimTaskTool(
       const providedPlan = input.plan !== undefined;
       const sessionKey = sparkSessionKey(ctx);
       const store = defaultTaskGraphStore(cwd);
+      const existingGraph = await store.load();
+      if (!existingGraph)
+        return {
+          content: [{ type: "text", text: NO_SPARK_PROJECT_FOUND_HINT }],
+          details: { found: false },
+        };
       const claimed = await store.update(
         async (graph) => {
           await sparkTodoStore(cwd, ctx).hydrate(graph);
@@ -134,7 +147,7 @@ export function registerSparkClaimTaskTool(
           const existing =
             resolveSessionClaimedTask(graph, project.ref, sessionKey, input.name ?? input.title) ??
             tasks.find((task) => Boolean(input.name) && task.name === input.name) ??
-            tasks.find((task) => task.title === input.title) ??
+            tasks.find((task) => Boolean(input.title) && task.title === input.title) ??
             resolveObviousTaskRenameCandidate(graph, project.ref, tasks);
           if (existing && taskClaimedBy(existing) && !isClaimOwnedBySession(existing, sessionKey))
             return { error: "claimed_by_other" as const, activeTask: existing };
@@ -143,15 +156,8 @@ export function registerSparkClaimTaskTool(
             return { error: "active_claim_exists" as const, activeTask: activeClaim };
           if (!providedPlan && (!existing || !existing.plan))
             return { error: "task_plan_required" as const };
-          const willStartUnfinished = isUnfinishedTaskStatus(status);
-          const hasInputTodos = input.todos.length > 0;
-          const existingTodos = existing ? graph.taskTodos(existing.ref) : [];
-          const hasExistingActiveTodos = existingTodos.some(
-            (todo) =>
-              todo.status !== "done" && todo.status !== "cancelled" && todo.status !== "deleted",
-          );
-          if (willStartUnfinished && !hasInputTodos && !hasExistingActiveTodos)
-            return { error: "task_todos_required" as const };
+          const resolved = resolveClaimedTaskFields(input, existing);
+          if (!resolved) return { error: "task_title_required" as const };
           const requestedName = taskNamePatchForClaim(existing, input.name, input.title);
           const namePatch = requestedName
             ? uniqueTaskNameForExistingTask(tasks, requestedName, existing?.ref)
@@ -159,54 +165,41 @@ export function registerSparkClaimTaskTool(
           const task = existing
             ? graph.updateTask(existing.ref, {
                 ...(namePatch ? { name: namePatch } : {}),
-                title: input.title,
-                description: input.description,
-                kind: input.kind,
+                title: resolved.title,
+                description: resolved.description,
+                kind: resolved.kind,
                 status,
-                roleRef: input.roleRef,
-                plan: normalizeTaskPlan(
-                  input.plan ?? existing.plan,
-                  input.description,
-                  input.title,
-                ),
+                roleRef: input.roleRef ?? existing.roleRef,
+                plan: normalizeTaskPlan(resolved.plan, resolved.description, resolved.title),
               })
             : graph.createTask({
                 projectRef: project.ref,
                 name: input.name,
-                title: input.title,
-                description: input.description,
-                kind: input.kind,
+                title: resolved.title,
+                description: resolved.description,
+                kind: resolved.kind,
                 status,
                 roleRef: input.roleRef,
-                plan: normalizeTaskPlan(input.plan, input.description, input.title),
+                plan: normalizeTaskPlan(resolved.plan, resolved.description, resolved.title),
               });
-          let todosChanged = false;
           if (isUnfinishedTaskStatus(status)) {
             graph.claimTask(task.ref, {
               kind: "main",
               claimedBy: sessionKey,
               sessionId: sessionKey,
-              roleRef: input.roleRef,
+              roleRef: input.roleRef ?? task.roleRef,
               leaseMs: MAIN_TASK_CLAIM_LEASE_MS,
             });
           }
-          if (input.todos.length > 0) {
-            graph.applyTodoOps(task.ref, [
-              {
-                op: "init",
-                items: input.todos,
-              },
-            ]);
-            todosChanged = true;
-          }
-          if (todosChanged) await sparkTodoStore(cwd, ctx).save(graph);
-          return { task: graph.getTask(task.ref) };
+          const taskTodos = graph.taskTodos(task.ref);
+          const hasActiveTodos = taskTodos.some(isActiveTaskTodo);
+          return { task: graph.getTask(task.ref), hasActiveTodos };
         },
         { createIfMissing: false },
       );
       if (!claimed.graph || claimed.result.error === "no_project")
         return {
-          content: [{ type: "text", text: "No Spark project found." }],
+          content: [{ type: "text", text: NO_SPARK_PROJECT_FOUND_HINT }],
           details: { found: false },
         };
       if (claimed.result.error === "task_plan_required")
@@ -214,20 +207,20 @@ export function registerSparkClaimTaskTool(
           content: [
             {
               type: "text",
-              text: `Cannot claim ${input.title}: creating or claiming a task without a bound task.plan is not allowed. Provide a concrete plan with objective, success criteria, evidence requirements, and steps before claiming.`,
+              text: `Cannot claim ${claimInputLabel(input)}: creating or claiming a task without a bound task.plan is not allowed. Provide a concrete plan with objective, success criteria, evidence requirements, and steps before claiming.`,
             },
           ],
           details: { found: true, error: "task_plan_required" },
         };
-      if (claimed.result.error === "task_todos_required")
+      if (claimed.result.error === "task_title_required")
         return {
           content: [
             {
               type: "text",
-              text: `Cannot claim ${input.title}: claimed tasks must have at least one task-local TODO. Provide todos in the claim call, or seed them first with task({ action: "todo_update", scope: "task", ops: [{ op: "init", items: [...] }] }).`,
+              text: "Cannot claim a new task without title or name. Provide title, or provide name so Spark can derive a readable title.",
             },
           ],
-          details: { found: true, error: "task_todos_required" },
+          details: { found: true, error: "task_title_required" },
         };
       if (
         claimed.result.error === "active_claim_exists" ||
@@ -239,8 +232,8 @@ export function registerSparkClaimTaskTool(
               type: "text",
               text:
                 claimed.result.error === "active_claim_exists"
-                  ? `Cannot claim ${input.title}: this session already has unfinished claimed task ${claimed.result.activeTask.title} (${claimed.result.activeTask.ref}). Finish, fail, or cancel it before claiming another task.`
-                  : `Cannot update ${input.title}: matching task is currently claimed by another session (${taskClaimSummary(claimed.result.activeTask)}).`,
+                  ? `Cannot claim ${claimInputLabel(input)}: this session already has unfinished claimed task ${claimed.result.activeTask.title} (${claimed.result.activeTask.ref}). Finish, fail, or cancel it before claiming another task.`
+                  : `Cannot update ${claimInputLabel(input)}: matching task is currently claimed by another session (${taskClaimSummary(claimed.result.activeTask)}).`,
             },
           ],
           details: {
@@ -254,7 +247,7 @@ export function registerSparkClaimTaskTool(
         content: [
           {
             type: "text",
-            text: renderClaimedTaskText(claimed.result.task),
+            text: renderClaimedTaskText(claimed.result.task, claimed.result.hasActiveTodos),
           },
         ],
         details: {
@@ -265,7 +258,46 @@ export function registerSparkClaimTaskTool(
   });
 }
 
-function renderClaimedTaskText(task: Task): string {
+interface ResolvedClaimedTaskFields {
+  title: string;
+  description: string;
+  kind: NonNullable<ReturnType<typeof normalizeTaskKind>>;
+  plan: Partial<TaskPlan>;
+}
+
+function resolveClaimedTaskFields(
+  input: NormalizedSparkClaimTaskInput,
+  existing: Task | undefined,
+): ResolvedClaimedTaskFields | undefined {
+  const title = input.title ?? existing?.title ?? titleFromTaskName(input.name);
+  if (!title) return undefined;
+  const plan = input.plan ?? existing?.plan;
+  if (!plan) return undefined;
+  const description = input.description ?? existing?.description ?? plan.objective ?? title;
+  return {
+    title,
+    description,
+    kind: input.kind ?? existing?.kind ?? "implement",
+    plan,
+  };
+}
+
+function titleFromTaskName(name: string | undefined): string | undefined {
+  if (!name) return undefined;
+  const words = name.replace(/^@/u, "").split(/[-_]+/u).filter(Boolean);
+  if (words.length === 0) return undefined;
+  return words.map((word) => word[0]?.toUpperCase() + word.slice(1)).join(" ");
+}
+
+function claimInputLabel(input: NormalizedSparkClaimTaskInput): string {
+  return input.title ?? (input.name ? `@${input.name}` : "task");
+}
+
+function isActiveTaskTodo(todo: TaskTodo): boolean {
+  return todo.status !== "done" && todo.status !== "cancelled" && todo.status !== "deleted";
+}
+
+function renderClaimedTaskText(task: Task, hasActiveTodos: boolean): string {
   const plan = task.plan;
   const lines = [`Claimed Spark task: @${task.name}: ${task.title} (${task.ref})`, "", "Plan:"];
   if (!plan) {
@@ -285,10 +317,16 @@ function renderClaimedTaskText(task: Task): string {
       `- constraints: ${renderPlanList(plan.constraints)}`,
     );
   }
-  lines.push(
-    "",
-    'Initial task TODOs are present for this claim. Next: execute the task TODOs, and refine them with task({ action: "todo_update", scope: "task", ops: [...] }) if the first breakdown is incomplete.',
-  );
+  lines.push("");
+  if (hasActiveTodos) {
+    lines.push(
+      'Task TODOs are present for this claim. Next: execute the task TODOs, and refine them with task({ action: "todo_update", scope: "task", ops: [...] }) if the breakdown is incomplete.',
+    );
+  } else {
+    lines.push(
+      'Next: set task-local TODOs with task({ action: "todo_update", scope: "task", ops: [{ op: "init", items: [...] }] }) before doing implementation work.',
+    );
+  }
   return lines.join("\n");
 }
 
@@ -338,11 +376,15 @@ function uniqueTaskNameForExistingTask(
 function taskNamePatchForClaim(
   existing: Task | undefined,
   requestedName: string | undefined,
-  requestedTitle: string,
+  requestedTitle: string | undefined,
 ): string | undefined {
   if (!existing) return requestedName;
   if (requestedName && requestedName !== existing.name) return requestedName;
-  if (!requestedName && isGenericTaskNameForTitle(existing.name, existing.title)) {
+  if (
+    requestedTitle &&
+    !requestedName &&
+    isGenericTaskNameForTitle(existing.name, existing.title)
+  ) {
     return taskNameFromTitleForPrompt(requestedTitle);
   }
   return undefined;

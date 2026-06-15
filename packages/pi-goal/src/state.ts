@@ -8,30 +8,16 @@ import {
   type GoalResult,
   type GoalSnapshot,
   type GoalStatus,
-  type GoalUsage,
-  type RuntimeUsageGoalStatus,
   type SessionEntryLike,
   type Goal,
 } from "./types.ts";
-
-export interface ApplyUsageOptions {
-  expectedGoalId?: string | null;
-  accountBudgetLimited?: boolean;
-}
 
 export function unixSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-export function cloneUsage(usage: GoalUsage): GoalUsage {
-  return { ...usage };
-}
-
 export function cloneGoal(goal: Goal): Goal {
-  return {
-    ...goal,
-    usage: cloneUsage(goal.usage),
-  };
+  return { ...goal };
 }
 
 export function goalsEquivalent(left: Goal, right: Goal): boolean {
@@ -39,11 +25,8 @@ export function goalsEquivalent(left: Goal, right: Goal): boolean {
     left.goalId === right.goalId &&
     left.objective === right.objective &&
     left.status === right.status &&
-    left.tokenBudget === right.tokenBudget &&
     left.createdAt === right.createdAt &&
-    left.updatedAt === right.updatedAt &&
-    left.usage.tokensUsed === right.usage.tokensUsed &&
-    left.usage.activeSeconds === right.usage.activeSeconds
+    left.updatedAt === right.updatedAt
   );
 }
 
@@ -58,41 +41,11 @@ export function validateObjective(objective: string): string | null {
   return null;
 }
 
-export function validateTokenBudget(tokenBudget: number | null | undefined): string | null {
-  if (tokenBudget === null || tokenBudget === undefined) {
-    return null;
-  }
-  if (!Number.isInteger(tokenBudget) || tokenBudget <= 0) {
-    return "Token budget must be a positive integer.";
-  }
-  return null;
-}
-
-export function statusAfterBudgetLimit(
-  status: GoalStatus,
-  tokensUsed: number,
-  tokenBudget: number | null,
-): GoalStatus {
-  if (status === "active" && tokenBudget !== null && tokensUsed >= tokenBudget) {
-    return "budgetLimited";
-  }
-  return status;
-}
-
-export function createGoal(
-  objective: string,
-  tokenBudget?: number | null,
-  now = unixSeconds(),
-): Goal {
+export function createGoal(objective: string, now = unixSeconds()): Goal {
   return {
     goalId: randomUUID(),
     objective: objective.trim(),
     status: "active",
-    tokenBudget: tokenBudget ?? null,
-    usage: {
-      tokensUsed: 0,
-      activeSeconds: 0,
-    },
     createdAt: now,
     updatedAt: now,
   };
@@ -104,22 +57,6 @@ export function setEntry(goal: Goal, source: GoalEntrySource, at = unixSeconds()
     kind: "set",
     source,
     goal: cloneGoal(goal),
-    at,
-  };
-}
-
-export function runtimeUsageEntry(goal: Goal, at = unixSeconds()): GoalCustomEntry {
-  if (!isRuntimeUsageGoalStatus(goal.status)) {
-    throw new Error(`Cannot persist ${goal.status} goal as runtime usage entry.`);
-  }
-  return {
-    version: 1,
-    kind: "usage",
-    source: "runtime",
-    goalId: goal.goalId,
-    status: goal.status,
-    usage: cloneUsage(goal.usage),
-    updatedAt: goal.updatedAt,
     at,
   };
 }
@@ -158,31 +95,10 @@ export function isGoalCustomEntry(data: unknown): data is GoalCustomEntry {
   if (entry.kind === "clear") {
     return entry.clearedGoalId === null || typeof entry.clearedGoalId === "string";
   }
-  if (entry.kind === "usage") {
-    return (
-      entry.source === "runtime" &&
-      typeof entry.goalId === "string" &&
-      isRuntimeUsageGoalStatus(entry.status) &&
-      isGoalUsage(entry.usage) &&
-      typeof entry.updatedAt === "number"
-    );
-  }
   if (entry.kind === "host_overflow_cap_reset") {
     return typeof entry.active === "boolean";
   }
   return entry.kind === "set" && isGoal(entry.goal);
-}
-
-export function isGoalUsage(usage: unknown): usage is GoalUsage {
-  if (!usage || typeof usage !== "object") {
-    return false;
-  }
-  const candidate = usage as GoalUsage;
-  return typeof candidate.tokensUsed === "number" && typeof candidate.activeSeconds === "number";
-}
-
-export function isRuntimeUsageGoalStatus(status: unknown): status is RuntimeUsageGoalStatus {
-  return status === "active" || status === "budgetLimited";
 }
 
 export function isGoal(goal: unknown): goal is Goal {
@@ -194,40 +110,13 @@ export function isGoal(goal: unknown): goal is Goal {
     typeof candidate.goalId === "string" &&
     typeof candidate.objective === "string" &&
     isGoalStatus(candidate.status) &&
-    (candidate.tokenBudget === null || typeof candidate.tokenBudget === "number") &&
     typeof candidate.createdAt === "number" &&
-    typeof candidate.updatedAt === "number" &&
-    isGoalUsage(candidate.usage)
+    typeof candidate.updatedAt === "number"
   );
 }
 
 export function isGoalStatus(status: unknown): status is GoalStatus {
-  return (
-    status === "active" ||
-    status === "paused" ||
-    status === "budgetLimited" ||
-    status === "complete"
-  );
-}
-
-function canApplyRuntimeUsageEntry(
-  goal: Goal | null,
-  entry: Extract<GoalCustomEntry, { kind: "usage" }>,
-): goal is Goal {
-  if (!goal || goal.goalId !== entry.goalId) {
-    return false;
-  }
-  if (!isRuntimeUsageGoalStatus(goal.status)) {
-    return false;
-  }
-  if (goal.status === "budgetLimited" && entry.status === "active") {
-    return false;
-  }
-  return (
-    entry.updatedAt >= goal.updatedAt &&
-    entry.usage.tokensUsed >= goal.usage.tokensUsed &&
-    entry.usage.activeSeconds >= goal.usage.activeSeconds
-  );
+  return status === "active" || status === "paused" || status === "complete";
 }
 
 export function reconstructGoal(entries: Iterable<SessionEntryLike>): GoalSnapshot {
@@ -244,14 +133,6 @@ export function reconstructGoal(entries: Iterable<SessionEntryLike>): GoalSnapsh
       goal = null;
     } else if (entry.data.kind === "set") {
       goal = cloneGoal(entry.data.goal);
-    } else if (entry.data.kind === "usage") {
-      if (!canApplyRuntimeUsageEntry(goal, entry.data)) {
-        continue;
-      }
-      goal = cloneGoal(goal);
-      goal.status = entry.data.status;
-      goal.usage = cloneUsage(entry.data.usage);
-      goal.updatedAt = entry.data.updatedAt;
     }
   }
 
@@ -281,11 +162,7 @@ export function reconstructHostOverflowCapNeedsUserReset(
   return needsReset;
 }
 
-export function createGoalResult(
-  current: Goal | null,
-  objective: string,
-  tokenBudget?: number | null,
-): GoalResult {
+export function createGoalResult(current: Goal | null, objective: string): GoalResult {
   if (current && current.status !== "complete") {
     return {
       ok: false,
@@ -300,12 +177,7 @@ export function createGoalResult(
     return { ok: false, message: objectiveError, goal: null };
   }
 
-  const budgetError = validateTokenBudget(tokenBudget);
-  if (budgetError) {
-    return { ok: false, message: budgetError, goal: null };
-  }
-
-  const goal = createGoal(objective, tokenBudget);
+  const goal = createGoal(objective);
   return {
     ok: true,
     message: "Goal created.",
@@ -313,18 +185,13 @@ export function createGoalResult(
   };
 }
 
-export function replaceGoal(objective: string, tokenBudget?: number | null): GoalResult {
+export function replaceGoal(objective: string): GoalResult {
   const objectiveError = validateObjective(objective);
   if (objectiveError) {
     return { ok: false, message: objectiveError, goal: null };
   }
 
-  const budgetError = validateTokenBudget(tokenBudget);
-  if (budgetError) {
-    return { ok: false, message: budgetError, goal: null };
-  }
-
-  const goal = createGoal(objective, tokenBudget);
+  const goal = createGoal(objective);
   return {
     ok: true,
     message: "Goal set.",
@@ -385,11 +252,7 @@ export function updateGoalStatus(current: Goal | null, status: GoalStatus): Goal
   }
 
   const goal = cloneGoal(current);
-  if (current.status === "budgetLimited" && (status === "active" || status === "paused")) {
-    goal.status = "budgetLimited";
-  } else {
-    goal.status = statusAfterBudgetLimit(status, goal.usage.tokensUsed, goal.tokenBudget);
-  }
+  goal.status = status;
   goal.updatedAt = unixSeconds();
 
   return {
@@ -397,76 +260,4 @@ export function updateGoalStatus(current: Goal | null, status: GoalStatus): Goal
     message: `Goal marked ${goal.status}.`,
     goal,
   };
-}
-
-export function applyUsage(
-  current: Goal | null,
-  tokensDelta: number,
-  activeSecondsDelta: number,
-  options: ApplyUsageOptions = {},
-): { goal: Goal | null; changed: boolean; crossedBudget: boolean } {
-  if (!current) {
-    return { goal: current, changed: false, crossedBudget: false };
-  }
-
-  if (
-    options.expectedGoalId !== undefined &&
-    options.expectedGoalId !== null &&
-    current.goalId !== options.expectedGoalId
-  ) {
-    return { goal: current, changed: false, crossedBudget: false };
-  }
-
-  const canAccount =
-    current.status === "active" ||
-    (options.accountBudgetLimited === true && current.status === "budgetLimited");
-  if (!canAccount) {
-    return { goal: current, changed: false, crossedBudget: false };
-  }
-
-  const tokens = Math.max(0, Math.trunc(tokensDelta));
-  const seconds = Math.max(0, Math.trunc(activeSecondsDelta));
-  if (tokens === 0 && seconds === 0) {
-    return { goal: current, changed: false, crossedBudget: false };
-  }
-
-  const goal = cloneGoal(current);
-  const wasUnderBudget = goal.tokenBudget === null || goal.usage.tokensUsed < goal.tokenBudget;
-  goal.usage.tokensUsed += tokens;
-  goal.usage.activeSeconds += seconds;
-  goal.status = statusAfterBudgetLimit(goal.status, goal.usage.tokensUsed, goal.tokenBudget);
-  goal.updatedAt = unixSeconds();
-
-  const crossedBudget =
-    current.status === "active" &&
-    wasUnderBudget &&
-    goal.tokenBudget !== null &&
-    goal.usage.tokensUsed >= goal.tokenBudget;
-
-  return { goal, changed: true, crossedBudget };
-}
-
-export function goalWithLiveUsage(
-  current: Goal | null,
-  activeGoalId: string | null,
-  lastAccountedAt: number | null,
-  now = Date.now(),
-): Goal | null {
-  if (
-    !current ||
-    current.status !== "active" ||
-    activeGoalId !== current.goalId ||
-    lastAccountedAt === null
-  ) {
-    return current;
-  }
-
-  const liveSeconds = Math.max(0, Math.floor((now - lastAccountedAt) / 1000));
-  if (liveSeconds === 0) {
-    return current;
-  }
-
-  const goal = cloneGoal(current);
-  goal.usage.activeSeconds += liveSeconds;
-  return goal;
 }

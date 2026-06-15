@@ -2,8 +2,8 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
-  DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
-  DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
+  DEFAULT_READY_TASK_MAX_CONCURRENCY,
+  DEFAULT_READY_TASK_TIMEOUT_MS,
   newRef,
   nowIso,
   type RunRef,
@@ -151,7 +151,7 @@ export async function saveSparkRunMode(
     status: "running",
     policy: {
       maxConcurrency: policy?.maxConcurrency ?? sparkRunStrategyMaxConcurrency(strategy),
-      timeoutMs: policy?.timeoutMs ?? DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
+      timeoutMs: policy?.timeoutMs ?? DEFAULT_READY_TASK_TIMEOUT_MS,
       stopOnAsk: true,
       stopOnValidationFailure: true,
     },
@@ -163,7 +163,7 @@ export async function saveSparkRunMode(
 }
 
 export function sparkRunStrategyMaxConcurrency(strategy: SparkRunStrategy): number {
-  return strategy === "sequential" ? 1 : DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY;
+  return strategy === "sequential" ? 1 : DEFAULT_READY_TASK_MAX_CONCURRENCY;
 }
 
 export function sparkRunStrategyForMaxConcurrency(maxConcurrency: number): SparkRunStrategy {

@@ -10,7 +10,7 @@ import {
 } from "./spark-background-subrole-lifecycle.ts";
 import { ensureSparkClaimReaper, sweepExpiredSparkClaims } from "./spark-claim-reaper.ts";
 import { ensureSparkGraphInvariants } from "./spark-graph-invariants.ts";
-import { hasLocalSparkDirectory } from "./spark-activation.ts";
+import { ensureLocalSparkDirectory } from "./spark-activation.ts";
 import { loadSparkGraph, saveSparkGraphAndTodos, sparkSessionOwnerKey } from "./session-state.ts";
 import { loadSessionGoal } from "./spark-session-goals.ts";
 import {
@@ -30,6 +30,11 @@ interface SparkExtensionEventApi extends SparkModeMessageApi {
 interface SparkExtensionEventDeps {
   refreshSparkWidget: (cwd: string, ctx?: SparkToolContext) => Promise<void>;
   ensureDagManager: (cwd: string, ctx: SparkToolContext) => void;
+  createAskAutoAnswerResolver?: (
+    ctx: SparkToolContext,
+  ) =>
+    | SparkToolContext["askAutoAnswerResolver"]
+    | Promise<SparkToolContext["askAutoAnswerResolver"]>;
 }
 
 export interface SparkExtensionEventHandlers {
@@ -70,6 +75,7 @@ export function registerSparkExtensionEvents(
     injectSparkHints(event, ctx),
   );
   pi.on?.("before_agent_start", async (_event: unknown, ctx: SparkToolContext) => {
+    await syncGoalAskAutoAnswerPolicy(ctx, deps);
     await syncGoalInteractiveToolAvailability(pi, ctx, goalToolBaselines);
     const sessionKey = sparkSessionOwnerKey(ctx);
     const pendingEntry = pendingSparkAgentInstructions.get(sessionKey);
@@ -94,13 +100,14 @@ export function registerSparkExtensionEvents(
     };
   });
   pi.on?.("turn_start", async (_event: unknown, ctx: SparkToolContext) => {
-    if (!(await hasLocalSparkDirectory(ctx.cwd))) return;
+    await ensureLocalSparkDirectory(ctx.cwd);
     await ensureSparkStateForActiveWorkspace(ctx.cwd, ctx);
+    await syncGoalAskAutoAnswerPolicy(ctx, deps);
     await syncGoalInteractiveToolAvailability(pi, ctx, goalToolBaselines);
     await deps.refreshSparkWidget(ctx.cwd, ctx);
   });
   pi.on?.("session_start", async (_event: unknown, ctx: SparkToolContext) => {
-    if (!(await hasLocalSparkDirectory(ctx.cwd))) return;
+    await ensureLocalSparkDirectory(ctx.cwd);
     ensureSparkClaimReaper(ctx.cwd);
     await ensureSparkStateForActiveWorkspace(ctx.cwd, ctx, { skipSweep: true });
     await resumeOwnedBackgroundSubroles(ctx.cwd, ctx);
@@ -120,11 +127,13 @@ export function registerSparkExtensionEvents(
   });
   pi.on?.("tool_execution_end", async (event: unknown, ctx: SparkToolContext) => {
     if (isSparkWidgetRefreshToolEvent(event)) await deps.refreshSparkWidget(ctx.cwd, ctx);
-    if (isToolExecutionEvent(event, "goal"))
+    if (isToolExecutionEvent(event, "goal")) {
+      await syncGoalAskAutoAnswerPolicy(ctx, deps);
       await syncGoalInteractiveToolAvailability(pi, ctx, goalToolBaselines);
+    }
   });
   pi.on?.("session_switch", async (_event: unknown, ctx: SparkToolContext) => {
-    if (!(await hasLocalSparkDirectory(ctx.cwd))) return;
+    await ensureLocalSparkDirectory(ctx.cwd);
     ensureSparkClaimReaper(ctx.cwd);
     await ensureSparkStateForActiveWorkspace(ctx.cwd, ctx, { skipSweep: true });
     await resumeOwnedBackgroundSubroles(ctx.cwd, ctx);
@@ -139,7 +148,7 @@ export function registerSparkExtensionEvents(
   return { queueSparkAgentInstruction };
 }
 
-const GOAL_DISABLED_INTERACTIVE_TOOLS = new Set(["ask", "ask_user", "ask_flow"]);
+const GOAL_DISABLED_INTERACTIVE_TOOLS = new Set(["ask_user", "ask_flow"]);
 
 type PendingSparkAgentInstruction = { instruction: string; goalId?: string };
 
@@ -150,6 +159,19 @@ async function activePendingInstruction(
   if (!pending?.goalId) return pending;
   const goal = await loadSessionGoal(ctx.cwd, ctx);
   return goal?.status === "active" && goal.goalId === pending.goalId ? pending : undefined;
+}
+
+async function syncGoalAskAutoAnswerPolicy(
+  ctx: SparkToolContext,
+  deps: SparkExtensionEventDeps,
+): Promise<void> {
+  if (await hasActiveCurrentSessionGoal(ctx)) {
+    ctx.askAutoAnswer = "reviewer";
+    ctx.askAutoAnswerResolver = await deps.createAskAutoAnswerResolver?.(ctx);
+    return;
+  }
+  delete ctx.askAutoAnswer;
+  delete ctx.askAutoAnswerResolver;
 }
 
 async function syncGoalInteractiveToolAvailability(

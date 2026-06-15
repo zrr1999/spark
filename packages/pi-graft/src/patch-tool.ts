@@ -83,7 +83,7 @@ export function registerPiGraftPatchTool(pi: PiGraftExtensionApi): void {
     name: "graft_patch",
     label: "Graft Patch",
     description: [
-      "Run a Graft-owned patcher child role-run.",
+      "Run a Graft-owned patcher child run.",
       "The child receives only Graft scratch, candidate, validation, evidence, repository, and materialization tools.",
       "If the patch request is unclear, the child must request clarification upward instead of editing or creating a candidate.",
     ].join(" "),

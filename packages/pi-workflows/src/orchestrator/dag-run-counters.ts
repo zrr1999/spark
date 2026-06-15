@@ -1,7 +1,7 @@
-import type { SparkDagRunRecord } from "./index.ts";
+import type { WorkflowRunRecord } from "./index.ts";
 
 export function reconcileDagRunCounters(
-  record: SparkDagRunRecord,
+  record: WorkflowRunRecord,
   fallbacks: { scheduledFallback?: number; completedFallback?: number } = {},
 ): void {
   record.scheduledTaskRefs = uniqueRefs(record.scheduledTaskRefs);

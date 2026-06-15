@@ -363,6 +363,33 @@ void test("cue runJob resolves serial chains after a failed leaf skips later lea
   );
 });
 
+void test("cue job output treats daemon no-output responses as empty output", async () => {
+  await withCueServer(
+    (message, socket) => {
+      const id = message.id as number;
+      const payload = requestPayload(message);
+      if ("JobOutput" in payload || "Eval" in payload) {
+        sendFrame(socket, {
+          type: "response",
+          id,
+          payload: { Err: { code: "NOT_FOUND", message: "no output found for J1" } },
+        });
+      }
+    },
+    async (client) => {
+      assert.deepEqual(await client.jobOutput("J1", 1024), {
+        stdout: "",
+        stderr: "",
+        truncated: false,
+      });
+      assert.deepEqual(await client.jobError("J1", 1024), {
+        stderr: "",
+        truncated: false,
+      });
+    },
+  );
+});
+
 void test("cue typed list, output, and log responses are parsed", async () => {
   await withCueServer(
     (message, socket) => {

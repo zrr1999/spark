@@ -2,7 +2,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { Type } from "typebox";
-import { defaultSparkDagRunStore } from "pi-workflows";
+import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import {
   SPARK_ROLE_RUN_RETENTION_TAIL_BYTES,
   collectRoleRunArtifactRetentionPlan,
@@ -35,6 +35,7 @@ import {
   collectSparkStateHousekeeping,
   type SparkStateSessionScopes,
 } from "./state-housekeeping.ts";
+import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 
 interface SparkStateToolDependencies {
@@ -205,7 +206,7 @@ export function registerSparkStateTool(
       const graph = await loadSparkGraph(cwd, ctx);
       if (!graph)
         return {
-          content: [{ type: "text", text: "No Spark project found." }],
+          content: [{ type: "text", text: NO_SPARK_PROJECT_FOUND_HINT }],
           details: { found: false },
         };
       if (action === "status") {
@@ -231,7 +232,7 @@ export function registerSparkStateTool(
         };
       }
       if (action === "prune") {
-        const dagRunStore = defaultSparkDagRunStore(cwd);
+        const dagRunStore = defaultSparkWorkflowRunStore(cwd);
         const prune = await dagRunStore.pruneRuns({
           dryRun,
           olderThanDays,

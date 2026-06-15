@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import type { RunRef } from "pi-extension-api";
-import { defaultSparkDagRunStore } from "pi-workflows";
+import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import { killActiveSparkRoleRunProcesses } from "spark-runtime";
 import {
   acknowledgeBackgroundDagRuns,
@@ -121,7 +121,7 @@ export function registerSparkBackgroundRunsTool(registerSparkTool: SparkToolRegi
           details: { background: { error: "missing_task_graph" } },
         };
       }
-      const dagRunStore = defaultSparkDagRunStore(cwd);
+      const dagRunStore = defaultSparkWorkflowRunStore(cwd);
       const currentProject = await currentSparkProject(cwd, ctx, graph);
       const currentProjectRef = currentProject?.ref;
       const scopeProjectRef = requestedProjectRef ?? currentProjectRef;

@@ -21,9 +21,11 @@ import {
   renderActiveSparkContextSummary,
 } from "./spark-active-injection.ts";
 import { registerSparkExtensionEvents } from "./spark-extension-events.ts";
+import { sessionModelName } from "./session-model.ts";
 import { withSparkToolOperationalNotes } from "./spark-tool-operational-notes.ts";
 import { SparkDagManagerController } from "./spark-dag-manager.ts";
 import { registerSparkModeCycleShortcut } from "./spark-mode-shortcut.ts";
+import { sparkSessionKey } from "./session-state.ts";
 import type { SparkRegisteredToolConfig, SparkToolContext } from "./spark-tool-registration.ts";
 import { SparkWidgetController } from "./spark-widget-controller.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
@@ -61,6 +63,21 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   const eventHandlers = registerSparkExtensionEvents(pi, {
     refreshSparkWidget,
     ensureDagManager: (cwd, ctx) => dagManagerController.ensure(cwd, ctx),
+    createAskAutoAnswerResolver: (ctx) => async (request, askCtx) => {
+      const cwd = askCtx.cwd || ctx.cwd;
+      const reviewer = await createReviewerRunner(cwd, askCtx);
+      if (!reviewer.answerAsk)
+        return {
+          blocked: true,
+          reason: "reviewer runner does not support ask auto-answer",
+        };
+      return reviewer.answerAsk({
+        cwd,
+        request,
+        sessionKey: sparkSessionKey(askCtx),
+        forkFromSession: askCtx.sessionManager?.getSessionFile?.(),
+      });
+    },
   });
 
   const registeredSparkTools = new Map<string, SparkRegisteredToolConfig>();
@@ -83,6 +100,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     return new PiRolesReviewerRunner({
       registry: await createSparkRoleRegistry(cwd),
       cwd,
+      sessionModel: sessionModelName(ctx.model),
     });
   }
 

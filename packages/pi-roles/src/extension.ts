@@ -45,6 +45,7 @@ interface PiRolesToolConfig {
     onUpdate: (update: { content: Array<{ type: "text"; text: string }> }) => void,
     ctx: {
       cwd?: string;
+      model?: PiRolesSessionModel;
       ui?: {
         notify?: (message: string, level?: string) => void;
         input?: (title: string, defaultValue?: string) => Promise<string | undefined>;
@@ -54,6 +55,11 @@ interface PiRolesToolConfig {
     content: Array<{ type: "text"; text: string }>;
     details?: Record<string, unknown>;
   }>;
+}
+
+interface PiRolesSessionModel {
+  provider?: unknown;
+  id?: unknown;
 }
 
 interface ToolCallRenderTheme {
@@ -275,7 +281,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     name: "call_role",
     label: "Call Role",
     description:
-      "Call one reusable Pi role directly with an explicit instruction. This is a one-off role invocation and is not attached to Spark tasks or DAG runs. Launches a fresh child Pi run by default, or an explicitly forked child run when mode=forked.",
+      "Call one reusable Pi role directly with an explicit instruction. This is a one-off role invocation and is not attached to managed task graphs or workflow runs. Launches a fresh child Pi run by default, or an explicitly forked child run when mode=forked.",
     parameters: Type.Object({
       role: Type.String({
         description: "Role id or full role ref, e.g. worker or role:builtin-worker.",
@@ -300,7 +306,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       model: Type.Optional(
         Type.String({
           description:
-            "Concrete Pi model to validate and bind on first actual run when no user binding exists.",
+            "Concrete Pi model override for this run. Defaults to a saved role model, then the current session model.",
         }),
       ),
       includeUser: Type.Optional(
@@ -333,6 +339,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       const model = await resolveRoleModelForCall({
         role,
         explicitModel: p.model,
+        sessionModel: sessionModelName(ctx.model),
         piCommand: p.piCommand ?? "pi",
         cwd,
         actualRun: true,
@@ -711,9 +718,16 @@ function requiredPiRolesCwd(ctx: { cwd?: string }, toolName: string): string {
   throw new Error(`${toolName} requires ctx.cwd or an explicit cwd parameter.`);
 }
 
+function sessionModelName(model: PiRolesSessionModel | undefined): string | undefined {
+  const provider = typeof model?.provider === "string" ? model.provider.trim() : "";
+  const id = typeof model?.id === "string" ? model.id.trim() : "";
+  return provider && id ? `${provider}/${id}` : undefined;
+}
+
 async function resolveRoleModelForCall(input: {
   role: RoleSpec;
   explicitModel?: string;
+  sessionModel?: string;
   piCommand: string;
   cwd: string;
   actualRun: boolean;
@@ -739,19 +753,12 @@ async function resolveRoleModelForCall(input: {
       });
     return resolved.model;
   }
+  if (input.sessionModel) return input.sessionModel;
   if (!input.actualRun) return undefined;
 
-  const selected = await input.ui?.input?.(`Choose Pi model for role ${input.role.id}`);
-  const model = selected?.trim();
-  if (!model) {
-    throw new Error(
-      `role model setting required for ${input.role.id} (${input.role.ref}); provide model or save one with role({ action: "model_set" })`,
-    );
-  }
-  await validateRoleModel({ piCommand: input.piCommand, model, cwd: input.cwd });
-  const entry = await defaultUserRoleModelSettingsStore().save(input.role.ref, model);
-  input.ui?.notify?.(`Saved model setting for role ${input.role.id}: ${entry.model}`, "success");
-  return entry.model;
+  throw new Error(
+    `role model unavailable for ${input.role.id} (${input.role.ref}); provide model, save one with role({ action: "model_set" }), or run with an active session model`,
+  );
 }
 
 function normalizeCallRoleToolParams(params: Record<string, unknown>): CallRoleToolParams {

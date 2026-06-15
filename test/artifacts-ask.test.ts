@@ -34,14 +34,14 @@ void test("artifact store writes hashes, blobs, and lineage links", async () => 
     const store = new ArtifactStore({ rootDir: dir });
     const projectRef = newRef("proj", "demo-project");
     const first = await store.put({
-      kind: "plan",
+      kind: "document",
       title: "Plan",
       format: "markdown",
       body: "# Plan\n",
       provenance: { producer: "spark", projectRef },
     });
     const second = await store.put({
-      kind: "review",
+      kind: "record",
       title: "Review",
       format: "json",
       body: { ok: true },
@@ -72,6 +72,129 @@ void test("artifact store writes hashes, blobs, and lineage links", async () => 
   }
 });
 
+void test("artifact tool describes valid provenance producers", () => {
+  const tools = new Map<string, { promptGuidelines?: string[]; parameters?: unknown }>();
+  registerPiArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
+  const tool = tools.get("artifact");
+  assert.ok(tool);
+
+  const promptGuidelines = tool.promptGuidelines?.join("\n") ?? "";
+  const parameters = JSON.stringify(tool.parameters);
+  assert.match(promptGuidelines, /package-specific artifact aliases/);
+  assert.doesNotMatch(promptGuidelines, /Spark-specific artifact aliases/);
+  for (const text of [promptGuidelines, parameters]) {
+    assert.match(text, /spark, role, task, review, ask, cue, user/);
+    assert.match(text, /Do not use assistant/);
+    assert.match(text, /producer=spark and producer=role are legacy compatibility/);
+    assert.match(text, /prefer producer=task with runRef\/taskRef/);
+    assert.doesNotMatch(text, /role for child role-run output/);
+    assert.doesNotMatch(text, /use producer=(?:spark|role)/i);
+  }
+  assert.match(parameters, /Legacy role ref/);
+});
+
+void test("artifact record stores validation evidence as a producer-tagged record", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-artifact-record-kind-"));
+  try {
+    const tools = new Map<
+      string,
+      { execute: Function; promptGuidelines?: string[]; parameters?: unknown }
+    >();
+    registerPiArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
+    const tool = tools.get("artifact");
+    assert.ok(tool);
+    const promptText = `${tool.promptGuidelines?.join("\n") ?? ""}\n${JSON.stringify(tool.parameters)}`;
+    assert.match(promptText, /record \(structured JSON record/);
+
+    const recorded = await tool.execute(
+      "artifact-record-kind",
+      {
+        action: "record",
+        kind: "record",
+        title: "Targeted validation",
+        format: "markdown",
+        body: "`npm test -- --runInBand` passed.",
+        provenance: { producer: "task" },
+      },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+
+    assert.equal(recorded.details.artifact.kind, "record");
+    const listed = await defaultArtifactStore(dir).list({ producer: "task" });
+    assert.deepEqual(
+      listed.map((artifact) => artifact.ref),
+      [recorded.details.refs.artifactRef],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("artifact record rejects retired verification kind with a directed hint", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-artifact-retired-kind-"));
+  try {
+    const tools = new Map<string, { execute: Function }>();
+    registerPiArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
+    const tool = tools.get("artifact");
+    assert.ok(tool);
+    await assert.rejects(
+      tool.execute(
+        "artifact-retired-kind",
+        {
+          action: "record",
+          kind: "verification",
+          title: "Targeted validation",
+          format: "markdown",
+          body: "passed",
+          provenance: { producer: "task" },
+        },
+        new AbortController().signal,
+        () => undefined,
+        { cwd: dir },
+      ),
+      /kind=record/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("artifact store folds legacy kinds onto canonical kinds when reading history", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-artifact-legacy-kind-"));
+  try {
+    const ref = newRef("artifact", "legacy-role-plan");
+    const legacyMetadata = {
+      ref,
+      kind: "role-plan",
+      title: "Legacy role plan",
+      format: "markdown",
+      body: "# Roles\n",
+      links: [],
+      provenance: { producer: "spark" },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    await writeFile(
+      join(dir, `${ref.slice("artifact:".length)}.json`),
+      `${JSON.stringify(legacyMetadata, null, 2)}\n`,
+      "utf8",
+    );
+
+    const store = new ArtifactStore({ rootDir: dir });
+    const loaded = await store.get(ref);
+    assert.equal(loaded.kind, "document");
+    const documents = await store.list({ kind: "document" });
+    assert.deepEqual(
+      documents.map((artifact) => artifact.ref),
+      [ref],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("artifact record tool stores top-level refs as provenance shortcuts", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-artifact-record-shortcuts-"));
   try {
@@ -86,7 +209,7 @@ void test("artifact record tool stores top-level refs as provenance shortcuts", 
       "artifact-record-shortcuts",
       {
         action: "record",
-        kind: "review",
+        kind: "record",
         title: "Shortcut provenance",
         format: "markdown",
         body: "# Review\n",
@@ -132,7 +255,7 @@ void test("artifact record rejects conflicting top-level provenance shortcuts", 
           "artifact-record-shortcut-conflict",
           {
             action: "record",
-            kind: "review",
+            kind: "record",
             title: "Shortcut conflict",
             format: "markdown",
             body: "# Review\n",
@@ -160,7 +283,7 @@ void test("artifact store compacts large metadata while hydrating full bodies", 
     });
     const body = { text: "abcdef".repeat(100) };
     const artifact = await store.put({
-      kind: "research",
+      kind: "document",
       title: "Large research",
       format: "json",
       body,
@@ -172,7 +295,7 @@ void test("artifact store compacts large metadata while hydrating full bodies", 
     assert.doesNotMatch(metadata, /abcdefabcdefabcdefabcdefabcdef/);
     assert.deepEqual((await store.get<typeof body>(artifact.ref)).body, body);
     assert.equal(JSON.parse(await store.getBody(artifact.ref)).text, body.text);
-    const [listed] = await store.list({ kind: "research" });
+    const [listed] = await store.list({ kind: "document" });
     assert.equal((listed as { bodyTruncated?: boolean } | undefined)?.bodyTruncated, true);
 
     const dryRun = await store.compactMetadata({ dryRun: true });
@@ -203,7 +326,7 @@ void test("artifact store rejects malformed persisted metadata with file context
     await rm(invalidPath, { force: true });
 
     const artifact = await store.put({
-      kind: "research",
+      kind: "document",
       title: "Broken metadata provenance",
       format: "json",
       body: { ok: true },
@@ -235,7 +358,7 @@ void test("artifact store rejects invalid bodies before writing blobs or metadat
       () =>
         store.put({
           ref,
-          kind: "research",
+          kind: "document",
           title: "Invalid body",
           format: "json",
           body: { ok: undefined } as unknown as JsonValue,
@@ -265,7 +388,7 @@ void test("artifact metadata compaction dry-runs and rewrites legacy inline bodi
     });
     const body = { text: "legacy-body-".repeat(100) };
     const artifact = await legacyStore.put({
-      kind: "research",
+      kind: "document",
       title: "Legacy large research",
       format: "json",
       body,
@@ -310,7 +433,7 @@ void test("artifact store refuses metadata blob paths outside the artifact root"
       inlineBodyThresholdBytes: 64,
     });
     const artifact = await legacyStore.put({
-      kind: "research",
+      kind: "document",
       title: "External blob path",
       format: "text",
       body: "outside-boundary".repeat(100),
@@ -748,6 +871,113 @@ void test("ask action tool dispatches canonical single-question asks", async () 
   const text = result.content.map((part: { text: string }) => part.text).join("\n");
   assert.match(text, /mode=Safe path/);
   assert.equal(result.details.request.questions.length, 1);
+});
+
+void test("ask action tool auto-answers with reviewer resolver without invoking UI", async () => {
+  const tools = new Map<string, { execute: Function }>();
+  const registerTool = (config: { name: string; execute: Function }) =>
+    tools.set(config.name, config);
+  registerPiAskTools({ registerTool });
+  registerPiAskFlowTool({ registerTool });
+  registerPiAskActionTool(
+    { registerTool },
+    {
+      resolveTool: (name) => tools.get(name) as never,
+      autoAnswer: async () => ({ answers: { mode: { values: ["safe_mode"] } } }),
+    },
+  );
+  const tool = tools.get("ask");
+  assert.ok(tool);
+  let uiInvoked = false;
+
+  const result = await tool.execute(
+    "ask-auto-answer-test",
+    {
+      action: "ask",
+      autoAnswer: "reviewer",
+      title: "Choose mode",
+      mode: "decision",
+      questions: [
+        {
+          id: "mode",
+          prompt: "Which mode?",
+          type: "single",
+          required: true,
+          options: [
+            { value: "fast_mode", label: "Fast path" },
+            { value: "safe_mode", label: "Safe path" },
+          ],
+        },
+      ],
+    },
+    new AbortController().signal,
+    () => undefined,
+    {
+      ui: {
+        select: async () => {
+          uiInvoked = true;
+          return "Fast path";
+        },
+      },
+    },
+  );
+
+  assert.equal(uiInvoked, false);
+  assert.equal(result.details.autoAnswered, true);
+  assert.equal(result.details.result.status, "answered");
+  assert.equal(result.details.result.nextAction, "resume");
+  assert.deepEqual(result.details.result.answers.mode.values, ["safe_mode"]);
+  assert.match(
+    result.content.map((part: { text: string }) => part.text).join("\n"),
+    /mode=Safe path/,
+  );
+});
+
+void test("ask action tool blocks invalid reviewer auto-answer output", async () => {
+  const tools = new Map<string, { execute: Function }>();
+  const registerTool = (config: { name: string; execute: Function }) =>
+    tools.set(config.name, config);
+  registerPiAskTools({ registerTool });
+  registerPiAskActionTool(
+    { registerTool },
+    {
+      resolveTool: (name) => tools.get(name) as never,
+      autoAnswer: async () => ({ answers: { mode: { values: ["missing"] } } }),
+    },
+  );
+  const tool = tools.get("ask");
+  assert.ok(tool);
+
+  const result = await tool.execute(
+    "ask-auto-answer-invalid-test",
+    {
+      action: "ask",
+      autoAnswer: "reviewer",
+      title: "Choose mode",
+      mode: "decision",
+      questions: [
+        {
+          id: "mode",
+          prompt: "Which mode?",
+          type: "single",
+          required: true,
+          options: [
+            { value: "fast_mode", label: "Fast path" },
+            { value: "safe_mode", label: "Safe path" },
+          ],
+        },
+      ],
+    },
+    new AbortController().signal,
+    () => undefined,
+    {},
+  );
+
+  assert.equal(result.details.autoAnswered, false);
+  assert.equal(result.details.blocked, true);
+  assert.equal(result.details.result.nextAction, "block");
+  assert.match(result.details.reason, /invalid option missing/);
+  assert.match(result.content.map((part: { text: string }) => part.text).join("\n"), /blocked/i);
 });
 
 void test("ask_flow fullscreen requires explicit cwd for persisted payloads", async () => {

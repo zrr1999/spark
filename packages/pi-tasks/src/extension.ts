@@ -77,7 +77,7 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
     description:
       "Canonical project/task/TODO/run graph capability. Use action to list/use/update projects, plan/claim/finish tasks, update TODOs, and inspect/control task runs.",
     promptGuidelines: [
-      "Use task as the canonical task/project/TODO/run tool instead of Spark-specific task aliases.",
+      "Use task as the canonical task/project/TODO/run graph capability instead of package-specific aliases.",
       "Use todo_update with scope=session or scope=task; TODOs are not a separate package/tool.",
       "Use run_control only with explicit runRef/taskRef/all:true selectors; broad destructive operations must never be implicit.",
     ],
@@ -105,13 +105,25 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
         Type.String({ description: "Task/project/status view depending on action." }),
       ),
       outputLanguage: Type.Optional(Type.String({ description: "Project output language." })),
-      roleRef: Type.Optional(Type.String({ description: "Preferred role ref for a task." })),
+      roleRef: Type.Optional(
+        Type.String({
+          description:
+            "Compatibility executor role ref for hosts that still bind reusable role specs; omit for normal task planning.",
+        }),
+      ),
       plan: Type.Optional(Type.Any({ description: "Task plan patch or plan metadata." })),
       tasks: Type.Optional(Type.Array(Type.Any({ description: "Concrete task plan entries." }))),
       dependsOn: Type.Optional(
         Type.Array(Type.String({ description: "Task dependency selectors." })),
       ),
-      todos: Type.Optional(Type.Array(Type.String({ description: "Initial task TODOs." }))),
+      todos: Type.Optional(
+        Type.Array(
+          Type.String({
+            description:
+              "Low-level initial task TODOs for task-creation handlers that explicitly support them; otherwise initialize TODOs with todo_update.",
+          }),
+        ),
+      ),
       ops: Type.Optional(Type.Array(Type.Any({ description: "TODO operation entries." }))),
       items: Type.Optional(Type.Array(Type.String({ description: "TODO item text list." }))),
       item: Type.Optional(Type.String({ description: "TODO item text." })),

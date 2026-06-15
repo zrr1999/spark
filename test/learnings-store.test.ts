@@ -31,8 +31,10 @@ void test("learning store records active learnings and searches by content", asy
       confidence: 0.9,
     });
 
-    assert.equal(recorded.kind, "learning");
+    assert.equal(recorded.kind, "knowledge");
     assert.equal(recorded.body.status, "active");
+    assert.equal(recorded.provenance.producer, "task");
+    assert.match(recorded.provenance.note ?? "", /pi-learnings record/);
     assert.deepEqual(
       recorded.links.map((link) => link.to),
       [evidenceRef],
@@ -79,11 +81,11 @@ void test("learning store rejects malformed persisted learning artifacts", async
     const malformedStore = new LearningStore({ artifactStore: malformedArtifactStore });
     await malformedArtifactStore.put({
       ref: newRef("artifact", "malformed-learning"),
-      kind: "learning",
+      kind: "knowledge",
       title: "Malformed learning",
       format: "json",
       body: { status: "active" },
-      provenance: { producer: "spark" },
+      provenance: { producer: "task" },
     });
     await assert.rejects(
       () => malformedStore.list(),
@@ -95,20 +97,22 @@ void test("learning store rejects malformed persisted learning artifacts", async
     const candidate = await mismatchStore.record({
       id: "candidate-kind-contract",
       title: "Candidate kind contract",
-      statement: "Candidate learnings must stay in learning-candidate artifacts.",
+      statement: "Learning artifacts must stay in knowledge artifacts.",
       status: "candidate",
     });
+    // A non-knowledge artifact in the same store is not a learning artifact: the
+    // learning store filters by kind=knowledge and must ignore it, not choke on it.
     await mismatchArtifactStore.put({
-      ref: newRef("artifact", "candidate-kind-mismatch"),
-      kind: "learning",
-      title: "Candidate kind mismatch",
+      ref: newRef("artifact", "unrelated-document"),
+      kind: "document",
+      title: "Unrelated document",
       format: "json",
       body: candidate.body,
-      provenance: { producer: "spark" },
+      provenance: { producer: "task" },
     });
-    await assert.rejects(
-      () => mismatchStore.list({ includeCandidates: true }),
-      /invalid learning artifact artifact:candidate-kind-mismatch: kind must be learning-candidate for candidate status/,
+    assert.deepEqual(
+      (await mismatchStore.list({ includeCandidates: true })).map((artifact) => artifact.ref),
+      [candidate.ref],
     );
   } finally {
     await rm(malformedDir, { recursive: true, force: true });
@@ -123,18 +127,27 @@ void test("learning export markdown round-trips and rejects malformed blocks", a
     const recorded = await store.record({
       id: "learning-export-format",
       title: "Learning export format is package-owned",
-      statement: "Spark learning export Markdown must parse as validated LearningRecord objects.",
+      statement: "Learning export Markdown must parse as validated LearningRecord objects.",
       category: "decision",
       tags: ["learning", "export"],
     });
 
     const markdown = renderLearningExportMarkdown([recorded.body]);
+    assert.match(markdown, /```json pi-learning/);
+    assert.doesNotMatch(markdown, /```json spark-learning/);
     assert.deepEqual(parseLearningExportMarkdown(markdown, "learnings.md"), [recorded.body]);
+    assert.deepEqual(
+      parseLearningExportMarkdown(
+        markdown.replace("```json pi-learning", "```json spark-learning"),
+        "legacy-learnings.md",
+      ),
+      [recorded.body],
+    );
 
     assert.throws(
       () =>
         parseLearningExportMarkdown(
-          ["# Invalid export", "", "```json spark-learning", "{not-json", "```", ""].join("\n"),
+          ["# Invalid export", "", "```json pi-learning", "{not-json", "```", ""].join("\n"),
           "invalid-json.md",
         ),
       (error) =>
@@ -150,7 +163,7 @@ void test("learning export markdown round-trips and rejects malformed blocks", a
           [
             "# Invalid export",
             "",
-            "```json spark-learning",
+            "```json pi-learning",
             JSON.stringify({ id: 42, title: "Incomplete record" }, null, 2),
             "```",
             "",
@@ -212,7 +225,7 @@ void test("learning store keeps candidates out of default active recall", async 
       tags: ["candidate"],
     });
 
-    assert.equal(candidate.kind, "learning-candidate");
+    assert.equal(candidate.kind, "knowledge");
     assert.deepEqual(await store.search({ query: "task-derived" }), []);
 
     const candidateResults = await store.search({ query: "task-derived", includeCandidates: true });
@@ -222,7 +235,7 @@ void test("learning store keeps candidates out of default active recall", async 
     );
 
     const active = await store.activate(candidate.ref);
-    assert.equal(active.kind, "learning");
+    assert.equal(active.kind, "knowledge");
     assert.equal(active.body.status, "active");
     assert.equal((await store.search({ query: "task-derived" })).length, 1);
   } finally {
@@ -354,7 +367,7 @@ void test("learning store supports stale, rejected, and superseded lifecycle sta
       rejected.ref,
       "Contradicts the decision gate.",
     );
-    assert.equal(rejectedUpdate.kind, "learning-candidate");
+    assert.equal(rejectedUpdate.kind, "knowledge");
     assert.equal(rejectedUpdate.body.status, "rejected");
     assert.equal(rejectedUpdate.body.rejectedReason, "Contradicts the decision gate.");
 

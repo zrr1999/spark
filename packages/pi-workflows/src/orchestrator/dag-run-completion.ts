@@ -1,26 +1,26 @@
 import { nowIso, type RunRef, type TaskRun, type TaskRunCompletionSummary } from "pi-extension-api";
 
 import type {
-  SparkDagCompletionFollowUp,
-  SparkDagRunNextSteps,
-  SparkDagRunRecord,
+  WorkflowRunCompletionFollowUp,
+  WorkflowRunNextSteps,
+  WorkflowRunRecord,
 } from "./index.ts";
 import { isAcknowledgeableDagRun, isAcknowledgedDagRunProblem } from "./dag-run-status.ts";
 
-export function createSparkDagCompletionFollowUp(
-  run: SparkDagRunRecord,
-): SparkDagCompletionFollowUp {
+export function createWorkflowRunCompletionFollowUp(
+  run: WorkflowRunRecord,
+): WorkflowRunCompletionFollowUp {
   const digest = run.completionDigest;
   const digestSuffix =
-    digest.length > 0 ? ` Digest: ${formatSparkDagCompletionDigest(digest)}.` : "";
+    digest.length > 0 ? ` Digest: ${formatWorkflowRunCompletionDigest(digest)}.` : "";
   return {
     createdAt: nowIso(),
     runRef: run.ref,
     status: run.status,
     scheduled: run.scheduled,
     completed: run.completed,
-    summary: `Spark workflow run: ${run.ref} ${run.status}: scheduled ${run.scheduled}, completed ${run.completed}.${digestSuffix}`,
-    nextActions: sparkDagRunNextActions(run),
+    summary: `Workflow run: ${run.ref} ${run.status}: scheduled ${run.scheduled}, completed ${run.completed}.${digestSuffix}`,
+    nextActions: workflowRunNextActions(run),
     completionDigest: digest.map(cloneTaskRunCompletionSummary),
   };
 }
@@ -39,13 +39,13 @@ export function normalizeTaskRunCompletionSummaries(
   return (summaries ?? []).map(cloneTaskRunCompletionSummary);
 }
 
-export function collectSparkDagRunNextSteps(
-  runs: Array<SparkDagRunRecord | undefined>,
-): SparkDagRunNextSteps[] {
+export function collectWorkflowRunNextSteps(
+  runs: Array<WorkflowRunRecord | undefined>,
+): WorkflowRunNextSteps[] {
   const seen = new Set<RunRef>();
-  const nextSteps: SparkDagRunNextSteps[] = [];
+  const nextSteps: WorkflowRunNextSteps[] = [];
   for (const run of runs) {
-    const steps = run ? sparkDagRunNextSteps(run) : undefined;
+    const steps = run ? workflowRunNextSteps(run) : undefined;
     if (!steps || seen.has(steps.runRef)) continue;
     seen.add(steps.runRef);
     nextSteps.push(steps);
@@ -53,17 +53,17 @@ export function collectSparkDagRunNextSteps(
   return nextSteps;
 }
 
-export function sparkDagRunNextSteps(run: SparkDagRunRecord): SparkDagRunNextSteps | undefined {
+export function workflowRunNextSteps(run: WorkflowRunRecord): WorkflowRunNextSteps | undefined {
   if (!isAcknowledgeableDagRun(run) || isAcknowledgedDagRunProblem(run)) return undefined;
   return {
     runRef: run.ref,
     status: run.status,
-    summary: `Next steps for ${run.status} Spark workflow run ${run.ref}`,
-    nextActions: sparkDagRunNextActions(run),
+    summary: `Next steps for ${run.status} workflow run ${run.ref}`,
+    nextActions: workflowRunNextActions(run),
   };
 }
 
-function formatSparkDagCompletionDigest(summaries: TaskRunCompletionSummary[]): string {
+function formatWorkflowRunCompletionDigest(summaries: TaskRunCompletionSummary[]): string {
   const visible = summaries.slice(0, 3).map((summary) => {
     const role = summary.roleRef ? ` role=${summary.roleRef.replace(/^role:/u, "")}` : "";
     const artifacts =
@@ -71,7 +71,7 @@ function formatSparkDagCompletionDigest(summaries: TaskRunCompletionSummary[]): 
     return `task=${summary.taskRef} run=${summary.runRef} status=${summary.status}${role}: ${summary.summary}${artifacts}`;
   });
   const hidden = summaries.length - visible.length;
-  if (hidden > 0) visible.push(`… ${hidden} more role-run completion(s)`);
+  if (hidden > 0) visible.push(`… ${hidden} more child run completion(s)`);
   return visible.join("; ");
 }
 
@@ -81,12 +81,12 @@ function cloneTaskRunCompletionSummary(
   return { ...summary, artifactRefs: [...summary.artifactRefs] };
 }
 
-function sparkDagRunNextActions(run: SparkDagRunRecord): string[] {
+function workflowRunNextActions(run: WorkflowRunRecord): string[] {
   const nextActions: string[] = [];
   if (run.status === "failed") {
     nextActions.push(
-      'failed: inspect task({ action: "run_status", runAction: "inspect" }) plus child task-run artifacts/logs to find the failed or cancelled role-run.',
-      "failed: fix the task, role, model, or dependency error, then rerun ready background work for the remaining ready frontier.",
+      'failed: inspect task({ action: "run_status", runAction: "inspect" }) plus child task-run artifacts/logs to find the failed or cancelled child run.',
+      "failed: fix the task, executor, model, or dependency error, then rerun ready background work for the remaining ready frontier.",
     );
   } else if (run.status === "stale") {
     nextActions.push(
@@ -95,7 +95,7 @@ function sparkDagRunNextActions(run: SparkDagRunRecord): string[] {
     );
   } else if (run.status === "timed_out") {
     nextActions.push(
-      'timed_out: legacy foreground timeout record; inspect task({ action: "run_status" }) for active role-runs or reconcile before retrying.',
+      'timed_out: legacy foreground timeout record; inspect task({ action: "run_status" }) for active child runs or reconcile before retrying.',
       'timed_out: if child work is still active, kill stuck children with task({ action: "run_control", control: "kill" }) only when you explicitly want to stop it.',
     );
   }
@@ -111,3 +111,10 @@ function sparkDagRunNextActions(run: SparkDagRunRecord): string[] {
     nextActions.push("Review task outputs and continue with newly unblocked ready tasks if any.");
   return nextActions;
 }
+
+/** @deprecated SparkDag* alias kept for compatibility. Prefer createWorkflowRunCompletionFollowUp. */
+export const createSparkDagCompletionFollowUp = createWorkflowRunCompletionFollowUp;
+/** @deprecated SparkDag* alias kept for compatibility. Prefer collectWorkflowRunNextSteps. */
+export const collectSparkDagRunNextSteps = collectWorkflowRunNextSteps;
+/** @deprecated SparkDag* alias kept for compatibility. Prefer workflowRunNextSteps. */
+export const sparkDagRunNextSteps = workflowRunNextSteps;

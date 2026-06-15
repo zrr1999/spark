@@ -3,11 +3,11 @@ import type { ArtifactStore } from "pi-artifacts";
 import type { RoleRef } from "pi-extension-api";
 import { killActiveSparkRoleRunProcesses, runSparkTask, type RoleRunMode } from "spark-runtime";
 import type { TaskGraph } from "pi-tasks";
-import type { SparkReadyTaskRun, SparkReadyTaskRunKiller } from "pi-workflows";
+import type { ReadyTaskRun, ReadyTaskRunKiller } from "pi-workflows";
 
 export interface SparkRuntimeReadyTaskRunner {
-  runTask: SparkReadyTaskRun;
-  killRuns: SparkReadyTaskRunKiller;
+  runTask: ReadyTaskRun;
+  killRuns: ReadyTaskRunKiller;
 }
 
 export interface SparkRuntimeReadyTaskRunnerOptions {
@@ -20,6 +20,7 @@ export interface SparkRuntimeReadyTaskRunnerOptions {
   sessionDir?: string;
   mode?: RoleRunMode;
   forkFromSession?: string;
+  sessionModel?: string;
   heartbeatIntervalMs?: number;
   onHeartbeat?: (graph: TaskGraph) => void | Promise<void>;
 }
@@ -43,6 +44,7 @@ export function createSparkRuntimeReadyTaskRunner(
         sessionDir: options.sessionDir,
         mode: options.mode,
         forkFromSession: options.forkFromSession,
+        sessionModel: options.sessionModel,
         heartbeatIntervalMs: options.heartbeatIntervalMs,
         onHeartbeat: options.onHeartbeat,
         claim: input.claim,

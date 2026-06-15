@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defaultSparkDagRunStore } from "pi-workflows";
+import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import { killActiveSparkRoleRunProcesses } from "spark-runtime";
 import type { RunRef } from "pi-extension-api";
 import { loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
@@ -123,7 +123,7 @@ export function registerSparkDagManagerTool(registerSparkTool: SparkToolRegistra
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd;
       const graph = await loadSparkGraph(cwd, ctx);
-      const dagRunStore = defaultSparkDagRunStore(cwd);
+      const dagRunStore = defaultSparkWorkflowRunStore(cwd);
       const action = normalizeSparkDagManagerAction(params.action);
       const runRef = normalizeSparkDagManagerRunRef(params.runRef);
       const dryRun = normalizeSparkDagManagerBoolean(

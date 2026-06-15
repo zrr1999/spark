@@ -11,7 +11,6 @@ import {
   renderSparkActiveSystemPrompt,
 } from "../packages/spark/src/extension/spark-active-injection.ts";
 import {
-  detectSparkActivation,
   hasNonSparkProjectFiles,
   shouldMaterializeSparkMd,
 } from "../packages/spark/src/extension/spark-activation.ts";
@@ -24,19 +23,7 @@ type SparkExtensionApiForTest = Parameters<typeof sparkExtension>[0];
 type SparkToolConfig = Parameters<NonNullable<SparkExtensionApiForTest["registerTool"]>>[0];
 type SparkToolContextForTest = Parameters<SparkToolConfig["execute"]>[4];
 
-void test("Spark activation requires a local .spark directory", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-no-local-state-"));
-  try {
-    await mkdir(join(dir, ".git"));
-    await writeFile(join(dir, "SPARK.md"), "# Existing intent\n", "utf8");
-
-    assert.deepEqual(await detectSparkActivation(dir), { active: false, reason: "no .spark" });
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-void test("Spark activation does not treat inaccessible directories as empty projects", async (t) => {
+void test("Spark project-file scan does not treat inaccessible directories as empty projects", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "spark-inaccessible-"));
   const locked = join(dir, "locked");
   try {
@@ -378,15 +365,18 @@ void test("initializeSparkIdea preserves clarified title and trace ask refs", as
     assert.doesNotMatch(projectJson, /Maintain current interaction context/);
     const artifactFiles = await readdir(join(dir, ".spark", "artifacts"));
     let traceBody: unknown;
+    let traceProducer: unknown;
     for (const file of artifactFiles.filter((entry) => entry.endsWith(".json"))) {
       const content = JSON.parse(
         await readFile(join(dir, ".spark", "artifacts", file), "utf8"),
-      ) as { kind?: string; body?: unknown };
-      if (content.kind === "run-trace") {
+      ) as { kind?: string; body?: unknown; provenance?: { producer?: unknown } };
+      if (content.kind === "trace") {
         traceBody = content.body;
+        traceProducer = content.provenance?.producer;
         break;
       }
     }
+    assert.equal(traceProducer, "task");
     assert.deepEqual((traceBody as { askRefs?: string[] }).askRefs, ["ask:ask-test"]);
   } finally {
     await rm(dir, { recursive: true, force: true });

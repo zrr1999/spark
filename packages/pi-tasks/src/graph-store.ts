@@ -28,7 +28,7 @@ export class TaskGraphStoreConflictError extends Error {
   readonly filePath: string;
 
   constructor(filePath: string) {
-    super(`Spark task graph changed since it was loaded: ${filePath}`);
+    super(`task graph changed since it was loaded: ${filePath}`);
     this.name = "TaskGraphStoreConflictError";
     this.filePath = filePath;
   }
@@ -38,7 +38,7 @@ export class TaskGraphStoreLockTimeoutError extends Error {
   readonly lockPath: string;
 
   constructor(lockPath: string) {
-    super(`timed out waiting for Spark task graph lock: ${lockPath}`);
+    super(`timed out waiting for task graph lock: ${lockPath}`);
     this.name = "TaskGraphStoreLockTimeoutError";
     this.lockPath = lockPath;
   }
@@ -48,7 +48,7 @@ export class TaskGraphStoreLockOwnerFormatError extends Error {
   readonly filePath: string;
 
   constructor(filePath: string, message: string) {
-    super(`invalid Spark task graph lock owner: ${filePath}: ${message}`);
+    super(`invalid task graph lock owner: ${filePath}: ${message}`);
     this.name = "TaskGraphStoreLockOwnerFormatError";
     this.filePath = filePath;
   }
@@ -58,7 +58,7 @@ export class TaskGraphStoreFormatError extends Error {
   readonly filePath: string;
 
   constructor(filePath: string, message: string) {
-    super(`invalid Spark task graph store: ${filePath}: ${message}`);
+    super(`invalid task graph store: ${filePath}: ${message}`);
     this.name = "TaskGraphStoreFormatError";
     this.filePath = filePath;
   }
@@ -161,6 +161,7 @@ export class TaskGraphStore {
   }
 }
 
+/** @deprecated Compatibility default path for existing task graph stores. Prefer explicit host-owned TaskGraphStore paths for new integrations. */
 export function defaultTaskGraphStore(cwd: string): TaskGraphStore {
   return new TaskGraphStore(join(cwd, ".spark", "projects.json"));
 }
@@ -258,7 +259,7 @@ async function acquireTaskGraphStoreLock(
           await rm(lockPath, { recursive: true, force: true });
         if (heartbeatError) {
           throw new Error(
-            `Spark task graph lock heartbeat failed: ${unknownErrorMessage(heartbeatError)}`,
+            `task graph lock heartbeat failed: ${unknownErrorMessage(heartbeatError)}`,
           );
         }
       };

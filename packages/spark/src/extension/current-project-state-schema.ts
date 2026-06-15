@@ -1,6 +1,6 @@
 import {
-  DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
-  DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
+  DEFAULT_READY_TASK_MAX_CONCURRENCY,
+  DEFAULT_READY_TASK_TIMEOUT_MS,
   type ProjectRef,
   type RunRef,
 } from "pi-extension-api";
@@ -179,11 +179,11 @@ function normalizeSparkRunModeState(value: unknown, filePath: string): SparkRunM
     policy: {
       maxConcurrency:
         policy?.maxConcurrency === undefined
-          ? DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY
+          ? DEFAULT_READY_TASK_MAX_CONCURRENCY
           : requirePositiveNumber(policy.maxConcurrency, filePath, "runMode.policy.maxConcurrency"),
       timeoutMs:
         policy?.timeoutMs === undefined
-          ? DEFAULT_SPARK_READY_TASK_TIMEOUT_MS
+          ? DEFAULT_READY_TASK_TIMEOUT_MS
           : requirePositiveNumber(policy.timeoutMs, filePath, "runMode.policy.timeoutMs"),
       stopOnAsk: true,
       stopOnValidationFailure: true,

@@ -6,11 +6,7 @@ import type {
   TaskStatus,
   ProjectRef,
 } from "pi-extension-api";
-import {
-  defaultSparkDagRunStore,
-  type SparkDagRunAcknowledgeResult,
-  type SparkDagRunStatus,
-} from "pi-workflows";
+import type { WorkflowRunAcknowledgeResult, WorkflowRunStatus } from "pi-workflows";
 import {
   listActiveSparkRoleRunProcesses,
   type KillSparkRoleRunProcessResult,
@@ -31,6 +27,7 @@ import {
   selectBackgroundDagRuns,
   summarizeBackgroundRuns,
 } from "./background-dag-runs.ts";
+import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 
 export { resolveBackgroundTaskRef } from "./background-child-runs.ts";
 
@@ -82,7 +79,7 @@ export type SparkBackgroundChildStatus =
 
 export interface SparkBackgroundDagRunView {
   runRef: RunRef;
-  status: SparkDagRunStatus;
+  status: WorkflowRunStatus;
   legacyTimedOut: boolean;
   projectRef?: ProjectRef;
   ownerSessionId?: string;
@@ -148,7 +145,7 @@ export interface SparkBackgroundRunsDetails {
   dagRuns: SparkBackgroundDagRunView[];
   childRuns: SparkBackgroundChildRunView[];
   killed?: KillSparkRoleRunProcessResult[];
-  acknowledged?: SparkDagRunAcknowledgeResult;
+  acknowledged?: WorkflowRunAcknowledgeResult;
 }
 
 export function normalizeSparkBackgroundAction(value: unknown): SparkBackgroundAction {
@@ -224,7 +221,7 @@ export function activeSparkRoleRunProcessesForCwd(cwd: string) {
 }
 
 export async function reconcileSparkDagRunsWithActiveProcesses(
-  dagRunStore: ReturnType<typeof defaultSparkDagRunStore>,
+  dagRunStore: ReturnType<typeof defaultSparkWorkflowRunStore>,
   graph: TaskGraph | undefined,
   cwd: string,
 ): Promise<void> {
@@ -238,7 +235,7 @@ export async function buildSparkBackgroundDetails(input: {
   action: SparkBackgroundAction;
   cwd: string;
   graph: TaskGraph;
-  dagRunStore: ReturnType<typeof defaultSparkDagRunStore>;
+  dagRunStore: ReturnType<typeof defaultSparkWorkflowRunStore>;
   currentProjectRef?: ProjectRef;
   projectRef?: ProjectRef;
   runMode?: SparkBackgroundRunModeState;
@@ -301,8 +298,8 @@ export async function buildSparkBackgroundDetails(input: {
 }
 
 export async function acknowledgeBackgroundDagRuns(input: {
-  dagRunStore: ReturnType<typeof defaultSparkDagRunStore>;
-  snapshot: Awaited<ReturnType<ReturnType<typeof defaultSparkDagRunStore>["load"]>>;
+  dagRunStore: ReturnType<typeof defaultSparkWorkflowRunStore>;
+  snapshot: Awaited<ReturnType<ReturnType<typeof defaultSparkWorkflowRunStore>["load"]>>;
   sessionId: string;
   projectRef?: ProjectRef;
   runRef?: RunRef;

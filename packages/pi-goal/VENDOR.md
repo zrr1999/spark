@@ -15,9 +15,13 @@ The vendored source is derived from MIT-licensed pi-codex-goal. Preserve this at
 ## Copied and renamed
 
 - types.ts: goal data model, renamed ThreadGoal to Goal and custom entry type to pi-goal.
-- state.ts: validation, reconstruction, state transitions, usage accounting helpers, renamed createThreadGoal to createGoal.
-- format.ts: budget/status formatting helpers with user-facing slash-command hints removed.
+- state.ts: validation, reconstruction, and state transitions, renamed createThreadGoal to createGoal.
+- format.ts: status formatting helpers with user-facing slash-command hints removed.
 - prompts.ts: continuation/completion-audit prompts with Spark-owned tool names and spark_goal_continuation marker.
+
+## Removed features
+
+- Token budget and usage accounting (tokenBudget, usage, budgetLimited status, runtime usage entries). Spark goals track objective and lifecycle status only.
 
 ## Omitted upstream features
 

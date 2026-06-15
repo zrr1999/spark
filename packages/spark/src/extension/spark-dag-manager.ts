@@ -1,18 +1,18 @@
 import { defaultArtifactStore } from "pi-artifacts";
 import {
-  DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
-  DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
+  DEFAULT_READY_TASK_MAX_CONCURRENCY,
+  DEFAULT_READY_TASK_TIMEOUT_MS,
   type TaskRef,
   type ProjectRef,
 } from "pi-extension-api";
 import {
-  type SparkDagCompletionFollowUp,
-  type SparkDagRunStatus,
-  defaultSparkDagRunStore,
-  runReadySparkTasks,
+  type WorkflowRunCompletionFollowUp,
+  type WorkflowRunStatus,
+  runReadyTasks,
 } from "pi-workflows";
 import { defaultTaskGraphStore, isUnfinishedTaskStatus, type TaskGraph } from "pi-tasks";
 import { reconcileSparkDagRunsWithActiveProcesses } from "./background-runs.ts";
+import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import { ensureRoleModelSettingsForProject } from "./role-model-settings.ts";
 import { hasLocalSparkDirectory } from "./spark-activation.ts";
 import {
@@ -25,6 +25,7 @@ import {
   type SparkRunModeStatus,
 } from "./session-state.ts";
 import { mergeTaskProgressIntoStore } from "./task-progress-store.ts";
+import { sessionModelName } from "./session-model.ts";
 import { createSparkRuntimeReadyTaskRunner } from "./spark-ready-task-runtime.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
@@ -76,7 +77,7 @@ export class SparkDagManagerController {
     const registry = await createSparkRoleRegistry(cwd);
     const artifactStore = defaultArtifactStore(cwd);
     const touched = new Set<TaskRef>();
-    const dagRunStore = defaultSparkDagRunStore(cwd);
+    const dagRunStore = defaultSparkWorkflowRunStore(cwd);
     const currentProject = await currentSparkProject(cwd, ctx, graph);
     const runMode = await loadSparkRunMode(cwd, ctx);
     if (runMode && runMode.status !== "running") return { continuePolling: false };
@@ -121,13 +122,13 @@ export class SparkDagManagerController {
       return { continuePolling: false };
     }
     const ownerSessionId = sparkSessionOwnerKey(ctx);
-    const maxConcurrency =
-      runMode?.policy.maxConcurrency ?? DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY;
-    const timeoutMs = runMode?.policy.timeoutMs ?? DEFAULT_SPARK_READY_TASK_TIMEOUT_MS;
+    const maxConcurrency = runMode?.policy.maxConcurrency ?? DEFAULT_READY_TASK_MAX_CONCURRENCY;
+    const timeoutMs = runMode?.policy.timeoutMs ?? DEFAULT_READY_TASK_TIMEOUT_MS;
     const runtimeRunner = createSparkRuntimeReadyTaskRunner({
       registry,
       artifactStore,
       cwd,
+      sessionModel: sessionModelName(ctx.model),
     });
     const dagRun = await dagRunStore.startRun({
       projectRef: currentProject.ref,
@@ -140,9 +141,9 @@ export class SparkDagManagerController {
       await sparkTodoStore(cwd, ctx).hydrate(current);
       await sparkTodoStore(cwd, ctx).save(current);
     };
-    let result: Awaited<ReturnType<typeof runReadySparkTasks>>;
+    let result: Awaited<ReturnType<typeof runReadyTasks>>;
     try {
-      result = await runReadySparkTasks({
+      result = await runReadyTasks({
         graph,
         ...runtimeRunner,
         dryRun: false,
@@ -227,7 +228,7 @@ function dagResultTerminalForRunMode(result: { failed?: number; cancelled?: numb
 
 function emitSparkDagCompletionFollowUp(
   ctx: SparkDagManagerContext,
-  followUp: SparkDagCompletionFollowUp | undefined,
+  followUp: WorkflowRunCompletionFollowUp | undefined,
 ): void {
   if (!followUp) return;
   const action = followUp.status === "succeeded" ? undefined : followUp.nextActions[0];
@@ -238,7 +239,7 @@ function emitSparkDagCompletionFollowUp(
 }
 
 function sparkDagCompletionNotificationLevel(
-  status: SparkDagRunStatus,
+  status: WorkflowRunStatus,
 ): "info" | "warning" | "error" {
   return status === "succeeded" ? "info" : status === "timed_out" ? "warning" : "error";
 }

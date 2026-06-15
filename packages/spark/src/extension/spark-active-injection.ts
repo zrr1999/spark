@@ -1,6 +1,6 @@
 import { defaultTaskGraphStore, type TaskGraph } from "pi-tasks";
 import { renderActiveSparkContext } from "./spark-active-context.ts";
-import { hasLocalSparkDirectory, readActiveSparkMd } from "./spark-activation.ts";
+import { ensureLocalSparkDirectory, readActiveSparkMd } from "./spark-activation.ts";
 import { ensureSparkClaimReaper, sweepExpiredSparkClaims } from "./spark-claim-reaper.ts";
 import { ensureSparkGraphInvariants } from "./spark-graph-invariants.ts";
 import {
@@ -107,7 +107,7 @@ export async function ensureSparkStateForActiveWorkspace(
   ctx?: SparkSessionContext,
   options: { skipSweep?: boolean } = {},
 ): Promise<TaskGraph | null> {
-  if (!(await hasLocalSparkDirectory(cwd))) return null;
+  await ensureLocalSparkDirectory(cwd);
   if (!options.skipSweep) await sweepExpiredSparkClaims(cwd, ctx);
   ensureSparkClaimReaper(cwd);
   return loadSparkGraph(cwd, ctx);

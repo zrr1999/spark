@@ -69,11 +69,11 @@ export async function initializeSparkIdea(
     options.sparkMd ??
     renderSparkMd({ idea, workingTitle: projectTitle, clarification: options.clarification });
   const sparkMdArtifact = await store.put({
-    kind: "spark-md",
+    kind: "document",
     title: "SPARK.md draft",
     format: "markdown",
     body: sparkMd,
-    provenance: { producer: "spark", projectRef: project.ref },
+    provenance: { producer: "task", projectRef: project.ref },
   });
   const shouldWriteSparkMd =
     options.materializeSparkMd !== false && (await shouldMaterializeSparkMd(cwd));
@@ -82,12 +82,12 @@ export async function initializeSparkIdea(
 
   const rolePlan = renderRolePlan({ idea, tasks: graph.tasks(project.ref) });
   const rolePlanArtifact = await store.put({
-    kind: "role-plan",
+    kind: "document",
     title: "Initial role plan",
     format: "markdown",
     body: rolePlan,
     provenance: {
-      producer: "spark",
+      producer: "task",
       projectRef: project.ref,
       parentArtifactRefs: [sparkMdArtifact.ref],
     },
@@ -116,12 +116,12 @@ export async function initializeSparkIdea(
   };
 
   await store.put({
-    kind: "run-trace",
+    kind: "trace",
     title: "Spark run trace",
     format: "json",
     body: trace as unknown as JsonValue,
     provenance: {
-      producer: "spark",
+      producer: "task",
       projectRef: project.ref,
       parentArtifactRefs: [sparkMdArtifact.ref, rolePlanArtifact.ref],
     },

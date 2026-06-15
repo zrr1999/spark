@@ -10,6 +10,7 @@ import {
 import type { RoleRef, ProjectRef } from "pi-extension-api";
 import { sparkTaskExecutorRoleRef } from "spark-runtime";
 import type { TaskGraph } from "pi-tasks";
+import { sessionModelName } from "./session-model.ts";
 
 export interface RoleModelSettingsPreflightResult {
   ready: boolean;
@@ -17,10 +18,12 @@ export interface RoleModelSettingsPreflightResult {
   checkedRoleRefs: RoleRef[];
   boundRoleRefs: RoleRef[];
   missingRoleRefs: RoleRef[];
+  inheritedRoleRefs?: RoleRef[];
   error?: string;
 }
 
 interface RoleModelSettingsContext {
+  model?: { provider?: unknown; id?: unknown };
   ui?: {
     input?: (title: string, defaultValue?: string) => Promise<string | undefined>;
     notify?: (message: string, level?: "info" | "warning" | "error" | "success") => void;
@@ -41,6 +44,8 @@ export async function ensureRoleModelSettingsForProject(input: {
   const userStore = defaultUserRoleModelSettingsStore();
   const boundRoleRefs: RoleRef[] = [];
   const missingRoleRefs: RoleRef[] = [];
+  const inheritedRoleRefs: RoleRef[] = [];
+  const sessionModel = sessionModelName(input.ctx.model);
   const resolvedModels: Array<{ roleRef: RoleRef; model: ResolvedRoleModelSetting }> = [];
   for (const roleRef of roleRefs) {
     const role = input.registry.get(roleRef) as RoleSpec;
@@ -54,6 +59,10 @@ export async function ensureRoleModelSettingsForProject(input: {
     if (existing) {
       boundRoleRefs.push(roleRef);
       resolvedModels.push({ roleRef, model: existing });
+      continue;
+    }
+    if (sessionModel) {
+      inheritedRoleRefs.push(roleRef);
       continue;
     }
     const selected = await input.ctx.ui?.input?.(`Choose Pi model for Spark role ${role.id}`);
@@ -85,20 +94,43 @@ export async function ensureRoleModelSettingsForProject(input: {
   if (missingRoleRefs.length > 0) {
     return {
       ready: false,
-      message: `Spark role model setting required before dispatch: ${missingRoleRefs.join(", ")}. Rerun with an interactive UI or save a concrete model with role({ action: "model_set" }) for each role.`,
+      message: `Spark role model unavailable before dispatch: ${missingRoleRefs.join(", ")}. Rerun with an active session model or save a concrete model with role({ action: "model_set" }) for each role.`,
       checkedRoleRefs: roleRefs,
       boundRoleRefs,
       missingRoleRefs,
+      inheritedRoleRefs,
       error: "missing_role_model_setting",
     };
   }
   return {
     ready: true,
-    message: `Spark role model settings ready for ${boundRoleRefs.length} role(s): ${resolvedModels.map(({ roleRef, model }) => `${roleRef}=${model.model} (${model.source})`).join(", ")}.`,
+    message: renderRoleModelSettingsReadyMessage(
+      boundRoleRefs,
+      inheritedRoleRefs,
+      resolvedModels,
+      sessionModel,
+    ),
     checkedRoleRefs: roleRefs,
     boundRoleRefs,
     missingRoleRefs: [],
+    inheritedRoleRefs,
   };
+}
+
+function renderRoleModelSettingsReadyMessage(
+  boundRoleRefs: RoleRef[],
+  inheritedRoleRefs: RoleRef[],
+  resolvedModels: Array<{ roleRef: RoleRef; model: ResolvedRoleModelSetting }>,
+  sessionModel: string | undefined,
+): string {
+  const saved = resolvedModels.map(
+    ({ roleRef, model }) => `${roleRef}=${model.model} (${model.source})`,
+  );
+  const inherited = sessionModel
+    ? inheritedRoleRefs.map((roleRef) => `${roleRef}=${sessionModel} (session)`)
+    : [];
+  const total = boundRoleRefs.length + inheritedRoleRefs.length;
+  return `Spark role models ready for ${total} role(s): ${[...saved, ...inherited].join(", ")}.`;
 }
 
 function uniqueRoleRefs(roleRefs: RoleRef[]): RoleRef[] {

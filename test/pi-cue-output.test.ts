@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
   type JobInfo,
   type ScriptResult,
   type PiCueExtensionApi,
+  type PiCueToolContext,
   normalizeCueBoolean,
   normalizeCueStderrForDisplay,
   normalizeCueTerminalOutput,
@@ -392,6 +396,148 @@ void test("pi-cue tools validate bad parameters before connecting to cued", asyn
         {},
       ),
     /cue_script script must be a non-empty string/,
+  );
+});
+
+void test("script_run and script_eval route venv only to python", async () => {
+  const tools = registerCueToolsForTest();
+  const runTool = tools.get("script_run");
+  const evalTool = tools.get("script_eval");
+  assert.ok(runTool);
+  assert.ok(evalTool);
+  const commands: string[] = [];
+  const fakeClient = {
+    isClosed: false,
+    async runJob(command: string) {
+      commands.push(command);
+      return {
+        jobId: `J${commands.length}`,
+        status: "Done" as const,
+        stdout: "ok\n",
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+        warnings: [],
+      };
+    },
+  };
+  const ctx = { cwd: "/work", cueClient: fakeClient } as unknown as PiCueToolContext;
+
+  const fileResult = await runTool.execute(
+    "call-venv-run",
+    { language: "python", path: "tools/check.py", venv: ".venv" },
+    new AbortController().signal,
+    () => undefined,
+    ctx,
+  );
+  assert.equal(commands[0], "/work/.venv/bin/python /work/tools/check.py");
+  assert.equal((fileResult.details as { venv?: string }).venv, "/work/.venv");
+
+  const evalResult = await evalTool.execute(
+    "call-venv-eval",
+    { language: "python", script: "print('ok')", venv: "/opt/venv" },
+    new AbortController().signal,
+    () => undefined,
+    ctx,
+  );
+  assert.match(commands[1] ?? "", /^\/opt\/venv\/bin\/python \/tmp\/pi-cue-script-runner\/inline-/);
+  assert.equal((evalResult.details as { venv?: string }).venv, "/opt/venv");
+
+  await assert.rejects(
+    () =>
+      runTool.execute(
+        "call-bad-venv-run",
+        { language: "cue-shell", path: "script.cue", venv: ".venv" },
+        new AbortController().signal,
+        () => undefined,
+        ctx,
+      ),
+    /script_run venv is only supported for language=python/,
+  );
+  await assert.rejects(
+    () =>
+      evalTool.execute(
+        "call-bad-venv-eval",
+        { language: "cue-shell", script: "msg", venv: ".venv" },
+        new AbortController().signal,
+        () => undefined,
+        ctx,
+      ),
+    /script_eval venv is only supported for language=python/,
+  );
+});
+
+void test("script_run and script_eval pass scope only to cue-shell RunScript", async () => {
+  const tools = registerCueToolsForTest();
+  const runTool = tools.get("script_run");
+  const evalTool = tools.get("script_eval");
+  assert.ok(runTool);
+  assert.ok(evalTool);
+  const dir = await mkdtemp(join(tmpdir(), "pi-cue-script-scope-"));
+  const scriptPath = join(dir, "build.cue");
+  await writeFile(scriptPath, "msg\n", "utf8");
+  const calls: Array<{ path: string; input: string; scope?: string }> = [];
+  const fakeClient = {
+    isClosed: false,
+    async runScript(options: { path: string; input: string; scope?: string }) {
+      calls.push(options);
+      return {
+        scriptId: `script:${calls.length}`,
+        source: { kind: "file" as const, path: options.path },
+        status: "done" as const,
+        exitCode: 0,
+        failedItemIndex: null,
+        timedOut: false,
+        items: [],
+      } satisfies ScriptResult;
+    },
+  };
+  const ctx = { cwd: dir, cueClient: fakeClient } as unknown as PiCueToolContext;
+
+  const fileResult = await runTool.execute(
+    "call-scope-run",
+    { language: "cue-shell", path: "build.cue", scope: "abc123" },
+    new AbortController().signal,
+    () => undefined,
+    ctx,
+  );
+  assert.equal(calls[0]?.path, scriptPath);
+  assert.equal(calls[0]?.input, "msg\n");
+  assert.equal(calls[0]?.scope, "abc123");
+  assert.equal((fileResult.details as { scope?: string }).scope, "abc123");
+
+  await evalTool.execute(
+    "call-scope-eval",
+    { language: "cue-shell", script: "msg", scope: "def456" },
+    new AbortController().signal,
+    () => undefined,
+    ctx,
+  );
+  assert.equal(calls[1]?.path, "<inline>");
+  assert.equal(calls[1]?.input, "msg");
+  assert.equal(calls[1]?.scope, "def456");
+
+  await assert.rejects(
+    () =>
+      runTool.execute(
+        "call-bad-scope-run",
+        { language: "python", path: "script.py", scope: "abc123" },
+        new AbortController().signal,
+        () => undefined,
+        ctx,
+      ),
+    /script_run scope is only supported for language=cue-shell/,
+  );
+  await assert.rejects(
+    () =>
+      evalTool.execute(
+        "call-bad-scope-eval",
+        { language: "python", script: "print('ok')", scope: "abc123" },
+        new AbortController().signal,
+        () => undefined,
+        ctx,
+      ),
+    /script_eval scope is only supported for language=cue-shell/,
   );
 });
 

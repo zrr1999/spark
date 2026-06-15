@@ -13,15 +13,11 @@ import {
   clearSessionGoal,
   editSessionGoalObjective,
   inferSessionGoalObjective,
-  isSessionGoalBudgetExhausted,
   loadSessionGoal,
   normalizeGoalObjective,
   normalizeOptionalReason,
-  sameGoalTarget,
   setSessionGoal,
   updateSessionGoalStatus,
-  updateSessionGoalTokenBudget,
-  type SparkGoalScope,
   type SparkSessionGoal,
   type SparkSessionGoalSource,
 } from "./spark-session-goals.ts";
@@ -36,7 +32,6 @@ import { withSparkReviewerLease } from "./spark-reviewer-lease.ts";
 
 export type SparkGoalToolAction =
   | "status"
-  | "infer"
   | "set"
   | "start"
   | "pause"
@@ -61,23 +56,24 @@ export function registerSparkGoalTool(
     name: "goal",
     label: "Spark Goal",
     description:
-      "Manage the current Pi session's durable goal state. Actions: status, infer, set, start, pause, resume, clear, edit. Goal completion is reviewer-owned; legacy complete requests are rejected for the main agent.",
+      "Manage the current Pi session's durable goal state. Actions: status, set, start, pause, resume, clear, edit. Goal completion is reviewer-owned. Autonomous pause is rejected; blockers must be resolved instead of pausing.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({
           description:
-            "status | infer | set | start | pause | resume | clear | edit. Defaults to status. Completion is reviewer-owned.",
+            "status | set | start | pause | resume | clear | edit. Defaults to status. Completion is reviewer-owned; autonomous pause requests are rejected.",
         }),
       ),
-      objective: Type.Optional(Type.String({ description: "Goal objective for set/start/edit." })),
-      reason: Type.Optional(Type.String({ description: "Reason for pause." })),
-      scope: Type.Optional(
-        Type.String({ description: "Goal scope: session or project. Defaults to session." }),
-      ),
-      tokenBudget: Type.Optional(
-        Type.Number({
+      objective: Type.Optional(
+        Type.String({
           description:
-            "Optional positive integer token budget for start/set/edit/resume. Budget exhaustion stops automatic continuation without marking the goal complete.",
+            "Goal objective for set/start/edit. For edit, this must correct a description or direction error without lowering difficulty.",
+        }),
+      ),
+      reason: Type.Optional(
+        Type.String({
+          description:
+            "Required for edit: explain the description/direction error being corrected. Pause reasons are not accepted for autonomous goal work.",
         }),
       ),
     }),
@@ -88,79 +84,12 @@ export function registerSparkGoalTool(
       const project = graph ? await currentSparkProject(cwd, ctx, graph) : undefined;
       const independentTodos = await loadIndependentTodos(cwd, ctx);
 
-      const requestedScope = normalizeSparkGoalScope(params.scope);
-      const requestedProjectRef = requestedScope === "project" ? project?.ref : undefined;
-
-      if (action === "infer") {
-        if (!graph)
-          return {
-            content: [
-              {
-                type: "text",
-                text: "No Spark project/task state is available to infer a session goal.",
-              },
-            ],
-            details: { found: false, action, error: "no_project_state" },
-          };
-        if (requestedScope === "project" && !project)
-          return {
-            content: [
-              {
-                type: "text",
-                text: "No current Spark project is selected for a project-scoped goal.",
-              },
-            ],
-            details: { found: false, action, error: "no_current_project", scope: requestedScope },
-          };
-        const objective = inferSessionGoalObjective(graph, project, independentTodos);
-        if (!objective)
-          return {
-            content: [
-              {
-                type: "text",
-                text: "No current Spark project or active session TODOs are available to infer a concrete session goal.",
-              },
-            ],
-            details: { found: false, action, error: "no_inferable_goal" },
-          };
-        return {
-          content: [{ type: "text", text: objective }],
-          details: {
-            found: true,
-            action,
-            scope: requestedScope,
-            projectRef: project?.ref,
-            objective,
-          },
-        };
-      }
-
       if (action === "status") {
         const goal = await loadSessionGoal(cwd, ctx);
         return goalResult(goal, action, goal ? renderGoalStatus(goal) : "No session goal is set.");
       }
 
-      const requestedTokenBudget = normalizeSparkGoalTokenBudget(params.tokenBudget);
-
       if (action === "set" || action === "start") {
-        if (requestedScope === "project" && !requestedProjectRef)
-          return {
-            content: [
-              {
-                type: "text",
-                text: 'No current Spark project is selected for a project-scoped goal. Select a Project with task({ action: "project_use" }) or use scope=session.',
-              },
-            ],
-            details: { found: false, action, error: "no_current_project", scope: requestedScope },
-          };
-        const activeConflict = await activeGoalConflict(
-          cwd,
-          ctx,
-          requestedScope,
-          requestedProjectRef,
-        );
-        if (activeConflict)
-          return goalConflictResult(activeConflict, action, requestedScope, requestedProjectRef);
         const objective = resolveGoalObjective(
           action,
           params.objective,
@@ -184,26 +113,13 @@ export function registerSparkGoalTool(
           objective,
           source,
           status: "active",
-          scope: requestedScope,
-          projectRef: requestedProjectRef,
-          tokenBudget: requestedTokenBudget,
         });
         await clearSparkExecutionMode(cwd, ctx);
         await deps.refreshSparkWidget(cwd, ctx);
-        return goalResult(
-          goal,
-          action,
-          `Spark ${goal.scope} goal active: ${oneLine(goal.objective)}`,
-        );
+        return goalResult(goal, action, renderGoalActivationResult(goal, graph, project));
       }
 
       const existingGoal = await loadSessionGoal(cwd, ctx);
-      if (
-        existingGoal &&
-        params.scope !== undefined &&
-        !sameGoalTarget(existingGoal, requestedScope, requestedProjectRef)
-      )
-        return goalConflictResult(existingGoal, action, requestedScope, requestedProjectRef);
       if (!existingGoal)
         return {
           content: [{ type: "text", text: "No session goal is set." }],
@@ -218,7 +134,7 @@ export function registerSparkGoalTool(
           content: [
             {
               type: "text" as const,
-              text: `Cleared Spark ${renderGoalTarget(existingGoal.scope, existingGoal.projectRef)} goal: ${oneLine(existingGoal.objective)}`,
+              text: `Cleared Spark session goal: ${oneLine(existingGoal.objective)}`,
             },
           ],
           details: { found: true, action, clearedGoal: existingGoal, goal: null },
@@ -230,51 +146,53 @@ export function registerSparkGoalTool(
             content: [
               {
                 type: "text" as const,
-                text: `Cannot resume completed Spark ${renderGoalTarget(existingGoal.scope, existingGoal.projectRef)} goal: ${oneLine(existingGoal.objective)}. Start a new goal instead.`,
+                text: `Cannot resume completed Spark session goal: ${oneLine(existingGoal.objective)}. Start a new goal instead.`,
               },
             ],
             details: { found: true, action, error: "goal_already_complete", goal: existingGoal },
           };
         await clearSparkExecutionMode(cwd, ctx);
-        const budgeted =
-          params.tokenBudget === undefined
-            ? existingGoal
-            : await updateSessionGoalTokenBudget(cwd, ctx, requestedTokenBudget);
-        const goalBeforeResume = budgeted ?? existingGoal;
-        if (isSessionGoalBudgetExhausted(goalBeforeResume))
+        const resumed = await updateSessionGoalStatus(cwd, ctx, "active", { retryState: null });
+        await deps.refreshSparkWidget(cwd, ctx);
+        return goalResult(resumed, action, renderGoalStatus(resumed ?? existingGoal));
+      }
+      if (action === "edit") {
+        const objective = normalizeGoalObjective(params.objective);
+        const reason = normalizeOptionalReason(params.reason);
+        const editResult = await reviewedEditCurrentSessionGoal(
+          cwd,
+          ctx,
+          deps,
+          objective,
+          reason,
+          _signal,
+        );
+        if (!editResult.approved)
           return {
             content: [
               {
-                type: "text" as const,
-                text: `Cannot resume Spark ${renderGoalTarget(goalBeforeResume.scope, goalBeforeResume.projectRef)} goal because its token budget is exhausted (${goalBeforeResume.usage.tokensUsed}/${goalBeforeResume.tokenBudget}). Increase tokenBudget or start a new goal.`,
+                type: "text",
+                text: renderGoalEditRejectedMessage(existingGoal, editResult),
               },
             ],
             details: {
               found: true,
               action,
-              error: "goal_budget_exhausted",
-              goal: goalBeforeResume,
+              error: "goal_edit_review_failed",
+              goal: existingGoal,
+              proposedObjective: objective,
+              review: editResult.review?.verdict,
+              reviewArtifact: editResult.reviewArtifactRef,
             },
           };
-        const resumed = await updateSessionGoalStatus(cwd, ctx, "active", { retryState: null });
-        await deps.refreshSparkWidget(cwd, ctx);
-        return goalResult(resumed, action, renderGoalStatus(resumed ?? goalBeforeResume));
-      }
-      if (action === "edit") {
-        const objective = normalizeGoalObjective(params.objective);
-        await clearSparkExecutionMode(cwd, ctx);
-        const editedObjective = await editSessionGoalObjective(cwd, ctx, objective);
-        const edited =
-          params.tokenBudget === undefined
-            ? editedObjective
-            : await updateSessionGoalTokenBudget(cwd, ctx, requestedTokenBudget);
-        await deps.refreshSparkWidget(cwd, ctx);
         return goalResult(
-          edited,
+          editResult.goal,
           action,
-          renderGoalStatus(edited ?? editedObjective ?? existingGoal),
+          renderGoalStatus(editResult.goal ?? existingGoal),
         );
       }
+      const autonomousPauseGuard = forbiddenAutonomousPauseResult(ctx, existingGoal, action);
+      if (autonomousPauseGuard) return autonomousPauseGuard;
       const reason = normalizeOptionalReason(params.reason);
       const pauseResult = await reviewedPauseCurrentSessionGoal(cwd, ctx, deps, reason, _signal);
       if (!pauseResult.goal)
@@ -308,7 +226,6 @@ export function normalizeSparkGoalAction(value: unknown): SparkGoalToolAction {
   if (value === undefined || value === null || value === "") return "status";
   if (
     value === "status" ||
-    value === "infer" ||
     value === "set" ||
     value === "start" ||
     value === "pause" ||
@@ -320,24 +237,8 @@ export function normalizeSparkGoalAction(value: unknown): SparkGoalToolAction {
     return value;
   }
   throw new Error(
-    "goal action must be status, infer, set, start, pause, resume, clear, edit, or complete",
+    "goal action must be status, set, start, pause, resume, clear, edit, or complete",
   );
-}
-
-export function normalizeSparkGoalScope(value: unknown): SparkGoalScope {
-  if (value === undefined || value === null || value === "") return "session";
-  if (value === "session" || value === "project") return value;
-  throw new Error("goal scope must be session or project");
-}
-
-export function normalizeSparkGoalTokenBudget(value: unknown): number | null {
-  if (value === undefined || value === null || value === "") return null;
-  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
-  if (typeof value === "string" && /^\d+$/u.test(value.trim())) {
-    const parsed = Number.parseInt(value.trim(), 10);
-    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
-  }
-  throw new Error("goal tokenBudget must be a positive integer");
 }
 
 export async function startOrInferSessionGoal(
@@ -345,7 +246,6 @@ export async function startOrInferSessionGoal(
   ctx: SparkToolContext,
   graph: TaskGraph | null,
   explicitObjective?: string,
-  tokenBudget?: number | null,
 ): Promise<SparkSessionGoal | undefined> {
   const project = graph ? await currentSparkProject(cwd, ctx, graph) : undefined;
   const independentTodos = await loadIndependentTodos(cwd, ctx);
@@ -358,7 +258,6 @@ export async function startOrInferSessionGoal(
     objective,
     source: explicitObjective?.trim() ? "explicit" : "inferred",
     status: "active",
-    tokenBudget,
   });
 }
 
@@ -378,6 +277,55 @@ interface ReviewedGoalPauseResult {
   reviewArtifactRef?: string;
 }
 
+interface ReviewedGoalEditResult {
+  goal?: SparkSessionGoal;
+  approved: boolean;
+  review?: ReviewerRunResult;
+  reviewArtifactRef?: string;
+}
+
+async function reviewedEditCurrentSessionGoal(
+  cwd: string,
+  ctx: SparkToolContext,
+  deps: SparkGoalToolDeps,
+  proposedObjective: string,
+  reason: string | undefined,
+  signal?: AbortSignal,
+): Promise<ReviewedGoalEditResult> {
+  const existingGoal = await loadSessionGoal(cwd, ctx);
+  if (!existingGoal) return { approved: false };
+  const reviewerRunner = await deps.createReviewerRunner?.(cwd, ctx);
+  if (!reviewerRunner) throw new Error("goal edit requires a reviewer runner");
+  const reviewInput: GoalReviewInput = {
+    targetKind: "goal",
+    cwd,
+    goalId: existingGoal.goalId,
+    objective: existingGoal.objective,
+    status: existingGoal.status,
+    requestedStatus: "edited",
+    proposedObjective,
+    reason,
+    evidenceRefs: existingGoal.lastReview?.artifactRef
+      ? [existingGoal.lastReview.artifactRef as `artifact:${string}`]
+      : [],
+    sessionKey: sparkSessionKey(ctx),
+    forkFromSession: ctx.sessionManager?.getSessionFile?.(),
+  };
+  const review = await runGoalReviewer(cwd, ctx, reviewerRunner, reviewInput, signal);
+  const verdict = review.verdict as GoalReviewVerdict;
+  const artifact = await recordGoalTransitionReviewArtifact(cwd, existingGoal, review, {
+    requestedStatus: "edited",
+    proposedObjective,
+    reason,
+  });
+  if (verdict.outcome !== "approved")
+    return { goal: existingGoal, approved: false, review, reviewArtifactRef: artifact.ref };
+  await clearSparkExecutionMode(cwd, ctx);
+  const edited = await editSessionGoalObjective(cwd, ctx, proposedObjective);
+  await deps.refreshSparkWidget(cwd, ctx);
+  return { goal: edited, approved: true, review, reviewArtifactRef: artifact.ref };
+}
+
 export async function reviewedPauseCurrentSessionGoal(
   cwd: string,
   ctx: SparkToolContext,
@@ -392,7 +340,6 @@ export async function reviewedPauseCurrentSessionGoal(
   const reviewInput: GoalReviewInput = {
     targetKind: "goal",
     cwd,
-    projectRef: existingGoal.projectRef,
     goalId: existingGoal.goalId,
     objective: existingGoal.objective,
     status: existingGoal.status,
@@ -404,9 +351,12 @@ export async function reviewedPauseCurrentSessionGoal(
     sessionKey: sparkSessionKey(ctx),
     forkFromSession: ctx.sessionManager?.getSessionFile?.(),
   };
-  const review = await runPauseReviewer(cwd, ctx, reviewerRunner, reviewInput, signal);
+  const review = await runGoalReviewer(cwd, ctx, reviewerRunner, reviewInput, signal);
   const verdict = review.verdict as GoalReviewVerdict;
-  const artifact = await recordGoalPauseReviewArtifact(cwd, existingGoal, review, reason);
+  const artifact = await recordGoalTransitionReviewArtifact(cwd, existingGoal, review, {
+    requestedStatus: "paused",
+    reason,
+  });
   if (verdict.outcome !== "approved")
     return {
       goal: existingGoal,
@@ -431,7 +381,7 @@ export async function reviewedPauseCurrentSessionGoal(
   return { goal, approved: true, review, reviewArtifactRef: artifact.ref };
 }
 
-async function runPauseReviewer(
+async function runGoalReviewer(
   cwd: string,
   ctx: SparkToolContext,
   reviewerRunner: ReviewerRunner,
@@ -482,11 +432,11 @@ function failedGoalPauseReviewerRunResult(
   };
 }
 
-async function recordGoalPauseReviewArtifact(
+async function recordGoalTransitionReviewArtifact(
   cwd: string,
   goal: SparkSessionGoal,
   review: ReviewerRunResult,
-  reason: string | undefined,
+  request: { requestedStatus: "paused" | "edited"; reason?: string; proposedObjective?: string },
 ) {
   const reviewerRun = {
     ...(review.record.runRef ? { runRef: review.record.runRef } : {}),
@@ -496,28 +446,68 @@ async function recordGoalPauseReviewArtifact(
     finishedAt: review.record.finishedAt,
   };
   return defaultArtifactStore(cwd).put({
-    kind: "review",
-    title: `Goal pause review for ${goal.scope} goal: ${oneLine(goal.objective)}`,
+    kind: "record",
+    title: `Goal ${request.requestedStatus} review for session goal: ${oneLine(goal.objective)}`,
     format: "json",
     body: {
       goalId: goal.goalId,
-      scope: goal.scope,
-      ...(goal.projectRef ? { projectRef: goal.projectRef } : {}),
       objective: goal.objective,
-      requestedStatus: "paused",
-      reason,
+      requestedStatus: request.requestedStatus,
+      ...(request.reason ? { reason: request.reason } : {}),
+      ...(request.proposedObjective ? { proposedObjective: request.proposedObjective } : {}),
       verdict: review.verdict,
       reviewerRun,
       recordedAt: nowIso(),
     } as unknown as JsonValue,
     provenance: {
       producer: "review",
-      projectRef: goal.projectRef,
       roleRef: review.record.roleRef,
       runRef: review.record.runRef,
     },
-    links: goal.projectRef ? [{ to: goal.projectRef, relation: "review-of" }] : undefined,
   });
+}
+
+function forbiddenAutonomousPauseResult(
+  ctx: SparkToolContext,
+  goal: SparkSessionGoal,
+  action: SparkGoalToolAction,
+) {
+  if (ctx.sparkAutonomousGoalTurn?.goalId !== goal.goalId) return undefined;
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text:
+          `Autonomous goal pause is not allowed for session goal: ${oneLine(goal.objective)}\n` +
+          'If progress is blocked, resolve the blocker first: inspect tasks, create or revise concrete blocking work with task({ action: "plan" }), claim/finish the blocking task, or use ask({ autoAnswer: "reviewer" }) only for reviewer-backed decisions when the host provides it. Do not reduce the goal or pause it to avoid hard work.',
+      },
+    ],
+    details: {
+      found: true,
+      action,
+      error: "autonomous_goal_pause_forbidden",
+      goal,
+      guidance: [
+        "Autonomous goal mode must not pause itself.",
+        "Resolve blockers by doing or planning blocking work before continuing the goal.",
+        "Only correct a goal objective when the current wording is materially wrong and the correction does not lower difficulty.",
+      ],
+    },
+  };
+}
+
+function renderGoalEditRejectedMessage(
+  goal: SparkSessionGoal,
+  result: ReviewedGoalEditResult,
+): string {
+  const verdict = result.review?.verdict as GoalReviewVerdict | undefined;
+  const summary =
+    verdict?.summary ??
+    "reviewer did not approve editing this goal; autonomous edits must correct a material description or direction error without lowering difficulty";
+  const findings = verdict?.findings?.length ? `\nFindings: ${verdict.findings.join("; ")}` : "";
+  const blockers = verdict?.blockers?.length ? `\nBlockers: ${verdict.blockers.join("; ")}` : "";
+  const artifact = result.reviewArtifactRef ? `\nReview artifact: ${result.reviewArtifactRef}` : "";
+  return `Goal edit blocked by reviewer for session goal: ${oneLine(goal.objective)}\nReview outcome: ${verdict?.outcome ?? "blocked"}\nReview summary: ${summary}${findings}${blockers}${artifact}`;
 }
 
 function renderGoalPauseRejectedMessage(
@@ -528,47 +518,7 @@ function renderGoalPauseRejectedMessage(
   const summary = verdict?.summary ?? "reviewer did not approve pausing this goal";
   const blockers = verdict?.blockers?.length ? `\nBlockers: ${verdict.blockers.join("; ")}` : "";
   const artifact = result.reviewArtifactRef ? `\nReview artifact: ${result.reviewArtifactRef}` : "";
-  return `Goal pause blocked by reviewer for ${renderGoalTarget(goal.scope, goal.projectRef)} goal: ${oneLine(goal.objective)}\nReview outcome: ${verdict?.outcome ?? "blocked"}\nReview summary: ${summary}${blockers}${artifact}`;
-}
-
-async function activeGoalConflict(
-  cwd: string,
-  ctx: SparkToolContext,
-  requestedScope: SparkGoalScope,
-  requestedProjectRef: SparkSessionGoal["projectRef"],
-): Promise<SparkSessionGoal | undefined> {
-  const existing = await loadSessionGoal(cwd, ctx);
-  if (!existing || existing.status === "complete" || existing.status === "paused") return undefined;
-  return sameGoalTarget(existing, requestedScope, requestedProjectRef) ? undefined : existing;
-}
-
-function goalConflictResult(
-  activeGoal: SparkSessionGoal,
-  action: SparkGoalToolAction,
-  requestedScope: SparkGoalScope,
-  requestedProjectRef: SparkSessionGoal["projectRef"],
-) {
-  const activeTarget = renderGoalTarget(activeGoal.scope, activeGoal.projectRef);
-  const requestedTarget = renderGoalTarget(requestedScope, requestedProjectRef);
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: `Cannot ${action} ${requestedTarget} goal because ${activeTarget} goal is already active: ${oneLine(activeGoal.objective)}. Pause the active goal first, wait for reviewer completion, or explicitly continue that same goal target.`,
-      },
-    ],
-    details: {
-      found: true,
-      action,
-      error: "active_goal_conflict",
-      requested: { scope: requestedScope, projectRef: requestedProjectRef },
-      activeGoal,
-      guidance: [
-        'Use goal({ action: "pause" }) on the active goal before starting another scope, or wait for the reviewer loop to complete the active goal.',
-        "Use the same scope/project target if you intend to update the currently active goal.",
-      ],
-    },
-  };
+  return `Goal pause blocked by reviewer for session goal: ${oneLine(goal.objective)}\nReview outcome: ${verdict?.outcome ?? "blocked"}\nReview summary: ${summary}${blockers}${artifact}`;
 }
 
 function reviewerOwnedGoalCompletionResult(goal: SparkSessionGoal, action: SparkGoalToolAction) {
@@ -576,7 +526,7 @@ function reviewerOwnedGoalCompletionResult(goal: SparkSessionGoal, action: Spark
     content: [
       {
         type: "text" as const,
-        text: `Goal completion is reviewer-owned for ${renderGoalTarget(goal.scope, goal.projectRef)} goal: ${oneLine(goal.objective)}. The main agent cannot mark goals complete; keep evidence/status accurate and wait for the Spark reviewer loop to apply an achieved verdict, or pause the goal if blocked.`,
+        text: `Goal completion is reviewer-owned for session goal: ${oneLine(goal.objective)}. The main agent cannot mark goals complete; keep evidence/status accurate and wait for the Spark reviewer loop to apply an achieved verdict. If blocked, resolve the blocker instead of pausing or weakening the goal.`,
       },
     ],
     details: {
@@ -587,7 +537,7 @@ function reviewerOwnedGoalCompletionResult(goal: SparkSessionGoal, action: Spark
       guidance: [
         "The main agent must not request goal completion directly.",
         "The Spark reviewer loop completes goals internally after an achieved verdict.",
-        'Use goal({ action: "pause" }) only when the goal is blocked or should stop without completion.',
+        "Do not pause autonomously when blocked; create or complete the blocking work first.",
       ],
     },
   };
@@ -611,16 +561,26 @@ function goalResult(goal: SparkSessionGoal | undefined, action: string, text: st
   };
 }
 
+function renderGoalActivationResult(
+  goal: SparkSessionGoal,
+  graph: TaskGraph | null,
+  project: Awaited<ReturnType<typeof currentSparkProject>>,
+): string {
+  const lines = ["Spark session goal active."];
+  if (!graph || !project) {
+    lines.push(
+      "No current Spark project is selected for this goal yet.",
+      'Next autonomous step: create or select a project with task({ action: "project_use", title, description }), using the goal objective as the project intent; then plan initial concrete tasks with task({ action: "plan" }).',
+      `Goal objective: ${oneLine(goal.objective)}`,
+    );
+  }
+  return lines.join("\n");
+}
+
 function renderGoalStatus(goal: SparkSessionGoal): string {
-  const lines = [
-    `Spark ${renderGoalTarget(goal.scope, goal.projectRef)} goal ${goal.status}`,
-    `Goal: ${oneLine(goal.objective)}`,
-    `Usage: ${goalUsageStatusText(goal)}`,
-  ];
-  const reason = goal.pauseReason ?? goal.budgetLimitedReason ?? goal.completedReason;
+  const lines = [`Spark session goal ${goal.status}`, `Goal: ${oneLine(goal.objective)}`];
+  const reason = goal.pauseReason ?? goal.completedReason;
   if (reason) lines.push(`Reason: ${reason}`);
-  if (goal.status === "budgetLimited")
-    lines.push("Budget limit: automatic continuation is stopped; this is not completion.");
   if (goal.lastReview)
     lines.push(
       `Last review: achieved=${goal.lastReview.achieved} confidence=${goal.lastReview.confidence ?? "unknown"} at ${goal.lastReview.reviewedAt}; ${oneLine(goal.lastReview.reason)}`,
@@ -630,35 +590,9 @@ function renderGoalStatus(goal: SparkSessionGoal): string {
       `Retry state: ${goal.retryState.consecutiveFailures} failure(s), nextDelayMs=${goal.retryState.nextDelayMs ?? "unknown"}.`,
     );
   lines.push(
-    'Actions: goal({ action: "status" }), goal({ action: "pause" }), goal({ action: "resume" }), goal({ action: "edit" }), goal({ action: "clear" }), goal({ action: "start" }); completion is reviewer-owned.',
+    'Actions: goal({ action: "status" }), goal({ action: "resume" }), goal({ action: "edit", objective, reason }), goal({ action: "clear" }), goal({ action: "start" }); completion is reviewer-owned, and autonomous pause is forbidden.',
   );
   return lines.join("\n");
-}
-
-function goalUsageStatusText(goal: SparkSessionGoal): string {
-  const usedText = formatCompactTokenCount(goal.usage.tokensUsed);
-  if (goal.tokenBudget === null)
-    return `${usedText} tokens used, ${goal.usage.activeSeconds}s active`;
-  const budgetText = formatCompactTokenCount(goal.tokenBudget);
-  const remainingText = formatCompactTokenCount(
-    Math.max(0, goal.tokenBudget - goal.usage.tokensUsed),
-  );
-  return `${usedText}/${budgetText} tokens (${remainingText} remaining), ${goal.usage.activeSeconds}s active`;
-}
-
-function formatCompactTokenCount(value: number): string {
-  if (!Number.isFinite(value)) return "0";
-  const count = Math.max(0, Math.round(value));
-  if (count < 10_000) return count.toLocaleString("en-US");
-  if (count < 1_000_000) return `${Math.round(count / 1_000).toLocaleString("en-US")}k`;
-  return `${(count / 1_000_000).toFixed(count < 10_000_000 ? 1 : 0)}M`;
-}
-
-function renderGoalTarget(
-  scope: SparkGoalScope,
-  projectRef: SparkSessionGoal["projectRef"],
-): string {
-  return scope === "project" ? `project (${projectRef})` : "session";
 }
 
 function oneLine(value: string): string {

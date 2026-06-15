@@ -1,7 +1,7 @@
 import type { TaskGraph, SessionTodoEntry } from "pi-tasks";
 import { isUnfinishedTaskStatus } from "pi-tasks";
 import type { TaskRunCompletionSummary, TaskStatus } from "pi-extension-api";
-import type { SparkDagStatusSummary } from "pi-workflows";
+import type { WorkflowRunStatusSummary } from "pi-workflows";
 import type { SparkRunModeState } from "./current-project-state.ts";
 import { appendRecentRoleRunCompletionLines } from "./role-run-completions.ts";
 import type { SparkSessionGoal } from "./spark-session-goals.ts";
@@ -43,7 +43,7 @@ export interface SparkStatusRenderInput {
   taskLimit: number | undefined;
   sessionKey: string;
   currentProject?: ReturnType<TaskGraph["projects"]>[number];
-  dagStatus: SparkDagStatusSummary;
+  dagStatus: WorkflowRunStatusSummary;
   runMode?: SparkRunModeState;
   sessionGoal?: SparkSessionGoal;
   independentTodos: SessionTodoEntry[];
@@ -141,11 +141,7 @@ function compactSparkStatusDetails(
     sessionGoal: input.sessionGoal
       ? {
           status: input.sessionGoal.status,
-          scope: input.sessionGoal.scope,
-          projectRef: input.sessionGoal.projectRef,
           objective: truncateInline(input.sessionGoal.objective, 180),
-          tokenBudget: input.sessionGoal.tokenBudget,
-          usage: input.sessionGoal.usage,
         }
       : undefined,
     hints: [
@@ -248,7 +244,7 @@ function compactIndependentTodoDecisionDetail(
   };
 }
 
-function compactDagDecisionDetail(dagStatus: SparkDagStatusSummary): Record<string, unknown> {
+function compactDagDecisionDetail(dagStatus: WorkflowRunStatusSummary): Record<string, unknown> {
   return {
     manager: dagStatus.manager,
     counts: {
@@ -275,7 +271,7 @@ function compactDagDecisionDetail(dagStatus: SparkDagStatusSummary): Record<stri
 }
 
 function compactDagRunDecisionDetail(
-  run: NonNullable<SparkDagStatusSummary["lastRun"]>,
+  run: NonNullable<WorkflowRunStatusSummary["lastRun"]>,
 ): Record<string, unknown> {
   return {
     ref: run.ref,
@@ -292,7 +288,7 @@ function compactDagRunDecisionDetail(
 function appendDagStatusLines(
   lines: string[],
   view: SparkStatusView,
-  dagStatus: SparkDagStatusSummary,
+  dagStatus: WorkflowRunStatusSummary,
 ): void {
   if (view === "active") {
     const compactDagRun = appendCompactSparkDagStatusLines(lines, dagStatus);
@@ -348,14 +344,10 @@ function renderProjectStatusLines(
       `  Tasks: ${tasks.length} total | ${claimed.length} claimed | ${sessionClaimed.length} current_session_claimed | ${formatTaskStatusCounts(statusCounts)}`,
     );
     if (isCurrent && input.sessionGoal) {
-      const reason =
-        input.sessionGoal.pauseReason ??
-        input.sessionGoal.budgetLimitedReason ??
-        input.sessionGoal.completedReason;
+      const reason = input.sessionGoal.pauseReason ?? input.sessionGoal.completedReason;
       const reasonText = reason ? ` | reason: ${truncateInline(reason, 120)}` : "";
-      const usageText = ` | usage: ${formatSessionGoalUsage(input.sessionGoal)}`;
       lines.push(
-        `  ${formatGoalScopeLabel(input.sessionGoal)} goal: ${input.sessionGoal.status} | ${truncateInline(input.sessionGoal.objective, 180)}${usageText}${reasonText}`,
+        `  Session goal: ${input.sessionGoal.status} | ${truncateInline(input.sessionGoal.objective, 180)}${reasonText}`,
       );
     }
     if (hiddenByView > 0)
@@ -396,21 +388,6 @@ function renderProjectStatusLines(
     renderedProjectDetails.push(renderedProjectDetail);
   }
   return renderedProjectDetails;
-}
-
-function formatSessionGoalUsage(goal: NonNullable<SparkStatusRenderInput["sessionGoal"]>): string {
-  const usedText = formatCompactTokenCount(goal.usage.tokensUsed);
-  if (goal.tokenBudget === null)
-    return `${usedText} tokens used, ${goal.usage.activeSeconds}s active`;
-  return `${usedText}/${formatCompactTokenCount(goal.tokenBudget)} tokens, ${goal.usage.activeSeconds}s active`;
-}
-
-function formatCompactTokenCount(value: number): string {
-  if (!Number.isFinite(value)) return "0";
-  const count = Math.max(0, Math.round(value));
-  if (count < 10_000) return count.toLocaleString("en-US");
-  if (count < 1_000_000) return `${Math.round(count / 1_000).toLocaleString("en-US")}k`;
-  return `${(count / 1_000_000).toFixed(count < 10_000_000 ? 1 : 0)}M`;
 }
 
 function formatCompletedTaskCounts(counts: Partial<Record<TaskStatus, number>>): string {
@@ -523,10 +500,6 @@ function appendIndependentTodoStatusLines(
       notes: todo.notes,
     })),
   };
-}
-
-function formatGoalScopeLabel(goal: SparkSessionGoal): string {
-  return goal.scope === "project" ? `Project(${goal.projectRef})` : "Session";
 }
 
 function sparkRunModeStatusLine(runMode: SparkRunModeState): string {

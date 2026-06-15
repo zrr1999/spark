@@ -6,7 +6,6 @@ import {
   compactContinuationPrompt,
   continuationGoalIdFromPrompt,
   createGoal,
-  formatSparkBudgetLines,
   goalToolResponse,
   validateObjective,
 } from "pi-goal";
@@ -31,10 +30,9 @@ void test("pi-goal package stays isolated from workflow packages", async () => {
 
 void test("pi-goal helpers create goals and continuation prompts", () => {
   assert.equal(validateObjective("  ship feature  "), null);
-  const goal = createGoal("  ship feature  ", 1000, 123);
+  const goal = createGoal("  ship feature  ", 123);
   assert.equal(goal.objective, "ship feature");
   assert.equal(goal.status, "active");
-  assert.equal(goal.tokenBudget, 1000);
 
   const prompt = compactContinuationPrompt(goal);
   assert.match(prompt, /<spark_goal_continuation/);
@@ -44,17 +42,7 @@ void test("pi-goal helpers create goals and continuation prompts", () => {
 
   const response = goalToolResponse(goal);
   assert.equal(response.goal?.goalId, goal.goalId);
-  assert.equal(response.remainingTokens, 1000);
-
-  assert.deepEqual(
-    formatSparkBudgetLines({ timeSpentSeconds: 61, tokensUsed: 250, tokenBudget: 1000 }),
-    [
-      "- Time spent pursuing goal: 1m",
-      "- Tokens used: 250",
-      "- Token budget: 1,000",
-      "- Tokens remaining: 750",
-    ],
-  );
+  assert.equal(response.goal?.status, "active");
 });
 
 async function listTypeScriptFiles(dir: string): Promise<string[]> {

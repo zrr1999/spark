@@ -211,7 +211,7 @@ export interface RequestEnvelope {
 
 export type RequestPayload =
   | { Eval: { input: string; mode: Mode } }
-  | { RunScript: { path: string; input: string } }
+  | { RunScript: { path: string; input: string; scope?: string } }
   | { Subscribe: { channels: string[] } }
   | { Unsubscribe: { channels: string[] } }
   | { ListJobs: { limit?: number | null } }
@@ -489,6 +489,10 @@ function okRecord(response: ResponsePayload): Record<string, unknown> {
     throw new CueError(response.Err.code, response.Err.message);
   }
   return (response as { Ok: Record<string, unknown> }).Ok;
+}
+
+function isNoBufferedOutputError(error: CueError): boolean {
+  return error.code === "NOT_FOUND" && /no output found/i.test(error.message);
 }
 
 function textOutputFromOk(ok: Record<string, unknown>): string | null {
@@ -778,12 +782,12 @@ export class CueClient {
    * the script-level terminal status.
    */
   async runScript(opts: RunScriptOptions): Promise<ScriptResult> {
-    const { path, input } = opts;
+    const { path, input, scope } = opts;
     const timeoutMs = (opts.timeout ?? 300) * 1000;
 
     await this.#ensureSubscribed("jobs");
 
-    const requestId = await this.#send({ RunScript: { path, input } });
+    const requestId = await this.#send({ RunScript: { path, input, ...(scope ? { scope } : {}) } });
     const response = await this.#waitForResponse(requestId);
     if ("Err" in response) {
       throw new CueError(response.Err.code, response.Err.message);
@@ -1273,6 +1277,7 @@ export class CueClient {
       }
     } catch (error) {
       if (!(error instanceof CueError)) throw error;
+      if (isNoBufferedOutputError(error)) return { stdout: "", stderr: "", truncated: false };
     }
 
     const response = await this.#rawEvalAndWait(`:out ${jobId}`);
@@ -1312,6 +1317,7 @@ export class CueClient {
       }
     } catch (error) {
       if (!(error instanceof CueError)) throw error;
+      if (isNoBufferedOutputError(error)) return { stderr: "", truncated: false };
     }
 
     const response = await this.#rawEvalAndWait(`:err ${jobId}`);
@@ -1952,6 +1958,8 @@ export interface RunScriptOptions {
   input: string;
   /** Foreground wait budget in seconds. Defaults to 300. */
   timeout?: number;
+  /** Optional cue-shell scope to use as the RunScript base scope. */
+  scope?: string;
 }
 
 export interface ScriptItemSummary {

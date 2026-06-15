@@ -6,6 +6,7 @@ import {
   analyzeSparkEntryMode,
   type SparkCommandProjectState,
   type SparkEntryIntent,
+  type SparkEntryMode,
   type SparkEntryModeChoice,
   type SparkEntryResolution,
 } from "./spark-entry.ts";
@@ -135,34 +136,26 @@ async function resolveSparkEntryWithoutGraph(
         ? { action: "initialize_new_project", idea, enterPlanning: false, planningSource: "auto" }
         : { action: "none" };
     }
-    if (intent.mode === "plan") {
-      return {
-        action: "blocked",
-        message:
-          "Spark plan mode needs an existing project or a Spark idea. Use /spark <idea> to initialize an empty project.",
-      };
-    }
-    return {
-      action: "blocked",
-      message: `Spark ${intent.mode} mode needs initialized Spark state. Use /spark <idea> or /plan first.`,
-    };
+    return blockedDirectModeWithoutGraph(intent.mode);
   }
 
-  if (intent.kind === "direct" && (intent.mode === "execute" || intent.mode === "research")) {
-    return {
-      action: "blocked",
-      message: `Spark ${intent.mode} mode needs initialized Spark state. Use /spark <idea> or /plan first.`,
-    };
-  }
+  if (intent.kind === "direct") return blockedDirectModeWithoutGraph(intent.mode);
 
   const idea = intent.prompt || (await inferExistingProjectSparkIdea(ctx));
   return idea
     ? {
         action: "initialize_existing_project",
         idea,
-        planningSource: intent.kind === "direct" && intent.mode === "plan" ? "direct" : "auto",
+        planningSource: "auto",
       }
     : { action: "none" };
+}
+
+function blockedDirectModeWithoutGraph(mode: SparkEntryMode): SparkEntryResolution {
+  return {
+    action: "blocked",
+    message: `Spark ${mode} mode needs initialized Spark project state. Create or select a project with task({ action: "project_use", title, description }) before using this mode.`,
+  };
 }
 
 async function chooseInitializedSparkMode(
@@ -191,7 +184,7 @@ async function inferExistingProjectSparkIdea(
     return inferred;
   }
   ctx.ui?.notify?.(
-    "Spark planning needs a concrete focus for this existing project. You can also run /spark <focus> or /plan <focus>.",
+    'Spark planning needs a concrete focus for this existing project. Create or select a project with task({ action: "project_use", title, description }) before planning.',
     "warning",
   );
   return undefined;
@@ -344,7 +337,7 @@ async function promptSparkNewProjectIdea(
   const trimmed = idea?.trim();
   if (trimmed) return trimmed;
   ctx.ui?.notify?.(
-    "Spark new-project mode needs an idea. You can also run /spark <idea>.",
+    "Spark new-project mode needs an idea; provide a concrete project title or description before initializing.",
     "warning",
   );
   return undefined;

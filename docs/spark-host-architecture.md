@@ -16,7 +16,7 @@ Spark has two host targets that share extension packages through `pi-extension-a
 │ Shared retained extension packages                                      │
 │                                                                         │
 │  pi-ask        pi-cue        pi-roles        pi-graft        spark       │
-│  ask tools     cue tools     role tools      graft tools     /spark +    │
+│  ask tools     cue tools     role tools      graft tools     modes +     │
 │                                                           Spark tools    │
 └───────────────────────────────────▲───────────────────────────────────┘
                                     │ explicit factories

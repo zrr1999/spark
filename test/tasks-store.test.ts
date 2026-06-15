@@ -28,7 +28,8 @@ import {
 import {
   SparkDagRunStoreFormatError,
   defaultSparkDagRunStore,
-  runReadySparkTasks,
+  defaultWorkflowRunStore,
+  runReadyTasks,
   type SparkDagRunRecord,
 } from "../packages/pi-workflows/src/index.ts";
 import {
@@ -2249,10 +2250,10 @@ void test("Spark DAG manager reports widget refresh failures without failing com
   }
 });
 
-void test("Spark DAG run store persists manager lifecycle and task progress", async () => {
+void test("workflow run store persists manager lifecycle and task progress", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-store-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     const projectRef = newRef("proj");
     const taskRef = newRef("task");
     const taskRunRef = newRef("run");
@@ -2285,7 +2286,7 @@ void test("Spark DAG run store persists manager lifecycle and task progress", as
     assert.ok(followUp);
     assert.equal(
       followUp.summary,
-      `Spark workflow run: ${dagRun.ref} succeeded: scheduled 1, completed 1.`,
+      `Workflow run: ${dagRun.ref} succeeded: scheduled 1, completed 1.`,
     );
     assert.deepEqual(followUp.nextActions, [
       "Review task outputs and continue with newly unblocked ready tasks if any.",
@@ -2318,6 +2319,7 @@ void test("Spark DAG run store persists manager lifecycle and task progress", as
     assert.deepEqual(record.completedTaskRefs, [taskRef]);
     assert.deepEqual(record.taskRunRefs, [taskRunRef]);
     assert.deepEqual(record.completionFollowUp, followUp);
+    assert.equal(defaultSparkDagRunStore(dir).filePath, store.filePath);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -2653,10 +2655,7 @@ void test("Spark DAG run store marks finished manager runs failed when child run
     });
 
     assert.ok(followUp);
-    assert.equal(
-      followUp.summary,
-      `Spark workflow run: ${dagRun.ref} failed: scheduled 1, completed 1.`,
-    );
+    assert.equal(followUp.summary, `Workflow run: ${dagRun.ref} failed: scheduled 1, completed 1.`);
     assert.match(followUp.nextActions.join("\n"), /failed: inspect task\(\{ action: "run_status"/);
     assert.match(followUp.nextActions.join("\n"), /rerun ready background work/);
     const status = await store.status();
@@ -3127,7 +3126,7 @@ void test("Spark DAG run reconcile revives stale records when a scheduled task s
   }
 });
 
-void test("runReadySparkTasks assigns default roles and schedules DAG waves with maxConcurrency 4", async () => {
+void test("runReadyTasks assigns default roles and schedules DAG waves with maxConcurrency 4", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-parallel-"));
   try {
     const graph = new TaskGraph();
@@ -3161,7 +3160,7 @@ void test("runReadySparkTasks assigns default roles and schedules DAG waves with
       | { kind: "schedule"; taskRef: TaskRef; running: number; scheduled: number }
       | { kind: "progress"; taskRef: TaskRef; running: number; completed: number }
     > = [];
-    const result = await runReadySparkTasks({
+    const result = await runReadyTasks({
       graph,
       ...createSparkRuntimeReadyTaskRunner({
         registry: new RoleRegistry(),
@@ -3223,7 +3222,7 @@ void test("runReadySparkTasks assigns default roles and schedules DAG waves with
   }
 });
 
-void test("runReadySparkTasks propagates schedule hook failures", async () => {
+void test("runReadyTasks propagates schedule hook failures", async () => {
   const graph = new TaskGraph();
   const project = graph.createProject({ title: "Demo", description: "demo" });
   graph.createTask({
@@ -3236,7 +3235,7 @@ void test("runReadySparkTasks propagates schedule hook failures", async () => {
 
   await assert.rejects(
     () =>
-      runReadySparkTasks({
+      runReadyTasks({
         graph,
         ...createSparkRuntimeReadyTaskRunner({ registry: new RoleRegistry() }),
         dryRun: true,
@@ -3248,7 +3247,7 @@ void test("runReadySparkTasks propagates schedule hook failures", async () => {
   );
 });
 
-void test("runReadySparkTasks aborts launched child work when schedule hook fails", async () => {
+void test("runReadyTasks aborts launched child work when schedule hook fails", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-schedule-hook-abort-"));
   try {
     const graph = new TaskGraph();
@@ -3270,7 +3269,7 @@ void test("runReadySparkTasks aborts launched child work when schedule hook fail
 
     await assert.rejects(
       () =>
-        runReadySparkTasks({
+        runReadyTasks({
           graph,
           ...createSparkRuntimeReadyTaskRunner({
             registry: new RoleRegistry(),
@@ -3296,14 +3295,14 @@ void test("runReadySparkTasks aborts launched child work when schedule hook fail
     const runs = graph.runs(project.ref).filter((run) => run.taskRef === task.ref);
     assert.equal(runs.length, 1);
     assert.equal(runs[0]?.status, "failed");
-    assert.match(runs[0]?.errorMessage ?? "", /Spark ready task scheduler aborted/);
+    assert.match(runs[0]?.errorMessage ?? "", /ready task scheduler aborted/);
   } finally {
     await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-void test("runReadySparkTasks limits ready frontier to the requested project", async () => {
+void test("runReadyTasks limits ready frontier to the requested project", async () => {
   const graph = new TaskGraph();
   const selected = graph.createProject({ title: "Selected", description: "selected" });
   const other = graph.createProject({ title: "Other", description: "other" });
@@ -3322,7 +3321,7 @@ void test("runReadySparkTasks limits ready frontier to the requested project", a
     plan: executionReadyPlan("Other ready task"),
   });
 
-  const result = await runReadySparkTasks({
+  const result = await runReadyTasks({
     graph,
     ...createSparkRuntimeReadyTaskRunner({ registry: new RoleRegistry() }),
     dryRun: true,
@@ -3335,7 +3334,7 @@ void test("runReadySparkTasks limits ready frontier to the requested project", a
   assert.equal(graph.getTask(otherTask.ref).status, "pending");
 });
 
-void test("runReadySparkTasks reports failed child runs in aggregate result", async () => {
+void test("runReadyTasks reports failed child runs in aggregate result", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ready-child-failed-"));
   try {
     const graph = new TaskGraph();
@@ -3351,7 +3350,7 @@ void test("runReadySparkTasks reports failed child runs in aggregate result", as
     await writeFile(fakePi, "#!/usr/bin/env node\nprocess.exit(0);\n", "utf8");
     await chmod(fakePi, 0o755);
 
-    const result = await runReadySparkTasks({
+    const result = await runReadyTasks({
       graph,
       ...createSparkRuntimeReadyTaskRunner({
         registry: new RoleRegistry(),
@@ -3375,7 +3374,7 @@ void test("runReadySparkTasks reports failed child runs in aggregate result", as
   }
 });
 
-void test("runReadySparkTasks returns the recorded failed run when child launch fails", async () => {
+void test("runReadyTasks returns the recorded failed run when child launch fails", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ready-child-launch-failed-"));
   try {
     const graph = new TaskGraph();
@@ -3388,7 +3387,7 @@ void test("runReadySparkTasks returns the recorded failed run when child launch 
       plan: executionReadyPlan("Launch child"),
     });
 
-    const result = await runReadySparkTasks({
+    const result = await runReadyTasks({
       graph,
       ...createSparkRuntimeReadyTaskRunner({
         registry: new RoleRegistry(),
@@ -3413,7 +3412,7 @@ void test("runReadySparkTasks returns the recorded failed run when child launch 
   }
 });
 
-void test("runReadySparkTasks propagates missing role errors before creating child runs", async () => {
+void test("runReadyTasks propagates missing role errors before creating child runs", async () => {
   const graph = new TaskGraph();
   const project = graph.createProject({ title: "Demo", description: "demo" });
   const task = graph.createTask({
@@ -3426,7 +3425,7 @@ void test("runReadySparkTasks propagates missing role errors before creating chi
 
   await assert.rejects(
     () =>
-      runReadySparkTasks({
+      runReadyTasks({
         graph,
         ...createSparkRuntimeReadyTaskRunner({ registry: new RoleRegistry() }),
         dryRun: false,
@@ -3441,7 +3440,7 @@ void test("runReadySparkTasks propagates missing role errors before creating chi
   assert.equal(graph.getTask(task.ref).claim, undefined);
 });
 
-void test("runReadySparkTasks treats timeoutMs as a foreground wait budget", async () => {
+void test("runReadyTasks treats timeoutMs as a foreground wait budget", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-timeout-"));
   try {
     const graph = new TaskGraph();
@@ -3468,7 +3467,7 @@ void test("runReadySparkTasks treats timeoutMs as a foreground wait budget", asy
     );
     await chmod(fakePi, 0o755);
 
-    const result = await runReadySparkTasks({
+    const result = await runReadyTasks({
       graph,
       ...createSparkRuntimeReadyTaskRunner({
         registry: new RoleRegistry(),
@@ -3498,7 +3497,7 @@ void test("runReadySparkTasks treats timeoutMs as a foreground wait budget", asy
     assert.equal(backgroundRuns.length, 1);
     assert.equal(backgroundRuns[0]?.taskRef, slowTask.ref);
     assert.match(backgroundRuns[0]?.errorMessage ?? "", /foreground wait expired/);
-    assert.match(backgroundRuns[0]?.errorMessage ?? "", /keeping role-run claim in background/);
+    assert.match(backgroundRuns[0]?.errorMessage ?? "", /keeping child run claim in background/);
     assert.equal(listActiveSparkRoleRunProcesses().length, 1);
   } finally {
     await killActiveSparkRoleRunProcesses();
@@ -3542,7 +3541,7 @@ void test("runSparkTask does not complete real tasks when the role run never sta
     assert.match(run.errorMessage ?? "", /without producing output/);
     assert.equal(graph.getTask(task.ref).status, "failed");
     assert.equal(graph.getTask(task.ref).claim, undefined);
-    const [artifact] = await artifactStore.list({ kind: "role-run" });
+    const [artifact] = await artifactStore.list({ kind: "trace" });
     assert.ok(artifact);
     const body = artifact.body as {
       schemaVersion?: number;
@@ -3766,7 +3765,7 @@ void test("runSparkTask writes compact role-run artifacts for large output", asy
     });
 
     assert.equal(run.status, "succeeded");
-    const [artifact] = await artifactStore.list({ kind: "role-run" });
+    const [artifact] = await artifactStore.list({ kind: "trace" });
     assert.ok(artifact);
     const artifactPath = artifactStore.pathFor(artifact.ref);
     const metadata = await readFile(artifactPath, "utf8");
@@ -3847,7 +3846,7 @@ void test("runSparkTask dry-run records validation without completing the task",
     assert.equal(graph.getTask(task.ref).claim, undefined);
     assert.equal(graph.getTask(task.ref).outputArtifacts.length, 1);
     assert.deepEqual(run.outputArtifacts, graph.getTask(task.ref).outputArtifacts);
-    const [artifact] = await artifactStore.list({ kind: "role-run" });
+    const [artifact] = await artifactStore.list({ kind: "trace" });
     assert.ok(artifact);
     assert.equal(artifact.ref, run.outputArtifacts[0]);
     assert.match(artifact.title, /^Role run planner-/);
@@ -4040,7 +4039,7 @@ void test("task timeout fails the task while leaving only the stuck child proces
     );
     await chmod(fakePi, 0o755);
 
-    const result = await runReadySparkTasks({
+    const result = await runReadyTasks({
       graph,
       ...createSparkRuntimeReadyTaskRunner({
         registry: new RoleRegistry(),

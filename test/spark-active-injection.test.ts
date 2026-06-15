@@ -62,7 +62,7 @@ void test("handleSparkInput lets active auto mode continue without canned route 
       assert.equal(ctx.selectCalls.length, 0);
       assert.equal(customMessages.length, 0);
       assert.equal(queuedInstructions.length, 0);
-      assert.equal((await defaultArtifactStore(dir).list({ kind: "ask-answer" })).length, 0);
+      assert.equal((await defaultArtifactStore(dir).list({ producer: "ask" })).length, 0);
       assert.equal((await loadSparkMode(dir, ctx)).mode, "auto");
     },
   );
@@ -81,7 +81,7 @@ void test("handleSparkInput does not turn until-done input into a template ask",
       assert.equal(ctx.selectCalls.length, 0);
       assert.equal(customMessages.length, 0);
       assert.equal(queuedInstructions.length, 0);
-      assert.equal((await defaultArtifactStore(dir).list({ kind: "ask-answer" })).length, 0);
+      assert.equal((await defaultArtifactStore(dir).list({ producer: "ask" })).length, 0);
       assert.equal((await loadSparkMode(dir, ctx)).mode, "auto");
     },
   );
@@ -106,7 +106,7 @@ void test("handleSparkInput lets active goal input bypass auto route ask", async
       assert.equal(ctx.selectCalls.length, 0);
       assert.equal(customMessages.length, 0);
       assert.equal(queuedInstructions.length, 0);
-      assert.equal((await defaultArtifactStore(dir).list({ kind: "ask-answer" })).length, 0);
+      assert.equal((await defaultArtifactStore(dir).list({ producer: "ask" })).length, 0);
       assert.equal((await loadSparkMode(dir, ctx)).mode, "auto");
     },
   );
@@ -152,7 +152,7 @@ void test("handleSparkInput lets slash commands bypass the auto-mode ask", async
       assert.equal(ctx.selectCalls.length, 0);
       assert.equal(customMessages.length, 0);
       assert.equal(queuedInstructions.length, 0);
-      assert.equal((await defaultArtifactStore(dir).list({ kind: "ask-answer" })).length, 0);
+      assert.equal((await defaultArtifactStore(dir).list({ producer: "ask" })).length, 0);
       assert.equal((await loadSparkMode(dir, ctx)).mode, "auto");
     },
   );

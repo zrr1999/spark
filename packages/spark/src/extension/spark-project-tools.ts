@@ -252,7 +252,7 @@ export async function saveProjectPurposeTrace(
 ): Promise<void> {
   if (!clarification.asked || !clarification.artifactRef) return;
   await defaultArtifactStore(cwd).put({
-    kind: "run-trace",
+    kind: "trace",
     title: "Project purpose clarification",
     format: "json",
     body: {
@@ -262,7 +262,7 @@ export async function saveProjectPurposeTrace(
       blocked: clarification.blocked,
     } as unknown as JsonValue,
     provenance: {
-      producer: "spark",
+      producer: "task",
       projectRef,
       parentArtifactRefs: [clarification.artifactRef as ArtifactRef],
     },

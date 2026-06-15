@@ -285,31 +285,11 @@ void test("spark widget pulses active session goal symbol", () => {
   assert.match(lines[0] ?? "", /◆ Goal\(◉\): Keep working toward the session goal/);
 });
 
-void test("spark widget renders compact goal token usage with clear units", () => {
+void test("spark widget shows session goal label when no project target", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       goal: {
         status: "active",
-        objective: "Keep the active goal readable.",
-        tokensUsed: 185_960,
-        tokenBudget: null,
-      },
-    }),
-    tui,
-    theme,
-  );
-
-  assert.match(lines[0] ?? "", /186k tokens used/);
-  assert.doesNotMatch(lines[0] ?? "", /∞ tok|185960/);
-});
-
-void test("spark widget shows project-scoped goal label", () => {
-  const lines = renderSparkWidgetLines(
-    widgetState({
-      goal: {
-        status: "active",
-        scope: "project",
-        projectRef: "proj:example",
         objective: "Finish the selected project goal.",
       },
     }),

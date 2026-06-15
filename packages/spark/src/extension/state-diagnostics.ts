@@ -3,9 +3,10 @@ import { basename, join, relative, resolve } from "node:path";
 import { resolveArtifactBlobPath } from "pi-artifacts";
 import type { ArtifactKind } from "pi-artifacts";
 import { nowIso, type ArtifactRef, type RunRef, type ProjectRef } from "pi-extension-api";
-import { defaultSparkDagRunStore, type SparkDagRunStatus } from "pi-workflows";
+import type { WorkflowRunStatus } from "pi-workflows";
 import { isUnfinishedTaskStatus, type TaskGraph } from "pi-tasks";
 import { listSparkStateFiles, readJsonObject, statIfPresent } from "./state-housekeeping-files.ts";
+import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 
 export interface SparkStateTerminalProjectCandidate {
   ref: ProjectRef;
@@ -19,7 +20,7 @@ export interface SparkStateTerminalProjectCandidate {
 export interface SparkStateInactiveDagRunCandidate {
   ref: RunRef;
   projectRef?: ProjectRef;
-  status: SparkDagRunStatus;
+  status: WorkflowRunStatus;
   scheduled: number;
   completed: number;
   startedAt: string;
@@ -119,7 +120,7 @@ export async function collectSparkStateDiagnostics(
     .filter((project) => project.status === "done" || project.unfinishedTasks === 0)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
-  const dagSnapshot = await defaultSparkDagRunStore(cwd).load();
+  const dagSnapshot = await defaultSparkWorkflowRunStore(cwd).load();
   const allInactiveDagRuns = dagSnapshot.runs
     .filter((run) => run.status !== "running")
     .map((run) => ({
@@ -192,7 +193,7 @@ async function collectSparkArtifactDiagnostics(
         : undefined;
     largeArtifacts.push({
       ref: (typeof raw.ref === "string" ? raw.ref : basename(file.name, ".json")) as ArtifactRef,
-      kind: (typeof raw.kind === "string" ? raw.kind : "research") as ArtifactKind,
+      kind: (typeof raw.kind === "string" ? raw.kind : "document") as ArtifactKind,
       title: typeof raw.title === "string" ? raw.title : undefined,
       format: typeof raw.format === "string" ? raw.format : undefined,
       bytes,

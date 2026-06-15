@@ -14,7 +14,7 @@ This inventory is the reviewable contract for local Spark runtime state under a 
 - `.spark/` and `.learnings/` are local runtime/recall state. They should be ignored by Git; durable shared knowledge must be exported or committed explicitly outside these local artifact stores.
 - Each typed store has one owner package/API. Callers should go through that API instead of writing JSON files directly. Where the current implementation has no dedicated store API, that gap is called out below rather than hidden.
 - Store transaction boundaries are per store file or per artifact metadata file. Spark does **not** provide database-style cross-store transactions.
-- Multi-store flows must tolerate partial success. For example, task execution may update `projects.json` and create artifacts separately; `/spark` initialization creates graph, TODO, review gate, and artifacts in separate commits.
+- Multi-store flows must tolerate partial success. For example, task execution may update `projects.json` and create artifacts separately; compatibility initialization creates graph, TODO, review gate, and artifacts in separate commits.
 - When a store writes content-addressed blobs plus metadata, metadata is the commit point. Orphan blobs are acceptable and may be reported by housekeeping; they are not evidence until referenced by committed metadata.
 - Session caches should be treated as recoverable hints. Losing or deleting a cache file must not delete canonical project/task/artifact history.
 

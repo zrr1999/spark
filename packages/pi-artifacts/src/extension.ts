@@ -32,6 +32,10 @@ type ArtifactAction = "record" | "list" | "read" | "link" | "compact";
 type ArtifactListView = "ref-only" | "summary" | "full";
 
 const DEFAULT_ARTIFACT_READ_PREVIEW_CHARS = 1_500;
+const ARTIFACT_PRODUCER_DESCRIPTION =
+  "Artifact producer must be one of: spark, role, task, review, ask, cue, user. Do not use assistant; use task for parent-session work/evidence, review for reviewer verdicts, ask for ask results, cue for cue-shell execution output, or user for user-supplied material. producer=spark and producer=role are legacy compatibility; prefer producer=task with runRef/taskRef for new execution evidence.";
+const ARTIFACT_KIND_DESCRIPTION =
+  "Artifact kind is the role/domain-agnostic shape of the artifact, never who produced it (use producer) or its lifecycle (use status). One of: document (prose/markdown deliverable: charter, research, plan), record (structured JSON record of a decision/answer/event; origin via producer ask/review/task), trace (prunable execution output/transcript), knowledge (reusable learning entry).";
 
 class ToolCallText implements ToolRenderComponent {
   private readonly text: string;
@@ -54,9 +58,11 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
     description:
       "Record, list, read, link, or compact artifact/evidence records with strict provenance.",
     promptGuidelines: [
-      "Use artifact as the canonical evidence/artifact tool; do not use Spark-specific artifact aliases.",
+      "Use artifact as the canonical evidence/artifact tool; do not use package-specific artifact aliases.",
       "Use action=list/read for inspection, action=record for bounded evidence writes, and action=compact only with dryRun reviewed first.",
       "Every recorded artifact needs concrete provenance; do not use artifacts as arbitrary scratch memory.",
+      ARTIFACT_KIND_DESCRIPTION,
+      ARTIFACT_PRODUCER_DESCRIPTION,
     ],
     parameters: Type.Object({
       action: Type.String({ description: "record | list | read | link | compact" }),
@@ -68,20 +74,31 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
           description: "parent | input | output | review-of | answer-to | trace-of | derived-from",
         }),
       ),
-      kind: Type.Optional(Type.String({ description: "Artifact kind filter or record kind." })),
+      kind: Type.Optional(
+        Type.String({
+          description: "Artifact kind filter or record kind. " + ARTIFACT_KIND_DESCRIPTION,
+        }),
+      ),
       title: Type.Optional(Type.String({ description: "Artifact title for action=record." })),
       format: Type.Optional(
         Type.String({ description: "markdown | json | text for action=record." }),
       ),
       body: Type.Optional(Type.Any({ description: "Artifact body for action=record." })),
       provenance: Type.Optional(
-        Type.Any({ description: "Strict provenance object for action=record." }),
+        Type.Any({
+          description:
+            "Strict provenance object for action=record. Required shape includes provenance.producer. " +
+            ARTIFACT_PRODUCER_DESCRIPTION,
+        }),
       ),
       links: Type.Optional(
         Type.Array(Type.Any({ description: "Typed artifact links for action=record." })),
       ),
       producer: Type.Optional(
-        Type.String({ description: "Provenance producer filter for action=list." }),
+        Type.String({
+          description:
+            "Provenance producer filter for action=list. " + ARTIFACT_PRODUCER_DESCRIPTION,
+        }),
       ),
       projectRef: Type.Optional(
         Type.String({
@@ -96,7 +113,8 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
       ),
       roleRef: Type.Optional(
         Type.String({
-          description: "Role ref filter for action=list, or provenance shortcut for action=record.",
+          description:
+            "Legacy role ref filter for action=list, or provenance shortcut for action=record. Prefer runRef/taskRef for new generic execution evidence.",
         }),
       ),
       linkedTo: Type.Optional(Type.String({ description: "Target ref filter for action=list." })),
@@ -370,8 +388,14 @@ function normalizeArtifactKind(value: unknown, field: string): ArtifactKind {
   if (!isArtifactKind(value)) {
     throw new Error(
       formatValidValuesError(field, value, "a valid artifact kind", ARTIFACT_KINDS, {
-        "plan-draft":
-          "Use kind=research with a title prefix like 'Plan draft: ...', or kind=plan for finalized plans.",
+        research: "Use kind=document for analysis/research write-ups.",
+        plan: "Use kind=document for plans and breakdowns.",
+        "plan-draft": "Use kind=document for plan drafts and finalized plans.",
+        review: "Use kind=record with producer=review for a reviewer verdict.",
+        verification: "Use kind=record (producer=task/cue) for test/build/validation evidence.",
+        test: "Use kind=record (producer=task/cue) for test/build/lint/validation evidence.",
+        validation: "Use kind=record (producer=task/cue) for validation evidence.",
+        learning: "Use kind=knowledge for reusable learning entries.",
       }),
     );
   }
@@ -415,7 +439,9 @@ function normalizeOptionalProducer(
     throw new Error(
       formatValidValuesError(field, value, "a valid artifact producer", ARTIFACT_PRODUCERS, {
         agent:
-          "Use producer=role for subagent output artifacts, or producer=task for parent-session task evidence.",
+          "Use producer=task for execution evidence, with runRef/taskRef when available, or producer=user for user-provided material.",
+        assistant:
+          "Use producer=task for parent-session work/evidence, review for reviewer verdicts, ask for ask results, cue for cue-shell output, or user for user-provided material.",
       }),
     );
   }

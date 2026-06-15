@@ -56,11 +56,11 @@ export function registerSparkLearningImportExportTools(
       });
       const markdown = renderLearningExportMarkdown(artifacts.map((artifact) => artifact.body));
       const exportArtifact = await defaultArtifactStore(cwd).put({
-        kind: "learning-export",
+        kind: "document",
         title: "Spark learnings export",
         format: "markdown",
         body: markdown,
-        provenance: { producer: "spark", note: "spark-learning explicit export" },
+        provenance: { producer: "task", note: "pi-learning explicit export" },
         links: artifacts.map((artifact) => ({
           to: artifact.ref,
           relation: "derived-from" as const,
@@ -151,13 +151,13 @@ export function registerSparkLearningImportExportTools(
       if (deleteLegacyAfterVerifiedExport) {
         const markdown = renderLearningExportMarkdown(imported.map((artifact) => artifact.body));
         verificationExportArtifact = await defaultArtifactStore(cwd).put({
-          kind: "learning-export",
+          kind: "document",
           title: "Legacy compound-learnings import verification export",
           format: "markdown",
           body: markdown,
           provenance: {
-            producer: "spark",
-            note: "spark-learning legacy import verification export",
+            producer: "task",
+            note: "pi-learning legacy import verification export",
           },
           links: imported.map((artifact) => ({
             to: artifact.ref,

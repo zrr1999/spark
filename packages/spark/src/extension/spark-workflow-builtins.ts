@@ -1,6 +1,9 @@
-import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { parseSparkWorkflowScript } from "pi-workflows";
+import {
+  listSavedWorkflows,
+  type WorkflowDescriptor,
+  type WorkflowRegistryError,
+} from "pi-workflows";
+import { workspaceWorkflowDir } from "./spark-workflow-registry.ts";
 
 export interface SparkSavedWorkflowDescriptor {
   name: string;
@@ -23,38 +26,14 @@ export interface SparkSavedWorkflowDiscovery {
 export async function discoverSparkSavedWorkflows(
   cwd: string,
 ): Promise<SparkSavedWorkflowDiscovery> {
-  const dir = join(cwd, ".spark", "workflows");
-  let entries: string[];
-  try {
-    entries = await readdir(dir);
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error as { code?: unknown }).code === "ENOENT"
-    )
-      return { workflows: [], errors: [] };
-    throw error;
-  }
-  const workflows: SparkSavedWorkflowDescriptor[] = [];
-  const errors: SparkSavedWorkflowError[] = [];
-  for (const entry of entries.filter((name) => name.endsWith(".js")).sort(compareStrings)) {
-    const path = join(dir, entry);
-    try {
-      const script = await readFile(path, "utf8");
-      const meta = parseSparkWorkflowScript(script).meta;
-      workflows.push({
-        name: entry.replace(/\.js$/u, ""),
-        title: meta.name,
-        description: meta.description,
-        path,
-        phases: meta.phases?.map((phase) => phase.title) ?? [],
-      });
-    } catch (error) {
-      errors.push({ path, error: error instanceof Error ? error.message : String(error) });
-    }
-  }
-  return { workflows, errors };
+  const listing = await listSavedWorkflows(cwd, {
+    includeUser: false,
+    workspaceWorkflowDir: workspaceWorkflowDir(cwd),
+  });
+  return {
+    workflows: listing.workflows.map(toSparkSavedWorkflowDescriptor),
+    errors: listing.errors.map(toSparkSavedWorkflowError),
+  };
 }
 
 export function renderSparkWorkflowGuidance(
@@ -89,6 +68,22 @@ export function renderSparkWorkflowGuidance(
   return recommendation + policy + budgetCatalog + savedCatalog;
 }
 
+function toSparkSavedWorkflowDescriptor(
+  workflow: WorkflowDescriptor,
+): SparkSavedWorkflowDescriptor {
+  return {
+    name: workflow.id,
+    title: workflow.title,
+    description: workflow.description,
+    path: workflow.path,
+    phases: workflow.phases,
+  };
+}
+
+function toSparkSavedWorkflowError(error: WorkflowRegistryError): SparkSavedWorkflowError {
+  return { path: error.path, error: error.error };
+}
+
 function renderSavedWorkflowCatalog(saved: SparkSavedWorkflowDiscovery): string {
   const lines: string[] = [];
   if (saved.workflows.length) {
@@ -119,10 +114,6 @@ function renderSavedWorkflowCatalog(saved: SparkSavedWorkflowDiscovery): string 
     "Ask with ask before selecting a saved workflow unless the focus clearly names it; discovery never executes saved workflow bodies.",
   );
   return "\n" + lines.join("\n");
-}
-
-function compareStrings(left: string, right: string): number {
-  return left.localeCompare(right);
 }
 
 function renderWorkflowBudgetCatalog(): string {

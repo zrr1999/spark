@@ -150,7 +150,7 @@ export async function readRoleRunArtifactPreview(
       skippedReason: `metadata_parse_failed: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
-  if (artifact.kind !== "role-run") {
+  if (artifact.kind !== "trace") {
     return {
       artifactRef,
       bodySize: artifact.bodySize,
@@ -333,7 +333,7 @@ export async function collectRoleRunArtifactRetentionPlan(
     const bodyInfo = extractRoleRunArtifactBodyInfo(raw);
     const candidate: RoleRunArtifactRetentionCandidate = {
       ref,
-      kind: kind ?? "role-run",
+      kind: kind ?? "trace",
       title: typeof raw.title === "string" ? raw.title : undefined,
       taskRef: bodyInfo.taskRef,
       runRef: bodyInfo.runRef,
@@ -343,7 +343,7 @@ export async function collectRoleRunArtifactRetentionPlan(
       bytes,
       metadataBytes: file.bytes,
       blobPath: relative(cwd, blobAbsolutePath),
-      candidateReason: `large_${kind}_transcript_blob`,
+      candidateReason: "large_role-run_transcript_blob",
       replacementSummary: roleRunReplacementSummary(ref, bodyInfo, bytes),
       transcriptTail: await readSerializedTranscriptTail(
         blobAbsolutePath,
@@ -588,7 +588,7 @@ function roleRunArtifactRefFromMetadata(
 }
 
 function isHistoricalRoleRunArtifactKind(kind: string | undefined): boolean {
-  return kind === "role-run";
+  return kind === "trace";
 }
 
 async function listRoleRunArtifactMetadataFiles(

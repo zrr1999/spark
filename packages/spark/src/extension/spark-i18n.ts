@@ -71,6 +71,7 @@ export interface GoalInstructionStrings {
   currentProject: (projectTitle: string) => string;
   goalLine: (objective: string) => string;
   loopTickHeader: string;
+  loopModeDecisionContract: string;
   loopReviewerOwnership: string;
   emptyGoalNotSet: string;
   emptyGoalReadContext: string;
@@ -161,13 +162,15 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
     currentProject: (title) => `Current project: ${title}`,
     goalLine: (objective) => `Goal: ${objective}`,
     loopTickHeader: "Spark foreground goal loop tick.",
+    loopModeDecisionContract:
+      "Main session mode decision required: choose exactly one of research, plan, or execute for this tick. Workflow and subagent role are tools, not modes.",
     loopReviewerOwnership:
-      'Goal completion is reviewer-owned; pause via goal({ action: "pause" }) when blocked.',
+      "Goal is a meta-mode over research/plan/execute. Use research for investigation (prefer subagent role + main-agent summary), plan for task decomposition, execute for bounded work (prefer workflow tools for parallelizable execution). Goal completion is reviewer-owned; when blocked, resolve the blocking work instead of pausing or weakening the goal.",
     emptyGoalNotSet: "Spark session goal is not set.",
     emptyGoalReadContext:
-      "Read the Spark project/task context below and decide a concrete, stable session goal. Default to completing all unfinished work in the selected project; use planning/readiness-only wording only when the user explicitly asked for that scope.",
+      "Read the Spark project/task context below and decide a concrete, stable session goal. Default to the substantive project outcome described by the project purpose/description/title; use planning/readiness-only wording only when the user explicitly asked for that scope.",
     emptyGoalWriteHint:
-      'Write it with goal({ action: "set", objective: "<one short stable line that targets project completion unless explicitly planning-only>" }).',
+      'Write it with goal({ action: "set", objective: "<one short stable line describing the intended project outcome, not task counts>" }).',
     emptyGoalNoCounts:
       "Do not include task counts or ready-frontier text inside the objective; those are recomputed each tick.",
     todoSweepNoneActive: "Session TODO sweep: no active session TODOs. Continue to the goal work.",
@@ -185,13 +188,15 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
     currentProject: (title) => `当前项目：${title}`,
     goalLine: (objective) => `目标：${objective}`,
     loopTickHeader: "Spark 前台目标循环节拍。",
+    loopModeDecisionContract:
+      "必须选择本 tick 的主 session 模式：只能从 research、plan、execute 中选一个。workflow 和 subagent role 是工具，不是模式。",
     loopReviewerOwnership:
-      '目标完成由 reviewer 决定；遇到阻塞时通过 goal({ action: "pause" }) 暂停。',
+      "goal 是覆盖 research/plan/execute 的元模式。research 用于调查（优先 subagent role + 主 agent 汇总），plan 用于任务拆解，execute 用于有边界的执行（适合并行的执行优先 workflow 工具）。目标完成由 reviewer 决定；遇到阻塞时先解决阻塞工作，不要自主暂停或降低目标难度。",
     emptyGoalNotSet: "尚未设置 Spark 会话目标。",
     emptyGoalReadContext:
-      "阅读下方 Spark 项目/任务上下文，给出一个具体且稳定的会话目标。默认目标应推进所选项目的全部未完成工作；只有用户明确要求仅规划/仅就绪时才写成 planning-only/readiness-only。",
+      "阅读下方 Spark 项目/任务上下文，给出一个具体且稳定的会话目标。默认目标应表达 project purpose/description/title 所描述的实质成果；只有用户明确要求仅规划/仅就绪时才写成 planning-only/readiness-only。",
     emptyGoalWriteHint:
-      '用 goal({ action: "set", objective: "<一句稳定短描述，默认指向项目完成，除非明确仅规划>" }) 写入。',
+      '用 goal({ action: "set", objective: "<一句稳定短描述，表达预期项目成果，不写任务计数>" }) 写入。',
     emptyGoalNoCounts: "目标里不要写任务计数或 ready 边界等动态信息；这些会在每个节拍重新计算。",
     todoSweepNoneActive: "会话 TODO 巡检：当前没有活动的会话 TODO，继续推进目标工作。",
     todoSweepHeader: (count) => `会话 TODO 巡检：第一个目标节拍前有 ${count} 条活动会话 TODO：`,
@@ -254,13 +259,7 @@ export interface ActiveSparkContextStrings {
     sessionClaimed: number;
     total: number;
   }) => string;
-  goalLine: (input: {
-    scope: "session" | "project";
-    projectRef?: string;
-    status: string;
-    objective: string;
-    reason?: string;
-  }) => string;
+  goalLine: (input: { status: string; objective: string; reason?: string }) => string;
   independentTodosHeader: (count: number) => string;
   independentTodosHidden: (hidden: number) => string;
   myClaimedTaskLine: (input: {
@@ -286,10 +285,9 @@ const ACTIVE_CONTEXT: Record<SparkLanguage, ActiveSparkContextStrings> = {
     currentProjectLine: (title, ref) => `- Current project: ${title} (${ref})`,
     taskCountsLine: ({ unfinished, claimed, sessionClaimed, total }) =>
       `- Unfinished tasks: ${unfinished} / claimed: ${claimed} / current_session_claimed: ${sessionClaimed} (${total} total)`,
-    goalLine: ({ scope, projectRef, status, objective, reason }) => {
-      const label = scope === "project" ? `Project(${projectRef})` : "Session";
+    goalLine: ({ status, objective, reason }) => {
       const reasonText = reason ? `; reason: ${reason}` : "";
-      return `- ${label} goal: ${status}; ${objective}${reasonText}`;
+      return `- Session goal: ${status}; ${objective}${reasonText}`;
     },
     independentTodosHeader: (count) => `- Independent TODOs (session priority): ${count} active`,
     independentTodosHidden: (hidden) => `  - … ${hidden} more active TODOs`,
@@ -312,10 +310,9 @@ const ACTIVE_CONTEXT: Record<SparkLanguage, ActiveSparkContextStrings> = {
     currentProjectLine: (title, ref) => `- 当前项目：${title}（${ref}）`,
     taskCountsLine: ({ unfinished, claimed, sessionClaimed, total }) =>
       `- 未完成任务：${unfinished} / 已认领：${claimed} / 当前会话已认领：${sessionClaimed}（共 ${total} 条）`,
-    goalLine: ({ scope, projectRef, status, objective, reason }) => {
-      const label = scope === "project" ? `Project(${projectRef})` : "Session";
+    goalLine: ({ status, objective, reason }) => {
       const reasonText = reason ? `；原因：${reason}` : "";
-      return `- ${label} 目标：${status}；${objective}${reasonText}`;
+      return `- Session 目标：${status}；${objective}${reasonText}`;
     },
     independentTodosHeader: (count) => `- 独立 TODO（会话优先级）：${count} 条活动中`,
     independentTodosHidden: (hidden) => `  - … 还有 ${hidden} 条活动 TODO`,

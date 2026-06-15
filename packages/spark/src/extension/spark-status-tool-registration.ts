@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defaultSparkDagRunStore } from "pi-workflows";
+import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import { defaultTaskGraphStore } from "pi-tasks";
 import { reconcileSparkDagRunsWithActiveProcesses } from "./background-runs.ts";
 import { collectRecentRoleRunCompletions } from "./role-run-completions.ts";
@@ -26,6 +26,7 @@ import {
 } from "./spark-status.ts";
 import { sparkStateSessionScopes } from "./spark-state-tool-registration.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
+import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
 import { collectSparkStateHousekeeping } from "./state-housekeeping.ts";
 
 interface SparkStatusToolDeps {
@@ -89,7 +90,7 @@ export function registerSparkStatusTool(
             {
               type: "text",
               text:
-                format === "json" ? JSON.stringify(details, null, 2) : "No Spark project found.",
+                format === "json" ? JSON.stringify(details, null, 2) : NO_SPARK_PROJECT_FOUND_HINT,
             },
           ],
           details,
@@ -104,7 +105,7 @@ export function registerSparkStatusTool(
         view === "summary"
           ? undefined
           : (explicitLimit ?? (view === "active" ? DEFAULT_SPARK_STATUS_ACTIVE_LIMIT : undefined));
-      const dagRunStore = defaultSparkDagRunStore(cwd);
+      const dagRunStore = defaultSparkWorkflowRunStore(cwd);
       await reconcileSparkDagRunsWithActiveProcesses(dagRunStore, graph, cwd);
       const dagStatus = await dagRunStore.status();
       const runMode = await loadSparkRunMode(cwd, ctx);

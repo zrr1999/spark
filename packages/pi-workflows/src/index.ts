@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { parseSparkWorkflowScript } from "./metadata.ts";
+import { parseWorkflowScript } from "./metadata.ts";
 
 export type WorkflowSource = "workspace" | "user";
 export type WorkflowSelector = `${WorkflowSource}:${string}`;
@@ -29,6 +29,7 @@ export interface WorkflowRegistryListing {
 
 export interface WorkflowRegistryOptions {
   includeUser?: boolean;
+  workspaceWorkflowDir?: string;
   userWorkflowDir?: string;
 }
 
@@ -44,6 +45,7 @@ export function workflowSelector(source: WorkflowSource, id: string): WorkflowSe
   return `${source}:${normalizeWorkflowId(id)}`;
 }
 
+/** @deprecated Compatibility default path for existing workspace workflow registries. Prefer injecting workspaceWorkflowDir explicitly from the host package. */
 export function workspaceWorkflowDir(cwd: string): string {
   return join(cwd, ".spark", "workflows");
 }
@@ -57,7 +59,10 @@ export async function listSavedWorkflows(
   options: WorkflowRegistryOptions = {},
 ): Promise<WorkflowRegistryListing> {
   const includeUser = options.includeUser ?? true;
-  const workspace = await discoverWorkflowDir("workspace", workspaceWorkflowDir(cwd));
+  const workspace = await discoverWorkflowDir(
+    "workspace",
+    options.workspaceWorkflowDir ?? workspaceWorkflowDir(cwd),
+  );
   const user = includeUser
     ? await discoverWorkflowDir("user", options.userWorkflowDir ?? userWorkflowDir())
     : { workflows: [], errors: [] };
@@ -71,6 +76,7 @@ export async function readSavedWorkflow(input: {
   cwd: string;
   selector: string;
   includeUser?: boolean;
+  workspaceWorkflowDir?: string;
   userWorkflowDir?: string;
 }): Promise<{ descriptor: WorkflowDescriptor; script: string }> {
   const selector = parseWorkflowSelector(input.selector);
@@ -79,12 +85,12 @@ export async function readSavedWorkflow(input: {
   }
   const dir =
     selector.source === "workspace"
-      ? workspaceWorkflowDir(input.cwd)
+      ? (input.workspaceWorkflowDir ?? workspaceWorkflowDir(input.cwd))
       : (input.userWorkflowDir ?? userWorkflowDir());
   const path = join(dir, `${selector.id}.js`);
   if (basename(path) !== `${selector.id}.js`) throw new Error("workflow selector escaped root");
   const script = await readFile(path, "utf8");
-  const meta = parseSparkWorkflowScript(script).meta;
+  const meta = parseWorkflowScript(script).meta;
   return {
     descriptor: {
       selector: workflowSelector(selector.source, selector.id),
@@ -125,7 +131,7 @@ async function discoverWorkflowDir(
     const id = entry.replace(/\.js$/u, "");
     try {
       const script = await readFile(path, "utf8");
-      const meta = parseSparkWorkflowScript(script).meta;
+      const meta = parseWorkflowScript(script).meta;
       workflows.push({
         selector: workflowSelector(source, id),
         id: normalizeWorkflowId(id),

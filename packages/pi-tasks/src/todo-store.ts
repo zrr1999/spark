@@ -18,7 +18,7 @@ export class TaskTodoStoreFormatError extends Error {
   readonly filePath: string;
 
   constructor(filePath: string, message: string) {
-    super(`invalid Spark task TODO store: ${filePath}: ${message}`);
+    super(`invalid task TODO store: ${filePath}: ${message}`);
     this.name = "TaskTodoStoreFormatError";
     this.filePath = filePath;
   }
@@ -57,6 +57,7 @@ export class TaskTodoStore {
   }
 }
 
+/** @deprecated Compatibility default path for existing task TODO stores. Prefer explicit host-owned TaskTodoStore paths for new integrations. */
 export function defaultTaskTodoStore(cwd: string, scope: string): TaskTodoStore {
   return new TaskTodoStore(join(cwd, ".spark", "todos", `${sanitizeTodoStoreScope(scope)}.json`));
 }

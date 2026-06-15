@@ -47,20 +47,18 @@ Both ask renderers follow these rules:
 7. **Summaries and artifacts are shared.** `summarizeAskResult()` and
    `summarizeAskAnswers()` provide the label-first human summary for both ask
    renderers; `createAskArtifactBody()` adds the same `summary` next to the
-   structured `request` and `result` when an ask is persisted by a caller such as
-   Spark.
+   structured `request` and `result` when an ask is persisted by a host package.
 8. **Freeform-only UI is valid.** The flow renderer uses `input` when the request only
    needs freeform questions; lack of `select`/`selectWithCustom` must not force
    default answers when an input UI is available. Optional blank freeform
    answers may be submitted as `kind: "skipped"` so forms can advance without
    pretending the user entered text.
 
-Spark-specific wrappers build on this contract. In particular, Spark's canonical `ask`
-facade requires each option to provide a stable id, a short label, and a clear
-human-readable description of what choosing that option means. Keep that
-Spark/LLM-facing option-description validation in Spark packages; `pi-ask`
-only owns generic structural validation, reserved UI labels, and ask runtime
-semantics.
+Host-specific wrappers build on this contract. A host facade may require each
+option to provide a stable id, a short label, and a clear human-readable
+description of what choosing that option means. Keep host/model-facing
+option-description validation in the host package; `pi-ask` only owns generic
+structural validation, reserved UI labels, and ask runtime semantics.
 
 ## Behavior comparison and adopted affordances
 
@@ -126,9 +124,9 @@ Immediate / next implementation:
 
 Later / optional:
 
-- Consider a compact actor label if Spark wants `Spark is requesting ...` rather
-  than fixed `Pi is requesting ...`. Keep this facade-level if possible; avoid a
-  broad schema field until there are multiple real actors.
+- Consider a compact actor label if a host wants a custom `... is requesting ...`
+  banner rather than fixed `Pi is requesting ...`. Keep this facade-level if
+  possible; avoid a broad schema field until there are multiple real actors.
 - Revisit visual separators only if real asks still feel dense after the banner,
   wrapped context, wrapped tabs, and concise footer changes.
 
@@ -157,7 +155,7 @@ Schema and validation:
 - `defaultValues` is valid for `single` and `multi`; it is invalid for
   `freeform` and cannot reference the UI-only custom sentinel.
 - Single-select questions may contain at most one default value.
-- Spark ask facade question params expose `defaultValues` directly on each question.
+- Host ask facades may expose `defaultValues` directly on each question after validating them.
 
 Correct request patterns:
 
@@ -248,7 +246,7 @@ Regression coverage:
    submit if no explicit answer was committed.
 4. Preserved/replay answers override `defaultValues` in both single and multi
    questions.
-5. Spark ask facade code passes validated `defaultValues` through without accepting custom
+5. Host facade code passes validated `defaultValues` through without accepting custom
    sentinel labels as default ids.
 
 ## Result and persistence helpers

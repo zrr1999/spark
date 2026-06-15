@@ -8,6 +8,7 @@ export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue
 export type ArtifactRef = `artifact:${string}` & { readonly __kind?: "artifact" };
 export type ProjectRef = `proj:${string}` & { readonly __kind?: "proj" };
 export type TaskRef = `task:${string}` & { readonly __kind?: "task" };
+/** @deprecated Role refs are retained for provenance compatibility with historical execution records. Prefer runRef/taskRef for new generic artifact provenance. */
 export type RoleRef = `role:${string}` & { readonly __kind?: "role" };
 export type RunRef = `run:${string}` & { readonly __kind?: "run" };
 export type ReviewRef = `review:${string}` & { readonly __kind?: "review" };
@@ -26,7 +27,9 @@ export type LinkableRef =
 export type ArtifactProducer = "spark" | "role" | "task" | "review" | "ask" | "cue" | "user";
 
 export const ARTIFACT_PRODUCERS = [
+  // Deprecated compatibility producer for historical records; prefer "task" with runRef/taskRef.
   "spark",
+  // Deprecated compatibility producer for historical records; prefer "task" with runRef/taskRef.
   "role",
   "task",
   "review",
@@ -40,45 +43,54 @@ export interface Provenance {
   runRef?: RunRef;
   projectRef?: ProjectRef;
   taskRef?: TaskRef;
+  /** @deprecated Retained for historical provenance compatibility. Prefer runRef/taskRef for new generic execution evidence. */
   roleRef?: RoleRef;
   parentArtifactRefs?: ArtifactRef[];
   note?: string;
 }
 
-export type ArtifactKind =
-  | "spark-md"
-  | "research"
-  | "plan"
-  | "task-breakdown"
-  | "role-plan"
-  | "handoff"
-  | "review"
-  | "cue-output"
-  | "role-run"
-  | "role-spec-proposal"
-  | "ask-answer"
-  | "run-trace"
-  | "learning"
-  | "learning-candidate"
-  | "learning-export";
+/**
+ * Artifact kind is a small, role/domain-agnostic axis describing what an
+ * artifact *is* by shape, never who produced it (use `producer`) or its
+ * lifecycle stage (use `status`/body):
+ * - document: prose/markdown deliverable (charter, research write-up, plan).
+ * - record: structured (JSON) record of one decision/answer/event; distinguish
+ *   origin via producer (ask/review/task/...).
+ * - trace: prunable execution output/transcript (execution transcript, cue run).
+ * - knowledge: reusable learning entry owned by the learning capability.
+ */
+export type ArtifactKind = "document" | "record" | "trace" | "knowledge";
 
 export const ARTIFACT_KINDS = [
-  "spark-md",
-  "research",
-  "plan",
-  "task-breakdown",
-  "role-plan",
-  "handoff",
-  "review",
-  "cue-output",
-  "role-run",
-  "role-spec-proposal",
-  "ask-answer",
-  "run-trace",
-  "learning",
-  "learning-candidate",
-  "learning-export",
+  "document",
+  "record",
+  "trace",
+  "knowledge",
 ] as const satisfies readonly ArtifactKind[];
+
+/**
+ * Historical kinds folded into the canonical set. Applied on read so existing
+ * local evidence keeps loading; the tool write path rejects these with a
+ * directed hint so new records pick the canonical kind.
+ */
+export const LEGACY_ARTIFACT_KIND_ALIASES: Readonly<Record<string, ArtifactKind>> = {
+  "spark-md": "document",
+  research: "document",
+  plan: "document",
+  "task-breakdown": "document",
+  "role-plan": "document",
+  handoff: "document",
+  "role-spec-proposal": "document",
+  "learning-export": "document",
+  review: "record",
+  verification: "record",
+  "ask-answer": "record",
+  "role-run": "trace",
+  "run-trace": "trace",
+  "cue-output": "trace",
+  learning: "knowledge",
+  "learning-candidate": "knowledge",
+};
 
 export type ArtifactFormat = "markdown" | "json" | "text";
 
@@ -90,6 +102,7 @@ export const ARTIFACT_FORMATS = [
 
 export interface ArtifactTranscriptRetention {
   schemaVersion: 1;
+  /** @deprecated Historical role-run retention marker. New retention strategies should use generic execution/run naming. */
   strategy: "role-run-compact-summary-tail";
   candidateReason: string;
   originalBlobPath?: string;
@@ -408,8 +421,8 @@ export class ArtifactStore {
 }
 
 /**
- * Default project artifact storage. Kept at `.spark/artifacts` for existing local evidence
- * compatibility while artifact ownership moves to this generic Pi capability package.
+ * @deprecated Compatibility default path for existing artifact stores.
+ * Prefer explicit ArtifactStore rootDir paths or host-owned path injection.
  */
 export function defaultArtifactStore(cwd: string): ArtifactStore {
   return new ArtifactStore({ rootDir: join(cwd, ".spark", "artifacts") });
@@ -427,12 +440,19 @@ export async function readArtifactMetadataFile(filePath: string): Promise<Artifa
       "invalid_json",
     );
   }
+  applyLegacyArtifactKindAlias(raw);
   try {
     validateArtifact(raw);
   } catch (error) {
     throw new ArtifactStoreFormatError(filePath, unknownErrorMessage(error));
   }
   return raw;
+}
+
+function applyLegacyArtifactKindAlias(raw: unknown): void {
+  if (!isRecord(raw) || typeof raw.kind !== "string") return;
+  const canonical = LEGACY_ARTIFACT_KIND_ALIASES[raw.kind];
+  if (canonical) raw.kind = canonical;
 }
 
 export function resolveArtifactBlobPath(rootDir: string, blobPath: string): string | undefined {

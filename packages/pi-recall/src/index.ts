@@ -23,6 +23,8 @@ export interface RecallStoreSnapshot {
   candidates: RecallCandidate[];
 }
 
+export type RecallStorePaths = Partial<Record<RecallScope, string>>;
+
 export class RecallStoreFormatError extends Error {
   readonly filePath: string;
 
@@ -118,12 +120,25 @@ export class RecallStore {
   }
 }
 
-export function defaultRecallStore(cwd: string, scope: RecallScope): RecallStore {
-  const filePath =
-    scope === "user"
-      ? join(process.env.PI_CODING_AGENT_DIR ?? join(cwd, ".spark"), "recall-candidates.json")
-      : join(cwd, ".spark", "recall-candidates.json");
-  return new RecallStore(filePath);
+export function recallStorePath(
+  cwd: string,
+  scope: RecallScope,
+  paths: RecallStorePaths = {},
+): string {
+  const explicitPath = paths[scope];
+  if (explicitPath?.trim()) return explicitPath;
+  return scope === "user"
+    ? join(process.env.PI_CODING_AGENT_DIR ?? join(cwd, ".spark"), "recall-candidates.json")
+    : join(cwd, ".spark", "recall-candidates.json");
+}
+
+/** @deprecated Compatibility default for historical Spark-backed local stores. Prefer explicit host-owned paths via RecallStore or recallStorePath paths. */
+export function defaultRecallStore(
+  cwd: string,
+  scope: RecallScope,
+  paths?: RecallStorePaths,
+): RecallStore {
+  return new RecallStore(recallStorePath(cwd, scope, paths));
 }
 
 function requiredText(value: string, label: string): string {

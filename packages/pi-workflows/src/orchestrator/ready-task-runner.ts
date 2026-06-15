@@ -1,6 +1,6 @@
 import {
-  DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
-  DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
+  DEFAULT_READY_TASK_MAX_CONCURRENCY,
+  DEFAULT_READY_TASK_TIMEOUT_MS,
   type RunRef,
   type Task,
   type TaskRef,
@@ -9,7 +9,7 @@ import {
 } from "pi-extension-api";
 import type { TaskGraph } from "pi-tasks";
 
-export interface SparkReadyTaskRunInput {
+export interface ReadyTaskRunInput {
   graph: TaskGraph;
   taskRef: TaskRef;
   dryRun: boolean;
@@ -21,50 +21,50 @@ export interface SparkReadyTaskRunInput {
   };
 }
 
-export type SparkReadyTaskRun = (input: SparkReadyTaskRunInput) => Promise<TaskRun>;
+export type ReadyTaskRun = (input: ReadyTaskRunInput) => Promise<TaskRun>;
 
-export interface SparkReadyTaskRunKillerInput {
+export interface ReadyTaskRunKillerInput {
   runRefs: RunRef[];
   reason: string;
 }
 
-export type SparkReadyTaskRunKiller = (input: SparkReadyTaskRunKillerInput) => Promise<unknown>;
+export type ReadyTaskRunKiller = (input: ReadyTaskRunKillerInput) => Promise<unknown>;
 
-export interface SparkReadyTaskRunnerOptions {
+export interface ReadyTaskRunnerOptions {
   graph: TaskGraph;
-  runTask: SparkReadyTaskRun;
-  killRuns?: SparkReadyTaskRunKiller;
+  runTask: ReadyTaskRun;
+  killRuns?: ReadyTaskRunKiller;
   projectRef?: ProjectRef;
   dryRun?: boolean;
-  /** Maximum number of role runs running at the same time. Default: 4. */
+  /** Maximum number of child runs running at the same time. Default: 4. */
   maxConcurrency?: number;
-  /** Foreground wait budget for this scheduler call. Expiry detaches active children instead of terminating the DAG run. */
+  /** Foreground wait budget for this scheduler call. Expiry detaches active children instead of terminating the workflow run. */
   timeoutMs?: number;
-  /** Per-role-run timeout. Defaults to no per-task timeout; use only when deliberately bounding each child. */
+  /** Per-child timeout. Defaults to no per-task timeout; use only when deliberately bounding each child. */
   taskTimeoutMs?: number;
-  onSchedule?: (result: SparkReadyTaskRunnerSchedule) => void | Promise<void>;
-  onProgress?: (result: SparkReadyTaskRunnerProgress) => void | Promise<void>;
+  onSchedule?: (result: ReadyTaskRunnerSchedule) => void | Promise<void>;
+  onProgress?: (result: ReadyTaskRunnerProgress) => void | Promise<void>;
   claim?: {
     sessionId?: string;
     leaseMs?: number;
   };
 }
 
-export interface SparkReadyTaskRunnerSchedule {
+export interface ReadyTaskRunnerSchedule {
   taskRef: TaskRef;
   runRef?: RunRef;
   running: number;
   scheduled: number;
 }
 
-export interface SparkReadyTaskRunnerProgress {
+export interface ReadyTaskRunnerProgress {
   taskRef: TaskRef;
   run: TaskRun;
   running: number;
   completed: number;
 }
 
-export interface SparkReadyTaskRunnerResult {
+export interface ReadyTaskRunnerResult {
   runs: TaskRun[];
   scheduled: number;
   completed: number;
@@ -79,9 +79,7 @@ export interface SparkReadyTaskRunnerResult {
   maxConcurrency: number;
 }
 
-export async function runReadySparkTasks(
-  input: SparkReadyTaskRunnerOptions,
-): Promise<SparkReadyTaskRunnerResult> {
+export async function runReadyTasks(input: ReadyTaskRunnerOptions): Promise<ReadyTaskRunnerResult> {
   const dryRun = input.dryRun ?? true;
   const maxConcurrency = normalizeMaxConcurrency(input.maxConcurrency);
   const timeoutMs = normalizeReadyTaskRunnerTimeoutMs(input.timeoutMs);
@@ -175,7 +173,7 @@ export async function runReadySparkTasks(
       running,
       promiseRunRefs,
       schedulerAbort,
-      reason: `Spark ready task scheduler aborted: ${unknownErrorMessage(error)}`,
+      reason: `ready task scheduler aborted: ${unknownErrorMessage(error)}`,
       killRuns: input.killRuns,
     });
     throw error;
@@ -213,7 +211,7 @@ async function abortRunningReadyTaskRuns(input: {
   promiseRunRefs: Map<Promise<TaskRun>, RunRef>;
   schedulerAbort: AbortController;
   reason: string;
-  killRuns?: SparkReadyTaskRunKiller;
+  killRuns?: ReadyTaskRunKiller;
 }): Promise<void> {
   if (input.running.size === 0) return;
   input.schedulerAbort.abort(input.reason);
@@ -248,7 +246,7 @@ function detachForegroundTimedOutTasks(
       ...run,
       status: "running",
       failureKind: undefined,
-      errorMessage: `Spark foreground wait expired after ${timeoutMs}ms; keeping role-run claim in background`,
+      errorMessage: `foreground wait expired after ${timeoutMs}ms; keeping child run claim in background`,
     };
     graph.recordRun(background);
     graph.setTaskStatus(task.ref, "running");
@@ -258,15 +256,15 @@ function detachForegroundTimedOutTasks(
 }
 
 function normalizeMaxConcurrency(value: number | undefined): number {
-  if (!Number.isFinite(value ?? DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY))
-    return DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY;
-  return Math.max(1, Math.floor(value ?? DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY));
+  if (!Number.isFinite(value ?? DEFAULT_READY_TASK_MAX_CONCURRENCY))
+    return DEFAULT_READY_TASK_MAX_CONCURRENCY;
+  return Math.max(1, Math.floor(value ?? DEFAULT_READY_TASK_MAX_CONCURRENCY));
 }
 
 function normalizeReadyTaskRunnerTimeoutMs(value: number | undefined): number {
-  if (!Number.isFinite(value ?? DEFAULT_SPARK_READY_TASK_TIMEOUT_MS))
-    return DEFAULT_SPARK_READY_TASK_TIMEOUT_MS;
-  return Math.max(1, Math.floor(value ?? DEFAULT_SPARK_READY_TASK_TIMEOUT_MS));
+  if (!Number.isFinite(value ?? DEFAULT_READY_TASK_TIMEOUT_MS))
+    return DEFAULT_READY_TASK_TIMEOUT_MS;
+  return Math.max(1, Math.floor(value ?? DEFAULT_READY_TASK_TIMEOUT_MS));
 }
 
 function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
@@ -290,3 +288,15 @@ function sleep(ms: number): Promise<void> {
     timer.unref?.();
   });
 }
+
+/** @deprecated Spark-named aliases are compatibility shims. Prefer ReadyTask* types in generic pi-workflows code. */
+export type SparkReadyTaskRunInput = ReadyTaskRunInput;
+export type SparkReadyTaskRun = ReadyTaskRun;
+export type SparkReadyTaskRunKillerInput = ReadyTaskRunKillerInput;
+export type SparkReadyTaskRunKiller = ReadyTaskRunKiller;
+export type SparkReadyTaskRunnerOptions = ReadyTaskRunnerOptions;
+export type SparkReadyTaskRunnerSchedule = ReadyTaskRunnerSchedule;
+export type SparkReadyTaskRunnerProgress = ReadyTaskRunnerProgress;
+export type SparkReadyTaskRunnerResult = ReadyTaskRunnerResult;
+/** @deprecated Spark-named alias kept for compatibility. Prefer runReadyTasks. */
+export const runReadySparkTasks = runReadyTasks;

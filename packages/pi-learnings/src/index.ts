@@ -172,7 +172,7 @@ export function renderLearningExportMarkdown(records: LearningRecord[]): string 
     lines.push(
       `## ${record.title}`,
       "",
-      "```json spark-learning",
+      "```json pi-learning",
       JSON.stringify(record, null, 2),
       "```",
       "",
@@ -186,13 +186,13 @@ export function parseLearningExportMarkdown(
   filePath = "<inline>",
 ): LearningRecord[] {
   const records: LearningRecord[] = [];
-  const blockPattern = /```json spark-learning\n([\s\S]*?)```/g;
+  const blockPattern = /```json (?:pi-learning|spark-learning)\n([\s\S]*?)```/g;
   let blockIndex = 0;
   for (const match of markdown.matchAll(blockPattern)) {
     blockIndex += 1;
     const raw = match[1]?.trim();
     if (!raw)
-      throw new LearningExportFormatError(filePath, "spark-learning block is empty", blockIndex);
+      throw new LearningExportFormatError(filePath, "learning export block is empty", blockIndex);
     let record: unknown;
     try {
       record = JSON.parse(raw);
@@ -260,12 +260,12 @@ export class LearningStore {
     validateLearningRecord(record);
     return this.artifactStore.put({
       ref,
-      kind: artifactKindForLearningStatus(record.status),
+      kind: "knowledge",
       title: record.title,
       format: "json",
       body: record,
       provenance: {
-        producer: "spark",
+        producer: "task",
         note: learningProvenanceNote("record"),
       },
       links: relationLinks(record),
@@ -277,12 +277,12 @@ export class LearningStore {
     const ref = newRef("artifact", record.id);
     return this.artifactStore.put({
       ref,
-      kind: artifactKindForLearningStatus(record.status),
+      kind: "knowledge",
       title: record.title,
       format: "json",
       body: record,
       provenance: {
-        producer: "spark",
+        producer: "task",
         note: learningProvenanceNote("import restore"),
       },
       links: relationLinks(record),
@@ -296,10 +296,7 @@ export class LearningStore {
 
   async list(filter: LearningListFilter = {}): Promise<Array<Artifact<LearningRecord>>> {
     const artifacts = await hydrateLearningArtifacts(
-      [
-        ...(await this.artifactStore.list({ kind: "learning" })),
-        ...(await this.artifactStore.list({ kind: "learning-candidate" })),
-      ],
+      [...(await this.artifactStore.list({ kind: "knowledge" }))],
       this.artifactStore,
     );
     return artifacts
@@ -378,12 +375,12 @@ export class LearningStore {
     validateLearningRecord(record);
     return this.artifactStore.put({
       ref,
-      kind: artifactKindForLearningStatus(record.status),
+      kind: "knowledge",
       title: record.title,
       format: "json",
       body: record,
       provenance: {
-        producer: "spark",
+        producer: "task",
         note: learningProvenanceNote("status update"),
       },
       links: relationLinks(record),
@@ -428,7 +425,7 @@ export function resolveLearningStoreTarget(
 }
 
 function learningProvenanceNote(action: string): string {
-  return `spark-learnings ${action}`;
+  return `pi-learnings ${action}`;
 }
 
 function defaultUserLearningRoot(): string {
@@ -464,10 +461,9 @@ function normalizeLearningArtifact(artifact: Artifact): Artifact<LearningRecord>
   } catch (error) {
     throw new Error(`invalid learning artifact ${artifact.ref}: ${unknownErrorMessage(error)}`);
   }
-  const expectedKind = artifactKindForLearningStatus(body.status);
-  if (artifact.kind !== expectedKind) {
+  if (artifact.kind !== "knowledge") {
     throw new Error(
-      `invalid learning artifact ${artifact.ref}: kind must be ${expectedKind} for ${body.status} status`,
+      `invalid learning artifact ${artifact.ref}: kind must be knowledge, received ${artifact.kind}`,
     );
   }
   return { ...artifact, body };
@@ -555,10 +551,6 @@ function normalizeLearningRecord(
     rejectedReason: null,
     rejectedAt: null,
   };
-}
-
-function artifactKindForLearningStatus(status: LearningStatus): "learning" | "learning-candidate" {
-  return status === "candidate" || status === "rejected" ? "learning-candidate" : "learning";
 }
 
 function stableLearningId(input: LearningRecordInput): string {

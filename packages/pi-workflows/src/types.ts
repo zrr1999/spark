@@ -1,36 +1,36 @@
-export interface SparkWorkflowPhase {
+export interface WorkflowPhase {
   title: string;
   detail?: string;
   model?: string;
 }
 
-export interface SparkWorkflowMeta {
+export interface WorkflowMeta {
   name: string;
   description: string;
   whenToUse?: string;
-  phases?: SparkWorkflowPhase[];
+  phases?: WorkflowPhase[];
 }
 
-export interface SparkWorkflowJournalEntry {
+export interface WorkflowJournalEntry {
   index: number;
   hash: string;
   result: unknown;
 }
 
-export type SparkWorkflowPhaseStatus = "success" | "fail" | "skip";
+export type WorkflowPhaseStatus = "success" | "fail" | "skip";
 
-export interface SparkWorkflowPhaseOptions {
-  status?: SparkWorkflowPhaseStatus;
+export interface WorkflowPhaseOptions {
+  status?: WorkflowPhaseStatus;
 }
 
-export interface SparkWorkflowPhaseRun {
+export interface WorkflowPhaseRun {
   title: string;
-  status?: SparkWorkflowPhaseStatus;
+  status?: WorkflowPhaseStatus;
   startedAt: string;
   finishedAt?: string;
 }
 
-export interface SparkWorkflowAgentOptions {
+export interface WorkflowAgentOptions {
   label?: string;
   phase?: string;
   schema?: unknown;
@@ -41,31 +41,31 @@ export interface SparkWorkflowAgentOptions {
   artifactRef?: string;
 }
 
-export type SparkWorkflowParallelOnError = "fail-fast" | "collect";
+export type WorkflowParallelOnError = "fail-fast" | "collect";
 
-export interface SparkWorkflowParallelRetryOptions {
+export interface WorkflowParallelRetryOptions {
   attempts?: number;
   backoffMs?: number;
 }
 
-export interface SparkWorkflowParallelOptions {
+export interface WorkflowParallelOptions {
   concurrency?: number;
-  retry?: SparkWorkflowParallelRetryOptions;
-  onError?: SparkWorkflowParallelOnError;
+  retry?: WorkflowParallelRetryOptions;
+  onError?: WorkflowParallelOnError;
 }
 
-export type SparkWorkflowParallelSettledResult<T> =
+export type WorkflowParallelSettledResult<T> =
   | { status: "fulfilled"; value: T; attempts: number }
   | { status: "rejected"; reason: unknown; attempts: number };
 
-export type SparkWorkflowAgentDeliveryStatus = "delivered" | "non_json_output" | "empty";
+export type WorkflowAgentDeliveryStatus = "delivered" | "non_json_output" | "empty";
 
-export interface SparkWorkflowAgentDeliverySummary {
-  status: SparkWorkflowAgentDeliveryStatus;
+export interface WorkflowAgentDeliverySummary {
+  status: WorkflowAgentDeliveryStatus;
   message?: string;
 }
 
-export interface SparkWorkflowArtifactRecordInput {
+export interface WorkflowArtifactRecordInput {
   title: string;
   body: string;
   kind?: string;
@@ -74,15 +74,15 @@ export interface SparkWorkflowArtifactRecordInput {
   projectRef?: string;
 }
 
-export interface SparkWorkflowArtifactRecordResult {
+export interface WorkflowArtifactRecordResult {
   ref: string;
 }
 
-export type SparkWorkflowArtifactRecorder = (
-  input: SparkWorkflowArtifactRecordInput,
-) => Promise<SparkWorkflowArtifactRecordResult> | SparkWorkflowArtifactRecordResult;
+export type WorkflowArtifactRecorder = (
+  input: WorkflowArtifactRecordInput,
+) => Promise<WorkflowArtifactRecordResult> | WorkflowArtifactRecordResult;
 
-export interface SparkWorkflowAgentEvent {
+export interface WorkflowAgentEvent {
   index: number;
   label: string;
   phase?: string;
@@ -90,29 +90,51 @@ export interface SparkWorkflowAgentEvent {
   model?: string;
 }
 
-export type SparkWorkflowAgentRunner = (
+export type WorkflowAgentRunner = (
   prompt: string,
-  options: SparkWorkflowAgentOptions & { index: number; phase?: string },
+  options: WorkflowAgentOptions & { index: number; phase?: string },
 ) => Promise<unknown>;
 
-export interface SparkWorkflowRunOptions {
+export interface WorkflowRunOptions {
   args?: unknown;
-  agent: SparkWorkflowAgentRunner;
-  artifactRecord?: SparkWorkflowArtifactRecorder;
+  agent: WorkflowAgentRunner;
+  artifactRecord?: WorkflowArtifactRecorder;
   concurrency?: number;
   maxAgents?: number;
-  resumeJournal?: Map<number, SparkWorkflowJournalEntry>;
-  onAgentJournal?: (entry: SparkWorkflowJournalEntry) => void;
-  onPhase?: (phase: SparkWorkflowPhaseRun) => void;
+  resumeJournal?: Map<number, WorkflowJournalEntry>;
+  onAgentJournal?: (entry: WorkflowJournalEntry) => void;
+  onPhase?: (phase: WorkflowPhaseRun) => void;
   now?: () => string;
-  onAgentStart?: (event: SparkWorkflowAgentEvent) => void;
-  onAgentEnd?: (event: SparkWorkflowAgentEvent & { result: unknown }) => void;
+  onAgentStart?: (event: WorkflowAgentEvent) => void;
+  onAgentEnd?: (event: WorkflowAgentEvent & { result: unknown }) => void;
 }
 
-export interface SparkWorkflowRunResult<T = unknown> {
-  meta: SparkWorkflowMeta;
+export interface WorkflowRunResult<T = unknown> {
+  meta: WorkflowMeta;
   result: T;
-  phases: SparkWorkflowPhaseRun[];
+  phases: WorkflowPhaseRun[];
   agentCount: number;
-  journal: SparkWorkflowJournalEntry[];
+  journal: WorkflowJournalEntry[];
 }
+
+/** @deprecated Spark-named aliases are compatibility shims. Prefer Workflow* types in generic pi-workflows code; Spark-owned adapters may translate names at package boundaries. */
+export type SparkWorkflowPhase = WorkflowPhase;
+export type SparkWorkflowMeta = WorkflowMeta;
+export type SparkWorkflowJournalEntry = WorkflowJournalEntry;
+export type SparkWorkflowPhaseStatus = WorkflowPhaseStatus;
+export type SparkWorkflowPhaseOptions = WorkflowPhaseOptions;
+export type SparkWorkflowPhaseRun = WorkflowPhaseRun;
+export type SparkWorkflowAgentOptions = WorkflowAgentOptions;
+export type SparkWorkflowParallelOnError = WorkflowParallelOnError;
+export type SparkWorkflowParallelRetryOptions = WorkflowParallelRetryOptions;
+export type SparkWorkflowParallelOptions = WorkflowParallelOptions;
+export type SparkWorkflowParallelSettledResult<T> = WorkflowParallelSettledResult<T>;
+export type SparkWorkflowAgentDeliveryStatus = WorkflowAgentDeliveryStatus;
+export type SparkWorkflowAgentDeliverySummary = WorkflowAgentDeliverySummary;
+export type SparkWorkflowArtifactRecordInput = WorkflowArtifactRecordInput;
+export type SparkWorkflowArtifactRecordResult = WorkflowArtifactRecordResult;
+export type SparkWorkflowArtifactRecorder = WorkflowArtifactRecorder;
+export type SparkWorkflowAgentEvent = WorkflowAgentEvent;
+export type SparkWorkflowAgentRunner = WorkflowAgentRunner;
+export type SparkWorkflowRunOptions = WorkflowRunOptions;
+export type SparkWorkflowRunResult<T = unknown> = WorkflowRunResult<T>;

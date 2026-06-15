@@ -1,26 +1,17 @@
 export const GOAL_CUSTOM_ENTRY_TYPE = "spark-goal";
 export const MAX_OBJECTIVE_CHARS = 8000;
 
-export type GoalStatus = "active" | "paused" | "budgetLimited" | "complete";
-
-export interface GoalUsage {
-  tokensUsed: number;
-  activeSeconds: number;
-}
+export type GoalStatus = "active" | "paused" | "complete";
 
 export interface Goal {
   goalId: string;
   objective: string;
   status: GoalStatus;
-  tokenBudget: number | null;
-  usage: GoalUsage;
   createdAt: number;
   updatedAt: number;
 }
 
 export type GoalEntrySource = "command" | "tool" | "runtime";
-
-export type RuntimeUsageGoalStatus = Extract<GoalStatus, "active" | "budgetLimited">;
 
 export type GoalCustomEntry =
   | {
@@ -28,16 +19,6 @@ export type GoalCustomEntry =
       kind: "set";
       source: GoalEntrySource;
       goal: Goal;
-      at: number;
-    }
-  | {
-      version: 1;
-      kind: "usage";
-      source: "runtime";
-      goalId: string;
-      status: RuntimeUsageGoalStatus;
-      usage: GoalUsage;
-      updatedAt: number;
       at: number;
     }
   | {

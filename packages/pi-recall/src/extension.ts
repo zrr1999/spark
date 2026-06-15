@@ -1,11 +1,20 @@
 import { Type } from "typebox";
 import type { ToolConfig, ToolRenderComponent, ToolRenderTheme } from "pi-extension-api";
-import { defaultRecallStore, type RecallCandidate, type RecallScope } from "./index.ts";
+import {
+  defaultRecallStore,
+  type RecallCandidate,
+  type RecallScope,
+  type RecallStorePaths,
+} from "./index.ts";
 
 export type PiRecallAction = "record_candidate" | "list" | "search" | "reject";
 
 export interface PiRecallExtensionApi {
   registerTool(config: ToolConfig): void;
+}
+
+export interface PiRecallToolOptions {
+  storePaths?: RecallStorePaths;
 }
 
 class ToolCallText implements ToolRenderComponent {
@@ -22,7 +31,10 @@ class ToolCallText implements ToolRenderComponent {
   }
 }
 
-export function registerPiRecallTool(pi: PiRecallExtensionApi): void {
+export function registerPiRecallTool(
+  pi: PiRecallExtensionApi,
+  options: PiRecallToolOptions = {},
+): void {
   pi.registerTool({
     name: "recall",
     label: "Recall",
@@ -56,7 +68,7 @@ export function registerPiRecallTool(pi: PiRecallExtensionApi): void {
       const cwd = requiredCwd(ctx);
       const action = normalizeRecallAction(params.action);
       const scope = normalizeRecallScope(params.scope);
-      const store = defaultRecallStore(cwd, scope);
+      const store = defaultRecallStore(cwd, scope, options.storePaths);
       if (action === "record_candidate") {
         const candidate = await store.record({
           scope,
@@ -86,8 +98,11 @@ export function registerPiRecallTool(pi: PiRecallExtensionApi): void {
   });
 }
 
-export default function piRecallExtension(pi: PiRecallExtensionApi): void {
-  registerPiRecallTool(pi);
+export default function piRecallExtension(
+  pi: PiRecallExtensionApi,
+  options: PiRecallToolOptions = {},
+): void {
+  registerPiRecallTool(pi, options);
 }
 
 function result(text: string, details: Record<string, unknown>) {

@@ -26,14 +26,24 @@ export interface SparkRegisteredToolConfig {
 
 export type SparkToolRegistrar = (config: SparkRegisteredToolConfig) => void;
 
+export interface SparkSessionModelRef {
+  provider?: unknown;
+  id?: unknown;
+}
+
 export interface SparkToolContext {
   cwd: string;
+  model?: SparkSessionModelRef;
   isIdle?: () => boolean;
   sessionManager?: {
     getSessionFile?: () => string | undefined;
     getLeafId?: () => string | undefined;
   };
   hasUI?: boolean;
+  askAutoAnswer?: "reviewer";
+  askAutoAnswerResolver?: (request: unknown, ctx: SparkToolContext) => Promise<unknown>;
+
+  sparkAutonomousGoalTurn?: { goalId: string };
   ui?: {
     notify?: (message: string, level?: "info" | "warning" | "error" | "success") => void;
     confirm?: (title: string, message: string) => Promise<boolean>;

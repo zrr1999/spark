@@ -1,5 +1,5 @@
 import type { RunRef, TaskRef, ProjectRef } from "pi-extension-api";
-import type { SparkDagRunRecord } from "pi-workflows";
+import type { WorkflowRunRecord } from "pi-workflows";
 import type {
   SparkBackgroundChildRunView,
   SparkBackgroundDagRunView,
@@ -7,19 +7,19 @@ import type {
   SparkBackgroundSummaryState,
 } from "./background-runs.ts";
 
-export function isActionableProblemDagRun(run: SparkDagRunRecord): boolean {
+export function isActionableProblemDagRun(run: WorkflowRunRecord): boolean {
   return isProblemDagRun(run) && !run.acknowledgedAt;
 }
 
 export function dagRunInProjectScope(
-  run: SparkDagRunRecord,
+  run: WorkflowRunRecord,
   projectRef: ProjectRef | undefined,
 ): boolean {
   return !projectRef || !run.projectRef || run.projectRef === projectRef;
 }
 
 export function backgroundDagRunView(
-  run: SparkDagRunRecord,
+  run: WorkflowRunRecord,
   activeChildren: SparkBackgroundChildRunView[],
 ): SparkBackgroundDagRunView {
   const completed = new Set(run.completedTaskRefs);
@@ -43,12 +43,12 @@ export function backgroundDagRunView(
 }
 
 export function selectBackgroundDagRuns(input: {
-  runs: SparkDagRunRecord[];
+  runs: WorkflowRunRecord[];
   projectRef?: ProjectRef;
   includeHistory: boolean;
   targetRunRef?: RunRef;
   targetTaskRef?: TaskRef;
-}): SparkDagRunRecord[] {
+}): WorkflowRunRecord[] {
   const sorted = [...input.runs]
     .filter((run) => dagRunInProjectScope(run, input.projectRef))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -155,11 +155,11 @@ export function summarizeBackgroundRuns(input: {
   };
 }
 
-function isProblemDagRun(run: SparkDagRunRecord): boolean {
+function isProblemDagRun(run: WorkflowRunRecord): boolean {
   return run.status === "failed" || run.status === "stale" || run.status === "timed_out";
 }
 
-function backgroundDagRunNextActions(run: SparkDagRunRecord, activeChildren: number): string[] {
+function backgroundDagRunNextActions(run: WorkflowRunRecord, activeChildren: number): string[] {
   if (run.status === "running" && activeChildren > 0)
     return ["wait, inspect a child run, or kill a child only if it is stuck"];
   if (run.status === "running")

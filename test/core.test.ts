@@ -63,7 +63,7 @@ void test("artifact contract validates persisted metadata shape", () => {
   const projectRef = newRef("proj", "contract-project");
   const artifact = {
     ref,
-    kind: "research",
+    kind: "record",
     title: "Contract artifact",
     format: "json",
     body: { ok: true },
@@ -335,10 +335,11 @@ void test("Spark prompt threads the current session mode into the marker", () =>
   assert.match(executePrompt, /mode: execute/);
 });
 
-void test("builtin Spark roles are instructed to use ask tools for blockers", () => {
+void test("builtin Pi roles are instructed to use ask tools for blockers", () => {
   for (const role of createBuiltinRoles()) {
-    assert.match(role.systemPrompt, /use Spark ask tools/i);
+    assert.match(role.systemPrompt, /use the available ask tool/i);
     assert.match(role.systemPrompt, /block|ambigu/i);
+    assert.doesNotMatch(role.systemPrompt, /Spark ask tools/i);
   }
 });
 

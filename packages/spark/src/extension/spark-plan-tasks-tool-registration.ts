@@ -18,6 +18,7 @@ import {
 } from "../flows/roadmap-flow.ts";
 import { currentSparkProject, loadSparkGraph, saveSparkGraphAndTodos } from "./session-state.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
+import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 import {
   compactTaskDetail,
@@ -126,7 +127,7 @@ export function registerSparkPlanTasksTool(
       const graph = await loadSparkGraph(cwd, ctx);
       if (!graph)
         return {
-          content: [{ type: "text", text: "No Spark project found." }],
+          content: [{ type: "text", text: NO_SPARK_PROJECT_FOUND_HINT }],
           details: { found: false },
         };
       const projectSelector = normalizeOptionalToolString(
@@ -143,7 +144,7 @@ export function registerSparkPlanTasksTool(
               type: "text",
               text: projectSelector
                 ? `No Spark project matched ${projectSelector}. Use project=proj:... or select a current project first.`
-                : "No Spark project found.",
+                : NO_SPARK_PROJECT_FOUND_HINT,
             },
           ],
           details: { found: false, error: projectSelector ? "project_not_found" : undefined },

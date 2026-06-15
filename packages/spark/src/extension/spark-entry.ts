@@ -258,7 +258,7 @@ export function analyzeSparkEntryMode(
       ...reasons,
       normalizedPrompt
         ? "The prompt does not clearly choose planning or execution; Spark should infer the next mode from task readiness."
-        : "Bare /spark in an initialized workspace should infer the next mode from task readiness.",
+        : "No explicit mode prompt was provided in an initialized workspace; Spark should infer the next mode from task readiness.",
     ],
     prompt: normalizedPrompt,
     currentProjectTitle,

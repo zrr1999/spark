@@ -160,17 +160,17 @@ export function parsePiJsonlEvents(stdout: string): unknown[];
 
 Every run references an existing role. A run can be fresh or forked regardless of whether the role source is builtin, project, or user. For usage guidance, safety constraints, and Spark attribution rules, see [role-run-modes.md](./role-run-modes.md).
 
-## Tool / Spark mapping
+## Tool / runtime mapping
 
-| Surface                      | `pi-roles` / Spark concept                                               |
-| ---------------------------- | ------------------------------------------------------------------------ |
-| `role({ action: "list" })`   | Pi role-spec management over `RoleRegistry.list()`                       |
-| `role({ action: "get" })`    | Pi role-spec management over `RoleRegistry.select()`                     |
-| `role({ action: "create" })` | Pi role-spec management creating project/user `RoleSpec`s                |
-| `role({ action: "call" })`   | One-off direct role invocation; not attached to Spark tasks              |
-| Spark task binding           | `Task.roleRef` string resolved by `RoleRegistry`                         |
-| Spark task execution         | `spark-runtime` calls `runRole()` behind `task({ action: "run_ready" })` |
-| Spark runtime claim          | `TaskClaim.kind = "role-run"`, `roleRef`, `runName`, `runRef`            |
-| Spark runtime artifact       | `kind: "role-run"` with task/run provenance                              |
+| Surface                      | `pi-roles` / runtime concept                                                                 |
+| ---------------------------- | -------------------------------------------------------------------------------------------- |
+| `role({ action: "list" })`   | Pi role-spec management over `RoleRegistry.list()`                                           |
+| `role({ action: "get" })`    | Pi role-spec management over `RoleRegistry.select()`                                         |
+| `role({ action: "create" })` | Pi role-spec management creating project/user `RoleSpec`s                                    |
+| `role({ action: "call" })`   | One-off direct role invocation; not attached to managed task graphs or workflow runs          |
+| Task executor binding        | Compatibility `Task.roleRef` string resolved by `RoleRegistry` at the host/runtime boundary  |
+| Task execution               | `spark-runtime` calls `runRole()` behind `task({ action: "run_ready" })`                     |
+| Runtime claim                | Compatibility `TaskClaim.kind = "role-run"`, `roleRef`, `runName`, `runRef` attribution      |
+| Runtime artifact             | Compatibility `kind: "role-run"` records with task/run provenance                            |
 
 Runtime package boundaries should not keep compatibility aliases. Repair stale local state with explicit migration or cleanup tooling before it reaches `pi-roles`, `pi-tasks`, or `spark-runtime`.

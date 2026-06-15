@@ -295,7 +295,7 @@ export function collectNonConcreteTaskIssues(
 
 export function renderNonConcreteTaskIssues(issues: readonly NonConcreteTaskIssue[]): string {
   return [
-    "task_not_concrete: Spark tasks must be concrete executable/review/validation work, not standalone design/planning placeholders.",
+    "task_not_concrete: tasks must be concrete executable/review/validation work, not standalone design/planning placeholders.",
     ...issues.map((issue) => `- @${issue.name ?? "unnamed"}: ${issue.title} - ${issue.message}`),
     "Discuss design/architecture decisions with the user first, then embed the chosen design in each concrete task.plan.",
   ].join("\n");

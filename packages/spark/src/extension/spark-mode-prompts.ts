@@ -93,7 +93,7 @@ export function renderSparkExecutionModePrompt(
             ? renderWorkflowAction(workflowSelector)
             : 'Read the current project/task plan and inspect ready tasks with task({ action: "status" }). Claim at most one concrete task with task({ action: "claim" }), execute it, verify the required evidence with artifact/learning/context as needed, then call task({ action: "finish" }). Stop after that task finishes; do not auto-claim another task or dispatch continuous work from /execute.',
         strategy === "goal"
-          ? "Goal mode is non-interactive: do not call ask/ask_flow; if a required user decision blocks progress, stop and report or pause the goal."
+          ? "Goal mode is non-interactive: do not call ask_user/ask_flow. Canonical ask may be used only when the host supplies reviewer auto-answer. If a blocker appears, resolve the blocker by doing or planning the blocking work; do not pause or weaken the goal autonomously."
           : "If the user wants autonomous completion of all ready work, suggest /goal. If the user wants a scripted saved workflow, suggest /workflow.",
         strategy === "goal" ? SPARK_GOAL_DECISION_RULE : ASK_BEFORE_GUESSING,
         ...(workflowGuidance ? [workflowGuidance] : []),
@@ -108,12 +108,12 @@ export function renderSparkExecutionModePrompt(
   return renderModePrompt(graph, selectedProjectRef, focus, "Execution", requirements);
 }
 
-const SPARK_GOAL_DECISION_RULE = `Goal objectives should normally mean completing all unfinished work in the selected project, not stopping at a plan, unless the user explicitly says planning-only/readiness-only/仅规划. If task decomposition is wrong, missing, or blocks the goal, create or revise concrete tasks with task({ action: "plan" }); if a missing user decision would change ${PLANNING_AFFECTING_CHOICES} and cannot be inferred from context, stop, report the blocker, or pause the goal with goal({ action: "pause" }) instead of inventing scope.`;
+const SPARK_GOAL_DECISION_RULE = `Goal objectives should normally describe the selected project's substantive intended outcome from its purpose, description, title, task plans, evidence requirements, and blockers; do not reduce the goal to task counts or merely stopping at a plan unless the user explicitly says planning-only/readiness-only/仅规划. Autonomous goal edits require a strong reason and may only correct materially wrong description or direction; never lower difficulty, narrow required outcomes, or convert implementation work into planning-only/readiness-only work. If task decomposition is wrong, missing, or blocks the goal, create or revise concrete tasks with task({ action: "plan" }); if a missing user decision would change ${PLANNING_AFFECTING_CHOICES} and cannot be inferred from context, use canonical ask only when reviewer auto-answer is available; otherwise stop and report the blocker without pausing or weakening the goal.`;
 
 function renderGoalAction(hasExplicitGoal: boolean): string {
   const goalSource = hasExplicitGoal
     ? "Use the explicit goal focus as the target objective."
-    : "Infer the target objective from the current project title, unfinished tasks, ready tasks, task plans, required evidence, recent artifacts, and blockers.";
+    : "Infer the target objective from the current project purpose, description, title, task plans, required evidence, recent artifacts, and blockers.";
   return (
     'Run Spark goal mode: read the current project/task plan and inspect ready tasks with task({ action: "status" }). ' +
     goalSource +

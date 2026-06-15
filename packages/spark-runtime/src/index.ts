@@ -61,7 +61,12 @@ export {
 } from "./role-run-artifacts.ts";
 
 export interface SparkRoleRunResult {
-  record: RoleRunRecord;
+  record: RoleRunRecord & {
+    mode?: RoleRunMode;
+    model?: string;
+    sessionDir?: string;
+    forkFromSession?: string;
+  };
   stdout: string;
   stderr: string;
   jsonEvents: unknown[];
@@ -356,6 +361,7 @@ export interface RoleRunnerOptions {
   runName?: string;
   mode?: RoleRunMode;
   forkFromSession?: string;
+  sessionModel?: string;
 }
 
 export interface SparkTaskRunOptions {
@@ -375,6 +381,7 @@ export interface SparkTaskRunOptions {
   sessionDir?: string;
   mode?: RoleRunMode;
   forkFromSession?: string;
+  sessionModel?: string;
   heartbeatIntervalMs?: number;
   onHeartbeat?: (graph: TaskGraph) => void | Promise<void>;
   claim?: {
@@ -511,6 +518,7 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
         runName,
         mode: input.mode,
         forkFromSession: input.forkFromSession,
+        sessionModel: input.sessionModel,
       },
       runRef,
     );
@@ -518,7 +526,7 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
     let outputArtifactRef: ArtifactRef | undefined;
     if (input.artifactStore) {
       const artifact = await input.artifactStore.put({
-        kind: "role-run",
+        kind: "trace",
         title: `Role run ${runName} for ${task.title}`,
         format: "json",
         body: createRoleRunArtifactBody({
@@ -720,9 +728,13 @@ function createRoleRunArtifactBody(input: {
   };
 }
 
-function compactRoleRunRecord(record: RoleRunRecord): Omit<RoleRunRecord, "instruction"> {
+function compactRoleRunRecord(
+  record: SparkRoleRunResult["record"],
+): Omit<RoleRunRecord, "instruction"> {
   const { instruction: _instruction, ...compact } = record;
-  return compact;
+  return Object.fromEntries(
+    Object.entries(compact).filter((entry) => entry[1] !== undefined),
+  ) as Omit<RoleRunRecord, "instruction">;
 }
 
 function createTextTail(
@@ -999,6 +1011,7 @@ export async function runRoleInstructionOnly(
       runName: baseRecord.runName,
       mode: options.mode,
       forkFromSession: options.forkFromSession,
+      sessionModel: options.sessionModel,
     },
     baseRecord.ref,
   );
@@ -1012,7 +1025,10 @@ async function runPiJsonRole(
   role: { ref: RoleRef; systemPrompt: string },
   instruction: RoleInstruction,
   options: Required<Pick<RoleRunnerOptions, "cwd" | "piCommand" | "timeoutMs">> &
-    Pick<RoleRunnerOptions, "signal" | "sessionDir" | "runName" | "mode" | "forkFromSession">,
+    Pick<
+      RoleRunnerOptions,
+      "signal" | "sessionDir" | "runName" | "mode" | "forkFromSession" | "sessionModel"
+    >,
   runRef: RunRef,
 ): Promise<SparkRoleRunResult> {
   let tracked: TrackedSparkRoleRunProcess | undefined;
@@ -1022,16 +1038,17 @@ async function runPiJsonRole(
       projectStore: defaultProjectRoleModelSettingsStore(options.cwd),
       userStore: defaultUserRoleModelSettingsStore(),
     });
-    if (!roleModel && options.piCommand === "pi") {
+    const model = roleModel?.model ?? (options.sessionModel?.trim() || undefined);
+    if (!model && options.piCommand === "pi") {
       throw new Error(
-        `role model setting required for ${role.ref}; save one with role({ action: "model_set" }) before dispatch`,
+        `role model unavailable for ${role.ref}; save one with role({ action: "model_set" }) or run with an active session model before dispatch`,
       );
     }
     const result = await runRole({
       runRef: runRef as `run:${string}`,
       roleRef: role.ref as `role:${string}`,
       systemPrompt: role.systemPrompt,
-      model: roleModel?.model,
+      model,
       instruction: instruction.instruction,
       runGuidance: sparkRoleRunGuidance(),
       sessionDir: options.sessionDir,
@@ -1063,9 +1080,13 @@ async function runPiJsonRole(
         roleRef: role.ref,
         runName: options.runName,
         instruction: instruction.instruction,
+        mode: result.record.mode,
+        model,
         status: result.record.status as RoleRunStatus,
         startedAt: result.record.startedAt,
         finishedAt: result.record.finishedAt,
+        sessionDir: result.record.sessionDir,
+        forkFromSession: result.record.forkFromSession,
       },
       stdout: result.stdout,
       stderr: result.stderr,

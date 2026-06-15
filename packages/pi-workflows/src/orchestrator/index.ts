@@ -14,17 +14,17 @@ import {
 import type { TaskGraph } from "pi-tasks";
 
 import {
-  collectSparkDagRunNextSteps,
+  collectWorkflowRunNextSteps,
   completionDigestFromTaskRuns,
-  createSparkDagCompletionFollowUp,
+  createWorkflowRunCompletionFollowUp,
 } from "./dag-run-completion.ts";
 import { reconcileDagRunCounters } from "./dag-run-counters.ts";
-import { reconcileSparkDagRunSnapshot } from "./dag-run-reconcile.ts";
+import { reconcileWorkflowRunSnapshot } from "./dag-run-reconcile.ts";
 import {
-  normalizeSparkDagRunPruneOptions,
-  planSparkDagRunPrune,
-  type SparkDagRunPruneOptions,
-  type SparkDagRunPruneResult,
+  normalizeWorkflowRunPruneOptions,
+  planWorkflowRunPrune,
+  type WorkflowRunPruneOptions,
+  type WorkflowRunPruneResult,
 } from "./dag-run-retention.ts";
 import {
   isAcknowledgeableDagRun,
@@ -32,15 +32,23 @@ import {
   isActionableDagRunProblem,
   isTerminalDagRunStatus,
 } from "./dag-run-status.ts";
-import { emptySparkDagRunSnapshot, loadSparkDagRunStoreSnapshot } from "./dag-run-serialization.ts";
+import { emptyWorkflowRunSnapshot, loadWorkflowRunStoreSnapshot } from "./dag-run-serialization.ts";
 
 export {
-  DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY,
-  DEFAULT_SPARK_READY_TASK_TIMEOUT_MS,
+  DEFAULT_READY_TASK_MAX_CONCURRENCY,
+  DEFAULT_READY_TASK_TIMEOUT_MS,
 } from "pi-extension-api";
-export { sparkDagRunNextSteps } from "./dag-run-completion.ts";
-export { SparkDagRunStoreFormatError } from "./dag-run-serialization.ts";
+export { workflowRunNextSteps, sparkDagRunNextSteps } from "./dag-run-completion.ts";
+export {
+  WorkflowRunStoreFormatError,
+  SparkDagRunStoreFormatError,
+} from "./dag-run-serialization.ts";
 export type {
+  WorkflowRunPruneOptions,
+  WorkflowRunPruneResult,
+  WorkflowRunRetentionCandidateReason,
+  WorkflowRunRetentionEntry,
+  WorkflowRunRetentionKeepReason,
   SparkDagRunPruneOptions,
   SparkDagRunPruneResult,
   SparkDagRunRetentionCandidateReason,
@@ -48,7 +56,16 @@ export type {
   SparkDagRunRetentionKeepReason,
 } from "./dag-run-retention.ts";
 export {
+  runReadyTasks,
   runReadySparkTasks,
+  type ReadyTaskRun,
+  type ReadyTaskRunInput,
+  type ReadyTaskRunKiller,
+  type ReadyTaskRunKillerInput,
+  type ReadyTaskRunnerOptions,
+  type ReadyTaskRunnerProgress,
+  type ReadyTaskRunnerResult,
+  type ReadyTaskRunnerSchedule,
   type SparkReadyTaskRun,
   type SparkReadyTaskRunInput,
   type SparkReadyTaskRunKiller,
@@ -59,20 +76,20 @@ export {
   type SparkReadyTaskRunnerSchedule,
 } from "./ready-task-runner.ts";
 
-export type SparkDagManagerStatus = "idle" | "running" | "failed";
-export type SparkDagRunStatus = "running" | "succeeded" | "failed" | "timed_out" | "stale";
+export type WorkflowRunManagerStatus = "idle" | "running" | "failed";
+export type WorkflowRunStatus = "running" | "succeeded" | "failed" | "timed_out" | "stale";
 
-export interface SparkDagManagerState {
-  status: SparkDagManagerStatus;
+export interface WorkflowRunManagerState {
+  status: WorkflowRunManagerStatus;
   activeRunRef?: RunRef;
   lastRunRef?: RunRef;
   updatedAt: string;
 }
 
-export interface SparkDagCompletionFollowUp {
+export interface WorkflowRunCompletionFollowUp {
   createdAt: string;
   runRef: RunRef;
-  status: SparkDagRunStatus;
+  status: WorkflowRunStatus;
   scheduled: number;
   completed: number;
   summary: string;
@@ -80,35 +97,35 @@ export interface SparkDagCompletionFollowUp {
   completionDigest: TaskRunCompletionSummary[];
 }
 
-export interface SparkDagRunNextSteps {
+export interface WorkflowRunNextSteps {
   runRef: RunRef;
-  status: Extract<SparkDagRunStatus, "failed" | "stale" | "timed_out">;
+  status: Extract<WorkflowRunStatus, "failed" | "stale" | "timed_out">;
   summary: string;
   nextActions: string[];
 }
 
-export interface SparkDagRunAcknowledgeInput {
+export interface WorkflowRunAcknowledgeInput {
   runRef?: RunRef;
   sessionId: string;
   now?: string;
 }
 
-export interface SparkDagRunAcknowledgeResult {
-  snapshot: SparkDagRunStoreSnapshot;
+export interface WorkflowRunAcknowledgeResult {
+  snapshot: WorkflowRunStoreSnapshot;
   acknowledged: RunRef[];
   alreadyAcknowledged: RunRef[];
   skipped: RunRef[];
   missing: RunRef[];
 }
 
-export interface SparkDagRunRecord {
+export interface WorkflowRunRecord {
   ref: RunRef;
   projectRef?: ProjectRef;
   ownerSessionId?: string;
   dryRun: boolean;
   maxConcurrency: number;
   timeoutMs: number;
-  status: SparkDagRunStatus;
+  status: WorkflowRunStatus;
   startedAt: string;
   updatedAt: string;
   finishedAt?: string;
@@ -122,21 +139,21 @@ export interface SparkDagRunRecord {
   acknowledgedAt?: string;
   acknowledgedBySession?: string;
   completionDigest: TaskRunCompletionSummary[];
-  completionFollowUp?: SparkDagCompletionFollowUp;
+  completionFollowUp?: WorkflowRunCompletionFollowUp;
 }
 
-export interface SparkDagRunStoreSnapshot {
+export interface WorkflowRunStoreSnapshot {
   version: 1;
-  manager: SparkDagManagerState;
-  runs: SparkDagRunRecord[];
+  manager: WorkflowRunManagerState;
+  runs: WorkflowRunRecord[];
 }
 
-export interface SparkDagStatusSummary {
-  manager: SparkDagManagerState;
-  activeRun?: SparkDagRunRecord;
-  actionableRun?: SparkDagRunRecord;
-  lastRun?: SparkDagRunRecord;
-  recentRuns: SparkDagRunRecord[];
+export interface WorkflowRunStatusSummary {
+  manager: WorkflowRunManagerState;
+  activeRun?: WorkflowRunRecord;
+  actionableRun?: WorkflowRunRecord;
+  lastRun?: WorkflowRunRecord;
+  recentRuns: WorkflowRunRecord[];
   running: number;
   succeeded: number;
   failed: number;
@@ -144,20 +161,20 @@ export interface SparkDagStatusSummary {
   timedOut: number;
   acknowledged: number;
   actionable: number;
-  nextSteps: SparkDagRunNextSteps[];
+  nextSteps: WorkflowRunNextSteps[];
 }
 
-export interface SparkDagStatusQueryOptions {
+export interface WorkflowRunStatusQueryOptions {
   limit?: number;
 }
 
-export interface SparkDagRunReconcileInput {
+export interface WorkflowRunReconcileInput {
   graph?: TaskGraph;
   activeRunRefs?: Iterable<RunRef>;
   now?: string;
 }
 
-export interface SparkDagRunStartInput {
+export interface WorkflowRunStartInput {
   projectRef?: ProjectRef;
   ownerSessionId?: string;
   dryRun: boolean;
@@ -165,19 +182,19 @@ export interface SparkDagRunStartInput {
   timeoutMs: number;
 }
 
-export interface SparkDagRunScheduleInput {
+export interface WorkflowRunScheduleInput {
   taskRef: TaskRef;
   runRef?: RunRef;
   scheduled: number;
 }
 
-export interface SparkDagRunProgressInput {
+export interface WorkflowRunProgressInput {
   taskRef: TaskRef;
   run: TaskRun;
   completed: number;
 }
 
-export interface SparkDagRunFinishInput {
+export interface WorkflowRunFinishInput {
   scheduled: number;
   completed: number;
   timedOut: boolean;
@@ -188,7 +205,25 @@ export interface SparkDagRunFinishInput {
   runs?: TaskRun[];
 }
 
-export class SparkDagRunStore {
+/** @deprecated SparkDag* aliases are compatibility shims. Prefer WorkflowRun* types in generic pi-workflows code; Spark-owned adapters should own Spark naming. */
+export type SparkDagManagerStatus = WorkflowRunManagerStatus;
+export type SparkDagRunStatus = WorkflowRunStatus;
+export type SparkDagManagerState = WorkflowRunManagerState;
+export type SparkDagCompletionFollowUp = WorkflowRunCompletionFollowUp;
+export type SparkDagRunNextSteps = WorkflowRunNextSteps;
+export type SparkDagRunAcknowledgeInput = WorkflowRunAcknowledgeInput;
+export type SparkDagRunAcknowledgeResult = WorkflowRunAcknowledgeResult;
+export type SparkDagRunRecord = WorkflowRunRecord;
+export type SparkDagRunStoreSnapshot = WorkflowRunStoreSnapshot;
+export type SparkDagStatusSummary = WorkflowRunStatusSummary;
+export type SparkDagStatusQueryOptions = WorkflowRunStatusQueryOptions;
+export type SparkDagRunReconcileInput = WorkflowRunReconcileInput;
+export type SparkDagRunStartInput = WorkflowRunStartInput;
+export type SparkDagRunScheduleInput = WorkflowRunScheduleInput;
+export type SparkDagRunProgressInput = WorkflowRunProgressInput;
+export type SparkDagRunFinishInput = WorkflowRunFinishInput;
+
+export class WorkflowRunStore {
   readonly filePath: string;
   readonly lockPath: string;
 
@@ -197,12 +232,12 @@ export class SparkDagRunStore {
     this.lockPath = `${filePath}.lock`;
   }
 
-  async status(options: SparkDagStatusQueryOptions = {}): Promise<SparkDagStatusSummary> {
-    return summarizeSparkDagRuns(await this.load(), options);
+  async status(options: WorkflowRunStatusQueryOptions = {}): Promise<WorkflowRunStatusSummary> {
+    return summarizeWorkflowRuns(await this.load(), options);
   }
 
-  async clearInactiveRuns(): Promise<SparkDagRunStoreSnapshot> {
-    let cleared: SparkDagRunStoreSnapshot | undefined;
+  async clearInactiveRuns(): Promise<WorkflowRunStoreSnapshot> {
+    let cleared: WorkflowRunStoreSnapshot | undefined;
     await this.updateSnapshot((snapshot) => {
       snapshot.runs = snapshot.runs.filter(shouldKeepDagRunWhenClearingInactive);
       const activeRun =
@@ -220,15 +255,15 @@ export class SparkDagRunStore {
     return cleared ?? (await this.load());
   }
 
-  async pruneRuns(options: SparkDagRunPruneOptions = {}): Promise<SparkDagRunPruneResult> {
-    const normalized = normalizeSparkDagRunPruneOptions(options);
+  async pruneRuns(options: WorkflowRunPruneOptions = {}): Promise<WorkflowRunPruneResult> {
+    const normalized = normalizeWorkflowRunPruneOptions(options);
     if (normalized.dryRun) {
       const snapshot = await this.load();
-      return planSparkDagRunPrune(snapshot, normalized);
+      return planWorkflowRunPrune(snapshot, normalized);
     }
-    let result: SparkDagRunPruneResult | undefined;
+    let result: WorkflowRunPruneResult | undefined;
     await this.updateSnapshot((snapshot) => {
-      result = planSparkDagRunPrune(snapshot, normalized);
+      result = planWorkflowRunPrune(snapshot, normalized);
       const deletedRefs = new Set(result.candidates.map((candidate) => candidate.ref));
       snapshot.runs = snapshot.runs.filter((run) => !deletedRefs.has(run.ref));
       if (
@@ -254,15 +289,15 @@ export class SparkDagRunStore {
         deleted: result.candidates,
       };
     });
-    return result ?? planSparkDagRunPrune(await this.load(), normalized);
+    return result ?? planWorkflowRunPrune(await this.load(), normalized);
   }
 
   async acknowledgeFailures(
-    input: SparkDagRunAcknowledgeInput,
-  ): Promise<SparkDagRunAcknowledgeResult> {
+    input: WorkflowRunAcknowledgeInput,
+  ): Promise<WorkflowRunAcknowledgeResult> {
     const now = input.now ?? nowIso();
-    const result: SparkDagRunAcknowledgeResult = {
-      snapshot: emptySparkDagRunSnapshot(),
+    const result: WorkflowRunAcknowledgeResult = {
+      snapshot: emptyWorkflowRunSnapshot(),
       acknowledged: [],
       alreadyAcknowledged: [],
       skipped: [],
@@ -296,12 +331,12 @@ export class SparkDagRunStore {
     return result;
   }
 
-  async reconcile(input: SparkDagRunReconcileInput = {}): Promise<SparkDagRunStoreSnapshot> {
+  async reconcile(input: WorkflowRunReconcileInput = {}): Promise<WorkflowRunStoreSnapshot> {
     const activeRunRefs = new Set(input.activeRunRefs ?? []);
     const now = input.now ?? nowIso();
-    let reconciled: SparkDagRunStoreSnapshot | undefined;
+    let reconciled: WorkflowRunStoreSnapshot | undefined;
     await this.updateSnapshot((snapshot) => {
-      reconcileSparkDagRunSnapshot(snapshot, {
+      reconcileWorkflowRunSnapshot(snapshot, {
         graph: input.graph,
         activeRunRefs,
         now,
@@ -311,19 +346,19 @@ export class SparkDagRunStore {
     return reconciled ?? (await this.load());
   }
 
-  async load(): Promise<SparkDagRunStoreSnapshot> {
-    return loadSparkDagRunStoreSnapshot(this.filePath);
+  async load(): Promise<WorkflowRunStoreSnapshot> {
+    return loadWorkflowRunStoreSnapshot(this.filePath);
   }
 
-  async save(snapshot: SparkDagRunStoreSnapshot): Promise<void> {
+  async save(snapshot: WorkflowRunStoreSnapshot): Promise<void> {
     await writeJsonFileAtomic(this.filePath, snapshot);
   }
 
-  async startRun(input: SparkDagRunStartInput): Promise<SparkDagRunRecord> {
-    let created: SparkDagRunRecord | undefined;
+  async startRun(input: WorkflowRunStartInput): Promise<WorkflowRunRecord> {
+    let created: WorkflowRunRecord | undefined;
     await this.updateSnapshot((snapshot) => {
       const now = nowIso();
-      const record: SparkDagRunRecord = {
+      const record: WorkflowRunRecord = {
         ref: newRef("run"),
         projectRef: input.projectRef,
         ownerSessionId: input.ownerSessionId,
@@ -350,11 +385,11 @@ export class SparkDagRunStore {
       snapshot.runs = [...snapshot.runs, record];
       created = record;
     });
-    if (!created) throw new Error("failed to start Spark workflow run");
+    if (!created) throw new Error("failed to start workflow run");
     return created;
   }
 
-  async recordSchedule(runRef: RunRef, input: SparkDagRunScheduleInput): Promise<void> {
+  async recordSchedule(runRef: RunRef, input: WorkflowRunScheduleInput): Promise<void> {
     await this.updateRun(runRef, (record) => {
       if (isTerminalDagRunStatus(record.status)) return false;
       if (!record.scheduledTaskRefs.includes(input.taskRef))
@@ -366,7 +401,7 @@ export class SparkDagRunStore {
     });
   }
 
-  async recordProgress(runRef: RunRef, input: SparkDagRunProgressInput): Promise<void> {
+  async recordProgress(runRef: RunRef, input: WorkflowRunProgressInput): Promise<void> {
     await this.updateRun(runRef, (record) => {
       if (isTerminalDagRunStatus(record.status)) return false;
       if (!record.completedTaskRefs.includes(input.taskRef))
@@ -379,10 +414,10 @@ export class SparkDagRunStore {
 
   async finishRun(
     runRef: RunRef,
-    result: SparkDagRunFinishInput,
+    result: WorkflowRunFinishInput,
     error?: unknown,
-  ): Promise<SparkDagCompletionFollowUp | undefined> {
-    let followUp: SparkDagCompletionFollowUp | undefined;
+  ): Promise<WorkflowRunCompletionFollowUp | undefined> {
+    let followUp: WorkflowRunCompletionFollowUp | undefined;
     await this.updateSnapshot((snapshot) => {
       const now = nowIso();
       const record = snapshot.runs.find((candidate) => candidate.ref === runRef);
@@ -427,12 +462,12 @@ export class SparkDagRunStore {
           : error
             ? JSON.stringify(error)
             : hasFailedChildren
-              ? `Spark workflow child runs failed: failed=${failedChildren} cancelled=${cancelledChildren}`
+              ? `workflow child runs failed: failed=${failedChildren} cancelled=${cancelledChildren}`
               : undefined;
       record.finishedAt = now;
       record.updatedAt = now;
       record.completionDigest = completionDigestFromTaskRuns(result.runs ?? []);
-      followUp = createSparkDagCompletionFollowUp(record);
+      followUp = createWorkflowRunCompletionFollowUp(record);
       record.completionFollowUp = followUp;
       snapshot.manager = {
         status: error ? "failed" : "idle",
@@ -447,7 +482,7 @@ export class SparkDagRunStore {
 
   private async updateRun(
     runRef: RunRef,
-    update: (record: SparkDagRunRecord) => boolean | void,
+    update: (record: WorkflowRunRecord) => boolean | void,
   ): Promise<void> {
     await this.updateSnapshot((snapshot) => {
       const record = snapshot.runs.find((candidate) => candidate.ref === runRef);
@@ -459,7 +494,7 @@ export class SparkDagRunStore {
   }
 
   private async updateSnapshot(
-    update: (snapshot: SparkDagRunStoreSnapshot) => void,
+    update: (snapshot: WorkflowRunStoreSnapshot) => void,
   ): Promise<void> {
     await this.withLock(async () => {
       const snapshot = await this.load();
@@ -470,7 +505,7 @@ export class SparkDagRunStore {
   }
 
   private async withLock<T>(fn: () => T | Promise<T>): Promise<T> {
-    const release = await acquireSparkDagRunStoreLock(this.lockPath);
+    const release = await acquireWorkflowRunStoreLock(this.lockPath);
     try {
       return await fn();
     } finally {
@@ -479,11 +514,11 @@ export class SparkDagRunStore {
   }
 }
 
-function shouldKeepDagRunWhenClearingInactive(run: SparkDagRunRecord): boolean {
+function shouldKeepDagRunWhenClearingInactive(run: WorkflowRunRecord): boolean {
   return run.status === "running" || isActionableDagRunProblem(run);
 }
 
-function latestRunningDagRun(runs: SparkDagRunRecord[]): SparkDagRunRecord | undefined {
+function latestRunningDagRun(runs: WorkflowRunRecord[]): WorkflowRunRecord | undefined {
   for (let index = runs.length - 1; index >= 0; index -= 1) {
     const run = runs[index];
     if (run?.status === "running") return run;
@@ -491,7 +526,7 @@ function latestRunningDagRun(runs: SparkDagRunRecord[]): SparkDagRunRecord | und
   return undefined;
 }
 
-async function acquireSparkDagRunStoreLock(lockPath: string): Promise<() => Promise<void>> {
+async function acquireWorkflowRunStoreLock(lockPath: string): Promise<() => Promise<void>> {
   const timeoutMs = 10_000;
   const retryIntervalMs = 25;
   const staleMs = 60_000;
@@ -505,15 +540,15 @@ async function acquireSparkDagRunStoreLock(lockPath: string): Promise<() => Prom
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      await removeStaleSparkDagRunStoreLock(lockPath, staleMs);
+      await removeStaleWorkflowRunStoreLock(lockPath, staleMs);
       if (Date.now() - started >= timeoutMs)
-        throw new Error(`timed out waiting for Spark DAG run store lock: ${lockPath}`);
+        throw new Error(`timed out waiting for workflow run store lock: ${lockPath}`);
       await sleep(retryIntervalMs);
     }
   }
 }
 
-async function removeStaleSparkDagRunStoreLock(lockPath: string, staleMs: number): Promise<void> {
+async function removeStaleWorkflowRunStoreLock(lockPath: string, staleMs: number): Promise<void> {
   try {
     const info = await stat(lockPath);
     if (Date.now() - info.mtimeMs >= staleMs) await rm(lockPath, { recursive: true, force: true });
@@ -529,14 +564,20 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-export function defaultSparkDagRunStore(cwd: string): SparkDagRunStore {
-  return new SparkDagRunStore(join(cwd, ".spark", "workflow-runs.json"));
+/** @deprecated Compatibility default path for existing workflow run stores. Prefer explicit WorkflowRunStore paths or host-owned path injection. */
+export function defaultWorkflowRunStore(cwd: string): WorkflowRunStore {
+  return new WorkflowRunStore(join(cwd, ".spark", "workflow-runs.json"));
 }
 
-export function summarizeSparkDagRuns(
-  snapshot: SparkDagRunStoreSnapshot,
-  options: SparkDagStatusQueryOptions = {},
-): SparkDagStatusSummary {
+/** @deprecated Spark-named alias kept for compatibility. Prefer WorkflowRunStore with explicit host-owned paths. */
+export const SparkDagRunStore = WorkflowRunStore;
+/** @deprecated Spark-named alias kept for compatibility. Prefer defaultWorkflowRunStore only for compatibility, or explicit host-owned paths for new code. */
+export const defaultSparkDagRunStore = defaultWorkflowRunStore;
+
+export function summarizeWorkflowRuns(
+  snapshot: WorkflowRunStoreSnapshot,
+  options: WorkflowRunStatusQueryOptions = {},
+): WorkflowRunStatusSummary {
   const sorted = [...snapshot.runs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const limit = Number.isFinite(options.limit ?? 5)
     ? Math.max(1, Math.floor(options.limit ?? 5))
@@ -563,6 +604,9 @@ export function summarizeSparkDagRuns(
     timedOut: snapshot.runs.filter((run) => run.status === "timed_out").length,
     acknowledged: snapshot.runs.filter(isAcknowledgedDagRunProblem).length,
     actionable: actionableRuns.length,
-    nextSteps: collectSparkDagRunNextSteps([actionableRun, lastRun, ...recentRuns]),
+    nextSteps: collectWorkflowRunNextSteps([actionableRun, lastRun, ...recentRuns]),
   };
 }
+
+/** @deprecated SparkDag* alias kept for compatibility. Prefer summarizeWorkflowRuns. */
+export const summarizeSparkDagRuns = summarizeWorkflowRuns;

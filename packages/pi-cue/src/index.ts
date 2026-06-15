@@ -39,6 +39,7 @@ export type PiCueNotifyLevel = "info" | "warning" | "error" | "success";
 
 export interface PiCueToolContext {
   cwd?: string;
+  cueClient?: CueClient;
   ui?: { notify?: (msg: string, level: PiCueNotifyLevel) => void };
 }
 
@@ -123,8 +124,10 @@ import { checkAndWarn as checkCuedVersionAndWarn } from "./version-check.ts";
 let client: CueClient | null = null;
 
 async function getClient(ctx?: {
+  cueClient?: CueClient;
   ui?: { notify?: (msg: string, level: PiCueNotifyLevel) => void };
 }): Promise<CueClient> {
+  if (ctx?.cueClient) return ctx.cueClient;
   if (client && !client.isClosed) return client;
   client = null;
   const transport = await resolveCueTransport();
@@ -749,9 +752,10 @@ async function writeInlineScriptTemp(language: ScriptLanguage, body: string): Pr
 
 async function runPythonScriptJob(
   cued: CueClient,
-  options: { path: string; timeout: number; tailBytes: number; cwd: string },
+  options: { path: string; timeout: number; tailBytes: number; cwd: string; venv?: string },
 ) {
-  const result = await cued.runJob(`python3 ${quoteCueWord(options.path)}`, {
+  const python = pythonExecutableForVenv(options.venv);
+  const result = await cued.runJob(`${quoteCueWord(python)} ${quoteCueWord(options.path)}`, {
     timeout: options.timeout,
     cwd: options.cwd,
   });
@@ -778,6 +782,7 @@ async function runPythonScriptJob(
     exitCode: result.exitCode,
     timedOut: result.timedOut,
     warnings: result.warnings,
+    ...(options.venv ? { venv: options.venv } : {}),
   };
   if (result.status === "Failed" && !result.timedOut) {
     const err = new Error(lines.join("\n"));
@@ -785,6 +790,10 @@ async function runPythonScriptJob(
     throw err;
   }
   return { content: [{ type: "text" as const, text: lines.join("\n") }], details };
+}
+
+function pythonExecutableForVenv(venv: string | undefined): string {
+  return venv ? `${venv.replace(/\/+$/u, "")}/bin/python` : "python3";
 }
 
 function rejectDeprecatedCueParam(
@@ -1090,6 +1099,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       timeout: number;
       tailBytes: number;
       toolName: "cue_run" | "cue_script" | "script_run" | "script_eval";
+      scope?: string;
     },
     ctx: PiCueToolContext,
   ) {
@@ -1102,6 +1112,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       path: resolvedPath,
       input: body,
       timeout,
+      scope: options.scope,
     });
     const lines = renderCueScriptResult(result, { pathLabel, timeout, tailBytes });
     const summary = result.items.map((item) => ({
@@ -1120,6 +1131,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       source: result.source,
       status: result.status,
       exitCode: result.exitCode,
+      ...(options.scope ? { scope: options.scope } : {}),
       failedItemIndex: result.failedItemIndex,
       timedOut: result.timedOut,
       items: summary,
@@ -1295,7 +1307,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     description:
       "Run a script file with an explicit language runner. " +
       "Supported languages in this version: cue-shell and python. " +
-      "For cue-shell this delegates to RunScript and mirrors cue_run; for python it runs python3 through cue-shell job execution.",
+      "For cue-shell this delegates to RunScript and mirrors cue_run; for python it runs python3 or the selected venv interpreter through cue-shell job execution.",
     parameters: Type.Object({
       path: Type.String({ description: "Path to the script file to run." }),
       language: Type.String({ description: "Script language. Required: cue-shell or python." }),
@@ -1311,6 +1323,14 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             "Limit stdout/stderr to the last N bytes. Default: 16384. Pass 0 for full output.",
         }),
       ),
+      venv: Type.Optional(
+        Type.String({ description: "Python virtualenv path. Only valid for language=python." }),
+      ),
+      scope: Type.Optional(
+        Type.String({
+          description: "Cue-shell scope for RunScript. Only valid for language=cue-shell.",
+        }),
+      ),
     }),
     renderCall(args, theme) {
       return renderToolCall(
@@ -1320,6 +1340,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           formatStringArg(args.path, { prefix: "path=", maxLength: 60 }),
           formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
           formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
+          formatStringArg(args.venv, { prefix: "venv=", maxLength: 40 }),
+          formatStringArg(args.scope, { prefix: "scope=" }),
         ],
         theme,
       );
@@ -1344,9 +1366,20 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         DEFAULT_CUE_TAIL_BYTES,
         "script_run tail_bytes",
       );
+      const venvParam = normalizeOptionalCueString(params.venv, "script_run venv");
+      const scope = normalizeOptionalCueString(params.scope, "script_run scope");
+      if (language !== "python" && venvParam)
+        throw new Error("script_run venv is only supported for language=python");
+      if (language !== "cue-shell" && scope)
+        throw new Error("script_run scope is only supported for language=cue-shell");
       const baseCwd = resolveCueWorkingDirectory(undefined, ctx.cwd);
       const { isAbsolute, resolve } = await import("node:path");
       const resolvedPath = isAbsolute(pathParam) ? pathParam : resolve(baseCwd, pathParam);
+      const venv = venvParam
+        ? isAbsolute(venvParam)
+          ? venvParam
+          : resolve(baseCwd, venvParam)
+        : undefined;
       const cued = await getClient(ctx);
 
       if (language === "cue-shell") {
@@ -1370,12 +1403,19 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             timeout,
             tailBytes,
             toolName: "script_run",
+            scope,
           },
           ctx,
         );
       }
 
-      return runPythonScriptJob(cued, { path: resolvedPath, timeout, tailBytes, cwd: baseCwd });
+      return runPythonScriptJob(cued, {
+        path: resolvedPath,
+        timeout,
+        tailBytes,
+        cwd: baseCwd,
+        venv,
+      });
     },
   });
 
@@ -1385,7 +1425,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     description:
       "Run an inline script body with an explicit language runner. " +
       "Supported languages in this version: cue-shell and python. " +
-      "Inline python is written to a temporary file and executed with python3 through cue-shell.",
+      "Inline python is written to a temporary file and executed with python3 or the selected venv interpreter through cue-shell.",
     parameters: Type.Object({
       script: Type.String({ description: "Inline script body to run." }),
       language: Type.String({ description: "Script language. Required: cue-shell or python." }),
@@ -1404,6 +1444,14 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             "Limit stdout/stderr to the last N bytes. Default: 16384. Pass 0 for full output.",
         }),
       ),
+      venv: Type.Optional(
+        Type.String({ description: "Python virtualenv path. Only valid for language=python." }),
+      ),
+      scope: Type.Optional(
+        Type.String({
+          description: "Cue-shell scope for RunScript. Only valid for language=cue-shell.",
+        }),
+      ),
     }),
     renderCall(args, theme) {
       const scriptArg =
@@ -1418,6 +1466,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           formatStringArg(args.pathLabel, { prefix: "label=", maxLength: 40 }),
           formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
           formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
+          formatStringArg(args.venv, { prefix: "venv=", maxLength: 40 }),
+          formatStringArg(args.scope, { prefix: "scope=" }),
         ],
         theme,
       );
@@ -1444,6 +1494,19 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         DEFAULT_CUE_TAIL_BYTES,
         "script_eval tail_bytes",
       );
+      const venvParam = normalizeOptionalCueString(params.venv, "script_eval venv");
+      const scope = normalizeOptionalCueString(params.scope, "script_eval scope");
+      if (language !== "python" && venvParam)
+        throw new Error("script_eval venv is only supported for language=python");
+      if (language !== "cue-shell" && scope)
+        throw new Error("script_eval scope is only supported for language=cue-shell");
+      const baseCwd = resolveCueWorkingDirectory(undefined, ctx.cwd);
+      const { isAbsolute, resolve } = await import("node:path");
+      const venv = venvParam
+        ? isAbsolute(venvParam)
+          ? venvParam
+          : resolve(baseCwd, venvParam)
+        : undefined;
       const cued = await getClient(ctx);
 
       if (language === "cue-shell") {
@@ -1455,6 +1518,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             timeout,
             tailBytes,
             toolName: "script_eval",
+            scope,
           },
           ctx,
         );
@@ -1465,7 +1529,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         path: tempPath,
         timeout,
         tailBytes,
-        cwd: resolveCueWorkingDirectory(undefined, ctx.cwd),
+        cwd: baseCwd,
+        venv,
       });
     },
   });

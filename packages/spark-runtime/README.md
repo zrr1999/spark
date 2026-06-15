@@ -44,4 +44,4 @@ Attribution:
 - `runName`, `ownerSessionId`, and `runRef` identify the concrete run in `TaskRun` records and active `TaskClaim`s.
 - Runtime-created artifacts use `kind: "role-run"` with task provenance and run-record data so outputs are attributed to the Spark task and concrete run while still retaining the role ref.
 
-Use `runSparkTask()` for single-task execution. Use `pi-workflows` `runReadySparkTasks()` for graph-level ready task scheduling.
+Use `runSparkTask()` for single-task execution. Use `pi-workflows` `runReadyTasks()` for graph-level ready task scheduling.

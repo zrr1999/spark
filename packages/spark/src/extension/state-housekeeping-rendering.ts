@@ -1,4 +1,4 @@
-import type { SparkDagRunPruneResult } from "pi-workflows";
+import type { WorkflowRunPruneResult } from "pi-workflows";
 import type { RoleRunArtifactRetentionPlan } from "spark-runtime";
 import type {
   SparkProtectedStoreReason,
@@ -134,7 +134,7 @@ function appendInactiveDagRunDiagnostics(
     );
 }
 
-export function appendSparkDagRunPruneLines(lines: string[], prune: SparkDagRunPruneResult): void {
+export function appendSparkDagRunPruneLines(lines: string[], prune: WorkflowRunPruneResult): void {
   lines.push(
     `Retention: olderThanDays=${prune.olderThanDays} cutoff=${prune.cutoffIso} keepRecent=${prune.keepRecent} keepRecentPerProject=${prune.keepRecentPerProject} before=${prune.before} after=${prune.after}`,
   );

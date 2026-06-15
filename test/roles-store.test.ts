@@ -12,7 +12,7 @@ import {
   builtinRoleIds,
 } from "pi-roles";
 
-void test("builtin Spark roles are instructed to implement concrete repo behavior feedback", () => {
+void test("builtin Pi roles are instructed to implement concrete repo behavior feedback", () => {
   const roles = createBuiltinRoles();
   const planner = roles.find((role) => role.id === "planner");
   const worker = roles.find((role) => role.id === "worker");
@@ -23,7 +23,7 @@ void test("builtin Spark roles are instructed to implement concrete repo behavio
   );
 });
 
-void test("builtin Spark roles expose minimal sufficient tool profiles", () => {
+void test("builtin Pi roles expose minimal sufficient tool profiles", () => {
   const roles = createBuiltinRoles("2026-06-04T00:00:00.000Z");
   assert.deepEqual(
     roles.map((role) => role.id),

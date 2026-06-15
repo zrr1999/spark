@@ -104,7 +104,7 @@ export async function replaySparkAskTool(input: {
   const store = defaultArtifactStore(input.cwd);
   const artifact = input.artifactRef
     ? await store.get(input.artifactRef)
-    : (await store.list({ kind: "ask-answer" })).slice(-1)[0];
+    : (await store.list({ producer: "ask" })).slice(-1)[0];
   if (!artifact) {
     return {
       content: [{ type: "text", text: "No replayable ask artifact found." }],
@@ -129,7 +129,7 @@ export async function replaySparkAskTool(input: {
   const blocked = isPiAskFlowGateBlocked(result, request);
   const body = createAskArtifactBody(request, result, { blocked });
   const replayArtifact = await store.put({
-    kind: "ask-answer",
+    kind: "record",
     title: `Replay ask: ${request.title ?? request.flow}`,
     format: "json",
     body: body as unknown as JsonValue,
@@ -170,7 +170,7 @@ async function runAndPersistSparkAskRequest(
   const blocked = isPiAskFlowGateBlocked(result, request);
   const body = createAskArtifactBody(request, result, { blocked });
   const artifact = await defaultArtifactStore(input.cwd).put({
-    kind: "ask-answer",
+    kind: "record",
     title: input.title,
     format: "json",
     body: body as unknown as JsonValue,

@@ -3,29 +3,31 @@ import type { TaskGraph } from "pi-tasks";
 
 import {
   completionDigestFromTaskRuns,
-  createSparkDagCompletionFollowUp,
+  createWorkflowRunCompletionFollowUp,
 } from "./dag-run-completion.ts";
 import { reconcileDagRunCounters, uniqueRefs } from "./dag-run-counters.ts";
-import type { SparkDagRunRecord, SparkDagRunStoreSnapshot } from "./index.ts";
+import type { WorkflowRunRecord, WorkflowRunStoreSnapshot } from "./index.ts";
 
-export interface SparkDagRunSnapshotReconcileInput {
+export interface WorkflowRunSnapshotReconcileInput {
   graph?: TaskGraph;
   activeRunRefs: Set<RunRef>;
   now: string;
 }
 
-export function reconcileSparkDagRunSnapshot(
-  snapshot: SparkDagRunStoreSnapshot,
-  input: SparkDagRunSnapshotReconcileInput,
+export function reconcileWorkflowRunSnapshot(
+  snapshot: WorkflowRunStoreSnapshot,
+  input: WorkflowRunSnapshotReconcileInput,
 ): void {
   for (const record of snapshot.runs) {
-    if (recoverActiveStaleDagRun(snapshot, record, input.graph, input.activeRunRefs, input.now))
+    if (
+      recoverActiveStaleWorkflowRun(snapshot, record, input.graph, input.activeRunRefs, input.now)
+    )
       continue;
     if (record.status !== "running") continue;
-    recoverActiveDagTaskRunRefs(record, input.graph, input.activeRunRefs);
+    recoverActiveWorkflowTaskRunRefs(record, input.graph, input.activeRunRefs);
     if (isActiveSchedulingWindow(snapshot, record, input.activeRunRefs)) continue;
     if (record.taskRunRefs.some((runRef) => input.activeRunRefs.has(runRef))) continue;
-    reconcileStaleDagRun(record, input.graph, input.now);
+    reconcileStaleWorkflowRun(record, input.graph, input.now);
   }
   if (
     snapshot.manager.activeRunRef &&
@@ -39,8 +41,8 @@ export function reconcileSparkDagRunSnapshot(
   snapshot.manager.updatedAt = input.now;
 }
 
-function reconcileStaleDagRun(
-  record: SparkDagRunRecord,
+function reconcileStaleWorkflowRun(
+  record: WorkflowRunRecord,
   graph: TaskGraph | undefined,
   now: string,
 ): void {
@@ -63,23 +65,23 @@ function reconcileStaleDagRun(
     record.status = "succeeded";
   else if (taskRuns.some((run) => run.status === "cancelled")) record.status = "failed";
   else record.status = "stale";
-  record.errorMessage ??= `Spark workflow run was reconciled as ${record.status} after no active child process was found.`;
+  record.errorMessage ??= `workflow run was reconciled as ${record.status} after no active child process was found.`;
   record.finishedAt ??= now;
   record.updatedAt = now;
   if (record.completionDigest.length === 0)
     record.completionDigest = completionDigestFromTaskRuns(taskRuns);
-  record.completionFollowUp ??= createSparkDagCompletionFollowUp(record);
+  record.completionFollowUp ??= createWorkflowRunCompletionFollowUp(record);
 }
 
-function recoverActiveStaleDagRun(
-  snapshot: SparkDagRunStoreSnapshot,
-  record: SparkDagRunRecord,
+function recoverActiveStaleWorkflowRun(
+  snapshot: WorkflowRunStoreSnapshot,
+  record: WorkflowRunRecord,
   graph: TaskGraph | undefined,
   activeRunRefs: Set<RunRef>,
   now: string,
 ): boolean {
   if (record.status !== "stale" || record.acknowledgedAt) return false;
-  recoverActiveDagTaskRunRefs(record, graph, activeRunRefs);
+  recoverActiveWorkflowTaskRunRefs(record, graph, activeRunRefs);
   if (!record.taskRunRefs.some((runRef) => activeRunRefs.has(runRef))) return false;
   record.status = "running";
   record.finishedAt = undefined;
@@ -94,8 +96,8 @@ function recoverActiveStaleDagRun(
   return true;
 }
 
-function recoverActiveDagTaskRunRefs(
-  record: SparkDagRunRecord,
+function recoverActiveWorkflowTaskRunRefs(
+  record: WorkflowRunRecord,
   graph: TaskGraph | undefined,
   activeRunRefs: Set<RunRef>,
 ): void {
@@ -114,8 +116,8 @@ function recoverActiveDagTaskRunRefs(
 }
 
 function isActiveSchedulingWindow(
-  snapshot: SparkDagRunStoreSnapshot,
-  record: SparkDagRunRecord,
+  snapshot: WorkflowRunStoreSnapshot,
+  record: WorkflowRunRecord,
   activeRunRefs: Set<RunRef>,
 ): boolean {
   return (
@@ -125,3 +127,8 @@ function isActiveSchedulingWindow(
     record.taskRunRefs.length === 0
   );
 }
+
+/** @deprecated SparkDag* aliases are compatibility shims. Prefer WorkflowRun* reconciliation symbols. */
+export type SparkDagRunSnapshotReconcileInput = WorkflowRunSnapshotReconcileInput;
+/** @deprecated SparkDag* alias kept for compatibility. Prefer reconcileWorkflowRunSnapshot. */
+export const reconcileSparkDagRunSnapshot = reconcileWorkflowRunSnapshot;

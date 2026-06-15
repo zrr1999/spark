@@ -51,15 +51,15 @@ export function renderSparkInitSummary(result: SparkInitResult): string {
       `- 初始项目标题：${result.projectTitle}`,
       result.sparkMdPath
         ? `- SPARK.md：${result.sparkMdPath}`
-        : "- SPARK.md：未物化（intent 已保存为 spark-md artifact）",
+        : "- SPARK.md：未物化（intent 已保存为 document record）",
       `- Project：${result.projectRef}`,
       `- Tasks：${result.taskCount}`,
       result.currentTaskTitle
         ? `- 当前 task：${result.currentTaskTitle} (${result.currentTaskRef})`
         : "- 当前 task：无",
       `- 当前 TODO：${result.todoSummary.total} total / ${result.todoSummary.inProgress} in_progress / ${result.todoSummary.pending} pending / ${result.todoSummary.done} done`,
-      `- SPARK artifact：${result.sparkMdArtifactRef}`,
-      `- Role plan artifact：${result.rolePlanArtifactRef}`,
+      `- Intent record：${result.sparkMdArtifactRef}`,
+      `- Plan record：${result.rolePlanArtifactRef}`,
       `- Trace：${result.traceRef}`,
     ];
     for (const askRef of result.askArtifactRefs) lines.push(`- Clarification ask：${askRef}`);
@@ -72,15 +72,15 @@ export function renderSparkInitSummary(result: SparkInitResult): string {
     `- Initial project title: ${result.projectTitle}`,
     result.sparkMdPath
       ? `- SPARK.md: ${result.sparkMdPath}`
-      : "- SPARK.md: not materialized (intent saved as spark-md artifact)",
+      : "- SPARK.md: not materialized (intent saved as document record)",
     `- Project: ${result.projectRef}`,
     `- Tasks: ${result.taskCount}`,
     result.currentTaskTitle
       ? `- Current task: ${result.currentTaskTitle} (${result.currentTaskRef})`
       : "- Current task: none",
     `- Current TODOs: ${result.todoSummary.total} total / ${result.todoSummary.inProgress} in_progress / ${result.todoSummary.pending} pending / ${result.todoSummary.done} done`,
-    `- SPARK artifact: ${result.sparkMdArtifactRef}`,
-    `- Role plan artifact: ${result.rolePlanArtifactRef}`,
+    `- Intent record: ${result.sparkMdArtifactRef}`,
+    `- Plan record: ${result.rolePlanArtifactRef}`,
     `- Trace: ${result.traceRef}`,
   ];
   for (const askRef of result.askArtifactRefs) lines.push(`- Clarification ask: ${askRef}`);

@@ -6,8 +6,8 @@ import {
   adversarialReviewWorkflowScript,
   deepResearchWorkflowScript,
   fanOutWithBriefWorkflowScript,
-  parseSparkWorkflowScript,
-  runSparkWorkflowScript,
+  parseWorkflowScript,
+  runWorkflowScript,
 } from "../packages/pi-workflows/src/index.ts";
 import { createSparkWorkflowRoleRunAdapter } from "../packages/spark-runtime/src/index.ts";
 
@@ -31,17 +31,31 @@ void test("pi-workflows package stays isolated from runtime execution packages",
   }
 });
 
+void test("Spark production code uses generic pi-workflows imports instead of compatibility aliases", async () => {
+  const sourceFiles = await listTypeScriptFiles("packages/spark/src");
+  const deprecatedPiWorkflowImports =
+    /import\s+(?:type\s+)?\{[^}]*\b(?:defaultSparkDagRunStore|defaultWorkflowRunStore|workspaceWorkflowDir|SparkDag\w*|SparkWorkflow\w*|sparkDagRunNextSteps|runReadySparkTasks)\b[^}]*\}\s+from\s+["']pi-workflows["']/su;
+  for (const file of sourceFiles) {
+    const source = await readFile(file, "utf8");
+    assert.doesNotMatch(
+      source,
+      deprecatedPiWorkflowImports,
+      `${file} must import generic Workflow* symbols from pi-workflows; Spark-named aliases are compatibility only`,
+    );
+  }
+});
+
 void test("pi-workflows parses metadata without executing expressions", () => {
   assert.throws(
     () =>
-      parseSparkWorkflowScript(`export const meta = {
+      parseWorkflowScript(`export const meta = {
   name: (() => { throw new Error('meta executed') })(),
   description: 'Demo workflow',
 }`),
     /unsupported identifier|expected identifier/,
   );
 
-  const parsed = parseSparkWorkflowScript(`export const meta = {
+  const parsed = parseWorkflowScript(`export const meta = {
   name: 'demo { literal }',
   description: "Demo // workflow",
   phases: [
@@ -73,7 +87,7 @@ const [a, b] = await parallel([
 ])
 return { scan, a, b }`;
 
-  const parsed = parseSparkWorkflowScript(script);
+  const parsed = parseWorkflowScript(script);
   assert.equal(parsed.meta.name, "demo");
   assert.deepEqual(
     parsed.meta.phases?.map((phase) => phase.title),
@@ -81,7 +95,7 @@ return { scan, a, b }`;
   );
 
   const prompts: string[] = [];
-  const result = await runSparkWorkflowScript(script, {
+  const result = await runWorkflowScript(script, {
     agent: async (prompt) => {
       prompts.push(prompt);
       return "result: " + prompt;
@@ -101,7 +115,7 @@ return { scan, a, b }`;
   });
 
   const replayPrompts: string[] = [];
-  const replay = await runSparkWorkflowScript(script, {
+  const replay = await runWorkflowScript(script, {
     resumeJournal: new Map(result.journal.map((entry) => [entry.index, entry])),
     agent: async (prompt) => {
       replayPrompts.push(prompt);
@@ -116,28 +130,28 @@ return { scan, a, b }`;
 });
 
 void test("pi-workflows exposes and runs workflow script factories", async () => {
-  const deep = parseSparkWorkflowScript(deepResearchWorkflowScript());
+  const deep = parseWorkflowScript(deepResearchWorkflowScript());
   assert.equal(deep.meta.name, "deep_research");
   assert.deepEqual(
     deep.meta.phases?.map((phase) => phase.title),
     ["Queries", "Gather", "Verify", "Report"],
   );
 
-  const review = parseSparkWorkflowScript(adversarialReviewWorkflowScript());
+  const review = parseWorkflowScript(adversarialReviewWorkflowScript());
   assert.equal(review.meta.name, "adversarial_review");
   assert.deepEqual(
     review.meta.phases?.map((phase) => phase.title),
     ["Investigate", "Refute", "Consensus"],
   );
 
-  const fanOut = parseSparkWorkflowScript(fanOutWithBriefWorkflowScript());
+  const fanOut = parseWorkflowScript(fanOutWithBriefWorkflowScript());
   assert.equal(fanOut.meta.name, "fan_out_with_brief");
   assert.deepEqual(
     fanOut.meta.phases?.map((phase) => phase.title),
     ["Brief", "Fan out", "Fan in"],
   );
 
-  const deepRun = await runSparkWorkflowScript(deepResearchWorkflowScript(), {
+  const deepRun = await runWorkflowScript(deepResearchWorkflowScript(), {
     args: { question: "workflow smoke" },
     agent: async (_prompt, options) => options.label ?? "agent",
   });
@@ -147,7 +161,7 @@ void test("pi-workflows exposes and runs workflow script factories", async () =>
     ["Queries", "Gather", "Verify", "Report"],
   );
 
-  const reviewRun = await runSparkWorkflowScript(adversarialReviewWorkflowScript(), {
+  const reviewRun = await runWorkflowScript(adversarialReviewWorkflowScript(), {
     args: { task: "workflow smoke" },
     agent: async (_prompt, options) => options.label ?? "agent",
   });
@@ -176,7 +190,7 @@ void test("pi-workflows records explicit phase statuses", async () => {
     startedAt: string;
     finishedAt?: string;
   }> = [];
-  const run = await runSparkWorkflowScript(script, {
+  const run = await runWorkflowScript(script, {
     now: (() => {
       let tick = 0;
       return () => `2026-06-09T00:00:0${tick++}.000Z`;
@@ -228,7 +242,7 @@ void test("pi-workflows applies phase model defaults and per-agent overrides", a
   await agent('agent override', { label: 'override', model: 'provider/agent-model' })`;
 
   const models: Array<string | undefined> = [];
-  await runSparkWorkflowScript(script, {
+  await runWorkflowScript(script, {
     agent: async (_prompt, options) => {
       models.push(options.model);
       return "ok";
@@ -275,7 +289,7 @@ void test("pi-workflows role-run adapter maps workflow agents to Spark dependenc
   assert.equal(request.metadata.index, 2);
   assert.equal(request.metadata.isolation, "worktree");
   assert.equal(request.metadata.artifactRef, "artifact:brief-123");
-  assert.match(request.instruction, /Spark workflow child role-run/);
+  assert.match(request.instruction, /Spark workflow child run/);
   assert.match(request.instruction, /Inspect auth routes/);
   assert.match(request.instruction, /Phase: Review/);
   assert.match(request.instruction, /Isolation: worktree/);
@@ -286,7 +300,7 @@ void test("pi-workflows fan_out_with_brief records one brief and fans out with a
   const prompts: string[] = [];
   const artifactInputs: Array<{ title: string; body: string; kind?: string; format?: string }> = [];
 
-  const run = await runSparkWorkflowScript(fanOutWithBriefWorkflowScript(), {
+  const run = await runWorkflowScript(fanOutWithBriefWorkflowScript(), {
     args: {
       briefTitle: "Audit brief",
       briefBody: "Shared context for all workers.",
@@ -335,7 +349,7 @@ void test("pi-workflows fan_out_with_brief records one brief and fans out with a
 void test("pi-workflows fan_out_with_brief requires artifact recorder", async () => {
   await assert.rejects(
     () =>
-      runSparkWorkflowScript(fanOutWithBriefWorkflowScript(), {
+      runWorkflowScript(fanOutWithBriefWorkflowScript(), {
         args: { briefBody: "brief", agents: [{ name: "one", prompt: "work" }] },
         agent: async () => "unused",
       }),
@@ -349,10 +363,10 @@ await agent('check isolation', { isolation: 'container' })`;
 
   await assert.rejects(
     () =>
-      runSparkWorkflowScript(script, {
+      runWorkflowScript(script, {
         agent: async () => "should not run",
       }),
-    /Spark workflow agent isolation must be 'worktree'/,
+    /workflow agent isolation must be 'worktree'/,
   );
 });
 
@@ -369,7 +383,7 @@ const output = await parallel([1, 2, 3, 4].map((value) => async () => {
 }), { concurrency: 2 })
 return { output, maxActive }`;
 
-  const run = await runSparkWorkflowScript(script, { agent: async () => "unused" });
+  const run = await runWorkflowScript(script, { agent: async () => "unused" });
 
   assert.deepEqual(JSON.parse(JSON.stringify(run.result)), {
     output: [1, 2, 3, 4],
@@ -396,7 +410,7 @@ const collected = await parallel([
 ], { retry: { attempts: 2 }, onError: 'collect' })
 return { attempts, retried, collected }`;
 
-  const run = await runSparkWorkflowScript(script, { agent: async () => "unused" });
+  const run = await runWorkflowScript(script, { agent: async () => "unused" });
   const result = JSON.parse(JSON.stringify(run.result)) as {
     attempts: { flaky: number; bad: number };
     retried: string[];
@@ -417,7 +431,7 @@ void test("pi-workflows agent artifactRef prepends context bundle prompt", async
 return await agent('do the work', { label: 'worker', artifactRef: 'artifact:brief-123' })`;
   const prompts: string[] = [];
 
-  const run = await runSparkWorkflowScript(script, {
+  const run = await runWorkflowScript(script, {
     agent: async (prompt, options) => {
       prompts.push(prompt);
       assert.equal(options.artifactRef, "artifact:brief-123");
@@ -436,12 +450,12 @@ await agent('child', { label: 'child' })`;
 
   await assert.rejects(
     () =>
-      runSparkWorkflowScript(script, {
+      runWorkflowScript(script, {
         agent: async () => ({
           delivery: { status: "empty", message: "No final assistant message found" },
         }),
       }),
-    /Spark workflow agent child produced empty delivery: No final assistant message found/,
+    /workflow agent child produced empty delivery: No final assistant message found/,
   );
 });
 

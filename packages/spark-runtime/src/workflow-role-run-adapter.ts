@@ -1,5 +1,5 @@
 import type { RoleRef } from "pi-extension-api";
-import type { SparkWorkflowAgentOptions, SparkWorkflowAgentRunner } from "pi-workflows";
+import type { WorkflowAgentOptions, WorkflowAgentRunner } from "pi-workflows";
 
 export interface SparkWorkflowRoleRunRequest {
   roleRef: RoleRef;
@@ -35,7 +35,7 @@ export interface SparkWorkflowRoleRunAdapterDeps {
 
 export function createSparkWorkflowRoleRunAdapter(
   deps: SparkWorkflowRoleRunAdapterDeps,
-): SparkWorkflowAgentRunner {
+): WorkflowAgentRunner {
   return async (prompt, options) => {
     const label = normalizedWorkflowAgentLabel(options);
     const request: SparkWorkflowRoleRunRequest = {
@@ -62,7 +62,7 @@ export function createSparkWorkflowRoleRunAdapter(
 }
 
 export function normalizedWorkflowAgentLabel(
-  options: SparkWorkflowAgentOptions & { index: number },
+  options: WorkflowAgentOptions & { index: number },
 ): string {
   const explicit = options.label?.trim();
   return explicit || "workflow-agent-" + (options.index + 1);
@@ -70,11 +70,11 @@ export function normalizedWorkflowAgentLabel(
 
 export function renderSparkWorkflowAgentInstruction(
   prompt: string,
-  options: SparkWorkflowAgentOptions & { index: number; phase?: string },
+  options: WorkflowAgentOptions & { index: number; phase?: string },
   label = normalizedWorkflowAgentLabel(options),
 ): string {
   const lines = [
-    "You are a Spark workflow child role-run. Execute exactly the workflow agent request below and return the requested result.",
+    "You are a Spark workflow child run. Execute exactly the workflow agent request below and return the requested result.",
     "",
     "Workflow metadata:",
     "- Agent index: " + options.index,

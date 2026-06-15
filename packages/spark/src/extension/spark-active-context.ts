@@ -81,8 +81,6 @@ function renderActiveSparkProjectSummary(
     const reasonText = sessionGoal.pauseReason ?? sessionGoal.completedReason;
     lines.push(
       strings.goalLine({
-        scope: sessionGoal.scope,
-        projectRef: sessionGoal.projectRef,
         status: sessionGoal.status,
         objective: truncateInline(sessionGoal.objective, 180),
         reason: reasonText ? truncateInline(reasonText, 120) : undefined,
@@ -144,8 +142,6 @@ function renderNoCurrentSparkProjectSummary(
     const reasonText = sessionGoal.pauseReason ?? sessionGoal.completedReason;
     lines.push(
       strings.goalLine({
-        scope: sessionGoal.scope,
-        projectRef: sessionGoal.projectRef,
         status: sessionGoal.status,
         objective: truncateInline(sessionGoal.objective, 180),
         reason: reasonText ? truncateInline(reasonText, 120) : undefined,

@@ -121,8 +121,15 @@ export interface ExtensionUi {
   custom?: (...args: unknown[]) => unknown;
 }
 
+export interface SessionModelRef {
+  provider: string;
+  id: string;
+  api?: string;
+}
+
 export interface ExtensionContext {
   cwd?: string;
+  model?: SessionModelRef;
   hasUI?: boolean;
   ui?: ExtensionUi;
   isIdle?: () => boolean;
@@ -220,8 +227,8 @@ export class NotFoundError extends PiError {
   }
 }
 
-export const DEFAULT_SPARK_READY_TASK_MAX_CONCURRENCY = 4;
-export const DEFAULT_SPARK_READY_TASK_TIMEOUT_MS = 3_600_000;
+export const DEFAULT_READY_TASK_MAX_CONCURRENCY = 4;
+export const DEFAULT_READY_TASK_TIMEOUT_MS = 3_600_000;
 
 export function newRef<K extends RefKind>(kind: K, id: string = randomUUID()): Ref<K> {
   if (!id || id.includes(":")) throw new PiError("INVALID_REF", `invalid ${kind} id: ${id}`);
@@ -462,11 +469,11 @@ export interface TaskClaim {
 }
 
 export interface TaskAttribution {
-  /** Session/main actor identity. Role runs are rendered as sessionId/runName. */
+  /** Session/main actor identity. Child runs are rendered as sessionId/runName. */
   sessionId?: string;
-  /** Concrete role spec used for this completion, when completed by a role run. */
+  /** Compatibility role spec attribution for hosts that execute tasks through reusable role specs. */
   roleRef?: RoleRef;
-  /** Concrete role-run name. Main-session completions should leave this unset. */
+  /** Concrete child run name. Main-session completions should leave this unset. */
   runName?: string;
 }
 
@@ -583,9 +590,9 @@ export interface TaskRun {
   projectRef: ProjectRef;
   taskRef: TaskRef;
   roleRef?: RoleRef;
-  /** Human-readable name for this concrete role run; roleRef remains the reusable definition. */
+  /** Human-readable name for this concrete child run. */
   runName?: string;
-  /** Session that owns this concrete role run, used for post-completion attribution. */
+  /** Session that owns this concrete child run, used for post-completion attribution. */
   ownerSessionId?: string;
   status: TaskRunStatus;
   failureKind?: TaskRunFailureKind;

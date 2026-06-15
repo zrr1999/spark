@@ -1,13 +1,13 @@
 ---
 name: spark
-description: Use for turning an initial or ambiguous project intent into SPARK.md, a project/task DAG, artifacts, reviews, asks, and a role plan through the /spark command.
+description: Use for turning an initial or ambiguous project intent into SPARK.md, a project/task DAG, artifacts, reviews, asks, and a role plan through Spark's compatibility entry and canonical task/goal/workflow tools.
 ---
 
 # Spark
 
 Spark extensions are dual-host: the same retained extension packages should run under Pi's `@earendil-works/pi-coding-agent` host and under the native `spark-cli` host via `SparkHostRuntime` / `pi-extension-api`. Keep shared extension behavior host-neutral; put native CLI boot, provider/model selection, sessions, skills, and pi-tui wrappers in `packages/spark-cli/src/host/` or `packages/spark-cli/src/tui/`.
 
-Use Spark command modes intentionally: `/spark <idea>` for initialization/autodetection, `/research <focus>` for investigation, `/plan <focus>` for task-DAG refinement, `/execute <focus>` for one default execution step, `/goal <focus>` for autonomous verified foreground progress (derive the goal from current Spark state when focus is omitted, asking if ambiguous), and `/workflow[:selector] <focus>` for saved Spark workflow scripts. Workflows use `/workflow workspace:<name>` and `/workflow user:<name>`. Do not reintroduce legacy `/run*` command guidance.
+Use Spark command modes intentionally: the compatibility entry handles initialization/autodetection for existing callers; `/research <focus>` investigates, `/plan <focus>` refines the task DAG, `/execute <focus>` runs one default execution step, `/goal <focus>` drives autonomous verified foreground progress (derive the goal from current Spark state when focus is omitted, asking if ambiguous), and `/workflow[:selector] <focus>` runs saved Spark workflow scripts. Workflows use `/workflow workspace:<name>` and `/workflow user:<name>`. Do not reintroduce legacy `/run*` command guidance.
 
 Spark is now a composition/mode facade over generic Pi capabilities:
 

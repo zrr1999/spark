@@ -20,13 +20,8 @@ import {
 import { detectSparkProjectState, resolveSparkEntry } from "./spark-entry-resolution.ts";
 import { currentSparkProject, loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
 import { loadIndependentTodos } from "./session-todos.ts";
+import { startOrInferSessionGoal } from "./spark-goal-tool-registration.ts";
 import {
-  normalizeSparkGoalTokenBudget,
-  reviewedPauseCurrentSessionGoal,
-  startOrInferSessionGoal,
-} from "./spark-goal-tool-registration.ts";
-import {
-  applySessionGoalUsage,
   clearSessionGoal,
   loadSessionGoal,
   updateSessionGoalStatus,
@@ -124,10 +119,13 @@ export function registerSparkCommands(
   pi.on?.("agent_end", async (event, ctx) => {
     await handleForegroundGoalAgentEnd(pi, ctx, event);
   });
+  pi.on?.("tool_execution_end", async (event, ctx) => {
+    if (isGoalToolDeactivationEvent(event)) clearForegroundGoalLoop(ctx.cwd, ctx);
+  });
 
   pi.registerCommand("spark", {
     description:
-      "Enter the inferred Spark mode, or initialize a new Spark idea with /spark <idea>.",
+      "Compatibility entry: infer Spark mode or initialize a new Spark idea from the provided prompt.",
     async handler(args, ctx) {
       await handleSparkEntryCommand(pi, ctx, { kind: "auto", prompt: args.trim() });
     },
@@ -176,13 +174,6 @@ export function registerSparkCommands(
     },
   });
 
-  pi.registerCommand("pause-goal", {
-    description: "Pause the current session's active Spark goal without deleting it.",
-    async handler(args, ctx) {
-      await handleSparkPauseGoalCommand(pi, ctx, args.trim());
-    },
-  });
-
   pi.registerCommand("workflow", {
     description:
       "Enter Spark workflow execution mode; accepts optional selector like workspace:foo or user:foo.",
@@ -214,19 +205,8 @@ export function registerSparkCommands(
     return { focus: trimmed };
   }
 
-  function parseGoalCommandArgs(args: string): { objective: string; tokenBudget: number | null } {
-    const trimmed = args.trim();
-    const tokenPrefixes = ["--tokens=", "--token-budget="];
-    const prefix = tokenPrefixes.find((candidate) => trimmed.startsWith(candidate));
-    if (!prefix) return { objective: trimmed, tokenBudget: null };
-    const afterPrefix = trimmed.slice(prefix.length);
-    const tokenEnd = firstWhitespaceIndex(afterPrefix);
-    const tokenText = tokenEnd < 0 ? afterPrefix : afterPrefix.slice(0, tokenEnd);
-    if (!isDecimalDigits(tokenText)) return { objective: trimmed, tokenBudget: null };
-    return {
-      objective: (tokenEnd < 0 ? "" : afterPrefix.slice(tokenEnd + 1)).trim(),
-      tokenBudget: normalizeSparkGoalTokenBudget(tokenText),
-    };
+  function parseGoalCommandArgs(args: string): string {
+    return args.trim();
   }
 
   function firstWhitespaceIndex(value: string): number {
@@ -250,12 +230,6 @@ export function registerSparkCommands(
     return (char >= "a" && char <= "z") || (char >= "0" && char <= "9");
   }
 
-  function isDecimalDigits(value: string): boolean {
-    if (!value) return false;
-    for (const char of value) if (char < "0" || char > "9") return false;
-    return true;
-  }
-
   async function handleSparkEntryCommand(
     piApi: SparkCommandApi,
     ctx: SparkCommandContext,
@@ -272,9 +246,7 @@ export function registerSparkCommands(
     ctx: SparkCommandContext,
     rawArgs: string,
   ): Promise<void> {
-    const parsedGoalArgs = parseGoalCommandArgs(rawArgs);
-    const objective = parsedGoalArgs.objective;
-    const tokenBudget = parsedGoalArgs.tokenBudget;
+    const objective = parseGoalCommandArgs(rawArgs);
     const graph = await loadSparkGraph(ctx.cwd, ctx);
     const project = graph ? await currentSparkProject(ctx.cwd, ctx, graph) : undefined;
     const existingGoal = await loadSessionGoal(ctx.cwd, ctx);
@@ -291,7 +263,7 @@ export function registerSparkCommands(
       if (completedProject) {
         clearForegroundGoalLoop(ctx.cwd, ctx);
         if (objective.trim()) {
-          const goal = await startOrInferSessionGoal(ctx.cwd, ctx, graph, objective, tokenBudget);
+          const goal = await startOrInferSessionGoal(ctx.cwd, ctx, graph, objective);
           if (!goal) return;
           await deps.refreshSparkWidget(ctx.cwd, ctx);
           const projectLabel = project ? ` · project: ${project.title}` : "";
@@ -315,15 +287,6 @@ export function registerSparkCommands(
         ctx.ui?.notify?.(
           notifications.staleClearedFor(compactInline(completedProject.title)),
           "info",
-        );
-        return;
-      }
-      if (existingGoal.status === "budgetLimited") {
-        const budget =
-          existingGoal.tokenBudget === null ? "unlimited" : String(existingGoal.tokenBudget);
-        ctx.ui?.notify?.(
-          `Spark goal cannot continue because its token budget is exhausted (${existingGoal.usage.tokensUsed}/${budget}). Start a new /goal or raise the budget with the goal tool.`,
-          "warning",
         );
         return;
       }
@@ -375,7 +338,7 @@ export function registerSparkCommands(
       );
       return;
     }
-    const goal = await startOrInferSessionGoal(ctx.cwd, ctx, graph, objective, tokenBudget);
+    const goal = await startOrInferSessionGoal(ctx.cwd, ctx, graph, objective);
     if (!goal) return;
     await deps.refreshSparkWidget(ctx.cwd, ctx);
     const projectLabel = project ? ` · project: ${project.title}` : "";
@@ -430,11 +393,9 @@ export function registerSparkCommands(
   ): ReturnType<TaskGraph["projects"]>[number] | undefined {
     if (goal.source !== "inferred") return undefined;
     const projects = graph.projects();
-    const candidate = goal.projectRef
-      ? projects.find((project) => project.ref === goal.projectRef)
-      : projects.find((project) =>
-          inferredGoalObjectiveNamesProject(goal.objective, project.title),
-        );
+    const candidate = projects.find((project) =>
+      inferredGoalObjectiveNamesProject(goal.objective, project.title),
+    );
     if (!candidate || candidate.status !== "done") return undefined;
     return candidate;
   }
@@ -465,6 +426,7 @@ export function registerSparkCommands(
         instructions.goalLine(goal.objective),
         ...sweep,
         instructions.pauseLineForeground,
+        instructions.loopModeDecisionContract,
         instructions.loopReviewerOwnership,
       ]
         .filter((line): line is string => Boolean(line))
@@ -498,42 +460,6 @@ export function registerSparkCommands(
       `${labels.join("\n")}${more}`,
       instructions.todoSweepDisposition,
     ];
-  }
-
-  async function handleSparkPauseGoalCommand(
-    piApi: SparkCommandApi,
-    ctx: SparkCommandContext,
-    reason: string,
-  ): Promise<void> {
-    const result = await reviewedPauseCurrentSessionGoal(ctx.cwd, ctx, deps, reason || undefined);
-    const project = await currentSparkProjectForCtx(ctx);
-    const language = sparkLanguageForProject({
-      project,
-      goal: result.goal,
-      fallbackText: reason,
-    });
-    const notifications = goalNotifications(language);
-    if (!result.goal) {
-      ctx.ui?.notify?.(notifications.noSessionGoal, "warning");
-      return;
-    }
-    if (!result.approved) {
-      const visible = notifications.pauseBlocked(compactInline(result.goal.objective));
-      ctx.ui?.notify?.(visible, "warning");
-      piApi.sendMessage({ customType: "spark-goal-request", content: visible, display: true });
-      return;
-    }
-    clearForegroundGoalLoop(ctx.cwd, ctx);
-    const visible = notifications.paused(compactInline(result.goal.objective));
-    ctx.ui?.notify?.(visible, "info");
-    piApi.sendMessage({ customType: "spark-goal-request", content: visible, display: true });
-  }
-
-  async function currentSparkProjectForCtx(
-    ctx: SparkCommandContext,
-  ): Promise<SparkProjectLike | undefined> {
-    const graph = await loadSparkGraph(ctx.cwd, ctx);
-    return graph ? await currentSparkProject(ctx.cwd, ctx, graph) : undefined;
   }
 
   async function scheduleForegroundGoalLoopIfActive(
@@ -591,6 +517,15 @@ export function registerSparkCommands(
     if (!options.preserveGeneration) nextForegroundGoalLoopGeneration(key);
   }
 
+  function isGoalToolDeactivationEvent(event: unknown): boolean {
+    if (!event || typeof event !== "object") return false;
+    const toolEvent = event as { toolName?: unknown; isError?: unknown; params?: unknown };
+    if (toolEvent.toolName !== "goal" || toolEvent.isError === true) return false;
+    if (!toolEvent.params || typeof toolEvent.params !== "object") return false;
+    const action = (toolEvent.params as { action?: unknown }).action;
+    return action === "pause" || action === "clear";
+  }
+
   function nextForegroundGoalLoopGeneration(key: string): number {
     const generation = (foregroundGoalLoopGenerations.get(key) ?? 0) + 1;
     foregroundGoalLoopGenerations.set(key, generation);
@@ -607,6 +542,7 @@ export function registerSparkCommands(
     if (timer) clearTimeout(timer);
     foregroundGoalTimers.delete(key);
     const generation = nextForegroundGoalLoopGeneration(key);
+    ctx.sparkAutonomousGoalTurn = { goalId };
     foregroundGoalAwaitingTurns.set(key, {
       piApi,
       ctx,
@@ -702,6 +638,8 @@ export function registerSparkCommands(
     }
     for (const [key, awaiting] of pending) {
       foregroundGoalAwaitingTurns.delete(key);
+      if (awaiting.ctx.sparkAutonomousGoalTurn?.goalId === awaiting.goalId)
+        delete awaiting.ctx.sparkAutonomousGoalTurn;
       if (foregroundGoalLoopGenerations.get(key) !== awaiting.generation) continue;
       const active = await loadActiveForegroundGoal(awaiting.ctx);
       if (!active || active.goal.goalId !== awaiting.goalId) continue;
@@ -720,12 +658,8 @@ export function registerSparkCommands(
           });
         continue;
       }
-      const accounting = await recordForegroundGoalSuccessfulTurn(awaiting.ctx, awaiting, event);
+      const accounting = await recordForegroundGoalSuccessfulTurn(awaiting.ctx);
       await resetForegroundGoalRetryState(awaiting.ctx, accounting.goal ?? active.goal);
-      if (accounting.crossedBudget) {
-        await notifyForegroundGoalBudgetLimited(awaiting.ctx, accounting.goal ?? active.goal);
-        continue;
-      }
       scheduleForegroundGoalLoop(
         awaiting.piApi ?? piApi,
         awaiting.ctx,
@@ -818,91 +752,11 @@ export function registerSparkCommands(
     return { paused: false, delayMs: retryState.nextDelayMs };
   }
 
-  async function recordForegroundGoalSuccessfulTurn(
-    ctx: SparkGoalLoopContext,
-    awaiting: ForegroundGoalAwaitingTurn,
-    event: unknown,
-  ): Promise<{
+  async function recordForegroundGoalSuccessfulTurn(ctx: SparkGoalLoopContext): Promise<{
     goal?: NonNullable<Awaited<ReturnType<typeof loadSessionGoal>>>;
-    changed: boolean;
-    crossedBudget: boolean;
   }> {
-    const tokensUsedDelta = foregroundGoalEventTokensUsed(event);
-    const activeSecondsDelta = Math.max(0, Math.floor((Date.now() - awaiting.startedAtMs) / 1000));
-    const result = await applySessionGoalUsage(ctx.cwd, ctx, {
-      goalId: awaiting.goalId,
-      tokensUsedDelta,
-      activeSecondsDelta,
-    });
-    if (result.changed) await deps.refreshSparkWidget(ctx.cwd, ctx);
-    return result;
-  }
-
-  async function notifyForegroundGoalBudgetLimited(
-    ctx: SparkGoalLoopContext,
-    goal: NonNullable<Awaited<ReturnType<typeof loadSessionGoal>>>,
-  ): Promise<void> {
-    clearForegroundGoalLoop(ctx.cwd, ctx);
-    const project = await currentSparkProjectForCtx(ctx);
-    const language = sparkLanguageForProject({ project, goal });
-    const message =
-      language === "zh"
-        ? `Spark 目标因 token budget 耗尽而停止自动续跑：${goal.usage.tokensUsed}/${goal.tokenBudget}`
-        : `Spark goal stopped after token budget was exhausted: ${goal.usage.tokensUsed}/${goal.tokenBudget}`;
-    ctx.ui?.notify?.(message, "warning");
-  }
-
-  function foregroundGoalEventTokensUsed(event: unknown): number {
-    const usage = findTokenUsage(event);
-    if (!usage) return 0;
-    return usage.totalTokens ?? usage.inputTokens + usage.outputTokens;
-  }
-
-  function findTokenUsage(
-    event: unknown,
-  ): { inputTokens: number; outputTokens: number; totalTokens?: number } | undefined {
-    if (!event || typeof event !== "object") return undefined;
-    const record = event as Record<string, unknown>;
-    const direct = normalizeTokenUsageRecord(record.usage);
-    if (direct) return direct;
-    const message = normalizeTokenUsageRecord(record.message);
-    if (message) return message;
-    const messages = record.messages;
-    if (Array.isArray(messages)) {
-      for (const candidate of [...messages].reverse()) {
-        const usage = normalizeTokenUsageRecord(candidate);
-        if (usage) return usage;
-      }
-    }
-    return undefined;
-  }
-
-  function normalizeTokenUsageRecord(
-    value: unknown,
-  ): { inputTokens: number; outputTokens: number; totalTokens?: number } | undefined {
-    if (!value || typeof value !== "object") return undefined;
-    const record = value as Record<string, unknown>;
-    const usage = record.usage && typeof record.usage === "object" ? record.usage : record;
-    const usageRecord = usage as Record<string, unknown>;
-    const inputTokens = optionalTokenCount(
-      usageRecord.inputTokens ?? usageRecord.input_tokens ?? usageRecord.promptTokens,
-    );
-    const outputTokens = optionalTokenCount(
-      usageRecord.outputTokens ?? usageRecord.output_tokens ?? usageRecord.completionTokens,
-    );
-    const totalTokens = optionalTokenCount(usageRecord.totalTokens ?? usageRecord.total_tokens);
-    if (totalTokens === undefined && inputTokens === undefined && outputTokens === undefined)
-      return undefined;
-    return {
-      inputTokens: inputTokens ?? 0,
-      outputTokens: outputTokens ?? 0,
-      ...(totalTokens !== undefined ? { totalTokens } : {}),
-    };
-  }
-
-  function optionalTokenCount(value: unknown): number | undefined {
-    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
-    return Math.trunc(value);
+    const goal = await loadSessionGoal(ctx.cwd, ctx);
+    return { goal: goal ?? undefined };
   }
 
   async function resetForegroundGoalRetryState(
@@ -924,7 +778,7 @@ export function registerSparkCommands(
     if (!goal.retryState || goal.retryState.consecutiveFailures === 0) return;
     if (goal.status === "complete") return;
     await updateSessionGoalStatus(ctx.cwd, ctx, goal.status, {
-      reason: goal.pauseReason ?? goal.budgetLimitedReason,
+      reason: goal.pauseReason,
       review: goal.lastReview,
       retryState: null,
     });
@@ -1024,11 +878,7 @@ export function registerSparkCommands(
       );
       return undefined;
     }
-    const project = graph
-      ? goal.scope === "project" && goal.projectRef
-        ? graph.projects().find((candidate) => candidate.ref === goal.projectRef)
-        : await currentSparkProject(ctx.cwd, ctx, graph)
-      : undefined;
+    const project = graph ? await currentSparkProject(ctx.cwd, ctx, graph) : undefined;
     return { graph: graph ?? undefined, project, goal };
   }
 
@@ -1058,14 +908,31 @@ export function registerSparkCommands(
       await deps.refreshSparkWidget(ctx.cwd, ctx);
       return Boolean(updated);
     }
+    const reviewContext = await goalReviewContext(ctx, active, independentTodos);
+    if (!reviewContext.projectRef && reviewContext.evidenceRefs.length === 0) {
+      const reviewedAt = nowIso();
+      const reason = "Goal progress needs a current Spark project before completion review.";
+      const updated = await updateSessionGoalStatus(ctx.cwd, ctx, "active", {
+        review: {
+          achieved: false,
+          confidence: "deterministic-blocker",
+          reason,
+          remainingWork:
+            'Create or select a project with task({ action: "project_use", title, description }) using the goal objective as the project intent, then plan initial concrete tasks with task({ action: "plan" }).',
+          blockers: ["missing_current_project"],
+          reviewedAt,
+        },
+        expectedGoalId: active.goal.goalId,
+      });
+      await deps.refreshSparkWidget(ctx.cwd, ctx);
+      return Boolean(updated);
+    }
     const reviewerRunner = await deps.createReviewerRunner?.(ctx.cwd, ctx);
     if (!reviewerRunner) return true;
-    const reviewContext = await goalReviewContext(ctx, active, independentTodos);
     const reviewInput: GoalReviewInput = {
       targetKind: "goal",
       cwd: ctx.cwd,
-      projectRef:
-        active.goal.scope === "project" ? active.goal.projectRef : reviewContext.projectRef,
+      projectRef: reviewContext.projectRef,
       projectStatus: reviewContext.projectStatus,
       goalId: active.goal.goalId,
       objective: active.goal.objective,
@@ -1221,7 +1088,7 @@ export function registerSparkCommands(
   }
 
   function isSessionTodoDispositionGoal(goal: SparkSessionGoal): boolean {
-    return goal.scope === "session" && /session TODO/i.test(goal.objective);
+    return /session TODO/i.test(goal.objective);
   }
 
   async function recordSessionTodoDispositionEvidence(
@@ -1237,12 +1104,11 @@ export function registerSparkCommands(
       return counts;
     }, {});
     const artifact = await defaultArtifactStore(cwd).put({
-      kind: "review",
+      kind: "record",
       title: `Session TODO disposition snapshot for goal: ${compactInline(goal.objective)}`,
       format: "json",
       body: {
         goalId: goal.goalId,
-        scope: goal.scope,
         objective: goal.objective,
         sessionKey: goal.sessionKey,
         recordedAt: nowIso(),
@@ -1252,7 +1118,7 @@ export function registerSparkCommands(
         todos: todos.map(sessionTodoEvidenceEntry),
       } as unknown as JsonValue,
       provenance: {
-        producer: "spark",
+        producer: "task",
         note: "Current session TODO disposition evidence for goal completion review.",
       },
     });
@@ -1275,8 +1141,6 @@ export function registerSparkCommands(
   ): SparkProjectLike | undefined {
     if (!active.graph) return active.project;
     if (active.project) return active.project;
-    if (active.goal.scope === "project" && active.goal.projectRef)
-      return active.graph.projects().find((project) => project.ref === active.goal.projectRef);
     const projectsWithEvidence = active.graph
       .projects()
       .filter((project) => projectTaskEvidenceRefs(active.graph!, project.ref).length > 0);
@@ -1304,7 +1168,7 @@ export function registerSparkCommands(
   ): Promise<ArtifactRef[]> {
     const taskEvidenceRefs = projectTaskEvidenceRefs(graph, projectRef);
     const projectReviewRefs = (
-      await defaultArtifactStore(cwd).list({ kind: "review", projectRef })
+      await defaultArtifactStore(cwd).list({ producer: "review", projectRef })
     ).map((artifact) => artifact.ref);
     return [...new Set([...taskEvidenceRefs, ...projectReviewRefs])].slice(-20);
   }
@@ -1375,12 +1239,11 @@ export function registerSparkCommands(
     ];
     return store.put({
       ref,
-      kind: "review",
-      title: `Goal review for ${active.goal.scope} goal: ${compactInline(active.goal.objective)}`,
+      kind: "record",
+      title: `Goal review for session goal: ${compactInline(active.goal.objective)}`,
       format: "json",
       body: {
         goalId: active.goal.goalId,
-        scope: active.goal.scope,
         ...(input.projectRef ? { projectRef: input.projectRef } : {}),
         objective: active.goal.objective,
         reviewPacket,
@@ -1423,6 +1286,7 @@ export function registerSparkCommands(
       projectTitle ? instructions.currentProject(projectTitle) : undefined,
       instructions.goalLine(objective),
       status,
+      instructions.loopModeDecisionContract,
       instructions.loopReviewerOwnership,
     ]
       .filter((line): line is string => Boolean(line))
@@ -1434,12 +1298,18 @@ export function registerSparkCommands(
     project: SparkProjectLike | undefined,
     language: SparkLanguage,
   ): string | undefined {
-    if (!graph || !project) return undefined;
+    if (!graph || !project) return renderGoalBootstrapStatus(language);
     const tasks = graph.tasks(project.ref);
     const unfinished = tasks.filter((task) => isUnfinishedTaskStatus(task.status));
     const ready = graph.readyTasks(project.ref);
     const readyHead = ready.slice(0, 3).map((task) => task.title);
     return goalContextStrings(language).projectStatus(unfinished.length, ready.length, readyHead);
+  }
+
+  function renderGoalBootstrapStatus(language: SparkLanguage): string {
+    return language === "zh"
+      ? '当前 goal 尚未绑定项目。下一步：用 task({ action: "project_use", title, description }) 基于目标创建或选择项目，然后用 task({ action: "plan" }) 规划初始具体任务。不要等待用户手动建项目，除非目标意图确实不明确。'
+      : 'No current project is selected for this goal. Next: create or select a project with task({ action: "project_use", title, description }) using the goal objective as project intent, then plan initial concrete tasks with task({ action: "plan" }). Do not wait for the user to create the project manually unless the goal intent is genuinely ambiguous.';
   }
 
   function foregroundGoalLoopKey(cwd: string, ctx: SparkToolContext): string {

@@ -1,13 +1,13 @@
 import {
-  sparkDagRunNextSteps,
-  type SparkDagRunRecord,
-  type SparkDagStatusSummary,
+  workflowRunNextSteps,
+  type WorkflowRunRecord,
+  type WorkflowRunStatusSummary,
 } from "pi-workflows";
 
 export function appendCompactSparkDagStatusLines(
   lines: string[],
-  dagStatus: SparkDagStatusSummary,
-): SparkDagRunRecord | undefined {
+  dagStatus: WorkflowRunStatusSummary,
+): WorkflowRunRecord | undefined {
   const compactRun = dagStatus.activeRun ?? dagStatus.actionableRun;
   if (!compactRun) return undefined;
   const runKind = compactRun.ref === dagStatus.activeRun?.ref ? "active" : "actionable";
@@ -17,7 +17,10 @@ export function appendCompactSparkDagStatusLines(
   return compactRun;
 }
 
-export function appendSparkDagStatusLines(lines: string[], dagStatus: SparkDagStatusSummary): void {
+export function appendSparkDagStatusLines(
+  lines: string[],
+  dagStatus: WorkflowRunStatusSummary,
+): void {
   const managerSuffix = dagStatus.manager.activeRunRef
     ? ` active=${dagStatus.manager.activeRunRef}`
     : "";
@@ -38,7 +41,7 @@ export function appendSparkDagStatusLines(lines: string[], dagStatus: SparkDagSt
   }
 }
 
-export function formatSparkDagRun(run: SparkDagRunRecord): string {
+export function formatSparkDagRun(run: WorkflowRunRecord): string {
   const finishedSuffix = run.finishedAt ? ` finished=${run.finishedAt}` : "";
   const timeoutSuffix = run.timedOut ? " timed_out=true" : "";
   const ackSuffix = run.acknowledgedAt
@@ -49,10 +52,10 @@ export function formatSparkDagRun(run: SparkDagRunRecord): string {
 
 export function appendSparkDagRunNextStepLines(
   lines: string[],
-  run: SparkDagRunRecord,
+  run: WorkflowRunRecord,
   indent: string,
 ): void {
-  const nextSteps = sparkDagRunNextSteps(run);
+  const nextSteps = workflowRunNextSteps(run);
   if (!nextSteps) return;
   lines.push(`${indent}Next steps (${nextSteps.status}):`);
   for (const action of nextSteps.nextActions) lines.push(`${indent}  - ${action}`);

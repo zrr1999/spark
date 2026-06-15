@@ -28,6 +28,7 @@ import {
   renderSparkGoalContinuationPrompt,
   sparkGoalObjectiveForNextTask,
 } from "./spark-goal-continuation.ts";
+import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 import type {
   ReviewerRunResult,
@@ -197,7 +198,7 @@ export function registerSparkFinishTaskTool(
         if (isFinishTaskErrorResult(candidate)) {
           if (candidate.error === "no_project")
             return {
-              content: [{ type: "text", text: "No Spark project found." }],
+              content: [{ type: "text", text: NO_SPARK_PROJECT_FOUND_HINT }],
               details: { found: false },
             };
           return {
@@ -322,13 +323,13 @@ export function registerSparkFinishTaskTool(
       const finishResult = updated.result as FinishCommitResult;
       if (!updated.graph)
         return {
-          content: [{ type: "text", text: "No Spark project found." }],
+          content: [{ type: "text", text: NO_SPARK_PROJECT_FOUND_HINT }],
           details: { found: false },
         };
       if (isFinishTaskErrorResult(finishResult)) {
         if (finishResult.error === "no_project")
           return {
-            content: [{ type: "text", text: "No Spark project found." }],
+            content: [{ type: "text", text: NO_SPARK_PROJECT_FOUND_HINT }],
             details: { found: false },
           };
         return {
@@ -656,7 +657,7 @@ async function recordTaskReviewArtifact(
     finishedAt: review.record.finishedAt,
   };
   return defaultArtifactStore(cwd).put({
-    kind: "review",
+    kind: "record",
     title: `Task finish review for @${task.name}: ${task.title}`,
     format: "json",
     body: {

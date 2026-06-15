@@ -29,7 +29,7 @@ export function registerPiWorkflowTool(pi: PiWorkflowExtensionApi): void {
     description:
       "Canonical saved-script workflow tool. List or read workflows from controlled workspace/user roots; inline workflows are not accepted.",
     promptGuidelines: [
-      "Use workflow for saved-script discovery/preview only; /goal is separate and not a workflow.",
+      "Use workflow for saved-script discovery/preview only; goal state is separate and not a workflow.",
       "Do not pass inline workflow source or arbitrary paths; use workspace:<id> or user:<id> selectors.",
       "Execute workflows through the host's explicit workflow command/runtime, not by evaluating scripts from this tool.",
     ],

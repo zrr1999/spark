@@ -1,11 +1,11 @@
 import { nowIso, type RunRef, type ProjectRef } from "pi-extension-api";
 
-import type { SparkDagRunRecord, SparkDagRunStoreSnapshot } from "./index.ts";
+import type { WorkflowRunRecord, WorkflowRunStoreSnapshot } from "./index.ts";
 import { isAcknowledgeableDagRun, isTerminalDagRunStatus } from "./dag-run-status.ts";
 
-export type SparkDagRunRetentionCandidateReason = "old-succeeded" | "old-acknowledged-problem";
+export type WorkflowRunRetentionCandidateReason = "old-succeeded" | "old-acknowledged-problem";
 
-export type SparkDagRunRetentionKeepReason =
+export type WorkflowRunRetentionKeepReason =
   | "active-run"
   | "running"
   | "non-terminal"
@@ -16,20 +16,20 @@ export type SparkDagRunRetentionKeepReason =
   | "unsafe-status"
   | "invalid-timestamp";
 
-export interface SparkDagRunRetentionEntry {
+export interface WorkflowRunRetentionEntry {
   ref: RunRef;
   projectRef?: ProjectRef;
-  status: SparkDagRunRecord["status"];
+  status: WorkflowRunRecord["status"];
   startedAt: string;
   updatedAt: string;
   finishedAt?: string;
   acknowledgedAt?: string;
   retentionDate: string;
   ageDays?: number;
-  reason: SparkDagRunRetentionCandidateReason | SparkDagRunRetentionKeepReason;
+  reason: WorkflowRunRetentionCandidateReason | WorkflowRunRetentionKeepReason;
 }
 
-export interface SparkDagRunPruneOptions {
+export interface WorkflowRunPruneOptions {
   dryRun?: boolean;
   olderThanDays?: number;
   keepRecent?: number;
@@ -38,8 +38,8 @@ export interface SparkDagRunPruneOptions {
   now?: string;
 }
 
-export interface SparkDagRunPruneResult {
-  snapshot: SparkDagRunStoreSnapshot;
+export interface WorkflowRunPruneResult {
+  snapshot: WorkflowRunStoreSnapshot;
   dryRun: boolean;
   olderThanDays: number;
   keepRecent: number;
@@ -47,12 +47,12 @@ export interface SparkDagRunPruneResult {
   cutoffIso: string;
   before: number;
   after: number;
-  candidates: SparkDagRunRetentionEntry[];
-  deleted: SparkDagRunRetentionEntry[];
-  kept: SparkDagRunRetentionEntry[];
+  candidates: WorkflowRunRetentionEntry[];
+  deleted: WorkflowRunRetentionEntry[];
+  kept: WorkflowRunRetentionEntry[];
 }
 
-export interface NormalizedSparkDagRunPruneOptions {
+export interface NormalizedWorkflowRunPruneOptions {
   dryRun: boolean;
   olderThanDays: number;
   keepRecent: number;
@@ -63,9 +63,9 @@ export interface NormalizedSparkDagRunPruneOptions {
   cutoffIso: string;
 }
 
-export function normalizeSparkDagRunPruneOptions(
-  options: SparkDagRunPruneOptions,
-): NormalizedSparkDagRunPruneOptions {
+export function normalizeWorkflowRunPruneOptions(
+  options: WorkflowRunPruneOptions,
+): NormalizedWorkflowRunPruneOptions {
   const olderThanDays = Number.isFinite(options.olderThanDays ?? 30)
     ? Math.max(0, Math.floor(options.olderThanDays ?? 30))
     : 30;
@@ -90,18 +90,18 @@ export function normalizeSparkDagRunPruneOptions(
   };
 }
 
-export function planSparkDagRunPrune(
-  snapshot: SparkDagRunStoreSnapshot,
-  options: NormalizedSparkDagRunPruneOptions,
-): SparkDagRunPruneResult {
+export function planWorkflowRunPrune(
+  snapshot: WorkflowRunStoreSnapshot,
+  options: NormalizedWorkflowRunPruneOptions,
+): WorkflowRunPruneResult {
   const activeRunRefs = new Set(options.activeRunRefs);
   if (snapshot.manager.activeRunRef) activeRunRefs.add(snapshot.manager.activeRunRef);
   const terminalRuns = snapshot.runs
     .filter((run) => isTerminalDagRunStatus(run.status))
-    .sort(compareSparkDagRunRetentionDateDesc);
+    .sort(compareWorkflowRunRetentionDateDesc);
   const globallyRecent = new Set(terminalRuns.slice(0, options.keepRecent).map((run) => run.ref));
   const recentlyByProject = new Set<RunRef>();
-  const byProject = new Map<string, SparkDagRunRecord[]>();
+  const byProject = new Map<string, WorkflowRunRecord[]>();
   for (const run of terminalRuns) {
     const projectKey = run.projectRef ?? "__unprojected__";
     byProject.set(projectKey, [...(byProject.get(projectKey) ?? []), run]);
@@ -109,10 +109,10 @@ export function planSparkDagRunPrune(
   for (const runs of byProject.values())
     for (const run of runs.slice(0, options.keepRecentPerProject)) recentlyByProject.add(run.ref);
 
-  const candidates: SparkDagRunRetentionEntry[] = [];
-  const kept: SparkDagRunRetentionEntry[] = [];
+  const candidates: WorkflowRunRetentionEntry[] = [];
+  const kept: WorkflowRunRetentionEntry[] = [];
   for (const run of snapshot.runs) {
-    const decision = sparkDagRunRetentionDecision(run, options, {
+    const decision = workflowRunRetentionDecision(run, options, {
       activeRunRefs,
       globallyRecent,
       recentlyByProject,
@@ -136,21 +136,21 @@ export function planSparkDagRunPrune(
   };
 }
 
-function sparkDagRunRetentionDecision(
-  run: SparkDagRunRecord,
-  options: NormalizedSparkDagRunPruneOptions,
+function workflowRunRetentionDecision(
+  run: WorkflowRunRecord,
+  options: NormalizedWorkflowRunPruneOptions,
   windows: {
     activeRunRefs: Set<RunRef>;
     globallyRecent: Set<RunRef>;
     recentlyByProject: Set<RunRef>;
   },
-): SparkDagRunRetentionEntry {
-  const retentionDate = sparkDagRunRetentionDate(run);
+): WorkflowRunRetentionEntry {
+  const retentionDate = workflowRunRetentionDate(run);
   const retentionMs = Date.parse(retentionDate);
   const ageDays = Number.isFinite(retentionMs)
     ? Math.max(0, (options.nowMs - retentionMs) / (24 * 60 * 60 * 1_000))
     : undefined;
-  const entry = (reason: SparkDagRunRetentionEntry["reason"]): SparkDagRunRetentionEntry => ({
+  const entry = (reason: WorkflowRunRetentionEntry["reason"]): WorkflowRunRetentionEntry => ({
     ref: run.ref,
     projectRef: run.projectRef,
     status: run.status,
@@ -181,12 +181,24 @@ function sparkDagRunRetentionDecision(
   return entry("unsafe-status");
 }
 
-function sparkDagRunRetentionDate(run: SparkDagRunRecord): string {
+function workflowRunRetentionDate(run: WorkflowRunRecord): string {
   return run.finishedAt ?? run.updatedAt ?? run.startedAt;
 }
 
-function compareSparkDagRunRetentionDateDesc(a: SparkDagRunRecord, b: SparkDagRunRecord): number {
-  const byDate = sparkDagRunRetentionDate(b).localeCompare(sparkDagRunRetentionDate(a));
+function compareWorkflowRunRetentionDateDesc(a: WorkflowRunRecord, b: WorkflowRunRecord): number {
+  const byDate = workflowRunRetentionDate(b).localeCompare(workflowRunRetentionDate(a));
   if (byDate !== 0) return byDate;
   return b.ref.localeCompare(a.ref);
 }
+
+/** @deprecated SparkDag* aliases are compatibility shims. Prefer WorkflowRun* retention symbols. */
+export type SparkDagRunRetentionCandidateReason = WorkflowRunRetentionCandidateReason;
+export type SparkDagRunRetentionKeepReason = WorkflowRunRetentionKeepReason;
+export type SparkDagRunRetentionEntry = WorkflowRunRetentionEntry;
+export type SparkDagRunPruneOptions = WorkflowRunPruneOptions;
+export type SparkDagRunPruneResult = WorkflowRunPruneResult;
+export type NormalizedSparkDagRunPruneOptions = NormalizedWorkflowRunPruneOptions;
+/** @deprecated SparkDag* alias kept for compatibility. Prefer normalizeWorkflowRunPruneOptions. */
+export const normalizeSparkDagRunPruneOptions = normalizeWorkflowRunPruneOptions;
+/** @deprecated SparkDag* alias kept for compatibility. Prefer planWorkflowRunPrune. */
+export const planSparkDagRunPrune = planWorkflowRunPrune;

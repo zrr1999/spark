@@ -244,8 +244,49 @@ void test("spark runtime role dispatch fails loudly without model settings", asy
           { roleRef: "role:builtin-worker", instruction: "Run without a model setting." },
           { dryRun: false, cwd: dir, piCommand: "pi", timeoutMs: 5_000 },
         ),
-      /role model setting required for role:builtin-worker/,
+      /role model unavailable for role:builtin-worker/,
     );
+  } finally {
+    if (previousHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousHome;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark runtime role dispatch inherits session model when no role model is saved", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-runtime-session-model-"));
+  const previousHome = process.env.PI_ROLES_HOME;
+  process.env.PI_ROLES_HOME = join(dir, "home");
+  try {
+    const fakePi = join(dir, "fake-pi.mjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "const args = process.argv.slice(2);",
+        "if (!args.includes('--print')) process.exit(10);",
+        "if (!args.includes('--model') || args[args.indexOf('--model') + 1] !== 'test/model') process.exit(11);",
+        "process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Runtime session model result.' }] }, args }) + '\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    const registry = new RoleRegistry();
+    const result = await runRoleInstructionOnly(
+      registry,
+      { roleRef: "role:builtin-worker", instruction: "Run with the session model." },
+      {
+        dryRun: false,
+        cwd: dir,
+        piCommand: fakePi,
+        timeoutMs: 5_000,
+        sessionModel: "test/model",
+      },
+    );
+
+    assert.equal(result.record.status, "succeeded");
+    assert.equal(result.record.model, "test/model");
   } finally {
     if (previousHome === undefined) delete process.env.PI_ROLES_HOME;
     else process.env.PI_ROLES_HOME = previousHome;

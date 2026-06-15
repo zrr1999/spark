@@ -10,17 +10,16 @@ Responsibilities:
 
 - model generic goal state and usage accounting
 - reconstruct goal state from session custom entries
-- render goal summaries, budget text, and continuation prompts
+- render goal summaries and continuation prompts
 - keep goal tool-name guidance and continuation markers in one package
 - document canonical goal actions used by host extensions: `status`, `start`, `pause`, `resume`, `clear`, `edit`, and reviewer-owned `complete`
 
 Lifecycle semantics:
 
-- `status` is the primary inspection surface and should show scope, objective, status, usage, budget, review/retry state, and available actions
+- `status` is the primary inspection surface and should show scope, objective, status, review/retry state, and available actions
 - `start` creates or replaces a completed goal; host extensions must reject conflicting non-complete goals instead of silently switching
 - `pause` stops automatic continuation without deleting the goal; `resume` only restarts a still-valid paused goal
 - `edit` changes the objective deliberately and clears stale review/retry state; `clear` forgets the current goal without completing it
-- `tokenBudget` is optional; budget exhaustion sets a budget-limited/stopped state and halts automatic continuation, but it is not goal completion
 - `complete` remains reviewer-owned; there is no standalone `goal_complete` alias
 
 Non-responsibilities:

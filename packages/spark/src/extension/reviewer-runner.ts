@@ -59,9 +59,10 @@ export interface GoalReviewInput {
   };
   goalId: string;
   objective: string;
-  status: "active" | "paused" | "budgetLimited" | "complete";
-  requestedStatus: "paused" | "complete";
+  status: "active" | "paused" | "complete";
+  requestedStatus: "paused" | "complete" | "edited";
   reason?: string;
+  proposedObjective?: string;
   evidenceRefs: ArtifactRef[];
   sessionKey?: string;
   forkFromSession?: string;
@@ -108,8 +109,25 @@ export interface ReviewerRunResult {
   record: ReviewerRunRecord;
 }
 
+export interface AskAutoAnswerInput {
+  cwd: string;
+  request: unknown;
+  sessionKey?: string;
+  forkFromSession?: string;
+}
+
+export interface AskAutoAnswerResult {
+  answers?: Record<
+    string,
+    { values?: string[]; customText?: string; notes?: string; comment?: string }
+  >;
+  blocked?: boolean;
+  reason?: string;
+}
+
 export interface ReviewerRunner {
   review(input: ReviewInput, signal?: AbortSignal): Promise<ReviewerRunResult>;
+  answerAsk?(input: AskAutoAnswerInput, signal?: AbortSignal): Promise<AskAutoAnswerResult>;
 }
 
 export interface PiRolesReviewerRunnerOptions {
@@ -119,6 +137,7 @@ export interface PiRolesReviewerRunnerOptions {
   timeoutMs?: number;
   reviewerRoleRef?: RoleRef;
   model?: string;
+  sessionModel?: string;
   sessionDir?: string;
   now?: () => string;
 }
@@ -137,6 +156,16 @@ const REVIEWER_JSON_SCHEMA = [
   "}",
 ].join("\n");
 
+const ASK_AUTO_ANSWER_JSON_SCHEMA = [
+  "Return ONLY compact JSON with this shape:",
+  "{",
+  '  "answers": { "questionId": { "values": ["option_value"], "customText": "freeform text", "notes": "brief rationale" } },',
+  '  "blocked": false,',
+  '  "reason": "why blocked or why these answers were chosen"',
+  "}",
+  "Use options[].value exactly. For single/preview choose at most one value. For freeform use customText. If the packet is ambiguous or evidence is insufficient, set blocked=true and explain reason.",
+].join("\n");
+
 export class PiRolesReviewerRunner implements ReviewerRunner {
   readonly #registry: RoleRegistry;
   readonly #cwd: string;
@@ -144,6 +173,7 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
   readonly #timeoutMs: number;
   readonly #reviewerRoleRef: RoleRef;
   readonly #model?: string;
+  readonly #sessionModel?: string;
   readonly #sessionDir?: string;
   readonly #now: () => string;
 
@@ -154,6 +184,7 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_REVIEWER_TIMEOUT_MS;
     this.#reviewerRoleRef = options.reviewerRoleRef ?? builtinRoleRef("reviewer");
     this.#model = options.model;
+    this.#sessionModel = options.sessionModel;
     this.#sessionDir = options.sessionDir;
     this.#now = options.now ?? nowIso;
   }
@@ -162,17 +193,14 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
     const role = this.#registry.get(this.#reviewerRoleRef);
     const runRef = newRef("run");
     const startedAt = this.#now();
-    const resolvedModel =
-      this.#model ??
-      (
-        await resolveRoleModelSetting({
-          roleRef: role.ref,
-          roleId: role.id,
-          roleName: role.id,
-          projectStore: defaultProjectRoleModelSettingsStore(input.cwd || this.#cwd),
-          userStore: defaultUserRoleModelSettingsStore(),
-        })
-      )?.model;
+    const roleModel = await resolveRoleModelSetting({
+      roleRef: role.ref,
+      roleId: role.id,
+      roleName: role.id,
+      projectStore: defaultProjectRoleModelSettingsStore(input.cwd || this.#cwd),
+      userStore: defaultUserRoleModelSettingsStore(),
+    });
+    const resolvedModel = this.#model ?? roleModel?.model ?? this.#sessionModel;
     const result = await runRole({
       runRef: runRef as `run:${string}`,
       roleRef: role.ref as `role:${string}`,
@@ -198,6 +226,37 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
       verdict: parseReviewerVerdictForInput(input, result.stdout),
       record: roleRunRecord(result, startedAt, finishedAt),
     };
+  }
+
+  async answerAsk(input: AskAutoAnswerInput, signal?: AbortSignal): Promise<AskAutoAnswerResult> {
+    const role = this.#registry.get(this.#reviewerRoleRef);
+    const runRef = newRef("run");
+    const roleModel = await resolveRoleModelSetting({
+      roleRef: role.ref,
+      roleId: role.id,
+      roleName: role.id,
+      projectStore: defaultProjectRoleModelSettingsStore(input.cwd || this.#cwd),
+      userStore: defaultUserRoleModelSettingsStore(),
+    });
+    const resolvedModel = this.#model ?? roleModel?.model ?? this.#sessionModel;
+    const result = await runRole({
+      runRef: runRef as `run:${string}`,
+      roleRef: role.ref as `role:${string}`,
+      systemPrompt: buildReadOnlyReviewerSystemPrompt(role.systemPrompt),
+      model: resolvedModel,
+      instruction: renderAskAutoAnswerInstruction(input),
+      runGuidance: ASK_AUTO_ANSWER_JSON_SCHEMA,
+      mode: input.forkFromSession ? "forked" : "fresh",
+      forkFromSession: input.forkFromSession,
+      sessionDir: this.#sessionDir,
+      piCommand: this.#piCommand,
+      cwd: input.cwd || this.#cwd,
+      timeoutMs: this.#timeoutMs,
+      signal,
+    });
+    if (result.record.status !== "succeeded")
+      return { blocked: true, reason: `reviewer role run ${result.record.status}` };
+    return parseAskAutoAnswerResult(result.stdout);
   }
 }
 
@@ -236,6 +295,7 @@ export function renderReviewerInstruction(input: ReviewInput): string {
           status: input.status,
           requestedStatus: input.requestedStatus,
           reason: input.reason,
+          proposedObjective: input.proposedObjective,
           evidenceRefs: input.evidenceRefs,
           sessionKey: input.sessionKey,
         };
@@ -245,13 +305,49 @@ export function renderReviewerInstruction(input: ReviewInput): string {
     "For requestedStatus=complete, approve only when the objective is achieved; set achieved accordingly.",
     "If projectStatus.taskCounts.unfinished > 0, default to needs_changes unless the objective explicitly says this is planning-only/readiness-only and does not ask for project/task implementation completion.",
     "When unfinished project work remains, include concrete remainingWork using projectStatus.readyTasks and unfinishedTasks instead of treating planning evidence as implementation completion.",
-    "For requestedStatus=paused, approve only when the pause reason is valid and stopping without completion is appropriate; do not require achieved=true.",
+    "For requestedStatus=paused, reject main-agent autonomous pauses; blockers should be resolved by doing or planning blocking work, not by pausing the goal.",
+    "For requestedStatus=edited, approve only when the proposed objective corrects a material description error or wrong direction in the current objective and does not reduce difficulty, remove required outcomes, narrow scope, or turn implementation work into planning-only/readiness-only work.",
     "If work remains or the requested transition is not justified, use outcome=needs_changes and list concrete blockers/findings.",
     REVIEWER_JSON_SCHEMA,
     "",
     "Review packet:",
     JSON.stringify(packet, null, 2),
   ].join("\n");
+}
+
+export function renderAskAutoAnswerInstruction(input: AskAutoAnswerInput): string {
+  return [
+    "Answer this ask packet as a read-only reviewer for an autonomous goal turn.",
+    "Choose only when the request context and options make the next action clear.",
+    "Return option values, not labels. Do not mutate state or call tools.",
+    ASK_AUTO_ANSWER_JSON_SCHEMA,
+    "",
+    "Ask packet:",
+    JSON.stringify({ request: input.request, sessionKey: input.sessionKey }, null, 2),
+  ].join("\n");
+}
+
+export function parseAskAutoAnswerResult(text: string): AskAutoAnswerResult {
+  const value = parseJsonObjectFromText(text);
+  const output: AskAutoAnswerResult = {};
+  if (typeof value.reason === "string") output.reason = value.reason;
+  if (value.blocked === true) output.blocked = true;
+  if (value.answers && typeof value.answers === "object" && !Array.isArray(value.answers)) {
+    output.answers = {};
+    for (const [questionId, rawAnswer] of Object.entries(value.answers)) {
+      if (!rawAnswer || typeof rawAnswer !== "object" || Array.isArray(rawAnswer)) continue;
+      const answer = rawAnswer as Record<string, unknown>;
+      output.answers[questionId] = {
+        ...(Array.isArray(answer.values)
+          ? { values: answer.values.filter((item): item is string => typeof item === "string") }
+          : {}),
+        ...(typeof answer.customText === "string" ? { customText: answer.customText } : {}),
+        ...(typeof answer.notes === "string" ? { notes: answer.notes } : {}),
+        ...(typeof answer.comment === "string" ? { comment: answer.comment } : {}),
+      };
+    }
+  }
+  return output;
 }
 
 export function parseReviewerVerdictForInput(input: ReviewInput, text: string): ReviewerVerdict {
