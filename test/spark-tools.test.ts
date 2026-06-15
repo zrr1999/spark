@@ -1490,10 +1490,18 @@ void test("/goal sets a durable session goal instead of execute-mode continuatio
       goalPrompt,
       /Main session mode decision required: choose exactly one of research, plan, or execute/,
     );
-    assert.match(goalPrompt, /Workflow and subagent role are tools, not modes/);
+    assert.match(goalPrompt, /state the mode and whether you are staying or switching/);
+    assert.match(goalPrompt, /Goal, workflow, subagent role, and role-run are not modes/);
     assert.match(goalPrompt, /Goal is a meta-mode over research\/plan\/execute/);
-    assert.match(goalPrompt, /prefer subagent role \+ main-agent summary/);
-    assert.match(goalPrompt, /prefer workflow tools for parallelizable execution/);
+    assert.match(
+      goalPrompt,
+      /prefer subagent role \+ main-agent summary when parallel inspection helps/,
+    );
+    assert.match(
+      goalPrompt,
+      /saved workflow runtime or task run_ready for parallelizable execution when it fits/,
+    );
+    assert.match(goalPrompt, /strategy recommendations, not mandatory steps/);
     assert.match(goalPrompt, /Goal completion is reviewer-owned/);
     assert.doesNotMatch(goalPrompt, /goal\(\{ action: "complete" \}\).*concise verified reason/);
     assert.doesNotMatch(goalPrompt, /## Execution mode requirements/);
