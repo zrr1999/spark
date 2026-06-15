@@ -279,18 +279,27 @@ When cue-shell is used inside `subagent(...)` with `context: "fork"` or
 When writing `chain` or `parallel` steps, pass explicit `cwd` if the
 step needs to operate in a specific directory inside the worktree.
 
-## Daemon check
+## Daemon and transport check
 
-The extension auto-starts `cued` on first use. If the daemon becomes
-unreachable during a session, the extension will attempt to restart it
-automatically.
+The extension honors cue-shell client transport profiles resolved by
+`cue-client target resolve --json` or `cue client target resolve --json`.
+Unix profiles connect to the resolved socket; if the local daemon is
+unreachable, the extension may auto-start `cued` for that Unix socket. SSH
+profiles connect through the configured gateway command over stdio and do not
+auto-start the remote daemon.
 
-Manual control is still available:
+Manual local control is still available:
 
 ```text
 cued start
 cued stop
 cued status
+```
+
+For SSH profiles, start the remote daemon explicitly, for example:
+
+```text
+ssh user@example.com "cued start"
 ```
 
 ---
@@ -311,13 +320,17 @@ cued status
 
 ### Daemon not reachable
 
-The extension auto-starts the daemon on first use and retries on connection
-failure. If you see persistent "DAEMON_UNREACHABLE" errors:
+For Unix profiles, the extension auto-starts the daemon on first use and
+retries on connection failure. If you see persistent "DAEMON_UNREACHABLE"
+errors:
 
 ```text
 cued status  # check if cued is installed and in PATH
 cued start   # manual start if auto-start fails
 ```
+
+For SSH profiles, the error refers to the remote gateway. Start or repair the
+remote daemon explicitly, then retry the Pi tool call.
 
 ### "cd inside :run" errors
 

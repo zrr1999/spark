@@ -122,32 +122,51 @@ import { checkAndWarn as checkCuedVersionAndWarn } from "./version-check.ts";
 // ── Shared state ───────────────────────────────────────────────────────────
 
 let client: CueClient | null = null;
+let clientTransportKey: string | null = null;
+
+export function __resetPiCueClientForTests(): void {
+  client?.close();
+  client = null;
+  clientTransportKey = null;
+}
+
+function cueTransportKey(transport: CueResolvedTransport): string {
+  if (transport.transport === "unix") return `unix:${transport.socket_path}`;
+  return ["ssh", transport.profile_name, transport.destination, transport.gateway_command].join(
+    ":",
+  );
+}
 
 async function getClient(ctx?: {
   cueClient?: CueClient;
   ui?: { notify?: (msg: string, level: PiCueNotifyLevel) => void };
 }): Promise<CueClient> {
   if (ctx?.cueClient) return ctx.cueClient;
-  if (client && !client.isClosed) return client;
-  client = null;
   const transport = await resolveCueTransport();
-  const socketPath = socketPathForPiCue(transport);
+  const transportKey = cueTransportKey(transport);
+  if (client && !client.isClosed && clientTransportKey === transportKey) return client;
+  if (client && !client.isClosed) client.close();
+  client = null;
+  clientTransportKey = null;
   try {
-    client = await CueClient.connect(socketPath);
-  } catch {
+    client = await CueClient.connectResolved(transport);
+    clientTransportKey = transportKey;
+  } catch (error) {
+    if (transport.transport === "ssh") throw error;
     // Daemon not running — auto-start local/unix transports only.
     ctx?.ui?.notify?.("cue-shell: auto-starting daemon…", "info");
     try {
-      await autoStartDaemon(socketPath);
+      await autoStartDaemon(transport.socket_path);
     } catch (startErr) {
-      const msg = `cue-shell daemon not reachable at ${socketPath}. Auto-start failed: ${(startErr as Error).message}`;
+      const msg = `cue-shell daemon not reachable at ${transport.socket_path}. Auto-start failed: ${(startErr as Error).message}`;
       throw new CueError("DAEMON_UNREACHABLE", msg);
     }
     // Retry connection after starting.
     try {
-      client = await CueClient.connect(socketPath);
+      client = await CueClient.connectResolved(transport);
+      clientTransportKey = transportKey;
     } catch (err) {
-      const msg = `cue-shell daemon started but still not reachable at ${socketPath}: ${(err as Error).message}`;
+      const msg = `cue-shell daemon started but still not reachable at ${transport.socket_path}: ${(err as Error).message}`;
       throw new CueError("DAEMON_UNREACHABLE", msg);
     }
   }
@@ -160,14 +179,6 @@ async function getClient(ctx?: {
 }
 
 /** Spawn `cued start` as a detached background process. */
-function socketPathForPiCue(transport: CueResolvedTransport): string {
-  if (transport.transport === "unix") return transport.socket_path;
-  throw new CueError(
-    "UNSUPPORTED_TRANSPORT",
-    `cue profile \`${transport.profile_name}\` resolves to ssh transport (${transport.destination}), but pi-cue currently supports only unix cue-shell transport profiles. Use cue-client/cue-tui for remote targets or configure a unix profile for pi-cue.`,
-  );
-}
-
 async function autoStartDaemon(socketPath: string): Promise<void> {
   const { spawn } = await import("node:child_process");
   return new Promise((resolve, reject) => {
@@ -249,7 +260,6 @@ const CUE_SCHEDULE_STATUS_FILTERS = [
 ] as const;
 const CUE_SCOPE_ACTIONS = ["list", "env", "config"] as const;
 const SCRIPT_LANGUAGES = ["cue-shell", "python"] as const;
-type ScriptLanguage = (typeof SCRIPT_LANGUAGES)[number];
 
 function isFileOp(command: string): boolean {
   const firstWord = command.trim().split(/\s+/)[0];
@@ -736,26 +746,23 @@ function quoteCueWord(value: string): string {
   return JSON.stringify(value);
 }
 
-async function writeInlineScriptTemp(language: ScriptLanguage, body: string): Promise<string> {
-  const { createHash } = await import("node:crypto");
-  const { tmpdir } = await import("node:os");
-  const { mkdir, writeFile } = await import("node:fs/promises");
-  const { join } = await import("node:path");
-  const ext = language === "python" ? "py" : "cue";
-  const hash = createHash("sha256").update(body).digest("hex").slice(0, 16);
-  const dir = join(tmpdir(), "pi-cue-script-runner");
-  await mkdir(dir, { recursive: true });
-  const file = join(dir, "inline-" + hash + "." + ext);
-  await writeFile(file, body, "utf-8");
-  return file;
-}
-
 async function runPythonScriptJob(
   cued: CueClient,
-  options: { path: string; timeout: number; tailBytes: number; cwd: string; venv?: string },
+  options: {
+    path?: string;
+    inlineScript?: string;
+    pathLabel?: string;
+    timeout: number;
+    tailBytes: number;
+    cwd: string;
+    venv?: string;
+  },
 ) {
   const python = pythonExecutableForVenv(options.venv);
-  const result = await cued.runJob(`${quoteCueWord(python)} ${quoteCueWord(options.path)}`, {
+  const target = options.inlineScript
+    ? `-c ${quoteCueWord(options.inlineScript)}`
+    : quoteCueWord(options.path ?? "");
+  const result = await cued.runJob(`${quoteCueWord(python)} ${target}`, {
     timeout: options.timeout,
     cwd: options.cwd,
   });
@@ -776,7 +783,8 @@ async function runPythonScriptJob(
   }
   const details = {
     language: "python",
-    path: options.path,
+    path: options.path ?? options.pathLabel ?? "<inline>",
+    inline: options.inlineScript !== undefined,
     jobId: result.jobId,
     status: result.status,
     exitCode: result.exitCode,
@@ -1425,7 +1433,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     description:
       "Run an inline script body with an explicit language runner. " +
       "Supported languages in this version: cue-shell and python. " +
-      "Inline python is written to a temporary file and executed with python3 or the selected venv interpreter through cue-shell.",
+      "Inline Python is executed with python -c through cue-shell, using python3 or the selected venv interpreter.",
     parameters: Type.Object({
       script: Type.String({ description: "Inline script body to run." }),
       language: Type.String({ description: "Script language. Required: cue-shell or python." }),
@@ -1524,9 +1532,9 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         );
       }
 
-      const tempPath = await writeInlineScriptTemp(language, script);
       return runPythonScriptJob(cued, {
-        path: tempPath,
+        inlineScript: script,
+        pathLabel,
         timeout,
         tailBytes,
         cwd: baseCwd,

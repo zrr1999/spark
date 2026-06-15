@@ -440,7 +440,7 @@ void test("script_run and script_eval route venv only to python", async () => {
     () => undefined,
     ctx,
   );
-  assert.match(commands[1] ?? "", /^\/opt\/venv\/bin\/python \/tmp\/pi-cue-script-runner\/inline-/);
+  assert.equal(commands[1], "/opt/venv/bin/python -c \"print('ok')\"");
   assert.equal((evalResult.details as { venv?: string }).venv, "/opt/venv");
 
   await assert.rejects(

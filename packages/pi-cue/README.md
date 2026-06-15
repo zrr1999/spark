@@ -12,7 +12,7 @@ Resource-oriented tools:
 - `cue_run` — run a `.cue` file via cue-shell script mode, mirroring `cue run <file.cue>`. Top-level items execute sequentially and fail fast; successful no-output items are summarized instead of expanded one-by-one.
 - `cue_script` — run an inline `.cue` script body. Use this when the script content is generated in the Pi session; prefer `cue_run` when a real `.cue` file exists on disk.
 - `script_run` — run a script file with an explicit `language`. First batch supports `cue-shell` and `python`; `cue-shell` delegates to RunScript, while `python` runs `python3` through cue-shell job execution.
-- `script_eval` — run an inline script body with an explicit `language`. Inline Python is written to a temporary file before execution.
+- `script_eval` — run an inline script body with an explicit `language`. Inline Python is executed through `python -c` so it runs in the selected cue-shell transport environment.
 - `cue_jobs` — list, inspect, wait for, and stop jobs via `action`. List output is limited to 20 rows by default and includes `pending_reason` when a job is waiting for resources; chain status/wait output prioritizes failed/running/non-clean leaves and summarizes clean successful leaves.
 - `cue_resources` — inspect resource providers and snapshots via `action: "providers"` or `action: "resources"`.
 - `cue_schedule` — add/list/pause/resume/remove scheduled or one-shot jobs. List output is limited to 20 rows by default.
@@ -20,6 +20,14 @@ Resource-oriented tools:
 - `cue_history` — recent history only by default; `limit` and `tail_bytes` are passed to `cued` when supported. Use `limit: 0` and `tail_bytes: 0` for full text.
 
 The extension also disables the built-in `bash` tool on session start so command execution goes through cue-shell.
+
+## Transport profiles
+
+`pi-cue` honors cue-shell client transport resolution through `cue-client target resolve --json` or `cue client target resolve --json`.
+
+- Unix profiles connect to the resolved daemon socket. If the local daemon is not reachable, `pi-cue` may auto-start `cued` for that Unix socket.
+- SSH profiles connect through the configured gateway command, equivalent to `ssh <destination> <gateway_command>`, and then speak the same cue-shell IPC framing over stdio.
+- Remote daemon startup remains explicit. `pi-cue` does not run `start_command` for SSH profiles; start the remote daemon yourself, for example `ssh user@example.com "cued start"`.
 
 ## Resource-gated commands
 

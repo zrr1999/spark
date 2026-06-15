@@ -1,17 +1,18 @@
 /**
  * cue-shell IPC client for Node.js
  *
- * Speaks the cue-shell length-prefixed JSON framing protocol over a Unix
- * domain socket.  The default socket path follows cue-shell's own convention:
- * `$XDG_RUNTIME_DIR/cue-shell/cued.sock` with a fallback to the platform
- * temp directory.
+ * Speaks the cue-shell length-prefixed JSON framing protocol over either a
+ * Unix domain socket or an SSH gateway stdio stream. The default Unix socket
+ * path follows cue-shell's own convention: `$XDG_RUNTIME_DIR/cue-shell/cued.sock`
+ * with a fallback to the platform temp directory.
  *
  * Protocol: 4-byte big-endian length prefix + UTF-8 JSON body.
  * Max message size: 16 MiB.
  */
 
-import { spawn } from "node:child_process";
-import { type Socket, createConnection } from "node:net";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { env } from "node:process";
@@ -139,13 +140,8 @@ function parseResolvedTransport(text: string, source: string): CueResolvedTransp
   throw new Error(`unsupported resolver transport from ${source}: ${String(record.transport)}`);
 }
 
-async function resolveConnectionSocketPath(): Promise<string> {
-  const resolved = await resolveCueTransport();
-  if (resolved.transport === "unix") return resolved.socket_path;
-  throw new CueError(
-    "UNSUPPORTED_TRANSPORT",
-    `cue profile \`${resolved.profile_name}\` resolves to ssh transport (${resolved.destination}), but pi-cue currently supports only unix cue-shell transport profiles. Use cue-client/cue-tui for remote targets or configure a unix profile for pi-cue.`,
-  );
+async function resolveConnectionTransport(): Promise<CueResolvedTransport> {
+  return resolveCueTransport();
 }
 
 function quoteModeParamValue(value: string): string {
@@ -509,6 +505,7 @@ function textOutputFromOk(ok: Record<string, unknown>): string | null {
 
 const MAX_MESSAGE_SIZE = 16 * 1024 * 1024; // 16 MiB
 const MAX_OUTPUT_BUFFER = 4 * 1024 * 1024; // 4 MiB per stream, per job
+const MAX_SSH_STDERR_SNAPSHOT = 64 * 1024; // keep recent gateway diagnostics bounded
 
 // ── Connection state ───────────────────────────────────────────────────────
 
@@ -518,9 +515,131 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface CueClientStream {
+  on(event: "data", listener: (chunk: Buffer) => void): this;
+  on(event: "error", listener: (error: Error) => void): this;
+  on(event: "close", listener: () => void): this;
+  write(frame: Buffer): boolean;
+  destroy(error?: Error): void;
+}
+
+function connectUnixCueClient(path: string): Promise<CueClient> {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({ path }, () => {
+      resolve(new CueClient(socket));
+    });
+    socket.on("error", reject);
+  });
+}
+
+async function connectSshCueClient(
+  transport: Extract<CueResolvedTransport, { transport: "ssh" }>,
+): Promise<CueClient> {
+  const stream = SshCueClientStream.spawn(transport);
+  const client = new CueClient(stream);
+  try {
+    await client.pingForVersion();
+    return client;
+  } catch (error) {
+    client.close();
+    throw new CueError(
+      "DAEMON_UNREACHABLE",
+      sshConnectionErrorMessage(transport, stream.stderrSnapshot(), error),
+    );
+  }
+}
+
+function sshConnectionErrorMessage(
+  transport: Extract<CueResolvedTransport, { transport: "ssh" }>,
+  stderr: string,
+  error: unknown,
+): string {
+  const detail = stderr || (error instanceof Error ? error.message : String(error));
+  return [
+    `cue profile \`${transport.profile_name}\` failed to connect via SSH to ${transport.destination}.`,
+    `Gateway command: ${transport.gateway_command}`,
+    `Remote daemon startup is explicit; start it with: ssh ${transport.destination} ${JSON.stringify(transport.start_command)}`,
+    `Detail: ${detail}`,
+  ].join("\n");
+}
+
+class SshCueClientStream extends EventEmitter implements CueClientStream {
+  #child: ChildProcessWithoutNullStreams;
+  #stderr: Buffer[] = [];
+  #stderrBytes = 0;
+  #closed = false;
+
+  private constructor(child: ChildProcessWithoutNullStreams) {
+    super();
+    this.#child = child;
+    child.stdout.on("data", (chunk: Buffer) => this.emit("data", chunk));
+    child.stdout.on("error", (error: Error) => this.emit("error", error));
+    child.stdin.on("error", (error: Error) => this.emit("error", error));
+    child.stderr.on("data", (chunk: Buffer) => this.#appendStderr(chunk));
+    child.stderr.on("error", (error: Error) => {
+      this.#appendStderr(Buffer.from(`failed to read ssh stderr: ${error.message}`));
+    });
+    child.on("error", (error: Error) => this.emit("error", error));
+    child.on("close", () => this.#emitCloseOnce());
+  }
+
+  static spawn(transport: Extract<CueResolvedTransport, { transport: "ssh" }>): SshCueClientStream {
+    return new SshCueClientStream(
+      spawn("ssh", [transport.destination, transport.gateway_command], {
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+    );
+  }
+
+  write(frame: Buffer): boolean {
+    return this.#child.stdin.write(frame);
+  }
+
+  destroy(error?: Error): void {
+    if (error) this.emit("error", error);
+    this.#child.kill();
+    this.#emitCloseOnce();
+  }
+
+  stderrSnapshot(): string {
+    return Buffer.concat(this.#stderr, this.#stderrBytes).toString("utf8").trim();
+  }
+
+  #appendStderr(chunk: Buffer): void {
+    let data = Buffer.from(chunk);
+    if (data.length > MAX_SSH_STDERR_SNAPSHOT) {
+      data = data.subarray(data.length - MAX_SSH_STDERR_SNAPSHOT);
+      this.#stderr = [data];
+      this.#stderrBytes = data.length;
+      return;
+    }
+
+    this.#stderr.push(data);
+    this.#stderrBytes += data.length;
+    while (this.#stderrBytes > MAX_SSH_STDERR_SNAPSHOT) {
+      const first = this.#stderr[0];
+      if (!first) break;
+      const extra = this.#stderrBytes - MAX_SSH_STDERR_SNAPSHOT;
+      if (first.length <= extra) {
+        this.#stderr.shift();
+        this.#stderrBytes -= first.length;
+      } else {
+        this.#stderr[0] = first.subarray(extra);
+        this.#stderrBytes -= extra;
+      }
+    }
+  }
+
+  #emitCloseOnce(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.emit("close");
+  }
+}
+
 /** Active connection to the cued daemon. */
 export class CueClient {
-  #socket: Socket;
+  #socket: CueClientStream;
   #nextId = 1;
   #pending = new Map<number, PendingRequest>();
   #listeners = new Map<string, Set<(event: EventPayload) => void>>();
@@ -530,8 +649,8 @@ export class CueClient {
   #closePromise: Promise<void>;
   #resolveClose!: () => void;
 
-  /** Create a client from an already-connected Unix socket. */
-  constructor(socket: Socket) {
+  /** Create a client from an already-connected cue-shell IPC stream. */
+  constructor(socket: CueClientStream) {
     this.#socket = socket;
     this.#closePromise = new Promise((resolve) => {
       this.#resolveClose = resolve;
@@ -549,19 +668,20 @@ export class CueClient {
   /**
    * Connect to the cued daemon.
    *
-   * An explicit `socketPath` is always honored. Without an override, pi-cue asks
-   * `cue-client target resolve --json` (falling back to `cue client target ...`)
-   * for the active client transport profile and currently supports only unix
-   * profiles.
+   * An explicit `socketPath` is always honored as a Unix socket override. Without
+   * an override, pi-cue asks `cue-client target resolve --json` (falling back to
+   * `cue client target ...`) for the active client transport profile and then
+   * connects either to a Unix socket or to an SSH gateway stream.
    */
   static async connect(socketPath?: string): Promise<CueClient> {
-    const path = socketPath ?? (await resolveConnectionSocketPath());
-    return new Promise((resolve, reject) => {
-      const socket = createConnection({ path }, () => {
-        resolve(new CueClient(socket));
-      });
-      socket.on("error", reject);
-    });
+    if (socketPath) return connectUnixCueClient(socketPath);
+    return CueClient.connectResolved(await resolveConnectionTransport());
+  }
+
+  /** Connect to an already-resolved cue-shell client transport profile. */
+  static async connectResolved(transport: CueResolvedTransport): Promise<CueClient> {
+    if (transport.transport === "unix") return connectUnixCueClient(transport.socket_path);
+    return connectSshCueClient(transport);
   }
 
   /** Resolved when the connection closes. */

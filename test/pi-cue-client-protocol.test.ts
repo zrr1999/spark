@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import net, { type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { CueClient, CueError, resolveCueTransport } from "../packages/pi-cue/src/index.ts";
+import {
+  CueClient,
+  CueError,
+  __resetPiCueClientForTests,
+  type PiCueExtensionApi,
+  registerPiCueTools,
+  resolveCueTransport,
+} from "../packages/pi-cue/src/index.ts";
 
 type CueFrame = Record<string, unknown>;
+type RegisteredPiCueTool = Parameters<PiCueExtensionApi["registerTool"]>[0];
 
 async function writeExecutable(path: string, body: string): Promise<void> {
   await writeFile(path, body);
@@ -44,10 +52,9 @@ function sendFrame(socket: Socket, message: CueFrame): void {
   socket.write(encodeFrame(message));
 }
 
-async function withCueServer(
+async function startCueServer(
   handler: (message: CueFrame, socket: Socket) => void,
-  run: (client: CueClient, requests: CueFrame[]) => Promise<void>,
-): Promise<void> {
+): Promise<{ socketPath: string; requests: CueFrame[]; close: () => Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), "pi-cue-protocol-"));
   const socketPath = join(dir, "cued.sock");
   const requests: CueFrame[] = [];
@@ -70,14 +77,27 @@ async function withCueServer(
     server.once("error", reject);
     server.listen(socketPath, resolve);
   });
+  return {
+    socketPath,
+    requests,
+    close: async () => {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(dir, { force: true, recursive: true });
+    },
+  };
+}
 
-  const client = await CueClient.connect(socketPath);
+async function withCueServer(
+  handler: (message: CueFrame, socket: Socket) => void,
+  run: (client: CueClient, requests: CueFrame[]) => Promise<void>,
+): Promise<void> {
+  const server = await startCueServer(handler);
+  const client = await CueClient.connect(server.socketPath);
   try {
-    await run(client, requests);
+    await run(client, server.requests);
   } finally {
     client.close();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    await rm(dir, { force: true, recursive: true });
+    await server.close();
   }
 }
 
@@ -87,6 +107,59 @@ function requestPayload(message: CueFrame): Record<string, unknown> {
   const payload = message.payload;
   assert.ok(payload && typeof payload === "object" && !Array.isArray(payload));
   return payload as Record<string, unknown>;
+}
+
+function registerCueToolsForProtocolTest(): Map<string, RegisteredPiCueTool> {
+  const tools = new Map<string, RegisteredPiCueTool>();
+  registerPiCueTools({
+    registerTool: (config) => tools.set(config.name, config),
+  });
+  return tools;
+}
+
+function singleJobCueServer(label: string) {
+  return (message: CueFrame, socket: Socket) => {
+    const id = message.id as number;
+    const payload = requestPayload(message);
+    if ("Subscribe" in payload) {
+      sendFrame(socket, { type: "response", id, payload: { Ok: { Ack: {} } } });
+      return;
+    }
+    if ("Eval" in payload) {
+      sendFrame(socket, {
+        type: "response",
+        id,
+        payload: {
+          Ok: {
+            JobCreated: {
+              job_id: `J-${label}`,
+              open_hint: "fg",
+              warnings: [],
+            },
+          },
+        },
+      });
+      return;
+    }
+    if ("ListJobs" in payload) {
+      sendFrame(socket, {
+        type: "response",
+        id,
+        payload: {
+          Ok: {
+            JobList: [
+              {
+                id: `J-${label}`,
+                status: "Running",
+                pipeline: label,
+                open_hint: "fg",
+              },
+            ],
+          },
+        },
+      });
+    }
+  };
 }
 
 void test("resolveCueTransport uses cue-client target resolver JSON", async () => {
@@ -121,19 +194,161 @@ void test("resolveCueTransport falls back to cue client namespace", async () => 
   );
 });
 
-void test("implicit CueClient.connect rejects ssh resolver profiles without autostart", async () => {
+void test("pi-cue tools reconnect when the resolved transport profile changes", async () => {
+  const first = await startCueServer(singleJobCueServer("first"));
+  const second = await startCueServer(singleJobCueServer("second"));
+  const selector = await mkdtemp(join(tmpdir(), "pi-cue-target-selector-"));
+  const selectorFile = join(selector, "target");
+  try {
+    await writeFile(selectorFile, "first", "utf8");
+    await withTempPath(
+      {
+        "cue-client": `#!/bin/sh
+case "$(cat "$PI_CUE_TARGET_SELECTOR")" in
+  first) printf '%s\n' '{"schema_version":1,"profile_name":"first","transport":"unix","socket_path":"${first.socketPath}"}' ;;
+  second) printf '%s\n' '{"schema_version":1,"profile_name":"second","transport":"unix","socket_path":"${second.socketPath}"}' ;;
+  *) echo unknown target >&2; exit 2 ;;
+esac
+`,
+      },
+      async () => {
+        const originalSelector = process.env.PI_CUE_TARGET_SELECTOR;
+        process.env.PI_CUE_TARGET_SELECTOR = selectorFile;
+        try {
+          const tools = registerCueToolsForProtocolTest();
+          const execTool = tools.get("cue_exec");
+          assert.ok(execTool);
+          await execTool.execute(
+            "first-call",
+            { command: "echo first", background: true },
+            new AbortController().signal,
+            () => undefined,
+            { cwd: "/work" },
+          );
+          await writeFile(selectorFile, "second", "utf8");
+          await execTool.execute(
+            "second-call",
+            { command: "echo second", background: true },
+            new AbortController().signal,
+            () => undefined,
+            { cwd: "/work" },
+          );
+          assert.ok(
+            first.requests.some((request) => JSON.stringify(request).includes("echo first")),
+          );
+          assert.equal(
+            first.requests.some((request) => JSON.stringify(request).includes("echo second")),
+            false,
+          );
+          assert.ok(
+            second.requests.some((request) => JSON.stringify(request).includes("echo second")),
+          );
+        } finally {
+          if (originalSelector === undefined) delete process.env.PI_CUE_TARGET_SELECTOR;
+          else process.env.PI_CUE_TARGET_SELECTOR = originalSelector;
+        }
+      },
+    );
+  } finally {
+    __resetPiCueClientForTests();
+    await first.close();
+    await second.close();
+    await rm(selector, { force: true, recursive: true });
+  }
+});
+
+void test("implicit CueClient.connect supports ssh resolver profiles through gateway stdio", async () => {
   await withTempPath(
     {
       "cue-client": `#!/bin/sh\nprintf '%s\n' '{"schema_version":1,"profile_name":"remote","transport":"ssh","destination":"devbox","gateway_command":"cued gateway --stdio","start_command":"cued start"}'\n`,
+      ssh: `#!/usr/bin/env node
+const fs = require("node:fs");
+fs.writeFileSync(process.env.SSH_ARGS_FILE, JSON.stringify(process.argv.slice(2)));
+let buffer = Buffer.alloc(0);
+function frame(message) {
+  const body = Buffer.from(JSON.stringify(message), "utf8");
+  const header = Buffer.alloc(4);
+  header.writeUInt32BE(body.length, 0);
+  return Buffer.concat([header, body]);
+}
+process.stdin.on("data", (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  while (buffer.length >= 4) {
+    const len = buffer.readUInt32BE(0);
+    if (buffer.length < 4 + len) return;
+    const message = JSON.parse(buffer.subarray(4, 4 + len).toString("utf8"));
+    buffer = buffer.subarray(4 + len);
+    if (message.payload && message.payload.Ping) {
+      process.stdout.write(frame({
+        type: "response",
+        id: message.id,
+        payload: { Ok: { Pong: { version: "9.9.9" } } },
+      }));
+    }
+  }
+});
+`,
+    },
+    async (dir) => {
+      const argsPath = join(dir, "ssh-args.json");
+      const originalArgsFile = process.env.SSH_ARGS_FILE;
+      process.env.SSH_ARGS_FILE = argsPath;
+      try {
+        const client = await CueClient.connect();
+        assert.equal(await client.pingForVersion(), "9.9.9");
+        client.close();
+        assert.deepEqual(JSON.parse(await readFile(argsPath, "utf8")), [
+          "devbox",
+          "cued gateway --stdio",
+        ]);
+      } finally {
+        if (originalArgsFile === undefined) delete process.env.SSH_ARGS_FILE;
+        else process.env.SSH_ARGS_FILE = originalArgsFile;
+      }
+    },
+  );
+});
+
+void test("implicit CueClient.connect fails ssh profiles without local daemon autostart", async () => {
+  await withTempPath(
+    {
+      "cue-client": `#!/bin/sh\nprintf '%s\n' '{"schema_version":1,"profile_name":"remote","transport":"ssh","destination":"devbox","gateway_command":"cued gateway --stdio","start_command":"cued start"}'\n`,
+      ssh: `#!/bin/sh\necho 'remote cued socket missing' >&2\nexit 42\n`,
     },
     async () => {
       await assert.rejects(
         CueClient.connect(),
         (error) =>
           error instanceof CueError &&
-          error.code === "UNSUPPORTED_TRANSPORT" &&
+          error.code === "DAEMON_UNREACHABLE" &&
           error.message.includes("remote") &&
-          error.message.includes("devbox"),
+          error.message.includes("devbox") &&
+          error.message.includes("cued start") &&
+          error.message.includes("remote cued socket missing"),
+      );
+    },
+  );
+});
+
+void test("ssh connection errors keep bounded trailing stderr diagnostics", async () => {
+  await withTempPath(
+    {
+      "cue-client": `#!/bin/sh\nprintf '%s\n' '{"schema_version":1,"profile_name":"remote","transport":"ssh","destination":"devbox","gateway_command":"cued gateway --stdio","start_command":"cued start"}'\n`,
+      ssh: `#!/usr/bin/env node
+process.stderr.write("old-prefix-" + "x".repeat(70 * 1024));
+process.stderr.write("tail-diagnostic: remote gateway failed");
+process.exit(42);
+`,
+    },
+    async () => {
+      await assert.rejects(
+        CueClient.connect(),
+        (error) =>
+          error instanceof CueError &&
+          error.code === "DAEMON_UNREACHABLE" &&
+          !error.message.includes("old-prefix") &&
+          error.message.includes("tail-diagnostic: remote gateway failed") &&
+          error.message.length < 66 * 1024,
       );
     },
   );
