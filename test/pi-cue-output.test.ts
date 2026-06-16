@@ -491,13 +491,24 @@ void test("pi-cue tool descriptions match cue-shell chain operator contract", ()
   assert.match(scriptTool.description, /`\|\?\|`/);
 });
 
-void test("pi-cue skill documents script runner venv and scope parameters", async () => {
+void test("pi-cue docs document script runner venv, scope, and python -c behavior", async () => {
   const skill = await readFile("packages/pi-cue/skills/pi-cue/SKILL.md", "utf8");
+  const readme = await readFile("packages/pi-cue/README.md", "utf8");
+  const toolsDoc = await readFile("docs/tools.md", "utf8");
 
   assert.match(skill, /`script_run`\s+\|[^\n]+`venv\?`, `scope\?`/);
   assert.match(skill, /`script_eval`\s+\|[^\n]+`venv\?`, `scope\?`/);
   assert.match(skill, /`venv` is valid only with `language="python"`/);
   assert.match(skill, /`scope` is valid only with `language="cue-shell"`/);
+
+  assert.match(readme, /`venv` interpreter/);
+  assert.match(readme, /`scope` is valid only for `language: "cue-shell"`/);
+  assert.match(readme, /python -c/);
+
+  assert.match(toolsDoc, /`cue_resources`/);
+  assert.match(toolsDoc, /python -c/);
+  assert.match(toolsDoc, /`venv` is python-only and `scope` is cue-shell-only/);
+  assert.doesNotMatch(toolsDoc, /temporary file before execution/);
 });
 
 void test("script_run and script_eval pass scope only to cue-shell RunScript", async () => {
