@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -489,6 +489,15 @@ void test("pi-cue tool descriptions match cue-shell chain operator contract", ()
   assert.match(runTool.description, /`\|\?\|`/);
   assert.match(scriptTool.description, /`\|\|\|`/);
   assert.match(scriptTool.description, /`\|\?\|`/);
+});
+
+void test("pi-cue skill documents script runner venv and scope parameters", async () => {
+  const skill = await readFile("packages/pi-cue/skills/pi-cue/SKILL.md", "utf8");
+
+  assert.match(skill, /`script_run`\s+\|[^\n]+`venv\?`, `scope\?`/);
+  assert.match(skill, /`script_eval`\s+\|[^\n]+`venv\?`, `scope\?`/);
+  assert.match(skill, /`venv` is valid only with `language="python"`/);
+  assert.match(skill, /`scope` is valid only with `language="cue-shell"`/);
 });
 
 void test("script_run and script_eval pass scope only to cue-shell RunScript", async () => {
