@@ -467,6 +467,30 @@ void test("script_run and script_eval route venv only to python", async () => {
   );
 });
 
+void test("pi-cue tool descriptions match cue-shell chain operator contract", () => {
+  const tools = registerCueToolsForTest();
+  const execTool = tools.get("cue_exec");
+  const runTool = tools.get("cue_run");
+  const scriptTool = tools.get("cue_script");
+  assert.ok(execTool);
+  assert.ok(runTool);
+  assert.ok(scriptTool);
+
+  const execDescription = `${execTool.description} ${JSON.stringify(execTool.parameters)}`;
+  assert.match(execDescription, /\|\|\| runs jobs in parallel|\|\|\| for parallel jobs/);
+  assert.match(
+    execDescription,
+    /\|\?\| races jobs until one succeeds|\|\?\| for any-success race jobs/,
+  );
+  assert.match(execDescription, /&&\/\|\| are job-internal logical operators|'&&'\/'\|\|'/);
+  assert.doesNotMatch(execDescription, /\|\| runs in parallel|\|\| parallel|\|\|\?\s+parallel/);
+
+  assert.match(runTool.description, /`\|\|\|`/);
+  assert.match(runTool.description, /`\|\?\|`/);
+  assert.match(scriptTool.description, /`\|\|\|`/);
+  assert.match(scriptTool.description, /`\|\?\|`/);
+});
+
 void test("script_run and script_eval pass scope only to cue-shell RunScript", async () => {
   const tools = registerCueToolsForTest();
   const runTool = tools.get("script_run");

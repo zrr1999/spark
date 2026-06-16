@@ -3,8 +3,8 @@ name: pi-cue
 description: |
    Use cue-shell as the only execution backend (bash is disabled).
    cue-shell uses direct-exec with its own composition operators:
-   |> pipes stdout, -> runs in serial on success, || runs in parallel,
-   ~> runs in serial ignoring failures.
+   |> pipes stdout inside one job, &&/|| are job-internal logical operators,
+   -> and ~> run jobs serially, and |||/|?| compose jobs in parallel/race chains.
    Use cue_exec for direct commands; pass resource requirements with cue_exec needs={...}, not embedded :run(need...). Use cue_run for .cue files, cue_script for inline .cue scripts, and script_run/script_eval for explicit-language generic scripts.
    cue_jobs to list/status/wait/stop, cue_resources to inspect providers/resources, cue_schedule for scheduled tasks.
    cue-shell has its own grammar — not bash-compatible.
@@ -60,43 +60,50 @@ with native composition operators.
 | `\|&>`   | Pipe stdout+stderr → next stdin | `make \|&> tee build.log`   |
 | `\|!>`   | Pipe stderr-only → next stdin   | `cargo test \|!> grep FAIL` |
 
+**Job logical operators** (inside one job):
+
+| Operator | Effect                                      |
+| -------- | ------------------------------------------- |
+| `&&`     | Run right side only if left side succeeds   |
+| `\|\|`   | Run right side only if left side fails      |
+
 **Chain operators** (between jobs — each step is tracked individually):
 
 | Operator | Effect                                      |
 | -------- | ------------------------------------------- |
-| `->`     | Run next only if previous succeeds (exit 0) |
-| `~>`     | Run next regardless of previous exit code   |
-| `\|\|`   | Run both concurrently                       |
-| `\|\|?`  | Run concurrently, stop when first succeeds  |
+| `->`     | Run next job only if previous succeeds      |
+| `~>`     | Run next job regardless of previous exit    |
+| `\|\|\|` | Run both jobs concurrently                  |
+| `\|?\|`  | Run jobs concurrently, stop after success   |
 
 ### Precedence and grouping
 
 ```text
-pipe (|>)  >  parallel (||)  >  serial (->)
+pipe (|>)  >  job logical (&&/||)  >  chain parallel (|||/|?|)  >  serial (->/~>)
 
-a |> b -> c || d    =    (a |> b) -> (c || d)
+a |> b -> c ||| d    =    (a |> b) -> (c ||| d)
 ```
 
 Group with `()` for explicit precedence:
 
 ```text
-cue_exec(command="(cargo build || cargo audit) -> cargo test")
+cue_exec(command="(cargo build ||| cargo audit) -> cargo test")
 ```
 
 **⚠️ `cue_exec(command="...")` still sends `:run ...` to cue-shell.** Parentheses immediately after
 `:run` are parsed as mode parameters. The adapter inserts the needed space before grouped commands.
 
 ```text
-✅  cue_exec(command="(sleep 0.5 || echo fast) -> echo done")
+✅  cue_exec(command="(sleep 0.5 ||| echo fast) -> echo done")
 ```
 
 ### Converting from shell syntax
 
 | Shell                      | cue-shell        |
 | -------------------------- | ---------------- |
-| `cmd1 && cmd2`             | `cmd1 -> cmd2`   |
-| `cmd1 \|\| cmd2`           | `cmd1 ~> cmd2`   |
-| `cmd1 & cmd2` (background) | `cmd1 \|\| cmd2` |
+| `cmd1 && cmd2`             | `cmd1 && cmd2` inside one job, or `cmd1 -> cmd2` for tracked jobs |
+| `cmd1 \|\| cmd2`           | `cmd1 \|\| cmd2` inside one job, or `cmd1 ~> cmd2` to ignore left failure before a tracked next job |
+| `cmd1 & cmd2` (background) | `cmd1 \|\|\| cmd2` |
 | `cmd1 \| cmd2`             | `cmd1 \|> cmd2`  |
 | `cmd1 2>&1 \| cmd2`        | `cmd1 \|&> cmd2` |
 
@@ -109,8 +116,8 @@ cue_exec(command="(cargo build || cargo audit) -> cargo test")
 ```text
 cue_exec(command="cargo build |> grep -E 'error|warning'")
 cue_exec(command="cargo build -> cargo test")
-cue_exec(command="cargo clippy || cargo test")
-cue_exec(command="(cargo build || cargo audit) -> cargo test")
+cue_exec(command="cargo clippy ||| cargo test")
+cue_exec(command="(cargo build ||| cargo audit) -> cargo test")
 ```
 
 ### File operations
@@ -256,8 +263,8 @@ catch yourself writing bash-isms, check the operator table above first.
 
 **⚠️ Multiple sync `cue_exec()` calls in the same function_call block may be
 merged by the agent framework into a single job.** If you need true
-parallelism, use the `||` operator inside a single command string:
-`cue_exec(command="cmd1 || cmd2 || cmd3")` or start background jobs
+parallelism, use the `|||` chain operator inside a single command string:
+`cue_exec(command="cmd1 ||| cmd2 ||| cmd3")` or start background jobs
 (`cue_exec(background=true)`).
 
 ## Failed jobs and stderr
