@@ -253,7 +253,7 @@ or error out:
 | ---------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------- | -------------------------------------- |
 | `ls *.pdf` / `rm *.tmp`            | `find . -name '*.pdf'`                                            | cue-shell does no glob expansion                        |
 | `cmd 2>/dev/null`                  | `cmd ~> echo ok` or check stderr via `cue_jobs(action="status")`  | No shell redirect syntax; stderr is buffered per-job    |
-| `cmd1 && cmd2`                     | `cmd1 -> cmd2`                                                    | `&&` is bash; use `->` for serial-on-success            |
+| `cmd1 && cmd2`                     | Keep `cmd1 && cmd2` inside one job, or use `cmd1 -> cmd2` for tracked jobs | `&&` is valid cue-shell job logic; `->` is tracked serial-on-success |
 | `echo $(date)`                     | Not supported                                                     | No command substitution (`$()` / backtick)              |
 | heredoc: `cat << EOF ... EOF`      | Write a file first, then `cue_exec(command="cat /tmp/x")`         | heredoc syntax not available                            |
 | `python3 -c "...nested quotes..."` | Write a temp script, then `cue_exec(command="python3 /tmp/s.py")` | Quote nesting in `-c` is fragile; use a temp file       |

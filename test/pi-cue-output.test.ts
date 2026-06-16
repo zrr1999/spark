@@ -500,6 +500,8 @@ void test("pi-cue docs document script runner venv, scope, and python -c behavio
   assert.match(skill, /`script_eval`\s+\|[^\n]+`venv\?`, `scope\?`/);
   assert.match(skill, /`venv` is valid only with `language="python"`/);
   assert.match(skill, /`scope` is valid only with `language="cue-shell"`/);
+  assert.match(skill, /`&&` is valid cue-shell job logic/);
+  assert.doesNotMatch(skill, /`&&` is bash; use `->`/);
 
   assert.match(readme, /`venv` interpreter/);
   assert.match(readme, /`scope` is valid only for `language: "cue-shell"`/);
