@@ -2,22 +2,29 @@ import {
   Editor,
   Key,
   matchesKey,
+  parseKey,
   ProcessTerminal,
   TUI,
   truncateToWidth,
   wrapTextWithAnsi,
   type Component,
   type Focusable,
+  type OverlayOptions,
   type SelectListTheme,
 } from "@earendil-works/pi-tui";
 
 import { submitToSparkAgent, type SparkCliHostServices } from "./host/bootstrap.ts";
-import type { SparkKeybindings } from "./host/keybindings.ts";
+import type { SparkKeybindingContext, SparkKeybindings } from "./host/keybindings.ts";
 import type {
   SparkHostCustomMessage,
   SparkHostMessageRenderer,
   SparkHostRenderTheme,
 } from "./host/types.ts";
+import {
+  createSparkModelPickerFromCustomUi,
+  type SparkModelSelectorTheme,
+  type SparkModelSelectorTuiLike,
+} from "./tui/model-selector.ts";
 
 export type SparkNativeMessageRole =
   | "system"
@@ -209,6 +216,7 @@ export function defaultSparkNativeResponder(input: string): string {
 }
 
 const plain = (text: string): string => text;
+const SPARK_APP_KEYS = new Set(["ctrl+l", "ctrl+p", "shift+ctrl+p", "ctrl+o", "ctrl+t"]);
 const plainRenderTheme: SparkHostRenderTheme = {
   fg: (_color, text) => text,
   bg: (_color, text) => text,
@@ -229,8 +237,20 @@ function createEditorTheme() {
   };
 }
 
+function isSparkAppKey(key: string): boolean {
+  return SPARK_APP_KEYS.has(key);
+}
+
+function isOverlayRequest(value: unknown): value is {
+  overlay?: boolean;
+  overlayOptions?: OverlayOptions;
+} {
+  return typeof value === "object" && value !== null;
+}
+
 export interface SparkNativeTuiAppOptions {
   keybindings?: SparkKeybindings;
+  keybindingContext?: SparkKeybindingContext;
   messageRenderers?: ReadonlyMap<string, SparkHostMessageRenderer>;
 }
 
@@ -240,6 +260,8 @@ export class SparkNativeTuiApp implements Component, Focusable {
   private readonly session: SparkNativeSession;
   private readonly onExit: () => void;
   private readonly messageRenderers: ReadonlyMap<string, SparkHostMessageRenderer>;
+  private readonly keybindings?: SparkKeybindings;
+  private readonly keybindingContext: SparkKeybindingContext;
   private cachedWidth?: number;
   private cachedLines?: string[];
   private focusedValue = false;
@@ -256,6 +278,8 @@ export class SparkNativeTuiApp implements Component, Focusable {
     this.session = session;
     this.onExit = onExit;
     this.messageRenderers = options.messageRenderers ?? new Map();
+    this.keybindings = options.keybindings;
+    this.keybindingContext = options.keybindingContext ?? { hasUI: true };
     this.registerToggleKeybindings(options.keybindings);
     this.editor = new Editor(tui, createEditorTheme(), { paddingX: 1 });
     this.editor.onSubmit = (text) => {
@@ -282,6 +306,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
   }
 
   handleInput(data: string): void {
+    if (this.handleSparkKeybinding(data)) return;
     if (matchesKey(data, Key.ctrl("c")) || matchesKey(data, Key.ctrl("d"))) {
       this.onExit();
       return;
@@ -297,6 +322,50 @@ export class SparkNativeTuiApp implements Component, Focusable {
     this.editor.handleInput(data);
     this.invalidate();
     this.tui.requestRender();
+  }
+
+  custom<T>(
+    factory: (
+      tui: SparkModelSelectorTuiLike,
+      theme: SparkModelSelectorTheme,
+      keybindings: unknown,
+      done: (value: T) => void,
+    ) => Component,
+    options?: unknown,
+  ): Promise<T> {
+    return new Promise<T>((resolve) => {
+      let settled = false;
+      let handle: { hide(): void } | undefined;
+      const done = (value: T) => {
+        if (settled) return;
+        settled = true;
+        handle?.hide();
+        resolve(value);
+      };
+      const component = factory(
+        { requestRender: () => this.tui.requestRender() },
+        plainRenderTheme,
+        this.keybindings,
+        done,
+      );
+      const overlayOptions = isOverlayRequest(options) ? options.overlayOptions : undefined;
+      if (
+        (!isOverlayRequest(options) || options.overlay !== false) &&
+        typeof this.tui.showOverlay === "function"
+      ) {
+        handle = this.tui.showOverlay(component, overlayOptions);
+      } else {
+        this.tui.addChild(component);
+        this.tui.setFocus(component);
+        handle = {
+          hide: () => {
+            this.tui.removeChild(component);
+            this.tui.setFocus(this);
+            this.tui.requestRender();
+          },
+        };
+      }
+    });
   }
 
   toggleTools(): boolean {
@@ -319,6 +388,19 @@ export class SparkNativeTuiApp implements Component, Focusable {
 
   isThinkingExpanded(): boolean {
     return this.thinkingExpanded;
+  }
+
+  private handleSparkKeybinding(data: string): boolean {
+    const key = parseKey(data) ?? data;
+    const keybindings = this.keybindings;
+    if (!keybindings || !isSparkAppKey(key)) return false;
+    void keybindings.executeKey(key, this.keybindingContext).then((didHandle) => {
+      if (didHandle) {
+        this.invalidate();
+        this.tui.requestRender();
+      }
+    });
+    return true;
   }
 
   private registerToggleKeybindings(keybindings: SparkKeybindings | undefined): void {
@@ -464,22 +546,12 @@ export async function runNativeSparkTui(input?: string | RunNativeSparkTuiOption
   });
   const stop = () => resolveDone?.();
 
-  if (options.services) {
-    options.services.runtime.setUiTransport({
-      notify: (message, level) =>
-        session.addCustomMessage({
-          customType: "notification",
-          content: `${level ?? "info"}: ${message}`,
-          display: true,
-        }),
+  for (const diagnostic of options.services?.diagnostics ?? []) {
+    session.addCustomMessage({
+      customType: "diagnostic",
+      content: `${diagnostic.type}: ${diagnostic.message}`,
+      display: true,
     });
-    for (const diagnostic of options.services.diagnostics) {
-      session.addCustomMessage({
-        customType: "diagnostic",
-        content: `${diagnostic.type}: ${diagnostic.message}`,
-        display: true,
-      });
-    }
   }
 
   const app = new SparkNativeTuiApp(tui, session, stop, {
@@ -492,6 +564,20 @@ export async function runNativeSparkTui(input?: string | RunNativeSparkTuiOption
         )
       : undefined,
   });
+  if (options.services) {
+    const ui = {
+      notify: (message: string, level?: "info" | "warning" | "error" | "success") =>
+        session.addCustomMessage({
+          customType: "notification",
+          content: `${level ?? "info"}: ${message}`,
+          display: true,
+        }),
+      custom: (...args: unknown[]) =>
+        app.custom(args[0] as Parameters<typeof app.custom>[0], args[1]),
+    };
+    options.services.runtime.setUiTransport(ui);
+    options.services.modelSelector.setPicker(createSparkModelPickerFromCustomUi(app));
+  }
   tui.addChild(app);
   tui.setFocus(app);
   terminal.setTitle("Spark");

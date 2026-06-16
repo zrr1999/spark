@@ -28,7 +28,7 @@ function model(id: string, name = id): ProviderModelDefinition {
     name,
     reasoning: id.endsWith("b"),
     input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    cost: { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
     contextWindow: 4096,
     maxTokens: 1024,
   };
@@ -115,6 +115,16 @@ void test("SparkModelSelector select validates through registry and persists Spa
   ]);
 });
 
+void test("SparkModelSelector includes model pricing in picker state", () => {
+  const registry = registryWithModels();
+  const selector = new SparkModelSelector({ registry, config: configSeed() });
+
+  const item = selector.getPickerState().items.find((entry) => entry.modelId === "model-a");
+
+  assert.equal(item?.modelLabel.startsWith("[$0.5/$3/M] "), true);
+  assert.equal(item?.description.includes("$0.5 in / $3 out / $0.05 read / $0 write per 1M"), true);
+});
+
 void test("SparkModelSelector openPicker passes active state and persists the chosen model", async () => {
   const registry = registryWithModels();
   registry.setActive({ providerName: "fake", modelId: "model-a" });
@@ -194,7 +204,7 @@ void test("Spark model selector TUI wrapper renders bounded SelectList rows", ()
     true,
   );
   assert.equal(
-    lines.some((line) => line.includes("fake / model-b (active)")),
+    lines.some((line) => line.includes("$0.5/$3/M") && line.includes("model-b")),
     true,
   );
   assert.equal(

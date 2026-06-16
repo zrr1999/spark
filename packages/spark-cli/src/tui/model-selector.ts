@@ -11,6 +11,7 @@ import {
   truncateToWidth,
   type Component,
   type SelectItem,
+  type SelectListLayoutOptions,
   type SelectListTheme,
 } from "@earendil-works/pi-tui";
 
@@ -119,6 +120,7 @@ export class SparkModelSelectorComponent implements Component {
       selectItems,
       Math.min(Math.max(selectItems.length, 1), options.maxVisible ?? 10),
       options.theme ?? PLAIN_SPARK_MODEL_SELECTOR_THEME,
+      MODEL_SELECTOR_LAYOUT,
     );
 
     const activeIndex = options.state.items.findIndex((item) => item.active);
@@ -152,6 +154,11 @@ export class SparkModelSelectorComponent implements Component {
     return lines.map((line) => truncateToWidth(line, width));
   }
 }
+
+const MODEL_SELECTOR_LAYOUT: SelectListLayoutOptions = {
+  minPrimaryColumnWidth: 44,
+  maxPrimaryColumnWidth: 72,
+};
 
 function toSelectItem(item: SparkModelSelectorItem): SelectItem {
   const label = `${item.providerLabel} / ${item.modelLabel}${item.active ? " (active)" : ""}`;

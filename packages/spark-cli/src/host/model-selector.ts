@@ -71,7 +71,7 @@ export class SparkModelSelector {
   private readonly registry: SparkProviderRegistry;
   private readonly loadConfig: SparkConfigLoader;
   private readonly saveConfig: SparkConfigSaver;
-  private readonly picker?: SparkModelPicker;
+  private picker?: SparkModelPicker;
   private config?: SparkConfig;
 
   constructor(options: SparkModelSelectorOptions) {
@@ -109,6 +109,10 @@ export class SparkModelSelector {
 
   getActive(): SparkActiveSelection | undefined {
     return this.registry.getActive();
+  }
+
+  setPicker(picker: SparkModelPicker | undefined): void {
+    this.picker = picker;
   }
 
   /**
@@ -248,7 +252,7 @@ function toSelectorItem(
     providerName: provider.name,
     providerLabel: provider.name,
     modelId: model.id,
-    modelLabel: model.name || model.id,
+    modelLabel: appendCostSummary(model.name || model.id, model),
     description: describeModel(provider, model),
     active: active?.providerName === provider.name && active.modelId === model.id,
     reasoning: model.reasoning,
@@ -257,10 +261,43 @@ function toSelectorItem(
 
 function describeModel(provider: ProviderConfig, model: ProviderModelDefinition): string {
   const parts = [`${provider.name}/${model.id}`];
+  const cost = formatCostDetails(model);
+  if (cost) parts.push(cost);
   if (model.reasoning) parts.push("reasoning");
   parts.push(`${formatNumber(model.contextWindow)} ctx`);
   parts.push(`${formatNumber(model.maxTokens)} max`);
   return parts.join(" • ");
+}
+
+function appendCostSummary(label: string, model: ProviderModelDefinition): string {
+  const summary = formatCostSummary(model);
+  return summary ? `[${summary}] ${label}` : label;
+}
+
+function formatCostSummary(model: ProviderModelDefinition): string | undefined {
+  const { input, output } = model.cost;
+  if (!hasAnyCost(model)) return undefined;
+  return `$${formatCostNumber(input)}/$${formatCostNumber(output)}/M`;
+}
+
+function formatCostDetails(model: ProviderModelDefinition): string | undefined {
+  if (!hasAnyCost(model)) return undefined;
+  const { input, output, cacheRead, cacheWrite } = model.cost;
+  return `$${formatCostNumber(input)} in / $${formatCostNumber(output)} out / $${formatCostNumber(cacheRead)} read / $${formatCostNumber(cacheWrite)} write per 1M`;
+}
+
+function hasAnyCost(model: ProviderModelDefinition): boolean {
+  const { input, output, cacheRead, cacheWrite } = model.cost;
+  return [input, output, cacheRead, cacheWrite].some(
+    (value) => Number.isFinite(value) && value > 0,
+  );
+}
+
+function formatCostNumber(value: number): string {
+  if (!Number.isFinite(value)) return String(value);
+  return Number.isInteger(value)
+    ? String(value)
+    : String(value).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function formatNumber(value: number): string {

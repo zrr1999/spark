@@ -9,7 +9,13 @@ import type { SparkHostMessageRenderer } from "../packages/spark-cli/src/host/ty
 import { SparkNativeSession, SparkNativeTuiApp } from "../packages/spark-cli/src/native-tui.ts";
 
 function fakeTui(): TUI {
-  return { requestRender: () => undefined, terminal: { rows: 30, cols: 100 } } as unknown as TUI;
+  return {
+    requestRender: () => undefined,
+    terminal: { rows: 30, cols: 100 },
+    addChild: () => undefined,
+    removeChild: () => undefined,
+    setFocus: () => undefined,
+  } as unknown as TUI;
 }
 
 function renderMessageContent(content: Parameters<SparkHostMessageRenderer>[0]["content"]): string {
@@ -92,6 +98,24 @@ void test("SparkNativeTuiApp uses custom message renderers and skips display=fal
   const rendered = app.render(80).join("\n");
   assert.match(rendered, /custom-render:green:expanded=true/);
   assert.doesNotMatch(rendered, /hidden/);
+});
+
+void test("SparkNativeTuiApp dispatches app keybindings before editor input", async () => {
+  const session = new SparkNativeSession();
+  const keybindings = new SparkKeybindings();
+  let picked = 0;
+  keybindings.register({
+    id: "app.modelPicker",
+    defaultKey: "ctrl+l",
+    description: "Open model picker",
+    handler: () => void (picked += 1),
+  });
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined, { keybindings });
+
+  app.handleInput("\f");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(picked, 1);
 });
 
 void test("SparkNativeTuiApp installs Ctrl+O/Ctrl+T toggle handlers into SparkKeybindings", async () => {

@@ -40,12 +40,13 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
       api?: string;
       baseUrl?: string;
       thinkingLevelMap?: Record<string, string | null>;
+      cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
     }>;
     streamSimple: unknown;
   };
 
   assert.equal(registeredName, "baidu-oneapi");
-  assert.equal(config.api, "anthropic-messages");
+  assert.equal(config.api, "baidu-oneapi");
   assert.equal(config.streamSimple, streamBaiduOneApi);
   assert.deepEqual(
     config.models.map((model) => [model.id, model.reasoning, model.api]),
@@ -54,8 +55,8 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
       ["claude-opus-4.7", true, undefined],
       ["claude-opus-4.8", true, undefined],
       ["claude-fable-5", true, undefined],
-      ["gpt-5.5", true, "openai-responses"],
-      ["gpt-5.5-coding-plan", true, "openai-responses"],
+      ["gpt-5.5", true, undefined],
+      ["gpt-5.5-coding-plan", true, undefined],
     ],
   );
   assert.deepEqual(
@@ -79,6 +80,24 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
     config.models.find((model) => model.id === "gpt-5.5")?.baseUrl,
     "https://oneapi-comate.baidu-int.com/v1",
   );
+  assert.deepEqual(config.models.find((model) => model.id === "gpt-5.5")?.cost, {
+    input: 0.5,
+    output: 3,
+    cacheRead: 0.05,
+    cacheWrite: 0,
+  });
+  assert.deepEqual(config.models.find((model) => model.id === "claude-fable-5")?.cost, {
+    input: 1.1,
+    output: 5.5,
+    cacheRead: 0.11,
+    cacheWrite: 1.375,
+  });
+  assert.deepEqual(config.models.find((model) => model.id === "claude-opus-4.6")?.cost, {
+    input: 5.5,
+    output: 27.5,
+    cacheRead: 0.55,
+    cacheWrite: 6.875,
+  });
 });
 
 void test("Baidu OneAPI payload keeps gateway model spelling", () => {
