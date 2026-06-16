@@ -295,6 +295,48 @@ void test("graft_cli_exec allows low-frequency patch promote argv", async () => 
   }
 });
 
+void test("graft-attach --status uses canonical workspace attach route", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graft-attach-status-"));
+  const argvFile = join(dir, "argv.txt");
+  const previousGraftBin = process.env.GRAFT_BIN;
+  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
+  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
+  process.env.GRAFT_BIN = await writeMockGraft(
+    dir,
+    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\nprintf '{"message":"attach status"}\\n'`,
+  );
+
+  try {
+    const { pi, commands } = createFakePi();
+    registerPiGraftExtension(pi);
+    const attach = commands.get("graft-attach");
+    assert.ok(attach, "expected graft-attach command to be registered");
+    const notifications: string[] = [];
+    await attach.handler("--status", {
+      cwd: dir,
+      ui: {
+        notify(message) {
+          notifications.push(message);
+        },
+      },
+    });
+    assert.deepEqual(notifications, ["attach status"]);
+    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
+      "--cwd",
+      dir,
+      "workspace",
+      "attach",
+      "--status",
+    ]);
+  } finally {
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
+    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
+    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
 void test("graft-ps command uses the direct CLI route", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-graft-ps-"));
   const argvFile = join(dir, "argv.txt");
@@ -321,7 +363,12 @@ void test("graft-ps command uses the direct CLI route", async () => {
       },
     });
     assert.deepEqual(notifications, ["ps direct"]);
-    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), ["--cwd", dir, "ps"]);
+    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
+      "--cwd",
+      dir,
+      "workspace",
+      "ps",
+    ]);
   } finally {
     if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
     else process.env.GRAFT_BIN = previousGraftBin;
@@ -356,6 +403,7 @@ void test("graft_init uses direct CLI bootstrap path", async () => {
       "--cwd",
       project,
       "--json",
+      "workspace",
       "init",
     ]);
   } finally {

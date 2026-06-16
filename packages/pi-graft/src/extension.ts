@@ -216,7 +216,7 @@ async function workspaceIdForRequest(cwd: string): Promise<string> {
   if (fromEnv) return fromEnv;
 
   try {
-    const execution = await runDirectGraft(cwd, ["--json", "status"]);
+    const execution = await runDirectGraft(cwd, ["--json", "workspace", "status"]);
     const envelope = tryParseJsonRecord(execution.stdout);
     const workspaceId = workspaceIdFromEnvelope(envelope);
     if (workspaceId) {
@@ -728,6 +728,11 @@ function shouldRunDirectCli(argv: string[]): boolean {
     const subcommand = secondaryCliCommand(argv, primary);
     return subcommand === "list";
   }
+  if (primary === "workspace") {
+    const subcommand = secondaryCliCommand(argv, primary);
+    if (subcommand === "gc") return !argv.includes("--apply");
+    return ["init", "status", "attach", "detach", "ps", "doctor"].includes(subcommand ?? "");
+  }
   if (primary === "patch") {
     const subcommand = secondaryCliCommand(argv, primary);
     return subcommand === "show" || subcommand === "search" || subcommand === "list";
@@ -1057,7 +1062,8 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     description: "Attach cwd to a graft workspace route: /graft-attach [workspace-id|--status]",
     handler: async (args: string, ctx: PiGraftCommandContext) => {
       const trimmed = args.trim();
-      const argv = trimmed === "--status" ? ["attach", "--status"] : ["attach"];
+      const argv =
+        trimmed === "--status" ? ["workspace", "attach", "--status"] : ["workspace", "attach"];
       if (trimmed && trimmed !== "--status") argv.push("--workspace", trimmed);
       await notifyCliExec(ctx, argv, "Attached graft workspace route.");
     },
@@ -1066,21 +1072,21 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   pi.registerCommand("graft-detach", {
     description: "Detach cwd from its graft workspace route: /graft-detach",
     handler: async (_args: string, ctx: PiGraftCommandContext) => {
-      await notifyCliExec(ctx, ["detach"], "Detached graft workspace route.");
+      await notifyCliExec(ctx, ["workspace", "detach"], "Detached graft workspace route.");
     },
   });
 
   pi.registerCommand("graft-ps", {
     description: "Show graft global daemon and registry status: /graft-ps",
     handler: async (_args: string, ctx: PiGraftCommandContext) => {
-      await notifyCliExec(ctx, ["ps"], "Graft ps completed.");
+      await notifyCliExec(ctx, ["workspace", "ps"], "Graft ps completed.");
     },
   });
 
   pi.registerCommand("graft-doctor", {
     description: "Diagnose graft registry state: /graft-doctor [--rebuild-registry]",
     handler: async (args: string, ctx: PiGraftCommandContext) => {
-      const argv = ["doctor"];
+      const argv = ["workspace", "doctor"];
       const flags = args.trim() ? args.trim().split(/\s+/) : [];
       for (const flag of flags) {
         if (flag !== "--rebuild-registry") {
@@ -1162,7 +1168,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = optionalStringParam(params, "cwd") ?? toolCwd(ctx, activeState, lastCwd);
-      const argv = ["--json", "init"];
+      const argv = ["--json", "workspace", "init"];
       if (optionalBooleanParam(params, "registerOnly")) argv.push("--register-only");
       const { envelope, execution } = await directCliJson(cwd, argv);
       const workspaceId = workspaceIdFromEnvelope(envelope);
@@ -1214,7 +1220,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
-      const { envelope, execution } = await directCliJson(cwd, ["--json", "ps"]);
+      const { envelope, execution } = await directCliJson(cwd, ["--json", "workspace", "ps"]);
       return envelopeToolResult(envelope, { execution });
     },
   });
@@ -1236,7 +1242,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
-      const argv = ["--json", "doctor"];
+      const argv = ["--json", "workspace", "doctor"];
       if (optionalBooleanParam(params, "rebuildRegistry")) argv.push("--rebuild-registry");
       const { envelope, execution } = await directCliJson(cwd, argv);
       return envelopeToolResult(envelope, { execution });

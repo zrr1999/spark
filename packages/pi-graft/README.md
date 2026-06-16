@@ -43,7 +43,7 @@ These tools do not override Pi built-ins. Each scratch tool accepts either `base
 ### Graft lifecycle and inspection tools
 
 - `graft_help` — show maintained workflow guidance (`agent-workflow`) or command help.
-- `graft_init` — bootstrap or register a workspace through direct `graft init`.
+- `graft_init` — bootstrap or register a workspace through direct `graft workspace init`.
 - `graft_patch` — run a Graft-owned worker child with only Graft-related tools available. If the patch instruction is unclear, the child must request clarification upward instead of editing directly or creating a candidate.
 - `graft_status` — inspect pi-graft convenience state and graftd status.
 - `graft_ps` — show global daemon and registry status.
@@ -88,7 +88,7 @@ The extension talks to `$GRAFT_HOME/run/daemon.sock` (default `$HOME/.graft/run/
 graftd start --cwd <cwd> --socket "$GRAFT_HOME/run/daemon.sock"
 ```
 
-Routed wire requests include `workspace_id` and `workspace_root` (the Pi cwd). The extension resolves `workspace_id` from `GRAFT_WORKSPACE` first, then from `graft --json status` / `graft_init` output, then from restored Pi session state; only an uninitialized or undiscoverable workspace falls back to `ws:default` and lets graftd report the precise routing error. Lifecycle/materialize/repo write tools route through `graftd cli_exec` with `graft --cwd <cwd> ...`; read-only query, help, bootstrap, and diagnostics paths can run the direct `graft` binary. `graft_cli_exec` validates its argv against a narrow low-frequency allowlist before choosing the direct or daemon route. Set `GRAFT_BIN`/`GRAFT_DAEMON_BIN` if they are not on `PATH`.
+Routed wire requests include `workspace_id` and `workspace_root` (the Pi cwd). The extension resolves `workspace_id` from `GRAFT_WORKSPACE` first, then from `graft --json workspace status` / `graft_init` output, then from restored Pi session state; only an uninitialized or undiscoverable workspace falls back to `ws:default` and lets graftd report the precise routing error. Lifecycle/materialize/repo write tools route through `graftd cli_exec` with `graft --cwd <cwd> ...`; read-only query, help, bootstrap, and diagnostics paths can run the direct `graft` binary. `graft_cli_exec` validates its argv against a narrow low-frequency allowlist before choosing the direct or daemon route. Set `GRAFT_BIN`/`GRAFT_DAEMON_BIN` if they are not on `PATH`.
 
 The current implementation is UTF-8-text first. Binary, image, and directory behavior follows the current graft scratch wire errors and should fail loudly rather than falling back to disk reads or writes.
 
