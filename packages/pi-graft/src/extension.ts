@@ -1681,8 +1681,6 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       dryRun: Type.Optional(
         Type.Boolean({ description: "Plan without writing; defaults to true." }),
       ),
-      asCommit: Type.Optional(Type.Boolean({ description: "Write a detached Git commit." })),
-      ref: Type.Optional(Type.String({ description: "Git ref for materialized commit." })),
     }),
     async execute(
       _toolCallId: string,
@@ -1697,9 +1695,6 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       if (!patch) throw new Error("graft_materialize requires patch or a previous admitted patch.");
       const argv = ["materialize", patch];
       if (optionalBooleanParam(params, "dryRun", true)) argv.push("--dry-run");
-      if (optionalBooleanParam(params, "asCommit")) argv.push("--as-commit");
-      const ref = optionalStringParam(params, "ref");
-      if (ref) argv.push("--ref", ref);
       const envelope = await cliExec(cwd, argv);
       return envelopeToolResult(envelope, { state });
     },

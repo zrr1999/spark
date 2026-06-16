@@ -438,6 +438,58 @@ void test("graft_repo list uses the direct CLI route", async () => {
   }
 });
 
+void test("graft_materialize schema and argv match current graft CLI", async () => {
+  const project = "/tmp/pi-graft-materialize-workspace";
+  const previousHome = process.env.GRAFT_HOME;
+  const previousWorkspace = process.env.GRAFT_WORKSPACE;
+
+  try {
+    await withMockGraftd(
+      (request) => {
+        assert.equal(request.op, "cli_exec");
+        assert.equal(request.params.workspace_id, "ws:materialize");
+        assert.equal(request.params.workspace_root, project);
+        assert.deepEqual(request.params.argv, [
+          "graft",
+          "--cwd",
+          project,
+          "materialize",
+          "patch:abc",
+          "--dry-run",
+        ]);
+        return {
+          id: request.id,
+          ok: true,
+          result: { message: "materialization dry-run ready" },
+        };
+      },
+      async (home) => {
+        process.env.GRAFT_HOME = home;
+        process.env.GRAFT_WORKSPACE = "ws:materialize";
+        const { pi, tools } = createFakePi();
+        registerPiGraftExtension(pi);
+        const materialize = tools.get("graft_materialize");
+        assert.ok(materialize, "expected graft_materialize to be registered");
+        const schema = JSON.stringify(materialize.parameters);
+        assert.doesNotMatch(schema, /asCommit|as-commit|"ref"|--ref/);
+
+        const result = await executeTool(
+          materialize,
+          "graft_materialize",
+          { patch: "patch:abc" },
+          { cwd: project },
+        );
+        assert.match(result.content[0].text, /materialization dry-run ready/);
+      },
+    );
+  } finally {
+    if (previousHome === undefined) delete process.env.GRAFT_HOME;
+    else process.env.GRAFT_HOME = previousHome;
+    if (previousWorkspace === undefined) delete process.env.GRAFT_WORKSPACE;
+    else process.env.GRAFT_WORKSPACE = previousWorkspace;
+  }
+});
+
 void test("graft_repo add uses daemon-owned cli_exec routing", async () => {
   const project = "/tmp/pi-graft-repo-add-workspace";
   const previousHome = process.env.GRAFT_HOME;
