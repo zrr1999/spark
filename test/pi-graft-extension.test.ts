@@ -225,6 +225,46 @@ void test("graft_cli_exec validates argv before daemon work", async () => {
   );
 });
 
+void test("graft_cli_exec does not direct-route removed property command", async () => {
+  const project = "/tmp/pi-graft-property-route-workspace";
+  const previousHome = process.env.GRAFT_HOME;
+  const previousWorkspace = process.env.GRAFT_WORKSPACE;
+
+  try {
+    await withMockGraftd(
+      (request) => {
+        assert.equal(request.op, "cli_exec");
+        assert.equal(request.params.workspace_id, "ws:property-route");
+        assert.equal(request.params.workspace_root, project);
+        assert.deepEqual(request.params.argv, ["graft", "--cwd", project, "property", "list"]);
+        return {
+          id: request.id,
+          ok: true,
+          result: { message: "routed through daemon" },
+        };
+      },
+      async (home) => {
+        process.env.GRAFT_HOME = home;
+        process.env.GRAFT_WORKSPACE = "ws:property-route";
+        const { pi, tools } = createFakePi();
+        registerPiGraftExtension(pi);
+        const result = await executeTool(
+          tools.get("graft_cli_exec"),
+          "graft_cli_exec",
+          { argv: ["property", "list"] },
+          { cwd: project },
+        );
+        assert.match(result.content[0].text, /routed through daemon/);
+      },
+    );
+  } finally {
+    if (previousHome === undefined) delete process.env.GRAFT_HOME;
+    else process.env.GRAFT_HOME = previousHome;
+    if (previousWorkspace === undefined) delete process.env.GRAFT_WORKSPACE;
+    else process.env.GRAFT_WORKSPACE = previousWorkspace;
+  }
+});
+
 void test("graft-ps command uses the direct CLI route", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-graft-ps-"));
   const argvFile = join(dir, "argv.txt");

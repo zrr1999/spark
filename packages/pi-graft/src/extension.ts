@@ -638,7 +638,6 @@ const DIRECT_CLI_COMMANDS = new Set([
   "incoming",
   "init",
   "ps",
-  "property",
   "scratch",
   "search",
   "show",
