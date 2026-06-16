@@ -1,6 +1,6 @@
-# Extension capability unification plan
+# Extension capability unification migration record
 
-This document is the migration contract for making the Pi/Spark extension suite conceptually unified while keeping implementations decoupled. It is intentionally **extension-first**: it does not refactor `packages/spark-cli/src/host/*` or native Spark CLI session internals.
+This historical migration record documents the implemented contract for making the Pi/Spark extension suite conceptually unified while keeping implementations decoupled. It is intentionally **extension-first**: it does not refactor `packages/spark-cli/src/host/*` or native Spark CLI session internals.
 
 ## Status (2026-06-05)
 
@@ -51,8 +51,8 @@ Domain-specific command families that are not duplicated by Spark, such as `pi-c
 
 Spark should not own generic mechanisms. It should provide:
 
-- Spark compatibility entry plus `/research`, `/plan`, `/execute`, `/goal`, `/workflow` commands.
-- Spark mode prompt and activation rules.
+- Spark compatibility entry plus `/research`, `/plan`, `/implement`, `/goal`, `/workflow` commands.
+- Spark research-default mode prompt and activation rules.
 - Spark context providers over active project/task/workflow state.
 - Spark function/workflow presets and orchestration policy.
 
@@ -302,7 +302,7 @@ Own saved scripts as a generic Pi capability.
 Canonical tool:
 
 ```ts
-workflow({ action: "list" | "read" | "validate" | "run" | "runs_status" | "runs_prune", ... })
+workflow({ action: "list" | "read", ... })
 ```
 
 Actions:
@@ -311,10 +311,7 @@ Actions:
 | ------------- | ------------------------------------------------------------------ | --------------------------------------------------------------- |
 | `list`        | discovers only user/workspace saved script roots                   | `spark-workflow-registry`, `pi-prompt-template-model` discovery |
 | `read`        | reads saved script metadata/body by selector                       | `pi-subagents chain get`                                        |
-| `validate`    | parses frontmatter/script; no execution                            | `pi-prompt-template-model` validation                           |
-| `run`         | executes saved script by selector only, no inline arbitrary script | `pi-workflows`, `pi-prompt-template-model run-prompt`           |
-| `runs_status` | workflow-run invocation status                                     | `spark_dag_manager status`                                      |
-| `runs_prune`  | dryRun default true                                                | `spark_state prune`, workflow-run retention                     |
+Execution and workflow-run retention remain host/Spark policy rather than public `workflow` tool mutations.
 
 `/workflow` in Spark remains saved scripts only. `/goal` remains a separate Spark command and is not a workflow selector.
 
@@ -325,7 +322,7 @@ Actions:
 - Spark compatibility entry
 - `/research`
 - `/plan`
-- `/execute`
+- `/implement`
 - `/goal`
 - `/workflow`
 - Spark context provider registration
@@ -352,12 +349,12 @@ It should not register duplicate canonical tools for task, artifact, ask, role, 
 | `spark_dag_manager`                       | `task({ action: "run_status" })` / `task({ action: "run_control" })` / `workflow({ action: ... })` | No                 | Low-level compatibility/debug surface is not canonical.                 |
 | `spark_state status/doctor`               | owner-specific status actions                                                                      | No                 | Avoid one broad state dumping ground.                                   |
 | `spark_state cleanup`                     | `task({ action: "cache_cleanup" })` plus owner-specific cleanup actions                            | No                 | Owner-scoped dry-run cleanup only.                                      |
-| `spark_state prune`                       | `workflow({ action: "runs_prune" })`                                                               | No                 | Workflow-run store owner handles retention.                             |
+| `spark_state prune`                       | Spark workflow-run retention policy                                                                | No                 | Workflow-run store owner handles retention; not a public workflow tool action. |
 | `spark_state compact-role-run-artifacts`  | `artifact({ action: "compact" })`                                                                  | No                 | Artifact owner handles blob retention.                                  |
 | `spark_list_artifacts`                    | `artifact({ action: "list" })`                                                                     | No                 | Generic artifact capability.                                            |
 | `spark_get_artifact`                      | `artifact({ action: "read" })`                                                                     | No                 | Generic artifact capability.                                            |
 | `spark_ask`                               | `ask({ action: "ask", persistence: { artifact: true }, ... })`                                     | No                 | Pi ask owns UI and persistence adapter.                                 |
-| `spark_ask_replay`                        | `ask({ action: "replay" })`                                                                        | No                 | Generic persisted ask replay.                                           |
+| `spark_ask_replay`                        | internal ask artifact read/replay helpers                                                           | No                 | Replay is not part of the public/default `ask` action surface.          |
 | `ask_user`                                | `ask({ action: "ask", questions: [one] })`                                                         | Internal only      | Single-question implementation behind canonical `ask`.                  |
 | `ask_flow`                                | `ask({ action: "flow", questions: [...] })`                                                        | Internal only      | Fullscreen/multi-question implementation behind canonical `ask`.        |
 | `list_roles`                              | `role({ action: "list" })`                                                                         | Internal only      | Role listing implementation behind canonical `role`.                    |
@@ -373,9 +370,9 @@ It should not register duplicate canonical tools for task, artifact, ask, role, 
 | `spark_learning_reject`                   | `learning({ action: "reject" })`                                                                   | No                 | Generic evidence-backed learning.                                       |
 | `spark_learning_export_markdown`          | `learning({ action: "export_markdown" })`                                                          | No                 | Generic export.                                                         |
 | `spark_learning_import_markdown`          | `learning({ action: "import_markdown" })`                                                          | No                 | Generic import.                                                         |
-| Spark compatibility entry                 | Spark compatibility entry                                                                          | Yes                | Retained for existing callers; new guidance should prefer canonical tools and explicit mode commands. |
-| `/research`, `/plan`, `/execute`, `/goal` | same                                                                                               | Yes                | Spark mode commands.                                                    |
-| `/workflow`                               | `/workflow` delegating to `workflow({ action: "run" })`                                            | Yes                | Saved scripts only.                                                     |
+| Spark compatibility entry                   | Spark compatibility entry                                            | Yes                | Retained for existing callers; new guidance should prefer canonical tools and explicit mode commands. |
+| `/research`, `/plan`, `/implement`, `/goal` | same                                                                 | Yes                | Spark mode commands.                                                    |
+| `/workflow`                                 | `/workflow` through Spark host/runtime policy over saved workflows   | Yes                | Saved scripts only.                                                     |
 | `/workflow:goal`                          | none                                                                                               | No                 | Goal is not workflow.                                                   |
 | `cue_*`, `graft_*`                        | unchanged for this pass                                                                            | Yes                | Not duplicated Spark concepts; explicit schemas remain safer for now.   |
 

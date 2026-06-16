@@ -23,7 +23,7 @@ inspired_by:
 
 ## 目标
 
-- 让 `/spark` 能从初始想法创建或恢复本地 Spark 状态，而不是依赖聊天上下文记忆。
+- 让 Spark 在没有 `.spark/` 或 `SPARK.md` 预置状态时也能默认进入研究模式，并让 `/spark` 在需要项目绑定状态时从初始想法创建或恢复本地 Spark 状态，而不是依赖聊天上下文记忆。
 - 用持久化的项目与任务有向无环图表达工作分解、依赖、认领、待办事项、运行记录和完成状态。
 - 用类型化证据制品记录结构化提问答案、角色执行输出、审查结果、运行轨迹和后续证据。
 - 将结构化提问作为工作流原语：在项目、任务、路线图或审查流程需要真实澄清或决策时调用，而不是展示宽泛的录入表单。
@@ -35,7 +35,7 @@ inspired_by:
 
 Spark 现在支持两个宿主目标：Pi 中的 `packages/spark/src/extension/` 仍是 `/spark` 等命令和门面策略的 Pi 扩展入口；`packages/spark-cli` 是原生 `pi-tui` 宿主，负责构造 `SparkHostRuntime`、显式内置扩展加载器、提供方注册表、模型选择器、JSONL 会话存储、三层技能解析器和 `SparkAgentLoop`。共享扩展包通过 `pi-extension-api` 在两个宿主中运行，不应依赖具体的 Pi SDK 运行时。
 
-- `packages/spark`：Pi 扩展门面、`/spark`、`/research`、`/plan`、`/execute`、`/goal`、`/workflow`、Spark 小组件、模式与策略、内置 Spark 角色以及活动上下文提供方。
+- `packages/spark`：Pi 扩展门面、`/spark`、`/research`、`/plan`、`/implement`、`/goal`、`/workflow`、Spark 小组件、模式与策略、内置 Spark 角色以及活动上下文提供方。
 - `packages/spark-runtime`：单个 Spark 任务到角色执行的适配层，负责调用 `pi-roles` 并回写证据制品、运行记录和状态。
 - `packages/pi-extension-api`：共享扩展宿主与工具契约、引用、错误类型以及轻量 JSON、文件系统和时间辅助能力。
 - `packages/pi-artifacts`：证据制品元数据与二进制对象存储、来源、谱系，以及规范化 `artifact({ action })` 工具。
@@ -66,7 +66,7 @@ Spark 现在支持两个宿主目标：Pi 中的 `packages/spark/src/extension/`
 
 - `/spark` 初始化或恢复不会覆盖既有状态，不会生成占位任务，也不会要求用户先填写宽泛表单。
 - `task({ action: "status" })` 和 Spark 小组件能以低噪声方式展示当前项目、活动任务、待办事项、工作流运行状态和就绪性问题。
-- `task({ action: "plan" })`、`task({ action: "claim" })` 和 `task({ action: "run_ready" })` 能区分规划、认领、执行和完成；角色执行失败或未启动不会被错误标记为任务完成。
+- `task({ action: "plan" })`、`task({ action: "claim" })` 和 `task({ action: "run_ready" })` 能区分规划、认领、实现和完成；角色执行失败或未启动不会被错误标记为任务完成。
 - `ask({ action: "ask" | "flow" })` 的聚焦与全屏流程结果语义一致：自定义输入是一等结果，决策或审批没有有效选项时会阻塞，用户界面不泄漏原始标识符。
 - `pi-roles` 角色规范与运行工具同 Spark 工作流运行边界清晰，直接 `role({ action: "call" })` 不冒充任务执行。
 - `pi-cue` 工具默认输出有界且适合上下文阅读，同时保留获取完整输出的显式方式。
@@ -89,3 +89,4 @@ Spark 现在支持两个宿主目标：Pi 中的 `packages/spark/src/extension/`
 - 2026-05-22：根据历史任务审查、`pi-roles` 迁移、结构化提问、任务和 `cue` 边界，以及当时实现状态重建项目意图。
 - 2026-06-05：根据门面切换、实现下沉和 `spark-core`、`spark-tasks`、`spark-learnings`、`spark-goal`、`spark-workflows` 退场更新当前边界。
 - 2026-06-15：统一正式中文表述，保留必要代码标识符和兼容性术语。
+- 2026-06-16：更新默认研究模式、`/implement` 模式命名以及 Spark 组合 Pi 扩展能力的边界表述。

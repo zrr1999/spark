@@ -1,0 +1,29 @@
+# cue_jobs
+cue_jobs action=status id=J12 tail=4096
+
+# cue_jobs
+cue_jobs action=list status=running limit=5
+
+# cue_jobs
+cue_jobs action=wait id=J12 timeout=30s tail=4096
+
+# cue_scope
+cue_scope action=list limit=3 include-env tail=2048
+
+# cue_history
+cue_history J12 limit=10 tail=4096
+
+# cue_schedule
+cue_schedule action=add schedule="every 5m" command="pnpm test"
+
+# cue_run
+cue_run path=scripts/build.cue timeout=30s tail=4096
+
+# cue_script
+cue_script inline=1line(s) label=inline.cue timeout=30s tail=4096
+
+# script_run
+script_run lang=python path=scripts/smoke.py timeout=30s tail=4096
+
+# script_eval
+script_eval lang=python inline=1line(s) label=inline.py timeout=30s tail=4096

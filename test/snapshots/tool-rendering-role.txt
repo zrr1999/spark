@@ -1,0 +1,11 @@
+# role
+role action=list
+
+# role
+role action=get worker
+
+# role
+role action=create id=repo-inspector
+
+# role
+role action=call worker

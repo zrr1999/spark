@@ -335,9 +335,10 @@ void test("ssh connection errors keep bounded trailing stderr diagnostics", asyn
     {
       "cue-client": `#!/bin/sh\nprintf '%s\n' '{"schema_version":1,"profile_name":"remote","transport":"ssh","destination":"devbox","gateway_command":"cued gateway --stdio","start_command":"cued start"}'\n`,
       ssh: `#!/usr/bin/env node
-process.stderr.write("old-prefix-" + "x".repeat(70 * 1024));
-process.stderr.write("tail-diagnostic: remote gateway failed");
-process.exit(42);
+process.stderr.write(
+  "old-prefix-" + "x".repeat(70 * 1024) + "tail-diagnostic: remote gateway failed",
+  () => process.exit(42),
+);
 `,
     },
     async () => {
@@ -348,7 +349,8 @@ process.exit(42);
           error.code === "DAEMON_UNREACHABLE" &&
           !error.message.includes("old-prefix") &&
           error.message.includes("tail-diagnostic: remote gateway failed") &&
-          error.message.length < 66 * 1024,
+          // Runtime keeps a 64 KiB stderr tail and wraps it with fixed SSH profile guidance.
+          error.message.length < 68 * 1024,
       );
     },
   );

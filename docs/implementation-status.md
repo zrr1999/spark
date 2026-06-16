@@ -47,11 +47,12 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
    - Spark single-task adapter over `pi-roles`
    - dry-run and real task execution, runtime-created role-run claims, heartbeat loop, artifact persistence, timeout/reconciliation tracking, kill controls, and role-run transcript compaction support
 - `spark`
-   - Spark compatibility entry plus `/research`, `/plan`, `/execute`, `/goal`, and `/workflow[:selector]` commands
+   - Spark compatibility entry plus `/research`, `/plan`, `/implement`, `/goal`, and `/workflow[:selector]` commands
    - Spark widget, mode state, active context provider, session-bound goal facade, review/init flow state, builtin Spark roles, and role/model binding policy
    - canonical visible tool surface through `task`, `learning`, `artifact`, `ask`, `context`, `workflow`, `role`, `recall`, and `goal`; legacy `spark_*` tool configs are internal implementation details only and are not registered as active tools
+   - always-available research-default standing mode, with project-bound context appended only after a graph/current project exists
    - state initialization without a generic intake template; clarification/decision asks are grounded in inspected context
-   - root `SPARK.md` materialization only during compatibility initialization when `.git` exists in cwd; direct modes keep intent under `.spark` artifacts
+   - root `SPARK.md` materialization only during compatibility initialization when `.git` exists in cwd; direct project-bound modes keep intent under `.spark` artifacts
 - `spark-cli`
    - native Spark-first `pi-tui` host with explicit builtin extension loading, provider registry, model selector, JSONL session store, skill resolver, local daemon queue, and `SparkAgentLoop`
    - extension packages depend on `pi-extension-api`, not on Pi's concrete SDK runtime

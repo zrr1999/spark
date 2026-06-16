@@ -4,10 +4,10 @@
 
 Commands:
 
-- Spark compatibility entry — legacy command entry remains registered for existing callers, but new user-facing guidance should prefer canonical tools and explicit mode commands below. High-confidence prompts route to research, planning, or default execution; prompts that ask for autonomous or workflow-style progress ask before selecting a goal or workflow execute strategy. This compatibility entry is the only command path that may materialize root `SPARK.md` during initialization.
-- `/research <focus>` — investigate repository/project context and summarize findings without task graph changes or task claims.
+- Spark compatibility entry — legacy command entry remains registered for existing callers, but new user-facing guidance should prefer canonical tools and explicit mode commands below. Spark is always available: research is the unconditional default standing mode, high-confidence prompts route to research, planning, or implementation, and prompts that ask for autonomous or workflow-style progress ask before selecting a goal or workflow implement strategy. This compatibility entry is the only command path that may materialize root `SPARK.md` during initialization.
+- `/research <focus>` — investigate repository/project context and summarize findings without task graph changes or task claims. This is the default mode when no project-bound mode state exists.
 - `/plan <focus>` — inject a high-priority planning prompt for research, clarification, and task-DAG creation/refinement. It is prompt guidance, not a permission gate; planning mode does not execute tasks and does not create root `SPARK.md`.
-- `/execute <focus>` — enter default execution mode. Claim and finish at most one concrete task; run `/execute` again for one more default step. If the request needs continuous execution, use `/goal`; if it needs scripted execution, use `/workflow[:selector]`.
+- `/implement <focus>` — enter default implementation mode. Claim and finish at most one concrete task; run `/implement` again for one more default step. If the request needs continuous execution, use `/goal`; if it needs scripted execution, use `/workflow[:selector]`.
 - `/goal <focus>` — enter or restart autonomous verified foreground goal mode; continue across ready tasks until complete or blocked. `/goal` requires a concrete `<focus>` when no goal already exists; empty `/goal` asks the agent to clarify the real user goal instead of generating an “Advance project …” template. `/goal` never overwrites an existing active or paused goal: a new `<focus>` is ignored until the existing goal is reviewer-completed or explicitly paused/restarted with the old objective. Foreground goal ticks are idle-interval based, not backlog based: a tick is considered only after the agent has been idle for the goal interval, stale tick context is dropped when the goal pauses or changes, and session reset commands such as reload/resume/new/fork/revert/reset auto-pause active goals before the reset so stale foreground ticks cannot continue from pre-reset state.
 - `/workflow[:selector] <focus>` — enter workflow execution mode for saved workflow scripts. Use `/workflow workspace:<name>` for `.spark/workflows/*.js` and `/workflow user:<name>` for `~/.agents/workflows/*.js`. Empty `/workflow` asks which workflow to use or whether to draft a workspace workflow.
 
@@ -36,11 +36,10 @@ Retired `spark_*` compatibility tools are not part of the active public tool sur
 
 Automatic behavior:
 
-1. Explicit activation first:
-   - a `SPARK.md` exists in cwd or an ancestor
-   - a `.spark/projects.json` exists in cwd or an ancestor
-   - cwd is under an allowlisted directory in
-     `~/.config/spark/config.toml`
+1. Spark standing mode is always available:
+   - active turns receive a `Spark mode: research` marker by default, even before `.spark/` or `SPARK.md` exists
+   - project-bound context is appended only after a graph/current project exists
+   - explicit `/plan` and `/implement` remain project-bound and guide the user to create/select a project when no graph exists
 2. Compatibility initialization does not start with a generic intake template:
    - Spark records the initial intent and builds
      investigation/planning tasks first
@@ -60,10 +59,10 @@ Automatic behavior:
    - the output language defaults from the current request
      language; do not ask a separate language question when the
      language is obvious
-3. Root-file materialization is separate from activation:
-   - `.spark/` is always created
+3. Root-file materialization is separate from always-available mode guidance:
+   - `.spark/` is local runtime state and is created only when durable state is needed by the host/tool path
    - root `SPARK.md` is only written when `.git` exists in the current cwd
-4. Natural-language detection second:
+4. Natural-language detection follows mode guidance:
    - high-confidence new-idea prompts enter Spark initialization through the compatibility entry
    - ordinary coding tasks are not intercepted
 5. When Spark is active, loaded graphs are kept aligned
@@ -110,7 +109,7 @@ Automatic behavior:
      workflow-run summary, last/active workflow run, unacknowledged problem
      counts, acknowledged known-failure counts, and timeout/stale
      signals
-   - execute-mode state is persisted in this session's
+   - implement-mode state is persisted in this session's
      `.spark/sessions/<session>.json` entry alongside the
      selected project. It records `runRef`, `projectRef`, `focus`,
      `status`, policy, and timestamps; `policy.maxConcurrency` is the
@@ -136,7 +135,7 @@ Automatic behavior:
      is attached; role-run execution records output artifacts as the
      first concrete evidence attachment mechanism
    - `task({ action: "finish", status: "done" })` is reviewer-gated:
-     Spark resolves the claimed task, runs a read-only forked reviewer
+     Spark resolves the claimed task, runs a read-only fresh reviewer
      through the `ReviewerRunner` boundary, persists a `kind="record"`
      artifact with `producer="review"`, and marks the task done only when the verdict approves.
      Rejected, blocked, malformed, or failed reviewer verdicts return

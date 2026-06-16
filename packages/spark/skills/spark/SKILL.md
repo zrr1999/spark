@@ -5,9 +5,9 @@ description: Use for turning an initial or ambiguous project intent into SPARK.m
 
 # Spark
 
-Spark extensions are dual-host: the same retained extension packages should run under Pi's `@earendil-works/pi-coding-agent` host and under the native `spark-cli` host via `SparkHostRuntime` / `pi-extension-api`. Keep shared extension behavior host-neutral; put native CLI boot, provider/model selection, sessions, skills, and pi-tui wrappers in `packages/spark-cli/src/host/` or `packages/spark-cli/src/tui/`.
+Spark extensions are dual-host: the same retained `pi-*` extension packages should run under Pi's `@earendil-works/pi-coding-agent` host and under the native `spark-cli` host via `SparkHostRuntime` / `pi-extension-api`. Keep shared extension behavior host-neutral; put native CLI boot, provider/model selection, sessions, skills, and pi-tui wrappers in `packages/spark-cli/src/host/` or `packages/spark-cli/src/tui/`.
 
-Use Spark command modes intentionally: the compatibility entry handles initialization/autodetection for existing callers; `/research <focus>` investigates, `/plan <focus>` refines the task DAG, `/execute <focus>` runs one default execution step, `/goal <focus>` drives autonomous verified foreground progress (derive the goal from current Spark state when focus is omitted, asking if ambiguous), and `/workflow[:selector] <focus>` runs saved Spark workflow scripts. Workflows use `/workflow workspace:<name>` and `/workflow user:<name>`. Do not reintroduce legacy `/run*` command guidance.
+Use Spark command modes intentionally: research is the unconditional default standing mode and auto-detects when project-bound state is needed; `/research <focus>` investigates, `/plan <focus>` refines the task DAG, `/implement <focus>` runs one default implementation step, `/goal <focus>` drives autonomous verified foreground progress (derive the goal from current Spark state when focus is omitted, asking if ambiguous), and `/workflow[:selector] <focus>` runs saved Spark workflow scripts. Workflows use `/workflow workspace:<name>` and `/workflow user:<name>`. Do not reintroduce legacy run or execute command guidance.
 
 Spark is now a composition/mode facade over generic Pi capabilities:
 
@@ -21,7 +21,7 @@ Spark is now a composition/mode facade over generic Pi capabilities:
 - `workflow`: saved-script workflow discovery/preview from controlled roots.
 - `pi-cue`: reusable controlled execution infrastructure.
 - `pi-goal` and `pi-workflows`: reusable goal/workflow primitives; Spark owns project-bound `/goal` and `/workflow` command policy.
-- `spark-runtime`: Spark-owned single-task role-run adapter for `/execute`, ready-task execution, and role-run artifacts.
+- `spark-runtime`: Spark-owned single-task role-run adapter for `/implement`, ready-task execution, and role-run artifacts.
 
 Rules:
 
@@ -42,7 +42,7 @@ Rules:
 15.   After a decision is confirmed and the next action is clear, continue with that action instead of stopping for another permission prompt.
 16.   Show the active project header with task counts plus claimed task / TODO text summaries by default; render independent session TODOs as siblings of the project display. `task({ action: "status" })`/Spark status default to active unfinished/current-session work; use summary/full views only when needed.
 17.   Before launching multiple role-runs or parallel workstreams, ask for approval with `ask` unless the user explicitly requested immediate dispatch. Treat no-selection as blocked, not approval; asks do not support automatic timeout.
-18.   Prefer Spark-native delegation: inspect roles with `role({ action: "list" | "get" })`, bind concrete tasks to builtin/project/user `roleRef`s, and hand execution to Spark workflow-run scheduling via `task({ action: "run_ready" })`. For default foreground execution, `/execute` claims at most one concrete task and stops. For autonomous foreground execution, `/goal` uses Spark goal continuation prompts and continues verified task progress until done or blocked; when the user gives no focus, infer the objective from the active project/task state and use `ask` if the project, scope, priority, or ready path is ambiguous. For scripted/subagent execution, use saved workspace/user workflows; workflow `agent()` calls must cross the Spark workflow role-run adapter boundary rather than raw Pi subagent spawning. Use `role({ action: "call" })` only for one-off direct role calls that should stay outside Spark tasks/DAGs.
+18.   Prefer Spark-native delegation: inspect roles with `role({ action: "list" | "get" })`, bind concrete tasks to builtin/project/user `roleRef`s, and hand execution to Spark workflow-run scheduling via `task({ action: "run_ready" })`. For default foreground implementation, `/implement` claims at most one concrete task and stops. For autonomous foreground implementation, `/goal` uses Spark goal continuation prompts and continues verified task progress until done or blocked; when the user gives no focus, infer the objective from the active project/task state and use `ask` if the project, scope, priority, or ready path is ambiguous. For scripted/subagent execution, use saved workspace/user workflows; workflow `agent()` calls must cross the Spark workflow role-run adapter boundary rather than raw Pi subagent spawning. Use `role({ action: "call" })` only for one-off direct role calls that should stay outside Spark tasks/DAGs.
 19.   When using `pi-cue` `run`, prefer direct-exec commands and Pi file tools. Use `/bin/sh -lc` only for real shell features such as redirection, here-docs, variable expansion, or compound conditionals.
 20.   Keep temporary plans, role-run reports, and scratch outputs out of the repo root; use `.spark/notes/`, `.spark/role-reports/`, or typed Spark artifacts unless the user asks for committed docs.
 

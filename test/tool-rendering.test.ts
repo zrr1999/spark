@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { visibleWidth } from "@earendil-works/pi-tui";
 
@@ -30,29 +32,32 @@ const plainTheme: RenderTheme = {
   bold: (text) => text,
 };
 
-void test("Spark extension canonical facade tools render parameter-aware tool calls", () => {
+const snapshotDir = join(dirname(fileURLToPath(import.meta.url)), "snapshots");
+const textSnapshot = { serializers: [(value: unknown) => String(value)] };
+
+void test("Spark extension canonical facade tools render parameter-aware tool calls", (t) => {
   const tools = registerSparkToolsForRendering();
 
   assertAllToolsHaveCallRenderers(tools);
-  assert.equal(
-    renderCall(tools, "task", { action: "status", view: "full", limit: 5 }),
-    "task action=status",
+  t.assert.fileSnapshot(
+    renderCallCases(tools, [
+      { name: "task", args: { action: "status", view: "full", limit: 5 } },
+      { name: "task", args: { action: "project_list", status: "all" } },
+      {
+        name: "task",
+        args: {
+          action: "plan",
+          tasks: [
+            { name: "inspect", title: "Inspect code", description: "Read sources" },
+            { name: "implement", title: "Implement rendering", description: "Patch tools" },
+          ],
+        },
+      },
+      { name: "goal", args: { action: "status" } },
+    ]),
+    join(snapshotDir, "tool-rendering-spark.txt"),
+    textSnapshot,
   );
-  assert.equal(
-    renderCall(tools, "task", { action: "project_list", status: "all" }),
-    "task action=project_list",
-  );
-  assert.equal(
-    renderCall(tools, "task", {
-      action: "plan",
-      tasks: [
-        { name: "inspect", title: "Inspect code", description: "Read sources" },
-        { name: "implement", title: "Implement rendering", description: "Patch tools" },
-      ],
-    }),
-    "task action=plan",
-  );
-  assert.equal(renderCall(tools, "goal", { action: "status" }), "goal action=status");
   assert.equal(tools.has("patch"), false, "patch workflows are owned by pi-graft");
   assert.equal(tools.has("cue_exec"), false, "pi-cue is registered as its own extension");
   assert.deepEqual(
@@ -73,28 +78,34 @@ void test("Spark extension canonical facade tools render parameter-aware tool ca
   assertVisibleWidthAtMost(longTask, 80);
 });
 
-void test("standalone Pi ask, cue, and role tools render parameter-aware tool calls", () => {
+void test("standalone Pi ask, cue, and role tools render parameter-aware tool calls", (t) => {
   const askTools = new Map<string, RenderableToolConfig>();
   piAskExtension({
     registerTool: (config) => askTools.set(config.name, config),
   });
   assertAllToolsHaveCallRenderers(askTools);
   assert.deepEqual([...askTools.keys()].sort(), ["ask"]);
-  assert.equal(
-    renderCall(askTools, "ask", {
-      action: "flow",
-      title: "Choose scope",
-      questions: [{ id: "scope", prompt: "What next?" }],
-    }),
-    "ask action=flow Choose scope 1q",
-  );
-  assert.equal(
-    renderCall(askTools, "ask", {
-      action: "ask",
-      title: "Choose scope",
-      questions: [{ id: "scope", prompt: "What next?" }],
-    }),
-    "ask action=ask Choose scope 1q",
+  t.assert.fileSnapshot(
+    renderCallCases(askTools, [
+      {
+        name: "ask",
+        args: {
+          action: "flow",
+          title: "Choose scope",
+          questions: [{ id: "scope", prompt: "What next?" }],
+        },
+      },
+      {
+        name: "ask",
+        args: {
+          action: "ask",
+          title: "Choose scope",
+          questions: [{ id: "scope", prompt: "What next?" }],
+        },
+      },
+    ]),
+    join(snapshotDir, "tool-rendering-ask.txt"),
+    textSnapshot,
   );
 
   const cueTools = registerCueToolsForRendering();
@@ -111,71 +122,50 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
     "script_eval",
     "script_run",
   ]);
-  assert.equal(
-    renderCall(cueTools, "cue_jobs", { action: "status", id: "J12", tail_bytes: 4096 }),
-    "cue_jobs action=status id=J12 tail=4096",
-  );
-  assert.equal(
-    renderCall(cueTools, "cue_jobs", { action: "list", status: "running", limit: 5 }),
-    "cue_jobs action=list status=running limit=5",
-  );
-  assert.equal(
-    renderCall(cueTools, "cue_jobs", { action: "wait", id: "J12", timeout: 30, tail_bytes: 4096 }),
-    "cue_jobs action=wait id=J12 timeout=30s tail=4096",
-  );
-  assert.equal(
-    renderCall(cueTools, "cue_scope", {
-      action: "list",
-      limit: 3,
-      includeEnv: true,
-      tail_bytes: 2048,
-    }),
-    "cue_scope action=list limit=3 include-env tail=2048",
-  );
-  assert.equal(
-    renderCall(cueTools, "cue_history", { id: "J12", limit: 10, tail_bytes: 4096 }),
-    "cue_history J12 limit=10 tail=4096",
-  );
-  assert.equal(
-    renderCall(cueTools, "cue_schedule", {
-      action: "add",
-      schedule: "every 5m",
-      command: "pnpm test",
-    }),
-    'cue_schedule action=add schedule="every 5m" command="pnpm test"',
-  );
-  assert.equal(
-    renderCall(cueTools, "cue_run", { path: "scripts/build.cue", timeout: 30, tail_bytes: 4096 }),
-    "cue_run path=scripts/build.cue timeout=30s tail=4096",
-  );
-  assert.equal(
-    renderCall(cueTools, "cue_script", {
-      script: 'job run { command: "echo ok" }',
-      pathLabel: "inline.cue",
-      timeout: 30,
-      tail_bytes: 4096,
-    }),
-    "cue_script inline=1line(s) label=inline.cue timeout=30s tail=4096",
-  );
-
-  assert.equal(
-    renderCall(cueTools, "script_run", {
-      language: "python",
-      path: "scripts/smoke.py",
-      timeout: 30,
-      tail_bytes: 4096,
-    }),
-    "script_run lang=python path=scripts/smoke.py timeout=30s tail=4096",
-  );
-  assert.equal(
-    renderCall(cueTools, "script_eval", {
-      language: "python",
-      script: 'print("ok")',
-      pathLabel: "inline.py",
-      timeout: 30,
-      tail_bytes: 4096,
-    }),
-    "script_eval lang=python inline=1line(s) label=inline.py timeout=30s tail=4096",
+  t.assert.fileSnapshot(
+    renderCallCases(cueTools, [
+      { name: "cue_jobs", args: { action: "status", id: "J12", tail_bytes: 4096 } },
+      { name: "cue_jobs", args: { action: "list", status: "running", limit: 5 } },
+      {
+        name: "cue_jobs",
+        args: { action: "wait", id: "J12", timeout: 30, tail_bytes: 4096 },
+      },
+      {
+        name: "cue_scope",
+        args: { action: "list", limit: 3, includeEnv: true, tail_bytes: 2048 },
+      },
+      { name: "cue_history", args: { id: "J12", limit: 10, tail_bytes: 4096 } },
+      {
+        name: "cue_schedule",
+        args: { action: "add", schedule: "every 5m", command: "pnpm test" },
+      },
+      { name: "cue_run", args: { path: "scripts/build.cue", timeout: 30, tail_bytes: 4096 } },
+      {
+        name: "cue_script",
+        args: {
+          script: 'job run { command: "echo ok" }',
+          pathLabel: "inline.cue",
+          timeout: 30,
+          tail_bytes: 4096,
+        },
+      },
+      {
+        name: "script_run",
+        args: { language: "python", path: "scripts/smoke.py", timeout: 30, tail_bytes: 4096 },
+      },
+      {
+        name: "script_eval",
+        args: {
+          language: "python",
+          script: 'print("ok")',
+          pathLabel: "inline.py",
+          timeout: 30,
+          tail_bytes: 4096,
+        },
+      },
+    ]),
+    join(snapshotDir, "tool-rendering-cue.txt"),
+    textSnapshot,
   );
 
   const longRun = renderCall(
@@ -196,39 +186,39 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
   });
   assertAllToolsHaveCallRenderers(roleTools);
   assert.deepEqual([...roleTools.keys()].sort(), ["role"]);
-  assert.equal(
-    renderCall(roleTools, "role", { action: "list", source: "builtin" }),
-    "role action=list",
-  );
-  assert.equal(
-    renderCall(roleTools, "role", { action: "get", role: "worker" }),
-    "role action=get worker",
-  );
-  assert.equal(
-    renderCall(roleTools, "role", { action: "create", id: "repo-inspector" }),
-    "role action=create id=repo-inspector",
-  );
-  assert.equal(
-    renderCall(roleTools, "role", { action: "call", role: "worker" }),
-    "role action=call worker",
+  t.assert.fileSnapshot(
+    renderCallCases(roleTools, [
+      { name: "role", args: { action: "list", source: "builtin" } },
+      { name: "role", args: { action: "get", role: "worker" } },
+      { name: "role", args: { action: "create", id: "repo-inspector" } },
+      { name: "role", args: { action: "call", role: "worker" } },
+    ]),
+    join(snapshotDir, "tool-rendering-role.txt"),
+    textSnapshot,
   );
 
   const graftTools = registerGraftToolsForRendering();
-  assert.equal(
-    renderCall(graftTools, "graft_patch", {
-      instruction: "Create a narrow candidate for the requested fix.",
-      mode: "forked",
-      model: "test/model",
-    }),
-    'graft_patch "Create a narrow candidate for the requested fix." mode=forked model=test/model',
-  );
-  assert.equal(
-    renderCall(graftTools, "graft_repo", {
-      action: "add",
-      repoId: "spark",
-      url: "https://github.com/zrr1999/spark.git",
-    }),
-    "graft_repo action=add repo=spark url=https://github.com/zrr1999/spark.git",
+  t.assert.fileSnapshot(
+    renderCallCases(graftTools, [
+      {
+        name: "graft_patch",
+        args: {
+          instruction: "Create a narrow candidate for the requested fix.",
+          mode: "forked",
+          model: "test/model",
+        },
+      },
+      {
+        name: "graft_repo",
+        args: {
+          action: "add",
+          repoId: "spark",
+          url: "https://github.com/zrr1999/spark.git",
+        },
+      },
+    ]),
+    join(snapshotDir, "tool-rendering-graft.txt"),
+    textSnapshot,
   );
 
   const longAsk = renderCall(
@@ -281,6 +271,15 @@ function assertAllToolsHaveCallRenderers(tools: Map<string, RenderableToolConfig
   for (const tool of tools.values()) {
     assert.equal(typeof tool.renderCall, "function", `${tool.name} should define renderCall`);
   }
+}
+
+function renderCallCases(
+  tools: Map<string, RenderableToolConfig>,
+  cases: Array<{ name: string; args: Record<string, unknown>; width?: number }>,
+): string {
+  return cases
+    .map(({ name, args, width }) => [`# ${name}`, renderCall(tools, name, args, width)].join("\n"))
+    .join("\n\n");
 }
 
 function renderCall(

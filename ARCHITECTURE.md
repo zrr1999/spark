@@ -33,7 +33,7 @@ spark-cli              # native Spark CLI host over the extension contract
 
 Allowed high-level usage:
 
-- `spark` may orchestrate Spark mode UI/policy and compose `pi-*` capabilities plus `spark-runtime`. It owns `/spark`, `/research`, `/plan`, `/execute`, `/goal`, `/workflow`, the Spark widget, active-context provider registration, and the five builtin Spark role specs (`worker`, `scout`, `planner`, `reviewer`, `oracle`).
+- `spark` may orchestrate Spark mode UI/policy and compose `pi-*` capabilities plus `spark-runtime`. It owns `/spark`, `/research`, `/plan`, `/implement`, `/goal`, `/workflow`, the Spark widget, active-context provider registration, and the five builtin Spark role specs (`worker`, `scout`, `planner`, `reviewer`, `oracle`).
 - `spark-runtime` adapts one Spark task into a `pi-roles` role run and maps completion back into task status, claims, and artifacts.
 - `pi-tasks` owns durable project/task/TODO graph state, readiness rules, task/run types, claim leases, and the canonical `task({ action })` tool. Optional task `roleRef` values are executor hints, not readiness requirements.
 - `pi-workflows` owns saved workflow discovery/runtime primitives and `.spark/workflow-runs.json` DAG/workflow-run state. Workflow is the generic superset; DAG runs are workflow runs.

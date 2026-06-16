@@ -1,6 +1,6 @@
 # spark
 
-`spark` is the Spark suite for Pi: a controlled agentic development system where the Pi extension entry point is `/spark`, and lower-level capabilities are kept as Spark primitives.
+`spark` is the Spark suite for Pi: a controlled agentic development system where the Pi extension entry point is `/spark`, and Spark composes lower-level `pi-*` extension capabilities through project/task orchestration policy.
 
 The repository also contains an MVP standalone Spark-first TUI host:
 
@@ -15,7 +15,7 @@ The standalone `spark` command is published by `@zendev-lab/spark-cli` and built
 
 Spark now has two supported host targets:
 
-- **Pi extension host**: `packages/spark/src/extension/` is loaded by `@earendil-works/pi-coding-agent` through Pi's normal extension/package discovery. This remains the canonical `/spark`, `/research`, `/plan`, `/execute`, `/workflow`, and Spark tool surface inside Pi.
+- **Pi extension host**: `packages/spark/src/extension/` is loaded by `@earendil-works/pi-coding-agent` through Pi's normal extension/package discovery. This remains the canonical `/spark`, `/research`, `/plan`, `/implement`, `/goal`, `/workflow`, and Spark tool surface inside Pi.
 - **Spark CLI native host**: `packages/spark-cli` starts `SparkHostRuntime` directly on `@earendil-works/pi-tui`, loads retained builtin extensions through explicit factories (`@zendev-lab/pi-ask`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-graft`, `@zendev-lab/spark`), registers providers such as `baidu-oneapi`, discovers Spark skills from builtin/workspace/user layers, and runs turns through `@earendil-works/pi-ai`.
 
 The extension packages depend on the shared `@zendev-lab/pi-extension-api` contract, not on Pi's concrete SDK package. Host-specific code belongs under `packages/spark-cli/src/host/` and TUI wrappers under `packages/spark-cli/src/tui/`; the Pi extension implementation should stay usable by Pi without importing spark-cli.
@@ -32,12 +32,12 @@ Spark command modes are intentionally split:
 
 - `/research <focus>` investigates and summarizes findings without changing tasks.
 - `/plan <focus>` plans or refines the task DAG and does not execute work.
-- `/execute <focus>` executes one bounded default step, normally claiming at most one concrete task before stopping.
+- `/implement <focus>` implements one bounded default step, normally claiming at most one concrete task before stopping.
 - `/goal <focus>` runs autonomous verified foreground goal progress until complete or blocked. If no focus is provided, Spark derives the goal from the current project/task state and asks when ambiguous.
 - `/workflow[:selector] <focus>` runs saved Spark workflow scripts. Use `/workflow workspace:<name>` for `.spark/workflows/*.js` and `/workflow user:<name>` for `~/.agents/workflows/*.js`. Empty `/workflow` asks which workflow to use or whether to draft a workspace workflow.
-- `/spark <focus>` infers research, planning, or default execution when high confidence. If the prompt asks for autonomous or workflow-style progress, Spark asks before selecting a goal or workflow execute strategy.
+- `/spark <focus>` infers research, planning, or default implementation when high confidence. If the prompt asks for autonomous or workflow-style progress, Spark asks before selecting a goal or workflow implement strategy.
 
-The first vertical slice then creates local Spark state under `.spark/`:
+Project-bound flows create local Spark state under `.spark/` when durable graph, review, artifact, or run state is needed:
 
 - `.spark/projects.json`
 - `.spark/review-gate.json`
@@ -47,7 +47,7 @@ The first vertical slice then creates local Spark state under `.spark/`:
 - a review gate
 - a run trace artifact
 
-A root `SPARK.md` is only materialized by `/spark` initialization, and only when the current `cwd` looks like a concrete repo (currently: `.git` exists in `cwd`). Direct modes such as `/research`, `/plan`, `/execute`, `/goal`, and `/workflow[:selector]` do not create or overwrite root `SPARK.md`; when they initialize minimal Spark state, intent is kept in `.spark` artifacts.
+Spark is always available in research mode even before `.spark/` or `SPARK.md` exists. A root `SPARK.md` is only materialized by `/spark` compatibility initialization, and only when the current `cwd` looks like a concrete repo (currently: `.git` exists in `cwd`). Direct modes such as `/research`, `/plan`, `/implement`, `/goal`, and `/workflow[:selector]` do not create or overwrite root `SPARK.md`; when they initialize minimal Spark state, intent is kept in `.spark` artifacts.
 
 `.spark/` is local runtime state and should be ignored by Git. Spark learnings live separately under the ignored local `.learnings/` directory for repo/workspace-scoped recall or under the user learning directory for personal cross-project knowledge; share them through explicit Markdown exports instead of committing the local artifact store by default. Use canonical owner tools for maintenance (`task({ action: "cache_cleanup" })`, `artifact({ action: "compact" })`, and workflow-run retention actions as they land); cleanup remains dry-run by default and must never target protected stores such as project graph, artifacts, notes, workflow runs, or review-gate state.
 
@@ -65,7 +65,7 @@ Manage settings through the canonical role tool actions: `role({ action: "model_
 
 ## Packages
 
-- `@zendev-lab/spark` — high-level `/spark`, `/research`, `/plan`, `/execute`, `/goal`, and `/workflow[:selector]` mode facade that composes generic `pi-*` capabilities with Spark-owned orchestration policy, widget state, builtin Spark roles, and active-context provider registration.
+- `@zendev-lab/spark` — high-level `/spark`, `/research`, `/plan`, `/implement`, `/goal`, and `/workflow[:selector]` mode facade that composes generic `pi-*` capabilities with Spark-owned orchestration policy, widget state, builtin Spark roles, and active-context provider registration.
 - `@zendev-lab/spark-cli` — standalone Spark-first native TUI host built directly on `@earendil-works/pi-tui`; starts the `spark` command, owns its local transcript/follow-up queue, and provides a local daemon queue for detached session-run tasks.
 - `@zendev-lab/spark-runtime` — Spark single-task runtime adapter that executes one task through `@zendev-lab/pi-roles`, writes artifacts, and owns task/run/timeout mapping above `RoleRun`.
 - `@zendev-lab/pi-extension-api` — shared extension host/tool contract, refs, errors, and light JSON/fs/time helpers.

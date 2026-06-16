@@ -1,0 +1,11 @@
+# task
+task action=status
+
+# task
+task action=project_list
+
+# task
+task action=plan
+
+# goal
+goal action=status
