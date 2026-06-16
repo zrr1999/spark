@@ -22,7 +22,7 @@ Tools:
 - `recall` — canonical controlled recall-candidate tool. Use explicit `scope: "user" | "workspace" | "repo"` with `record_candidate`, `list`, `search`, and `reject`; recall candidates are not `.learnings/` and are not automatic memory.
 - `workflow` — canonical saved-script workflow discovery/preview tool. Use `action: "list"` or `action: "read"` with `workspace:<id>` / `user:<id>` selectors; inline workflows and arbitrary paths are rejected. Execution remains through `/workflow[:selector]` host runtime policy.
 - `role` — canonical role action tool. Use `action: "list" | "get" | "create" | "call" | "model_list" | "model_get" | "model_set" | "model_delete"`; Spark task execution should prefer `task({ action: "run_ready" })` so task claims, run records, and evidence attribution stay coherent.
-- `pi-cue` tools (`cue_exec`, `cue_run`, `cue_script`, `script_run`, `script_eval`, `cue_jobs`, `cue_schedule`, `cue_scope`, `cue_history`) — cue-shell execution and job/scope/history management.
+- `pi-cue` tools (`cue_exec`, `cue_run`, `cue_script`, `script_run`, `script_eval`, `cue_jobs`, `cue_resources`, `cue_schedule`, `cue_scope`, `cue_history`) — cue-shell execution and job/scope/history management.
 - `pi-graft` tools (`graft_patch`, `graft_read`, `graft_write`, `graft_edit`, `graft_delete`, `graft_candidate_from_scratch`, `graft_validate`, `graft_admit`, `graft_show`, `graft_evidence`, `graft_candidates`, `graft_search`, `graft_materialize`, `graft_repo`, ...) — Graft scratch/candidate/patch workflows. `graft_patch` owns patcher-style child runs and exposes only Graft-related tools to the child; unclear patch instructions must be escalated upward instead of applied.
 
 Naming/render policy:

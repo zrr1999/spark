@@ -505,7 +505,8 @@ void test("pi-cue docs document script runner venv, scope, and python -c behavio
   assert.match(readme, /`scope` is valid only for `language: "cue-shell"`/);
   assert.match(readme, /python -c/);
 
-  assert.match(toolsDoc, /`cue_resources`/);
+  assert.match(toolsDoc, /`pi-cue` tools \([^\n]+`cue_resources`[^\n]+\)/);
+  assert.match(toolsDoc, /`cue_resources` — inspect resource providers and snapshots/);
   assert.match(toolsDoc, /python -c/);
   assert.match(toolsDoc, /`venv` is python-only and `scope` is cue-shell-only/);
   assert.doesNotMatch(toolsDoc, /temporary file before execution/);
