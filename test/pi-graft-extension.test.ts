@@ -243,6 +243,52 @@ void test("graft_cli_exec validates argv before daemon work", async () => {
       ),
     /does not allow graft scratch/,
   );
+  await assert.rejects(
+    () =>
+      executeTool(
+        cliExec,
+        "graft_cli_exec",
+        { argv: ["incoming"] },
+        { cwd: "/tmp/pi-graft-no-daemon" },
+      ),
+    /does not allow graft incoming/,
+  );
+});
+
+void test("graft_cli_exec routes canonical patch incoming through direct CLI", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graft-patch-incoming-"));
+  const argvFile = join(dir, "argv.txt");
+  const previousGraftBin = process.env.GRAFT_BIN;
+  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
+  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
+  process.env.GRAFT_BIN = await writeMockGraft(
+    dir,
+    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\nprintf '{"message":"incoming groups"}\\n'`,
+  );
+
+  try {
+    const { pi, tools } = createFakePi();
+    registerPiGraftExtension(pi);
+    const result = await executeTool(
+      tools.get("graft_cli_exec"),
+      "graft_cli_exec",
+      { argv: ["patch", "incoming"] },
+      { cwd: dir },
+    );
+    assert.match(result.content[0].text, /incoming groups/);
+    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
+      "--cwd",
+      dir,
+      "patch",
+      "incoming",
+    ]);
+  } finally {
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
+    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
+    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
+    await rm(dir, { force: true, recursive: true });
+  }
 });
 
 void test("graft_cli_exec allows low-frequency patch promote argv", async () => {

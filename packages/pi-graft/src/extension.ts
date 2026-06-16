@@ -636,7 +636,7 @@ function assertCliExecAllowed(argv: string[]): void {
 }
 
 function isAllowedCliExecCommand(primary: string, secondary: string | undefined): boolean {
-  if (primary === "explain" || primary === "incoming" || primary === "sync") return true;
+  if (primary === "explain" || primary === "sync") return true;
   if (primary === "get" || primary === "run") return true;
   if (primary === "bundle") return secondary === "export" || secondary === "import";
   if (primary === "repo")
@@ -649,6 +649,7 @@ function isAllowedCliExecCommand(primary: string, secondary: string | undefined)
       "list",
       "show",
       "search",
+      "incoming",
       "diff",
       "compose",
       "migrate",
@@ -672,7 +673,6 @@ const DIRECT_CLI_COMMANDS = new Set([
   "doctor",
   "evidence",
   "explain",
-  "incoming",
   "init",
   "ps",
   "scratch",
@@ -735,7 +735,7 @@ function shouldRunDirectCli(argv: string[]): boolean {
   }
   if (primary === "patch") {
     const subcommand = secondaryCliCommand(argv, primary);
-    return subcommand === "show" || subcommand === "search" || subcommand === "list";
+    return ["incoming", "list", "show", "search"].includes(subcommand ?? "");
   }
   if (primary === "registry") {
     return secondaryCliCommand(argv, primary) !== "import";
