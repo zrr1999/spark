@@ -111,6 +111,8 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
     assert.equal(services.runtime.cwd, cwd);
     assert.equal(services.providerRegistry.getActive()?.providerName, "fake-provider");
     assert.equal(services.providerRegistry.getActive()?.modelId, "fake-model");
+    assert.equal(services.providerRegistry.hasProvider("spark-fusion"), true);
+    assert.equal(services.providerRegistry.listModelsFor("spark-fusion")[0]?.id, "spark-fusion");
     assert.equal(
       services.runtime.getAllTools().some((tool) => tool.name === "ask"),
       true,

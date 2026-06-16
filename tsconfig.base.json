@@ -40,6 +40,7 @@
       "@zendev-lab/spark-cli/baidu-oneapi-provider": [
         "./packages/spark-cli/src/baidu-oneapi-provider.ts"
       ],
+      "@zendev-lab/spark-cli/fusion-provider": ["./packages/spark-cli/src/host/fusion-provider.ts"],
       "@zendev-lab/spark-runtime": ["./packages/spark-runtime/src/index.ts"],
       "@zendev-lab/spark/extension": ["./packages/spark/src/extension/index.ts"]
     }

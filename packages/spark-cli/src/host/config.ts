@@ -24,12 +24,24 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+export interface SparkModelSelectionConfig {
+  provider: string;
+  model: string;
+}
+
+export interface SparkFusionConfig {
+  analysisModels?: SparkModelSelectionConfig[];
+  judgeModel?: SparkModelSelectionConfig;
+  panelSize?: number;
+}
+
 export interface SparkConfig {
   extensions: string[];
   providers: string[];
   activeProvider?: string;
   activeModel?: string;
   activeThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  fusion?: SparkFusionConfig;
 }
 
 export const DEFAULT_SPARK_CONFIG: SparkConfig = {
@@ -86,6 +98,7 @@ export function mergeWithDefault(raw: unknown): SparkConfig {
     activeProvider: typeof fields.activeProvider === "string" ? fields.activeProvider : undefined,
     activeModel: typeof fields.activeModel === "string" ? fields.activeModel : undefined,
     activeThinkingLevel: parseThinkingLevel(fields.activeThinkingLevel),
+    fusion: parseFusionConfig(fields.fusion),
   };
 }
 
@@ -113,4 +126,35 @@ function parseThinkingLevel(value: unknown): SparkConfig["activeThinkingLevel"] 
     return value;
   }
   return undefined;
+}
+
+function parseFusionConfig(value: unknown): SparkFusionConfig | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const fields = value as Record<string, unknown>;
+  const analysisModels = Array.isArray(fields.analysisModels)
+    ? fields.analysisModels.filter(isModelSelectionConfig)
+    : undefined;
+  const judgeModel = isModelSelectionConfig(fields.judgeModel) ? fields.judgeModel : undefined;
+  const panelSize =
+    typeof fields.panelSize === "number" && Number.isFinite(fields.panelSize)
+      ? Math.min(Math.max(Math.floor(fields.panelSize), 1), 8)
+      : undefined;
+  if (!analysisModels && !judgeModel && panelSize === undefined) return undefined;
+  return {
+    ...(analysisModels ? { analysisModels } : {}),
+    ...(judgeModel ? { judgeModel } : {}),
+    ...(panelSize !== undefined ? { panelSize } : {}),
+  };
+}
+
+function isModelSelectionConfig(value: unknown): value is SparkModelSelectionConfig {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    typeof (value as SparkModelSelectionConfig).provider === "string" &&
+    typeof (value as SparkModelSelectionConfig).model === "string" &&
+    (value as SparkModelSelectionConfig).provider.length > 0 &&
+    (value as SparkModelSelectionConfig).model.length > 0
+  );
 }

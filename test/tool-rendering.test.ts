@@ -277,9 +277,9 @@ function renderCallCases(
   tools: Map<string, RenderableToolConfig>,
   cases: Array<{ name: string; args: Record<string, unknown>; width?: number }>,
 ): string {
-  return cases
+  return `${cases
     .map(({ name, args, width }) => [`# ${name}`, renderCall(tools, name, args, width)].join("\n"))
-    .join("\n\n");
+    .join("\n\n")}\n`;
 }
 
 function renderCall(

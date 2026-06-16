@@ -21,6 +21,7 @@ import {
   type SparkExtensionLoadResult,
 } from "./extension-loader.ts";
 import { SparkKeybindings } from "./keybindings.ts";
+import { registerSparkFusionProvider } from "./fusion-provider.ts";
 import {
   SparkModelSelector,
   registerSparkModelSelectorKeybindings,
@@ -121,6 +122,8 @@ export async function createSparkCliHostServices(
         message: `Provider ${outcome.specifier}: ${outcome.error}`,
       });
   }
+  if (providerRegistry.listProviders().length > 0)
+    registerSparkFusionProvider(providerRegistry, config);
 
   const activeSelection = selectInitialModel(providerRegistry, config);
   if (!activeSelection) {

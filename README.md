@@ -20,6 +20,28 @@ Spark now has two supported host targets:
 
 The extension packages depend on the shared `@zendev-lab/pi-extension-api` contract, not on Pi's concrete SDK package. Host-specific code belongs under `packages/spark-cli/src/host/` and TUI wrappers under `packages/spark-cli/src/tui/`; the Pi extension implementation should stay usable by Pi without importing spark-cli.
 
+### Spark CLI Fusion-style model
+
+When at least one real Spark CLI provider is registered, the native host also registers `spark-fusion/spark-fusion`. It is a local OpenRouter Fusion-style virtual model: panel models answer the latest user request in parallel, then a judge model receives the panel outputs and writes the final response. Unlike OpenRouter's hosted `openrouter/fusion`, the first version does not inject web search/fetch tools or rely on an outer model deciding whether to invoke Fusion; users select `spark-fusion` explicitly from the model picker.
+
+Optional `~/.spark/config.json` configuration:
+
+```json
+{
+  "fusion": {
+    "analysisModels": [
+      { "provider": "baidu-oneapi", "model": "claude-opus-4.8" },
+      { "provider": "baidu-oneapi", "model": "claude-fable-5" },
+      { "provider": "baidu-oneapi", "model": "gpt-5.5" }
+    ],
+    "judgeModel": { "provider": "baidu-oneapi", "model": "claude-opus-4.8" },
+    "panelSize": 3
+  }
+}
+```
+
+If `analysisModels` is omitted, Spark chooses the first available non-fusion models up to `panelSize`; if `judgeModel` is omitted or invalid, Spark uses the first panel model.
+
 ## User-facing entry point
 
 ```text

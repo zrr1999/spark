@@ -47,6 +47,11 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
         activeProvider: "baidu-oneapi",
         activeModel: "claude-opus-4.7",
         activeThinkingLevel: "medium",
+        fusion: {
+          analysisModels: [{ provider: "baidu-oneapi", model: "claude-opus-4.7" }],
+          judgeModel: { provider: "baidu-oneapi", model: "gpt-5.5" },
+          panelSize: 2,
+        },
       },
       path,
     );
@@ -60,6 +65,11 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
     assert.equal(config.activeProvider, "baidu-oneapi");
     assert.equal(config.activeModel, "claude-opus-4.7");
     assert.equal(config.activeThinkingLevel, "medium");
+    assert.deepEqual(config.fusion, {
+      analysisModels: [{ provider: "baidu-oneapi", model: "claude-opus-4.7" }],
+      judgeModel: { provider: "baidu-oneapi", model: "gpt-5.5" },
+      panelSize: 2,
+    });
 
     // Saved file is JSON with trailing newline
     const onDisk = await readFile(path, "utf8");
@@ -76,6 +86,11 @@ void test("mergeSparkConfigWithDefault tolerates missing keys, partial inputs, a
     activeProvider: 7,
     activeModel: "claude-opus-4.6",
     activeThinkingLevel: "fast",
+    fusion: {
+      analysisModels: [{ provider: "fake", model: "a" }, { provider: "bad" }, null],
+      judgeModel: { provider: "fake", model: "judge" },
+      panelSize: 99,
+    },
   });
   // 42 and "" are filtered out because the schema only accepts non-empty strings
   assert.deepEqual(merged.extensions, ["@zendev-lab/pi-cue"]);
@@ -83,4 +98,9 @@ void test("mergeSparkConfigWithDefault tolerates missing keys, partial inputs, a
   assert.equal(merged.activeProvider, undefined);
   assert.equal(merged.activeModel, "claude-opus-4.6");
   assert.equal(merged.activeThinkingLevel, undefined);
+  assert.deepEqual(merged.fusion, {
+    analysisModels: [{ provider: "fake", model: "a" }],
+    judgeModel: { provider: "fake", model: "judge" },
+    panelSize: 8,
+  });
 });

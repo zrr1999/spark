@@ -14,7 +14,8 @@
   ],
   "type": "module",
   "exports": {
-    "./baidu-oneapi-provider": "./src/baidu-oneapi-provider.ts"
+    "./baidu-oneapi-provider": "./src/baidu-oneapi-provider.ts",
+    "./fusion-provider": "./src/host/fusion-provider.ts"
   },
   "publishConfig": {
     "access": "public"
