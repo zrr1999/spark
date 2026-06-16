@@ -174,6 +174,20 @@ type RoutedMockGraftdContext = ReturnType<typeof createFakePi> & {
   project: string;
 };
 
+function successfulCliExec(
+  request: MockGraftdRequest,
+  project: string,
+  workspaceId: string,
+  argvTail: string[],
+  result: Record<string, unknown>,
+): Record<string, unknown> {
+  assert.equal(request.op, "cli_exec");
+  assert.equal(request.params.workspace_id, workspaceId);
+  assert.equal(request.params.workspace_root, project);
+  assert.deepEqual(request.params.argv, ["graft", "--cwd", project, ...argvTail]);
+  return { id: request.id, ok: true, result };
+}
+
 async function withRoutedMockGraftd(
   projectName: string,
   workspaceId: string | undefined,
@@ -373,23 +387,14 @@ await test("graft_cli_exec allows low-frequency patch promote argv", async () =>
   await withRoutedMockGraftd(
     "pi-graft-promote-workspace",
     "ws:promote",
-    (request, project) => {
-      assert.equal(request.op, "cli_exec");
-      assert.equal(request.params.workspace_id, "ws:promote");
-      assert.equal(request.params.workspace_root, project);
-      assert.deepEqual(request.params.argv, [
-        "graft",
-        "--cwd",
+    (request, project) =>
+      successfulCliExec(
+        request,
         project,
-        "patch",
-        "promote",
-        "patch:abc",
-        "--to",
-        "review",
-        "--yes",
-      ]);
-      return { id: request.id, ok: true, result: { message: "promoted" } };
-    },
+        "ws:promote",
+        ["patch", "promote", "patch:abc", "--to", "review", "--yes"],
+        { message: "promoted" },
+      ),
     async ({ project, tools }) => {
       const result = await executeTool(
         tools.get("graft_cli_exec"),
@@ -514,19 +519,16 @@ await test("pi-graft routed daemon requests use workspace_root, not cwd", async 
     "pi-graft-routed-workspace",
     "ws:test",
     (request, project) => {
-      assert.equal(request.op, "cli_exec");
-      assert.equal(request.params.workspace_id, "ws:test");
-      assert.equal(request.params.workspace_root, project);
       assert.equal("cwd" in request.params, false);
-      assert.deepEqual(request.params.argv, [
-        "graft",
-        "--cwd",
+      return successfulCliExec(
+        request,
         project,
-        "patch",
-        "validate",
-        "candidate:abc",
-      ]);
-      return { id: request.id, ok: true, result: { message: "validation completed" } };
+        "ws:test",
+        ["patch", "validate", "candidate:abc"],
+        {
+          message: "validation completed",
+        },
+      );
     },
     async ({ project, tools }) => {
       const result = await executeTool(
@@ -544,22 +546,14 @@ await test("graft_admit uses canonical patch namespace over daemon route", async
   await withRoutedMockGraftd(
     "pi-graft-admit-workspace",
     "ws:admit",
-    (request, project) => {
-      assert.equal(request.op, "cli_exec");
-      assert.equal(request.params.workspace_id, "ws:admit");
-      assert.equal(request.params.workspace_root, project);
-      assert.deepEqual(request.params.argv, [
-        "graft",
-        "--cwd",
+    (request, project) =>
+      successfulCliExec(
+        request,
         project,
-        "patch",
-        "admit",
-        "candidate:abc",
-        "--require",
-        "tests_pass",
-      ]);
-      return { id: request.id, ok: true, result: { message: "admitted", patch_id: "patch:def" } };
-    },
+        "ws:admit",
+        ["patch", "admit", "candidate:abc", "--require", "tests_pass"],
+        { message: "admitted", patch_id: "patch:def" },
+      ),
     async ({ project, tools }) => {
       const result = await executeTool(
         tools.get("graft_admit"),
@@ -752,21 +746,14 @@ await test("graft_materialize schema and argv match current graft CLI", async ()
   await withRoutedMockGraftd(
     "pi-graft-materialize-workspace",
     "ws:materialize",
-    (request, project) => {
-      assert.equal(request.op, "cli_exec");
-      assert.equal(request.params.workspace_id, "ws:materialize");
-      assert.equal(request.params.workspace_root, project);
-      assert.deepEqual(request.params.argv, [
-        "graft",
-        "--cwd",
+    (request, project) =>
+      successfulCliExec(
+        request,
         project,
-        "patch",
-        "materialize",
-        "patch:abc",
-        "--dry-run",
-      ]);
-      return { id: request.id, ok: true, result: { message: "materialization dry-run ready" } };
-    },
+        "ws:materialize",
+        ["patch", "materialize", "patch:abc", "--dry-run"],
+        { message: "materialization dry-run ready" },
+      ),
     async ({ project, tools }) => {
       const materialize = tools.get("graft_materialize");
       assert.ok(materialize, "expected graft_materialize to be registered");
@@ -788,23 +775,14 @@ await test("graft_repo add uses daemon-owned cli_exec routing", async () => {
   await withRoutedMockGraftd(
     "pi-graft-repo-add-workspace",
     "ws:repo",
-    (request, project) => {
-      assert.equal(request.op, "cli_exec");
-      assert.equal(request.params.workspace_id, "ws:repo");
-      assert.equal(request.params.workspace_root, project);
-      assert.deepEqual(request.params.argv, [
-        "graft",
-        "--cwd",
+    (request, project) =>
+      successfulCliExec(
+        request,
         project,
-        "repo",
-        "add",
-        "spark",
-        "/repos/spark",
-        "--default-branch",
-        "main",
-      ]);
-      return { id: request.id, ok: true, result: { message: "added repo spark" } };
-    },
+        "ws:repo",
+        ["repo", "add", "spark", "/repos/spark", "--default-branch", "main"],
+        { message: "added repo spark" },
+      ),
     async ({ project, tools }) => {
       const result = await executeTool(
         tools.get("graft_repo"),
