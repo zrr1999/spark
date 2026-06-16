@@ -27,6 +27,7 @@
     "lint": "vp lint . --fix",
     "lint:check": "vp lint .",
     "test": "node --experimental-strip-types --test \"test/*.test.ts\"",
+    "test:file": "node --experimental-strip-types --test",
     "verify": "pnpm run check && pnpm test",
     "prepare": "pnpx @j178/prek install --hook-type commit-msg --hook-type pre-commit"
   },
