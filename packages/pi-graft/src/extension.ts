@@ -1821,7 +1821,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     name: "graft_cli_exec",
     label: "Graft CLI Exec",
     description:
-      "Run allowlisted low-frequency Graft CLI argv: explain/incoming/sync/get/run, bundle export/import, repo add/list/sync/lock/update, workspace init/status/attach/detach/ps/doctor/gc, and patch list/show/search/diff/compose/migrate/revert/promote/materialize.",
+      "Run allowlisted low-frequency Graft CLI argv: explain/sync/get/run, bundle export/import, repo add/list/sync/lock/update, workspace init/status/attach/detach/ps/doctor/gc, and patch incoming/list/show/search/diff/compose/migrate/revert/promote/materialize.",
     parameters: Type.Object({
       argv: Type.Array(
         Type.String({ description: "Graft CLI arguments, excluding the graft binary." }),

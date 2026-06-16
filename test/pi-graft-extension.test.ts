@@ -255,6 +255,16 @@ void test("graft_cli_exec validates argv before daemon work", async () => {
   );
 });
 
+void test("graft_cli_exec description advertises canonical patch incoming", () => {
+  const { pi, tools } = createFakePi();
+  registerPiGraftExtension(pi);
+  const cliExec = tools.get("graft_cli_exec");
+  assert.ok(cliExec, "expected graft_cli_exec tool to be registered");
+
+  assert.match(cliExec.description, /patch incoming\/list\/show\/search/);
+  assert.doesNotMatch(cliExec.description, /explain\/incoming\/sync/);
+});
+
 void test("graft_cli_exec routes canonical patch incoming through direct CLI", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-graft-patch-incoming-"));
   const argvFile = join(dir, "argv.txt");
