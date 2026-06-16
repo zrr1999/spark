@@ -337,6 +337,7 @@ void test("pi-graft routed daemon requests use workspace_root, not cwd", async (
           "graft",
           "--cwd",
           project,
+          "patch",
           "validate",
           "candidate:abc",
         ]);
@@ -358,6 +359,55 @@ void test("pi-graft routed daemon requests use workspace_root, not cwd", async (
           { cwd: project },
         );
         assert.match(result.content[0].text, /validation completed/);
+      },
+    );
+  } finally {
+    if (previousHome === undefined) delete process.env.GRAFT_HOME;
+    else process.env.GRAFT_HOME = previousHome;
+    if (previousWorkspace === undefined) delete process.env.GRAFT_WORKSPACE;
+    else process.env.GRAFT_WORKSPACE = previousWorkspace;
+  }
+});
+
+void test("graft_admit uses canonical patch namespace over daemon route", async () => {
+  const project = "/tmp/pi-graft-admit-workspace";
+  const previousHome = process.env.GRAFT_HOME;
+  const previousWorkspace = process.env.GRAFT_WORKSPACE;
+
+  try {
+    await withMockGraftd(
+      (request) => {
+        assert.equal(request.op, "cli_exec");
+        assert.equal(request.params.workspace_id, "ws:admit");
+        assert.equal(request.params.workspace_root, project);
+        assert.deepEqual(request.params.argv, [
+          "graft",
+          "--cwd",
+          project,
+          "patch",
+          "admit",
+          "candidate:abc",
+          "--require",
+          "tests_pass",
+        ]);
+        return {
+          id: request.id,
+          ok: true,
+          result: { message: "admitted", patch_id: "patch:def" },
+        };
+      },
+      async (home) => {
+        process.env.GRAFT_HOME = home;
+        process.env.GRAFT_WORKSPACE = "ws:admit";
+        const { pi, tools } = createFakePi();
+        registerPiGraftExtension(pi);
+        const result = await executeTool(
+          tools.get("graft_admit"),
+          "graft_admit",
+          { candidate: "candidate:abc", required: ["tests_pass"] },
+          { cwd: project },
+        );
+        assert.match(result.content[0].text, /admitted/);
       },
     );
   } finally {
@@ -495,6 +545,7 @@ void test("graft candidate and search filters use current constraint argv", asyn
       "--cwd",
       project,
       "--json",
+      "patch",
       "search",
       "--constraint",
       "tests_pass",
@@ -522,6 +573,48 @@ void test("graft candidate and search filters use current constraint argv", asyn
   }
 });
 
+void test("graft_show uses canonical patch namespace over direct CLI route", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graft-show-"));
+  const argvFile = join(dir, "argv.txt");
+  const project = join(dir, "project");
+  await mkdir(project, { recursive: true });
+  const previousGraftBin = process.env.GRAFT_BIN;
+  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
+  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
+  process.env.GRAFT_BIN = await writeMockGraft(
+    dir,
+    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\necho 'shown'`,
+  );
+
+  try {
+    const { pi, tools } = createFakePi();
+    registerPiGraftExtension(pi);
+    const result = await executeTool(
+      tools.get("graft_show"),
+      "graft_show",
+      { target: "patch:abc", evidence: true, change: true },
+      { cwd: project },
+    );
+    assert.match(result.content[0].text, /shown/);
+    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
+      "--cwd",
+      project,
+      "--json",
+      "patch",
+      "show",
+      "patch:abc",
+      "--evidence",
+      "--change",
+    ]);
+  } finally {
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
+    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
+    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
 void test("graft_materialize schema and argv match current graft CLI", async () => {
   const project = "/tmp/pi-graft-materialize-workspace";
   const previousHome = process.env.GRAFT_HOME;
@@ -537,6 +630,7 @@ void test("graft_materialize schema and argv match current graft CLI", async () 
           "graft",
           "--cwd",
           project,
+          "patch",
           "materialize",
           "patch:abc",
           "--dry-run",
