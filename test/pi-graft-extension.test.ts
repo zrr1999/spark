@@ -223,10 +223,30 @@ void test("graft_cli_exec validates argv before daemon work", async () => {
       ),
     /argv\[1] must be a string/,
   );
+  await assert.rejects(
+    () =>
+      executeTool(
+        cliExec,
+        "graft_cli_exec",
+        { argv: ["property", "list"] },
+        { cwd: "/tmp/pi-graft-no-daemon" },
+      ),
+    /does not allow graft property/,
+  );
+  await assert.rejects(
+    () =>
+      executeTool(
+        cliExec,
+        "graft_cli_exec",
+        { argv: ["scratch", "read", "--base", "graft:empty", "note.txt"] },
+        { cwd: "/tmp/pi-graft-no-daemon" },
+      ),
+    /does not allow graft scratch/,
+  );
 });
 
-void test("graft_cli_exec does not direct-route removed property command", async () => {
-  const project = "/tmp/pi-graft-property-route-workspace";
+void test("graft_cli_exec allows low-frequency patch promote argv", async () => {
+  const project = "/tmp/pi-graft-promote-workspace";
   const previousHome = process.env.GRAFT_HOME;
   const previousWorkspace = process.env.GRAFT_WORKSPACE;
 
@@ -234,27 +254,37 @@ void test("graft_cli_exec does not direct-route removed property command", async
     await withMockGraftd(
       (request) => {
         assert.equal(request.op, "cli_exec");
-        assert.equal(request.params.workspace_id, "ws:property-route");
+        assert.equal(request.params.workspace_id, "ws:promote");
         assert.equal(request.params.workspace_root, project);
-        assert.deepEqual(request.params.argv, ["graft", "--cwd", project, "property", "list"]);
+        assert.deepEqual(request.params.argv, [
+          "graft",
+          "--cwd",
+          project,
+          "patch",
+          "promote",
+          "patch:abc",
+          "--to",
+          "review",
+          "--yes",
+        ]);
         return {
           id: request.id,
           ok: true,
-          result: { message: "routed through daemon" },
+          result: { message: "promoted" },
         };
       },
       async (home) => {
         process.env.GRAFT_HOME = home;
-        process.env.GRAFT_WORKSPACE = "ws:property-route";
+        process.env.GRAFT_WORKSPACE = "ws:promote";
         const { pi, tools } = createFakePi();
         registerPiGraftExtension(pi);
         const result = await executeTool(
           tools.get("graft_cli_exec"),
           "graft_cli_exec",
-          { argv: ["property", "list"] },
+          { argv: ["patch", "promote", "patch:abc", "--to", "review", "--yes"] },
           { cwd: project },
         );
-        assert.match(result.content[0].text, /routed through daemon/);
+        assert.match(result.content[0].text, /promoted/);
       },
     );
   } finally {
@@ -954,7 +984,7 @@ void test("pi-graft controls real graftd scratch lifecycle through canonical pro
     const exported = await executeTool(
       tools.get("graft_cli_exec"),
       "graft_cli_exec",
-      { argv: ["registry", "export", join(dir, "registry.json")] },
+      { argv: ["bundle", "export", join(dir, "registry.json")] },
       toolCtx,
     );
     assert.match(exported.content[0].text, /exported registry/);

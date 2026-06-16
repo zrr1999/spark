@@ -620,7 +620,44 @@ function cliArgvParam(params: Record<string, unknown>): string[] {
       );
     }
   }
+  assertCliExecAllowed(argv);
   return argv;
+}
+
+function assertCliExecAllowed(argv: string[]): void {
+  const primary = primaryCliCommand(argv);
+  if (!primary) throw new Error("graft_cli_exec argv must include a graft command.");
+  const secondary = secondaryCliCommand(argv, primary);
+  if (isAllowedCliExecCommand(primary, secondary)) return;
+  const command = secondary ? `${primary} ${secondary}` : primary;
+  throw new Error(
+    `graft_cli_exec does not allow graft ${command}. Use typed pi-graft tools for scratch/patch lifecycle operations, or graft_help for supported low-frequency CLI workflows.`,
+  );
+}
+
+function isAllowedCliExecCommand(primary: string, secondary: string | undefined): boolean {
+  if (primary === "explain" || primary === "incoming" || primary === "sync") return true;
+  if (primary === "get" || primary === "run") return true;
+  if (primary === "bundle") return secondary === "export" || secondary === "import";
+  if (primary === "repo")
+    return ["add", "list", "sync", "lock", "update"].includes(secondary ?? "");
+  if (primary === "workspace") {
+    return ["init", "status", "attach", "detach", "ps", "doctor", "gc"].includes(secondary ?? "");
+  }
+  if (primary === "patch") {
+    return [
+      "list",
+      "show",
+      "search",
+      "diff",
+      "compose",
+      "migrate",
+      "revert",
+      "promote",
+      "materialize",
+    ].includes(secondary ?? "");
+  }
+  return false;
 }
 
 const DIRECT_CLI_COMMANDS = new Set([
@@ -1777,7 +1814,8 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   pi.registerTool({
     name: "graft_cli_exec",
     label: "Graft CLI Exec",
-    description: "Run allowlisted low-frequency read-only or diagnostic graft CLI argv safely.",
+    description:
+      "Run allowlisted low-frequency Graft CLI argv: explain/incoming/sync/get/run, bundle export/import, repo add/list/sync/lock/update, workspace init/status/attach/detach/ps/doctor/gc, and patch list/show/search/diff/compose/migrate/revert/promote/materialize.",
     parameters: Type.Object({
       argv: Type.Array(
         Type.String({ description: "Graft CLI arguments, excluding the graft binary." }),
