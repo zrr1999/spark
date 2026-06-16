@@ -1467,7 +1467,9 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ),
       expected: Type.Optional(
         Type.Array(
-          Type.String({ description: "Expected workspace property, e.g. CargoTestsPass" }),
+          Type.String({
+            description: "Expected whole-state constraint primitive, e.g. tests_pass",
+          }),
         ),
       ),
       producer: Type.Optional(
@@ -1532,7 +1534,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         }),
       ),
       expected: Type.Optional(
-        Type.Array(Type.String({ description: "Additional expected property." })),
+        Type.Array(Type.String({ description: "Additional expected constraint primitive." })),
       ),
     }),
     async execute(
@@ -1567,7 +1569,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         }),
       ),
       required: Type.Optional(
-        Type.Array(Type.String({ description: "Required passed property." })),
+        Type.Array(Type.String({ description: "Required passing constraint primitive." })),
       ),
     }),
     async execute(
@@ -1695,7 +1697,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       base: Type.Optional(Type.String({ description: "Filter by base state." })),
       producer: Type.Optional(Type.String({ description: "Filter by producer." })),
       hasEvidence: Type.Optional(
-        Type.String({ description: "Filter by passing evidence property." }),
+        Type.String({ description: "Filter by passing evidence for this whole-state constraint." }),
       ),
     }),
     async execute(

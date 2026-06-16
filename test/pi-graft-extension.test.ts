@@ -662,6 +662,36 @@ void test("graft_repo list uses the direct CLI route", async () => {
   }
 });
 
+void test("graft lifecycle schemas describe constraints, not properties", () => {
+  const { pi, tools } = createFakePi();
+  registerPiGraftExtension(pi);
+  const candidateFromScratch = tools.get("graft_candidate_from_scratch");
+  const validate = tools.get("graft_validate");
+  const admit = tools.get("graft_admit");
+  const search = tools.get("graft_search");
+  assert.ok(candidateFromScratch, "expected graft_candidate_from_scratch to be registered");
+  assert.ok(validate, "expected graft_validate to be registered");
+  assert.ok(admit, "expected graft_admit to be registered");
+  assert.ok(search, "expected graft_search to be registered");
+
+  const candidateProperties = (
+    candidateFromScratch.parameters as { properties: Record<string, any> }
+  ).properties;
+  const validateProperties = (validate.parameters as { properties: Record<string, any> })
+    .properties;
+  const admitProperties = (admit.parameters as { properties: Record<string, any> }).properties;
+  const searchProperties = (search.parameters as { properties: Record<string, any> }).properties;
+
+  assert.match(candidateProperties.expected.items.description, /constraint primitive/);
+  assert.match(validateProperties.expected.items.description, /constraint primitive/);
+  assert.match(admitProperties.required.items.description, /constraint primitive/);
+  assert.match(searchProperties.hasEvidence.description, /whole-state constraint/);
+  assert.doesNotMatch(candidateProperties.expected.items.description, /property/i);
+  assert.doesNotMatch(validateProperties.expected.items.description, /property/i);
+  assert.doesNotMatch(admitProperties.required.items.description, /property/i);
+  assert.doesNotMatch(searchProperties.hasEvidence.description, /property/i);
+});
+
 void test("graft candidate and search filters use current constraint argv", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-graft-constraint-filter-"));
   const argvFile = join(dir, "argv.txt");
