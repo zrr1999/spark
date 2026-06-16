@@ -170,6 +170,39 @@ async function withMockGraftd(
   }
 }
 
+type RoutedMockGraftdContext = ReturnType<typeof createFakePi> & {
+  project: string;
+};
+
+async function withRoutedMockGraftd(
+  projectName: string,
+  workspaceId: string | undefined,
+  handler: (request: MockGraftdRequest, project: string) => Record<string, unknown>,
+  run: (context: RoutedMockGraftdContext) => Promise<void>,
+): Promise<void> {
+  const project = join(testTmpRoot, projectName);
+  const envBackup: EnvBackup = {
+    GRAFT_HOME: process.env.GRAFT_HOME,
+    GRAFT_WORKSPACE: process.env.GRAFT_WORKSPACE,
+  };
+
+  try {
+    await withMockGraftd(
+      (request) => handler(request, project),
+      async (home) => {
+        process.env.GRAFT_HOME = home;
+        if (workspaceId === undefined) delete process.env.GRAFT_WORKSPACE;
+        else process.env.GRAFT_WORKSPACE = workspaceId;
+        const fakePi = createFakePi();
+        registerPiGraftExtension(fakePi.pi);
+        await run({ ...fakePi, project });
+      },
+    );
+  } finally {
+    restoreEnv(envBackup);
+  }
+}
+
 await test("pi-graft registers the final high-frequency direct tool set", () => {
   const { pi, commands, tools, handlers } = createFakePi();
   registerPiGraftExtension(pi);
@@ -337,53 +370,36 @@ await test("graft_cli_exec routes canonical patch incoming through direct CLI", 
 });
 
 await test("graft_cli_exec allows low-frequency patch promote argv", async () => {
-  const project = join(testTmpRoot, "pi-graft-promote-workspace");
-  const previousHome = process.env.GRAFT_HOME;
-  const previousWorkspace = process.env.GRAFT_WORKSPACE;
-
-  try {
-    await withMockGraftd(
-      (request) => {
-        assert.equal(request.op, "cli_exec");
-        assert.equal(request.params.workspace_id, "ws:promote");
-        assert.equal(request.params.workspace_root, project);
-        assert.deepEqual(request.params.argv, [
-          "graft",
-          "--cwd",
-          project,
-          "patch",
-          "promote",
-          "patch:abc",
-          "--to",
-          "review",
-          "--yes",
-        ]);
-        return {
-          id: request.id,
-          ok: true,
-          result: { message: "promoted" },
-        };
-      },
-      async (home) => {
-        process.env.GRAFT_HOME = home;
-        process.env.GRAFT_WORKSPACE = "ws:promote";
-        const { pi, tools } = createFakePi();
-        registerPiGraftExtension(pi);
-        const result = await executeTool(
-          tools.get("graft_cli_exec"),
-          "graft_cli_exec",
-          { argv: ["patch", "promote", "patch:abc", "--to", "review", "--yes"] },
-          { cwd: project },
-        );
-        assert.match(result.content[0].text, /promoted/);
-      },
-    );
-  } finally {
-    if (previousHome === undefined) delete process.env.GRAFT_HOME;
-    else process.env.GRAFT_HOME = previousHome;
-    if (previousWorkspace === undefined) delete process.env.GRAFT_WORKSPACE;
-    else process.env.GRAFT_WORKSPACE = previousWorkspace;
-  }
+  await withRoutedMockGraftd(
+    "pi-graft-promote-workspace",
+    "ws:promote",
+    (request, project) => {
+      assert.equal(request.op, "cli_exec");
+      assert.equal(request.params.workspace_id, "ws:promote");
+      assert.equal(request.params.workspace_root, project);
+      assert.deepEqual(request.params.argv, [
+        "graft",
+        "--cwd",
+        project,
+        "patch",
+        "promote",
+        "patch:abc",
+        "--to",
+        "review",
+        "--yes",
+      ]);
+      return { id: request.id, ok: true, result: { message: "promoted" } };
+    },
+    async ({ project, tools }) => {
+      const result = await executeTool(
+        tools.get("graft_cli_exec"),
+        "graft_cli_exec",
+        { argv: ["patch", "promote", "patch:abc", "--to", "review", "--yes"] },
+        { cwd: project },
+      );
+      assert.match(result.content[0].text, /promoted/);
+    },
+  );
 });
 
 await test("graft-attach --status uses canonical workspace attach route", async () => {
@@ -494,134 +510,87 @@ await test("pi-graft tools require explicit cwd or restored session state", asyn
 });
 
 await test("pi-graft routed daemon requests use workspace_root, not cwd", async () => {
-  const project = join(testTmpRoot, "pi-graft-routed-workspace");
-  const previousHome = process.env.GRAFT_HOME;
-  const previousWorkspace = process.env.GRAFT_WORKSPACE;
-
-  try {
-    await withMockGraftd(
-      (request) => {
-        assert.equal(request.op, "cli_exec");
-        assert.equal(request.params.workspace_id, "ws:test");
-        assert.equal(request.params.workspace_root, project);
-        assert.equal("cwd" in request.params, false);
-        assert.deepEqual(request.params.argv, [
-          "graft",
-          "--cwd",
-          project,
-          "patch",
-          "validate",
-          "candidate:abc",
-        ]);
-        return {
-          id: request.id,
-          ok: true,
-          result: { message: "validation completed" },
-        };
-      },
-      async (home) => {
-        process.env.GRAFT_HOME = home;
-        process.env.GRAFT_WORKSPACE = "ws:test";
-        const { pi, tools } = createFakePi();
-        registerPiGraftExtension(pi);
-        const result = await executeTool(
-          tools.get("graft_validate"),
-          "graft_validate",
-          { target: "candidate:abc" },
-          { cwd: project },
-        );
-        assert.match(result.content[0].text, /validation completed/);
-      },
-    );
-  } finally {
-    if (previousHome === undefined) delete process.env.GRAFT_HOME;
-    else process.env.GRAFT_HOME = previousHome;
-    if (previousWorkspace === undefined) delete process.env.GRAFT_WORKSPACE;
-    else process.env.GRAFT_WORKSPACE = previousWorkspace;
-  }
+  await withRoutedMockGraftd(
+    "pi-graft-routed-workspace",
+    "ws:test",
+    (request, project) => {
+      assert.equal(request.op, "cli_exec");
+      assert.equal(request.params.workspace_id, "ws:test");
+      assert.equal(request.params.workspace_root, project);
+      assert.equal("cwd" in request.params, false);
+      assert.deepEqual(request.params.argv, [
+        "graft",
+        "--cwd",
+        project,
+        "patch",
+        "validate",
+        "candidate:abc",
+      ]);
+      return { id: request.id, ok: true, result: { message: "validation completed" } };
+    },
+    async ({ project, tools }) => {
+      const result = await executeTool(
+        tools.get("graft_validate"),
+        "graft_validate",
+        { target: "candidate:abc" },
+        { cwd: project },
+      );
+      assert.match(result.content[0].text, /validation completed/);
+    },
+  );
 });
 
 await test("graft_admit uses canonical patch namespace over daemon route", async () => {
-  const project = join(testTmpRoot, "pi-graft-admit-workspace");
-  const previousHome = process.env.GRAFT_HOME;
-  const previousWorkspace = process.env.GRAFT_WORKSPACE;
-
-  try {
-    await withMockGraftd(
-      (request) => {
-        assert.equal(request.op, "cli_exec");
-        assert.equal(request.params.workspace_id, "ws:admit");
-        assert.equal(request.params.workspace_root, project);
-        assert.deepEqual(request.params.argv, [
-          "graft",
-          "--cwd",
-          project,
-          "patch",
-          "admit",
-          "candidate:abc",
-          "--require",
-          "tests_pass",
-        ]);
-        return {
-          id: request.id,
-          ok: true,
-          result: { message: "admitted", patch_id: "patch:def" },
-        };
-      },
-      async (home) => {
-        process.env.GRAFT_HOME = home;
-        process.env.GRAFT_WORKSPACE = "ws:admit";
-        const { pi, tools } = createFakePi();
-        registerPiGraftExtension(pi);
-        const result = await executeTool(
-          tools.get("graft_admit"),
-          "graft_admit",
-          { candidate: "candidate:abc", required: ["tests_pass"] },
-          { cwd: project },
-        );
-        assert.match(result.content[0].text, /admitted/);
-      },
-    );
-  } finally {
-    if (previousHome === undefined) delete process.env.GRAFT_HOME;
-    else process.env.GRAFT_HOME = previousHome;
-    if (previousWorkspace === undefined) delete process.env.GRAFT_WORKSPACE;
-    else process.env.GRAFT_WORKSPACE = previousWorkspace;
-  }
+  await withRoutedMockGraftd(
+    "pi-graft-admit-workspace",
+    "ws:admit",
+    (request, project) => {
+      assert.equal(request.op, "cli_exec");
+      assert.equal(request.params.workspace_id, "ws:admit");
+      assert.equal(request.params.workspace_root, project);
+      assert.deepEqual(request.params.argv, [
+        "graft",
+        "--cwd",
+        project,
+        "patch",
+        "admit",
+        "candidate:abc",
+        "--require",
+        "tests_pass",
+      ]);
+      return { id: request.id, ok: true, result: { message: "admitted", patch_id: "patch:def" } };
+    },
+    async ({ project, tools }) => {
+      const result = await executeTool(
+        tools.get("graft_admit"),
+        "graft_admit",
+        { candidate: "candidate:abc", required: ["tests_pass"] },
+        { cwd: project },
+      );
+      assert.match(result.content[0].text, /admitted/);
+    },
+  );
 });
 
 await test("graft_status uses the global daemon status op without routing fields", async () => {
-  const project = join(testTmpRoot, "pi-graft-status-workspace");
-  const previousHome = process.env.GRAFT_HOME;
-
-  try {
-    await withMockGraftd(
-      (request) => {
-        assert.equal(request.op, "status");
-        assert.deepEqual(request.params, {});
-        return {
-          id: request.id,
-          ok: true,
-          result: { status: "ok", daemon: "graftd" },
-        };
-      },
-      async (home) => {
-        process.env.GRAFT_HOME = home;
-        const { pi, tools } = createFakePi();
-        registerPiGraftExtension(pi);
-        const result = await executeTool(
-          tools.get("graft_status"),
-          "graft_status",
-          {},
-          { cwd: project },
-        );
-        assert.match(result.content[0].text, /graftd: ok/);
-      },
-    );
-  } finally {
-    if (previousHome === undefined) delete process.env.GRAFT_HOME;
-    else process.env.GRAFT_HOME = previousHome;
-  }
+  await withRoutedMockGraftd(
+    "pi-graft-status-workspace",
+    undefined,
+    (request) => {
+      assert.equal(request.op, "status");
+      assert.deepEqual(request.params, {});
+      return { id: request.id, ok: true, result: { status: "ok", daemon: "graftd" } };
+    },
+    async ({ project, tools }) => {
+      const result = await executeTool(
+        tools.get("graft_status"),
+        "graft_status",
+        {},
+        { cwd: project },
+      );
+      assert.match(result.content[0].text, /graftd: ok/);
+    },
+  );
 });
 
 await test("graft_repo list uses the direct CLI route", async () => {
@@ -780,111 +749,77 @@ await test("graft_show uses canonical patch namespace over direct CLI route", as
 });
 
 await test("graft_materialize schema and argv match current graft CLI", async () => {
-  const project = join(testTmpRoot, "pi-graft-materialize-workspace");
-  const previousHome = process.env.GRAFT_HOME;
-  const previousWorkspace = process.env.GRAFT_WORKSPACE;
+  await withRoutedMockGraftd(
+    "pi-graft-materialize-workspace",
+    "ws:materialize",
+    (request, project) => {
+      assert.equal(request.op, "cli_exec");
+      assert.equal(request.params.workspace_id, "ws:materialize");
+      assert.equal(request.params.workspace_root, project);
+      assert.deepEqual(request.params.argv, [
+        "graft",
+        "--cwd",
+        project,
+        "patch",
+        "materialize",
+        "patch:abc",
+        "--dry-run",
+      ]);
+      return { id: request.id, ok: true, result: { message: "materialization dry-run ready" } };
+    },
+    async ({ project, tools }) => {
+      const materialize = tools.get("graft_materialize");
+      assert.ok(materialize, "expected graft_materialize to be registered");
+      const schema = JSON.stringify(materialize.parameters);
+      assert.doesNotMatch(schema, /asCommit|as-commit|"ref"|--ref/);
 
-  try {
-    await withMockGraftd(
-      (request) => {
-        assert.equal(request.op, "cli_exec");
-        assert.equal(request.params.workspace_id, "ws:materialize");
-        assert.equal(request.params.workspace_root, project);
-        assert.deepEqual(request.params.argv, [
-          "graft",
-          "--cwd",
-          project,
-          "patch",
-          "materialize",
-          "patch:abc",
-          "--dry-run",
-        ]);
-        return {
-          id: request.id,
-          ok: true,
-          result: { message: "materialization dry-run ready" },
-        };
-      },
-      async (home) => {
-        process.env.GRAFT_HOME = home;
-        process.env.GRAFT_WORKSPACE = "ws:materialize";
-        const { pi, tools } = createFakePi();
-        registerPiGraftExtension(pi);
-        const materialize = tools.get("graft_materialize");
-        assert.ok(materialize, "expected graft_materialize to be registered");
-        const schema = JSON.stringify(materialize.parameters);
-        assert.doesNotMatch(schema, /asCommit|as-commit|"ref"|--ref/);
-
-        const result = await executeTool(
-          materialize,
-          "graft_materialize",
-          { patch: "patch:abc" },
-          { cwd: project },
-        );
-        assert.match(result.content[0].text, /materialization dry-run ready/);
-      },
-    );
-  } finally {
-    if (previousHome === undefined) delete process.env.GRAFT_HOME;
-    else process.env.GRAFT_HOME = previousHome;
-    if (previousWorkspace === undefined) delete process.env.GRAFT_WORKSPACE;
-    else process.env.GRAFT_WORKSPACE = previousWorkspace;
-  }
+      const result = await executeTool(
+        materialize,
+        "graft_materialize",
+        { patch: "patch:abc" },
+        { cwd: project },
+      );
+      assert.match(result.content[0].text, /materialization dry-run ready/);
+    },
+  );
 });
 
 await test("graft_repo add uses daemon-owned cli_exec routing", async () => {
-  const project = join(testTmpRoot, "pi-graft-repo-add-workspace");
-  const previousHome = process.env.GRAFT_HOME;
-  const previousWorkspace = process.env.GRAFT_WORKSPACE;
-
-  try {
-    await withMockGraftd(
-      (request) => {
-        assert.equal(request.op, "cli_exec");
-        assert.equal(request.params.workspace_id, "ws:repo");
-        assert.equal(request.params.workspace_root, project);
-        assert.deepEqual(request.params.argv, [
-          "graft",
-          "--cwd",
-          project,
-          "repo",
-          "add",
-          "spark",
-          "/repos/spark",
-          "--default-branch",
-          "main",
-        ]);
-        return {
-          id: request.id,
-          ok: true,
-          result: { message: "added repo spark" },
-        };
-      },
-      async (home) => {
-        process.env.GRAFT_HOME = home;
-        process.env.GRAFT_WORKSPACE = "ws:repo";
-        const { pi, tools } = createFakePi();
-        registerPiGraftExtension(pi);
-        const result = await executeTool(
-          tools.get("graft_repo"),
-          "graft_repo",
-          {
-            action: "add",
-            repoId: "spark",
-            url: "/repos/spark",
-            defaultBranch: "main",
-          },
-          { cwd: project },
-        );
-        assert.match(result.content[0].text, /added repo spark/);
-      },
-    );
-  } finally {
-    if (previousHome === undefined) delete process.env.GRAFT_HOME;
-    else process.env.GRAFT_HOME = previousHome;
-    if (previousWorkspace === undefined) delete process.env.GRAFT_WORKSPACE;
-    else process.env.GRAFT_WORKSPACE = previousWorkspace;
-  }
+  await withRoutedMockGraftd(
+    "pi-graft-repo-add-workspace",
+    "ws:repo",
+    (request, project) => {
+      assert.equal(request.op, "cli_exec");
+      assert.equal(request.params.workspace_id, "ws:repo");
+      assert.equal(request.params.workspace_root, project);
+      assert.deepEqual(request.params.argv, [
+        "graft",
+        "--cwd",
+        project,
+        "repo",
+        "add",
+        "spark",
+        "/repos/spark",
+        "--default-branch",
+        "main",
+      ]);
+      return { id: request.id, ok: true, result: { message: "added repo spark" } };
+    },
+    async ({ project, tools }) => {
+      const result = await executeTool(
+        tools.get("graft_repo"),
+        "graft_repo",
+        {
+          action: "add",
+          repoId: "spark",
+          url: "/repos/spark",
+          defaultBranch: "main",
+        },
+        { cwd: project },
+      );
+      assert.match(result.content[0].text, /added repo spark/);
+    },
+  );
 });
 
 await test("pi-graft controls real graftd scratch lifecycle through canonical protocol", async (t) => {
