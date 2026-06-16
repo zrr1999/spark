@@ -438,6 +438,90 @@ void test("graft_repo list uses the direct CLI route", async () => {
   }
 });
 
+void test("graft candidate and search filters use current constraint argv", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graft-constraint-filter-"));
+  const argvFile = join(dir, "argv.txt");
+  const project = join(dir, "project");
+  await mkdir(project, { recursive: true });
+  const previousGraftBin = process.env.GRAFT_BIN;
+  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
+  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
+  process.env.GRAFT_BIN = await writeMockGraft(
+    dir,
+    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\necho 'filtered'`,
+  );
+
+  try {
+    const { pi, tools } = createFakePi();
+    registerPiGraftExtension(pi);
+    const candidates = tools.get("graft_candidates");
+    const search = tools.get("graft_search");
+    assert.ok(candidates, "expected graft_candidates to be registered");
+    assert.ok(search, "expected graft_search to be registered");
+    const candidateProperties = (candidates.parameters as { properties: Record<string, unknown> })
+      .properties;
+    const searchProperties = (search.parameters as { properties: Record<string, unknown> })
+      .properties;
+    assert.ok("constraint" in candidateProperties);
+    assert.ok("constraint" in searchProperties);
+    assert.equal("property" in candidateProperties, false);
+    assert.equal("property" in searchProperties, false);
+
+    await executeTool(
+      candidates,
+      "graft_candidates",
+      { constraint: "tests_pass", failed: true, producer: "pi-graft" },
+      { cwd: project },
+    );
+    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
+      "--cwd",
+      project,
+      "--json",
+      "candidates",
+      "--constraint",
+      "tests_pass",
+      "--failed",
+      "--producer",
+      "pi-graft",
+    ]);
+
+    await executeTool(
+      search,
+      "graft_search",
+      { constraint: "tests_pass", base: "graft:empty", hasEvidence: "tests_pass" },
+      { cwd: project },
+    );
+    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
+      "--cwd",
+      project,
+      "--json",
+      "search",
+      "--constraint",
+      "tests_pass",
+      "--base",
+      "graft:empty",
+      "--has-evidence",
+      "tests_pass",
+    ]);
+
+    await assert.rejects(
+      () =>
+        executeTool(candidates, "graft_candidates", { property: "tests_pass" }, { cwd: project }),
+      /property was renamed to constraint/,
+    );
+    await assert.rejects(
+      () => executeTool(search, "graft_search", { property: "tests_pass" }, { cwd: project }),
+      /property was renamed to constraint/,
+    );
+  } finally {
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
+    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
+    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
 void test("graft_materialize schema and argv match current graft CLI", async () => {
   const project = "/tmp/pi-graft-materialize-workspace";
   const previousHome = process.env.GRAFT_HOME;

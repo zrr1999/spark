@@ -1613,7 +1613,9 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     label: "Graft Candidates",
     description: "List unadmitted candidates.",
     parameters: Type.Object({
-      property: Type.Optional(Type.String({ description: "Filter by expected property." })),
+      constraint: Type.Optional(
+        Type.String({ description: "Filter by expected constraint primitive." }),
+      ),
       failed: Type.Optional(Type.Boolean({ description: "Show only failed candidates." })),
       producer: Type.Optional(Type.String({ description: "Filter by producer." })),
     }),
@@ -1625,10 +1627,12 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
+      if ("property" in params)
+        throw new Error("graft_candidates property was renamed to constraint.");
       const argv = ["--json", "candidates"];
-      const property = optionalStringParam(params, "property");
+      const constraint = optionalStringParam(params, "constraint");
       const producer = optionalStringParam(params, "producer");
-      if (property) argv.push("--property", property);
+      if (constraint) argv.push("--constraint", constraint);
       if (optionalBooleanParam(params, "failed")) argv.push("--failed");
       if (producer) argv.push("--producer", producer);
       const { text, details } = await executeCliArgv(cwd, argv);
@@ -1641,7 +1645,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     label: "Graft Search",
     description: "Search admitted patches.",
     parameters: Type.Object({
-      property: Type.Optional(Type.String({ description: "Filter by property." })),
+      constraint: Type.Optional(Type.String({ description: "Filter by constraint primitive." })),
       base: Type.Optional(Type.String({ description: "Filter by base state." })),
       producer: Type.Optional(Type.String({ description: "Filter by producer." })),
       hasEvidence: Type.Optional(
@@ -1656,12 +1660,13 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
+      if ("property" in params) throw new Error("graft_search property was renamed to constraint.");
       const argv = ["--json", "search"];
-      const property = optionalStringParam(params, "property");
+      const constraint = optionalStringParam(params, "constraint");
       const base = optionalStringParam(params, "base");
       const producer = optionalStringParam(params, "producer");
       const hasEvidence = optionalStringParam(params, "hasEvidence");
-      if (property) argv.push("--property", property);
+      if (constraint) argv.push("--constraint", constraint);
       if (base) argv.push("--base", base);
       if (producer) argv.push("--producer", producer);
       if (hasEvidence) argv.push("--has-evidence", hasEvidence);
