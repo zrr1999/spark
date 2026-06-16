@@ -24,15 +24,15 @@ import {
 
 type RegisteredPiCueTool = Parameters<PiCueExtensionApi["registerTool"]>[0];
 
-void test("normalizeCueTerminalOutput keeps final carriage-return frame", () => {
+await test("normalizeCueTerminalOutput keeps final carriage-return frame", () => {
   assert.equal(normalizeCueTerminalOutput("Working 1\rWorking 2\rDone\n"), "Done\n");
 });
 
-void test("normalizeCueTerminalOutput preserves CRLF line content", () => {
+await test("normalizeCueTerminalOutput preserves CRLF line content", () => {
   assert.equal(normalizeCueTerminalOutput("hello\r\n"), "hello\n");
 });
 
-void test("normalizeCueTerminalOutput collapses repeated spinner progress lines", () => {
+await test("normalizeCueTerminalOutput collapses repeated spinner progress lines", () => {
   const output = [
     "⠋ Running hooks... vp check --fix...",
     "⠙ Running hooks... vp check --fix...",
@@ -46,7 +46,7 @@ void test("normalizeCueTerminalOutput collapses repeated spinner progress lines"
   );
 });
 
-void test("normalizeCueStderrForDisplay removes duplicated PTY merge note", () => {
+await test("normalizeCueStderrForDisplay removes duplicated PTY merge note", () => {
   assert.equal(
     normalizeCueStderrForDisplay("[PTY: stdout and stderr are merged]\nhello\r\n", "hello\r\n"),
     "",
@@ -62,7 +62,7 @@ void test("normalizeCueStderrForDisplay removes duplicated PTY merge note", () =
   );
 });
 
-void test("renderCueScriptResult includes source, timeout, item identity, and status", () => {
+await test("renderCueScriptResult includes source, timeout, item identity, and status", () => {
   const result = {
     scriptId: "script:one",
     source: { kind: "inline" },
@@ -114,7 +114,7 @@ void test("renderCueScriptResult includes source, timeout, item identity, and st
   assert.match(rendered, /\[stderr\]\nbad/);
 });
 
-void test("renderCueScriptResult compacts clean successful items", () => {
+await test("renderCueScriptResult compacts clean successful items", () => {
   const result = {
     scriptId: "script:clean",
     source: { kind: "file", path: "build.cue" },
@@ -181,7 +181,7 @@ void test("renderCueScriptResult compacts clean successful items", () => {
   assert.match(rendered, /visible/);
 });
 
-void test("renderCueChainStatus prioritizes non-clean leaves and compacts clean leaves", async () => {
+await test("renderCueChainStatus prioritizes non-clean leaves and compacts clean leaves", async () => {
   const outputRequests: Array<{ id: string; tailBytes?: number }> = [];
   const errorRequests: Array<{ id: string; tailBytes?: number }> = [];
   const reader = {
@@ -246,7 +246,7 @@ function chainJob(
   };
 }
 
-void test("pi-cue numeric and boolean normalizers reject invalid explicit values", () => {
+await test("pi-cue numeric and boolean normalizers reject invalid explicit values", () => {
   assert.equal(normalizeCueTailBytes(undefined, 128), 128);
   assert.equal(normalizeCueTailBytes(0), 0);
   assert.equal(normalizeCueTailBytes(4096), 4096);
@@ -282,7 +282,7 @@ void test("pi-cue numeric and boolean normalizers reject invalid explicit values
   assert.throws(() => normalizeCueResourceNeeds({ gpu: " " }), /non-empty string/);
 });
 
-void test("resolveCueWorkingDirectory anchors explicit relative cwd to the Pi context cwd", () => {
+await test("resolveCueWorkingDirectory anchors explicit relative cwd to the Pi context cwd", () => {
   assert.equal(
     resolveCueWorkingDirectory(".", "/tmp/pi-session", "/tmp/process-cwd"),
     "/tmp/pi-session",
@@ -301,7 +301,7 @@ void test("resolveCueWorkingDirectory anchors explicit relative cwd to the Pi co
   );
 });
 
-void test("pi-cue tools validate bad parameters before connecting to cued", async () => {
+await test("pi-cue tools validate bad parameters before connecting to cued", async () => {
   const tools = registerCueToolsForTest();
   const execTool = tools.get("cue_exec");
   const runTool = tools.get("cue_run");
@@ -399,7 +399,7 @@ void test("pi-cue tools validate bad parameters before connecting to cued", asyn
   );
 });
 
-void test("script_run and script_eval route venv only to python", async () => {
+await test("script_run and script_eval route venv only to python", async () => {
   const tools = registerCueToolsForTest();
   const runTool = tools.get("script_run");
   const evalTool = tools.get("script_eval");
@@ -467,7 +467,7 @@ void test("script_run and script_eval route venv only to python", async () => {
   );
 });
 
-void test("pi-cue tool descriptions match cue-shell chain operator contract", () => {
+await test("pi-cue tool descriptions match cue-shell chain operator contract", () => {
   const tools = registerCueToolsForTest();
   const execTool = tools.get("cue_exec");
   const runTool = tools.get("cue_run");
@@ -491,7 +491,7 @@ void test("pi-cue tool descriptions match cue-shell chain operator contract", ()
   assert.match(scriptTool.description, /`\|\?\|`/);
 });
 
-void test("pi-cue docs document script runner venv, scope, and python -c behavior", async () => {
+await test("pi-cue docs document script runner venv, scope, and python -c behavior", async () => {
   const skill = await readFile("packages/pi-cue/skills/pi-cue/SKILL.md", "utf8");
   const readme = await readFile("packages/pi-cue/README.md", "utf8");
   const toolsDoc = await readFile("docs/tools.md", "utf8");
@@ -514,7 +514,7 @@ void test("pi-cue docs document script runner venv, scope, and python -c behavio
   assert.doesNotMatch(toolsDoc, /temporary file before execution/);
 });
 
-void test("script_run and script_eval pass scope only to cue-shell RunScript", async () => {
+await test("script_run and script_eval pass scope only to cue-shell RunScript", async () => {
   const tools = registerCueToolsForTest();
   const runTool = tools.get("script_run");
   const evalTool = tools.get("script_eval");
