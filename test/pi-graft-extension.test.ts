@@ -253,6 +253,16 @@ void test("graft_cli_exec validates argv before daemon work", async () => {
       ),
     /does not allow graft incoming/,
   );
+  await assert.rejects(
+    () =>
+      executeTool(
+        cliExec,
+        "graft_cli_exec",
+        { argv: ["patch", "materialize", "patch:abc"] },
+        { cwd: "/tmp/pi-graft-no-daemon" },
+      ),
+    /does not allow graft patch materialize/,
+  );
 });
 
 void test("graft_cli_exec description advertises canonical patch incoming", () => {
@@ -263,6 +273,7 @@ void test("graft_cli_exec description advertises canonical patch incoming", () =
 
   assert.match(cliExec.description, /patch incoming\/list\/show\/search/);
   assert.doesNotMatch(cliExec.description, /explain\/incoming\/sync/);
+  assert.doesNotMatch(cliExec.description, /materialize/);
 });
 
 void test("graft_cli_exec routes canonical patch incoming through direct CLI", async () => {
