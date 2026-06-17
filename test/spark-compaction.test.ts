@@ -12,6 +12,7 @@ import {
   estimateSparkContextTokens,
   estimateSparkTokens,
   prepareSparkCompaction,
+  sessionEntriesToAgentMessages,
   shouldSparkCompact,
   type SparkCompactionSettings,
   type SparkSessionRecord,
@@ -105,6 +106,40 @@ void test("compactSparkSessionRecord appends Pi-compatible compaction entry", as
     assert.deepEqual(entry.details, { readFiles: ["a.ts"], modifiedFiles: ["b.ts"] });
     assert.equal(record.entries.at(-1), entry);
     assert.equal(prepareSparkCompaction(record, undefined, tinyKeepSettings), undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("sessionEntriesToAgentMessages rebuilds compacted context with summary and kept messages", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-compaction-session-context-"));
+  try {
+    const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
+    const record = compactableRecord(store);
+    const preparation = prepareSparkCompaction(record, undefined, tinyKeepSettings)!;
+    await compactSparkSessionRecord(record, preparation, async () => ({
+      summary: "Older conversation summary.",
+    }));
+
+    const messages = sessionEntriesToAgentMessages(record.entries);
+    assert.deepEqual(
+      messages.map((message) => message.role),
+      ["user", "assistant"],
+    );
+    assert.equal(
+      messages[0]?.content,
+      "The conversation history before this point was compacted into the following summary:\n\n<summary>\nOlder conversation summary.\n</summary>",
+    );
+    assert.deepEqual(messages[1]?.content, [{ type: "text", text: "recent answer" }]);
+    assert.doesNotMatch(JSON.stringify(messages), /a{20}|b{20}|recent request/);
+
+    store.appendMessage(record, { role: "user", content: "after compact" });
+    const resumed = sessionEntriesToAgentMessages(record.entries);
+    assert.deepEqual(
+      resumed.map((message) => message.role),
+      ["user", "assistant", "user"],
+    );
+    assert.equal(resumed[2]?.content, "after compact");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

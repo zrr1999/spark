@@ -33,6 +33,22 @@ function assistant(text: string): Record<string, unknown> {
   };
 }
 
+function messageContentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((block): block is { type: "text"; text: string } =>
+      Boolean(
+        block &&
+        typeof block === "object" &&
+        block.type === "text" &&
+        typeof block.text === "string",
+      ),
+    )
+    .map((block) => block.text)
+    .join(" ");
+}
+
 function fakeProviderModule(
   captured: { systemPrompt?: string; modelId?: string; userPrompt?: string } = {},
 ) {
@@ -48,7 +64,7 @@ function fakeProviderModule(
         ) => {
           captured.systemPrompt = context.systemPrompt;
           captured.modelId = (_model as { id?: string }).id;
-          captured.userPrompt = String(context.messages?.at(-1)?.content ?? "");
+          captured.userPrompt = messageContentText(context.messages?.at(-1)?.content);
           const message = assistant(`boot ok:${context.messages?.length ?? 0}`);
           return {
             async *[Symbol.asyncIterator]() {

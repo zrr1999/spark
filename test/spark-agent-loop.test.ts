@@ -310,7 +310,7 @@ void test("SparkAgentLoop drainOutboxIntoMessages turns sendUserMessage envelope
   const firstAssistant = buildAssistant([{ type: "text", text: "first turn" }]);
   const secondAssistant = buildAssistant([{ type: "text", text: "after outbox" }]);
   let calls = 0;
-  const fake: SparkAgentStreamFunction = (_model, context) => {
+  const fake: SparkAgentStreamFunction = (_model, _context) => {
     calls += 1;
     if (calls === 1) {
       // After turn 1, push a user message into the outbox so the loop runs again.
@@ -328,7 +328,6 @@ void test("SparkAgentLoop drainOutboxIntoMessages turns sendUserMessage envelope
       },
       result: () => resultPromise,
     } as ReturnType<SparkAgentStreamFunction>;
-    void context;
   };
   const loop = new SparkAgentLoop({
     host,

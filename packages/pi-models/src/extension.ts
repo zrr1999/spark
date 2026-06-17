@@ -314,7 +314,7 @@ function renderModelsCall(
 ): ToolRenderComponent {
   const parts = [
     "models",
-    args.provider ? `provider=${String(args.provider)}` : undefined,
+    typeof args.provider === "string" ? `provider=${args.provider}` : undefined,
     args.query ? `query=${JSON.stringify(args.query)}` : undefined,
     args.includeUnavailable === true ? "all" : undefined,
     typeof args.limit === "number" ? `limit=${args.limit}` : undefined,

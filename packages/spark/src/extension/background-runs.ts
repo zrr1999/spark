@@ -22,7 +22,6 @@ import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import {
   collectBackgroundChildRuns,
   enrichBackgroundChildRunsWithRoleRunArtifacts,
-  resolveBackgroundTaskRef,
 } from "./background-child-runs.ts";
 import {
   backgroundRunView,

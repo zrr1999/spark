@@ -20,7 +20,7 @@
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@earendil-works/pi-tui": "^0.74.1",
+    "@earendil-works/pi-tui": "^0.79.4",
     "@zendev-lab/pi-artifacts": "workspace:^",
     "@zendev-lab/pi-context": "workspace:^",
     "@zendev-lab/pi-extension-api": "workspace:^",
@@ -31,6 +31,6 @@
     "@zendev-lab/pi-tasks": "workspace:^",
     "@zendev-lab/pi-workflows": "workspace:^",
     "@zendev-lab/spark-runtime": "workspace:^",
-    "typebox": "^1.1.38"
+    "typebox": "^1.2.13"
   }
 }

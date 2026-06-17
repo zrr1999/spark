@@ -33,7 +33,9 @@ void test("pi-btw package keeps upstream extension, skill, and host-specific dep
   assert.deepEqual(pkg.pi?.extensions, ["./extensions/btw.ts"]);
   assert.deepEqual(pkg.pi?.skills, ["./skills"]);
   assert.ok(pkg.files?.includes("skills"));
-  assert.equal(pkg.dependencies?.["@earendil-works/pi-coding-agent"], "0.74.1");
+  assert.equal(pkg.dependencies?.["@earendil-works/pi-coding-agent"], "0.79.4");
+  assert.equal(pkg.dependencies?.["@earendil-works/pi-ai"], "0.79.4");
+  assert.equal(pkg.dependencies?.["@earendil-works/pi-tui"], "0.79.4");
 });
 
 void test("pi-btw side sessions do not hardcode bash as an enabled tool", async () => {

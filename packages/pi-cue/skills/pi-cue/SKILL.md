@@ -30,7 +30,7 @@ SSH profiles, that cwd must be valid on the remote host.
 | **Exec**      | `cue_exec`      | Execute a direct command and create a job   | `command`, `background?`, `timeout?`, `cwd?`, `pty?`, `needs?`, `tail_bytes?`           |
 | **Script**    | `cue_run`       | Run a `.cue` file (`cue run <file.cue>`)    | `path`, `timeout?`, `tail_bytes?`                                                       |
 | **Script**    | `cue_script`    | Run an inline `.cue` script body            | `script`, `pathLabel?`, `timeout?`, `tail_bytes?`                                       |
-| **Script**    | `script_run`    | Run a script file with explicit language    | `path`, `language`, `timeout?`, `tail_bytes?`, `venv?`, `scope?`                        |
+| **Script**    | `script_run`    | Run a script file with explicit language    | `path`, `language`, `timeout?`, `tail_bytes?`, `venv?`                                  |
 | **Script**    | `script_eval`   | Run an inline script with explicit language | `script`, `language`, `pathLabel?`, `timeout?`, `tail_bytes?`, `venv?`                  |
 | **Jobs**      | `cue_jobs`      | List/status/wait/stop jobs                  | `action` (list/status/wait/stop), `id?`, `status?`, `limit?`, `timeout?`, `tail_bytes?` |
 | **Resources** | `cue_resources` | Inspect providers and resource snapshots    | `action?` (providers/resources)                                                         |

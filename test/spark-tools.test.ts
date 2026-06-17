@@ -891,8 +891,8 @@ void test("/research, /plan, /implement, /goal, and /workflow selector commands 
     const goalCommand = initializedRun.commands.get("goal");
     assert.ok(goalCommand, "missing /goal command");
     assert.equal(initializedRun.commands.get("workflow:goal"), undefined);
-    assert.ok(initializedRun.commands.get("workflow:deep-research"));
-    assert.ok(initializedRun.commands.get("workflow:adversarial-review"));
+    assert.ok(initializedRun.commands.get("workflow:research"));
+    assert.ok(initializedRun.commands.get("workflow:review"));
     await goalCommand.handler("Finish the queue until done", initializedCtx);
     assert.match(customMessageVisible(initializedRun.customMessages.at(-1)), /Spark goal active/);
     assert.doesNotMatch(
@@ -952,8 +952,8 @@ void test("/research, /plan, /implement, /goal, and /workflow selector commands 
     );
     const workflowCommand = initializedRun.commands.get("workflow");
     assert.ok(workflowCommand, "missing /workflow command");
-    const fusionWorkflowCommand = initializedRun.commands.get("workflow:fusion");
-    assert.ok(fusionWorkflowCommand, "missing /workflow:fusion command");
+    const researchWorkflowCommand = initializedRun.commands.get("workflow:research");
+    assert.ok(researchWorkflowCommand, "missing /workflow:research command");
     assert.equal(initializedRun.commands.get("workflow:triage"), undefined);
     await workflowCommand.handler("workspace:triage Review with a workflow", initializedCtx);
     assert.match(
@@ -975,7 +975,7 @@ void test("/research, /plan, /implement, /goal, and /workflow selector commands 
     assert.match(workflowPrompt, /broken\.js/);
     assert.match(workflowPrompt, /discovery never executes saved workflow bodies/);
 
-    await workflowCommand.handler("builtin:fusion Compare design options", initializedCtx);
+    await workflowCommand.handler("builtin:research Compare design options", initializedCtx);
     assert.match(
       customMessageVisible(initializedRun.customMessages.at(-1)),
       /Spark research mode requested/,
@@ -984,27 +984,30 @@ void test("/research, /plan, /implement, /goal, and /workflow selector commands 
       customMessageVisible(initializedRun.customMessages.at(-1)),
       /Spark workflow driver requested/,
     );
-    const fusionWorkflowPrompt = initializedRun.customMessages.at(-1)?.content ?? "";
-    assert.match(fusionWorkflowPrompt, /## Research mode requirements/);
-    assert.match(fusionWorkflowPrompt, /Builtin workflow selector: builtin:fusion/);
-    assert.match(fusionWorkflowPrompt, /## Builtin workflow guidance/);
-    assert.match(fusionWorkflowPrompt, /registry mode as authoritative routing metadata/);
+    const researchWorkflowPrompt = initializedRun.customMessages.at(-1)?.content ?? "";
+    assert.match(researchWorkflowPrompt, /## Research mode requirements/);
+    assert.match(researchWorkflowPrompt, /Builtin workflow selector: builtin:research/);
+    assert.match(researchWorkflowPrompt, /## Builtin workflow guidance/);
+    assert.match(researchWorkflowPrompt, /registry mode as authoritative routing metadata/);
     assert.match(
-      fusionWorkflowPrompt,
-      /workflow\(\{ action: "read", selector: "builtin:fusion" \}\)/,
+      researchWorkflowPrompt,
+      /workflow\(\{ action: "read", selector: "builtin:research" \}\)/,
     );
-    assert.doesNotMatch(fusionWorkflowPrompt, /## Workflow driver mode requirements/);
+    assert.doesNotMatch(researchWorkflowPrompt, /## Workflow driver mode requirements/);
 
-    await fusionWorkflowCommand.handler("Compare default panel and judge behavior", initializedCtx);
+    await researchWorkflowCommand.handler(
+      "Compare default panel and judge behavior",
+      initializedCtx,
+    );
     assert.match(
       customMessageVisible(initializedRun.customMessages.at(-1)),
       /Spark research mode requested/,
     );
-    const fusionColonPrompt = initializedRun.customMessages.at(-1)?.content ?? "";
-    assert.match(fusionColonPrompt, /Builtin workflow selector: builtin:fusion/);
-    assert.match(fusionColonPrompt, /User focus: Compare default panel and judge behavior/);
-    assert.match(fusionColonPrompt, /## Research mode requirements/);
-    assert.doesNotMatch(fusionColonPrompt, /## Workflow driver mode requirements/);
+    const researchColonPrompt = initializedRun.customMessages.at(-1)?.content ?? "";
+    assert.match(researchColonPrompt, /Builtin workflow selector: builtin:research/);
+    assert.match(researchColonPrompt, /User focus: Compare default panel and judge behavior/);
+    assert.match(researchColonPrompt, /## Research mode requirements/);
+    assert.doesNotMatch(researchColonPrompt, /## Workflow driver mode requirements/);
 
     initializedCtx.ui.select = async () =>
       assert.fail("/workflow should not open a canned selector ask");

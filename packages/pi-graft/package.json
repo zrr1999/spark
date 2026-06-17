@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "@zendev-lab/pi-roles": "workspace:^",
-    "typebox": "^1.1.38"
+    "typebox": "^1.2.13"
   },
   "pi": {
     "extensions": [
