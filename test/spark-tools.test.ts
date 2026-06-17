@@ -891,8 +891,8 @@ void test("/research, /plan, /implement, /goal, and /workflow selector commands 
     const goalCommand = initializedRun.commands.get("goal");
     assert.ok(goalCommand, "missing /goal command");
     assert.equal(initializedRun.commands.get("workflow:goal"), undefined);
-    assert.equal(initializedRun.commands.get("workflow:deep-research"), undefined);
-    assert.equal(initializedRun.commands.get("workflow:adversarial-review"), undefined);
+    assert.ok(initializedRun.commands.get("workflow:deep-research"));
+    assert.ok(initializedRun.commands.get("workflow:adversarial-review"));
     await goalCommand.handler("Finish the queue until done", initializedCtx);
     assert.match(customMessageVisible(initializedRun.customMessages.at(-1)), /Spark goal active/);
     assert.doesNotMatch(
@@ -952,6 +952,9 @@ void test("/research, /plan, /implement, /goal, and /workflow selector commands 
     );
     const workflowCommand = initializedRun.commands.get("workflow");
     assert.ok(workflowCommand, "missing /workflow command");
+    const fusionWorkflowCommand = initializedRun.commands.get("workflow:fusion");
+    assert.ok(fusionWorkflowCommand, "missing /workflow:fusion command");
+    assert.equal(initializedRun.commands.get("workflow:triage"), undefined);
     await workflowCommand.handler("workspace:triage Review with a workflow", initializedCtx);
     assert.match(
       customMessageVisible(initializedRun.customMessages.at(-1)),
@@ -971,6 +974,37 @@ void test("/research, /plan, /implement, /goal, and /workflow selector commands 
     assert.match(workflowPrompt, /Saved workflow validation issues/);
     assert.match(workflowPrompt, /broken\.js/);
     assert.match(workflowPrompt, /discovery never executes saved workflow bodies/);
+
+    await workflowCommand.handler("builtin:fusion Compare design options", initializedCtx);
+    assert.match(
+      customMessageVisible(initializedRun.customMessages.at(-1)),
+      /Spark research mode requested/,
+    );
+    assert.doesNotMatch(
+      customMessageVisible(initializedRun.customMessages.at(-1)),
+      /Spark workflow driver requested/,
+    );
+    const fusionWorkflowPrompt = initializedRun.customMessages.at(-1)?.content ?? "";
+    assert.match(fusionWorkflowPrompt, /## Research mode requirements/);
+    assert.match(fusionWorkflowPrompt, /Builtin workflow selector: builtin:fusion/);
+    assert.match(fusionWorkflowPrompt, /## Builtin workflow guidance/);
+    assert.match(fusionWorkflowPrompt, /registry mode as authoritative routing metadata/);
+    assert.match(
+      fusionWorkflowPrompt,
+      /workflow\(\{ action: "read", selector: "builtin:fusion" \}\)/,
+    );
+    assert.doesNotMatch(fusionWorkflowPrompt, /## Workflow driver mode requirements/);
+
+    await fusionWorkflowCommand.handler("Compare default panel and judge behavior", initializedCtx);
+    assert.match(
+      customMessageVisible(initializedRun.customMessages.at(-1)),
+      /Spark research mode requested/,
+    );
+    const fusionColonPrompt = initializedRun.customMessages.at(-1)?.content ?? "";
+    assert.match(fusionColonPrompt, /Builtin workflow selector: builtin:fusion/);
+    assert.match(fusionColonPrompt, /User focus: Compare default panel and judge behavior/);
+    assert.match(fusionColonPrompt, /## Research mode requirements/);
+    assert.doesNotMatch(fusionColonPrompt, /## Workflow driver mode requirements/);
 
     initializedCtx.ui.select = async () =>
       assert.fail("/workflow should not open a canned selector ask");
@@ -8313,7 +8347,7 @@ void test("spark_status defaults to active view, supports full history, summary,
     await useOnlySparkProject(tools, ctx);
     const active = await executeSparkTool(tools, "spark_status", ctx, {});
     const activeText = toolText(active);
-    assert.match(activeText, /Spark tasks \(active view, limit=20\):/);
+    assert.match(activeText, /Spark tasks \(active view, limit=8\):/);
     assert.match(activeText, /Tool persistence \[current\]/);
     assert.doesNotMatch(activeText, /Project status: active/);
     assert.match(activeText, /Active tasks:/);
@@ -8329,7 +8363,7 @@ void test("spark_status defaults to active view, supports full history, summary,
     assert.doesNotMatch(activeText, new RegExp(project.ref));
     assert.match(activeText, /Completed tasks: 2 total \| done=1 \| cancelled=1/);
     assert.equal(active.details?.view, "active");
-    assert.equal(active.details?.limit, 20);
+    assert.equal(active.details?.limit, 8);
     assert.equal(active.details?.activeProjectRef, project.ref);
     assert.equal("tasks" in active.details!, false);
     assert.equal("dependencies" in active.details!, false);

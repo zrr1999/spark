@@ -1,12 +1,11 @@
 import { Type } from "typebox";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import { defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
-import { reconcileSparkDagRunsWithActiveProcesses } from "./background-runs.ts";
+import { reconcileSparkWorkflowRunsWithActiveProcesses } from "./background-runs.ts";
 import { collectRecentRoleRunCompletions } from "./role-run-completions.ts";
 import {
   currentSparkProject,
   loadSparkGraph,
-  loadSparkRunMode,
   saveSparkGraphAndTodos,
   sparkSessionKey,
 } from "./session-state.ts";
@@ -41,7 +40,7 @@ export function registerSparkStatusTool(
     name: "spark_status",
     label: "Spark Status",
     description:
-      'Compatibility surface for task({ action: "status" }): show Spark project/task status. Defaults to an active view focused on unfinished work and current session state; use view=full for all history.',
+      'Compatibility surface for task_read({ action: "status" }): show Spark project/task status. Defaults to an active view focused on unfinished work and current session state; use view=full for all history.',
     parameters: Type.Object({
       view: Type.Optional(
         Type.String({
@@ -53,7 +52,7 @@ export function registerSparkStatusTool(
       limit: Type.Optional(
         Type.Number({
           description:
-            "Maximum number of task rows per project. Defaults to 20 in active view; omitted in summary/full unless provided.",
+            "Maximum number of task rows per project. Defaults to 8 in active view; omitted in summary/full unless provided.",
         }),
       ),
       format: Type.Optional(
@@ -105,10 +104,10 @@ export function registerSparkStatusTool(
         view === "summary"
           ? undefined
           : (explicitLimit ?? (view === "active" ? DEFAULT_SPARK_STATUS_ACTIVE_LIMIT : undefined));
-      const dagRunStore = defaultSparkWorkflowRunStore(cwd);
-      await reconcileSparkDagRunsWithActiveProcesses(dagRunStore, graph, cwd);
-      const dagStatus = await dagRunStore.status();
-      const runMode = await loadSparkRunMode(cwd, ctx);
+      const runStore = defaultSparkWorkflowRunStore(cwd);
+      await reconcileSparkWorkflowRunsWithActiveProcesses(runStore, graph, cwd);
+      const workflowRunStatus = await runStore.status();
+      const runControl = await runStore.loadControl();
       const sessionKey = sparkSessionKey(ctx);
       const independentTodos = await loadIndependentTodos(cwd, ctx);
       const currentProject = await currentSparkProject(cwd, ctx, graph);
@@ -131,8 +130,8 @@ export function registerSparkStatusTool(
         taskLimit,
         sessionKey,
         currentProject,
-        dagStatus,
-        runMode,
+        workflowRunStatus,
+        runControl,
         sessionGoal,
         independentTodos,
         recentRoleRunCompletions,

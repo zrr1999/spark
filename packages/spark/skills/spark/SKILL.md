@@ -1,13 +1,14 @@
 ---
 name: spark
 description: Use for turning an initial or ambiguous project intent into SPARK.md, a project/task DAG, artifacts, reviews, asks, and a role plan through Spark's compatibility entry and canonical task_read/task_write/assign/goal/workflow tools.
+disable-model-invocation: true
 ---
 
 # Spark
 
 Spark extensions are dual-host: the same retained `pi-*` extension packages should run under Pi's `@earendil-works/pi-coding-agent` host and under the native `spark-cli` host via `SparkHostRuntime` / `pi-extension-api`. Keep shared extension behavior host-neutral; put native CLI boot, provider/model selection, sessions, skills, and pi-tui wrappers in `packages/spark-cli/src/host/` or `packages/spark-cli/src/tui/`.
 
-Use Spark command modes intentionally: research is the unconditional default standing mode and auto-detects when project-bound state is needed; `/research <focus>` investigates, `/plan <focus>` refines the task DAG, `/implement <focus>` runs one default implementation step, `/goal <focus>` drives autonomous verified foreground progress (derive the goal from current Spark state when focus is omitted, asking if ambiguous), and `/workflow[:selector] <focus>` runs saved Spark workflow scripts. Workflows use `/workflow workspace:<name>` and `/workflow user:<name>`. Do not reintroduce legacy run or execute command guidance.
+Use Spark command modes intentionally: research is the unconditional default standing mode and auto-detects when project-bound state is needed; `/research <focus>` investigates, `/plan <focus>` refines the task DAG, `/implement <focus>` runs one default implementation step, `/goal <focus>` drives autonomous verified foreground progress (derive the goal from current Spark state when focus is omitted, asking if ambiguous), and `/workflow[:selector] <focus>` runs builtin or saved Spark workflow scripts. Use `/workflow:fusion <question>` or `/workflow builtin:fusion <question>` for the builtin Fusion research workflow; use `/workflow workspace:<name>` and `/workflow user:<name>` for disk workflows. Do not reintroduce legacy run, execute command, or virtual-model fusion guidance.
 
 Spark is now a composition/mode facade over generic Pi capabilities:
 
@@ -20,7 +21,7 @@ Spark is now a composition/mode facade over generic Pi capabilities:
 - `learning`: canonical evidence-backed `.learnings/` records.
 - `context`: registered bounded context providers such as `spark.active`.
 - `recall`: explicit scoped recall candidates, distinct from `.learnings/`.
-- `workflow`: saved-script workflow discovery/preview from controlled roots.
+- `workflow`: builtin and saved-script workflow discovery/preview from controlled roots.
 - `pi-cue`: reusable controlled execution infrastructure.
 - `pi-goal` and `pi-workflows`: reusable goal/workflow primitives; Spark owns project-bound `/goal` and `/workflow` command policy.
 - `spark-runtime`: Spark-owned single-task role-run adapter for `/implement`, ready-task execution, and role-run artifacts.

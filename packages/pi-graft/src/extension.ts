@@ -1,21 +1,65 @@
-import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
-import net from "node:net";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import {
+  createExtensionRoleSpec,
+  registerExtensionRole,
+  type RoleSpec,
+} from "@zendev-lab/pi-roles";
 import { Type } from "typebox";
 
-import { registerPiGraftPatchTool } from "./patch-tool.ts";
+import {
+  formatDirectOutput,
+  runDirectGraft,
+  runGraftJson,
+  type DirectGraftExecution,
+  type JsonRecord,
+  type JsonValue,
+} from "./graft-client.ts";
 
 const STATE_ENTRY = "pi-graft-state";
-const DEFAULT_CONNECT_TIMEOUT_MS = 500;
-const DEFAULT_START_TIMEOUT_MS = 5_000;
-const GLOBAL_GRAFTD_OPS = new Set(["status", "shutdown"]);
+export const PI_GRAFT_PATCHER_ROLE_ID = "patcher";
+export const PI_GRAFT_PATCHER_ROLE_REF = "role:extension-patcher";
+export const PI_GRAFT_PATCHER_ALLOWED_TOOLS = [
+  "graft_help",
+  "graft_init",
+  "graft_status",
+  "graft_ps",
+  "graft_doctor",
+  "graft_scratch_open",
+  "graft_read",
+  "graft_write",
+  "graft_edit",
+  "graft_delete",
+  "graft_scratch_diff",
+  "graft_scratch_drop",
+  "graft_scratch_pin",
+  "graft_scratch_unpin",
+  "graft_candidate_from_scratch",
+  "graft_validate",
+  "graft_admit",
+  "graft_show",
+  "graft_evidence",
+  "graft_candidates",
+  "graft_search",
+  "graft_materialize",
+  "graft_repo",
+  "graft_cli_exec",
+] as const;
 const GRAFT_REPO_ACTIONS = ["add", "list", "sync", "lock", "update"] as const;
 
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
-type JsonRecord = Record<string, JsonValue>;
+export function createPiGraftPatcherRoleSpec(): RoleSpec {
+  return createExtensionRoleSpec({
+    id: PI_GRAFT_PATCHER_ROLE_ID,
+    description:
+      "Graft-owned patcher role for scratch/candidate/validation/materialization workflows.",
+    systemPrompt: [
+      "You are the pi-graft patcher role.",
+      "Use only Graft scratch, candidate, validation, evidence, repository, and materialization tools exposed to you.",
+      "Do not edit the working tree directly; create or update Graft scratches, promote candidates, validate, and report candidate or patch refs with evidence.",
+      "If the requested patch is ambiguous, underspecified, contradictory, or missing success criteria, stop and report the blocker upward instead of asking interactively or changing files.",
+    ].join("\n"),
+    allowedTools: [...PI_GRAFT_PATCHER_ALLOWED_TOOLS],
+    origin: { kind: "extension", note: "pi-graft" },
+  });
+}
 
 export interface PiGraftSessionContext {
   cwd?: string;
@@ -26,24 +70,12 @@ export interface PiGraftSessionContext {
   };
 }
 
-export interface PiGraftCommandContext extends PiGraftSessionContext {
-  cwd: string;
-  ui?: {
-    notify?: (message: string, level?: "info" | "warning" | "error") => void;
-  };
-}
-
 export interface PiGraftToolContext extends PiGraftSessionContext {
   cwd: string;
   ui?: {
     input?: (prompt: string, defaultValue?: string) => Promise<string | undefined>;
     notify?: (message: string, level?: "info" | "warning" | "error" | "success") => void;
   };
-}
-
-export interface PiGraftCommand {
-  description: string;
-  handler: (args: string, ctx: PiGraftCommandContext) => Promise<void>;
 }
 
 export interface PiGraftToolResult {
@@ -97,7 +129,6 @@ export interface PiGraftExtensionApi {
     event: "session_start",
     handler: (event: unknown, ctx: PiGraftSessionContext) => unknown,
   ): void;
-  registerCommand(name: string, options: PiGraftCommand): void;
   registerTool(definition: PiGraftToolDefinition): void;
   appendEntry?: (customType: string, data?: unknown) => void;
 }
@@ -110,68 +141,6 @@ export interface ActiveGraftScratchState {
   updatedAt: string;
   lastCandidate?: string;
   lastPatch?: string;
-}
-
-interface WireError {
-  code: string;
-  message: string;
-  retry?: JsonValue;
-}
-
-interface WireResponse {
-  id: string;
-  ok: boolean;
-  result?: JsonValue;
-  error?: WireError;
-}
-
-class GraftdError extends Error {
-  readonly code: string;
-  readonly retry?: JsonValue;
-
-  constructor(error: WireError) {
-    super(`${error.code}: ${error.message}`);
-    this.name = "GraftdError";
-    this.code = error.code;
-    this.retry = error.retry;
-  }
-}
-
-class GraftCliError extends Error {
-  readonly program: string;
-  readonly argv: string[];
-  readonly cwd: string;
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly exitCode: number | null;
-
-  constructor({
-    program,
-    argv,
-    cwd,
-    stdout,
-    stderr,
-    exitCode,
-  }: {
-    program: string;
-    argv: string[];
-    cwd: string;
-    stdout: string;
-    stderr: string;
-    exitCode: number | null;
-  }) {
-    const output = `${stdout}${stderr}`.trim();
-    super(
-      `graft CLI failed (${program} ${argv.join(" ")}): ${output || `exit ${exitCode ?? "unknown"}`}`,
-    );
-    this.name = "GraftCliError";
-    this.program = program;
-    this.argv = argv;
-    this.cwd = cwd;
-    this.stdout = stdout;
-    this.stderr = stderr;
-    this.exitCode = exitCode;
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -198,142 +167,9 @@ function stringArrayField(value: unknown, field: string): string[] | undefined {
   return fieldValue.every((item) => typeof item === "string") ? fieldValue : undefined;
 }
 
-function graftHome(): string {
-  const fromEnv = process.env.GRAFT_HOME?.trim();
-  if (fromEnv) return fromEnv;
-  const home = process.env.HOME?.trim() || homedir();
-  return join(home, ".graft");
-}
-
-function workspaceSocketPath(_cwd: string): string {
-  return join(graftHome(), "run", "daemon.sock");
-}
-
-const workspaceIdsByRoot = new Map<string, string>();
-
-async function workspaceIdForRequest(cwd: string): Promise<string> {
-  const fromEnv = process.env.GRAFT_WORKSPACE?.trim();
-  if (fromEnv) return fromEnv;
-
-  try {
-    const execution = await runDirectGraft(cwd, ["--json", "workspace", "status"]);
-    const envelope = tryParseJsonRecord(execution.stdout);
-    const workspaceId = workspaceIdFromEnvelope(envelope);
-    if (workspaceId) {
-      workspaceIdsByRoot.set(cwd, workspaceId);
-      return workspaceId;
-    }
-  } catch {
-    /* Fall through to the last known id/default; the daemon will report a precise routing error. */
-  }
-
-  return workspaceIdsByRoot.get(cwd) ?? "ws:default";
-}
-
 function compactError(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
-}
-
-interface DirectGraftExecution {
-  mode: "direct";
-  program: string;
-  cwd: string;
-  argv: string[];
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}
-
-interface DaemonGraftExecution {
-  mode: "daemon";
-  cwd: string;
-  argv: string[];
-}
-
-function graftCandidates(): string[] {
-  const fromEnv = process.env.GRAFT_BIN?.trim();
-  if (fromEnv) return [fromEnv];
-  return ["graft"];
-}
-
-async function runDirectGraft(cwd: string, argv: string[]): Promise<DirectGraftExecution> {
-  let lastError = "no graft candidate tried";
-  for (const graft of graftCandidates()) {
-    const actualArgv = ["--cwd", cwd, ...argv];
-    const result = await new Promise<{
-      code: number | null;
-      stdout: string;
-      stderr: string;
-      error?: Error;
-    }>((resolve) => {
-      const child = spawn(graft, actualArgv, { cwd, stdio: ["ignore", "pipe", "pipe"] });
-      const stdout: Buffer[] = [];
-      const stderr: Buffer[] = [];
-      child.stdout?.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
-      child.stderr?.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
-      child.once("error", (error) => {
-        resolve({
-          code: null,
-          stdout: Buffer.concat(stdout).toString(),
-          stderr: Buffer.concat(stderr).toString(),
-          error,
-        });
-      });
-      child.once("exit", (code) => {
-        resolve({
-          code,
-          stdout: Buffer.concat(stdout).toString(),
-          stderr: Buffer.concat(stderr).toString(),
-        });
-      });
-    });
-
-    if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
-      lastError = `${graft} not found`;
-      continue;
-    }
-    if (result.error) {
-      throw new Error(`could not run graft CLI with ${graft}: ${result.error.message}`);
-    }
-    if (result.code !== 0) {
-      throw new GraftCliError({
-        program: graft,
-        argv: actualArgv,
-        cwd,
-        stdout: result.stdout,
-        stderr: result.stderr,
-        exitCode: result.code,
-      });
-    }
-    return {
-      mode: "direct",
-      program: graft,
-      cwd,
-      argv: actualArgv,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.code,
-    };
-  }
-  throw new Error(`${lastError}; set GRAFT_BIN or put graft on PATH`);
-}
-
-function tryParseJsonRecord(text: string): JsonRecord | undefined {
-  const trimmed = text.trim();
-  if (!trimmed) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(trimmed);
-    return isRecord(parsed) ? (parsed as JsonRecord) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function parseJsonRecord(text: string, context: string): JsonRecord {
-  const parsed = tryParseJsonRecord(text);
-  if (!parsed) throw new Error(`${context} did not return a JSON object.`);
-  return parsed;
 }
 
 function workspaceIdFromEnvelope(envelope: JsonRecord | undefined): string | undefined {
@@ -352,164 +188,8 @@ async function directCliJson(
   cwd: string,
   argv: string[],
 ): Promise<{ envelope: JsonRecord; execution: DirectGraftExecution }> {
-  const execution = await runDirectGraft(cwd, argv);
-  return { envelope: parseJsonRecord(execution.stdout, `graft ${argv.join(" ")}`), execution };
-}
-
-function formatDirectOutput(execution: DirectGraftExecution): string {
-  return (
-    `${execution.stdout}${execution.stderr}`.trim() ||
-    `graft ${execution.argv.join(" ")} completed.`
-  );
-}
-
-async function canConnect(
-  socketPath: string,
-  timeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = net.createConnection(socketPath);
-    const timer = setTimeout(() => {
-      socket.destroy();
-      resolve(false);
-    }, timeoutMs);
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      socket.end();
-      resolve(true);
-    });
-    socket.once("error", () => {
-      clearTimeout(timer);
-      resolve(false);
-    });
-  });
-}
-
-function graftdCandidates(): string[] {
-  const fromEnv = process.env.GRAFT_DAEMON_BIN?.trim();
-  if (fromEnv) return [fromEnv];
-  return ["graftd"];
-}
-
-async function startGraftd(cwd: string, socketPath: string): Promise<void> {
-  await mkdir(join(graftHome(), "run"), { recursive: true });
-
-  let lastError = "no graftd candidate tried";
-  for (const graftd of graftdCandidates()) {
-    const result = await new Promise<{
-      code: number | null;
-      stdout: string;
-      stderr: string;
-      error?: Error;
-    }>((resolve) => {
-      const child = spawn(graftd, ["start", "--cwd", cwd, "--socket", socketPath], {
-        cwd,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      const stdout: Buffer[] = [];
-      const stderr: Buffer[] = [];
-      child.stdout?.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
-      child.stderr?.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
-      child.once("error", (error) => {
-        resolve({
-          code: null,
-          stdout: Buffer.concat(stdout).toString(),
-          stderr: Buffer.concat(stderr).toString(),
-          error,
-        });
-      });
-      child.once("exit", (code) => {
-        resolve({
-          code,
-          stdout: Buffer.concat(stdout).toString(),
-          stderr: Buffer.concat(stderr).toString(),
-        });
-      });
-    });
-
-    if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
-      lastError = `${graftd} not found`;
-      continue;
-    }
-    if (result.error) {
-      throw new Error(`could not start graftd with ${graftd}: ${result.error.message}`);
-    }
-    if (result.code !== 0) {
-      throw new Error(
-        `could not start graftd with ${graftd}: ${(result.stdout + result.stderr).trim()}`,
-      );
-    }
-
-    const deadline = Date.now() + DEFAULT_START_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      if (await canConnect(socketPath)) return;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    lastError = `graftd ${graftd} returned success but ${socketPath} did not become reachable`;
-  }
-
-  throw new Error(`${lastError}; set GRAFT_DAEMON_BIN or put graftd on PATH`);
-}
-
-async function ensureGraftd(cwd: string): Promise<string> {
-  const socketPath = workspaceSocketPath(cwd);
-  if (await canConnect(socketPath)) return socketPath;
-  await startGraftd(cwd, socketPath);
-  return socketPath;
-}
-
-async function requestGraftd(
-  cwd: string,
-  op: string,
-  params: JsonRecord = {},
-  options: { spawnIfMissing?: boolean } = {},
-): Promise<JsonValue> {
-  const socketPath =
-    options.spawnIfMissing === false ? workspaceSocketPath(cwd) : await ensureGraftd(cwd);
-  const id = `pi-graft-${Date.now()}-${randomUUID()}`;
-  const requestParams = GLOBAL_GRAFTD_OPS.has(op)
-    ? params
-    : { workspace_id: await workspaceIdForRequest(cwd), workspace_root: cwd, ...params };
-  return new Promise((resolve, reject) => {
-    const socket = net.createConnection(socketPath);
-    let buffer = "";
-    socket.once("connect", () => {
-      socket.write(`${JSON.stringify({ id, op, params: requestParams })}\n`);
-    });
-    socket.on("data", (chunk) => {
-      buffer += chunk.toString("utf8");
-      const newline = buffer.indexOf("\n");
-      if (newline === -1) return;
-      const line = buffer.slice(0, newline).trim();
-      socket.end();
-      try {
-        const response = JSON.parse(line) as WireResponse;
-        if (!response.ok) {
-          reject(
-            new GraftdError(
-              response.error ?? { code: "E_DAEMON", message: "graftd returned an error" },
-            ),
-          );
-          return;
-        }
-        resolve(response.result ?? null);
-      } catch (error) {
-        reject(error);
-      }
-    });
-    socket.once("error", (error) => reject(error));
-    socket.once("end", () => {
-      if (buffer.trim().length === 0) reject(new Error("empty response from graftd"));
-    });
-  });
-}
-
-async function cliExec(cwd: string, argv: string[]): Promise<JsonRecord> {
-  const result = await requestGraftd(cwd, "cli_exec", {
-    argv: ["graft", "--cwd", cwd, ...argv] as JsonValue[],
-  });
-  if (!isRecord(result)) throw new Error("graftd cli_exec returned a non-object result");
-  return result as JsonRecord;
+  const { envelope, execution } = await runGraftJson(cwd, argv);
+  return { envelope, execution };
 }
 
 function restoreState(ctx: PiGraftSessionContext): ActiveGraftScratchState | undefined {
@@ -620,129 +300,11 @@ function cliArgvParam(params: Record<string, unknown>): string[] {
       );
     }
   }
-  assertCliExecAllowed(argv);
   return argv;
-}
-
-function assertCliExecAllowed(argv: string[]): void {
-  const primary = primaryCliCommand(argv);
-  if (!primary) throw new Error("graft_cli_exec argv must include a graft command.");
-  const secondary = secondaryCliCommand(argv, primary);
-  if (isAllowedCliExecCommand(primary, secondary)) return;
-  const command = secondary ? `${primary} ${secondary}` : primary;
-  throw new Error(
-    `graft_cli_exec does not allow graft ${command}. Use typed pi-graft tools for scratch/patch lifecycle operations, or graft_help for supported low-frequency CLI workflows.`,
-  );
-}
-
-function isAllowedCliExecCommand(primary: string, secondary: string | undefined): boolean {
-  if (primary === "explain" || primary === "sync") return true;
-  if (primary === "get" || primary === "run") return true;
-  if (primary === "bundle") return secondary === "export" || secondary === "import";
-  if (primary === "repo")
-    return ["add", "list", "sync", "lock", "update"].includes(secondary ?? "");
-  if (primary === "workspace") {
-    return ["init", "status", "attach", "detach", "ps", "doctor", "gc"].includes(secondary ?? "");
-  }
-  if (primary === "patch") {
-    return [
-      "list",
-      "show",
-      "search",
-      "incoming",
-      "diff",
-      "compose",
-      "migrate",
-      "revert",
-      "promote",
-    ].includes(secondary ?? "");
-  }
-  return false;
-}
-
-const DIRECT_CLI_COMMANDS = new Set([
-  "attach",
-  "cache",
-  "candidate",
-  "candidates",
-  "clone",
-  "detach",
-  "diff",
-  "discard",
-  "doctor",
-  "evidence",
-  "explain",
-  "init",
-  "ps",
-  "scratch",
-  "search",
-  "show",
-  "status",
-]);
-
-function primaryCliCommand(argv: string[]): string | undefined {
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index]!;
-    if (arg === "--cwd") {
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--cwd=")) continue;
-    if (arg === "--json") continue;
-    if (arg === "--help" || arg === "-h") return arg;
-    if (arg.startsWith("-")) continue;
-    return arg;
-  }
-  return undefined;
 }
 
 function hasHelpFlag(argv: string[]): boolean {
   return argv.some((arg) => arg === "--help" || arg === "-h");
-}
-
-function secondaryCliCommand(argv: string[], primary: string): string | undefined {
-  let foundPrimary = false;
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index]!;
-    if (arg === "--cwd") {
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--cwd=") || arg === "--json") continue;
-    if (arg.startsWith("-")) continue;
-    if (!foundPrimary) {
-      foundPrimary = arg === primary;
-      continue;
-    }
-    return arg;
-  }
-  return undefined;
-}
-
-function shouldRunDirectCli(argv: string[]): boolean {
-  const primary = primaryCliCommand(argv);
-  if (primary === undefined) return false;
-  if (hasHelpFlag(argv)) return true;
-  if (primary === "repo") {
-    const subcommand = secondaryCliCommand(argv, primary);
-    return subcommand === "list";
-  }
-  if (primary === "workspace") {
-    const subcommand = secondaryCliCommand(argv, primary);
-    if (subcommand === "gc") return !argv.includes("--apply");
-    return ["init", "status", "attach", "detach", "ps", "doctor"].includes(subcommand ?? "");
-  }
-  if (primary === "patch") {
-    const subcommand = secondaryCliCommand(argv, primary);
-    return ["incoming", "list", "show", "search"].includes(subcommand ?? "");
-  }
-  if (primary === "registry") {
-    return secondaryCliCommand(argv, primary) !== "import";
-  }
-  if (primary === "gc") {
-    return !argv.includes("--apply");
-  }
-  return DIRECT_CLI_COMMANDS.has(primary);
 }
 
 function formatEnvelope(envelope: JsonRecord): string {
@@ -769,30 +331,12 @@ async function executeCliArgv(
   cwd: string,
   argv: string[],
 ): Promise<{ text: string; details: Record<string, unknown> }> {
-  if (shouldRunDirectCli(argv)) {
+  if (hasHelpFlag(argv)) {
     const execution = await runDirectGraft(cwd, argv);
-    const envelope = tryParseJsonRecord(execution.stdout);
-    return {
-      text: envelope ? formatEnvelope(envelope) : formatDirectOutput(execution),
-      details: { envelope, execution },
-    };
+    return { text: formatDirectOutput(execution), details: { execution } };
   }
-  const envelope = await cliExec(cwd, argv);
-  const execution: DaemonGraftExecution = {
-    mode: "daemon",
-    cwd,
-    argv: ["graft", "--cwd", cwd, ...argv],
-  };
+  const { envelope, execution } = await runGraftJson(cwd, argv);
   return { text: formatEnvelope(envelope), details: { envelope, execution } };
-}
-
-async function notifyCliExec(
-  ctx: PiGraftCommandContext,
-  argv: string[],
-  fallbackMessage: string,
-): Promise<void> {
-  const result = await executeCliArgv(ctx.cwd, argv);
-  ctx.ui?.notify?.(result.text || fallbackMessage, "info");
 }
 
 interface ParsedAnchor {
@@ -1025,6 +569,12 @@ function sourceDescription(source: ScratchSourceSelection): string {
   return `scratch ${source.from}`;
 }
 
+function scratchSourceArgv(source: ScratchSourceSelection): string[] {
+  if (source.base) return ["--base", source.base];
+  if (source.from) return ["--from", source.from];
+  throw new Error("scratch source is missing base/from.");
+}
+
 function scratchSourceSchema(): Record<string, unknown> {
   return {
     base: Type.Optional(
@@ -1037,15 +587,50 @@ function scratchSourceSchema(): Record<string, unknown> {
   };
 }
 
+async function graftJsonResult(
+  cwd: string,
+  argv: string[],
+  context: string,
+  options: { stdin?: string } = {},
+): Promise<{ result: JsonRecord; envelope: JsonRecord; execution: DirectGraftExecution }> {
+  const { envelope, result, execution } = await runGraftJson(cwd, argv, options);
+  if (!result)
+    throw new Error(`graft ${context} did not return result: ${JSON.stringify(envelope)}`);
+  return { result, envelope, execution };
+}
+
+function requireResultString(result: unknown, context: string, field: string): string {
+  const value = stringField(result, field);
+  if (!value)
+    throw new Error(`graftd ${context} did not return ${field}: ${JSON.stringify(result)}`);
+  return value;
+}
+
+function requireResultBoolean(result: unknown, context: string, field: string): boolean {
+  if (isRecord(result) && typeof result[field] === "boolean") return result[field];
+  throw new Error(`graftd ${context} did not return ${field}: ${JSON.stringify(result)}`);
+}
+
+function requireResultNumber(result: unknown, context: string, field: string): number {
+  if (isRecord(result) && typeof result[field] === "number") return result[field];
+  throw new Error(`graftd ${context} did not return ${field}: ${JSON.stringify(result)}`);
+}
+
+function requireResultStringArray(result: unknown, context: string, field: string): string[] {
+  const value = stringArrayField(result, field);
+  if (!value)
+    throw new Error(`graftd ${context} did not return ${field}: ${JSON.stringify(result)}`);
+  return value;
+}
+
 export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
-  registerPiGraftPatchTool(pi);
+  registerExtensionRole(createPiGraftPatcherRoleSpec());
 
   let activeState: ActiveGraftScratchState | undefined;
   let lastCwd: string | undefined;
 
   function rememberState(cwd: string, updates: StateUpdates): ActiveGraftScratchState {
     activeState = mergeState(activeState, cwd, updates);
-    if (activeState.workspaceId) workspaceIdsByRoot.set(cwd, activeState.workspaceId);
     registerState(pi, activeState);
     return activeState;
   }
@@ -1053,63 +638,6 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   pi.on("session_start", (_event: unknown, ctx: PiGraftSessionContext) => {
     lastCwd = ctx.cwd;
     activeState = restoreState(ctx);
-    if (activeState?.workspaceId)
-      workspaceIdsByRoot.set(activeState.workspace, activeState.workspaceId);
-  });
-
-  pi.registerCommand("graft-attach", {
-    description: "Attach cwd to a graft workspace route: /graft-attach [workspace-id|--status]",
-    handler: async (args: string, ctx: PiGraftCommandContext) => {
-      const trimmed = args.trim();
-      const argv =
-        trimmed === "--status" ? ["workspace", "attach", "--status"] : ["workspace", "attach"];
-      if (trimmed && trimmed !== "--status") argv.push("--workspace", trimmed);
-      await notifyCliExec(ctx, argv, "Attached graft workspace route.");
-    },
-  });
-
-  pi.registerCommand("graft-detach", {
-    description: "Detach cwd from its graft workspace route: /graft-detach",
-    handler: async (_args: string, ctx: PiGraftCommandContext) => {
-      await notifyCliExec(ctx, ["workspace", "detach"], "Detached graft workspace route.");
-    },
-  });
-
-  pi.registerCommand("graft-ps", {
-    description: "Show graft global daemon and registry status: /graft-ps",
-    handler: async (_args: string, ctx: PiGraftCommandContext) => {
-      await notifyCliExec(ctx, ["workspace", "ps"], "Graft ps completed.");
-    },
-  });
-
-  pi.registerCommand("graft-doctor", {
-    description: "Diagnose graft registry state: /graft-doctor [--rebuild-registry]",
-    handler: async (args: string, ctx: PiGraftCommandContext) => {
-      const argv = ["workspace", "doctor"];
-      const flags = args.trim() ? args.trim().split(/\s+/) : [];
-      for (const flag of flags) {
-        if (flag !== "--rebuild-registry") {
-          throw new Error(`unknown graft-doctor argument: ${flag}`);
-        }
-      }
-      if (flags.includes("--rebuild-registry")) argv.push("--rebuild-registry");
-      await notifyCliExec(ctx, argv, "Graft doctor completed.");
-    },
-  });
-
-  pi.registerCommand("graft-close", {
-    description: "Clear pi-graft convenience state for the current session: /graft-close",
-    handler: async (_args: string, ctx: PiGraftCommandContext) => {
-      const hadState = activeState !== undefined;
-      activeState = undefined;
-      registerState(pi, undefined);
-      ctx.ui?.notify?.(
-        hadState
-          ? "Cleared pi-graft convenience state. Returned scratch ids can still be passed explicitly as from while graftd keeps them."
-          : "No pi-graft convenience state.",
-        "info",
-      );
-    },
   });
 
   pi.registerTool({
@@ -1167,7 +695,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = optionalStringParam(params, "cwd") ?? toolCwd(ctx, activeState, lastCwd);
-      const argv = ["--json", "workspace", "init"];
+      const argv = ["--json", "init"];
       if (optionalBooleanParam(params, "registerOnly")) argv.push("--register-only");
       const { envelope, execution } = await directCliJson(cwd, argv);
       const workspaceId = workspaceIdFromEnvelope(envelope);
@@ -1194,7 +722,8 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       let daemon: JsonValue | undefined;
       let daemonText = "graftd: unavailable";
       try {
-        daemon = await requestGraftd(cwd, "status");
+        const status = await graftJsonResult(cwd, ["scratch", "status"], "scratch status");
+        daemon = status.result;
         daemonText = `graftd: ${stringField(daemon, "status") ?? "ok"}`;
       } catch (error) {
         daemonText = `graftd: unavailable (${compactError(error)})`;
@@ -1219,7 +748,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
-      const { envelope, execution } = await directCliJson(cwd, ["--json", "workspace", "ps"]);
+      const { envelope, execution } = await directCliJson(cwd, ["--json", "ps"]);
       return envelopeToolResult(envelope, { execution });
     },
   });
@@ -1241,10 +770,43 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
-      const argv = ["--json", "workspace", "doctor"];
+      const argv = ["--json", "doctor"];
       if (optionalBooleanParam(params, "rebuildRegistry")) argv.push("--rebuild-registry");
       const { envelope, execution } = await directCliJson(cwd, argv);
       return envelopeToolResult(envelope, { execution });
+    },
+  });
+
+  pi.registerTool({
+    name: "graft_scratch_open",
+    label: "Graft Scratch Open",
+    description: "Open a base ref as a daemon scratch and remember it as lastScratch.",
+    parameters: Type.Object({
+      base: Type.String({
+        description: "Base ref to open: graft:empty, tree:<id>, candidate:<id>, or patch:<id>.",
+      }),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const base = optionalStringParam(params, "base");
+      if (!base) throw new Error("graft_scratch_open requires base.");
+      const { result } = await graftJsonResult(
+        cwd,
+        ["scratch", "open", "--base", base],
+        "scratch open",
+      );
+      const scratch = requireResultString(result, "scratch_open", "scratch");
+      const nextState = rememberState(cwd, { base, lastScratch: scratch });
+      return {
+        content: [{ type: "text", text: `Opened ${base} as graft scratch ${scratch}.` }],
+        details: { result, state: nextState },
+      };
     },
   });
 
@@ -1272,11 +834,11 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const source = scratchSourceSelection(params, previousState);
       const path = typeof params.path === "string" ? params.path : undefined;
       if (!path) throw new Error("graft_read requires path.");
-      const result = await requestGraftd(cwd, "scratch_read", {
-        ...source.params,
-        path,
-        mode: "hashlines",
-      });
+      const { result } = await graftJsonResult(
+        cwd,
+        ["scratch", "read", ...scratchSourceArgv(source), path, "--mode", "hashlines"],
+        "scratch read",
+      );
       const content = stringField(result, "content");
       const scratch = stringField(result, "scratch");
       if (content === undefined || !scratch)
@@ -1318,10 +880,13 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const content = typeof params.content === "string" ? params.content : undefined;
       if (!path) throw new Error("graft_write requires path.");
       if (content === undefined) throw new Error("graft_write requires content.");
-      const result = await requestGraftd(cwd, "scratch_write", { ...source.params, path, content });
-      const scratch = stringField(result, "scratch");
-      if (!scratch)
-        throw new Error(`graftd scratch_write did not return scratch: ${JSON.stringify(result)}`);
+      const { result } = await graftJsonResult(
+        cwd,
+        ["scratch", "write", ...scratchSourceArgv(source), path, "--content-stdin"],
+        "scratch write",
+        { stdin: content },
+      );
+      const scratch = requireResultString(result, "scratch_write", "scratch");
       const nextState = rememberState(cwd, {
         base: sourceBaseUpdate(source, previousState),
         lastScratch: scratch,
@@ -1392,11 +957,14 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const path = typeof params.path === "string" ? params.path : undefined;
       if (!path) throw new Error("graft_edit requires path.");
       const edits = convertHashlineEdits(params.edits);
-      const result = await requestGraftd(cwd, "scratch_edit", { ...source.params, path, edits });
-      const scratch = stringField(result, "scratch");
+      const { result } = await graftJsonResult(
+        cwd,
+        ["scratch", "edit", ...scratchSourceArgv(source), path, "--edits-stdin"],
+        "scratch edit",
+        { stdin: JSON.stringify(edits) },
+      );
+      const scratch = requireResultString(result, "scratch_edit", "scratch");
       const updatedAnchors = stringField(result, "updated_anchors");
-      if (!scratch)
-        throw new Error(`graftd scratch_edit did not return scratch: ${JSON.stringify(result)}`);
       const nextState = rememberState(cwd, {
         base: sourceBaseUpdate(source, previousState),
         lastScratch: scratch,
@@ -1433,10 +1001,12 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const source = scratchSourceSelection(params, previousState);
       const path = typeof params.path === "string" ? params.path : undefined;
       if (!path) throw new Error("graft_delete requires path.");
-      const result = await requestGraftd(cwd, "scratch_delete", { ...source.params, path });
-      const scratch = stringField(result, "scratch");
-      if (!scratch)
-        throw new Error(`graftd scratch_delete did not return scratch: ${JSON.stringify(result)}`);
+      const { result } = await graftJsonResult(
+        cwd,
+        ["scratch", "delete", ...scratchSourceArgv(source), path],
+        "scratch delete",
+      );
+      const scratch = requireResultString(result, "scratch_delete", "scratch");
       const changedPaths = stringArrayField(result, "changed_paths") ?? [];
       const nextState = rememberState(cwd, {
         base: sourceBaseUpdate(source, previousState),
@@ -1455,6 +1025,139 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   });
 
   pi.registerTool({
+    name: "graft_scratch_diff",
+    label: "Graft Scratch Diff",
+    description: "Show changed paths between two daemon scratch ids.",
+    parameters: Type.Object({
+      from: Type.String({ description: "Source scratch id." }),
+      to: Type.Optional(
+        Type.String({ description: "Target scratch id. Defaults to lastScratch." }),
+      ),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const state = stateForCwd(activeState, cwd);
+      const from = optionalStringParam(params, "from");
+      const to = optionalStringParam(params, "to") ?? state?.lastScratch;
+      if (!from) throw new Error("graft_scratch_diff requires from.");
+      if (!to) throw new Error("graft_scratch_diff requires to or a previous scratch tool result.");
+      const { result } = await graftJsonResult(cwd, ["scratch", "diff", from, to], "scratch diff");
+      const changedPaths = requireResultStringArray(result, "scratch_diff", "changed_paths");
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Scratch diff ${from} -> ${to}. Changed paths: ${changedPaths.length ? changedPaths.join(", ") : "none"}`,
+          },
+        ],
+        details: { result, state },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "graft_scratch_drop",
+    label: "Graft Scratch Drop",
+    description: "Drop an unpinned daemon scratch.",
+    parameters: Type.Object({
+      scratch: Type.Optional(Type.String({ description: "Scratch id. Defaults to lastScratch." })),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const state = stateForCwd(activeState, cwd);
+      const scratch = optionalStringParam(params, "scratch") ?? state?.lastScratch;
+      if (!scratch)
+        throw new Error("graft_scratch_drop requires scratch or a previous scratch tool result.");
+      const { result } = await graftJsonResult(cwd, ["scratch", "drop", scratch], "scratch drop");
+      const dropped = requireResultBoolean(result, "scratch_drop", "dropped");
+      return {
+        content: [
+          { type: "text", text: `${dropped ? "Dropped" : "Kept"} graft scratch ${scratch}.` },
+        ],
+        details: { result, state },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "graft_scratch_pin",
+    label: "Graft Scratch Pin",
+    description: "Pin a daemon scratch and return a lease.",
+    parameters: Type.Object({
+      scratch: Type.Optional(Type.String({ description: "Scratch id. Defaults to lastScratch." })),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const state = stateForCwd(activeState, cwd);
+      const scratch = optionalStringParam(params, "scratch") ?? state?.lastScratch;
+      if (!scratch)
+        throw new Error("graft_scratch_pin requires scratch or a previous scratch tool result.");
+      const { result } = await graftJsonResult(cwd, ["scratch", "pin", scratch], "scratch pin");
+      const lease = requireResultString(result, "scratch_pin", "lease");
+      const pinned = requireResultNumber(result, "scratch_pin", "pinned");
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Pinned graft scratch ${scratch} with lease ${lease}. Active pins: ${pinned}.`,
+          },
+        ],
+        details: { result, state },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "graft_scratch_unpin",
+    label: "Graft Scratch Unpin",
+    description: "Release a daemon scratch lease.",
+    parameters: Type.Object({
+      lease: Type.String({ description: "Scratch lease returned by graft_scratch_pin." }),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: PiGraftToolContext,
+    ) {
+      const cwd = toolCwd(ctx, activeState, lastCwd);
+      const lease = optionalStringParam(params, "lease");
+      if (!lease) throw new Error("graft_scratch_unpin requires lease.");
+      const { result } = await graftJsonResult(cwd, ["scratch", "unpin", lease], "scratch unpin");
+      const scratch = requireResultString(result, "scratch_unpin", "scratch");
+      const pinned = requireResultNumber(result, "scratch_unpin", "pinned");
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Released lease ${lease} for graft scratch ${scratch}. Active pins: ${pinned}.`,
+          },
+        ],
+        details: { result, state: stateForCwd(activeState, cwd) },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: "graft_candidate_from_scratch",
     label: "Graft Candidate From Scratch",
     description: "Create a candidate from a scratch id.",
@@ -1467,7 +1170,8 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       expected: Type.Optional(
         Type.Array(
           Type.String({
-            description: "Expected whole-state constraint primitive, e.g. tests_pass",
+            description:
+              "Whole-state constraint primitive to validate immediately and add to the candidate constraint, e.g. tests_pass.",
           }),
         ),
       ),
@@ -1490,15 +1194,16 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         throw new Error(
           "graft_candidate_from_scratch requires scratch or a previous scratch tool result in this workspace.",
         );
-      const result = await requestGraftd(cwd, "candidate_from_scratch", {
-        scratch,
-        expected: normalizeStringList(params.expected) as JsonValue[],
-        producer:
-          typeof params.producer === "string" && params.producer
-            ? params.producer
-            : "@zendev-lab/pi-graft",
-        message: typeof params.message === "string" ? params.message : null,
-      });
+      const argv = ["candidate", "from-scratch", scratch];
+      for (const expected of normalizeStringList(params.expected)) argv.push("--expect", expected);
+      argv.push(
+        "--producer",
+        typeof params.producer === "string" && params.producer
+          ? params.producer
+          : "@zendev-lab/pi-graft",
+      );
+      if (typeof params.message === "string") argv.push("--message", params.message);
+      const { result } = await graftJsonResult(cwd, argv, "candidate from-scratch");
       const candidate = stringField(result, "candidate");
       if (!candidate)
         throw new Error(
@@ -1533,7 +1238,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         }),
       ),
       expected: Type.Optional(
-        Type.Array(Type.String({ description: "Additional expected constraint primitive." })),
+        Type.Array(Type.String({ description: "Additional expected property." })),
       ),
     }),
     async execute(
@@ -1550,10 +1255,13 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         throw new Error(
           "graft_validate requires target or a previous graft_candidate_from_scratch candidate.",
         );
-      const argv = ["patch", "validate", target];
+      const argv = ["validate", target];
       for (const expected of normalizeStringList(params.expected)) argv.push("--expect", expected);
-      const envelope = await cliExec(cwd, argv);
-      return { content: [{ type: "text", text: formatEnvelope(envelope) }], details: { envelope } };
+      const { envelope, execution } = await runGraftJson(cwd, argv);
+      return {
+        content: [{ type: "text", text: formatEnvelope(envelope) }],
+        details: { envelope, execution },
+      };
     },
   });
 
@@ -1568,7 +1276,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         }),
       ),
       required: Type.Optional(
-        Type.Array(Type.String({ description: "Required passing constraint primitive." })),
+        Type.Array(Type.String({ description: "Required passed property." })),
       ),
     }),
     async execute(
@@ -1585,9 +1293,9 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         throw new Error(
           "graft_admit requires candidate or a previous graft_candidate_from_scratch candidate.",
         );
-      const argv = ["patch", "admit", candidate];
+      const argv = ["admit", candidate];
       for (const required of normalizeStringList(params.required)) argv.push("--require", required);
-      const envelope = await cliExec(cwd, argv);
+      const { envelope, execution } = await runGraftJson(cwd, argv);
       const patch =
         typeof envelope.patch_id === "string" ? envelope.patch_id : stringField(envelope, "patch");
       let nextState = state;
@@ -1596,7 +1304,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       }
       return {
         content: [{ type: "text", text: formatEnvelope(envelope) }],
-        details: { envelope, state: nextState },
+        details: { envelope, execution, state: nextState },
       };
     },
   });
@@ -1622,7 +1330,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const target =
         optionalStringParam(params, "target") ?? state?.lastPatch ?? state?.lastCandidate;
       if (!target) throw new Error("graft_show requires target or a previous candidate/patch.");
-      const argv = ["--json", "patch", "show", target];
+      const argv = ["--json", "show", target];
       if (optionalBooleanParam(params, "evidence")) argv.push("--evidence");
       if (optionalBooleanParam(params, "change")) argv.push("--change");
       const { text, details } = await executeCliArgv(cwd, argv);
@@ -1660,9 +1368,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     label: "Graft Candidates",
     description: "List unadmitted candidates.",
     parameters: Type.Object({
-      constraint: Type.Optional(
-        Type.String({ description: "Filter by expected constraint primitive." }),
-      ),
+      property: Type.Optional(Type.String({ description: "Filter by expected property." })),
       failed: Type.Optional(Type.Boolean({ description: "Show only failed candidates." })),
       producer: Type.Optional(Type.String({ description: "Filter by producer." })),
     }),
@@ -1674,12 +1380,10 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
-      if ("property" in params)
-        throw new Error("graft_candidates property was renamed to constraint.");
       const argv = ["--json", "candidates"];
-      const constraint = optionalStringParam(params, "constraint");
+      const property = optionalStringParam(params, "property");
       const producer = optionalStringParam(params, "producer");
-      if (constraint) argv.push("--constraint", constraint);
+      if (property) argv.push("--property", property);
       if (optionalBooleanParam(params, "failed")) argv.push("--failed");
       if (producer) argv.push("--producer", producer);
       const { text, details } = await executeCliArgv(cwd, argv);
@@ -1692,11 +1396,11 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     label: "Graft Search",
     description: "Search admitted patches.",
     parameters: Type.Object({
-      constraint: Type.Optional(Type.String({ description: "Filter by constraint primitive." })),
+      property: Type.Optional(Type.String({ description: "Filter by property." })),
       base: Type.Optional(Type.String({ description: "Filter by base state." })),
       producer: Type.Optional(Type.String({ description: "Filter by producer." })),
       hasEvidence: Type.Optional(
-        Type.String({ description: "Filter by passing evidence for this whole-state constraint." }),
+        Type.String({ description: "Filter by passing evidence property." }),
       ),
     }),
     async execute(
@@ -1707,13 +1411,12 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
-      if ("property" in params) throw new Error("graft_search property was renamed to constraint.");
-      const argv = ["--json", "patch", "search"];
-      const constraint = optionalStringParam(params, "constraint");
+      const argv = ["--json", "search"];
+      const property = optionalStringParam(params, "property");
       const base = optionalStringParam(params, "base");
       const producer = optionalStringParam(params, "producer");
       const hasEvidence = optionalStringParam(params, "hasEvidence");
-      if (constraint) argv.push("--constraint", constraint);
+      if (property) argv.push("--property", property);
       if (base) argv.push("--base", base);
       if (producer) argv.push("--producer", producer);
       if (hasEvidence) argv.push("--has-evidence", hasEvidence);
@@ -1725,7 +1428,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   pi.registerTool({
     name: "graft_materialize",
     label: "Graft Materialize",
-    description: "Plan or materialize an admitted patch target.",
+    description: "Plan or materialize an admitted patch target into an isolated inspection state.",
     parameters: Type.Object({
       patch: Type.Optional(
         Type.String({ description: "Patch id; defaults to last admitted patch." }),
@@ -1745,10 +1448,12 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const state = stateForCwd(activeState, cwd);
       const patch = optionalStringParam(params, "patch") ?? state?.lastPatch;
       if (!patch) throw new Error("graft_materialize requires patch or a previous admitted patch.");
-      const argv = ["patch", "materialize", patch];
+      // graft routes `materialize` as a Local command (not a daemon cli_exec write),
+      // so run it through the direct CLI path instead of the daemon write path.
+      const argv = ["--json", "materialize", patch];
       if (optionalBooleanParam(params, "dryRun", true)) argv.push("--dry-run");
-      const envelope = await cliExec(cwd, argv);
-      return envelopeToolResult(envelope, { state });
+      const { text, details } = await executeCliArgv(cwd, argv);
+      return { content: [{ type: "text", text }], details: { state, ...details } };
     },
   });
 
@@ -1779,8 +1484,14 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         [
           formatGraftStringArg(args.action, { prefix: "action=", fallback: "list" }),
           formatGraftStringArg(args.repoId, { prefix: "repo=" }),
-          formatGraftStringArg(args.url, { prefix: "url=", maxLength: 60 }),
-          formatGraftStringArg(args.cwd, { prefix: "cwd=", maxLength: 60 }),
+          formatGraftStringArg(args.url, {
+            prefix: "url=",
+            maxLength: GRAFT_TOOL_CALL_PATH_MAX_LENGTH,
+          }),
+          formatGraftStringArg(args.cwd, {
+            prefix: "cwd=",
+            maxLength: GRAFT_TOOL_CALL_PATH_MAX_LENGTH,
+          }),
         ],
         theme,
       );
@@ -1821,8 +1532,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   pi.registerTool({
     name: "graft_cli_exec",
     label: "Graft CLI Exec",
-    description:
-      "Run allowlisted low-frequency Graft CLI argv: explain/sync/get/run, bundle export/import, repo add/list/sync/lock/update, workspace init/status/attach/detach/ps/doctor/gc, and patch incoming/list/show/search/diff/compose/migrate/revert/promote.",
+    description: "Run allowlisted low-frequency read-only or diagnostic graft CLI argv safely.",
     parameters: Type.Object({
       argv: Type.Array(
         Type.String({ description: "Graft CLI arguments, excluding the graft binary." }),
@@ -1846,6 +1556,9 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   });
 }
 
+const GRAFT_TOOL_CALL_DEFAULT_ARG_MAX_LENGTH = 80;
+const GRAFT_TOOL_CALL_PATH_MAX_LENGTH = 60;
+
 function renderGraftToolCall(
   toolName: string,
   parts: Array<string | undefined>,
@@ -1864,7 +1577,7 @@ function formatGraftStringArg(
 ): string | undefined {
   const raw = typeof value === "string" && value.trim() ? value.trim() : options.fallback;
   if (!raw) return undefined;
-  const maxLength = options.maxLength ?? 80;
+  const maxLength = options.maxLength ?? GRAFT_TOOL_CALL_DEFAULT_ARG_MAX_LENGTH;
   const normalized = raw.length <= maxLength ? raw : `${raw.slice(0, Math.max(0, maxLength - 1))}…`;
   const rendered = /\s/u.test(normalized) ? JSON.stringify(normalized) : normalized;
   return `${options.prefix ?? ""}${rendered}`;

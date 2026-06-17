@@ -1,4 +1,5 @@
 import { isActiveSessionTodo, isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
+import { listBuiltinWorkflows } from "@zendev-lab/pi-workflows";
 import { nowIso, type ProjectRef } from "@zendev-lab/pi-extension-api";
 import type { SparkEntryIntent, SparkEntryMode } from "./spark-entry.ts";
 import {
@@ -85,6 +86,24 @@ interface ForegroundGoalAwaitingTurn {
   failure?: string;
 }
 
+function sendSparkRuntimeInstruction(
+  piApi: SparkCommandApi,
+  customType: "spark-goal-request",
+  instruction: string,
+  visible: string,
+  details: Record<string, unknown> = {},
+): void {
+  piApi.sendMessage(
+    {
+      customType,
+      content: instruction,
+      display: false,
+      details: { ...details, visible },
+    },
+    { deliverAs: "followUp", triggerTurn: true },
+  );
+}
+
 export function registerSparkCommands(
   pi: SparkCommandApi,
   deps: SparkCommandRegistrationDeps,
@@ -164,12 +183,24 @@ export function registerSparkCommands(
 
   pi.registerCommand("workflow", {
     description:
-      "Enter Spark workflow execution mode; accepts optional selector like workspace:foo or user:foo.",
+      "Enter Spark workflow execution mode; accepts optional selector like builtin:foo, workspace:foo, or user:foo.",
     async handler(args, ctx) {
       const parsed = parseWorkflowCommandArgs(args);
       await handleSparkWorkflowCommand(pi, ctx, parsed);
     },
   });
+
+  for (const workflow of listBuiltinWorkflows()) {
+    pi.registerCommand("workflow:" + workflow.id, {
+      description: `Enter Spark builtin workflow ${workflow.id}.`,
+      async handler(args, ctx) {
+        await handleSparkWorkflowCommand(pi, ctx, {
+          selector: "builtin:" + workflow.id,
+          focus: args.trim(),
+        });
+      },
+    });
+  }
 
   function parseWorkflowCommandArgs(args: string): { selector?: string; focus: string } {
     const trimmed = args.trim();
@@ -181,7 +212,7 @@ export function registerSparkCommands(
     if (separator < 0) return { focus: trimmed };
     const source = candidate.slice(0, separator);
     const id = candidate.slice(separator + 1);
-    if ((source === "workspace" || source === "user") && isWorkflowId(id)) {
+    if ((source === "builtin" || source === "workspace" || source === "user") && isWorkflowId(id)) {
       return { selector: source + ":" + id, focus: rest };
     }
     return { focus: trimmed };
@@ -314,25 +345,21 @@ export function registerSparkCommands(
       const summary = renderEmptyGoalInferContext(graph, project, language);
       ctx.ui?.notify?.(notifications.noActiveGoal, "info");
       const instructions = goalInstructions(language);
-      deps.queueSparkAgentInstruction(
-        ctx,
-        [
-          instructions.emptyGoalNotSet,
-          instructions.emptyGoalReadContext,
-          instructions.emptyGoalWriteHint,
-          instructions.emptyGoalNoCounts,
-          summary,
-        ]
-          .filter((line): line is string => Boolean(line))
-          .join("\n"),
-      );
-      piApi.sendMessage(
-        {
-          customType: "spark-goal-request",
-          content: notifications.inferDispatched,
-          display: false,
-        },
-        { deliverAs: "followUp", triggerTurn: true },
+      const instruction = [
+        instructions.emptyGoalNotSet,
+        instructions.emptyGoalReadContext,
+        instructions.emptyGoalWriteHint,
+        instructions.emptyGoalNoCounts,
+        summary,
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join("\n");
+      sendSparkRuntimeInstruction(
+        piApi,
+        "spark-goal-request",
+        instruction,
+        notifications.inferDispatched,
+        { purpose: "empty-goal-infer" },
       );
       return;
     }
@@ -446,26 +473,22 @@ export function registerSparkCommands(
     const project = graph ? await currentSparkProject(ctx.cwd, ctx, graph) : undefined;
     const sweep = await renderSessionTodoSweepLines(ctx, language);
     const instructions = goalInstructions(language);
-    deps.queueSparkAgentInstruction(
-      ctx,
-      [
-        instructions.goalActiveHeader,
-        projectTitle ? instructions.currentProject(projectTitle) : undefined,
-        instructions.goalLine(goal.objective),
-        ...sweep,
-        instructions.pauseLineForeground,
-        instructions.loopModeDecisionContract,
-        instructions.loopReviewerOwnership,
-        graph ? renderForegroundGoalModePrompt(graph, project?.ref, goal.objective) : undefined,
-      ]
-        .filter((line): line is string => Boolean(line))
-        .join("\n"),
-      { goalId: goal.goalId },
-    );
-    piApi.sendMessage(
-      { customType: "spark-goal-request", content: visible, display: false },
-      { deliverAs: "followUp", triggerTurn: true },
-    );
+    const instruction = [
+      instructions.goalActiveHeader,
+      projectTitle ? instructions.currentProject(projectTitle) : undefined,
+      instructions.goalLine(goal.objective),
+      ...sweep,
+      instructions.pauseLineForeground,
+      instructions.loopModeDecisionContract,
+      instructions.loopReviewerOwnership,
+      graph ? renderForegroundGoalModePrompt(graph, project?.ref, goal.objective) : undefined,
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n");
+    sendSparkRuntimeInstruction(piApi, "spark-goal-request", instruction, visible, {
+      goalId: goal.goalId,
+      purpose: "foreground-goal-start",
+    });
     markForegroundGoalAwaitingTurn(piApi, ctx, goal.goalId);
     if (!piApi.on)
       scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
@@ -627,21 +650,17 @@ export function registerSparkCommands(
     const language = sparkLanguageForProject({ project, goal });
     const notifications = goalNotifications(language);
     const visible = notifications.goalTickHeader(compactInline(goal.objective), projectLabel);
-    deps.queueSparkAgentInstruction(
-      ctx,
-      renderForegroundGoalTickInstruction(
-        project?.title,
-        goal.objective,
-        active.graph,
-        project,
-        language,
-      ),
-      { goalId: goal.goalId },
+    const instruction = renderForegroundGoalTickInstruction(
+      project?.title,
+      goal.objective,
+      active.graph,
+      project,
+      language,
     );
-    piApi.sendMessage(
-      { customType: "spark-goal-request", content: visible, display: false },
-      { deliverAs: "followUp", triggerTurn: true },
-    );
+    sendSparkRuntimeInstruction(piApi, "spark-goal-request", instruction, visible, {
+      goalId: goal.goalId,
+      purpose: "foreground-goal-tick",
+    });
     markForegroundGoalAwaitingTurn(piApi, ctx, goal.goalId);
   }
 

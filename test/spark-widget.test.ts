@@ -143,10 +143,10 @@ void test("spark widget hides deleted task TODOs but keeps done task TODOs visib
   assert.doesNotMatch(lines, /Deleted child TODO/);
 });
 
-void test("spark widget shows compact DAG progress above project details", () => {
+void test("spark widget shows compact workflow-run progress above project details", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
-      dag: {
+      workflowRun: {
         status: "running",
         runRef: "run:abc",
         scheduled: 3,
@@ -168,7 +168,7 @@ void test("spark widget shows compact DAG progress above project details", () =>
 void test("spark widget suppresses duplicate background row when session agent is shown", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
-      dag: {
+      workflowRun: {
         status: "running",
         runRef: "run:abc",
         scheduled: 1,
@@ -197,15 +197,10 @@ void test("spark widget suppresses duplicate background row when session agent i
   assert.doesNotMatch(lines.join("\n"), /Background work/);
 });
 
-void test("spark widget merges run mode state into background progress", () => {
+void test("spark widget renders workflow-run state as background progress", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
-      run: {
-        status: "running",
-        runRef: "run:6a2e8150-1234-4cde-9abc-000000000000",
-        focus: "Finish the queue",
-      },
-      dag: {
+      workflowRun: {
         status: "failed",
         runRef: "run:9fb95fb0-f08c-41a5-b4a3-bd4e4622034b",
         scheduled: 13,
@@ -223,10 +218,10 @@ void test("spark widget merges run mode state into background progress", () => {
   assert.doesNotMatch(lines.join("\n"), /Spark DAG|Spark run/);
 });
 
-void test("spark widget renders completed DAG state in plain language", () => {
+void test("spark widget renders completed workflow-run state in plain language", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
-      dag: {
+      workflowRun: {
         status: "failed",
         runRef: "run:9fb95fb0-f08c-41a5-b4a3-bd4e4622034b",
         scheduled: 13,
@@ -661,6 +656,22 @@ void test("spark widget summarizes tasks and current-session in-memory running r
     /◆ Spark UX redesign · Tasks\(running=5 pending=1 failed=1: agents worker×2, reviewer\)/,
   );
   assert.doesNotMatch(header, /a1b2c3d4|0c5a1efe|2dd9591d|stale-worker/);
+});
+
+void test("spark widget renders active non-trivial lens on the project header", () => {
+  const planLines = renderSparkWidgetLines(
+    widgetState({ activeLens: { mode: "plan", driver: "interactive" } }),
+    { terminal: { columns: 120 }, requestRender() {} },
+    theme,
+  );
+  assert.match(planLines[0] ?? "", /^◆ Spark UX redesign · Lens: plan/);
+
+  const researchLines = renderSparkWidgetLines(
+    widgetState({ activeLens: { mode: "research", driver: "interactive" } }),
+    { terminal: { columns: 120 }, requestRender() {} },
+    theme,
+  );
+  assert.doesNotMatch(researchLines[0] ?? "", /Lens:/);
 });
 
 void test("spark widget renders task summary on the project header", () => {

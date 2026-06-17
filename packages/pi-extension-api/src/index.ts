@@ -183,9 +183,6 @@ export type PiErrorCode =
   | "POLICY_VIOLATION"
   | "RUNNER_ERROR";
 
-/** @deprecated Use PiError. */
-export type SparkErrorCode = PiErrorCode;
-
 export class PiError extends Error {
   readonly code: PiErrorCode;
   readonly details?: Record<string, unknown>;
@@ -195,14 +192,6 @@ export class PiError extends Error {
     this.name = "PiError";
     this.code = code;
     this.details = details;
-  }
-}
-
-/** @deprecated Use PiError. */
-export class SparkError extends PiError {
-  constructor(code: PiErrorCode, message: string, details?: Record<string, unknown>) {
-    super(code, message, details);
-    this.name = "SparkError";
   }
 }
 

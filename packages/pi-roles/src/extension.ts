@@ -876,6 +876,8 @@ function compactRole(role: RoleSpec) {
   };
 }
 
+const TOOL_CALL_DEFAULT_ARG_MAX_LENGTH = 80;
+
 function renderToolCall(
   toolName: string,
   parts: Array<string | undefined>,
@@ -895,7 +897,7 @@ function formatStringArg(
   const text = typeof value === "string" && value.trim() ? value.trim() : options.fallback;
   if (!text) return undefined;
   const rendered = /\s|["'`]/.test(text) ? JSON.stringify(text) : text;
-  return `${options.prefix ?? ""}${truncateInline(rendered, options.maxLength ?? 80)}`;
+  return `${options.prefix ?? ""}${truncateInline(rendered, options.maxLength ?? TOOL_CALL_DEFAULT_ARG_MAX_LENGTH)}`;
 }
 
 function formatNumberArg(value: unknown, options: { prefix?: string } = {}): string | undefined {

@@ -1,9 +1,14 @@
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import {
+  getBuiltinWorkflowDefinition,
+  listBuiltinWorkflows,
+  type BuiltinWorkflowMode,
+} from "./builtins.ts";
 import { parseWorkflowScript } from "./metadata.ts";
 
-export type WorkflowSource = "workspace" | "user";
+export type WorkflowSource = "builtin" | "workspace" | "user";
 export type WorkflowSelector = `${WorkflowSource}:${string}`;
 
 export interface WorkflowDescriptor {
@@ -14,6 +19,7 @@ export interface WorkflowDescriptor {
   description: string;
   path: string;
   phases: string[];
+  mode?: BuiltinWorkflowMode;
 }
 
 export interface WorkflowRegistryError {
@@ -59,6 +65,7 @@ export async function listSavedWorkflows(
   options: WorkflowRegistryOptions = {},
 ): Promise<WorkflowRegistryListing> {
   const includeUser = options.includeUser ?? true;
+  const builtins = discoverBuiltinWorkflows();
   const workspace = await discoverWorkflowDir(
     "workspace",
     options.workspaceWorkflowDir ?? workspaceWorkflowDir(cwd),
@@ -67,8 +74,8 @@ export async function listSavedWorkflows(
     ? await discoverWorkflowDir("user", options.userWorkflowDir ?? userWorkflowDir())
     : { workflows: [], errors: [] };
   return {
-    workflows: [...workspace.workflows, ...user.workflows],
-    errors: [...workspace.errors, ...user.errors],
+    workflows: [...builtins.workflows, ...workspace.workflows, ...user.workflows],
+    errors: [...builtins.errors, ...workspace.errors, ...user.errors],
   };
 }
 
@@ -80,6 +87,25 @@ export async function readSavedWorkflow(input: {
   userWorkflowDir?: string;
 }): Promise<{ descriptor: WorkflowDescriptor; script: string }> {
   const selector = parseWorkflowSelector(input.selector);
+  if (selector.source === "builtin") {
+    const definition = getBuiltinWorkflowDefinition(selector.id);
+    if (!definition) throw new Error(`unknown builtin workflow: ${selector.id}`);
+    const script = definition.scriptFactory();
+    const meta = parseWorkflowScript(script).meta;
+    return {
+      descriptor: {
+        selector: workflowSelector("builtin", selector.id),
+        id: selector.id,
+        source: "builtin",
+        title: meta.name,
+        description: meta.description,
+        path: workflowSelector("builtin", selector.id),
+        phases: meta.phases?.map((phase) => phase.title) ?? [],
+        mode: definition.mode,
+      },
+      script,
+    };
+  }
   if (selector.source === "user" && input.includeUser === false) {
     throw new Error("user workflows are disabled for this read");
   }
@@ -107,10 +133,43 @@ export async function readSavedWorkflow(input: {
 
 function parseWorkflowSelector(selector: string): { source: WorkflowSource; id: string } {
   const [source, rawId, ...rest] = selector.split(":");
-  if (rest.length > 0 || (source !== "workspace" && source !== "user") || !rawId) {
-    throw new Error("workflow selector must be workspace:<id> or user:<id>");
+  if (
+    rest.length > 0 ||
+    (source !== "builtin" && source !== "workspace" && source !== "user") ||
+    !rawId
+  ) {
+    throw new Error("workflow selector must be builtin:<id>, workspace:<id>, or user:<id>");
   }
   return { source, id: normalizeWorkflowId(rawId) };
+}
+
+function discoverBuiltinWorkflows(): WorkflowRegistryListing {
+  const workflows: WorkflowDescriptor[] = [];
+  const errors: WorkflowRegistryError[] = [];
+  for (const definition of listBuiltinWorkflows()) {
+    try {
+      const id = normalizeWorkflowId(definition.id);
+      const script = definition.scriptFactory();
+      const meta = parseWorkflowScript(script).meta;
+      workflows.push({
+        selector: workflowSelector("builtin", id),
+        id,
+        source: "builtin",
+        title: meta.name,
+        description: meta.description,
+        path: workflowSelector("builtin", id),
+        phases: meta.phases?.map((phase) => phase.title) ?? [],
+        mode: definition.mode,
+      });
+    } catch (error) {
+      errors.push({
+        source: "builtin",
+        path: workflowSelector("builtin", definition.id),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return { workflows, errors };
 }
 
 async function discoverWorkflowDir(

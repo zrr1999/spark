@@ -26,4 +26,4 @@ cue_script inline=1line(s) label=inline.cue timeout=30s tail=4096
 script_run lang=python path=scripts/smoke.py timeout=30s tail=4096
 
 # script_eval
-script_eval lang=python inline=1line(s) label=inline.py timeout=30s tail=4096
+script_eval lang=python inline=1line(s) preview="print(\"ok\")" label=inline.py timeout=30s tail=4096

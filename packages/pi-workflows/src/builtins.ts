@@ -1,3 +1,141 @@
+export type BuiltinWorkflowMode = "research" | "plan" | "implement";
+
+export interface BuiltinWorkflowDefinition {
+  id: string;
+  mode: BuiltinWorkflowMode;
+  title: string;
+  description: string;
+  scriptFactory: () => string;
+}
+
+export const builtinWorkflowDefinitions: readonly BuiltinWorkflowDefinition[] = [
+  {
+    id: "fusion",
+    mode: "research",
+    title: "fusion",
+    description: "Fusion-style multi-model deliberation with panel review and judge synthesis",
+    scriptFactory: fusionWorkflowScript,
+  },
+  {
+    id: "deep-research",
+    mode: "research",
+    title: "deep_research",
+    description: "Deep research with cross-checked claims",
+    scriptFactory: deepResearchWorkflowScript,
+  },
+  {
+    id: "fan-out-with-brief",
+    mode: "research",
+    title: "fan_out_with_brief",
+    description:
+      "Fan out multiple agents from one shared briefing artifact and collect their outputs",
+    scriptFactory: fanOutWithBriefWorkflowScript,
+  },
+  {
+    id: "adversarial-review",
+    mode: "research",
+    title: "adversarial_review",
+    description: "Findings cross-checked by skeptical reviewers",
+    scriptFactory: adversarialReviewWorkflowScript,
+  },
+];
+
+export function listBuiltinWorkflows(): readonly BuiltinWorkflowDefinition[] {
+  return builtinWorkflowDefinitions;
+}
+
+export function getBuiltinWorkflowDefinition(id: string): BuiltinWorkflowDefinition | undefined {
+  return builtinWorkflowDefinitions.find((workflow) => workflow.id === id);
+}
+
+export function fusionWorkflowScript(): string {
+  return `export const meta = {
+  name: 'fusion',
+  description: 'Fusion-style multi-model deliberation with panel review and judge synthesis',
+  phases: [{ title: 'Panel' }, { title: 'Synthesis' }],
+}
+
+const input = args || {}
+const question = String(input.question || input.prompt || input.task || '')
+const configuredPanel = Array.isArray(input.panelModels)
+  ? input.panelModels
+  : (Array.isArray(input.models) ? input.models : [])
+const requestedPanelSize = Number(input.panelSize)
+const panelSize = Number.isFinite(requestedPanelSize)
+  ? Math.max(1, Math.min(8, Math.trunc(requestedPanelSize)))
+  : 3
+const panel = configuredPanel.length > 0
+  ? configuredPanel
+  : Array.from({ length: panelSize }, (_, index) => ({ label: 'panel ' + (index + 1) }))
+
+function panelPrompt() {
+  return [
+    'You are one expert in a Spark Fusion-style multi-model panel.',
+    'Answer the user request independently. Be concise, evidence-oriented, and mention uncertainty or assumptions. Do not call tools.',
+    '',
+    'User request:',
+    question,
+  ].join('\\n')
+}
+
+phase('Panel')
+const panelResults = await parallel(panel.map((item, index) => async () => {
+  const model = typeof item === 'string'
+    ? item
+    : (item && item.model ? String(item.model) : undefined)
+  const provider = item && typeof item === 'object' && item.provider ? String(item.provider) : undefined
+  const label = item && typeof item === 'object' && (item.label || item.name)
+    ? String(item.label || item.name)
+    : (model || provider || ('panel ' + (index + 1)))
+  return {
+    label,
+    provider,
+    model,
+    output: await agent(panelPrompt(), { label, model, agentType: 'model' }),
+  }
+}), {
+  concurrency: input.concurrency,
+  retry: input.retry,
+  onError: 'collect',
+})
+
+function renderPanelResult(result, index) {
+  if (result && result.status === 'fulfilled') {
+    const value = result.value || {}
+    const label = value.provider && value.model
+      ? value.provider + '/' + value.model
+      : (value.label || value.model || ('panel ' + (index + 1)))
+    return '## Panel ' + (index + 1) + ': ' + label + '\\n' + (value.output || '(empty response)')
+  }
+  const reason = result && result.reason
+    ? (result.reason.message || String(result.reason))
+    : 'unknown error'
+  return '## Panel ' + (index + 1) + '\\nERROR: ' + reason
+}
+
+phase('Synthesis')
+const renderedResults = panelResults.map(renderPanelResult).join('\\n\\n')
+const judgePrompt = [
+  'You are the judge in a Spark Fusion-style multi-model deliberation.',
+  'Compare the panel responses, then write the final answer for the user. Prefer consensus, call out contradictions only when useful, preserve unique correct insights, and do not invent unavailable evidence.',
+  'Return the final user-facing answer directly; do not include hidden analysis JSON unless the user asked for it.',
+  '',
+  'Original user request:',
+  question,
+  '',
+  'Panel responses:',
+  renderedResults,
+  '',
+  'Synthesize a final answer. Use this comparison checklist internally: consensus, contradictions, coverage gaps, unique insights, and blind spots.',
+].join('\\n')
+const report = await agent(judgePrompt, {
+  label: 'judge synthesis',
+  model: input.judgeModel,
+  agentType: 'model',
+})
+return { question, panelResults, report }`;
+}
+
 export function deepResearchWorkflowScript(): string {
   return `export const meta = {
   name: 'deep_research',

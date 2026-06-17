@@ -29,6 +29,9 @@
       "@zendev-lab/pi-graft/extension": ["./packages/pi-graft/src/extension.ts"],
       "@zendev-lab/pi-learnings": ["./packages/pi-learnings/src/index.ts"],
       "@zendev-lab/pi-learnings/extension": ["./packages/pi-learnings/src/extension.ts"],
+      "@zendev-lab/pi-models": ["./packages/pi-models/src/index.ts"],
+      "@zendev-lab/pi-models/extension": ["./packages/pi-models/src/extension.ts"],
+      "@zendev-lab/pi-modes": ["./packages/pi-modes/src/index.ts"],
       "@zendev-lab/pi-recall": ["./packages/pi-recall/src/index.ts"],
       "@zendev-lab/pi-recall/extension": ["./packages/pi-recall/src/extension.ts"],
       "@zendev-lab/pi-roles": ["./packages/pi-roles/src/index.ts"],
@@ -40,7 +43,6 @@
       "@zendev-lab/spark-cli/baidu-oneapi-provider": [
         "./packages/spark-cli/src/baidu-oneapi-provider.ts"
       ],
-      "@zendev-lab/spark-cli/fusion-provider": ["./packages/spark-cli/src/host/fusion-provider.ts"],
       "@zendev-lab/spark-runtime": ["./packages/spark-runtime/src/index.ts"],
       "@zendev-lab/spark/extension": ["./packages/spark/src/extension/index.ts"]
     }

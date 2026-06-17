@@ -59,6 +59,9 @@ void test("injectSparkHints injects research mode without initialized Spark grap
     assert.equal(typeof result, "object");
     const prompt = (result as { systemPrompt?: string }).systemPrompt ?? "";
     assert.match(prompt, /Spark mode: research\./);
+    assert.match(prompt, /<builtin_skills>/);
+    assert.match(prompt, /# Spark/);
+    assert.doesNotMatch(prompt, /Use the read tool to load a skill's file/);
     assert.doesNotMatch(prompt, /Active Spark context/);
     assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
   } finally {
@@ -228,7 +231,7 @@ function testInputRouter(): {
       deps: {
         queueSparkAgentInstruction: (_ctx, instruction) => queuedInstructions.push(instruction),
         refreshSparkWidget: async () => undefined,
-        ensureDagManager: () => undefined,
+        ensureWorkflowRunManager: () => undefined,
       },
     },
   };

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,11 +7,10 @@ import test from "node:test";
 import type { ProjectRef } from "@zendev-lab/pi-extension-api";
 import {
   clearSparkMode,
+  loadCurrentProjectState,
   loadSparkMode,
   nextSparkSessionMode,
-  saveSparkExecutionMode,
   saveSparkMode,
-  saveSparkPlanningMode,
   SPARK_SESSION_MODE_CYCLE,
 } from "../packages/spark/src/extension/session-state.ts";
 
@@ -31,94 +30,59 @@ void test("loadSparkMode defaults to research with no persisted state", async ()
   });
 });
 
-void test("saveSparkMode round-trips research mode", async () => {
+void test("saveSparkMode persists only current project ref", async () => {
   await withTempDir(async (dir) => {
     const projectRef = "proj:test-research" as ProjectRef;
-    await saveSparkMode(dir, undefined, { mode: "research", projectRef, focus: "audit" });
-    const state = await loadSparkMode(dir, undefined);
-    assert.equal(state.mode, "research");
-    assert.equal(state.projectRef, projectRef);
-    assert.equal(state.focus, "audit");
-    assert.equal(state.executeStrategy, undefined);
-    assert.ok(state.enteredAt, "enteredAt should be populated by saveSparkExecutionMode");
+    await saveSparkMode(dir, undefined, { mode: "implement", projectRef, focus: "ship" });
+
+    assert.deepEqual(await loadSparkMode(dir, undefined), { mode: "research", projectRef });
+    assert.deepEqual(await loadCurrentProjectState(dir, undefined), { version: 1, projectRef });
   });
 });
 
-void test("saveSparkMode round-trips plan mode and records planningSource", async () => {
+void test("legacy executionMode and planningMode blocks are ignored by loadSparkMode", async () => {
   await withTempDir(async (dir) => {
-    const projectRef = "proj:test-plan" as ProjectRef;
-    await saveSparkMode(dir, undefined, {
-      mode: "plan",
-      projectRef,
-      focus: "scope review",
-      planningSource: "direct",
-    });
-    const state = await loadSparkMode(dir, undefined);
-    assert.equal(state.mode, "plan");
-    assert.equal(state.projectRef, projectRef);
-    assert.equal(state.focus, "scope review");
-    assert.equal(state.planningSource, "direct");
+    const projectRef = "proj:test-legacy" as ProjectRef;
+    await saveSparkMode(dir, undefined, { mode: "implement", projectRef });
+    const statePath = join(dir, ".spark", "sessions", "session-ephemeral.json");
+    await mkdir(join(dir, ".spark", "sessions"), { recursive: true });
+    await writeFile(
+      statePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          projectRef,
+          planningMode: { invalid: true },
+          executionMode: { invalid: true },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    assert.deepEqual(await loadSparkMode(dir, undefined), { mode: "research", projectRef });
+    assert.deepEqual(await loadCurrentProjectState(dir, undefined), { version: 1, projectRef });
+    assert.match(await readFile(statePath, "utf8"), /executionMode/);
   });
 });
 
-void test("saveSparkMode round-trips implement(workflow) with selector", async () => {
-  await withTempDir(async (dir) => {
-    const projectRef = "proj:test-implement" as ProjectRef;
-    await saveSparkMode(dir, undefined, {
-      mode: "implement",
-      projectRef,
-      executeStrategy: "workflow",
-      workflowSelector: "workspace:release-check",
-      focus: "ship feature",
-    });
-    const state = await loadSparkMode(dir, undefined);
-    assert.equal(state.mode, "implement");
-    assert.equal(state.executeStrategy, "workflow");
-    assert.equal(state.workflowSelector, "workspace:release-check");
-    assert.equal(state.focus, "ship feature");
-  });
-});
-
-void test("legacy saveSparkExecutionMode is readable via loadSparkMode", async () => {
-  await withTempDir(async (dir) => {
-    const projectRef = "proj:test-legacy-exec" as ProjectRef;
-    await saveSparkExecutionMode(dir, undefined, projectRef, "do it", "implement", "goal");
-    const state = await loadSparkMode(dir, undefined);
-    assert.equal(state.mode, "implement");
-    assert.equal(state.projectRef, projectRef);
-    assert.equal(state.executeStrategy, "goal");
-    assert.equal(state.focus, "do it");
-  });
-});
-
-void test("legacy saveSparkPlanningMode is readable via loadSparkMode", async () => {
-  await withTempDir(async (dir) => {
-    const projectRef = "proj:test-legacy-plan" as ProjectRef;
-    await saveSparkPlanningMode(dir, undefined, projectRef, "plan it", "auto");
-    const state = await loadSparkMode(dir, undefined);
-    assert.equal(state.mode, "plan");
-    assert.equal(state.projectRef, projectRef);
-    assert.equal(state.planningSource, "auto");
-  });
-});
-
-void test("clearSparkMode preserves projectRef but resets to research", async () => {
+void test("clearSparkMode removes current project selection", async () => {
   await withTempDir(async (dir) => {
     const projectRef = "proj:test-clear" as ProjectRef;
     await saveSparkMode(dir, undefined, { mode: "plan", projectRef });
     await clearSparkMode(dir, undefined);
-    const state = await loadSparkMode(dir, undefined);
-    assert.equal(state.mode, "research");
-    assert.equal(state.projectRef, projectRef);
+    assert.deepEqual(await loadSparkMode(dir, undefined), { mode: "research" });
+    assert.equal(await loadCurrentProjectState(dir, undefined), undefined);
   });
 });
 
-void test("saveSparkMode rejects plan/implement mode without projectRef", async () => {
+void test("saveSparkMode without projectRef clears current project selection", async () => {
   await withTempDir(async (dir) => {
-    await assert.rejects(
-      () => saveSparkMode(dir, undefined, { mode: "plan" }),
-      /projectRef is required/,
-    );
+    const projectRef = "proj:test-clear-empty" as ProjectRef;
+    await saveSparkMode(dir, undefined, { mode: "research", projectRef });
+    await saveSparkMode(dir, undefined, { mode: "plan" });
+    assert.deepEqual(await loadSparkMode(dir, undefined), { mode: "research" });
   });
 });
 

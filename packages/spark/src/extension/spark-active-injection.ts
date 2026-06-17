@@ -14,11 +14,9 @@ import {
 } from "./session-state.ts";
 import { loadIndependentTodos } from "./session-todos.ts";
 import { loadSessionGoal } from "./spark-session-goals.ts";
-import {
-  sparkLanguageForProject,
-  sparkSystemPromptLanguageDirective,
-  type SparkLanguage,
-} from "./spark-i18n.ts";
+import { sparkLanguageForProject, type SparkLanguage } from "./spark-i18n.ts";
+import { renderSparkModeSystemPrompt } from "./mode/index.ts";
+import { renderBuiltinSkillsPrompt } from "./spark-builtin-skills.ts";
 import type { SparkModeEntryDeps, SparkModeMessageApi } from "./spark-mode-entry.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
@@ -56,9 +54,11 @@ export async function injectSparkHints(event: unknown, ctx: SparkToolContext): P
     mode,
     summary?.language,
   );
-  return {
-    systemPrompt: summary?.content ? `${sparkPrompt}\n\n${summary.content}` : sparkPrompt,
-  };
+  const builtinSkillsPrompt = await renderBuiltinSkillsPrompt();
+  const sections = [sparkPrompt, builtinSkillsPrompt, summary?.content].filter(
+    (section): section is string => Boolean(section),
+  );
+  return { systemPrompt: sections.join("\n\n") };
 }
 
 export interface ActiveSparkContextSummary {
@@ -120,10 +120,7 @@ export function renderSparkActiveSystemPrompt(
   mode: SparkSessionMode = "research",
   language?: SparkLanguage,
 ): string {
-  const sparkPrompt = `Spark mode: ${mode}. Spark tools are available: task, artifact, ask, role, learning, context, recall, workflow, patch. Use project/task/TODO/SPARK.md context when present; ≤1 task; no canned asks; no guessing: ask unless user says infer/research.`;
-  const lines = [basePrompt, sparkPrompt];
-  if (language) lines.push(sparkSystemPromptLanguageDirective(language));
-  return lines.filter((line) => Boolean(line)).join("\n\n");
+  return renderSparkModeSystemPrompt({ basePrompt, mode, language });
 }
 
 function isSparkInputEvent(event: unknown): event is SparkInputEvent {

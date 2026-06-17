@@ -30,11 +30,10 @@ import {
   type TaskRef,
 } from "@zendev-lab/pi-extension-api";
 import {
-  SparkDagRunStoreFormatError,
-  defaultSparkDagRunStore,
+  WorkflowRunStoreFormatError,
   defaultWorkflowRunStore,
   runReadyTasks,
-  type SparkDagRunRecord,
+  type WorkflowRunRecord,
 } from "../packages/pi-workflows/src/index.ts";
 import {
   buildRoleRunArgs,
@@ -73,7 +72,7 @@ import {
   cleanupOwnedBackgroundSubroles,
   resumeOwnedBackgroundSubroles,
 } from "../packages/spark/src/extension/spark-background-subrole-lifecycle.ts";
-import { SparkDagManagerController } from "../packages/spark/src/extension/spark-dag-manager.ts";
+import { SparkWorkflowRunManagerController } from "../packages/spark/src/extension/spark-workflow-run-manager.ts";
 import { createSparkRuntimeReadyTaskRunner } from "../packages/spark/src/extension/spark-ready-task-runtime.ts";
 import {
   saveCurrentProjectRef,
@@ -96,9 +95,9 @@ function executionReadyPlan(objective: string): TaskPlan {
 }
 
 function testDagRunRecord(
-  input: Pick<SparkDagRunRecord, "ref" | "status" | "startedAt" | "updatedAt"> &
-    Partial<SparkDagRunRecord>,
-): SparkDagRunRecord {
+  input: Pick<WorkflowRunRecord, "ref" | "status" | "startedAt" | "updatedAt"> &
+    Partial<WorkflowRunRecord>,
+): WorkflowRunRecord {
   return {
     projectRef: input.projectRef,
     ownerSessionId: input.ownerSessionId,
@@ -168,7 +167,7 @@ void test("task graph store keeps TODOs out of projects.json and todo store rest
       projectRef: project.ref,
       title: "Plan",
       description: "plan",
-      roleRef: builtinRoleRef("planner"),
+      roleRef: builtinRoleRef("worker"),
       todos: [{ content: "Read inputs" }, { content: "Draft plan" }],
     });
     await store.save(graph);
@@ -329,7 +328,7 @@ void test("todo ops can initialize an empty task and use stable ids", () => {
     projectRef: project.ref,
     title: "Plan",
     description: "plan",
-    roleRef: builtinRoleRef("planner"),
+    roleRef: builtinRoleRef("worker"),
     plan: executionReadyPlan("Plan"),
   });
 
@@ -1706,15 +1705,15 @@ void test("Spark runtime exposes one executor role assignment contract", () => {
   });
 
   assert.equal(sparkTaskExecutorRoleRef(research), builtinRoleRef("scout"));
-  assert.equal(sparkTaskExecutorRoleRef(plan), builtinRoleRef("planner"));
+  assert.equal(sparkTaskExecutorRoleRef(plan), builtinRoleRef("worker"));
   assert.equal(sparkTaskExecutorRoleRef(review), builtinRoleRef("reviewer"));
   assert.equal(sparkTaskExecutorRoleRef(implementation), builtinRoleRef("worker"));
   assert.equal(
-    sparkTaskExecutorRoleRef(implementation, builtinRoleRef("planner")),
-    builtinRoleRef("planner"),
+    sparkTaskExecutorRoleRef(implementation, builtinRoleRef("scout")),
+    builtinRoleRef("scout"),
   );
   assert.equal(
-    sparkTaskExecutorRoleRef(explicit, builtinRoleRef("planner")),
+    sparkTaskExecutorRoleRef(explicit, builtinRoleRef("scout")),
     builtinRoleRef("reviewer"),
   );
 });
@@ -1782,8 +1781,8 @@ void test("Spark runtime Pi command args use current CLI flags and explicit sess
   assert.equal(args.includes("--fork"), false);
   assert.equal(args.includes("role:builtin-worker"), false);
   assert.equal(args.at(-2), "You are a worker.");
-  assert.equal(args.at(-1)?.includes("Spark role-run ask policy:"), true);
-  assert.equal(args.at(-1)?.includes("use the canonical ask tool"), true);
+  assert.equal(args.at(-1)?.includes("Spark role-run interaction policy:"), true);
+  assert.equal(args.at(-1)?.includes("You do not have interactive ask tools"), true);
   assert.equal(args.at(-1)?.includes("Spark naming quality policy:"), true);
   assert.equal(args.at(-1)?.includes("placeholder, generic, stale"), true);
   assert.equal(args.at(-1)?.includes("Stable refs must remain unchanged"), true);
@@ -1794,9 +1793,9 @@ void test("Spark runtime Pi command args use current CLI flags and explicit sess
         roleRef: builtinRoleRef("worker"),
         systemPrompt: "You are a worker.",
         instruction: "Implement the task.",
-        mode: "forked",
+        launch: "forked",
       }),
-    /forked role run requires forkFromSession/,
+    /forked role launch requires forkFromSession/,
   );
 });
 
@@ -1876,7 +1875,7 @@ void test("runSparkTask marks child timeout failed and clears the task claim", a
       projectRef: project.ref,
       title: "Plan",
       description: "plan",
-      roleRef: builtinRoleRef("planner"),
+      roleRef: builtinRoleRef("worker"),
       plan: executionReadyPlan("Plan"),
     });
     const fakePi = join(dir, "fake-pi.mjs");
@@ -1905,8 +1904,8 @@ void test("runSparkTask marks child timeout failed and clears the task claim", a
     assert.equal(run.completionSummary?.runRef, run.ref);
     assert.equal(graph.getTask(task.ref).status, "failed");
     assert.equal(graph.getTask(task.ref).claim, undefined);
-    assert.match(graph.getTask(task.ref).finishedBy?.runName ?? "", /^planner-/);
-    assert.match(run.runName ?? "", /^planner-/);
+    assert.match(graph.getTask(task.ref).finishedBy?.runName ?? "", /^worker-/);
+    assert.match(run.runName ?? "", /^worker-/);
     assert.equal(run.ownerSessionId, "session:parent");
     assert.equal(
       listActiveSparkRoleRunProcesses().some((entry) => entry.runName === run.runName),
@@ -1936,7 +1935,7 @@ void test("runSparkTask fails loudly when claim heartbeat persistence fails", as
       projectRef: project.ref,
       title: "Plan",
       description: "plan",
-      roleRef: builtinRoleRef("planner"),
+      roleRef: builtinRoleRef("worker"),
       plan: executionReadyPlan("Plan"),
     });
     const fakePi = join(dir, "fake-pi.mjs");
@@ -1993,7 +1992,7 @@ void test("timed-out Spark role-run process remains killable after task failure"
     projectRef: project.ref,
     title: "Plan",
     description: "plan",
-    roleRef: builtinRoleRef("planner"),
+    roleRef: builtinRoleRef("worker"),
     plan: executionReadyPlan("Plan"),
   });
   const dir = await mkdtemp(join(tmpdir(), "spark-kill-pi-"));
@@ -2048,7 +2047,7 @@ void test("background cleanup does not kill role-runs without an owned task grap
       projectRef: project.ref,
       title: "Plan",
       description: "plan",
-      roleRef: builtinRoleRef("planner"),
+      roleRef: builtinRoleRef("worker"),
       plan: executionReadyPlan("Plan"),
     });
     const fakePi = join(dir, "fake-pi.mjs");
@@ -2213,7 +2212,7 @@ void test("Spark DAG manager reports widget refresh failures without failing com
     await saveCurrentProjectRef(dir, ctx, project.ref);
     const notifications: Array<{ message: string; level?: string }> = [];
     let refreshCalls = 0;
-    const manager = new SparkDagManagerController({
+    const manager = new SparkWorkflowRunManagerController({
       refreshSparkWidget: async () => {
         refreshCalls += 1;
         throw new Error("widget unavailable");
@@ -2223,7 +2222,7 @@ void test("Spark DAG manager reports widget refresh failures without failing com
     const result = await manager.runOnce(dir, {
       ...ctx,
       ui: {
-        notify(message, level) {
+        notify(message: string, level?: "info" | "warning" | "error" | "success") {
           notifications.push({ message, level });
         },
       },
@@ -2231,7 +2230,7 @@ void test("Spark DAG manager reports widget refresh failures without failing com
 
     const stored = await defaultTaskGraphStore(dir).load();
     assert.ok(stored);
-    const dagStatus = await defaultSparkDagRunStore(dir).status();
+    const dagStatus = await defaultWorkflowRunStore(dir).status();
     assert.equal(result.continuePolling, false);
     assert.equal(stored.getTask(task.ref).status, "done");
     assert.equal(dagStatus.lastRun?.status, "succeeded");
@@ -2323,7 +2322,7 @@ void test("workflow run store persists manager lifecycle and task progress", asy
     assert.deepEqual(record.completedTaskRefs, [taskRef]);
     assert.deepEqual(record.taskRunRefs, [taskRunRef]);
     assert.deepEqual(record.completionFollowUp, followUp);
-    assert.equal(defaultSparkDagRunStore(dir).filePath, store.filePath);
+    assert.equal(defaultWorkflowRunStore(dir).filePath, store.filePath);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -2332,7 +2331,7 @@ void test("workflow run store persists manager lifecycle and task progress", asy
 void test("Spark DAG run store serializes concurrent task progress updates", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-rmw-lock-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     const projectRef = newRef("proj");
     const dagRun = await store.startRun({
       projectRef,
@@ -2378,14 +2377,14 @@ void test("Spark DAG run store serializes concurrent task progress updates", asy
 void test("Spark DAG run store rejects malformed persisted snapshots", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-store-invalid-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     await mkdir(join(dir, ".spark"), { recursive: true });
 
     await writeFile(store.filePath, "{not-json", "utf8");
     await assert.rejects(
       () => store.load(),
       (error) =>
-        error instanceof SparkDagRunStoreFormatError &&
+        error instanceof WorkflowRunStoreFormatError &&
         error.filePath === store.filePath &&
         /not valid JSON/.test(error.message),
     );
@@ -2394,7 +2393,7 @@ void test("Spark DAG run store rejects malformed persisted snapshots", async () 
     await assert.rejects(
       () => store.load(),
       (error) =>
-        error instanceof SparkDagRunStoreFormatError &&
+        error instanceof WorkflowRunStoreFormatError &&
         error.filePath === store.filePath &&
         /JSON root must be an object/.test(error.message),
     );
@@ -2407,7 +2406,7 @@ void test("Spark DAG run store rejects malformed persisted snapshots", async () 
     await assert.rejects(
       () => store.load(),
       (error) =>
-        error instanceof SparkDagRunStoreFormatError &&
+        error instanceof WorkflowRunStoreFormatError &&
         error.filePath === store.filePath &&
         /version must be 1/.test(error.message),
     );
@@ -2416,7 +2415,7 @@ void test("Spark DAG run store rejects malformed persisted snapshots", async () 
     await assert.rejects(
       () => store.load(),
       (error) =>
-        error instanceof SparkDagRunStoreFormatError &&
+        error instanceof WorkflowRunStoreFormatError &&
         error.filePath === store.filePath &&
         /manager must be an object/.test(error.message),
     );
@@ -2429,7 +2428,7 @@ void test("Spark DAG run store rejects malformed persisted snapshots", async () 
     await assert.rejects(
       () => store.load(),
       (error) =>
-        error instanceof SparkDagRunStoreFormatError &&
+        error instanceof WorkflowRunStoreFormatError &&
         error.filePath === store.filePath &&
         /runs must be an array/.test(error.message),
     );
@@ -2446,7 +2445,7 @@ void test("Spark DAG run store rejects malformed persisted snapshots", async () 
     await assert.rejects(
       () => store.load(),
       (error) =>
-        error instanceof SparkDagRunStoreFormatError &&
+        error instanceof WorkflowRunStoreFormatError &&
         error.filePath === store.filePath &&
         /runs\[0\]\.scheduledTaskRefs must be a string array/.test(error.message),
     );
@@ -2458,7 +2457,7 @@ void test("Spark DAG run store rejects malformed persisted snapshots", async () 
 void test("Spark DAG run store keeps foreground-timeout runs active for late progress", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-foreground-timeout-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     const projectRef = newRef("proj");
     const taskRef = newRef("task");
     const taskRunRef = newRef("run");
@@ -2553,7 +2552,7 @@ void test("Spark DAG run store keeps foreground-timeout runs active for late pro
 void test("Spark DAG run store ignores late progress after legacy timeout terminal finish", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-late-progress-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     const projectRef = newRef("proj");
     const firstTaskRef = newRef("task");
     const lateTaskRef = newRef("task");
@@ -2606,7 +2605,7 @@ void test("Spark DAG run store ignores late progress after legacy timeout termin
 void test("Spark DAG run store derives counters from unique scheduled and completed refs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-counter-invariants-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     const projectRef = newRef("proj");
     const taskRef = newRef("task");
     const runRef = newRef("run");
@@ -2644,7 +2643,7 @@ void test("Spark DAG run store derives counters from unique scheduled and comple
 void test("Spark DAG run store marks finished manager runs failed when child runs fail", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-child-failed-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     const dagRun = await store.startRun({
       dryRun: false,
       maxConcurrency: 1,
@@ -2660,7 +2659,10 @@ void test("Spark DAG run store marks finished manager runs failed when child run
 
     assert.ok(followUp);
     assert.equal(followUp.summary, `Workflow run: ${dagRun.ref} failed: scheduled 1, completed 1.`);
-    assert.match(followUp.nextActions.join("\n"), /failed: inspect task\(\{ action: "run_status"/);
+    assert.match(
+      followUp.nextActions.join("\n"),
+      /failed: inspect task_read\(\{ action: "run_status"/,
+    );
     assert.match(followUp.nextActions.join("\n"), /rerun ready background work/);
     const status = await store.status();
     assert.equal(status.manager.status, "idle");
@@ -2677,7 +2679,7 @@ void test("Spark DAG run store marks finished manager runs failed when child run
 void test("Spark DAG run store acknowledges terminal problem records without deleting history", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-ack-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     const failed = await store.startRun({
       dryRun: false,
       maxConcurrency: 1,
@@ -2722,7 +2724,7 @@ void test("Spark DAG run store acknowledges terminal problem records without del
 void test("Spark DAG run store can clear inactive manager records", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-clear-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     const finished = await store.startRun({
       dryRun: false,
       maxConcurrency: 1,
@@ -2763,7 +2765,7 @@ void test("Spark DAG run store can clear inactive manager records", async () => 
 void test("Spark DAG run store prunes old succeeded runs with dry-run preview first", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-prune-succeeded-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     const run = await store.startRun({ dryRun: false, maxConcurrency: 1, timeoutMs: 100 });
     await store.finishRun(run.ref, { scheduled: 0, completed: 0, timedOut: false });
 
@@ -2802,7 +2804,7 @@ void test("Spark DAG run store prunes old succeeded runs with dry-run preview fi
 void test("Spark DAG run store keeps unacknowledged failed runs during prune", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-prune-unack-failed-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     const failed = await store.startRun({ dryRun: false, maxConcurrency: 1, timeoutMs: 100 });
     await store.finishRun(failed.ref, {
       scheduled: 1,
@@ -2834,7 +2836,7 @@ void test("Spark DAG run store keeps unacknowledged failed runs during prune", a
 void test("Spark DAG run store prunes acknowledged failed runs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-prune-ack-failed-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     const failed = await store.startRun({ dryRun: false, maxConcurrency: 1, timeoutMs: 100 });
     await store.finishRun(failed.ref, {
       scheduled: 1,
@@ -2869,7 +2871,7 @@ void test("Spark DAG run store prunes acknowledged failed runs", async () => {
 void test("Spark DAG run store keeps active and recent terminal runs during prune", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-prune-active-recent-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     const projectA = newRef("proj");
     const projectB = newRef("proj");
     const oldA = newRef("run");
@@ -2944,7 +2946,7 @@ void test("Spark DAG run store keeps active and recent terminal runs during prun
 void test("Spark DAG run store reconciles stale running manager records", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-reconcile-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     const graph = new TaskGraph();
     const project = graph.createProject({ title: "Demo", description: "demo" });
     const task = graph.createTask({
@@ -2990,7 +2992,7 @@ void test("Spark DAG run store reconciles stale running manager records", async 
 void test("Spark DAG run reconcile does not mark the active scheduling window stale", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-reconcile-scheduling-window-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     const dagRun = await store.startRun({
       ownerSessionId: "session:parent",
       dryRun: false,
@@ -3018,7 +3020,7 @@ void test("Spark DAG run reconcile does not mark the active scheduling window st
 void test("Spark DAG run reconcile keeps DAG running when a scheduled task has an active child claim", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-reconcile-active-claim-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     const graph = new TaskGraph();
     const project = graph.createProject({ title: "Demo", description: "demo" });
     const task = graph.createTask({
@@ -3066,7 +3068,7 @@ void test("Spark DAG run reconcile keeps DAG running when a scheduled task has a
 void test("Spark DAG run reconcile revives stale records when a scheduled task still has an active child claim", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-reconcile-revive-active-claim-"));
   try {
-    const store = defaultSparkDagRunStore(dir);
+    const store = defaultWorkflowRunStore(dir);
     const graph = new TaskGraph();
     const project = graph.createProject({ title: "Demo", description: "demo" });
     const task = graph.createTask({
@@ -3518,7 +3520,7 @@ void test("runSparkTask does not complete real tasks when the role run never sta
       projectRef: project.ref,
       title: "Plan",
       description: "plan",
-      roleRef: builtinRoleRef("planner"),
+      roleRef: builtinRoleRef("worker"),
       plan: executionReadyPlan("Plan"),
     });
     const artifactStore = new ArtifactStore({
@@ -3561,7 +3563,7 @@ void test("runSparkTask does not complete real tasks when the role run never sta
     assert.equal(body.schemaVersion, 1);
     assert.equal(body.runRef, run.ref);
     assert.equal(body.taskRef, task.ref);
-    assert.equal(body.roleRef, builtinRoleRef("planner"));
+    assert.equal(body.roleRef, builtinRoleRef("worker"));
     assert.equal(body.status, "succeeded");
     assert.equal(body.record?.status, "succeeded");
     assert.equal(body.record?.instruction, undefined);
@@ -3844,7 +3846,7 @@ void test("runSparkTask dry-run records validation without completing the task",
       dryRun: true,
     });
     assert.equal(run.status, "succeeded");
-    assert.match(run.runName ?? "", /^planner-/);
+    assert.match(run.runName ?? "", /^worker-/);
     assert.equal(graph.getTask(task.ref).status, "ready");
     assert.equal(graph.getTask(task.ref).roleRef, undefined);
     assert.equal(graph.getTask(task.ref).claim, undefined);
@@ -3853,14 +3855,14 @@ void test("runSparkTask dry-run records validation without completing the task",
     const [artifact] = await artifactStore.list({ kind: "trace" });
     assert.ok(artifact);
     assert.equal(artifact.ref, run.outputArtifacts[0]);
-    assert.match(artifact.title, /^Role run planner-/);
+    assert.match(artifact.title, /^Role run worker-/);
     assert.equal(artifact.provenance.producer, "task");
     assert.equal(artifact.provenance.projectRef, project.ref);
     assert.equal(artifact.provenance.taskRef, task.ref);
     assert.equal(graph.getTask(task.ref).roleRef, undefined);
-    assert.equal(artifact.provenance.roleRef, builtinRoleRef("planner"));
+    assert.equal(artifact.provenance.roleRef, builtinRoleRef("worker"));
     assert.equal(artifact.provenance.runRef, run.ref);
-    assert.match(artifact.provenance.note ?? "", /^runName=planner-/);
+    assert.match(artifact.provenance.note ?? "", /^runName=worker-/);
     const body = artifact.body as {
       schemaVersion?: number;
       runRef?: string;
@@ -3876,7 +3878,7 @@ void test("runSparkTask dry-run records validation without completing the task",
     assert.equal(body.schemaVersion, 1);
     assert.equal(body.runRef, run.ref);
     assert.equal(body.taskRef, task.ref);
-    assert.equal(body.roleRef, builtinRoleRef("planner"));
+    assert.equal(body.roleRef, builtinRoleRef("worker"));
     assert.equal(body.status, "not_started");
     assert.equal(body.record?.ref, run.ref);
     assert.equal(body.record?.runName, run.runName);
@@ -3930,7 +3932,7 @@ void test("runSparkTask can request explicit forked Pi mode when a parent sessio
       cwd: dir,
       dryRun: false,
       piCommand: fakePi,
-      mode: "forked",
+      launch: "forked",
       forkFromSession: "parent-session.json",
       claim: { sessionId: "session:parent" },
     });

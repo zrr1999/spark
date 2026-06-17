@@ -20,27 +20,18 @@ Spark now has two supported host targets:
 
 The extension packages depend on the shared `@zendev-lab/pi-extension-api` contract, not on Pi's concrete SDK package. Host-specific code belongs under `packages/spark-cli/src/host/` and TUI wrappers under `packages/spark-cli/src/tui/`; the Pi extension implementation should stay usable by Pi without importing spark-cli.
 
-### Spark CLI Fusion-style model
+### Fusion research workflow
 
-When at least one real Spark CLI provider is registered, the native host also registers `spark-fusion/spark-fusion`. It is a local OpenRouter Fusion-style virtual model: panel models answer the latest user request in parallel, then a judge model receives the panel outputs and writes the final response. Unlike OpenRouter's hosted `openrouter/fusion`, the first version does not inject web search/fetch tools or rely on an outer model deciding whether to invoke Fusion; users select `spark-fusion` explicitly from the model picker.
+Spark Fusion-style multi-model deliberation is a builtin `pi-workflows` research workflow, not a model-picker target. Use `/workflow:fusion <question>` (or `/workflow builtin:fusion <question>`) to run a read-only expert panel followed by judge synthesis through Spark workflow/runtime plumbing. The builtin registry marks `fusion` as `mode: "research"`, so the command enters Spark research guardrails rather than implementation mode.
 
-Optional `~/.spark/config.json` configuration:
+Workflow discovery and preview use the canonical workflow tool:
 
-```json
-{
-  "fusion": {
-    "analysisModels": [
-      { "provider": "baidu-oneapi", "model": "claude-opus-4.8" },
-      { "provider": "baidu-oneapi", "model": "claude-fable-5" },
-      { "provider": "baidu-oneapi", "model": "gpt-5.5" }
-    ],
-    "judgeModel": { "provider": "baidu-oneapi", "model": "claude-opus-4.8" },
-    "panelSize": 3
-  }
-}
+```ts
+workflow({ action: "list" });
+workflow({ action: "read", selector: "builtin:fusion" });
 ```
 
-If `analysisModels` is omitted, Spark chooses the first available non-fusion models up to `panelSize`; if `judgeModel` is omitted or invalid, Spark uses the first panel model.
+The workflow accepts `question`, `prompt`, or `task`, plus optional `panelModels`/`models`, `panelSize`, `concurrency`, `retry`, and `judgeModel` arguments. If no panel is provided, Fusion uses the host workflow model-agent fallback; if `judgeModel` is omitted, the judge also uses the host fallback. Spark CLI no longer registers the retired Fusion model-picker target, and `~/.spark/config.json#fusion` is ignored.
 
 ## User-facing entry point
 
@@ -56,7 +47,7 @@ Spark command modes are intentionally split:
 - `/plan <focus>` plans or refines the task DAG and does not execute work.
 - `/implement <focus>` implements one bounded default step, normally claiming at most one concrete task before stopping.
 - `/goal <focus>` runs autonomous verified foreground goal progress until complete or blocked. If no focus is provided, Spark derives the goal from the current project/task state and asks when ambiguous.
-- `/workflow[:selector] <focus>` runs saved Spark workflow scripts. Use `/workflow workspace:<name>` for `.spark/workflows/*.js` and `/workflow user:<name>` for `~/.agents/workflows/*.js`. Empty `/workflow` asks which workflow to use or whether to draft a workspace workflow.
+- `/workflow[:selector] <focus>` runs Spark workflow scripts. Use `/workflow:fusion <question>` for the builtin Fusion research workflow, `/workflow builtin:<id>` for other builtin workflows, `/workflow workspace:<name>` for `.spark/workflows/*.js`, and `/workflow user:<name>` for `~/.agents/workflows/*.js`. Empty `/workflow` asks which workflow to use or whether to draft a workspace workflow.
 - `/spark <focus>` infers research, planning, or default implementation when high confidence. If the prompt asks for autonomous or workflow-style progress, Spark asks before selecting a goal or workflow implement strategy.
 
 Project-bound flows create local Spark state under `.spark/` when durable graph, review, artifact, or run state is needed:
@@ -71,7 +62,7 @@ Project-bound flows create local Spark state under `.spark/` when durable graph,
 
 Spark is always available in research mode even before `.spark/` or `SPARK.md` exists. A root `SPARK.md` is only materialized by `/spark` compatibility initialization, and only when the current `cwd` looks like a concrete repo (currently: `.git` exists in `cwd`). Direct modes such as `/research`, `/plan`, `/implement`, `/goal`, and `/workflow[:selector]` do not create or overwrite root `SPARK.md`; when they initialize minimal Spark state, intent is kept in `.spark` artifacts.
 
-`.spark/` is local runtime state and should be ignored by Git. Spark learnings live separately under the ignored local `.learnings/` directory for repo/workspace-scoped recall or under the user learning directory for personal cross-project knowledge; share them through explicit Markdown exports instead of committing the local artifact store by default. Use canonical owner tools for maintenance (`task({ action: "cache_cleanup" })`, `artifact({ action: "compact" })`, and workflow-run retention actions as they land); cleanup remains dry-run by default and must never target protected stores such as project graph, artifacts, notes, workflow runs, or review-gate state.
+`.spark/` is local runtime state and should be ignored by Git. Spark learnings live separately under the ignored local `.learnings/` directory for repo/workspace-scoped recall or under the user learning directory for personal cross-project knowledge; share them through explicit Markdown exports instead of committing the local artifact store by default. Use canonical owner tools for maintenance (`task_write({ action: "cache_cleanup" })`, `artifact({ action: "compact" })`, and workflow-run retention actions as they land); cleanup remains dry-run by default and must never target protected stores such as project graph, artifacts, notes, workflow runs, or review-gate state.
 
 ## Role model settings
 
@@ -92,7 +83,7 @@ Manage settings through the canonical role tool actions: `role({ action: "model_
 - `@zendev-lab/spark-runtime` — Spark single-task runtime adapter that executes one task through `@zendev-lab/pi-roles`, writes artifacts, and owns task/run/timeout mapping above `RoleRun`.
 - `@zendev-lab/pi-extension-api` — shared extension host/tool contract, refs, errors, and light JSON/fs/time helpers.
 - `@zendev-lab/pi-artifacts` — reusable artifact/evidence store, durable artifact metadata/blobs, provenance/lineage contracts, and the canonical `artifact` action tool.
-- `@zendev-lab/pi-tasks` — generic project/task/TODO/run graph capability and canonical `task({ action })` tool; owns readiness, claims, TODO stores, and `.spark/projects.json` graph state without depending on Spark packages.
+- `@zendev-lab/pi-tasks` — generic project/task/TODO/run graph capability and canonical `task_read` / `task_write` / `assign` tools; owns readiness, claims, TODO stores, and `.spark/projects.json` graph state without depending on Spark packages.
 - `@zendev-lab/pi-learnings` — generic evidence-backed learning capability and canonical `learning({ action })` tool; owns `.learnings/` local/user learning stores.
 - `@zendev-lab/pi-goal` — generic durable goal primitives and continuation prompt helpers; Spark owns the project-bound `/goal` facade while preserving historical serialized marker strings.
 - `@zendev-lab/pi-workflows` — saved-script workflow discovery/runtime primitives plus workflow/DAG run-store support for `.spark/workflow-runs.json`.
@@ -100,7 +91,7 @@ Manage settings through the canonical role tool actions: `role({ action: "model_
 - `@zendev-lab/pi-recall` — controlled explicit-scope recall candidate store/tool, separate from `.learnings/` and automatic memory.
 - `@zendev-lab/pi-cue` — reusable Pi/cue-shell execution substrate.
 - `@zendev-lab/pi-ask` — canonical public/default `ask` action tool with shared focused/flow protocol, state, renderer, and direct custom input handling behind that surface.
-- `@zendev-lab/pi-roles` — canonical `role` action tool plus reusable `RoleSpec` definitions, builtin/project/user role discovery, Markdown stores, role model settings, and task-agnostic direct role calls. It owns fresh/forked CLI launch, timeout/cancel, stdout/stderr capture, model-setting resolution, and tolerant JSONL parsing; it does not own Spark task DAGs, asks, artifacts, review gates, or package-specific role semantics.
+- `@zendev-lab/pi-roles` — canonical `role` action tool plus reusable `RoleSpec` definitions, builtin/extension/project/user role discovery, project/user Markdown stores, role model settings, and task-agnostic direct role calls. It owns fresh/forked CLI launch, timeout/cancel, stdout/stderr capture, model-setting resolution, and tolerant JSONL parsing; it does not own Spark task DAGs, asks, artifacts, review gates, or package-specific role semantics.
 
 Retired migration packages (`spark-core`, `spark-tasks`, `spark-learnings`, `spark-goal`, and `spark-workflows`) are no longer workspaces. No compatibility packages, long-lived `spark_*` tool aliases, or dual public/default tool surfaces are planned. Public action tools render as `tool action=<value> ...`. `spark-github` is intentionally deferred.
 

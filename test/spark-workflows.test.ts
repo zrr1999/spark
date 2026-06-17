@@ -6,7 +6,10 @@ import {
   adversarialReviewWorkflowScript,
   deepResearchWorkflowScript,
   fanOutWithBriefWorkflowScript,
+  fusionWorkflowScript,
+  listSavedWorkflows,
   parseWorkflowScript,
+  readSavedWorkflow,
   runWorkflowScript,
 } from "../packages/pi-workflows/src/index.ts";
 import { createSparkWorkflowRoleRunAdapter } from "../packages/spark-runtime/src/index.ts";
@@ -127,6 +130,110 @@ return { scan, a, b }`;
     JSON.parse(JSON.stringify(replay.result)),
     JSON.parse(JSON.stringify(result.result)),
   );
+});
+
+void test("pi-workflows lists and reads builtin workflows without frontmatter mode", async () => {
+  const listing = await listSavedWorkflows(".", {
+    includeUser: false,
+    workspaceWorkflowDir: "/definitely/missing/spark-workflows",
+  });
+
+  assert.deepEqual(listing.errors, []);
+  assert.deepEqual(
+    listing.workflows.map((workflow) => workflow.selector),
+    [
+      "builtin:fusion",
+      "builtin:deep-research",
+      "builtin:fan-out-with-brief",
+      "builtin:adversarial-review",
+    ],
+  );
+  assert.deepEqual(
+    listing.workflows.map((workflow) => workflow.mode),
+    ["research", "research", "research", "research"],
+  );
+
+  const { descriptor, script } = await readSavedWorkflow({
+    cwd: ".",
+    selector: "builtin:deep-research",
+    includeUser: false,
+  });
+  assert.equal(descriptor.source, "builtin");
+  assert.equal(descriptor.mode, "research");
+  assert.equal(descriptor.path, "builtin:deep-research");
+  assert.deepEqual(descriptor.phases, ["Queries", "Gather", "Verify", "Report"]);
+  assert.match(script, /export const meta/);
+  const parsed = parseWorkflowScript(script);
+  assert.equal(parsed.meta.name, "deep_research");
+  assert.equal("mode" in parsed.meta, false);
+
+  await assert.rejects(
+    () => readSavedWorkflow({ cwd: ".", selector: "builtin:missing", includeUser: false }),
+    /unknown builtin workflow: missing/,
+  );
+  await assert.rejects(
+    () => readSavedWorkflow({ cwd: ".", selector: "inline:demo", includeUser: false }),
+    /workflow selector must be builtin:<id>, workspace:<id>, or user:<id>/,
+  );
+});
+
+void test("pi-workflows fusion builtin fans out with collected errors and judge synthesis", async () => {
+  const { descriptor, script } = await readSavedWorkflow({
+    cwd: ".",
+    selector: "builtin:fusion",
+    includeUser: false,
+  });
+  assert.equal(descriptor.source, "builtin");
+  assert.equal(descriptor.mode, "research");
+  assert.deepEqual(descriptor.phases, ["Panel", "Synthesis"]);
+
+  const parsed = parseWorkflowScript(script);
+  assert.equal(parsed.meta.name, "fusion");
+  assert.equal("mode" in parsed.meta, false);
+
+  const agentCalls: Array<{ prompt: string; label?: string; model?: string; agentType?: string }> =
+    [];
+  const run = await runWorkflowScript(fusionWorkflowScript(), {
+    args: {
+      question: "Should Fusion live in workflows?",
+      panelModels: [
+        { label: "fast", model: "provider/fast" },
+        { label: "blocked", model: "provider/blocked" },
+      ],
+      judgeModel: "provider/judge",
+    },
+    agent: async (prompt, options) => {
+      agentCalls.push({
+        prompt,
+        label: options.label,
+        model: options.model,
+        agentType: options.agentType,
+      });
+      if (options.label === "blocked") throw new Error("MODEL_BLOCKED");
+      if (options.label === "judge synthesis") return "final synthesis";
+      return "panel answer from " + options.label;
+    },
+  });
+
+  assert.equal(run.agentCount, 3);
+  assert.deepEqual(
+    run.phases.map((phase) => phase.title),
+    ["Panel", "Synthesis"],
+  );
+  assert.deepEqual(
+    agentCalls.map((call) => call.label),
+    ["fast", "blocked", "judge synthesis"],
+  );
+  assert.deepEqual(
+    agentCalls.map((call) => call.agentType),
+    ["model", "model", "model"],
+  );
+  assert.equal(agentCalls[0]?.model, "provider/fast");
+  assert.equal(agentCalls[2]?.model, "provider/judge");
+  assert.match(agentCalls[0]?.prompt ?? "", /one expert in a Spark Fusion-style multi-model panel/);
+  assert.match(agentCalls[2]?.prompt ?? "", /ERROR: MODEL_BLOCKED/);
+  assert.match(agentCalls[2]?.prompt ?? "", /Synthesize a final answer/);
+  assert.equal((run.result as { report?: unknown }).report, "final synthesis");
 });
 
 void test("pi-workflows exposes and runs workflow script factories", async () => {
@@ -250,6 +357,70 @@ void test("pi-workflows applies phase model defaults and per-agent overrides", a
   });
 
   assert.deepEqual(models, ["provider/phase-model", "provider/agent-model"]);
+});
+
+void test("pi-workflows role-run adapter sends model agents through model runner hook", async () => {
+  const roleRequests: unknown[] = [];
+  const modelRequests: unknown[] = [];
+  const agent = createSparkWorkflowRoleRunAdapter({
+    roleRef: "role:builtin-worker",
+    async runRoleInstruction(request) {
+      roleRequests.push(request);
+      return { text: "role result" };
+    },
+    async runModelInstruction(request) {
+      modelRequests.push(request);
+      return { text: "model result" };
+    },
+  });
+
+  const result = await agent("Compare model answers", {
+    index: 1,
+    label: "panel 1",
+    phase: "Panel",
+    model: "provider/model",
+    agentType: "model",
+    timeoutMs: 250,
+    artifactRef: "artifact:brief-456",
+  });
+
+  assert.equal(result, "model result");
+  assert.equal(roleRequests.length, 0);
+  assert.equal(modelRequests.length, 1);
+  const request = modelRequests[0] as {
+    prompt: string;
+    label: string;
+    phase?: string;
+    model?: string;
+    metadata: Record<string, unknown>;
+  };
+  assert.equal(request.prompt, "Compare model answers");
+  assert.equal(request.label, "panel 1");
+  assert.equal(request.phase, "Panel");
+  assert.equal(request.model, "provider/model");
+  assert.equal(request.metadata.workflowAgent, true);
+  assert.equal(request.metadata.agentType, "model");
+  assert.equal(request.metadata.index, 1);
+  assert.equal(request.metadata.timeoutMs, 250);
+  assert.equal(request.metadata.artifactRef, "artifact:brief-456");
+});
+
+void test("pi-workflows role-run adapter fails model agents when model hook is missing", async () => {
+  const agent = createSparkWorkflowRoleRunAdapter({
+    roleRef: "role:builtin-worker",
+    async runRoleInstruction() {
+      return { text: "role result" };
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      agent("model prompt", {
+        index: 0,
+        agentType: "model",
+      }),
+    /workflow model agent runner is not configured/,
+  );
 });
 
 void test("pi-workflows role-run adapter maps workflow agents to Spark dependency boundary", async () => {

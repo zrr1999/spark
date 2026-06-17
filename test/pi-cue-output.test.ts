@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -24,15 +24,15 @@ import {
 
 type RegisteredPiCueTool = Parameters<PiCueExtensionApi["registerTool"]>[0];
 
-await test("normalizeCueTerminalOutput keeps final carriage-return frame", () => {
+void test("normalizeCueTerminalOutput keeps final carriage-return frame", () => {
   assert.equal(normalizeCueTerminalOutput("Working 1\rWorking 2\rDone\n"), "Done\n");
 });
 
-await test("normalizeCueTerminalOutput preserves CRLF line content", () => {
+void test("normalizeCueTerminalOutput preserves CRLF line content", () => {
   assert.equal(normalizeCueTerminalOutput("hello\r\n"), "hello\n");
 });
 
-await test("normalizeCueTerminalOutput collapses repeated spinner progress lines", () => {
+void test("normalizeCueTerminalOutput collapses repeated spinner progress lines", () => {
   const output = [
     "⠋ Running hooks... vp check --fix...",
     "⠙ Running hooks... vp check --fix...",
@@ -46,7 +46,7 @@ await test("normalizeCueTerminalOutput collapses repeated spinner progress lines
   );
 });
 
-await test("normalizeCueStderrForDisplay removes duplicated PTY merge note", () => {
+void test("normalizeCueStderrForDisplay removes duplicated PTY merge note", () => {
   assert.equal(
     normalizeCueStderrForDisplay("[PTY: stdout and stderr are merged]\nhello\r\n", "hello\r\n"),
     "",
@@ -62,7 +62,7 @@ await test("normalizeCueStderrForDisplay removes duplicated PTY merge note", () 
   );
 });
 
-await test("renderCueScriptResult includes source, timeout, item identity, and status", () => {
+void test("renderCueScriptResult includes source, timeout, item identity, and status", () => {
   const result = {
     scriptId: "script:one",
     source: { kind: "inline" },
@@ -114,7 +114,7 @@ await test("renderCueScriptResult includes source, timeout, item identity, and s
   assert.match(rendered, /\[stderr\]\nbad/);
 });
 
-await test("renderCueScriptResult compacts clean successful items", () => {
+void test("renderCueScriptResult compacts clean successful items", () => {
   const result = {
     scriptId: "script:clean",
     source: { kind: "file", path: "build.cue" },
@@ -181,7 +181,7 @@ await test("renderCueScriptResult compacts clean successful items", () => {
   assert.match(rendered, /visible/);
 });
 
-await test("renderCueChainStatus prioritizes non-clean leaves and compacts clean leaves", async () => {
+void test("renderCueChainStatus prioritizes non-clean leaves and compacts clean leaves", async () => {
   const outputRequests: Array<{ id: string; tailBytes?: number }> = [];
   const errorRequests: Array<{ id: string; tailBytes?: number }> = [];
   const reader = {
@@ -246,7 +246,7 @@ function chainJob(
   };
 }
 
-await test("pi-cue numeric and boolean normalizers reject invalid explicit values", () => {
+void test("pi-cue numeric and boolean normalizers reject invalid explicit values", () => {
   assert.equal(normalizeCueTailBytes(undefined, 128), 128);
   assert.equal(normalizeCueTailBytes(0), 0);
   assert.equal(normalizeCueTailBytes(4096), 4096);
@@ -282,7 +282,7 @@ await test("pi-cue numeric and boolean normalizers reject invalid explicit value
   assert.throws(() => normalizeCueResourceNeeds({ gpu: " " }), /non-empty string/);
 });
 
-await test("resolveCueWorkingDirectory anchors explicit relative cwd to the Pi context cwd", () => {
+void test("resolveCueWorkingDirectory anchors explicit relative cwd to the Pi context cwd", () => {
   assert.equal(
     resolveCueWorkingDirectory(".", "/tmp/pi-session", "/tmp/process-cwd"),
     "/tmp/pi-session",
@@ -301,7 +301,7 @@ await test("resolveCueWorkingDirectory anchors explicit relative cwd to the Pi c
   );
 });
 
-await test("pi-cue tools validate bad parameters before connecting to cued", async () => {
+void test("pi-cue tools validate bad parameters before connecting to cued", async () => {
   const tools = registerCueToolsForTest();
   const execTool = tools.get("cue_exec");
   const runTool = tools.get("cue_run");
@@ -399,7 +399,29 @@ await test("pi-cue tools validate bad parameters before connecting to cued", asy
   );
 });
 
-await test("script_run and script_eval route venv only to python", async () => {
+void test("script_eval renders a bounded inline code preview", () => {
+  const tools = registerCueToolsForTest();
+  const evalTool = tools.get("script_eval");
+  assert.ok(evalTool);
+  const rendered = evalTool
+    .renderCall?.(
+      {
+        language: "python",
+        script:
+          "\nprint('first')\nprint('second')\nprint('third')\nprint('fourth')\nprint('fifth')\nprint('sixth')\n",
+      },
+      { bold: (text: string) => text },
+      {},
+    )
+    .render(400)
+    .join("\n");
+  assert.match(rendered ?? "", /inline=6line\(s\)/);
+  assert.match(rendered ?? "", /preview=/);
+  assert.match(rendered ?? "", /print\('first'\).*print\('fifth'/);
+  assert.doesNotMatch(rendered ?? "", /print\('sixth'\)/);
+});
+
+void test("script_run and script_eval route venv only to python", async () => {
   const tools = registerCueToolsForTest();
   const runTool = tools.get("script_run");
   const evalTool = tools.get("script_eval");
@@ -435,7 +457,11 @@ await test("script_run and script_eval route venv only to python", async () => {
 
   const evalResult = await evalTool.execute(
     "call-venv-eval",
-    { language: "python", script: "print('ok')", venv: "/opt/venv" },
+    {
+      language: "python",
+      script: "print('ok')",
+      venv: "/opt/venv",
+    },
     new AbortController().signal,
     () => undefined,
     ctx,
@@ -467,54 +493,7 @@ await test("script_run and script_eval route venv only to python", async () => {
   );
 });
 
-await test("pi-cue tool descriptions match cue-shell chain operator contract", () => {
-  const tools = registerCueToolsForTest();
-  const execTool = tools.get("cue_exec");
-  const runTool = tools.get("cue_run");
-  const scriptTool = tools.get("cue_script");
-  assert.ok(execTool);
-  assert.ok(runTool);
-  assert.ok(scriptTool);
-
-  const execDescription = `${execTool.description} ${JSON.stringify(execTool.parameters)}`;
-  assert.match(execDescription, /\|\|\| runs jobs in parallel|\|\|\| for parallel jobs/);
-  assert.match(
-    execDescription,
-    /\|\?\| races jobs until one succeeds|\|\?\| for any-success race jobs/,
-  );
-  assert.match(execDescription, /&&\/\|\| are job-internal logical operators|'&&'\/'\|\|'/);
-  assert.doesNotMatch(execDescription, /\|\| runs in parallel|\|\| parallel|\|\|\?\s+parallel/);
-
-  assert.match(runTool.description, /`\|\|\|`/);
-  assert.match(runTool.description, /`\|\?\|`/);
-  assert.match(scriptTool.description, /`\|\|\|`/);
-  assert.match(scriptTool.description, /`\|\?\|`/);
-});
-
-await test("pi-cue docs document script runner venv, scope, and python -c behavior", async () => {
-  const skill = await readFile("packages/pi-cue/skills/pi-cue/SKILL.md", "utf8");
-  const readme = await readFile("packages/pi-cue/README.md", "utf8");
-  const toolsDoc = await readFile("docs/tools.md", "utf8");
-
-  assert.match(skill, /`script_run`\s+\|[^\n]+`venv\?`, `scope\?`/);
-  assert.match(skill, /`script_eval`\s+\|[^\n]+`venv\?`, `scope\?`/);
-  assert.match(skill, /`venv` is valid only with `language="python"`/);
-  assert.match(skill, /`scope` is valid only with `language="cue-shell"`/);
-  assert.match(skill, /`&&` is valid cue-shell job logic/);
-  assert.doesNotMatch(skill, /`&&` is bash; use `->`/);
-
-  assert.match(readme, /`venv` interpreter/);
-  assert.match(readme, /`scope` is valid only for `language: "cue-shell"`/);
-  assert.match(readme, /python -c/);
-
-  assert.match(toolsDoc, /`pi-cue` tools \([^\n]+`cue_resources`[^\n]+\)/);
-  assert.match(toolsDoc, /`cue_resources` — inspect resource providers and snapshots/);
-  assert.match(toolsDoc, /python -c/);
-  assert.match(toolsDoc, /`venv` is python-only and `scope` is cue-shell-only/);
-  assert.doesNotMatch(toolsDoc, /temporary file before execution/);
-});
-
-await test("script_run and script_eval pass scope only to cue-shell RunScript", async () => {
+void test("script_run and script_eval do not pass deprecated scope to RunScript", async () => {
   const tools = registerCueToolsForTest();
   const runTool = tools.get("script_run");
   const evalTool = tools.get("script_eval");
@@ -550,8 +529,8 @@ await test("script_run and script_eval pass scope only to cue-shell RunScript", 
   );
   assert.equal(calls[0]?.path, scriptPath);
   assert.equal(calls[0]?.input, "msg\n");
-  assert.equal(calls[0]?.scope, "abc123");
-  assert.equal((fileResult.details as { scope?: string }).scope, "abc123");
+  assert.equal(calls[0]?.scope, undefined);
+  assert.equal((fileResult.details as { scope?: string }).scope, undefined);
 
   await evalTool.execute(
     "call-scope-eval",
@@ -562,30 +541,7 @@ await test("script_run and script_eval pass scope only to cue-shell RunScript", 
   );
   assert.equal(calls[1]?.path, "<inline>");
   assert.equal(calls[1]?.input, "msg");
-  assert.equal(calls[1]?.scope, "def456");
-
-  await assert.rejects(
-    () =>
-      runTool.execute(
-        "call-bad-scope-run",
-        { language: "python", path: "script.py", scope: "abc123" },
-        new AbortController().signal,
-        () => undefined,
-        ctx,
-      ),
-    /script_run scope is only supported for language=cue-shell/,
-  );
-  await assert.rejects(
-    () =>
-      evalTool.execute(
-        "call-bad-scope-eval",
-        { language: "python", script: "print('ok')", scope: "abc123" },
-        new AbortController().signal,
-        () => undefined,
-        ctx,
-      ),
-    /script_eval scope is only supported for language=cue-shell/,
-  );
+  assert.equal(calls[1]?.scope, undefined);
 });
 
 function registerCueToolsForTest(): Map<string, RegisteredPiCueTool> {

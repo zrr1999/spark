@@ -4,28 +4,28 @@
 
 ## Mental model
 
-`@zendev-lab/pi-graft` does not edit the working tree directly. It talks to the machine-local global `graftd` at `$GRAFT_HOME/run/daemon.sock` and uses the same canonical daemon protocol as the CLI:
+`@zendev-lab/pi-graft` does not edit the working tree directly and does not speak graftd's socket protocol. Its TypeScript `graft-client` bridge is a thin process wrapper over `graft --json <argv>`: the Rust `graft` CLI remains the only wire translator, resolving socket location, daemon startup, typed daemon ops, daemon-owned `cli_exec`, and local routing internally. Tools shape convenient parameters into CLI argv/stdin and parse the JSON envelope/result:
 
 ```text
-graft_help / graft_init / graft_doctor                                    -> workflow/bootstrap/diagnostics
-graft_write/read/edit/delete { base: "graft:empty" | "candidate:..." | ... } -> scratch:a
-graft_write/read/edit/delete { from: "scratch:a" }                         -> scratch:b/c/...
-graft_candidate_from_scratch { scratch: "scratch:c" }                      -> candidate:...
+graft_help / graft_init / graft_doctor                                      -> workflow/bootstrap/diagnostics
+graft_scratch_open { base: "graft:empty" | "candidate:..." | ... }          -> scratch:a
+graft_write/read/edit/delete { base: "graft:empty" | "candidate:..." | ... } -> scratch:b
+graft_write/read/edit/delete { from: "scratch:b" }                         -> scratch:c/d/...
+graft_scratch_diff/drop/pin/unpin                                           -> daemon scratch lifecycle
+graft_candidate_from_scratch { scratch: "scratch:d" }                      -> candidate:...
 graft_validate / graft_admit / graft_show / graft_evidence / graft_materialize -> evidence / patch inspection
 graft_repo { action: "add" | "list" | "sync" | "lock" | "update" }          -> managed repo config/cache/lock workflow
 ```
 
 The extension keeps only convenience metadata (`base`, `lastScratch`, `lastCandidate`, and `lastPatch`) so later tool calls can omit `from`/`scratch` in the same workspace. That state is not the protocol entrance: every scratch tool accepts explicit `base` or `from`, and every result includes the returned scratch id in `details.result.scratch` for the next call. Rename has no separate operation yet; express it as `graft_delete` for the old path followed by `graft_write` for the new path.
 
-A scratch is daemon-instance-scoped. If `graftd` restarts, pass a fresh `base` or a still-reachable `from` scratch id; unsupported or unknown scratch ids fail through graftd's wire errors. Graft v3 treats cwd as an attach/routing key, not as the workspace identity; cwd may be a Git worktree.
+A scratch is daemon-instance-scoped. Use `graft_scratch_pin` when a scratch must survive cleanup pressure; release the lease with `graft_scratch_unpin`. If `graftd` restarts, pass a fresh `base` or a still-reachable `from` scratch id; unsupported or unknown scratch ids fail through graftd's wire errors. Graft v3 treats cwd as an attach/routing key, not as the workspace identity; cwd may be a Git worktree.
 
-## Commands
+## Commands and roles
 
-- `/graft-attach [workspace-id|--status]` — attach cwd to a Graft workspace route, or show attach status. Without an argument, Graft defaults to `ws:default`.
-- `/graft-detach` — remove the cwd registry route without deleting workspace repo metadata.
-- `/graft-ps` — show `$GRAFT_HOME`, global daemon socket/pid, registered workspaces, routes, and repo paths.
-- `/graft-doctor [--rebuild-registry]` — diagnose registry/workspace/repo-path reachability, optionally rebuilding missing machine-local workspace records from `$GRAFT_HOME/workspaces/*`.
-- `/graft-close` — clear pi-graft's convenience state in the Pi session. Returned scratch ids can still be passed explicitly as `from` while graftd keeps them.
+pi-graft registers no slash commands. Human users should run the ordinary `graft ...` CLI directly; agents should use the `graft_*` tools below.
+
+pi-graft also registers the explicit extension role `role:extension-patcher` (`id: patcher`) with `pi-roles`. This replaces the removed `graft_patch` public tool: call it through the canonical `role({ action: "call", role: "role:extension-patcher", instruction: ... })` surface when a patcher child run is appropriate. The role allowlist contains only Graft scratch/candidate/validation/evidence/repository/materialization tools; it has no `ask`, `task`, `task_write`, `goal`, `assign`, `role`, `workflow`, or `graft_patch` surface. If a patch request is unclear, the patcher reports the blocker upward instead of asking interactively or changing files.
 
 ## Tools
 
@@ -43,12 +43,15 @@ These tools do not override Pi built-ins. Each scratch tool accepts either `base
 ### Graft lifecycle and inspection tools
 
 - `graft_help` — show maintained workflow guidance (`agent-workflow`) or command help.
-- `graft_init` — bootstrap or register a workspace through direct `graft workspace init`.
-- `graft_patch` — run a Graft-owned worker child with only Graft-related tools available. If the patch instruction is unclear, the child must request clarification upward instead of editing directly or creating a candidate.
+- `graft_init` — bootstrap or register a workspace through `graft --json init`.
 - `graft_status` — inspect pi-graft convenience state and graftd status.
 - `graft_ps` — show global daemon and registry status.
 - `graft_doctor` — diagnose or repair registry state.
-- `graft_candidate_from_scratch` — create a candidate through graftd `candidate_from_scratch`.
+- `graft_scratch_open` — open a base ref as a daemon scratch and remember it as `lastScratch`.
+- `graft_scratch_diff` — compare two daemon scratch ids and return changed paths.
+- `graft_scratch_drop` — drop an unpinned daemon scratch.
+- `graft_scratch_pin` / `graft_scratch_unpin` — manage explicit scratch leases.
+- `graft_candidate_from_scratch` — create a candidate through `graft --json candidate from-scratch`; its `expected` tool parameter maps to `--expect` flags.
 - `graft_validate` — validate a candidate or patch.
 - `graft_admit` — admit a validated candidate as a patch.
 - `graft_show` — show a candidate or patch summary.
@@ -56,8 +59,8 @@ These tools do not override Pi built-ins. Each scratch tool accepts either `base
 - `graft_candidates` — list unadmitted candidates.
 - `graft_search` — search admitted patches.
 - `graft_materialize` — plan or materialize an admitted patch target; dry-run defaults to true.
-- `graft_repo` — manage configured repositories with the current `repo add/list/sync/lock/update` flow. `add/sync/lock/update` use daemon-owned CLI execution; `list` uses the direct local CLI path.
-- `graft_cli_exec` — allowlisted argv-only path for low-frequency advanced CLI workflows from `graft explain agent-workflow`, including explicit repo/sync/bundle/workspace-gc/patch-promote style operations; high-frequency scratch and patch lifecycle commands use dedicated typed tools.
+- `graft_repo` — manage configured repositories with the current `repo add/list/sync/lock/update` flow through `graft --json repo ...`; the Rust CLI decides local vs daemon execution.
+- `graft_cli_exec` — allowlisted argv-only path for low-frequency read-only or diagnostic commands; bootstrap and mutation commands use dedicated tools.
 
 ## Example
 
@@ -82,13 +85,9 @@ graft_candidate_from_scratch { scratch: "scratch:...", expected: ["CargoTestsPas
 
 ## Runtime assumptions
 
-The extension talks to `$GRAFT_HOME/run/daemon.sock` (default `$HOME/.graft/run/daemon.sock`). It auto-starts `graftd` with:
+The extension shells `GRAFT_BIN` when set, otherwise `graft`, always passing `--cwd <cwd>`. Non-help paths use `graft --json ...`; help/explain paths keep plain text output. Large scratch payloads go over stdin with `--content-stdin` and `--edits-stdin` so argv stays small and literal `"-"` file content remains possible.
 
-```bash
-graftd start --cwd <cwd> --socket "$GRAFT_HOME/run/daemon.sock"
-```
-
-Routed wire requests include `workspace_id` and `workspace_root` (the Pi cwd). The extension resolves `workspace_id` from `GRAFT_WORKSPACE` first, then from `graft --json workspace status` / `graft_init` output, then from restored Pi session state; only an uninitialized or undiscoverable workspace falls back to `ws:default` and lets graftd report the precise routing error. Lifecycle/materialize/repo write tools route through `graftd cli_exec` with `graft --cwd <cwd> ...`; read-only query, help, bootstrap, and diagnostics paths can run the direct `graft` binary. `graft_cli_exec` validates its argv against a narrow low-frequency allowlist before choosing the direct or daemon route. Set `GRAFT_BIN`/`GRAFT_DAEMON_BIN` if they are not on `PATH`.
+pi-graft never passes `--socket`, never resolves `$GRAFT_HOME/run/daemon.sock`, and never starts `graftd` itself. If the CLI needs a daemon, Rust `graft`/`crates/graft-client` owns socket discovery, stale-socket handling, auto-start, and the server↔client wire contract. Set `GRAFT_BIN` if `graft` is not on `PATH`; daemon binary discovery remains a graft CLI concern.
 
 The current implementation is UTF-8-text first. Binary, image, and directory behavior follows the current graft scratch wire errors and should fail loudly rather than falling back to disk reads or writes.
 
@@ -98,9 +97,9 @@ Verdict: **ship as an early integrated slice, with known caveats**.
 
 - P1 — future default tool replacement would change core Pi semantics. Current mitigation: scratch operations are explicit `graft_*` tools, while Pi built-ins remain available.
 - P1 — scratch state is not durable across daemon restart, and full multi-workspace scratch isolation depends on graftd's global-daemon workspace-state support. Mitigation: scratch ids are returned from each tool and pi-graft's convenience state is optional; lost scratch ids fail through graftd wire errors instead of hidden recovery.
-- P1 — current graft constraint/admission behavior can still require project-specific policy tuning. Mitigation: `graft_candidate_from_scratch`, `graft_validate`, and `graft_admit` are explicit separate steps; graft_read/graft_write/graft_edit/graft_delete never auto-create candidates or auto-admit.
+- P1 — current graft property/admission behavior can still require project-specific policy tuning. Mitigation: `graft_candidate_from_scratch`, `graft_validate`, and `graft_admit` are explicit separate steps; graft_read/graft_write/graft_edit/graft_delete never auto-create candidates or auto-admit.
 - P2 — file kind support is text-first. Mitigation: no passthrough fallback is implemented, so unsupported file kinds fail loudly.
-- P2 — integration depends on Pi's command/tool registration surface staying stable. Mitigation: `@zendev-lab/pi-graft` exports a narrow boundary type and the registration test asserts the exact commands and tools it installs.
+- P2 — integration depends on Pi's tool registration surface staying stable. Mitigation: `@zendev-lab/pi-graft` exports a narrow boundary type and the registration test asserts that it installs no slash commands and the expected tools.
 
 ## Validation
 

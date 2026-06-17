@@ -57,13 +57,13 @@ export function renderSparkWorkflowGuidance(
   );
   const recommendation =
     workflowSelector === "agent:auto"
-      ? "No workflow selector was provided. Agent must choose an existing saved workflow or create a new workspace workflow before execution."
+      ? "No workflow selector was provided. Select an existing saved workflow or prepare a new workspace workflow before execution."
       : goalFocus
-        ? "Use /goal for autonomous foreground goal progress; /workflow is for saved workflow scripts."
-        : "No saved workflow was selected confidently from the focus.";
+        ? "Use /goal for autonomous foreground goal progress; /workflow is reserved for saved workflow scripts."
+        : "The focus did not identify a specific saved workflow.";
   const policy =
     workflowSelector === "agent:auto"
-      ? ' Inspect available saved workflows with workflow({ action: "list" }); read likely candidates with workflow({ action: "read" }). If one existing saved workflow clearly matches the user\'s goal, use that selector and proceed through Spark workflow/runtime boundaries. If none fits and a reusable scripted workflow is needed, draft a new workspace workflow under .spark/workflows/<name>.js, then use /workflow workspace:<name> (or report that it was created and why execution should wait). Do not invent a selector, do not execute inline scripts, and ask only if choosing or creating the workflow would change user-visible scope or trust boundaries.'
+      ? ' Inspect available saved workflows with workflow({ action: "list" }); read candidate workflows with workflow({ action: "read" }). When an existing saved workflow clearly satisfies the user goal, use that selector and proceed through Spark workflow/runtime boundaries. When reusable scripted orchestration is required and no saved workflow applies, create a workspace workflow definition under .spark/workflows/<name>.js, then use /workflow workspace:<name> or report why execution should wait. Do not invent a selector, do not execute inline scripts, and ask only if choosing or creating the workflow would change user-visible scope or trust boundaries.'
       : " /workflow only accepts saved workspace:/user: workflow selectors; ask for an explicit selector before execution.";
   return recommendation + policy + budgetCatalog + savedCatalog;
 }

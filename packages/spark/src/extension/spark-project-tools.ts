@@ -138,7 +138,7 @@ export function findDuplicateSparkProjects(input: {
     blocked: (candidates[0]?.score ?? 0) >= DUPLICATE_PROJECT_BLOCK_SCORE,
     candidates,
     guidance: [
-      'Use task({ action: "project_use", project: <candidate ref or title> }) to select the existing Project when it is the same work.',
+      'Use task_write({ action: "project_use", project: <candidate ref or title> }) to select the existing Project when it is the same work.',
       "Ask the user which existing Project to use when multiple candidates look plausible.",
       "Only retry creation with a clearer differentiated title/description when this is genuinely new work.",
       "This gate does not merge, move tasks, or relink artifacts; selecting an existing Project is the only merge-like action in this slice.",

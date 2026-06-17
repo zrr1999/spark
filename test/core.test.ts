@@ -136,7 +136,7 @@ void test("task graph rejects cycles and cross-project dependencies", () => {
     projectRef: project.ref,
     title: "A",
     description: "a",
-    roleRef: builtinRoleRef("planner"),
+    roleRef: builtinRoleRef("worker"),
   });
   const b = graph.createTask({
     projectRef: project.ref,
@@ -206,7 +206,7 @@ void test("task graph plans multiple tasks without claiming them", () => {
       title: "Design claim registry",
       description: "Plan one-active-task claim semantics.",
       kind: "plan",
-      roleRef: builtinRoleRef("planner"),
+      roleRef: builtinRoleRef("worker"),
       plan: executionReadyPlan("Design claim registry"),
       dependsOn: ["Inspect ask flow"],
     },
@@ -315,9 +315,13 @@ void test("task role labels prefer active claim, finished attribution, then late
 void test("Spark prompt is a one-line mode marker", () => {
   const prompt = renderSparkActiveSystemPrompt("");
   assert.match(prompt, /^Spark mode: research\./);
-  assert.match(prompt, /Spark tools are available/);
-  assert.match(prompt, /task, artifact, ask, role, learning, context, recall, workflow, patch/);
-  assert.match(prompt, /no guessing: ask unless user says infer\/research/);
+  assert.match(prompt, /Tools:/);
+  assert.match(
+    prompt,
+    /task_read, task_write, assign, artifact, ask, role, learning, context, recall, workflow, pi-cue, pi-graft/,
+  );
+  assert.doesNotMatch(prompt, /workflow, patch/);
+  assert.doesNotMatch(prompt, /no guessing: ask unless user says infer\/research/);
   assert.doesNotMatch(prompt, /Spark active/);
   assert.doesNotMatch(prompt, /read SPARK\.md or the spark skill/);
   assert.doesNotMatch(prompt, /spark skill/);
@@ -335,14 +339,15 @@ void test("Spark prompt threads the current session mode into the marker", () =>
   assert.match(implementPrompt, /mode: implement/);
 });
 
-void test("builtin Pi roles separate interactive blockers from reviewer verdicts", () => {
+void test("builtin Pi roles report blockers upward instead of asking interactively", () => {
   for (const role of createBuiltinRoles()) {
+    assert.equal((role.allowedTools ?? []).includes("ask"), false);
     if (role.id === "reviewer") {
-      assert.equal((role.allowedTools ?? []).includes("ask"), false);
       assert.match(role.systemPrompt, /Do not ask interactively/);
       assert.match(role.systemPrompt, /findings\/blockers/);
     } else {
-      assert.match(role.systemPrompt, /use the available ask tool/i);
+      assert.match(role.systemPrompt, /upward/i);
+      assert.doesNotMatch(role.systemPrompt, /available ask tool/i);
     }
     assert.match(role.systemPrompt, /block|ambigu/i);
     assert.doesNotMatch(role.systemPrompt, /Spark ask tools/i);
@@ -359,7 +364,7 @@ void test("task graph maintains todos alongside a claimed current task", () => {
     title: "Plan",
     description: "plan",
     kind: "plan",
-    roleRef: builtinRoleRef("planner"),
+    roleRef: builtinRoleRef("worker"),
     todos: [{ content: "Read inputs" }, { content: "Draft graph" }],
   });
   graph.setCurrentTask(project.ref, task.ref);

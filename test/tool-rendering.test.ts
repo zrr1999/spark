@@ -41,10 +41,10 @@ void test("Spark extension canonical facade tools render parameter-aware tool ca
   assertAllToolsHaveCallRenderers(tools);
   t.assert.fileSnapshot(
     renderCallCases(tools, [
-      { name: "task", args: { action: "status", view: "full", limit: 5 } },
-      { name: "task", args: { action: "project_list", status: "all" } },
+      { name: "task_read", args: { action: "status", view: "full", limit: 5 } },
+      { name: "task_read", args: { action: "project_list", status: "all" } },
       {
-        name: "task",
+        name: "task_write",
         args: {
           action: "plan",
           tasks: [
@@ -53,7 +53,9 @@ void test("Spark extension canonical facade tools render parameter-aware tool ca
           ],
         },
       },
+      { name: "assign", args: { dryRun: true, maxConcurrency: 2 } },
       { name: "goal", args: { action: "status" } },
+      { name: "mode", args: { action: "plan", focus: "tighten tasks" } },
     ]),
     join(snapshotDir, "tool-rendering-spark.txt"),
     textSnapshot,
@@ -67,7 +69,7 @@ void test("Spark extension canonical facade tools render parameter-aware tool ca
 
   const longTask = renderCall(
     tools,
-    "task",
+    "task_write",
     {
       action: "claim",
       title:
@@ -201,14 +203,6 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
   t.assert.fileSnapshot(
     renderCallCases(graftTools, [
       {
-        name: "graft_patch",
-        args: {
-          instruction: "Create a narrow candidate for the requested fix.",
-          mode: "forked",
-          model: "test/model",
-        },
-      },
-      {
         name: "graft_repo",
         args: {
           action: "add",
@@ -260,7 +254,6 @@ function registerGraftToolsForRendering(): Map<string, RenderableToolConfig> {
   const tools = new Map<string, RenderableToolConfig>();
   piGraftExtension({
     registerTool: (config) => tools.set(config.name, config),
-    registerCommand: () => undefined,
     on: () => undefined,
   });
   return tools;

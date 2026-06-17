@@ -230,7 +230,7 @@ These are useful references but should not be implemented in the current Spark d
 - [`src/app/gateway.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/app/gateway.ts): combines HTTP gateway, job runner, channels, and worker loop. Spark is explicitly not doing gateway now.
 - [`src/gateway/server.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/gateway/server.ts): `GET /health`, `POST /jobs/exec`, `GET /jobs/:id`, `GET /jobs/:id/wait`; exclude HTTP routes and bearer-token auth.
 - [`src/gateway/job-store.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/gateway/job-store.ts): job records for HTTP API. Spark daemon can use queue task files instead; no separate gateway job abstraction yet.
-- [`src/gateway/service.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/gateway/service.ts): systemd/launchd service installation; exclude for now.
+- [`src/gateway/service.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/gateway/service.ts): systemd/launchd service installation; exclude from this phase.
 - [`src/cli/gateway.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/cli/gateway.ts): client commands for remote gateway health/exec/job/wait/service; exclude, except as a warning about command sprawl.
 
 ## Spark implementation sketch

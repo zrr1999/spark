@@ -18,20 +18,11 @@ import {
   type TaskTodo,
 } from "@zendev-lab/pi-extension-api";
 import { defaultTaskGraphStore, taskCompletionReadiness } from "@zendev-lab/pi-tasks";
-import {
-  currentSparkProject,
-  loadSparkExecutionMode,
-  sparkSessionKey,
-  sparkTodoStore,
-} from "./session-state.ts";
+import { currentSparkProject, sparkSessionKey, sparkTodoStore } from "./session-state.ts";
 import { resolveSessionClaimedTask } from "./task-claim-selection.ts";
 import { compactTaskDetail, normalizeOptionalToolString } from "./task-plan-tool.ts";
 import { compactLearningDetail } from "./learning-tools.ts";
 import { truncateInline } from "./tool-rendering.ts";
-import {
-  renderSparkGoalContinuationPrompt,
-  sparkGoalObjectiveForNextTask,
-} from "./spark-goal-continuation.ts";
 import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 import type {
@@ -174,7 +165,7 @@ export function registerSparkFinishTaskTool(
     name: "spark_finish_task",
     label: "Spark Finish Task",
     description:
-      'Compatibility surface for task({ action: "finish" }): finish this session\'s claimed Spark task as done, failed, or cancelled. Defaults to the current claimed task and status=done.',
+      'Compatibility surface for task_write({ action: "finish" }): finish this session\'s claimed Spark task as done, failed, or cancelled. Defaults to the current claimed task and status=done.',
     parameters: Type.Object({
       task: Type.Optional(
         Type.String({
@@ -193,7 +184,6 @@ export function registerSparkFinishTaskTool(
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd;
       const input = normalizeSparkFinishTaskInput(params);
-      const executionMode = await loadSparkExecutionMode(cwd, ctx);
       const store = defaultTaskGraphStore(cwd);
       let reviewArtifact: Artifact<JsonValue> | undefined;
       let reviewResult: ReviewerRunResult | undefined;
@@ -357,12 +347,7 @@ export function registerSparkFinishTaskTool(
       const candidateSuffix = learningCandidate
         ? `\nLearning candidate: ${learningCandidate.artifact.ref}`
         : "";
-      const executionSuffix = renderExecutionModeFinishSuffix(
-        executionMode,
-        finishedResult.projectRef,
-        finishedResult.nextReady,
-        input.status,
-      );
+      const executionSuffix = renderFinishNextStepSuffix(finishedResult.nextReady, input.status);
       return {
         content: [
           {
@@ -539,14 +524,14 @@ function renderFollowUpDispositionBlockedMessage(
     check.undispositioned.length > 5
       ? `\n- … ${check.undispositioned.length - 5} more undispositioned follow-up signal(s)`
       : "";
-  return `Task finish blocked by follow-up disposition gate: @${task.name}: ${task.title}\nResearch/review output contains follow-up signals that are not explicitly dispositioned. Mark each follow-up as one of: ${check.allowedDispositions.join(", ")}.\nUndispositioned signals:\n${signals}${hidden}\nThe task was not marked done. Create/confirm/defer/reject/scope follow-up work, then call task({ action: "finish" }) again.`;
+  return `Task finish blocked by follow-up disposition gate: @${task.name}: ${task.title}\nResearch/review output contains follow-up signals that are not explicitly dispositioned. Mark each follow-up as one of: ${check.allowedDispositions.join(", ")}.\nUndispositioned signals:\n${signals}${hidden}\nThe task was not marked done. Create/confirm/defer/reject/scope follow-up work, then call task_write({ action: "finish" }) again.`;
 }
 
 function renderOpenTaskTodoBlockedMessage(task: Task, readiness: TaskCompletionReadiness): string {
   const issue = readiness.issues.find((entry) => entry.kind === "open_task_todos");
   const todos = issue?.openTodos ?? [];
   const list = todos.length > 0 ? todos.map((label) => `- ${label}`).join("\n") : "- (no detail)";
-  return `Task finish blocked by open task TODOs: @${task.name}: ${task.title}\nFinish or disposition (cancel/delete/done) the remaining task TODOs before marking the task done.\nOpen TODOs:\n${list}\nThe task was not marked done. Update task TODOs with task({ action: "todo_update", scope: "task", ops: [...] }), then call task({ action: "finish" }) again.`;
+  return `Task finish blocked by open task TODOs: @${task.name}: ${task.title}\nFinish or disposition (cancel/delete/done) the remaining task TODOs before marking the task done.\nOpen TODOs:\n${list}\nThe task was not marked done. Update task TODOs with task_write({ action: "todo_update", scope: "task", ops: [...] }), then call task_write({ action: "finish" }) again.`;
 }
 
 function unknownErrorMessage(error: unknown): string {
@@ -700,39 +685,14 @@ function renderTaskReviewRejectedMessage(
 ): string {
   const findings = verdict.findings.length ? `\nFindings: ${verdict.findings.join("; ")}` : "";
   const blockers = verdict.blockers.length ? `\nBlockers: ${verdict.blockers.join("; ")}` : "";
-  return `Task finish blocked by reviewer: @${task.name}: ${task.title}\nReview outcome: ${verdict.outcome}\nReview summary: ${verdict.summary}${findings}${blockers}\nReview artifact: ${artifactRef}\nThe task was not marked done. Address the reviewer feedback, keep or update evidence, then call task({ action: "finish" }) again.`;
+  return `Task finish blocked by reviewer: @${task.name}: ${task.title}\nReview outcome: ${verdict.outcome}\nReview summary: ${verdict.summary}${findings}${blockers}\nReview artifact: ${artifactRef}\nThe task was not marked done. Address the reviewer feedback, keep or update evidence, then call task_write({ action: "finish" }) again.`;
 }
 
-function renderExecutionModeFinishSuffix(
-  executionMode: Awaited<ReturnType<typeof loadSparkExecutionMode>>,
-  projectRef: ProjectRef,
+function renderFinishNextStepSuffix(
   nextReady: Task | undefined,
   status: "done" | "failed" | "cancelled",
 ): string {
-  if (executionMode?.projectRef !== projectRef || status !== "done") return "";
-  if (executionMode.strategy === "goal") {
-    const continuation = renderSparkGoalContinuationPrompt(
-      sparkGoalObjectiveForNextTask({
-        focus: executionMode.focus,
-        nextTaskName: nextReady?.name,
-        nextTaskTitle: nextReady?.title,
-      }),
-    );
-    const modeLabel = "Goal execution mode";
-    return nextReady
-      ? "\n" +
-          modeLabel +
-          " continuing. Next ready task: @" +
-          nextReady.name +
-          ": " +
-          nextReady.title +
-          '. Continue now using the Spark goal continuation below: claim this task with task({ action: "claim" }), execute it, verify evidence, then call task({ action: "finish" }) again. Do not stop after this task unless blocked, no ready task remains, a user decision is required, validation fails, or the user interrupts.\n\n' +
-          continuation
-      : "\n" +
-          modeLabel +
-          " complete. No ready task remains; inspect blockers or finish the project.\n\n" +
-          continuation;
-  }
+  if (status !== "done") return "";
   return nextReady
     ? "\nImplementation mode stopped after one task. Next ready task: @" +
         nextReady.name +

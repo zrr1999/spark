@@ -123,7 +123,7 @@ export function renderRoadmapPlanningContext(context: RoadmapPlanningContext | u
       "- Planning focus matched this roadmap item; reuse/update it instead of creating a parallel item.",
     );
   lines.push(
-    '- When planning tasks, map this item into TaskPlan contextRefs/constraints/successCriteria/evidenceRequired; task({ action: "plan" }) will attach produced task refs back to the item.',
+    '- When planning tasks, map this item into TaskPlan contextRefs/constraints/successCriteria/evidenceRequired; task_write({ action: "plan" }) will attach produced task refs back to the item.',
   );
   return `\n\n${lines.join("\n")}`;
 }

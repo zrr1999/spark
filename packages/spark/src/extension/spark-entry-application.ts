@@ -58,16 +58,7 @@ export async function applySparkEntryResolution(
           resolution.focus,
           resolution.planningSource,
         );
-      else
-        await enterSparkImplementationMode(
-          piApi,
-          deps,
-          ctx,
-          graph,
-          resolution.focus,
-          resolution.executeStrategy,
-          resolution.workflowSelector,
-        );
+      else await enterSparkImplementationMode(piApi, deps, ctx, graph, resolution.focus);
       return;
     case "blocked":
       ctx.ui?.notify?.(resolution.message, "warning");
@@ -115,7 +106,7 @@ async function startSparkNewProject(
 
   await saveCurrentProjectRef(ctx.cwd, ctx, result.projectRef as ProjectRef);
   await deps.refreshSparkWidget(ctx.cwd, ctx);
-  deps.ensureDagManager(ctx.cwd, ctx);
+  deps.ensureWorkflowRunManager(ctx.cwd, ctx);
 
   if (options.enterMode === "plan") {
     const graph = await loadSparkGraph(ctx.cwd, ctx);

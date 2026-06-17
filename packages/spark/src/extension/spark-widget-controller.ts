@@ -7,18 +7,21 @@ import {
   isActiveSessionTodo,
   type SessionTodoEntry,
 } from "@zendev-lab/pi-tasks";
-import { SparkWidget, type SparkWidgetState, type TaskEntry } from "../ui/spark-widget.ts";
+import {
+  SparkWidget,
+  type SparkWidgetActiveLens,
+  type SparkWidgetState,
+  type TaskEntry,
+} from "../ui/spark-widget.ts";
 import { ensureLocalSparkDirectory } from "./spark-activation.ts";
 import { activeSparkRoleRunProcessesForCwd } from "./background-runs.ts";
 import {
   currentSparkProject,
-  loadCurrentProjectState,
   loadSparkGraph,
   saveSparkGraphAndTodos,
   sparkSessionKey,
   sparkSessionOwnerKey,
   type SparkSessionContext,
-  type SparkRunModeState,
 } from "./session-state.ts";
 import {
   assignTodoDisplayNumber,
@@ -33,6 +36,7 @@ import { latestRunsByTaskRef, taskPlanSummary } from "./task-display.ts";
 import { deriveTaskRoleLabel, isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 
 export interface SparkWidgetControllerContext extends SparkSessionContext {
+  sparkActiveLens?: SparkWidgetActiveLens;
   ui?: unknown;
 }
 
@@ -68,9 +72,9 @@ export class SparkWidgetController {
     const ownerSessionKey = sparkSessionOwnerKey(ctx);
     const activeProcesses = activeSparkRoleRunProcessesForCwd(cwd);
     const activeRunRefs = new Set(activeProcesses.map((process) => process.runRef));
-    const dagRunStore = defaultSparkWorkflowRunStore(cwd);
-    if (graph && activeRunRefs.size > 0) await dagRunStore.reconcile({ graph, activeRunRefs });
-    const dagStatus = await dagRunStore.status();
+    const runStore = defaultSparkWorkflowRunStore(cwd);
+    if (graph && activeRunRefs.size > 0) await runStore.reconcile({ graph, activeRunRefs });
+    const workflowRunStatus = await runStore.status();
     const independentTodos = (await loadIndependentTodos(cwd, ctx)).filter(isActiveSessionTodo);
     const todoDisplayNumbers = await loadTodoDisplayNumberState(cwd, ctx);
     const numberedIndependentTodos = independentTodos.map((todo) => ({
@@ -78,13 +82,12 @@ export class SparkWidgetController {
       displayNumber: assignTodoDisplayNumber(todoDisplayNumbers, independentTodoDisplayKey(todo)),
     }));
     const project = graph ? await currentSparkProject(cwd, ctx, graph) : undefined;
-    const currentState = await loadCurrentProjectState(cwd, ctx);
     const sessionGoal = await loadSessionGoal(cwd, ctx);
     if (!graph || !project) {
       this.state = {
-        dag: sparkDagWidgetEntry(dagStatus),
-        run: sparkRunWidgetEntry(currentState?.runMode),
+        workflowRun: sparkWorkflowRunWidgetEntry(workflowRunStatus),
         goal: sparkGoalWidgetEntry(sessionGoal),
+        activeLens: ctx?.sparkActiveLens,
         tasks: [],
         independentTodos: numberedIndependentTodos,
         taskCountTotal: 0,
@@ -105,9 +108,9 @@ export class SparkWidgetController {
     const lastRunsByTaskRef = latestRunsByTaskRef(graph.runs(project.ref));
     this.state = {
       projectTitle: isPlaceholderProjectTitle(project.title) ? undefined : project.title,
-      dag: sparkDagWidgetEntry(dagStatus, project.ref),
-      run: sparkRunWidgetEntry(currentState?.runMode, project.ref),
+      workflowRun: sparkWorkflowRunWidgetEntry(workflowRunStatus, project.ref),
       goal: sparkGoalWidgetEntry(sessionGoal),
+      activeLens: ctx?.sparkActiveLens,
       tasks: allTasks.map((task) => ({
         title: task.title,
         status: mapTaskStatus(task.status),
@@ -202,20 +205,11 @@ function compactGoalObjective(objective: string): string {
   return normalized.length > 96 ? `${normalized.slice(0, 93)}...` : normalized;
 }
 
-function sparkRunWidgetEntry(
-  runMode: SparkRunModeState | undefined,
+function sparkWorkflowRunWidgetEntry(
+  workflowRunStatus: WorkflowRunStatusSummary,
   projectRef?: ProjectRef,
-): SparkWidgetState["run"] {
-  if (!runMode) return undefined;
-  if (projectRef && runMode.projectRef !== projectRef) return undefined;
-  return { status: runMode.status, runRef: runMode.runRef, focus: runMode.focus };
-}
-
-function sparkDagWidgetEntry(
-  dagStatus: WorkflowRunStatusSummary,
-  projectRef?: ProjectRef,
-): SparkWidgetState["dag"] {
-  const activeRun = dagStatus.activeRun;
+): SparkWidgetState["workflowRun"] {
+  const activeRun = workflowRunStatus.activeRun;
   if (activeRun && (!projectRef || activeRun.projectRef === projectRef)) {
     return {
       status: activeRun.status,
@@ -225,7 +219,7 @@ function sparkDagWidgetEntry(
       active: true,
     };
   }
-  const actionableRun = dagStatus.actionableRun;
+  const actionableRun = workflowRunStatus.actionableRun;
   if (actionableRun && (!projectRef || actionableRun.projectRef === projectRef)) {
     return {
       status: actionableRun.status,

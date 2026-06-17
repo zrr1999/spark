@@ -46,22 +46,6 @@ export type {
   SparkActiveSelection,
 } from "./provider-registry.ts";
 export {
-  DEFAULT_SPARK_FUSION_PANEL_SIZE,
-  SPARK_FUSION_MODEL,
-  SPARK_FUSION_PROVIDER,
-  createSparkFusionProvider,
-  listAvailableFusionTargets,
-  registerSparkFusionProvider,
-  resolveSparkFusionRunConfig,
-  runSparkFusion,
-  streamSparkFusion,
-} from "./fusion-provider.ts";
-export type {
-  SparkFusionConfig,
-  SparkFusionModelSelection,
-  SparkFusionRunConfig,
-} from "./fusion-provider.ts";
-export {
   SPARK_MODEL_CYCLE_NEXT_BINDING_ID,
   SPARK_MODEL_CYCLE_PREV_BINDING_ID,
   SPARK_MODEL_PICKER_BINDING_ID,
@@ -85,6 +69,7 @@ export type {
 export {
   assistantMessageToText,
   createProviderRegistryStreamFunction,
+  createProviderRegistryWorkflowModelRunner,
   createSparkCliHostServices,
   defaultSparkCliKeybindingsPath,
   selectInitialModel,
@@ -131,12 +116,10 @@ export type {
   SparkCliHostDiagnostic,
   SparkCliHostServices,
   SparkCliHostServicesOptions,
+  SparkWorkflowModelRunRequest,
+  SparkWorkflowModelRunResponse,
 } from "./bootstrap.ts";
-export type {
-  SparkConfig,
-  SparkFusionConfig as SparkConfigFusionConfig,
-  SparkModelSelectionConfig,
-} from "./config.ts";
+export type { SparkConfig } from "./config.ts";
 export type {
   SparkCompactionPreparation,
   SparkCompactionSettings,

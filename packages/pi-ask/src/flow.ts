@@ -421,6 +421,8 @@ function formatUnknownError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+const TOOL_CALL_DEFAULT_ARG_MAX_LENGTH = 80;
+
 function renderAskFlowToolCall(
   name: string,
   parts: Array<string | undefined>,
@@ -443,7 +445,7 @@ function formatStringArg(
   if (!text) return undefined;
   const rendered = /\s|["'`]/.test(text) ? JSON.stringify(text) : text;
   const normalized = rendered.replaceAll(/\s+/g, " ");
-  const maxLength = options.maxLength ?? 80;
+  const maxLength = options.maxLength ?? TOOL_CALL_DEFAULT_ARG_MAX_LENGTH;
   const truncated =
     normalized.length <= maxLength
       ? normalized

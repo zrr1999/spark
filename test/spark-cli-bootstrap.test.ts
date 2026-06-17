@@ -7,6 +7,7 @@ import test from "node:test";
 import { stableId } from "../packages/pi-extension-api/src/index.ts";
 import { parseSparkCliArgs } from "../packages/spark-cli/src/cli.ts";
 import {
+  createProviderRegistryWorkflowModelRunner,
   createSparkCliHostServices,
   submitToSparkAgent,
   type SparkConfig,
@@ -32,7 +33,9 @@ function assistant(text: string): Record<string, unknown> {
   };
 }
 
-function fakeProviderModule(captured: { systemPrompt?: string } = {}) {
+function fakeProviderModule(
+  captured: { systemPrompt?: string; modelId?: string; userPrompt?: string } = {},
+) {
   return {
     default(api: { registerProvider(name: string, config: unknown): void }) {
       api.registerProvider("fake-provider", {
@@ -41,9 +44,11 @@ function fakeProviderModule(captured: { systemPrompt?: string } = {}) {
         api: "openai-completions",
         streamSimple: (
           _model: unknown,
-          context: { messages?: unknown[]; systemPrompt?: string },
+          context: { messages?: Array<{ content?: unknown }>; systemPrompt?: string },
         ) => {
           captured.systemPrompt = context.systemPrompt;
+          captured.modelId = (_model as { id?: string }).id;
+          captured.userPrompt = String(context.messages?.at(-1)?.content ?? "");
           const message = assistant(`boot ok:${context.messages?.length ?? 0}`);
           return {
             async *[Symbol.asyncIterator]() {
@@ -111,8 +116,7 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
     assert.equal(services.runtime.cwd, cwd);
     assert.equal(services.providerRegistry.getActive()?.providerName, "fake-provider");
     assert.equal(services.providerRegistry.getActive()?.modelId, "fake-model");
-    assert.equal(services.providerRegistry.hasProvider("spark-fusion"), true);
-    assert.equal(services.providerRegistry.listModelsFor("spark-fusion")[0]?.id, "spark-fusion");
+    assert.equal(services.providerRegistry.hasProvider("spark-fusion"), false);
     assert.equal(
       services.runtime.getAllTools().some((tool) => tool.name === "ask"),
       true,
@@ -135,6 +139,10 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
     const response = await submitToSparkAgent(services, "hello");
     assert.equal(response, "boot ok:1");
     assert.match(captured.systemPrompt ?? "", /Spark mode: research\./);
+    assert.match(captured.systemPrompt ?? "", /Tools: task_read, task_write, assign/);
+    assert.match(captured.systemPrompt ?? "", /<builtin_skills>/);
+    assert.match(captured.systemPrompt ?? "", /# Spark/);
+    assert.match(captured.systemPrompt ?? "", /at most one unfinished claimed task/);
     assert.match(captured.systemPrompt ?? "", /workspace-skill/);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -162,6 +170,80 @@ void test("createSparkCliHostServices loads config from explicit sparkHome by de
 
     assert.equal(services.config.providers[0], "fake-provider");
     assert.equal(services.providerRegistry.getActive()?.providerName, "fake-provider");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("provider registry workflow model runner completes in-process without role runs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-workflow-model-runner-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(sparkHome, { recursive: true });
+    const captured: { systemPrompt?: string; modelId?: string; userPrompt?: string } = {};
+    const services = await createSparkCliHostServices({
+      cwd,
+      sparkHome,
+      config: { extensions: [], providers: ["fake-provider"] },
+      extensions: [],
+      providers: ["fake-provider"],
+      providerImporter: async () => fakeProviderModule(captured),
+    });
+
+    const runModel = createProviderRegistryWorkflowModelRunner(services.providerRegistry);
+    const result = await runModel({
+      prompt: "Compare model answers",
+      label: "panel 1",
+      model: "fake-provider/fake-model",
+      metadata: { workflowAgent: true, agentType: "model" },
+    });
+
+    assert.equal(result.text, "boot ok:1");
+    assert.equal(captured.modelId, "fake-model");
+    assert.equal(captured.userPrompt, "Compare model answers");
+    assert.match(captured.systemPrompt ?? "", /read-only Spark workflow model agent/);
+    assert.equal(result.metadata?.providerName, "fake-provider");
+    assert.equal(result.metadata?.modelId, "fake-model");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("provider registry workflow model runner rejects unknown provider and model targets", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-workflow-model-runner-unknown-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(sparkHome, { recursive: true });
+    const services = await createSparkCliHostServices({
+      cwd,
+      sparkHome,
+      config: { extensions: [], providers: ["fake-provider"] },
+      extensions: [],
+      providers: ["fake-provider"],
+      providerImporter: async () => fakeProviderModule(),
+    });
+
+    const runModel = createProviderRegistryWorkflowModelRunner(services.providerRegistry);
+    await assert.rejects(
+      () =>
+        runModel({
+          prompt: "use a missing provider",
+          label: "panel",
+          model: "missing-provider/missing-model",
+        }),
+      /Unknown provider: missing-provider/,
+    );
+    await assert.rejects(
+      () =>
+        runModel({
+          prompt: "use a missing bare model",
+          label: "panel",
+          model: "missing-model",
+        }),
+      /Unknown workflow model: missing-model/,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

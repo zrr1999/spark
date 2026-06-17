@@ -1,11 +1,17 @@
-# task
-task action=status
+# task_read
+task_read action=status
 
-# task
-task action=project_list
+# task_read
+task_read action=project_list
 
-# task
-task action=plan
+# task_write
+task_write action=plan
+
+# assign
+assign dry-run max=2
 
 # goal
 goal action=status
+
+# mode
+mode action=plan focus=tighten tasks

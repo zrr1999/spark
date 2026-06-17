@@ -3,28 +3,15 @@ import { sparkSessionKey, type SparkSessionContext } from "./session-identity.ts
 
 export {
   clearCurrentProjectRef,
-  clearSparkExecutionMode,
   currentSparkProject,
   loadCurrentProjectRef,
   loadCurrentProjectState,
-  loadSparkExecutionMode,
-  loadSparkRunMode,
   saveCurrentProjectRef,
-  saveSparkExecutionMode,
-  saveSparkPlanningMode,
-  saveSparkRunMode,
   sparkRunStrategyForMaxConcurrency,
   sparkRunStrategyMaxConcurrency,
-  updateSparkRunModeStatus,
   type CurrentProjectStoreSnapshot,
   type SparkAgentMode,
-  type SparkExecuteStrategy,
-  type SparkExecutionBudget,
-  type SparkExecutionModeState,
   type SparkPlanningModeSource,
-  type SparkPlanningModeState,
-  type SparkRunModeState,
-  type SparkRunModeStatus,
   type SparkRunStrategy,
 } from "./current-project-state.ts";
 export {

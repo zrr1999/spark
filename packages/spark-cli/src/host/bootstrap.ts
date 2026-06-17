@@ -6,6 +6,7 @@ import type { AssistantMessageEvent, Context, Model, StreamOptions } from "@eare
 import { stableId, type ExtensionAPI } from "@zendev-lab/pi-extension-api";
 
 import { renderSparkActiveSystemPrompt } from "../../../spark/src/extension/spark-active-injection.ts";
+import { renderBuiltinSkillsPrompt } from "../../../spark/src/extension/spark-builtin-skills.ts";
 import { loadSparkMode } from "../../../spark/src/extension/session-state.ts";
 import type { SparkSessionContext } from "../../../spark/src/extension/session-identity.ts";
 import { SparkAgentLoop, type SparkAgentStreamFunction } from "./agent-loop.ts";
@@ -21,7 +22,6 @@ import {
   type SparkExtensionLoadResult,
 } from "./extension-loader.ts";
 import { SparkKeybindings } from "./keybindings.ts";
-import { registerSparkFusionProvider } from "./fusion-provider.ts";
 import {
   SparkModelSelector,
   registerSparkModelSelectorKeybindings,
@@ -55,6 +55,20 @@ export interface SparkCliHostServices {
   extensionLoadResult: SparkExtensionLoadResult;
   providerLoadResult: LoadResult;
   diagnostics: SparkCliHostDiagnostic[];
+}
+
+export interface SparkWorkflowModelRunRequest {
+  prompt: string;
+  label: string;
+  phase?: string;
+  model?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SparkWorkflowModelRunResponse {
+  text: string;
+  structured?: unknown;
+  metadata?: Record<string, unknown>;
 }
 
 export interface SparkCliHostServicesOptions {
@@ -122,9 +136,6 @@ export async function createSparkCliHostServices(
         message: `Provider ${outcome.specifier}: ${outcome.error}`,
       });
   }
-  if (providerRegistry.listProviders().length > 0)
-    registerSparkFusionProvider(providerRegistry, config);
-
   const activeSelection = selectInitialModel(providerRegistry, config);
   if (!activeSelection) {
     diagnostics.push({ type: "warning", message: "No Spark provider/model is registered yet." });
@@ -158,6 +169,11 @@ export async function createSparkCliHostServices(
     options.sessionManager ?? createSparkCliSessionManagerStub(sessionStore, cwd),
   );
   const skillResolver = new SparkSkillResolver({ cwd, sparkHome: options.sparkHome });
+  const builtinSkillsPrompt = (
+    await Promise.all(skillResolver.builtinDirs.map((dir) => renderBuiltinSkillsPrompt(dir)))
+  )
+    .filter(Boolean)
+    .join("\n");
   const skillsPrompt = await skillResolver.formatAvailableSkillsForPrompt();
   const baseSystemPrompt = options.systemPrompt ?? DEFAULT_SPARK_SYSTEM_PROMPT;
   const streamFunction = createProviderRegistryStreamFunction(providerRegistry);
@@ -173,12 +189,19 @@ export async function createSparkCliHostServices(
       cwd,
       runtime.makeContext(),
       baseSystemPrompt,
+      builtinSkillsPrompt,
       skillsPrompt,
     ),
   });
   runtime.on("before_agent_start", async (_event, ctx) => {
     agentLoop.setSystemPrompt(
-      await renderSparkCliAgentSystemPrompt(cwd, ctx, baseSystemPrompt, skillsPrompt),
+      await renderSparkCliAgentSystemPrompt(
+        cwd,
+        ctx,
+        baseSystemPrompt,
+        builtinSkillsPrompt,
+        skillsPrompt,
+      ),
     );
   });
 
@@ -202,10 +225,11 @@ async function renderSparkCliAgentSystemPrompt(
   cwd: string,
   ctx: SparkSessionContext,
   baseSystemPrompt: string,
+  builtinSkillsPrompt: string,
   skillsPrompt: string,
 ): Promise<string> {
   const mode = (await loadSparkMode(cwd, ctx)).mode;
-  return [renderSparkActiveSystemPrompt(baseSystemPrompt, mode), skillsPrompt]
+  return [renderSparkActiveSystemPrompt(baseSystemPrompt, mode), builtinSkillsPrompt, skillsPrompt]
     .filter(Boolean)
     .join("\n");
 }
@@ -223,6 +247,92 @@ export function createProviderRegistryStreamFunction(
       result(): Promise<unknown>;
     } as ReturnType<SparkAgentStreamFunction>;
   };
+}
+
+export function createProviderRegistryWorkflowModelRunner(
+  registry: SparkProviderRegistry,
+): (request: SparkWorkflowModelRunRequest) => Promise<SparkWorkflowModelRunResponse> {
+  return async (request) => {
+    const selection = resolveWorkflowModelSelection(registry, request.model);
+    const provider = registry.getProvider(selection.providerName);
+    if (!provider) throw new Error(`Unknown workflow model provider: ${selection.providerName}`);
+    const model = registry.buildModel(selection.providerName, selection.modelId);
+    const context: Context = {
+      systemPrompt: [
+        "You are a read-only Spark workflow model agent.",
+        "Answer the workflow prompt directly. Do not call tools or modify repository state.",
+      ].join("\n"),
+      messages: [{ role: "user", content: request.prompt, timestamp: Date.now() }],
+      tools: [],
+    };
+    const stream = provider.streamSimple(
+      model,
+      context,
+      {},
+    ) as AsyncIterable<AssistantMessageEvent> & {
+      result(): Promise<unknown>;
+    };
+    for await (const _event of stream) {
+      void _event;
+    }
+    const result = await stream.result();
+    return {
+      text: assistantMessageToText(result as { content?: unknown }),
+      metadata: {
+        ...request.metadata,
+        providerName: selection.providerName,
+        modelId: selection.modelId,
+      },
+    };
+  };
+}
+
+function resolveWorkflowModelSelection(
+  registry: SparkProviderRegistry,
+  requested: string | undefined,
+): SparkActiveSelection {
+  if (requested?.trim()) {
+    const trimmed = requested.trim();
+    const slash = trimmed.indexOf("/");
+    if (slash > 0) {
+      const selection = {
+        providerName: trimmed.slice(0, slash),
+        modelId: trimmed.slice(slash + 1),
+      };
+      assertWorkflowModelSelection(registry, selection);
+      return selection;
+    }
+    const active = registry.getActive();
+    if (
+      active &&
+      registry.listModelsFor(active.providerName).some((model) => model.id === trimmed)
+    ) {
+      const selection = { providerName: active.providerName, modelId: trimmed };
+      assertWorkflowModelSelection(registry, selection);
+      return selection;
+    }
+    const provider = registry
+      .listProviders()
+      .find((candidate) => candidate.models.some((model) => model.id === trimmed));
+    if (!provider) throw new Error(`Unknown workflow model: ${trimmed}`);
+    const selection = { providerName: provider.name, modelId: trimmed };
+    assertWorkflowModelSelection(registry, selection);
+    return selection;
+  }
+
+  const active = registry.getActive();
+  if (active) return active;
+  const provider = registry.listProviders()[0];
+  const model = provider?.models[0];
+  if (!provider || !model) throw new Error("No Spark model is available for workflow model agent");
+  return { providerName: provider.name, modelId: model.id };
+}
+
+function assertWorkflowModelSelection(
+  registry: SparkProviderRegistry,
+  selection: SparkActiveSelection,
+): void {
+  registry.buildModel(selection.providerName, selection.modelId);
 }
 
 export function selectInitialModel(

@@ -1,18 +1,17 @@
 import type { TaskGraph, SessionTodoEntry } from "@zendev-lab/pi-tasks";
 import { isUnfinishedTaskStatus } from "@zendev-lab/pi-tasks";
 import type { TaskRunCompletionSummary, TaskStatus } from "@zendev-lab/pi-extension-api";
-import type { WorkflowRunStatusSummary } from "@zendev-lab/pi-workflows";
-import type { SparkRunModeState } from "./current-project-state.ts";
+import type { WorkflowRunControl, WorkflowRunStatusSummary } from "@zendev-lab/pi-workflows";
 import { appendRecentRoleRunCompletionLines } from "./role-run-completions.ts";
 import type { SparkSessionGoal } from "./spark-session-goals.ts";
 import { sparkRunStrategyForMaxConcurrency } from "./session-state.ts";
 import { visibleIndependentTodos } from "./session-todos.ts";
 import {
-  appendCompactSparkDagStatusLines,
-  appendSparkDagRunNextStepLines,
-  appendSparkDagStatusLines,
-  formatSparkDagRun,
-} from "./spark-dag-status-rendering.ts";
+  appendCompactSparkWorkflowRunStatusLines,
+  appendSparkWorkflowRunNextStepLines,
+  appendSparkWorkflowRunStatusLines,
+  formatSparkWorkflowRun,
+} from "./spark-workflow-run-status-rendering.ts";
 import {
   compactProjectStatusSummaries,
   countTaskStatuses,
@@ -33,7 +32,7 @@ import {
 import { deriveTaskRoleLabel, isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 import { truncateInline } from "./tool-rendering.ts";
 
-export const DEFAULT_SPARK_STATUS_ACTIVE_LIMIT = 20;
+export const DEFAULT_SPARK_STATUS_ACTIVE_LIMIT = 8;
 export const DEFAULT_SPARK_STATUS_TODO_LIMIT = 3;
 export const DEFAULT_SPARK_STATUS_RECENT_COMPLETIONS_LIMIT = 5;
 
@@ -43,8 +42,8 @@ export interface SparkStatusRenderInput {
   taskLimit: number | undefined;
   sessionKey: string;
   currentProject?: ReturnType<TaskGraph["projects"]>[number];
-  dagStatus: WorkflowRunStatusSummary;
-  runMode?: SparkRunModeState;
+  workflowRunStatus: WorkflowRunStatusSummary;
+  runControl?: WorkflowRunControl;
   sessionGoal?: SparkSessionGoal;
   independentTodos: SessionTodoEntry[];
   recentRoleRunCompletions: TaskRunCompletionSummary[];
@@ -59,13 +58,13 @@ export function renderSparkStatus(input: SparkStatusRenderInput): {
   const lines = [
     `Spark tasks (${input.view} view${typeof input.taskLimit === "number" ? `, limit=${input.taskLimit}` : ""}):`,
   ];
-  if (input.runMode) lines.push(sparkRunModeStatusLine(input.runMode));
-  appendDagStatusLines(lines, input.view, input.dagStatus);
+  if (input.runControl) lines.push(sparkRunControlStatusLine(input.runControl));
+  appendWorkflowRunStatusLines(lines, input.view, input.workflowRunStatus);
   if (input.recentRoleRunCompletions.length > 0)
     appendRecentRoleRunCompletionLines(lines, input.recentRoleRunCompletions);
   if (input.view === "active" && !input.currentProject)
     lines.push(
-      '\nSpark available: no project selected for this session. Use task({ action: "project_use" }) to select a project, or request summary/full history to inspect all projects.',
+      '\nSpark available: no project selected for this session. Use task_write({ action: "project_use" }) to select a project, or request summary/full history to inspect all projects.',
     );
 
   const renderedProjectDetails = renderProjectStatusLines(lines, input);
@@ -81,8 +80,8 @@ export function renderSparkStatus(input: SparkStatusRenderInput): {
     renderedProjects: renderedProjectDetails,
     independentTodos: independentTodoDetails,
     projects: compactProjectStatusSummaries(input.graph, input.sessionKey),
-    dag: input.dagStatus,
-    runMode: input.runMode,
+    workflowRunStatus: input.workflowRunStatus,
+    runControl: input.runControl,
     sessionGoal: input.sessionGoal,
     recentRoleRunCompletions: input.recentRoleRunCompletions,
     ...(input.state ? { state: input.state } : {}),
@@ -127,15 +126,14 @@ function compactSparkStatusDetails(
     ready: readyTasks.slice(0, taskLimit).map((task) => compactTaskDecisionDetail(input, task)),
     renderedProjects: renderedProjectDetails.map(compactRenderedProjectDecisionDetail),
     independentTodos: compactIndependentTodoDecisionDetail(independentTodoDetails),
-    dag: compactDagDecisionDetail(input.dagStatus),
-    runMode: input.runMode
+    workflowRunStatus: compactWorkflowRunDecisionDetail(input.workflowRunStatus),
+    runControl: input.runControl
       ? {
-          status: input.runMode.status,
-          runRef: input.runMode.runRef,
-          projectRef: input.runMode.projectRef,
-          focus: input.runMode.focus,
-          maxConcurrency: input.runMode.policy.maxConcurrency,
-          timeoutMs: input.runMode.policy.timeoutMs,
+          status: input.runControl.status,
+          projectRef: input.runControl.projectRef,
+          focus: input.runControl.focus,
+          maxConcurrency: input.runControl.policy.maxConcurrency,
+          timeoutMs: input.runControl.policy.timeoutMs,
         }
       : undefined,
     sessionGoal: input.sessionGoal
@@ -145,7 +143,7 @@ function compactSparkStatusDetails(
         }
       : undefined,
     hints: [
-      'Use view="full" or includeDetails=true for full project/task/DAG details.',
+      'Use view="full" or includeDetails=true for full project/task/workflow-run details.',
       "Use text format for a human-readable active frontier.",
     ],
   };
@@ -244,24 +242,30 @@ function compactIndependentTodoDecisionDetail(
   };
 }
 
-function compactDagDecisionDetail(dagStatus: WorkflowRunStatusSummary): Record<string, unknown> {
+function compactWorkflowRunDecisionDetail(
+  workflowRunStatus: WorkflowRunStatusSummary,
+): Record<string, unknown> {
   return {
-    manager: dagStatus.manager,
+    manager: workflowRunStatus.manager,
     counts: {
-      running: dagStatus.running,
-      succeeded: dagStatus.succeeded,
-      failed: dagStatus.failed,
-      stale: dagStatus.stale,
-      timedOut: dagStatus.timedOut,
-      acknowledged: dagStatus.acknowledged,
-      actionable: dagStatus.actionable,
+      running: workflowRunStatus.running,
+      succeeded: workflowRunStatus.succeeded,
+      failed: workflowRunStatus.failed,
+      stale: workflowRunStatus.stale,
+      timedOut: workflowRunStatus.timedOut,
+      acknowledged: workflowRunStatus.acknowledged,
+      actionable: workflowRunStatus.actionable,
     },
-    activeRun: dagStatus.activeRun ? compactDagRunDecisionDetail(dagStatus.activeRun) : undefined,
-    actionableRun: dagStatus.actionableRun
-      ? compactDagRunDecisionDetail(dagStatus.actionableRun)
+    activeRun: workflowRunStatus.activeRun
+      ? compactWorkflowRunRecordDecisionDetail(workflowRunStatus.activeRun)
       : undefined,
-    lastRun: dagStatus.lastRun ? compactDagRunDecisionDetail(dagStatus.lastRun) : undefined,
-    nextSteps: dagStatus.nextSteps.map((step) => ({
+    actionableRun: workflowRunStatus.actionableRun
+      ? compactWorkflowRunRecordDecisionDetail(workflowRunStatus.actionableRun)
+      : undefined,
+    lastRun: workflowRunStatus.lastRun
+      ? compactWorkflowRunRecordDecisionDetail(workflowRunStatus.lastRun)
+      : undefined,
+    nextSteps: workflowRunStatus.nextSteps.map((step) => ({
       runRef: step.runRef,
       status: step.status,
       summary: truncateInline(step.summary, 200),
@@ -270,7 +274,7 @@ function compactDagDecisionDetail(dagStatus: WorkflowRunStatusSummary): Record<s
   };
 }
 
-function compactDagRunDecisionDetail(
+function compactWorkflowRunRecordDecisionDetail(
   run: NonNullable<WorkflowRunStatusSummary["lastRun"]>,
 ): Record<string, unknown> {
   return {
@@ -285,21 +289,21 @@ function compactDagRunDecisionDetail(
   };
 }
 
-function appendDagStatusLines(
+function appendWorkflowRunStatusLines(
   lines: string[],
   view: SparkStatusView,
-  dagStatus: WorkflowRunStatusSummary,
+  workflowRunStatus: WorkflowRunStatusSummary,
 ): void {
   if (view === "active") {
-    const compactDagRun = appendCompactSparkDagStatusLines(lines, dagStatus);
-    if (compactDagRun) {
-      const label = compactDagRun.ref === dagStatus.activeRun?.ref ? "Active" : "Actionable";
-      lines.push(`  ${label} workflow run: ${formatSparkDagRun(compactDagRun)}`);
-      appendSparkDagRunNextStepLines(lines, compactDagRun, "  ");
+    const compactRun = appendCompactSparkWorkflowRunStatusLines(lines, workflowRunStatus);
+    if (compactRun) {
+      const label = compactRun.ref === workflowRunStatus.activeRun?.ref ? "Active" : "Actionable";
+      lines.push(`  ${label} workflow run: ${formatSparkWorkflowRun(compactRun)}`);
+      appendSparkWorkflowRunNextStepLines(lines, compactRun, "  ");
     }
   } else if (view === "summary") {
-    appendCompactSparkDagStatusLines(lines, dagStatus);
-  } else appendSparkDagStatusLines(lines, dagStatus);
+    appendCompactSparkWorkflowRunStatusLines(lines, workflowRunStatus);
+  } else appendSparkWorkflowRunStatusLines(lines, workflowRunStatus);
 }
 
 function renderProjectStatusLines(
@@ -502,23 +506,21 @@ function appendIndependentTodoStatusLines(
   };
 }
 
-function sparkRunModeStatusLine(runMode: SparkRunModeState): string {
-  const focusSuffix = runMode.focus ? ` focus=${runMode.focus}` : "";
-  const strategy = sparkRunStrategyForMaxConcurrency(runMode.policy.maxConcurrency);
+function sparkRunControlStatusLine(control: WorkflowRunControl): string {
+  const focusSuffix = control.focus ? ` focus=${control.focus}` : "";
+  const strategy = sparkRunStrategyForMaxConcurrency(control.policy.maxConcurrency);
   return (
-    "Spark workflow mode: " +
-    runMode.status +
-    " " +
-    runMode.runRef +
+    "Spark workflow run: " +
+    control.status +
     " project=" +
-    runMode.projectRef +
+    control.projectRef +
     focusSuffix +
     " strategy=" +
     strategy +
     " maxConcurrency=" +
-    runMode.policy.maxConcurrency +
+    control.policy.maxConcurrency +
     " timeoutMs=" +
-    runMode.policy.timeoutMs
+    control.policy.timeoutMs
   );
 }
 

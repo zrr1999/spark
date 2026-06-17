@@ -35,7 +35,7 @@ export function registerSparkProjectTools(
     name: "spark_list_projects",
     label: "Spark List Projects",
     description:
-      'List Spark projects as structured JSON without parsing task({ action: "status" }) text. Parameters: status=active|done|all (default active). Example output item: { ref, title, status, taskCounts: { total, active, done, cancelled }, currentForSession }.',
+      'List Spark projects as structured JSON without parsing task_read({ action: "status" }) text. Parameters: status=active|done|all (default active). Example output item: { ref, title, status, taskCounts: { total, active, done, cancelled }, currentForSession }.',
     parameters: Type.Object({
       status: Type.Optional(
         Type.String({
@@ -139,7 +139,7 @@ export function registerSparkProjectTools(
     name: "spark_use_project",
     label: "Spark Use Project",
     description:
-      'Compatibility surface for task({ action: "project_use" }): set or create this Pi session\'s current Spark project. Other sessions keep their own current project selection. Use task({ action: "project_update" }) to rename an existing project.',
+      'Compatibility surface for task_write({ action: "project_use" }): set or create this Pi session\'s current Spark project. Other sessions keep their own current project selection. Use task_write({ action: "project_update" }) to rename an existing project.',
     parameters: Type.Object({
       project: Type.Optional(
         Type.String({ description: "Existing project ref or title/title prefix to use." }),
@@ -247,7 +247,7 @@ function renderDuplicateProjectBlockedMessage(
     "Candidates:",
     candidateLines,
     "Next steps:",
-    '- Select the existing Project with task({ action: "project_use", project: <candidate ref or title> }) when it is the same work.',
+    '- Select the existing Project with task_write({ action: "project_use", project: <candidate ref or title> }) when it is the same work.',
     "- Ask the user which Project to use when the match is ambiguous.",
     "- Retry creation only with a clearer differentiated title/description for genuinely new work.",
     "- No destructive merge/task move/artifact relink is performed; selecting an existing Project is the merge-like action in this slice.",

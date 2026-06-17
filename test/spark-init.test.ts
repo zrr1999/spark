@@ -120,9 +120,13 @@ void test("initializeSparkIdea does not overwrite an existing initialized projec
 void test("Spark prompt preserves base prompt and stays a single-line mode marker", () => {
   const prompt = renderSparkActiveSystemPrompt("Base prompt");
   assert.match(prompt, /^Base prompt\n\nSpark mode: research\./);
-  assert.match(prompt, /Spark tools are available/);
-  assert.match(prompt, /task, artifact, ask, role, learning, context, recall, workflow, patch/);
-  assert.match(prompt, /no guessing: ask unless user says infer\/research/);
+  assert.match(prompt, /Tools:/);
+  assert.match(
+    prompt,
+    /task_read, task_write, assign, artifact, ask, role, learning, context, recall, workflow, pi-cue, pi-graft/,
+  );
+  assert.doesNotMatch(prompt, /workflow, patch/);
+  assert.doesNotMatch(prompt, /no guessing: ask unless user says infer\/research/);
   assert.doesNotMatch(prompt, /Spark active/);
   assert.doesNotMatch(prompt, /spark skill/);
   assert.doesNotMatch(prompt, /standing project state/);
@@ -205,8 +209,11 @@ void test("active Spark context keeps strict limits for intent, claimed tasks, a
     await defaultTaskGraphStore(dir).save(graph);
     await defaultTaskTodoStore(dir, "leaf:test-leaf").save(graph);
     const ctx = { cwd: dir, sessionManager: { getLeafId: () => "test-leaf" } };
-    await executeSparkToolInTest("task", ctx, { action: "project_use", project: project.ref });
-    await executeSparkToolInTest("task", ctx, { action: "status" });
+    await executeSparkToolInTest("task_write", ctx, {
+      action: "project_use",
+      project: project.ref,
+    });
+    await executeSparkToolInTest("task_read", ctx, { action: "status" });
 
     const summary = await renderActiveSparkContextSummary(dir, ctx);
     assert.ok(summary);
@@ -294,8 +301,11 @@ void test("active Spark context omits finished history and finished TODOs", asyn
       cwd: dir,
       sessionManager: { getLeafId: () => "test-leaf" },
     };
-    await executeSparkToolInTest("task", ctx, { action: "project_use", project: project.ref });
-    await executeSparkToolInTest("task", ctx, { action: "status" });
+    await executeSparkToolInTest("task_write", ctx, {
+      action: "project_use",
+      project: project.ref,
+    });
+    await executeSparkToolInTest("task_read", ctx, { action: "status" });
     const summary = await renderActiveSparkContextSummary(dir, ctx);
 
     assert.ok(summary);

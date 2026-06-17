@@ -5,19 +5,17 @@ import type {
   ToolRenderTheme,
 } from "@zendev-lab/pi-extension-api";
 
-export type PiTaskAction =
-  | "status"
-  | "project_list"
+export type PiTaskReadAction = "status" | "project_list" | "run_status";
+export type PiTaskWriteAction =
   | "project_use"
   | "project_update"
   | "claim"
   | "plan"
   | "finish"
   | "todo_update"
-  | "run_ready"
-  | "run_status"
-  | "run_control"
   | "cache_cleanup";
+export type PiTaskAssignAction = "assign";
+export type PiTaskAction = PiTaskReadAction | PiTaskWriteAction | PiTaskAssignAction;
 
 type ToolExecute = ToolConfig["execute"];
 type ToolOnUpdate = Parameters<ToolExecute>[3];
@@ -59,36 +57,76 @@ class ToolCallText implements ToolRenderComponent {
   }
 }
 
-const TASK_ACTIONS: readonly PiTaskAction[] = [
-  "status",
-  "project_list",
+const TASK_READ_ACTIONS: readonly PiTaskReadAction[] = ["status", "project_list", "run_status"];
+
+const TASK_WRITE_ACTIONS: readonly PiTaskWriteAction[] = [
   "project_use",
   "project_update",
   "claim",
   "plan",
   "finish",
   "todo_update",
-  "run_ready",
-  "run_status",
-  "run_control",
   "cache_cleanup",
 ];
 
 export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOptions): void {
   pi.registerTool({
-    name: "task",
-    label: "Task",
+    name: "task_read",
+    label: "Task Read",
     description:
-      "Canonical project/task/TODO/run graph capability. Use action to list/use/update projects, plan/claim/finish tasks, update TODOs, and inspect/control task runs.",
+      "Read-only project/task/TODO/run graph capability. Use action to inspect project/task status, list projects, or inspect task-run status.",
     promptGuidelines: [
-      "Use task as the canonical task/project/TODO/run graph capability instead of package-specific aliases.",
-      "Use todo_update with scope=session or scope=task; TODOs are not a separate package/tool.",
-      "Use run_control only with explicit runRef/taskRef/all:true selectors; broad destructive operations must never be implicit.",
+      "Use task_read for project/task/TODO/run graph inspection only.",
+      "Use task_write for project/task/TODO graph mutations.",
+      "Use assign for explicit role-run spawning; task_read never schedules or controls child runs.",
+    ],
+    parameters: Type.Object({
+      action: Type.String({ description: "status | project_list | run_status" }),
+      project: Type.Optional(Type.String({ description: "Project selector/ref/title." })),
+      projectRef: Type.Optional(Type.String({ description: "Project ref filter or selector." })),
+      task: Type.Optional(Type.String({ description: "Task selector/ref/name/title." })),
+      taskRef: Type.Optional(Type.String({ description: "Task ref/name/title selector." })),
+      status: Type.Optional(Type.String({ description: "Status filter or status view." })),
+      includeHistory: Type.Optional(Type.Boolean({ description: "Include terminal run history." })),
+      includeDetails: Type.Optional(Type.Boolean({ description: "Expand task/run records." })),
+      runRef: Type.Optional(Type.String({ description: "Run ref selector." })),
+      runAction: Type.Optional(
+        Type.String({ description: "For run_status: status | list | inspect | reconcile." }),
+      ),
+      view: Type.Optional(Type.String({ description: "For status: active | summary | full." })),
+      format: Type.Optional(Type.String({ description: "For status: text | json." })),
+      limit: Type.Optional(Type.Number({ description: "Bounded row/list limit." })),
+      showFinished: Type.Optional(Type.Boolean({ description: "Deprecated full status alias." })),
+    }),
+    renderCall(args, theme) {
+      return renderTaskCall("task_read", args, theme);
+    },
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const action = normalizePiTaskReadAction(params.action);
+      return executePiTaskAction("task_read", action, options, {
+        toolCallId,
+        params,
+        signal,
+        onUpdate,
+        ctx,
+      });
+    },
+  });
+
+  pi.registerTool({
+    name: "task_write",
+    label: "Task Write",
+    description:
+      "Project/task/TODO graph mutation capability. Use action to select/update projects, claim/plan/finish tasks, update TODOs, or clean task-owned caches.",
+    promptGuidelines: [
+      "Use task_write for project/task/TODO graph mutations.",
+      "Creating or claiming a task is plan-locked: every task must have a bound task.plan before claim/creation completes.",
+      "Use assign for explicit role-run spawning; task_write does not expose run_ready or run_control.",
     ],
     parameters: Type.Object({
       action: Type.String({
         description:
-          "status | project_list | project_use | project_update | claim | plan | finish | todo_update | run_ready | run_status | run_control | cache_cleanup",
+          "project_use | project_update | claim | plan | finish | todo_update | cache_cleanup",
       }),
       scope: Type.Optional(Type.String({ description: "For todo_update: session | task." })),
       project: Type.Optional(Type.String({ description: "Project selector/ref/title." })),
@@ -105,9 +143,7 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
             "Optional task executor hint: research | implement | review. Omit for normal work.",
         }),
       ),
-      status: Type.Optional(
-        Type.String({ description: "Task/project/status view depending on action." }),
-      ),
+      status: Type.Optional(Type.String({ description: "Task/project status update." })),
       outputLanguage: Type.Optional(Type.String({ description: "Project output language." })),
       roleRef: Type.Optional(
         Type.String({
@@ -140,48 +176,83 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
         Type.Array(Type.String({ description: "Artifact refs that evidence task completion." })),
       ),
       dryRun: Type.Optional(
-        Type.Boolean({ description: "Dry-run for scheduling/cleanup actions." }),
+        Type.Boolean({ description: "Dry-run for task-owned cache cleanup actions." }),
       ),
-      maxConcurrency: Type.Optional(Type.Number({ description: "run_ready concurrency limit." })),
-      timeoutMs: Type.Optional(Type.Number({ description: "run_ready foreground wait budget." })),
-      includeHistory: Type.Optional(Type.Boolean({ description: "Include terminal run history." })),
-      includeDetails: Type.Optional(Type.Boolean({ description: "Expand task/run records." })),
-      runRef: Type.Optional(Type.String({ description: "Run ref selector." })),
-      runAction: Type.Optional(
-        Type.String({ description: "For run_status: status | list | inspect | reconcile." }),
-      ),
-      control: Type.Optional(
-        Type.String({ description: "For run_control: kill | reconcile | ack." }),
-      ),
-      signal: Type.Optional(Type.String({ description: "Kill signal for run_control kill." })),
-      forceAfterMs: Type.Optional(Type.Number({ description: "Kill force delay." })),
-      all: Type.Optional(Type.Boolean({ description: "Explicit broad run_control selector." })),
-      view: Type.Optional(Type.String({ description: "For status: active | summary | full." })),
-      format: Type.Optional(Type.String({ description: "For status: text | json." })),
-      limit: Type.Optional(Type.Number({ description: "Bounded row/list limit." })),
-      showFinished: Type.Optional(Type.Boolean({ description: "Deprecated full status alias." })),
       olderThanDays: Type.Optional(Type.Number({ description: "cache_cleanup staleness cutoff." })),
       includeBroken: Type.Optional(
         Type.Boolean({ description: "cache_cleanup malformed-cache flag." }),
       ),
     }),
     renderCall(args, theme) {
-      return renderTaskCall(args, theme);
+      return renderTaskCall("task_write", args, theme);
     },
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const action = normalizePiTaskAction(params.action);
-      const handler = options.handlers[action];
-      if (!handler) throw new Error(`task action is not available in this host: ${action}`);
-      return handler({ toolCallId, params, signal, onUpdate, ctx });
+      const action = normalizePiTaskWriteAction(params.action);
+      return executePiTaskAction("task_write", action, options, {
+        toolCallId,
+        params,
+        signal,
+        onUpdate,
+        ctx,
+      });
+    },
+  });
+
+  pi.registerTool({
+    name: "assign",
+    label: "Assign",
+    description:
+      "Explicit Spark assignment/spawn capability. Schedule the ready task frontier through the workflow runtime; dry-run by default.",
+    promptGuidelines: [
+      "Use assign only when ready Spark work should be dispatched to role runs.",
+      "Prefer workflow runtime for parallel/scripted execution; assign is the explicit spawn surface for Spark ready-task frontiers.",
+      "Use task_read for inspection and task_write for graph mutations before assigning work.",
+    ],
+    parameters: Type.Object({
+      dryRun: Type.Optional(
+        Type.Boolean({
+          description: "Dry-run assignment without spawning child role runs. Default true.",
+        }),
+      ),
+      maxConcurrency: Type.Optional(Type.Number({ description: "Assignment concurrency limit." })),
+      timeoutMs: Type.Optional(Type.Number({ description: "Foreground wait budget." })),
+    }),
+    renderCall(args, theme) {
+      const dryRun = args.dryRun === false ? "spawn" : "dry-run";
+      const concurrency =
+        typeof args.maxConcurrency === "number" ? `max=${args.maxConcurrency}` : undefined;
+      const text = ["assign", dryRun, concurrency].filter(Boolean).join(" ");
+      return new ToolCallText(theme.bold ? theme.bold(text) : text);
+    },
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      return executePiTaskAction("assign", "assign", options, {
+        toolCallId,
+        params,
+        signal,
+        onUpdate,
+        ctx,
+      });
     },
   });
 }
 
+function executePiTaskAction(
+  toolName: string,
+  action: PiTaskAction,
+  options: PiTaskToolOptions,
+  args: PiTaskActionHandlerArgs,
+): Promise<PiTaskToolResult> {
+  const handler = options.handlers[action];
+  if (!handler) throw new Error(`${toolName} action is not available in this host: ${action}`);
+  return handler(args);
+}
+
 function renderTaskCall(
+  toolName: string,
   args: Record<string, unknown>,
   theme: ToolRenderTheme,
 ): ToolRenderComponent {
-  const action = typeof args.action === "string" ? args.action : "?";
+  const action = typeof args.action === "string" ? args.action : undefined;
   const task =
     typeof args.task === "string"
       ? args.task
@@ -189,11 +260,16 @@ function renderTaskCall(
         ? args.taskRef
         : undefined;
   const project = typeof args.project === "string" ? args.project : undefined;
-  const text = ["task", `action=${action}`, task ?? project].filter(Boolean).join(" ");
+  const text = [toolName, action && `action=${action}`, task ?? project].filter(Boolean).join(" ");
   return new ToolCallText(theme.bold ? theme.bold(text) : text);
 }
 
-function normalizePiTaskAction(value: unknown): PiTaskAction {
-  if (TASK_ACTIONS.includes(value as PiTaskAction)) return value as PiTaskAction;
-  throw new Error(`task.action must be one of: ${TASK_ACTIONS.join(", ")}`);
+function normalizePiTaskReadAction(value: unknown): PiTaskReadAction {
+  if (TASK_READ_ACTIONS.includes(value as PiTaskReadAction)) return value as PiTaskReadAction;
+  throw new Error(`task_read.action must be one of: ${TASK_READ_ACTIONS.join(", ")}`);
+}
+
+function normalizePiTaskWriteAction(value: unknown): PiTaskWriteAction {
+  if (TASK_WRITE_ACTIONS.includes(value as PiTaskWriteAction)) return value as PiTaskWriteAction;
+  throw new Error(`task_write.action must be one of: ${TASK_WRITE_ACTIONS.join(", ")}`);
 }

@@ -26,10 +26,30 @@ export interface SparkWorkflowRoleRunResponse {
   metadata?: Record<string, unknown>;
 }
 
+export interface SparkWorkflowModelRunRequest {
+  prompt: string;
+  label: string;
+  phase?: string;
+  model?: string;
+  metadata: {
+    workflowAgent: true;
+    label: string;
+    phase?: string;
+    model?: string;
+    agentType: "model";
+    timeoutMs?: number;
+    artifactRef?: string;
+    index: number;
+  };
+}
+
 export interface SparkWorkflowRoleRunAdapterDeps {
   roleRef: RoleRef;
   runRoleInstruction: (
     request: SparkWorkflowRoleRunRequest,
+  ) => Promise<SparkWorkflowRoleRunResponse>;
+  runModelInstruction?: (
+    request: SparkWorkflowModelRunRequest,
   ) => Promise<SparkWorkflowRoleRunResponse>;
 }
 
@@ -38,6 +58,28 @@ export function createSparkWorkflowRoleRunAdapter(
 ): WorkflowAgentRunner {
   return async (prompt, options) => {
     const label = normalizedWorkflowAgentLabel(options);
+    if (options.agentType === "model") {
+      if (!deps.runModelInstruction) {
+        throw new Error("workflow model agent runner is not configured");
+      }
+      const response = await deps.runModelInstruction({
+        prompt,
+        label,
+        phase: options.phase,
+        model: options.model,
+        metadata: {
+          workflowAgent: true,
+          label,
+          phase: options.phase,
+          model: options.model,
+          agentType: "model",
+          timeoutMs: options.timeoutMs,
+          artifactRef: options.artifactRef,
+          index: options.index,
+        },
+      });
+      return response.structured ?? response.text;
+    }
     const request: SparkWorkflowRoleRunRequest = {
       roleRef: deps.roleRef,
       instruction: renderSparkWorkflowAgentInstruction(prompt, options, label),

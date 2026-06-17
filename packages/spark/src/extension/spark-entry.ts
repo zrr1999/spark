@@ -1,6 +1,6 @@
 import type { ProjectRef } from "@zendev-lab/pi-extension-api";
 import type { TaskGraph } from "@zendev-lab/pi-tasks";
-import type { SparkExecuteStrategy, SparkPlanningModeSource } from "./session-state.ts";
+import type { SparkPlanningModeSource } from "./session-state.ts";
 
 export type SparkCommandProjectStateKind = "empty_project" | "existing_project" | "initialized";
 
@@ -32,8 +32,6 @@ export type SparkEntryIntent =
       kind: "direct";
       mode: SparkEntryMode;
       prompt: string;
-      executeStrategy?: SparkExecuteStrategy;
-      workflowSelector?: string;
     };
 
 export type SparkEntryResolution =
@@ -49,8 +47,6 @@ export type SparkEntryResolution =
       mode: SparkEntryMode;
       focus?: string;
       planningSource?: SparkPlanningModeSource;
-      executeStrategy?: SparkExecuteStrategy;
-      workflowSelector?: string;
     }
   | { action: "blocked"; message: string }
   | { action: "none" };

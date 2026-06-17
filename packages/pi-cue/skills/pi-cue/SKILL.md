@@ -31,7 +31,7 @@ SSH profiles, that cwd must be valid on the remote host.
 | **Script**    | `cue_run`       | Run a `.cue` file (`cue run <file.cue>`)    | `path`, `timeout?`, `tail_bytes?`                                                       |
 | **Script**    | `cue_script`    | Run an inline `.cue` script body            | `script`, `pathLabel?`, `timeout?`, `tail_bytes?`                                       |
 | **Script**    | `script_run`    | Run a script file with explicit language    | `path`, `language`, `timeout?`, `tail_bytes?`, `venv?`, `scope?`                        |
-| **Script**    | `script_eval`   | Run an inline script with explicit language | `script`, `language`, `pathLabel?`, `timeout?`, `tail_bytes?`, `venv?`, `scope?`        |
+| **Script**    | `script_eval`   | Run an inline script with explicit language | `script`, `language`, `pathLabel?`, `timeout?`, `tail_bytes?`, `venv?`                  |
 | **Jobs**      | `cue_jobs`      | List/status/wait/stop jobs                  | `action` (list/status/wait/stop), `id?`, `status?`, `limit?`, `timeout?`, `tail_bytes?` |
 | **Resources** | `cue_resources` | Inspect providers and resource snapshots    | `action?` (providers/resources)                                                         |
 | **Schedule**  | `cue_schedule`  | Add/list/pause/resume/remove scheduled jobs | `action` (add/list/pause/resume/remove), `schedule?`, `command?`, `id?`, `limit?`       |
@@ -40,7 +40,7 @@ SSH profiles, that cwd must be valid on the remote host.
 
 Tool names are resource-oriented: `cue_exec` is for direct commands, `cue_run` is for real `.cue` files, `cue_script` is for inline `.cue` script bodies, and `script_run`/`script_eval` are generic explicit-language script runners. Compact managers cover jobs, schedules, scopes, and history.
 
-For `script_run` and `script_eval`, `venv` is valid only with `language="python"` and selects `<venv>/bin/python`; `scope` is valid only with `language="cue-shell"` and selects the RunScript base scope.
+For `script_run` and `script_eval`, `venv` is valid only with `language="python"` and selects `<venv>/bin/python`. `script_eval` previews a fixed, bounded leading snippet of inline code in the rendered tool call without exposing display-only parameters in the callable schema.
 
 `cue_exec` runs without a PTY by default (`pty=false`) so non-interactive commands get separate stdout/stderr and do not trigger terminal capability probes. Use `pty=true` only when a command genuinely needs terminal semantics; for sustained interactive work, use the cue TUI and `:fg` instead.
 

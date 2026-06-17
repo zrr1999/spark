@@ -16,7 +16,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./extension": "./src/extension.ts"
+    "./extension": "./src/extension.ts",
+    "./graft-client": "./src/graft-client.ts"
   },
   "publishConfig": {
     "access": "public"

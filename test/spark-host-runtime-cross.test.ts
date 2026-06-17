@@ -15,14 +15,17 @@ void test("SparkHostRuntime accepts piCueExtension(pi) without throwing", () => 
   assert.ok(toolNames.length >= 5, "pi-cue registers multiple tools");
 });
 
-void test("SparkHostRuntime accepts piGraftExtension(pi) and records its commands", () => {
+void test("SparkHostRuntime accepts piGraftExtension(pi) and records its tools", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-cross" });
   assert.doesNotThrow(() => piGraftExtension(host as never));
   const commandNames = host.listCommands().map((entry) => entry.name);
-  assert.ok(commandNames.includes("graft-attach"));
-  assert.ok(commandNames.includes("graft-doctor"));
+  assert.equal(
+    commandNames.some((name) => name.startsWith("graft-")),
+    false,
+  );
   const toolNames = host.getAllTools().map((tool) => tool.name);
   assert.ok(toolNames.includes("graft_status"));
+  assert.ok(toolNames.includes("graft_doctor"));
 });
 
 void test("SparkHostRuntime accepts piAskExtension(pi) and registers canonical ask tool", () => {

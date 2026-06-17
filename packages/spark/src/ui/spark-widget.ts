@@ -31,7 +31,7 @@ export interface TaskEntry {
   todos: SessionTodoEntry[];
 }
 
-export interface SparkDagWidgetEntry {
+export interface SparkWorkflowRunWidgetEntry {
   status: "running" | "succeeded" | "failed" | "timed_out" | "stale";
   runRef?: string;
   scheduled: number;
@@ -39,21 +39,20 @@ export interface SparkDagWidgetEntry {
   active?: boolean;
 }
 
-export interface SparkRunWidgetEntry {
-  status: "running" | "paused" | "blocked" | "done" | "failed" | "cancelled";
-  runRef: string;
-  focus?: string;
-}
-
 export interface SparkGoalWidgetEntry {
   status: "active" | "paused" | "complete";
   objective: string;
 }
 
+export interface SparkWidgetActiveLens {
+  mode: "research" | "plan" | "implement";
+  driver?: "interactive" | "goal" | "workflow";
+}
+
 export interface SparkWidgetState {
   projectTitle?: string;
-  dag?: SparkDagWidgetEntry;
-  run?: SparkRunWidgetEntry;
+  activeLens?: SparkWidgetActiveLens;
+  workflowRun?: SparkWorkflowRunWidgetEntry;
   goal?: SparkGoalWidgetEntry;
   tasks: TaskEntry[];
   independentTodos: SessionTodoEntry[];
@@ -143,8 +142,7 @@ function hasWidgetContent(state: SparkWidgetState | undefined): state is SparkWi
   return Boolean(
     state &&
     (state.projectTitle ||
-      state.dag ||
-      state.run ||
+      state.workflowRun ||
       state.goal ||
       state.tasks.length > 0 ||
       state.independentTodos.some(isVisibleIndependentTodo)),
@@ -175,8 +173,7 @@ export function renderSparkWidgetLines(
   const visibleTodos = state.independentTodos.filter(isVisibleIndependentTodo);
   if (
     !state.projectTitle &&
-    !state.dag &&
-    !state.run &&
+    !state.workflowRun &&
     !state.goal &&
     state.tasks.length === 0 &&
     visibleTodos.length === 0
@@ -195,7 +192,7 @@ export function renderSparkWidgetLines(
   const projectHeaderLine = formatProjectHeaderLine(state, visibleTasks, l.tasks, theme);
   const backgroundLine = hasSessionRunningAgent(visibleTasks)
     ? undefined
-    : formatBackgroundLine(state.dag, state.run, theme);
+    : formatBackgroundLine(state.workflowRun, theme);
 
   const tasks = visibleTasks.map((task) => ({
     ...task,
@@ -295,37 +292,28 @@ function formatTodoStatusSummary(todos: SessionTodoEntry[]): string {
 }
 
 function formatBackgroundLine(
-  dag: SparkDagWidgetEntry | undefined,
-  run: SparkRunWidgetEntry | undefined,
+  workflowRun: SparkWorkflowRunWidgetEntry | undefined,
   theme: SparkWidgetTheme,
 ): string | undefined {
-  if (!dag && !run) return undefined;
-  const body = dag ? formatBackgroundDagSummary(dag) : formatBackgroundRunSummary(run);
+  if (!workflowRun) return undefined;
+  const body = formatBackgroundRunSummary(workflowRun);
   return `${theme.fg("accent", "◆")} ${theme.fg("dim", body)}`;
 }
 
-function formatBackgroundDagSummary(dag: SparkDagWidgetEntry): string {
-  const status = dag.active ? "running" : dag.status;
+function formatBackgroundRunSummary(workflowRun: SparkWorkflowRunWidgetEntry): string {
+  const status = workflowRun.active ? "running" : workflowRun.status;
   const statusLabel = formatBackgroundStatusLabel(status);
-  const ref = dag.runRef ? ` · ${shortDagRunRef(dag.runRef)}` : "";
-  return `Background work: ${dag.completed}/${dag.scheduled} tasks finished · ${statusLabel}${ref}`;
+  const ref = workflowRun.runRef ? ` · ${shortRunRef(workflowRun.runRef)}` : "";
+  return `Background work: ${workflowRun.completed}/${workflowRun.scheduled} tasks finished · ${statusLabel}${ref}`;
 }
 
-function formatBackgroundRunSummary(run: SparkRunWidgetEntry | undefined): string {
-  if (!run) return "Background work";
-  const focus = run.focus ? ` · focus: ${run.focus}` : "";
-  return `Background work: ${formatBackgroundStatusLabel(run.status)} · ${shortDagRunRef(run.runRef)}${focus}`;
-}
-
-function formatBackgroundStatusLabel(
-  status: SparkDagWidgetEntry["status"] | SparkRunWidgetEntry["status"],
-): string {
-  if (status === "succeeded" || status === "done") return "done";
+function formatBackgroundStatusLabel(status: SparkWorkflowRunWidgetEntry["status"]): string {
+  if (status === "succeeded") return "done";
   if (status === "timed_out") return "timed out";
   return status;
 }
 
-function shortDagRunRef(runRef: string): string {
+function shortRunRef(runRef: string): string {
   const match = /^run:([0-9a-f]{8})/i.exec(runRef);
   return match ? `run:${match[1]}` : runRef;
 }
@@ -337,11 +325,25 @@ function formatProjectHeaderLine(
   theme: SparkWidgetTheme,
 ): string | undefined {
   const taskSummary = formatTaskSummaryHeader(state, visibleTasks, tasksLabel);
-  const suffix = taskSummary ? `${theme.fg("dim", "·")} ${theme.fg("dim", taskSummary)}` : "";
+  const lensSummary = formatActiveLensSummary(state.activeLens);
+  const summaries = [lensSummary, taskSummary].filter((part): part is string => Boolean(part));
+  const suffix = summaries
+    .map((summary) => `${theme.fg("dim", "·")} ${theme.fg("dim", summary)}`)
+    .join(" ");
   if (!state.projectTitle) {
-    return taskSummary ? `${theme.fg("accent", "◆")} ${theme.fg("dim", taskSummary)}` : undefined;
+    return summaries.length > 0
+      ? `${theme.fg("accent", "◆")} ${theme.fg("dim", summaries.join(" · "))}`
+      : undefined;
   }
   return `${theme.fg("accent", "◆")} ${theme.bold(state.projectTitle)}${suffix ? ` ${suffix}` : ""}`;
+}
+
+function formatActiveLensSummary(lens: SparkWidgetActiveLens | undefined): string | undefined {
+  if (!lens) return undefined;
+  const driver = lens.driver ?? "interactive";
+  if (lens.mode === "research" && driver === "interactive") return undefined;
+  const driverSuffix = driver === "interactive" ? "" : ` · ${driver}`;
+  return `Lens: ${lens.mode}${driverSuffix}`;
 }
 
 function formatTaskSummaryHeader(

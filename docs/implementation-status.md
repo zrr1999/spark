@@ -23,7 +23,7 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
    - Spark keeps project-bound `/goal` command/tool facade; historical serialized marker strings remain stable for compatibility
 - `pi-workflows`
    - canonical `workflow` list/read tool for saved scripts in controlled workspace `.spark/workflows/*.js` and user `~/.agents/workflows/*.js` roots
-   - workflow metadata/runtime primitives and `.spark/workflow-runs.json` DAG/workflow-run store with scheduling/reconciliation/retention helpers
+   - workflow metadata/runtime primitives and `.spark/workflow-runs.json` workflow-run store with scheduling/reconciliation/retention helpers
    - no inline workflow execution and no `/goal` aliasing; execution remains explicit host/runtime policy
 - `pi-context`
    - registered context provider contracts and canonical `context` list/preview tool with per-provider budgets
@@ -40,16 +40,16 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
    - raw TypeScript imports compatible with Pi / Node strip-types loading
    - daemon auto-start and bash disable policy
 - `pi-roles`
-   - reusable `RoleSpec` definitions with `builtin | project | user` sources
-   - builtin roles (`scout`, `planner`, `worker`, `reviewer`, `oracle`) as generic role specs; Spark facade decides how to use them
-   - project/user Markdown role stores, canonical public/default `role` action tool, task-agnostic direct `role({ action: "call" })`, fresh/forked run modes, explicit fork source requirements, JSONL parsing, active-run listing/cancellation, timeout signalling
+   - reusable `RoleSpec` definitions with `builtin | extension | project | user` sources
+   - builtin roles (`scout`, `reviewer`, `worker`) as generic role specs with audited capability profiles: scout=`read+net`, reviewer=`read+net+exec`, worker=`read+net+exec+write`; no builtin role receives `interact`, `spawn`, `ask`, `task`, `task_read`, `task_write`, `goal`, `role`, `assign`, `workflow`, or `graft_patch`
+   - extension role registration, project/user Markdown role stores, canonical public/default `role` action tool, task-agnostic direct `role({ action: "call" })`, fresh/forked run modes, explicit fork source requirements, JSONL parsing, active-run listing/cancellation, timeout signalling
 - `spark-runtime`
    - Spark single-task adapter over `pi-roles`
    - dry-run and real task execution, runtime-created role-run claims, heartbeat loop, artifact persistence, timeout/reconciliation tracking, kill controls, and role-run transcript compaction support
 - `spark`
    - Spark compatibility entry plus `/research`, `/plan`, `/implement`, `/goal`, and `/workflow[:selector]` commands
    - Spark widget, mode state, active context provider, session-bound goal facade, review/init flow state, builtin Spark roles, and role/model binding policy
-   - canonical visible tool surface through `task`, `learning`, `artifact`, `ask`, `context`, `workflow`, `role`, `recall`, and `goal`; legacy `spark_*` tool configs are internal implementation details only and are not registered as active tools
+   - canonical visible tool surface through `task_read`, `task_write`, `assign`, `learning`, `artifact`, `ask`, `context`, `workflow`, `role`, `recall`, and `goal`; legacy `spark_*` tool configs are internal implementation details only and are not registered as active tools
    - always-available research-default standing mode, with project-bound context appended only after a graph/current project exists
    - state initialization without a generic intake template; clarification/decision asks are grounded in inspected context
    - root `SPARK.md` materialization only during compatibility initialization when `.git` exists in cwd; direct project-bound modes keep intent under `.spark` artifacts
@@ -71,7 +71,7 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
 - `artifact({ action })` owns evidence/artifact records.
 - `learning({ action })` owns evidence-backed reusable learnings.
 - `ask({ action })` owns user-question UX and result semantics.
-- `context({ action })`, `recall`, `workflow({ action })`, `role({ action })`, `pi-cue`, and `pi-graft` tools remain canonical generic surfaces; patcher-style child runs belong to `graft_patch`, not the Spark facade.
+- `context({ action })`, `recall`, `workflow({ action })`, `role({ action })`, `pi-cue`, and `pi-graft` tools remain canonical generic surfaces; patcher-style child runs belong to explicit extension roles, not the Spark facade.
 - Public/default action tools render as `tool action=<value> ...`; do not keep fragmented compatibility surfaces public when a canonical action tool owns the domain.
 
 ## Deferred by design

@@ -23,7 +23,7 @@ import { activeSparkRoleRunProcessesForCwd } from "./background-runs.ts";
 import {
   SPARK_ROLE_RUN_RETENTION_RENDER_LIMIT,
   appendRoleRunArtifactRetentionLines,
-  appendSparkDagRunPruneLines,
+  appendSparkWorkflowRunPruneLines,
   appendSparkStateCleanupPlanLines,
   appendSparkStateDiagnosticsLines,
   appendSparkStateHousekeepingLines,
@@ -232,8 +232,8 @@ export function registerSparkStateTool(
         };
       }
       if (action === "prune") {
-        const dagRunStore = defaultSparkWorkflowRunStore(cwd);
-        const prune = await dagRunStore.pruneRuns({
+        const runStore = defaultSparkWorkflowRunStore(cwd);
+        const prune = await runStore.pruneRuns({
           dryRun,
           olderThanDays,
           keepRecent,
@@ -241,7 +241,7 @@ export function registerSparkStateTool(
           activeRunRefs: activeSparkRoleRunProcessesForCwd(cwd).map((process) => process.runRef),
         });
         const lines = [`Spark workflow-run prune ${dryRun ? "dry-run" : "apply"}:`];
-        appendSparkDagRunPruneLines(lines, prune);
+        appendSparkWorkflowRunPruneLines(lines, prune);
         return {
           content: [{ type: "text", text: lines.join("\n") }],
           details: { found: true, action, prune },

@@ -10,6 +10,10 @@ import {
   loadMatchingSparkSkillsForPrompt,
   parseSkillFrontmatter,
 } from "../packages/spark-cli/src/host/index.ts";
+import {
+  loadBuiltinSkills,
+  renderBuiltinSkillsForPrompt,
+} from "../packages/spark/src/extension/spark-builtin-skills.ts";
 
 async function writeSkill(
   root: string,
@@ -33,6 +37,31 @@ void test("parseSkillFrontmatter reads skill metadata booleans and body", () => 
     "disable-model-invocation": false,
   });
   assert.equal(parsed.body, "# Demo\n");
+});
+
+void test("loadBuiltinSkills and renderBuiltinSkillsForPrompt expose full builtin bodies", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-builtin-skills-fulltext-"));
+  try {
+    await writeSkill(
+      dir,
+      "spark/SKILL.md",
+      "name: spark\ndescription: Builtin Spark skill\ndisable-model-invocation: true\n",
+      "# Spark\nAlways follow builtin instructions.\n",
+    );
+
+    const skills = await loadBuiltinSkills(dir);
+    assert.equal(skills.length, 1);
+    assert.equal(skills[0]!.name, "spark");
+    assert.equal(skills[0]!.disableModelInvocation, true);
+    assert.match(skills[0]!.body, /Always follow builtin instructions/);
+
+    const prompt = renderBuiltinSkillsForPrompt(skills);
+    assert.match(prompt, /<builtin_skills>/);
+    assert.match(prompt, /Do not use the read tool/);
+    assert.match(prompt, /Always follow builtin instructions/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 void test("SparkSkillResolver discovers builtin, workspace, and user skills with user override precedence", async () => {

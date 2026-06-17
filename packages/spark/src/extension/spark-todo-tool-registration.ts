@@ -30,7 +30,7 @@ export function registerSparkTodoTools(
     name: "spark_update_todos",
     label: "Spark Update TODOs",
     description:
-      'Compatibility surface for task({ action: "todo_update", scope: "session" }): update independent session TODOs. These TODOs are not tied to a claimed task and survive reload/restart for this session.',
+      'Compatibility surface for task_write({ action: "todo_update", scope: "session" }): update independent session TODOs. These TODOs are not tied to a claimed task and survive reload/restart for this session.',
     parameters: Type.Object({
       ops: Type.Array(
         Type.Object({
@@ -68,7 +68,7 @@ export function registerSparkTodoTools(
     name: "spark_update_task_todos",
     label: "Spark Update Task TODOs",
     description:
-      'Compatibility surface for task({ action: "todo_update", scope: "task" }): update TODOs attached to this session\'s one currently claimed unfinished task. Only claimed unfinished tasks can have task TODOs modified; use task({ action: "todo_update", scope: "session" }) for independent session TODOs.',
+      'Compatibility surface for task_write({ action: "todo_update", scope: "task" }): update TODOs attached to this session\'s one currently claimed unfinished task. Only claimed unfinished tasks can have task TODOs modified; use task_write({ action: "todo_update", scope: "session" }) for independent session TODOs.',
     parameters: Type.Object({
       task: Type.Optional(
         Type.String({

@@ -60,16 +60,20 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
   assert.ok(tools.includes("role"));
   assert.ok(!tools.includes("list_roles"));
   assert.ok(tools.includes("graft_status"));
-  assert.ok(tools.includes("graft_patch"));
+  assert.ok(!tools.includes("graft_patch"));
   assert.ok(!tools.includes("patch"));
-  assert.ok(tools.includes("task"));
+  assert.ok(!tools.includes("task"));
+  assert.ok(tools.includes("task_read"));
+  assert.ok(tools.includes("task_write"));
+  assert.ok(tools.includes("assign"));
   assert.equal(
     tools.some((tool) => tool.startsWith("spark_")),
     false,
   );
   const commands = host.listCommands().map((command) => command.name);
   assert.ok(commands.includes("spark"));
-  assert.ok(commands.includes("graft-attach"));
+  assert.ok(commands.includes("workflow:fusion"));
+  assert.ok(!commands.some((command) => command.startsWith("graft-")));
 });
 
 void test("SparkExtensionLoader isolates one extension failure and continues loading later extensions", async () => {

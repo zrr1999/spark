@@ -10,8 +10,7 @@ import {
   type SparkEntryModeChoice,
   type SparkEntryResolution,
 } from "./spark-entry.ts";
-import { currentSparkProject, type SparkExecuteStrategy } from "./session-state.ts";
-import { listSparkWorkflowRegistry, normalizeSparkWorkflowId } from "./spark-workflow-registry.ts";
+import { currentSparkProject } from "./session-state.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
 export type SparkEntryResolutionContext = Pick<
@@ -62,66 +61,12 @@ export async function resolveSparkEntry(
       ? { action: "initialize_new_project", idea, enterPlanning: true, planningSource: "auto" }
       : { action: "none" };
   }
-  const executeStrategy = mode === "implement" ? resolveExecuteStrategy(intent) : undefined;
-  const workflowSelector =
-    executeStrategy === "workflow"
-      ? await resolveWorkflowSelector(ctx, graph, intent.prompt, intent)
-      : undefined;
-  if (executeStrategy === "workflow" && workflowSelector === false) return { action: "none" };
   return {
     action: "enter_mode",
     mode,
     focus: intent.prompt || undefined,
     planningSource: intent.kind === "direct" && mode === "plan" ? "direct" : "auto",
-    executeStrategy,
-    workflowSelector: workflowSelector || undefined,
   };
-}
-
-function resolveExecuteStrategy(intent: SparkEntryIntent): SparkExecuteStrategy {
-  if (intent.kind === "direct" && intent.executeStrategy) return intent.executeStrategy;
-  return "default";
-}
-
-async function resolveWorkflowSelector(
-  ctx: SparkEntryResolutionContext,
-  graph: TaskGraph,
-  prompt: string,
-  intent: SparkEntryIntent,
-): Promise<string | false | undefined> {
-  const requested = intent.kind === "direct" ? intent.workflowSelector : undefined;
-  const listing = await listSparkWorkflowRegistry(ctx.cwd);
-  const normalizedRequested = normalizeWorkflowSelector(requested);
-  if (
-    normalizedRequested &&
-    listing.workflows.some(
-      (workflow) => workflow.source + ":" + workflow.id === normalizedRequested,
-    )
-  ) {
-    return normalizedRequested;
-  }
-  if (!requested) return "agent:auto";
-
-  const available = listing.workflows.map((workflow) => workflow.source + ":" + workflow.id);
-  const reason = normalizedRequested
-    ? "Spark workflow selector not found: " + normalizedRequested + "."
-    : "Spark workflow mode needs an explicit saved workflow selector.";
-  const suffix = available.length
-    ? " Available workflow(s): " + available.join(", ") + "."
-    : " Create a saved workspace workflow under .spark/workflows/<name>.js, then run /workflow workspace:<name>.";
-  ctx.ui?.notify?.(reason + suffix, "warning");
-  return false;
-}
-
-function normalizeWorkflowSelector(selector: string | undefined): string | undefined {
-  if (!selector) return undefined;
-  const match = /^(workspace|user):(.+)$/u.exec(selector.trim());
-  if (!match) return undefined;
-  try {
-    return match[1] + ":" + normalizeSparkWorkflowId(match[2]);
-  } catch {
-    return undefined;
-  }
 }
 
 async function resolveSparkEntryWithoutGraph(
@@ -154,7 +99,7 @@ async function resolveSparkEntryWithoutGraph(
 function blockedDirectModeWithoutGraph(mode: SparkEntryMode): SparkEntryResolution {
   return {
     action: "blocked",
-    message: `Spark ${mode} mode needs initialized Spark project state. Create or select a project with task({ action: "project_use", title, description }) before using this mode.`,
+    message: `Spark ${mode} mode needs initialized Spark project state. Create or select a project with task_write({ action: "project_use", title, description }) before using this mode.`,
   };
 }
 
@@ -184,7 +129,7 @@ async function inferExistingProjectSparkIdea(
     return inferred;
   }
   ctx.ui?.notify?.(
-    'Spark planning needs a concrete focus for this existing project. Create or select a project with task({ action: "project_use", title, description }) before planning.',
+    'Spark planning needs a concrete focus for this existing project. Create or select a project with task_write({ action: "project_use", title, description }) before planning.',
     "warning",
   );
   return undefined;

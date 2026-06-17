@@ -4,7 +4,7 @@ import type { RoleRef } from "@zendev-lab/pi-extension-api";
 import {
   killActiveSparkRoleRunProcesses,
   runSparkTask,
-  type RoleRunMode,
+  type RoleLaunchMode,
 } from "@zendev-lab/spark-runtime";
 import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import type { ReadyTaskRun, ReadyTaskRunKiller } from "@zendev-lab/pi-workflows";
@@ -22,7 +22,7 @@ export interface SparkRuntimeReadyTaskRunnerOptions {
   cwd?: string;
   piCommand?: string;
   sessionDir?: string;
-  mode?: RoleRunMode;
+  launch?: RoleLaunchMode;
   forkFromSession?: string;
   sessionModel?: string;
   heartbeatIntervalMs?: number;
@@ -46,7 +46,7 @@ export function createSparkRuntimeReadyTaskRunner(
         timeoutMs: input.timeoutMs,
         signal: input.signal,
         sessionDir: options.sessionDir,
-        mode: options.mode,
+        launch: options.launch,
         forkFromSession: options.forkFromSession,
         sessionModel: options.sessionModel,
         heartbeatIntervalMs: options.heartbeatIntervalMs,

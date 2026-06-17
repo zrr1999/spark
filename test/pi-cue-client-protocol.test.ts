@@ -117,6 +117,13 @@ function registerCueToolsForProtocolTest(): Map<string, RegisteredPiCueTool> {
   return tools;
 }
 
+function toolParameterProperties(tool: RegisteredPiCueTool | undefined): Record<string, unknown> {
+  assert.ok(tool, "expected tool to be registered");
+  const parameters = tool.parameters as { properties?: Record<string, unknown> };
+  assert.ok(parameters.properties, "expected object parameter schema");
+  return parameters.properties;
+}
+
 function singleJobCueServer(label: string) {
   return (message: CueFrame, socket: Socket) => {
     const id = message.id as number;
@@ -394,7 +401,11 @@ void test("cue RunScript request matches the current strict daemon schema", asyn
       }
     },
     async (client, requests) => {
-      const result = await client.runScript({ path: "build.cue", input: ":run echo ok" });
+      const result = await client.runScript({
+        path: "build.cue",
+        input: ":run echo ok",
+        scope: "S@legacy",
+      } as Parameters<CueClient["runScript"]>[0]);
 
       assert.equal(result.scriptId, "R1");
       const scriptPayload = requestPayload(requests[1]!);
@@ -404,8 +415,21 @@ void test("cue RunScript request matches the current strict daemon schema", asyn
         false,
         "RunScript must not send deprecated mode",
       );
+      assert.equal(
+        "scope" in (scriptPayload.RunScript as Record<string, unknown>),
+        false,
+        "RunScript must not send deprecated scope",
+      );
     },
   );
+});
+
+void test("pi-cue script tool schemas do not expose deprecated RunScript scope", () => {
+  const tools = registerCueToolsForProtocolTest();
+  for (const name of ["cue_run", "cue_script", "script_run", "script_eval"]) {
+    const properties = toolParameterProperties(tools.get(name));
+    assert.equal("scope" in properties, false, `${name} must not expose scope`);
+  }
 });
 
 void test("cue eval encodes resource needs as run mode params", async () => {

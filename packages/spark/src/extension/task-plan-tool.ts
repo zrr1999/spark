@@ -42,7 +42,7 @@ export function normalizeTaskKind(value: unknown): TaskKind | undefined {
   if (value === "generic") return value;
   if (typeof value === "string" && value.startsWith("proj:"))
     throw new Error(
-      `kind received a project ref (${value}); pass it as project/projectRef, e.g. task({ action: "plan", project: "${value}", tasks: [...] })`,
+      `kind received a project ref (${value}); pass it as project/projectRef, e.g. task_write({ action: "plan", project: "${value}", tasks: [...] })`,
     );
   if (value === "plan" || value === "ask" || value === "cue" || value === "interaction")
     throw new Error(

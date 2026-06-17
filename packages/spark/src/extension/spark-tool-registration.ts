@@ -34,6 +34,10 @@ export interface SparkSessionModelRef {
 export interface SparkToolContext {
   cwd: string;
   model?: SparkSessionModelRef;
+  sparkActiveLens?: {
+    mode: "research" | "plan" | "implement";
+    driver?: "interactive" | "goal" | "workflow";
+  };
   isIdle?: () => boolean;
   sessionManager?: {
     getSessionFile?: () => string | undefined;

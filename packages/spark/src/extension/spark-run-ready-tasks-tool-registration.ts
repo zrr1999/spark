@@ -10,11 +10,10 @@ import { ensureRoleModelSettingsForProject } from "./role-model-settings.ts";
 import {
   currentSparkProject,
   loadSparkGraph,
-  loadSparkRunMode,
   saveSparkGraphAndTodos,
-  saveSparkRunMode,
   sparkRunStrategyForMaxConcurrency,
 } from "./session-state.ts";
+import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import { sessionModelName } from "./session-model.ts";
 import { ensureSparkGraphInvariants } from "./spark-graph-invariants.ts";
 import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
@@ -23,7 +22,7 @@ import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 
 interface SparkRunReadyTasksToolDeps {
-  ensureDagManager: (cwd: string, ctx: SparkToolContext) => void;
+  ensureWorkflowRunManager: (cwd: string, ctx: SparkToolContext) => void;
 }
 
 export function normalizeSparkRunReadyTasksBoolean(
@@ -56,7 +55,7 @@ export function registerSparkRunReadyTasksTool(
     name: "spark_run_ready_tasks",
     label: "Spark Run Ready Tasks",
     description:
-      'Compatibility surface for task({ action: "run_ready" }): run all currently ready Spark tasks with their bound builtin/project/user Spark role specs and persist task-run artifacts. Dry-run by default. Use this for Spark-native role/task workflow instead of spawning nested pi CLI sessions.',
+      "Internal compatibility implementation for assign: run all currently ready Spark tasks with their bound builtin/extension/project/user Spark role specs and persist task-run artifacts. Dry-run by default. Use assign for Spark-native role/task workflow instead of spawning nested pi CLI sessions.",
     parameters: Type.Object({
       dryRun: Type.Optional(Type.Boolean({ default: true })),
       maxConcurrency: Type.Optional(
@@ -104,7 +103,7 @@ export function registerSparkRunReadyTasksTool(
           content: [
             {
               type: "text",
-              text: 'No current Spark project selected. Use task({ action: "project_use" }) before running ready tasks.',
+              text: 'No current Spark project selected. Use task_write({ action: "project_use" }) before running ready tasks.',
             },
           ],
           details: { found: false, error: "no_current_project" },
@@ -124,34 +123,35 @@ export function registerSparkRunReadyTasksTool(
             details: settingsResult as unknown as Record<string, unknown>,
           };
         }
-        const existingRunMode = await loadSparkRunMode(cwd, ctx);
+        const runStore = defaultSparkWorkflowRunStore(cwd);
+        const existingControl = await runStore.loadControl();
         const focus =
-          existingRunMode?.projectRef === project.ref ? existingRunMode.focus : undefined;
-        const runMode = await saveSparkRunMode(
-          cwd,
-          ctx,
-          project.ref,
+          existingControl?.projectRef === project.ref ? existingControl.focus : undefined;
+        // Keep sparkRunStrategyForMaxConcurrency referenced for status/strategy parity.
+        void sparkRunStrategyForMaxConcurrency(maxConcurrency);
+        const control = await runStore.setControl({
+          projectRef: project.ref,
           focus,
-          sparkRunStrategyForMaxConcurrency(maxConcurrency),
-          { maxConcurrency, timeoutMs },
-        );
-        deps.ensureDagManager(cwd, ctx);
+          status: "running",
+          policy: { maxConcurrency, timeoutMs },
+        });
+        deps.ensureWorkflowRunManager(cwd, ctx);
         ctx.ui?.notify?.(
-          `Spark workflow-run scheduler started for “${project.title}”. Progress appears in the Spark widget; inspect with task({ action: "run_status" }).`,
+          `Spark workflow-run scheduler started for “${project.title}”. Progress appears in the Spark widget; inspect with task_read({ action: "run_status" }).`,
           "info",
         );
         return {
           content: [
             {
               type: "text",
-              text: `Spark workflow-run scheduler started for current project “${project.title}”. Progress appears in the Spark widget; inspect with task({ action: "run_status" }), or stop explicit stuck child runs with task({ action: "run_control", control: "kill" }).`,
+              text: `Spark workflow-run scheduler started for current project “${project.title}”. Progress appears in the Spark widget; inspect with task_read({ action: "run_status" }).`,
             },
           ],
           details: {
             workflowRunScheduler: "started",
             dryRun: false,
             projectRef: project.ref,
-            runModeRef: runMode.runRef,
+            controlProjectRef: control.projectRef,
             policy: { maxConcurrency, timeoutMs },
           },
         };

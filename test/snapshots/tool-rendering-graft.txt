@@ -1,5 +1,2 @@
-# graft_patch
-graft_patch "Create a narrow candidate for the requested fix." mode=forked model=test/model
-
 # graft_repo
 graft_repo action=add repo=spark url=https://github.com/zrr1999/spark.git

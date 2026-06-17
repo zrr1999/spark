@@ -46,23 +46,24 @@
     "@zendev-lab/pi-tasks": "workspace:^",
     "@zendev-lab/pi-workflows": "workspace:^",
     "@zendev-lab/spark-runtime": "workspace:^",
-    "typebox": "^1.1.38"
+    "typebox": "^1.2.13"
   },
   "devDependencies": {
-    "@earendil-works/pi-tui": "^0.74.1",
-    "@types/node": "^25.8.0",
+    "@earendil-works/pi-tui": "^0.74.2",
+    "@types/node": "^25.9.3",
     "oxlint": "1.61.0",
     "typescript": "^6.0.3",
-    "vite": "catalog:",
-    "vite-plus": "catalog:"
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.1.18",
+    "vite-plus": "0.1.18"
   },
-  "packageManager": "pnpm@11.1.2+sha512.415a1cc25974731e75455c1468371be74c5aa5fb7621b50d4056d222451609f11412f23fd602e6169f1e060466641f798597e1be961a10688836a67b16569499",
+  "packageManager": "pnpm@11.7.0",
   "pi": {
     "extensions": [
       "./packages/pi-ask/src/extension-entry.ts",
       "./packages/pi-artifacts/src/extension-entry.ts",
       "./packages/pi-btw/extensions/btw.ts",
       "./packages/pi-cue/src/extension/index.ts",
+      "./packages/pi-models/src/extension-entry.ts",
       "./packages/pi-roles/src/extension-entry.ts",
       "./packages/pi-recall/src/extension-entry.ts",
       "./packages/pi-workflows/src/extension-entry.ts",

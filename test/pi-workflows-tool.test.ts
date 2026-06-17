@@ -22,7 +22,7 @@ interface ToolConfig {
   ): Promise<ToolResult>;
 }
 
-void test("workflow tool lists and reads saved workspace scripts from controlled roots", async () => {
+void test("workflow tool lists builtins and reads saved workspace scripts from controlled roots", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-workflows-tool-"));
   try {
     await mkdir(workspaceWorkflowDir(dir), { recursive: true });
@@ -48,6 +48,7 @@ void test("workflow tool lists and reads saved workspace scripts from controlled
       { action: "list", includeUser: false },
       dir,
     );
+    assert.match(toolText(listed), /builtin:deep-research/);
     assert.match(toolText(listed), /workspace:release-check/);
     assert.match(toolText(listed), /Release Check/);
 
@@ -73,7 +74,7 @@ void test("workflow tool rejects inline/freeform selectors", async () => {
 
   await assert.rejects(
     () => executeTool(tools, "workflow", { action: "read", selector: "inline:do-things" }),
-    /workflow selector must be workspace:<id> or user:<id>/,
+    /workflow selector must be builtin:<id>, workspace:<id>, or user:<id>/,
   );
   await assert.rejects(
     () => executeTool(tools, "workflow", { action: "read", selector: "workspace:../escape" }),

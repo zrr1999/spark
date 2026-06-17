@@ -207,7 +207,7 @@ export interface RequestEnvelope {
 
 export type RequestPayload =
   | { Eval: { input: string; mode: Mode } }
-  | { RunScript: { path: string; input: string; scope?: string } }
+  | { RunScript: { path: string; input: string } }
   | { Subscribe: { channels: string[] } }
   | { Unsubscribe: { channels: string[] } }
   | { ListJobs: { limit?: number | null } }
@@ -906,12 +906,12 @@ export class CueClient {
    * the script-level terminal status.
    */
   async runScript(opts: RunScriptOptions): Promise<ScriptResult> {
-    const { path, input, scope } = opts;
+    const { path, input } = opts;
     const timeoutMs = (opts.timeout ?? 300) * 1000;
 
     await this.#ensureSubscribed("jobs");
 
-    const requestId = await this.#send({ RunScript: { path, input, ...(scope ? { scope } : {}) } });
+    const requestId = await this.#send({ RunScript: { path, input } });
     const response = await this.#waitForResponse(requestId);
     if ("Err" in response) {
       throw new CueError(response.Err.code, response.Err.message);
@@ -2082,8 +2082,6 @@ export interface RunScriptOptions {
   input: string;
   /** Foreground wait budget in seconds. Defaults to 300. */
   timeout?: number;
-  /** Optional cue-shell scope to use as the RunScript base scope. */
-  scope?: string;
 }
 
 export interface ScriptItemSummary {

@@ -7,7 +7,7 @@ import test from "node:test";
 import sparkExtension from "../packages/spark/src/extension/index.ts";
 import type { SparkWidgetTheme, SparkWidgetTui } from "../packages/spark/src/ui/spark-widget.ts";
 import { RoleRegistry, builtinRoleRef } from "@zendev-lab/pi-roles";
-import { defaultSparkDagRunStore } from "../packages/pi-workflows/src/index.ts";
+import { defaultWorkflowRunStore } from "../packages/pi-workflows/src/index.ts";
 import {
   killActiveSparkRoleRunProcesses,
   listActiveSparkRoleRunProcesses,
@@ -133,14 +133,14 @@ void test("Spark extension widget hides acknowledged DAG history and shows actio
     sparkExtension(pi);
 
     await executeTool(
-      requireTool(tools, "task"),
+      requireTool(tools, "task_write"),
       { action: "project_use", project: project.ref },
       ctx,
     );
     assert.ok(widgetComponent);
     assert.doesNotMatch(widgetComponent.render().join("\n"), /Background work:/);
 
-    const dagStore = defaultSparkDagRunStore(dir);
+    const dagStore = defaultWorkflowRunStore(dir);
     const acknowledgedRun = await dagStore.startRun({
       projectRef: project.ref,
       dryRun: false,
@@ -233,13 +233,13 @@ void test("Spark extension widget reconciles stale DAG records when an owned chi
     };
     sparkExtension(pi);
     await executeTool(
-      requireTool(tools, "task"),
+      requireTool(tools, "task_write"),
       { action: "project_use", project: project.ref },
       ctx,
     );
     assert.ok(widgetComponent);
 
-    const dagStore = defaultSparkDagRunStore(dir);
+    const dagStore = defaultWorkflowRunStore(dir);
     const dagRun = await dagStore.startRun({
       projectRef: project.ref,
       dryRun: false,
@@ -447,7 +447,7 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     sparkExtension(pi);
 
     await executeTool(
-      requireTool(tools, "task"),
+      requireTool(tools, "task_write"),
       { action: "project_use", project: "Widget refresh project" },
       ctx,
     );
@@ -456,7 +456,7 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     assert.match(widgetComponent.render().join("\n"), /Widget refresh project/);
 
     await executeTool(
-      requireTool(tools, "task"),
+      requireTool(tools, "task_write"),
       {
         action: "claim",
         title: "Widget refresh task",
@@ -474,11 +474,11 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     assert.doesNotMatch(widgetComponent.render().join("\n"), /First child TODO/);
 
     for (const handler of handlers.get("tool_execution_end") ?? [])
-      await handler({ toolName: "task" }, ctx);
+      await handler({ toolName: "task_write" }, ctx);
     assert.equal(renderRequests, 2);
 
     await executeTool(
-      requireTool(tools, "task"),
+      requireTool(tools, "task_write"),
       {
         action: "todo_update",
         scope: "task",
@@ -496,11 +496,11 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     assert.match(widgetComponent.render().join("\n"), /Second child TODO/);
 
     for (const handler of handlers.get("tool_execution_end") ?? [])
-      await handler({ toolName: "task" }, ctx);
+      await handler({ toolName: "task_write" }, ctx);
     assert.equal(renderRequests, 4);
 
     await executeTool(
-      requireTool(tools, "task"),
+      requireTool(tools, "task_write"),
       {
         action: "todo_update",
         scope: "session",
@@ -513,7 +513,7 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     assert.match(widgetComponent.render().join("\n"), /Independent session TODO/);
 
     for (const handler of handlers.get("tool_execution_end") ?? [])
-      await handler({ toolName: "task" }, ctx);
+      await handler({ toolName: "task_write" }, ctx);
     assert.equal(renderRequests, 6);
   } finally {
     await rm(dir, { recursive: true, force: true });

@@ -29,7 +29,7 @@ interface SparkExtensionEventApi extends SparkModeMessageApi {
 
 interface SparkExtensionEventDeps {
   refreshSparkWidget: (cwd: string, ctx?: SparkToolContext) => Promise<void>;
-  ensureDagManager: (cwd: string, ctx: SparkToolContext) => void;
+  ensureWorkflowRunManager: (cwd: string, ctx: SparkToolContext) => void;
   createAskAutoAnswerResolver?: (
     ctx: SparkToolContext,
   ) =>
@@ -67,7 +67,7 @@ export function registerSparkExtensionEvents(
       deps: {
         queueSparkAgentInstruction,
         refreshSparkWidget: deps.refreshSparkWidget,
-        ensureDagManager: deps.ensureDagManager,
+        ensureWorkflowRunManager: deps.ensureWorkflowRunManager,
       },
     }),
   );
@@ -204,7 +204,11 @@ async function hasActiveCurrentSessionGoal(ctx: SparkToolContext): Promise<boole
 }
 
 function isSparkWidgetRefreshToolEvent(event: unknown): boolean {
-  return isToolExecutionEvent(event, "task");
+  return (
+    isToolExecutionEvent(event, "task_read") ||
+    isToolExecutionEvent(event, "task_write") ||
+    isToolExecutionEvent(event, "assign")
+  );
 }
 
 function isToolExecutionEvent(event: unknown, toolName: string): boolean {

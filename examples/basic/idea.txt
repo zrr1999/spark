@@ -10,5 +10,5 @@ Expected local outputs:
 
 Then inspect:
 
-- spark_status
-- spark_run_ready_tasks { dryRun: true }
+- task_read { action: "status" }
+- assign { dryRun: true }

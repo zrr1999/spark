@@ -1,20 +1,18 @@
 /** Skill discovery for the native Spark CLI host. */
 
-import { existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import {
+  defaultBuiltinSkillsDir,
+  parseSkillFrontmatter,
+  type SparkSkillFrontmatter,
+} from "../../../spark/src/extension/spark-builtin-skills.ts";
+
+export { defaultBuiltinSkillsDir, parseSkillFrontmatter };
+export type { SparkSkillFrontmatter };
 
 export type SparkSkillLayer = "builtin" | "workspace" | "user";
-
-export interface SparkSkillFrontmatter {
-  name?: string;
-  description?: string;
-  disabled?: boolean;
-  "disable-model-invocation"?: boolean;
-  [key: string]: unknown;
-}
 
 export interface SparkSkill {
   name: string;
@@ -120,13 +118,6 @@ export function defaultSparkSkillsRoot(sparkHome?: string): string {
 
 export function defaultUserSkillsDir(sparkHome?: string): string {
   return join(defaultSparkSkillsRoot(sparkHome), "skills");
-}
-
-export function defaultBuiltinSkillsDir(): string {
-  const hostDir = dirname(fileURLToPath(import.meta.url));
-  const fromPackage = resolve(hostDir, "../../../spark/skills");
-  if (existsSync(fromPackage)) return fromPackage;
-  return resolve(process.cwd(), "packages", "spark", "skills");
 }
 
 export async function loadSkillsFromDir(
@@ -265,71 +256,6 @@ async function loadSkillFromFile(
     },
     diagnostics,
   };
-}
-
-export function parseSkillFrontmatter(markdown: string): {
-  frontmatter: SparkSkillFrontmatter;
-  body: string;
-} {
-  if (!markdown.startsWith("---\n")) return { frontmatter: {}, body: markdown };
-  const end = markdown.indexOf("\n---", 4);
-  if (end < 0) return { frontmatter: {}, body: markdown };
-  const raw = markdown.slice(4, end);
-  const body = markdown.slice(end + "\n---".length).replace(/^(?:\r?\n)+/, "");
-  return { frontmatter: parseSimpleYaml(raw), body };
-}
-
-function parseSimpleYaml(raw: string): SparkSkillFrontmatter {
-  const out: SparkSkillFrontmatter = {};
-  for (const line of raw.split(/\r?\n/)) {
-    if (!line.trim() || line.trimStart().startsWith("#")) continue;
-    const parsedLine = parseYamlLine(line);
-    if (!parsedLine) continue;
-    const value = parseYamlScalar(parsedLine.rest.trim());
-    const key = parsedLine.key;
-    out[key] = value;
-  }
-  return out;
-}
-
-function parseYamlLine(line: string): { key: string; rest: string } | undefined {
-  const colonIndex = line.indexOf(":");
-  if (colonIndex <= 0) return undefined;
-  const key = line.slice(0, colonIndex);
-  if (!isYamlKey(key)) return undefined;
-  return { key, rest: line.slice(colonIndex + 1) };
-}
-
-function isYamlKey(value: string): boolean {
-  const first = value[0];
-  if (!first || !isYamlKeyStart(first)) return false;
-  for (const char of value.slice(1)) if (!isYamlKeyChar(char)) return false;
-  return true;
-}
-
-function isYamlKeyStart(char: string): boolean {
-  return (char >= "A" && char <= "Z") || (char >= "a" && char <= "z") || char === "_";
-}
-
-function isYamlKeyChar(char: string): boolean {
-  return isYamlKeyStart(char) || (char >= "0" && char <= "9") || char === "-";
-}
-
-function parseYamlScalar(value: string): unknown {
-  if (value === "true") return true;
-  if (value === "false") return false;
-  if (value === "null") return null;
-  return unquoteYaml(value);
-}
-
-function unquoteYaml(value: string): string {
-  if (
-    (value.startsWith('"') && value.endsWith('"')) ||
-    (value.startsWith("'") && value.endsWith("'"))
-  ) {
-    return value.slice(1, -1);
-  }
-  return value;
 }
 
 function stringField(value: unknown): string | undefined {

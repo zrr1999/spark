@@ -208,7 +208,8 @@ void test("builtin role prompts and direct-call tool copy stay host-neutral", ()
     .map((role) => role.systemPrompt)
     .join("\n");
   assert.match(prompts, /You are a Pi scout/);
-  assert.match(prompts, /available ask tool/);
+  assert.match(prompts, /report the blocker.*upward/i);
+  assert.doesNotMatch(prompts, /available ask tool/);
   assert.doesNotMatch(prompts, /You are a Spark/);
   assert.doesNotMatch(prompts, /Spark ask tools/);
   assert.doesNotMatch(prompts, /Spark project or task/);
@@ -221,7 +222,7 @@ void test("role spec tools keep patch presets out of builtin role lookup", async
     const listed = await executeRoleTool(tools, "list_roles", { source: "builtin" }, dir);
     const roleIds = ((listed.details?.roles ?? []) as Array<{ id: string }>).map((role) => role.id);
 
-    assert.deepEqual(roleIds, ["oracle", "planner", "reviewer", "scout", "worker"]);
+    assert.deepEqual(roleIds, ["reviewer", "scout", "worker"]);
     assert.doesNotMatch(listed.content[0]?.text ?? "", /\bpatcher?\b/);
     await assert.rejects(
       executeRoleTool(tools, "get_role", { role: "patch" }, dir),
@@ -262,7 +263,7 @@ void test("call_role launches fresh role runs", async () => {
       {
         role: "worker",
         instruction: "Run the fake worker.",
-        mode: "fresh",
+        launch: "fresh",
         model: "test/model",
         piCommand: fakePi,
         timeoutMs: 5_000,
@@ -273,18 +274,18 @@ void test("call_role launches fresh role runs", async () => {
     assert.match(result.content[0]?.text ?? "", /Role call succeeded: worker/);
     assert.match(
       result.content[0]?.text ?? "",
-      /runRef=run:[^\n]+ · mode=fresh · model=test\/model/,
+      /runRef=run:[^\n]+ · launch=fresh · model=test\/model/,
     );
     assert.match(result.content[0]?.text ?? "", /result:\nFake worker result\./);
     assert.doesNotMatch(result.content[0]?.text ?? "", /lastJsonEvent/);
     assert.doesNotMatch(result.content[0]?.text ?? "", /stdout:\n\{"type":"message_end"/);
     const details = result.details as {
-      record?: { status?: string; mode?: string };
+      record?: { status?: string; launch?: string };
       jsonEventCount?: number;
       delivery?: { status?: string; hasFinalAssistantText?: boolean };
     };
     assert.equal(details.record?.status, "succeeded");
-    assert.equal(details.record?.mode, "fresh");
+    assert.equal(details.record?.launch, "fresh");
     assert.equal(details.jsonEventCount, 1);
     assert.equal(details.delivery?.status, "delivered");
     assert.equal(details.delivery?.hasFinalAssistantText, true);
@@ -296,7 +297,7 @@ void test("call_role launches fresh role runs", async () => {
         action: "call",
         role: "worker",
         instruction: "Run the fake worker through the canonical role tool.",
-        mode: "fresh",
+        launch: "fresh",
         model: "test/model",
         piCommand: fakePi,
         timeoutMs: 5_000,
@@ -437,27 +438,27 @@ void test("call_role exposes empty delivery when JSON events have no final assis
   }
 });
 
-void test("call_role forked mode requires explicit parent session", async () => {
+void test("call_role forked launch requires explicit parent session", async () => {
   const tools = registerRoleToolsForTest();
   await assert.rejects(
     executeCallRole(tools, {
       role: "reviewer",
       instruction: "Review with context.",
-      mode: "forked",
+      launch: "forked",
     }),
-    /forked mode requires forkFromSession/,
+    /forked launch requires forkFromSession/,
   );
 });
 
-void test("call_role rejects unknown run modes instead of falling back to fresh", async () => {
+void test("call_role rejects unknown launches instead of falling back to fresh", async () => {
   const tools = registerRoleToolsForTest();
   await assert.rejects(
     executeCallRole(tools, {
       role: "worker",
-      instruction: "Run with an invalid mode.",
-      mode: "legacy-mode",
+      instruction: "Run with an invalid launch.",
+      launch: "legacy-mode",
     }),
-    /unsupported role run mode/,
+    /unsupported role launch mode/,
   );
 });
 
@@ -519,7 +520,7 @@ void test("pi-roles tools reject invalid explicit parameters instead of using de
   );
   await assert.rejects(
     executeRoleTool(tools, "list_roles", { source: "managed" }),
-    /list_roles source must be builtin, project, or user/,
+    /list_roles source must be builtin, extension, project, or user/,
   );
   await assert.rejects(
     executeRoleTool(tools, "get_role", { role: "worker", includePrompt: "true" }),
@@ -556,6 +557,17 @@ void test("pi-roles tools reject invalid explicit parameters instead of using de
       rationale: "Parameter validation should be explicit.",
       expectedUses: ["validation"],
       source: "workspace",
+    }),
+    /create_role source must be project or user/,
+  );
+  await assert.rejects(
+    executeRoleTool(tools, "create_role", {
+      id: "extension-source",
+      description: "Extension roles are package-registered, not user-created.",
+      systemPrompt: "Do not write this role.",
+      rationale: "Parameter validation should reject extension writes.",
+      expectedUses: ["validation"],
+      source: "extension",
     }),
     /create_role source must be project or user/,
   );
@@ -652,7 +664,7 @@ void test("pi-roles tools reject invalid explicit parameters instead of using de
     executeCallRole(tools, {
       role: "reviewer",
       instruction: "Fork with an invalid parent.",
-      mode: "forked",
+      launch: "forked",
       forkFromSession: 42,
     }),
     /call_role forkFromSession must be a string/,

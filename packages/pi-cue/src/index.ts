@@ -826,6 +826,13 @@ function limitLines(text: string, maxLines: number): { text: string; truncated: 
   return { text: lines.slice(Math.max(0, lines.length - maxLines)).join("\n"), truncated: true };
 }
 
+const TOOL_CALL_DEFAULT_ARG_MAX_LENGTH = 80;
+const TOOL_CALL_COMMAND_MAX_LENGTH = 120;
+const TOOL_CALL_PATH_MAX_LENGTH = 60;
+const TOOL_CALL_LABEL_MAX_LENGTH = 40;
+const TOOL_CALL_INLINE_SCRIPT_PREVIEW_LINES = 5;
+const TOOL_CALL_INLINE_SCRIPT_PREVIEW_MAX_LENGTH = 240;
+
 function renderToolCall(
   toolName: string,
   parts: Array<string | undefined>,
@@ -845,7 +852,24 @@ function formatStringArg(
   const text = typeof value === "string" && value.trim() ? value.trim() : options.fallback;
   if (!text) return undefined;
   const rendered = needsQuoting(text) ? JSON.stringify(text) : text;
-  return `${options.prefix ?? ""}${truncateInline(rendered, options.maxLength ?? 80)}`;
+  return `${options.prefix ?? ""}${truncateInline(rendered, options.maxLength ?? TOOL_CALL_DEFAULT_ARG_MAX_LENGTH)}`;
+}
+
+function formatInlineScriptPreview(script: unknown): string[] {
+  if (typeof script !== "string" || !script.trim()) return [];
+  const nonEmptyLines = script
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim());
+  const lineCountArg = `inline=${nonEmptyLines.length}line(s)`;
+  const preview = nonEmptyLines.slice(0, TOOL_CALL_INLINE_SCRIPT_PREVIEW_LINES).join(" ↵ ");
+  return [
+    lineCountArg,
+    formatStringArg(preview, {
+      prefix: "preview=",
+      maxLength: TOOL_CALL_INLINE_SCRIPT_PREVIEW_MAX_LENGTH,
+    }),
+  ].filter((part): part is string => Boolean(part));
 }
 
 function formatNumberArg(
@@ -864,7 +888,7 @@ function formatNeedsArg(value: unknown): string | undefined {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, quantity]) => `${key}=${String(quantity)}`)
     .join(",");
-  return `needs=${truncateInline(text, 80)}`;
+  return `needs=${truncateInline(text, TOOL_CALL_DEFAULT_ARG_MAX_LENGTH)}`;
 }
 
 function needsQuoting(value: string): boolean {
@@ -945,7 +969,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       return renderToolCall(
         "cue_exec",
         [
-          formatStringArg(args.command, { maxLength: 120 }),
+          formatStringArg(args.command, { maxLength: TOOL_CALL_COMMAND_MAX_LENGTH }),
           args.background === true ? "background" : undefined,
           formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
           formatStringArg(args.cwd, { prefix: "cwd=" }),
@@ -1109,7 +1133,6 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       timeout: number;
       tailBytes: number;
       toolName: "cue_run" | "cue_script" | "script_run" | "script_eval";
-      scope?: string;
     },
     ctx: PiCueToolContext,
   ) {
@@ -1122,7 +1145,6 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       path: resolvedPath,
       input: body,
       timeout,
-      scope: options.scope,
     });
     const lines = renderCueScriptResult(result, { pathLabel, timeout, tailBytes });
     const summary = result.items.map((item) => ({
@@ -1141,7 +1163,6 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       source: result.source,
       status: result.status,
       exitCode: result.exitCode,
-      ...(options.scope ? { scope: options.scope } : {}),
       failedItemIndex: result.failedItemIndex,
       timedOut: result.timedOut,
       items: summary,
@@ -1186,7 +1207,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       return renderToolCall(
         "cue_run",
         [
-          formatStringArg(args.path, { prefix: "path=", maxLength: 60 }),
+          formatStringArg(args.path, { prefix: "path=", maxLength: TOOL_CALL_PATH_MAX_LENGTH }),
           formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
           formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
         ],
@@ -1270,7 +1291,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         "cue_script",
         [
           scriptArg,
-          formatStringArg(args.pathLabel, { prefix: "label=", maxLength: 40 }),
+          formatStringArg(args.pathLabel, {
+            prefix: "label=",
+            maxLength: TOOL_CALL_LABEL_MAX_LENGTH,
+          }),
           formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
           formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
         ],
@@ -1336,22 +1360,16 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       venv: Type.Optional(
         Type.String({ description: "Python virtualenv path. Only valid for language=python." }),
       ),
-      scope: Type.Optional(
-        Type.String({
-          description: "Cue-shell scope for RunScript. Only valid for language=cue-shell.",
-        }),
-      ),
     }),
     renderCall(args, theme) {
       return renderToolCall(
         "script_run",
         [
           formatStringArg(args.language, { prefix: "lang=" }),
-          formatStringArg(args.path, { prefix: "path=", maxLength: 60 }),
+          formatStringArg(args.path, { prefix: "path=", maxLength: TOOL_CALL_PATH_MAX_LENGTH }),
           formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
           formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
-          formatStringArg(args.venv, { prefix: "venv=", maxLength: 40 }),
-          formatStringArg(args.scope, { prefix: "scope=" }),
+          formatStringArg(args.venv, { prefix: "venv=", maxLength: TOOL_CALL_LABEL_MAX_LENGTH }),
         ],
         theme,
       );
@@ -1377,11 +1395,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         "script_run tail_bytes",
       );
       const venvParam = normalizeOptionalCueString(params.venv, "script_run venv");
-      const scope = normalizeOptionalCueString(params.scope, "script_run scope");
       if (language !== "python" && venvParam)
         throw new Error("script_run venv is only supported for language=python");
-      if (language !== "cue-shell" && scope)
-        throw new Error("script_run scope is only supported for language=cue-shell");
       const baseCwd = resolveCueWorkingDirectory(undefined, ctx.cwd);
       const { isAbsolute, resolve } = await import("node:path");
       const resolvedPath = isAbsolute(pathParam) ? pathParam : resolve(baseCwd, pathParam);
@@ -1413,7 +1428,6 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             timeout,
             tailBytes,
             toolName: "script_run",
-            scope,
           },
           ctx,
         );
@@ -1457,27 +1471,20 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       venv: Type.Optional(
         Type.String({ description: "Python virtualenv path. Only valid for language=python." }),
       ),
-      scope: Type.Optional(
-        Type.String({
-          description: "Cue-shell scope for RunScript. Only valid for language=cue-shell.",
-        }),
-      ),
     }),
     renderCall(args, theme) {
-      const scriptArg =
-        typeof args.script === "string" && args.script.trim()
-          ? `inline=${(args.script as string).split(/\r?\n/).filter((line) => line.trim()).length}line(s)`
-          : undefined;
       return renderToolCall(
         "script_eval",
         [
           formatStringArg(args.language, { prefix: "lang=" }),
-          scriptArg,
-          formatStringArg(args.pathLabel, { prefix: "label=", maxLength: 40 }),
+          ...formatInlineScriptPreview(args.script),
+          formatStringArg(args.pathLabel, {
+            prefix: "label=",
+            maxLength: TOOL_CALL_LABEL_MAX_LENGTH,
+          }),
           formatNumberArg(args.timeout, { prefix: "timeout=", suffix: "s" }),
           formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
-          formatStringArg(args.venv, { prefix: "venv=", maxLength: 40 }),
-          formatStringArg(args.scope, { prefix: "scope=" }),
+          formatStringArg(args.venv, { prefix: "venv=", maxLength: TOOL_CALL_LABEL_MAX_LENGTH }),
         ],
         theme,
       );
@@ -1505,11 +1512,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         "script_eval tail_bytes",
       );
       const venvParam = normalizeOptionalCueString(params.venv, "script_eval venv");
-      const scope = normalizeOptionalCueString(params.scope, "script_eval scope");
       if (language !== "python" && venvParam)
         throw new Error("script_eval venv is only supported for language=python");
-      if (language !== "cue-shell" && scope)
-        throw new Error("script_eval scope is only supported for language=cue-shell");
       const baseCwd = resolveCueWorkingDirectory(undefined, ctx.cwd);
       const { isAbsolute, resolve } = await import("node:path");
       const venv = venvParam
@@ -1528,7 +1532,6 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             timeout,
             tailBytes,
             toolName: "script_eval",
-            scope,
           },
           ctx,
         );
@@ -1915,8 +1918,14 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         [
           formatStringArg(args.action, { prefix: "action=", fallback: "list" }),
           formatStringArg(args.id, { prefix: "id=" }),
-          formatStringArg(args.schedule, { prefix: "schedule=", maxLength: 40 }),
-          formatStringArg(args.command, { prefix: "command=", maxLength: 80 }),
+          formatStringArg(args.schedule, {
+            prefix: "schedule=",
+            maxLength: TOOL_CALL_LABEL_MAX_LENGTH,
+          }),
+          formatStringArg(args.command, {
+            prefix: "command=",
+            maxLength: TOOL_CALL_DEFAULT_ARG_MAX_LENGTH,
+          }),
           formatStringArg(args.status, { prefix: "status=" }),
           formatNumberArg(args.limit, { prefix: "limit=" }),
         ],

@@ -70,7 +70,7 @@ export async function initializeSparkIdea(
     renderSparkMd({ idea, workingTitle: projectTitle, clarification: options.clarification });
   const sparkMdArtifact = await store.put({
     kind: "document",
-    title: "SPARK.md draft",
+    title: "SPARK.md initial charter",
     format: "markdown",
     body: sparkMd,
     provenance: { producer: "task", projectRef: project.ref },

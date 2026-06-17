@@ -232,7 +232,7 @@ function describeSparkFocus(value: string | undefined, language: CopyLanguage): 
   if (language === "zh") {
     switch (value) {
       case "audit":
-        return "审计差距。";
+        return "审计未解决问题。";
       case "light_refactor":
         return "轻量重构。";
       case "docs_alignment":
@@ -245,7 +245,7 @@ function describeSparkFocus(value: string | undefined, language: CopyLanguage): 
   }
   switch (value) {
     case "audit":
-      return "Audit gaps.";
+      return "Audit unresolved issues.";
     case "light_refactor":
       return "Light refactor.";
     case "docs_alignment":

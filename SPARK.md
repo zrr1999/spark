@@ -58,15 +58,15 @@ Spark 现在支持两个宿主目标：Pi 中的 `packages/spark/src/extension/`
 - 不复制 OpenSpec/OpenArc 的完整文件树、变更目录或重型流程。
 - 不在 `pi-roles` 中引入 Spark 有向无环图、任务认领、证据制品或调度器语义。
 - 不保留旧 `spark-agents` / `pi-agent-run` 公开兼容包；只对必要的历史持久化状态保留窄读兼容。
-- 不保留长期 `spark_*` 工具别名或双重公开/默认工具表面；外部工具表面使用规范化 `task`、`learning`、`artifact`、`ask`、`goal` 等工具，动作工具渲染为 `tool action=<value> ...`。
+- 不保留长期 `spark_*` 工具别名或双重公开/默认工具表面；外部工具表面使用规范化 `task_read`、`task_write`、`assign`、`learning`、`artifact`、`ask`、`goal` 等工具，动作工具渲染为 `tool action=<value> ...`。
 - 不让结构化提问成为用户必须直接操作的独立产品面；它应服务具体的项目、任务、路线图或审查流程。
 - 不默认隐藏或丢弃执行证据；输出可以精简，但完整证据应能通过证据制品、完整读取或尾部读取参数取回。
 
 ## 成功信号
 
 - `/spark` 初始化或恢复不会覆盖既有状态，不会生成占位任务，也不会要求用户先填写宽泛表单。
-- `task({ action: "status" })` 和 Spark 小组件能以低噪声方式展示当前项目、活动任务、待办事项、工作流运行状态和就绪性问题。
-- `task({ action: "plan" })`、`task({ action: "claim" })` 和 `task({ action: "run_ready" })` 能区分规划、认领、实现和完成；角色执行失败或未启动不会被错误标记为任务完成。
+- `task_read({ action: "status" })` 和 Spark 小组件能以低噪声方式展示当前项目、活动任务、待办事项、工作流运行状态和就绪性问题。
+- `task_write({ action: "plan" })`、`task_write({ action: "claim" })` 和 `assign({ dryRun: true })` 能区分规划、认领、实现和完成；角色执行失败或未启动不会被错误标记为任务完成。
 - `ask({ action: "ask" | "flow" })` 的聚焦与全屏流程结果语义一致：自定义输入是一等结果，决策或审批没有有效选项时会阻塞，用户界面不泄漏原始标识符。
 - `pi-roles` 角色规范与运行工具同 Spark 工作流运行边界清晰，直接 `role({ action: "call" })` 不冒充任务执行。
 - `pi-cue` 工具默认输出有界且适合上下文阅读，同时保留获取完整输出的显式方式。

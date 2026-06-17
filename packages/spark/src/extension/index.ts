@@ -6,8 +6,7 @@ import {
 import { registerPiTaskTool, type PiTaskToolHandlers } from "@zendev-lab/pi-tasks/extension";
 import { renderSparkToolCall } from "./tool-rendering.ts";
 import { registerSparkAskTools } from "./spark-ask-tool-registration.ts";
-import { registerSparkDagManagerTool } from "./spark-dag-manager-tool-registration.ts";
-import { registerSparkBackgroundRunsTool } from "./spark-background-runs-tool-registration.ts";
+import { registerSparkWorkflowRunsTool } from "./spark-workflow-runs-tool-registration.ts";
 import { registerSparkLearningTools } from "./learning-tool-registration.ts";
 import { registerSparkStateTool } from "./spark-state-tool-registration.ts";
 import { registerSparkTodoTools } from "./spark-todo-tool-registration.ts";
@@ -26,8 +25,9 @@ import {
 import { registerSparkExtensionEvents } from "./spark-extension-events.ts";
 import { sessionModelName } from "./session-model.ts";
 import { withSparkToolOperationalNotes } from "./spark-tool-operational-notes.ts";
-import { SparkDagManagerController } from "./spark-dag-manager.ts";
+import { SparkWorkflowRunManagerController } from "./spark-workflow-run-manager.ts";
 import { registerSparkModeCycleShortcut } from "./spark-mode-shortcut.ts";
+import { registerSparkModeTool } from "./mode/index.ts";
 import { sparkSessionKey } from "./session-state.ts";
 import type { SparkRegisteredToolConfig, SparkToolContext } from "./spark-tool-registration.ts";
 import { SparkWidgetController } from "./spark-widget-controller.ts";
@@ -59,13 +59,13 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     await widgetController.refresh(cwd, ctx);
   }
 
-  const dagManagerController = new SparkDagManagerController({
+  const workflowRunManagerController = new SparkWorkflowRunManagerController({
     refreshSparkWidget,
   });
 
   const eventHandlers = registerSparkExtensionEvents(pi, {
     refreshSparkWidget,
-    ensureDagManager: (cwd, ctx) => dagManagerController.ensure(cwd, ctx),
+    ensureWorkflowRunManager: (cwd, ctx) => workflowRunManagerController.ensure(cwd, ctx),
     createAskAutoAnswerResolver: (ctx) => async (request, askCtx) => {
       const cwd = askCtx.cwd || ctx.cwd;
       const reviewer = await createReviewerRunner(cwd, askCtx);
@@ -111,7 +111,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     queueSparkAgentInstruction: (ctx, instruction, options) =>
       eventHandlers.queueSparkAgentInstruction(ctx, instruction, options),
     refreshSparkWidget,
-    ensureDagManager: (cwd, ctx) => dagManagerController.ensure(cwd, ctx),
+    ensureWorkflowRunManager: (cwd, ctx) => workflowRunManagerController.ensure(cwd, ctx),
     createReviewerRunner,
   });
 
@@ -136,13 +136,13 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
   registerSparkGoalTool(registerSparkTool, { refreshSparkWidget, createReviewerRunner });
 
+  registerSparkModeTool(registerSparkTool);
+
   registerSparkRunReadyTasksTool(registerSparkCompatTool, {
-    ensureDagManager: (cwd, ctx) => dagManagerController.ensure(cwd, ctx),
+    ensureWorkflowRunManager: (cwd, ctx) => workflowRunManagerController.ensure(cwd, ctx),
   });
 
-  registerSparkBackgroundRunsTool(registerSparkCompatTool);
-
-  registerSparkDagManagerTool(registerSparkCompatTool);
+  registerSparkWorkflowRunsTool(registerSparkCompatTool);
 
   registerSparkAskTools(registerSparkCompatTool);
 
@@ -213,9 +213,8 @@ function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): PiTa
         },
       );
     },
-    run_ready: direct("spark_run_ready_tasks"),
     run_status: ({ toolCallId, params, signal, onUpdate, ctx }) =>
-      executeSparkImplementationTool(resolveTool, "spark_background_runs", {
+      executeSparkImplementationTool(resolveTool, "spark_workflow_runs", {
         toolCallId,
         params: {
           ...stripTaskAction(params),
@@ -226,18 +225,7 @@ function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): PiTa
         onUpdate,
         ctx,
       }),
-    run_control: ({ toolCallId, params, signal, onUpdate, ctx }) =>
-      executeSparkImplementationTool(resolveTool, "spark_background_runs", {
-        toolCallId,
-        params: {
-          ...stripTaskAction(params),
-          action: normalizeTaskRunControlAction(params.control),
-          control: undefined,
-        },
-        signal,
-        onUpdate,
-        ctx,
-      }),
+    assign: direct("spark_run_ready_tasks"),
     cache_cleanup: ({ toolCallId, params, signal, onUpdate, ctx }) =>
       executeSparkImplementationTool(resolveTool, "spark_state", {
         toolCallId,
@@ -309,11 +297,6 @@ function normalizeTaskRunStatusAction(value: unknown): "status" | "list" | "insp
     return value;
   }
   throw new Error("task.runAction must be status, list, inspect, or reconcile for run_status");
-}
-
-function normalizeTaskRunControlAction(value: unknown): "kill" | "reconcile" | "ack" {
-  if (value === "kill" || value === "reconcile" || value === "ack") return value;
-  throw new Error("task.control must be kill, reconcile, or ack for run_control");
 }
 
 function stripTaskAction(params: Record<string, unknown>): Record<string, unknown> {
