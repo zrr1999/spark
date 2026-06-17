@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -10,6 +13,9 @@ import {
   type SparkWidgetTheme,
   type SparkWidgetTui,
 } from "../packages/spark/src/ui/spark-widget.ts";
+import { SparkWidgetController } from "../packages/spark/src/extension/spark-widget-controller.ts";
+import { setSessionGoal } from "../packages/spark/src/extension/spark-session-goals.ts";
+import { setSessionLoop } from "../packages/spark/src/extension/spark-session-loops.ts";
 
 const theme: SparkWidgetTheme = {
   fg: (_color, text) => text,
@@ -293,6 +299,65 @@ void test("spark widget shows session goal label when no project target", () => 
   );
 
   assert.match(lines[0] ?? "", /◆ Goal\(●\): Finish the selected project goal/);
+});
+
+void test("spark widget renders active and paused loop in the goal slot", () => {
+  const active = renderSparkWidgetLines(
+    widgetState({
+      goal: {
+        kind: "loop",
+        status: "active",
+        objective: "Continue loop progress.",
+      },
+    }),
+    tui,
+    theme,
+  );
+  assert.match(active[0] ?? "", /◆ Loop\(●\): Continue loop progress/);
+
+  const paused = renderSparkWidgetLines(
+    widgetState({
+      goal: {
+        kind: "loop",
+        status: "paused",
+        objective: "Continue loop progress later.",
+      },
+    }),
+    tui,
+    theme,
+  );
+  assert.match(paused[0] ?? "", /◆ Loop\(⏸\): Continue loop progress later/);
+});
+
+void test("spark widget controller lets active loop replace a completed goal in the shared slot", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-widget-loop-completed-goal-"));
+  try {
+    await setSessionGoal(dir, undefined, {
+      objective: "Completed old goal",
+      source: "explicit",
+      status: "complete",
+    });
+    await setSessionLoop(dir, undefined, {
+      objective: "Active loop should be visible",
+      source: "explicit",
+      status: "active",
+    });
+    let component: ReturnType<NonNullable<SparkWidgetRegistration["cb"]>> | undefined;
+    const controller = new SparkWidgetController();
+    await controller.refresh(dir, {
+      ui: {
+        setWidget(_key: string, cb: SparkWidgetRegistration["cb"] | undefined) {
+          component = cb?.(tui, theme);
+        },
+      },
+    });
+
+    const lines = component?.render() ?? [];
+    assert.match(lines[0] ?? "", /◆ Loop\(●\): Active loop should be visible/);
+    assert.doesNotMatch(lines.join("\n"), /Completed old goal/);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
 });
 
 void test("spark widget shows project header with task counts even before claims", () => {

@@ -1,4 +1,4 @@
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 
 import type { Task, TaskRef, ProjectRef } from "@zendev-lab/pi-extension-api";
 import type { TaskGraph } from "@zendev-lab/pi-tasks";
@@ -44,6 +44,8 @@ export async function collectSparkProtectedStoreSummaries(
 ): Promise<SparkProtectedStoreSummary[]> {
   return [
     await summarizeProtectedSparkStore(root, "projects.json", "task-graph", false),
+    await summarizeProtectedSparkStore(root, join("todos", "todos.sqlite"), "todo-records", false),
+    await summarizeProtectedSparkStore(root, "sessions", "session-state", true),
     await summarizeProtectedSparkStore(root, "artifacts", "artifact-history", true),
     await summarizeProtectedSparkStore(root, "notes", "notes", true),
     await summarizeProtectedSparkStore(root, "role-reports", "role-reports", true),
@@ -58,13 +60,16 @@ async function summarizeCurrentProjectCache(
   projectByRef: Map<ProjectRef, ReturnType<TaskGraph["projects"]>[number]>,
   staleCutoffMs: number,
 ): Promise<SparkStateCacheSummary> {
-  const files = await listSparkStateFiles(join(root, "sessions"));
+  const sessionsRoot = join(root, "sessions");
+  const files = (await listSparkStateFiles(sessionsRoot, true)).filter((file) =>
+    isCurrentProjectStateCacheFile(sessionsRoot, file),
+  );
   let staleFiles = 0;
   let brokenFiles = 0;
   let safeToDeleteFiles = 0;
   let activeFiles = 0;
   for (const file of files) {
-    const stale = file.mtimeMs < staleCutoffMs && fileScope(file) !== currentOwnerScope;
+    const stale = file.mtimeMs < staleCutoffMs && sessionStateFileScope(file) !== currentOwnerScope;
     if (stale) staleFiles += 1;
     const raw = await readJsonObject(file.path);
     if (!raw) {
@@ -86,13 +91,26 @@ async function summarizeCurrentProjectCache(
   });
 }
 
+function isCurrentProjectStateCacheFile(sessionsRoot: string, file: SparkStateFileInfo): boolean {
+  const relativePath = relative(sessionsRoot, file.path);
+  const segments = relativePath.split(/[\\/]/u);
+  if (segments.length === 1) return file.name.endsWith(".json") && file.name !== "index.json";
+  return segments.length === 2 && file.name === "state.json";
+}
+
+function sessionStateFileScope(file: SparkStateFileInfo): string {
+  return file.name === "state.json" ? basename(dirname(file.path)) : fileScope(file);
+}
+
 async function summarizeTaskTodoCache(
   root: string,
   currentSessionScope: string,
   taskByRef: Map<TaskRef, Task>,
   staleCutoffMs: number,
 ): Promise<SparkStateCacheSummary> {
-  const files = await listSparkStateFiles(join(root, "todos"));
+  const files = (await listSparkStateFiles(join(root, "todos"))).filter((file) =>
+    file.name.endsWith(".json"),
+  );
   let staleFiles = 0;
   let brokenFiles = 0;
   let safeToDeleteFiles = 0;

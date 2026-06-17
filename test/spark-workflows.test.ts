@@ -3,15 +3,16 @@ import { readdir, readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 import {
-  adversarialReviewWorkflowScript,
-  deepResearchWorkflowScript,
-  fanOutWithBriefWorkflowScript,
-  fusionWorkflowScript,
   listSavedWorkflows,
   parseWorkflowScript,
   readSavedWorkflow,
   runWorkflowScript,
 } from "../packages/pi-workflows/src/index.ts";
+import {
+  fanOutWithBriefWorkflowScript,
+  researchWorkflowScript,
+  reviewWorkflowScript,
+} from "../packages/pi-workflows/src/builtins.ts";
 import { createSparkWorkflowRoleRunAdapter } from "../packages/spark-runtime/src/index.ts";
 
 void test("pi-workflows package stays isolated from runtime execution packages", async () => {
@@ -141,30 +142,25 @@ void test("pi-workflows lists and reads builtin workflows without frontmatter mo
   assert.deepEqual(listing.errors, []);
   assert.deepEqual(
     listing.workflows.map((workflow) => workflow.selector),
-    [
-      "builtin:fusion",
-      "builtin:deep-research",
-      "builtin:fan-out-with-brief",
-      "builtin:adversarial-review",
-    ],
+    ["builtin:research", "builtin:review"],
   );
   assert.deepEqual(
     listing.workflows.map((workflow) => workflow.mode),
-    ["research", "research", "research", "research"],
+    ["research", "research"],
   );
 
   const { descriptor, script } = await readSavedWorkflow({
     cwd: ".",
-    selector: "builtin:deep-research",
+    selector: "builtin:research",
     includeUser: false,
   });
   assert.equal(descriptor.source, "builtin");
   assert.equal(descriptor.mode, "research");
-  assert.equal(descriptor.path, "builtin:deep-research");
-  assert.deepEqual(descriptor.phases, ["Queries", "Gather", "Verify", "Report"]);
+  assert.equal(descriptor.path, "builtin:research");
+  assert.deepEqual(descriptor.phases, ["Plan", "Explore", "Verify", "Report"]);
   assert.match(script, /export const meta/);
   const parsed = parseWorkflowScript(script);
-  assert.equal(parsed.meta.name, "deep_research");
+  assert.equal(parsed.meta.name, "research");
   assert.equal("mode" in parsed.meta, false);
 
   await assert.rejects(
@@ -177,25 +173,25 @@ void test("pi-workflows lists and reads builtin workflows without frontmatter mo
   );
 });
 
-void test("pi-workflows fusion builtin fans out with collected errors and judge synthesis", async () => {
+void test("pi-workflows research builtin fans out with collected errors and report synthesis", async () => {
   const { descriptor, script } = await readSavedWorkflow({
     cwd: ".",
-    selector: "builtin:fusion",
+    selector: "builtin:research",
     includeUser: false,
   });
   assert.equal(descriptor.source, "builtin");
   assert.equal(descriptor.mode, "research");
-  assert.deepEqual(descriptor.phases, ["Panel", "Synthesis"]);
+  assert.deepEqual(descriptor.phases, ["Plan", "Explore", "Verify", "Report"]);
 
   const parsed = parseWorkflowScript(script);
-  assert.equal(parsed.meta.name, "fusion");
+  assert.equal(parsed.meta.name, "research");
   assert.equal("mode" in parsed.meta, false);
 
   const agentCalls: Array<{ prompt: string; label?: string; model?: string; agentType?: string }> =
     [];
-  const run = await runWorkflowScript(fusionWorkflowScript(), {
+  const run = await runWorkflowScript(researchWorkflowScript(), {
     args: {
-      question: "Should Fusion live in workflows?",
+      question: "Should research live in workflows?",
       panelModels: [
         { label: "fast", model: "provider/fast" },
         { label: "blocked", model: "provider/blocked" },
@@ -210,42 +206,42 @@ void test("pi-workflows fusion builtin fans out with collected errors and judge 
         agentType: options.agentType,
       });
       if (options.label === "blocked") throw new Error("MODEL_BLOCKED");
-      if (options.label === "judge synthesis") return "final synthesis";
+      if (options.label === "write report") return "final synthesis";
       return "panel answer from " + options.label;
     },
   });
 
-  assert.equal(run.agentCount, 3);
+  assert.equal(run.agentCount, 5);
   assert.deepEqual(
     run.phases.map((phase) => phase.title),
-    ["Panel", "Synthesis"],
+    ["Plan", "Explore", "Verify", "Report"],
   );
   assert.deepEqual(
     agentCalls.map((call) => call.label),
-    ["fast", "blocked", "judge synthesis"],
+    ["research plan", "fast", "blocked", "cross-check", "write report"],
   );
   assert.deepEqual(
     agentCalls.map((call) => call.agentType),
-    ["model", "model", "model"],
+    [undefined, "model", "model", undefined, "model"],
   );
-  assert.equal(agentCalls[0]?.model, "provider/fast");
-  assert.equal(agentCalls[2]?.model, "provider/judge");
-  assert.match(agentCalls[0]?.prompt ?? "", /one expert in a Spark Fusion-style multi-model panel/);
-  assert.match(agentCalls[2]?.prompt ?? "", /ERROR: MODEL_BLOCKED/);
-  assert.match(agentCalls[2]?.prompt ?? "", /Synthesize a final answer/);
+  assert.equal(agentCalls[1]?.model, "provider/fast");
+  assert.equal(agentCalls[4]?.model, "provider/judge");
+  assert.match(agentCalls[1]?.prompt ?? "", /one contributor in a Spark research workflow/);
+  assert.match(agentCalls[3]?.prompt ?? "", /ERROR: MODEL_BLOCKED/);
+  assert.match(agentCalls[4]?.prompt ?? "", /Write the final user-facing research answer/);
   assert.equal((run.result as { report?: unknown }).report, "final synthesis");
 });
 
 void test("pi-workflows exposes and runs workflow script factories", async () => {
-  const deep = parseWorkflowScript(deepResearchWorkflowScript());
-  assert.equal(deep.meta.name, "deep_research");
+  const research = parseWorkflowScript(researchWorkflowScript());
+  assert.equal(research.meta.name, "research");
   assert.deepEqual(
-    deep.meta.phases?.map((phase) => phase.title),
-    ["Queries", "Gather", "Verify", "Report"],
+    research.meta.phases?.map((phase) => phase.title),
+    ["Plan", "Explore", "Verify", "Report"],
   );
 
-  const review = parseWorkflowScript(adversarialReviewWorkflowScript());
-  assert.equal(review.meta.name, "adversarial_review");
+  const review = parseWorkflowScript(reviewWorkflowScript());
+  assert.equal(review.meta.name, "review");
   assert.deepEqual(
     review.meta.phases?.map((phase) => phase.title),
     ["Investigate", "Refute", "Consensus"],
@@ -258,17 +254,17 @@ void test("pi-workflows exposes and runs workflow script factories", async () =>
     ["Brief", "Fan out", "Fan in"],
   );
 
-  const deepRun = await runWorkflowScript(deepResearchWorkflowScript(), {
+  const researchRun = await runWorkflowScript(researchWorkflowScript(), {
     args: { question: "workflow smoke" },
     agent: async (_prompt, options) => options.label ?? "agent",
   });
-  assert.equal(deepRun.agentCount, 5);
+  assert.equal(researchRun.agentCount, 6);
   assert.deepEqual(
-    deepRun.phases.map((phase) => phase.title),
-    ["Queries", "Gather", "Verify", "Report"],
+    researchRun.phases.map((phase) => phase.title),
+    ["Plan", "Explore", "Verify", "Report"],
   );
 
-  const reviewRun = await runWorkflowScript(adversarialReviewWorkflowScript(), {
+  const reviewRun = await runWorkflowScript(reviewWorkflowScript(), {
     args: { task: "workflow smoke" },
     agent: async (_prompt, options) => options.label ?? "agent",
   });

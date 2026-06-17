@@ -1114,7 +1114,7 @@ export class RoleRunCancelledError extends Error {
 }
 
 const activeRoleRuns = new Map<RoleRunRef, ActiveRoleRun>();
-const DEFAULT_ROLE_RUN_CAPTURE_LIMIT_BYTES = 8 * 1024 * 1024;
+const DEFAULT_ROLE_RUN_CAPTURE_LIMIT_BYTES = 1024 * 1024;
 
 interface BoundedOutputCapture {
   push(chunk: Buffer): void;
@@ -1127,21 +1127,29 @@ function createBoundedOutputCapture(
 ): BoundedOutputCapture {
   const chunks: Buffer[] = [];
   let capturedBytes = 0;
-  let droppedBytes = 0;
+  let omittedBytes = 0;
   return {
     push(chunk: Buffer) {
-      const remaining = Math.max(0, limitBytes - capturedBytes);
-      if (remaining > 0) {
-        const captured = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
-        chunks.push(captured);
-        capturedBytes += captured.length;
+      chunks.push(chunk);
+      capturedBytes += chunk.length;
+      while (capturedBytes > limitBytes && chunks.length > 0) {
+        const excess = capturedBytes - limitBytes;
+        const first = chunks[0]!;
+        if (first.length <= excess) {
+          chunks.shift();
+          capturedBytes -= first.length;
+          omittedBytes += first.length;
+          continue;
+        }
+        chunks[0] = first.subarray(excess);
+        capturedBytes -= excess;
+        omittedBytes += excess;
       }
-      if (chunk.length > remaining) droppedBytes += chunk.length - remaining;
     },
     text() {
       const output = Buffer.concat(chunks).toString("utf8");
-      if (droppedBytes === 0) return output;
-      return `${output}\n[pi-roles ${label} truncated after ${capturedBytes} bytes; dropped ${droppedBytes} bytes]\n`;
+      if (omittedBytes === 0) return output;
+      return `[pi-roles ${label} omitted first ${omittedBytes} bytes; showing last ${capturedBytes} bytes]\n${output}`;
     },
   };
 }
@@ -1238,7 +1246,7 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
   const child = spawn(input.piCommand, buildRoleRunArgs(input), {
     cwd: input.cwd,
     env: childEnv,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
   input.onChildProcess?.(child, startedAt);
   const stdoutCapture = createBoundedOutputCapture("stdout");

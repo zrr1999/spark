@@ -55,12 +55,12 @@ export function registerSparkGoalTool(
     name: "goal",
     label: "Spark Goal",
     description:
-      "Manage the current Pi session's durable goal state. Actions: status, set, start, pause, resume, clear, edit, complete. Goal completion is reviewer-gated: the main session requests completion, the reviewer audits, and Spark applies the approved state transition. Autonomous pause is rejected; blockers must be resolved instead of pausing.",
+      "Manage the current Pi session's durable goal state. Actions: status, set, start, pause, resume, clear, edit, complete. Active goals are autonomous foreground drivers: reviewer-backed ask auto-answer may resolve material decisions during goal work, while final goal completion remains reviewer-gated (main session requests, reviewer audits, Spark applies approved transition). Autonomous pause is rejected; blockers must be resolved instead of pausing.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({
           description:
-            "status | set | start | pause | resume | clear | edit | complete. Defaults to status. Completion requests are reviewer-gated; autonomous pause requests are rejected.",
+            "status | set | start | pause | resume | clear | edit | complete. Defaults to status. Active goal work may use reviewer-backed ask auto-answer; completion requests are reviewer-gated and autonomous pause requests are rejected.",
         }),
       ),
       objective: Type.Optional(
@@ -638,7 +638,7 @@ function renderGoalStatus(goal: SparkSessionGoal): string {
       `Retry state: ${goal.retryState.consecutiveFailures} failure(s), nextDelayMs=${goal.retryState.nextDelayMs ?? "unknown"}.`,
     );
   lines.push(
-    'Actions: goal({ action: "status" }), goal({ action: "resume" }), goal({ action: "edit", objective, reason }), goal({ action: "complete" }), goal({ action: "clear" }), goal({ action: "start" }); completion is reviewer-gated (main session requests, reviewer audits, Spark applies approved state), and autonomous pause is forbidden.',
+    'Actions: goal({ action: "status" }), goal({ action: "resume" }), goal({ action: "edit", objective, reason }), goal({ action: "complete" }), goal({ action: "clear" }), goal({ action: "start" }); active goal work may use reviewer-backed ask auto-answer for decisions, completion is reviewer-gated (main session requests, reviewer audits, Spark applies approved state), and autonomous pause is forbidden.',
   );
   return lines.join("\n");
 }

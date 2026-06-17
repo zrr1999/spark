@@ -6,7 +6,7 @@ import type { AssistantMessageEvent, Context, Model, StreamOptions } from "@eare
 import { stableId, type ExtensionAPI } from "@zendev-lab/pi-extension-api";
 
 import { renderSparkActiveSystemPrompt } from "../../../spark/src/extension/spark-active-injection.ts";
-import { renderBuiltinSkillsPrompt } from "../../../spark/src/extension/spark-builtin-skills.ts";
+import { renderBaseSystemPromptsPrompt } from "../../../spark/src/extension/spark-builtin-skills.ts";
 import { loadSparkMode } from "../../../spark/src/extension/session-state.ts";
 import type { SparkSessionContext } from "../../../spark/src/extension/session-identity.ts";
 import { SparkAgentLoop, type SparkAgentStreamFunction } from "./agent-loop.ts";
@@ -89,7 +89,7 @@ export interface SparkCliHostServicesOptions {
 }
 
 const DEFAULT_SPARK_SYSTEM_PROMPT =
-  "You are Spark, a Spark-first coding assistant running in the native spark-cli host.";
+  "You are a coding assistant running in the native spark-cli host. Use Spark as the project/task coordination layer, not as your assistant identity.";
 
 export async function createSparkCliHostServices(
   options: SparkCliHostServicesOptions = {},
@@ -169,11 +169,7 @@ export async function createSparkCliHostServices(
     options.sessionManager ?? createSparkCliSessionManagerStub(sessionStore, cwd),
   );
   const skillResolver = new SparkSkillResolver({ cwd, sparkHome: options.sparkHome });
-  const builtinSkillsPrompt = (
-    await Promise.all(skillResolver.builtinDirs.map((dir) => renderBuiltinSkillsPrompt(dir)))
-  )
-    .filter(Boolean)
-    .join("\n");
+  const builtinSkillsPrompt = await renderBaseSystemPromptsPrompt();
   const skillsPrompt = await skillResolver.formatAvailableSkillsForPrompt();
   const baseSystemPrompt = options.systemPrompt ?? DEFAULT_SPARK_SYSTEM_PROMPT;
   const streamFunction = createProviderRegistryStreamFunction(providerRegistry);

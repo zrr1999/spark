@@ -50,7 +50,7 @@ async function withActiveSparkInputProject<T>(
   }
 }
 
-void test("injectSparkHints injects research mode without initialized Spark graph", async () => {
+void test("injectSparkHints injects default research lens without initialized Spark graph", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-active-input-no-graph-"));
   try {
     const ctx = testSparkInputContext(dir);
@@ -58,9 +58,11 @@ void test("injectSparkHints injects research mode without initialized Spark grap
 
     assert.equal(typeof result, "object");
     const prompt = (result as { systemPrompt?: string }).systemPrompt ?? "";
-    assert.match(prompt, /Spark mode: research\./);
-    assert.match(prompt, /<builtin_skills>/);
+    assert.match(prompt, /Spark default research lens\./);
+    assert.match(prompt, /<base_system_prompts>/);
     assert.match(prompt, /# Spark/);
+    assert.match(prompt, /# pi-cue/);
+    assert.match(prompt, /# pi-graft/);
     assert.doesNotMatch(prompt, /Use the read tool to load a skill's file/);
     assert.doesNotMatch(prompt, /Active Spark context/);
     assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
@@ -69,7 +71,7 @@ void test("injectSparkHints injects research mode without initialized Spark grap
   }
 });
 
-void test("handleSparkInput lets active research mode continue without canned route ask", async () => {
+void test("handleSparkInput lets ordinary research-like input continue without canned route ask", async () => {
   await withActiveSparkInputProject(
     async ({ dir, ctx, router, customMessages, queuedInstructions }) => {
       const result = await handleSparkInput(
@@ -157,13 +159,13 @@ void test("analyzeSparkEntryMode treats stack-trace bugfix with no tasks as plan
   assert.match(analysis.reasons.join("\n"), /no pending\/ready project task exists/);
 });
 
-void test("handleSparkInput lets slash commands bypass the research-mode ask", async () => {
+void test("handleSparkInput lets slash commands bypass default research routing", async () => {
   await withActiveSparkInputProject(
     async ({ dir, ctx, router, customMessages, queuedInstructions }) => {
       ctx.selectedPrefix = "Research";
 
       const result = await handleSparkInput(
-        { text: "/research X 的实现", source: "interactive" },
+        { text: "/plan X 的实现", source: "interactive" },
         ctx,
         router,
       );

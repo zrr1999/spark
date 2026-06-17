@@ -408,6 +408,47 @@ void test("pi-roles launches Pi, captures JSONL events, and records run metadata
   }
 });
 
+void test("pi-roles bounded capture keeps tail JSONL results from large output", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-tail-capture-"));
+  try {
+    const fakePi = join(dir, "fake-pi.cjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "process.stdout.write('A'.repeat(2 * 1024 * 1024));",
+        "process.stdout.write('\\n' + JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'tail result delivered' }] } }) + '\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    const result = await runRole({
+      runRef: "run:tail-capture-test",
+      roleRef: "role:builtin-worker",
+      systemPrompt: "You are a worker.",
+      instruction: "Report after large output.",
+      piCommand: fakePi,
+      cwd: dir,
+    });
+
+    assert.match(
+      result.stdout,
+      /^\[pi-roles stdout omitted first \d+ bytes; showing last \d+ bytes\]/,
+    );
+    assert.match(result.stdout, /tail result delivered/);
+    assert.deepEqual(result.jsonEvents.at(-1), {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "tail result delivered" }],
+      },
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("pi-roles decrements role run depth for child Pi processes", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-roles-depth-env-"));
   try {

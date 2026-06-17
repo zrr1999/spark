@@ -3,9 +3,12 @@ import { readdir, readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 import {
+  LOOP_COMPLETION_BOUNDARY_GUIDANCE,
   compactContinuationPrompt,
   continuationGoalIdFromPrompt,
   createGoal,
+  createLoop,
+  evaluateLoopTick,
   goalToolResponse,
   validateObjective,
 } from "@zendev-lab/pi-goal";
@@ -15,6 +18,7 @@ void test("pi-goal package stays isolated from workflow packages", async () => {
     dependencies?: Record<string, string>;
   };
 
+  assert.equal(pkg.dependencies?.["@zendev-lab/pi-loop"], "workspace:^");
   assert.equal(pkg.dependencies?.["spark-workflows"], undefined);
 
   const sourceFiles = await listTypeScriptFiles("packages/pi-goal/src");
@@ -39,11 +43,24 @@ void test("pi-goal helpers create goals and continuation prompts", () => {
   assert.match(prompt, /goal\(\{ action: "status" \}\)/);
   assert.match(prompt, /goal\(\{ action: "complete" \}\)/);
   assert.match(prompt, /requesting reviewer-gated completion/);
+  assert.match(prompt, /pi-loop primitive/);
+  assert.match(prompt, /not the completion authority/);
   assert.equal(continuationGoalIdFromPrompt(prompt), goal.goalId);
 
   const response = goalToolResponse(goal);
   assert.equal(response.goal?.goalId, goal.goalId);
   assert.equal(response.goal?.status, "active");
+});
+
+void test("pi-goal re-exports non-completing pi-loop primitives without moving completion into loop", () => {
+  const loop = createLoop("Continue without completing", 123);
+  const tick = evaluateLoopTick({ loop, now: 124, reason: "start" });
+
+  assert.equal(tick.decision, "continue");
+  assert.equal(tick.loop?.status, "active");
+  assert.notEqual(tick.decision, "complete");
+  assert.notEqual(tick.loop?.status, "complete");
+  assert.match(LOOP_COMPLETION_BOUNDARY_GUIDANCE, /must not decide that a goal is complete/);
 });
 
 async function listTypeScriptFiles(dir: string): Promise<string[]> {

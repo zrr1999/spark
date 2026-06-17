@@ -165,6 +165,11 @@ async function syncGoalAskAutoAnswerPolicy(
   ctx: SparkToolContext,
   deps: SparkExtensionEventDeps,
 ): Promise<void> {
+  if (ctx.sparkActiveLens?.mode === "implement") {
+    delete ctx.askAutoAnswer;
+    delete ctx.askAutoAnswerResolver;
+    return;
+  }
   if (await hasActiveCurrentSessionGoal(ctx)) {
     ctx.askAutoAnswer = "reviewer";
     ctx.askAutoAnswerResolver = await deps.createAskAutoAnswerResolver?.(ctx);

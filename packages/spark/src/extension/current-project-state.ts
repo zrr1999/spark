@@ -1,5 +1,4 @@
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
 
 import { DEFAULT_READY_TASK_MAX_CONCURRENCY, type ProjectRef } from "@zendev-lab/pi-extension-api";
 import type { TaskGraph } from "@zendev-lab/pi-tasks";
@@ -10,10 +9,11 @@ import {
 } from "./current-project-state-schema.ts";
 import { readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {
-  sanitizeStoreScope,
-  sparkSessionOwnerKey,
-  type SparkSessionContext,
-} from "./session-identity.ts";
+  legacyCurrentProjectStorePath,
+  rebuildSessionIndex,
+  sessionStateStorePath,
+} from "./session-directory-store.ts";
+import type { SparkSessionContext } from "./session-identity.ts";
 
 export type {
   CurrentProjectStoreSnapshot,
@@ -60,6 +60,7 @@ export async function clearCurrentProjectRef(
   ctx: SparkSessionContext | undefined,
 ): Promise<void> {
   await rm(currentProjectStorePath(cwd, ctx), { force: true });
+  await rebuildSessionIndex(cwd);
 }
 
 export async function currentSparkProject(
@@ -77,8 +78,20 @@ export async function currentSparkProject(
   return undefined;
 }
 
-function currentProjectStorePath(cwd: string, ctx: SparkSessionContext | undefined): string {
-  return join(cwd, ".spark", "sessions", `${sanitizeStoreScope(sparkSessionOwnerKey(ctx))}.json`);
+export function currentProjectStorePath(cwd: string, ctx: SparkSessionContext | undefined): string {
+  return sessionStateStorePath(cwd, ctx);
+}
+
+export async function importLegacyCurrentProjectState(
+  cwd: string,
+  ctx: SparkSessionContext | undefined,
+): Promise<CurrentProjectStoreSnapshot | undefined> {
+  const legacyPath = legacyCurrentProjectStorePath(cwd, ctx);
+  const raw = await readJsonFileOptional<Record<string, unknown>>(legacyPath);
+  if (!raw) return undefined;
+  const snapshot = normalizeCurrentProjectStoreSnapshot(raw, legacyPath);
+  await saveCurrentProjectState(cwd, ctx, snapshot);
+  return snapshot;
 }
 
 async function saveCurrentProjectState(
@@ -87,4 +100,5 @@ async function saveCurrentProjectState(
   snapshot: CurrentProjectStoreSnapshot,
 ): Promise<void> {
   await writeJsonFileAtomic(currentProjectStorePath(cwd, ctx), snapshot);
+  await rebuildSessionIndex(cwd);
 }

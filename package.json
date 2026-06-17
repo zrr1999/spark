@@ -72,9 +72,7 @@
       "./packages/spark/src/extension/index.ts"
     ],
     "skills": [
-      "./packages/pi-btw/skills",
-      "./packages/pi-cue/skills",
-      "./packages/spark/skills"
+      "./packages/pi-btw/skills"
     ]
   }
 }

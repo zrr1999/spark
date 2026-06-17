@@ -71,8 +71,9 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
     false,
   );
   const commands = host.listCommands().map((command) => command.name);
-  assert.ok(commands.includes("spark"));
-  assert.ok(commands.includes("workflow:fusion"));
+  assert.ok(!commands.includes("spark"));
+  assert.ok(!commands.includes("research"));
+  assert.ok(commands.includes("workflow:research"));
   assert.ok(!commands.some((command) => command.startsWith("graft-")));
 });
 

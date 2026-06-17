@@ -22,7 +22,7 @@ void test("root Pi manifest exposes vendored pi-btw without enabling it in spark
 
   assert.equal(root.dependencies?.["@zendev-lab/pi-btw"], "workspace:^");
   assert.ok(root.pi?.extensions?.includes("./packages/pi-btw/extensions/btw.ts"));
-  assert.ok(root.pi?.skills?.includes("./packages/pi-btw/skills"));
+  assert.deepEqual(root.pi?.skills, ["./packages/pi-btw/skills"]);
   assert.ok(!DEFAULT_SPARK_CONFIG.extensions.includes("@zendev-lab/pi-btw/extension"));
   assert.ok(!DEFAULT_SPARK_CONFIG.extensions.includes("./packages/pi-btw/extensions/btw.ts"));
 });
@@ -33,9 +33,18 @@ void test("pi-btw package keeps upstream extension, skill, and host-specific dep
   assert.deepEqual(pkg.pi?.extensions, ["./extensions/btw.ts"]);
   assert.deepEqual(pkg.pi?.skills, ["./skills"]);
   assert.ok(pkg.files?.includes("skills"));
-  assert.equal(pkg.dependencies?.["@earendil-works/pi-coding-agent"], "0.79.4");
-  assert.equal(pkg.dependencies?.["@earendil-works/pi-ai"], "0.79.4");
-  assert.equal(pkg.dependencies?.["@earendil-works/pi-tui"], "0.79.4");
+  const piVersion = pkg.dependencies?.["@earendil-works/pi-coding-agent"];
+  assert.match(piVersion ?? "", /^\d+\.\d+\.\d+$/u);
+  assert.equal(pkg.dependencies?.["@earendil-works/pi-ai"], piVersion);
+  assert.equal(pkg.dependencies?.["@earendil-works/pi-tui"], piVersion);
+});
+
+void test("pi-cue package ships prompt text without registering it as a skill", async () => {
+  const pkg = await readPackageJson("packages/pi-cue/package.json");
+
+  assert.deepEqual(pkg.pi?.extensions, ["./src/extension/index.ts"]);
+  assert.equal(pkg.pi?.skills, undefined);
+  assert.ok(pkg.files?.includes("skills/**/*"));
 });
 
 void test("pi-btw side sessions do not hardcode bash as an enabled tool", async () => {

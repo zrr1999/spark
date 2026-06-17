@@ -48,7 +48,7 @@ void test("workflow tool lists builtins and reads saved workspace scripts from c
       { action: "list", includeUser: false },
       dir,
     );
-    assert.match(toolText(listed), /builtin:deep-research/);
+    assert.match(toolText(listed), /builtin:research/);
     assert.match(toolText(listed), /workspace:release-check/);
     assert.match(toolText(listed), /Release Check/);
 

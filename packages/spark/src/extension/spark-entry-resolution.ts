@@ -6,7 +6,6 @@ import {
   analyzeSparkEntryMode,
   type SparkCommandProjectState,
   type SparkEntryIntent,
-  type SparkEntryMode,
   type SparkEntryModeChoice,
   type SparkEntryResolution,
 } from "./spark-entry.ts";
@@ -75,32 +74,35 @@ async function resolveSparkEntryWithoutGraph(
   projectState: SparkCommandProjectState,
 ): Promise<SparkEntryResolution> {
   if (projectState.kind === "empty_project") {
-    if (intent.kind === "auto") {
-      const idea = intent.prompt || (await promptSparkNewProjectIdea(ctx));
-      return idea
-        ? { action: "initialize_new_project", idea, enterPlanning: false, planningSource: "auto" }
-        : { action: "none" };
-    }
-    return blockedDirectModeWithoutGraph(intent.mode);
+    const idea = intent.prompt || (await promptSparkNewProjectIdea(ctx));
+    return idea
+      ? {
+          action: "initialize_new_project",
+          idea: directModeBootstrapIdea(intent, idea),
+          enterPlanning: intent.kind === "direct",
+          planningSource: intent.kind === "direct" ? "direct" : "auto",
+        }
+      : { action: "none" };
   }
-
-  if (intent.kind === "direct") return blockedDirectModeWithoutGraph(intent.mode);
 
   const idea = intent.prompt || (await inferExistingProjectSparkIdea(ctx));
   return idea
     ? {
         action: "initialize_existing_project",
-        idea,
-        planningSource: "auto",
+        idea: directModeBootstrapIdea(intent, idea),
+        planningSource: intent.kind === "direct" ? "direct" : "auto",
       }
     : { action: "none" };
 }
 
-function blockedDirectModeWithoutGraph(mode: SparkEntryMode): SparkEntryResolution {
-  return {
-    action: "blocked",
-    message: `Spark ${mode} mode needs initialized Spark project state. Create or select a project with task_write({ action: "project_use", title, description }) before using this mode.`,
-  };
+function directModeBootstrapIdea(intent: SparkEntryIntent, idea: string): string {
+  if (intent.kind !== "direct") return idea;
+  return [
+    idea,
+    "",
+    `Requested Spark mode: ${intent.mode}.`,
+    "No current Spark project state was available, so first create/select the project and plan concrete tasks. If the project identity, scope, or acceptance criteria are ambiguous, ask for human review before narrowing the plan.",
+  ].join("\n");
 }
 
 async function chooseInitializedSparkMode(

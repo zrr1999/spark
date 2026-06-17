@@ -85,7 +85,7 @@ export function registerSparkStateTool(
     name: "spark_state",
     label: "Spark State",
     description:
-      "Inspect or explicitly clean safe Spark session/cache state. action=status and action=diagnostics/doctor are read-only; action=cleanup defaults to dryRun=true and never deletes protected stores such as project graph, artifacts, notes, role-reports, workflow-runs, or review-gate. action=compact-role-run-artifacts previews or applies historical role-run transcript blob replacement and defaults to dry-run.",
+      "Inspect or explicitly clean safe Spark session/cache state. action=status and action=diagnostics/doctor are read-only; action=cleanup defaults to dryRun=true and never deletes protected stores such as project graph, TODO records, session state, artifacts, notes, role-reports, workflow-runs, or review-gate. action=compact-role-run-artifacts previews or applies historical role-run transcript blob replacement and defaults to dry-run.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({

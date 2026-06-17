@@ -105,6 +105,12 @@ export interface KillSparkRoleRunProcessResult extends ActiveSparkRoleRunProcess
   errorMessage?: string;
 }
 
+export interface SendSparkRoleRunInputResult extends ActiveSparkRoleRunProcess {
+  bytes: number;
+  delivered: boolean;
+  errorMessage?: string;
+}
+
 interface TrackedSparkRoleRunProcess extends ActiveSparkRoleRunProcess {
   child: ChildProcess;
   closed: boolean;
@@ -120,6 +126,7 @@ const MAX_ROLE_RUN_ARTIFACT_JSON_EVENT_TAIL_COUNT = 10;
 const MAX_ROLE_RUN_ARTIFACT_JSON_EVENT_CHARS = 1_000;
 const DEFAULT_ROLE_RUN_FORCE_KILL_AFTER_MS = 1_000;
 const DEFAULT_ROLE_RUN_SHUTDOWN_WAIT_MS = 3_000;
+const ROLE_RUN_INPUT_ERROR_GRACE_MS = 75;
 const activeSparkRoleRunProcesses = new Map<RunRef, TrackedSparkRoleRunProcess>();
 
 function unknownErrorMessage(error: unknown): string {
@@ -140,6 +147,29 @@ export function listActiveSparkRoleRunProcesses(): ActiveSparkRoleRunProcess[] {
 export async function killActiveSparkRoleRunProcesses(
   options: KillSparkRoleRunProcessOptions = {},
 ): Promise<KillSparkRoleRunProcessResult[]> {
+  const targets = selectTrackedSparkRoleRunProcesses(options);
+  return Promise.all(targets.map((record) => killTrackedSparkRoleRunProcess(record, options)));
+}
+
+export async function sendInputToActiveSparkRoleRunProcesses(options: {
+  runRef?: RunRef;
+  runRefs?: RunRef[];
+  runName?: string;
+  runNames?: string[];
+  text: string;
+}): Promise<SendSparkRoleRunInputResult[]> {
+  const targets = selectTrackedSparkRoleRunProcesses(options);
+  return Promise.all(
+    targets.map((record) => sendInputToTrackedSparkRoleRunProcess(record, options.text)),
+  );
+}
+
+function selectTrackedSparkRoleRunProcesses(options: {
+  runRef?: RunRef;
+  runRefs?: RunRef[];
+  runName?: string;
+  runNames?: string[];
+}): TrackedSparkRoleRunProcess[] {
   const hasRunFilter = options.runRef !== undefined || options.runRefs !== undefined;
   const hasNameFilter = options.runName !== undefined || options.runNames !== undefined;
   const runRefs = new Set([
@@ -150,12 +180,11 @@ export async function killActiveSparkRoleRunProcesses(
     ...(options.runNames ?? []),
     ...(options.runName ? [options.runName] : []),
   ]);
-  const targets = [...activeSparkRoleRunProcesses.values()].filter((record) => {
+  return [...activeSparkRoleRunProcesses.values()].filter((record) => {
     if (hasRunFilter && !runRefs.has(record.runRef)) return false;
     if (hasNameFilter && !runNames.has(record.runName ?? "")) return false;
     return true;
   });
-  return Promise.all(targets.map((record) => killTrackedSparkRoleRunProcess(record, options)));
 }
 
 function trackSparkRoleRunProcess(input: {
@@ -177,6 +206,10 @@ function trackSparkRoleRunProcess(input: {
     closed: input.child.exitCode !== null || input.child.signalCode !== null,
   };
   if (tracked.closed) return tracked;
+  input.child.stdin?.on("error", () => {
+    tracked.closed = true;
+    activeSparkRoleRunProcesses.delete(input.runRef);
+  });
   activeSparkRoleRunProcesses.set(input.runRef, tracked);
   input.child.once("close", () => {
     tracked.closed = true;
@@ -248,6 +281,66 @@ async function killTrackedSparkRoleRunProcess(
     signalSent,
     forceScheduled,
     closed,
+    errorMessage,
+  };
+}
+
+async function sendInputToTrackedSparkRoleRunProcess(
+  record: TrackedSparkRoleRunProcess,
+  text: string,
+): Promise<SendSparkRoleRunInputResult> {
+  let delivered = false;
+  let errorMessage: string | undefined;
+  const payload = text.endsWith("\n") ? text : `${text}\n`;
+  if (record.closed) {
+    errorMessage = "role-run process is already closed";
+  } else if (!record.child.stdin?.writable) {
+    errorMessage = "role-run process stdin is not writable";
+  } else {
+    const stdin = record.child.stdin;
+    try {
+      errorMessage = await new Promise<string | undefined>((resolve) => {
+        let settled = false;
+        let graceTimer: ReturnType<typeof setTimeout> | undefined;
+        const settle = (message: string | undefined): void => {
+          if (settled) return;
+          settled = true;
+          if (graceTimer) clearTimeout(graceTimer);
+          setImmediate(() => stdin.off("error", onError));
+          resolve(message);
+        };
+        const onError = (error: Error): void => {
+          delivered = false;
+          settle(unknownErrorMessage(error));
+        };
+        stdin.on("error", onError);
+        stdin.write(payload, (error?: Error | null) => {
+          if (error) {
+            delivered = false;
+            settle(unknownErrorMessage(error));
+            return;
+          }
+          if (record.closed || stdin.destroyed || !stdin.writable) {
+            delivered = false;
+            settle("role-run process stdin is not writable");
+            return;
+          }
+          graceTimer = setTimeout(() => {
+            delivered = !record.closed && !stdin.destroyed && stdin.writable;
+            settle(delivered ? undefined : "role-run process stdin is not writable");
+          }, ROLE_RUN_INPUT_ERROR_GRACE_MS);
+          graceTimer.unref?.();
+        });
+      });
+    } catch (error) {
+      delivered = false;
+      errorMessage = unknownErrorMessage(error);
+    }
+  }
+  return {
+    ...snapshotSparkRoleRunProcess(record),
+    bytes: Buffer.byteLength(payload),
+    delivered,
     errorMessage,
   };
 }
@@ -395,6 +488,8 @@ export interface SparkTaskRunOptions {
   };
 }
 
+export const DEFAULT_TASK_CLAIM_LEASE_MS = 600_000;
+
 export class TaskClaimHeartbeatError extends Error {
   constructor(error: unknown) {
     super(`task claim heartbeat failed: ${unknownErrorMessage(error)}`);
@@ -459,7 +554,7 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
     input.claim?.claimedBy?.trim() ||
     (claimKind === "role-run" ? createRoleRunClaimId(input.claim?.sessionId, runName) : runName);
   const ownerSessionId = input.claim?.sessionId;
-  const leaseMs = input.claim?.leaseMs ?? input.timeoutMs ?? 600_000;
+  const leaseMs = input.claim?.leaseMs ?? DEFAULT_TASK_CLAIM_LEASE_MS;
   if (!dryRun) {
     input.graph.claimTask(task.ref, {
       kind: claimKind,
@@ -792,12 +887,90 @@ function createTaskRunCompletionSummary(input: {
 }
 
 function summarizeRoleRunResult(result: SparkRoleRunResult): string {
-  const stdout = result.stdout.trim();
+  const finalAssistantText = extractFinalAssistantText(result.jsonEvents);
+  if (finalAssistantText) return summarizeText(finalAssistantText);
+  const stdoutNonJson = nonJsonStdoutText(result.stdout);
   const stderr = result.stderr.trim();
-  const parts = [stdout, stderr ? `stderr: ${stderr}` : ""].filter(Boolean);
+  const parts = [stdoutNonJson, stderr ? `stderr: ${stderr}` : ""].filter(Boolean);
   if (parts.length > 0) return summarizeText(parts.join("\n"));
   if (result.jsonEvents.length > 0) return summarizeText(JSON.stringify(result.jsonEvents.at(-1)));
   return `role run finished with status ${result.record.status}`;
+}
+
+function extractFinalAssistantText(events: unknown[]): string | undefined {
+  for (const event of [...events].reverse()) {
+    const direct = extractAssistantText(eventMessage(event));
+    if (direct) return direct;
+    const messages = eventMessages(event);
+    for (const message of [...messages].reverse()) {
+      const text = extractAssistantText(message);
+      if (text) return text;
+    }
+  }
+  return undefined;
+}
+
+function eventMessage(event: unknown): unknown {
+  if (!event || typeof event !== "object") return undefined;
+  return (event as { message?: unknown }).message;
+}
+
+function eventMessages(event: unknown): unknown[] {
+  if (!event || typeof event !== "object") return [];
+  const messages = (event as { messages?: unknown }).messages;
+  return Array.isArray(messages) ? messages : [];
+}
+
+function extractAssistantText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") return undefined;
+  if ((message as { role?: unknown }).role !== "assistant") return undefined;
+  return messageContentText((message as { content?: unknown }).content);
+}
+
+function messageContentText(content: unknown): string | undefined {
+  if (typeof content === "string") return content.trim() || undefined;
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .map((block) => {
+      if (!block || typeof block !== "object") return "";
+      const item = block as { type?: unknown; text?: unknown };
+      return item.type === "text" && typeof item.text === "string" ? item.text : "";
+    })
+    .join("")
+    .trim();
+  return text || undefined;
+}
+
+function nonJsonStdoutText(value: string): string | undefined {
+  const text = value
+    .split(/\r?\n/u)
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return false;
+      if (looksLikePiJsonProtocolFragment(trimmed)) return false;
+      try {
+        JSON.parse(line);
+        return false;
+      } catch {
+        return true;
+      }
+    })
+    .join("\n")
+    .trim();
+  return text || undefined;
+}
+
+function looksLikePiJsonProtocolFragment(value: string): boolean {
+  if (value.startsWith('{"type":"') || value.startsWith('{"type": "')) return true;
+  if (value.startsWith('"type":"') || value.startsWith('"type": "')) return true;
+  return (
+    value.includes('"assistantMessageEvent"') ||
+    value.includes('"toolCallId"') ||
+    value.includes('"toolName"') ||
+    value.includes('"message_update"') ||
+    value.includes('"message_end"') ||
+    value.includes('"turn_end"')
+  );
 }
 
 function summarizeText(text: string): string {
@@ -826,17 +999,13 @@ function roleRunEvidenceCompletionFailure(
 }
 
 function roleRunCompletionFailure(result: SparkRoleRunResult, dryRun: boolean): string | undefined {
-  if (!dryRun) {
-    const blockedSparkModeRequest = blockedSparkModeRequestCompletionFailure(result);
-    if (blockedSparkModeRequest) return blockedSparkModeRequest;
-  }
   if (result.record.status === "succeeded") {
     if (dryRun) return undefined;
     const emptyOutput =
       result.stdout.trim().length === 0 &&
       result.stderr.trim().length === 0 &&
       result.jsonEvents.length === 0;
-    return emptyOutput ? "role run succeeded without producing output" : undefined;
+    return emptyOutput ? "role run succeeded without producing task output" : undefined;
   }
   if (result.record.status === "not_started") {
     if (dryRun) return undefined;
@@ -847,80 +1016,6 @@ function roleRunCompletionFailure(result: SparkRoleRunResult, dryRun: boolean): 
     return emptyOutput ? "role run did not start and produced no output" : "role run did not start";
   }
   return `role run finished with status ${result.record.status}`;
-}
-
-function blockedSparkModeRequestCompletionFailure(result: SparkRoleRunResult): string | undefined {
-  const structuredReason = findBlockedSparkModeRequestReason(result.jsonEvents);
-  if (structuredReason)
-    return `role run produced a blocked Spark mode request: ${structuredReason}`;
-  const text = `${result.stdout}\n${result.stderr}`;
-  if (/Spark auto mode selection blocked/u.test(text))
-    return "role run produced a blocked Spark mode request: Spark auto mode selection blocked";
-  return undefined;
-}
-
-function findBlockedSparkModeRequestReason(events: unknown[]): string | undefined {
-  for (const event of events) {
-    for (const message of collectSparkModeRequestMessages(event)) {
-      const reason = blockedSparkModeRequestReason(message);
-      if (reason) return reason;
-    }
-  }
-  return undefined;
-}
-
-function collectSparkModeRequestMessages(event: unknown): Array<Record<string, unknown>> {
-  const messages: Array<Record<string, unknown>> = [];
-  const stack = [event];
-  const seen = new Set<object>();
-  while (stack.length > 0) {
-    const value = stack.pop();
-    if (!value || typeof value !== "object") continue;
-    if (seen.has(value)) continue;
-    seen.add(value);
-    if (Array.isArray(value)) {
-      for (const item of value) stack.push(item);
-      continue;
-    }
-    const record = value as Record<string, unknown>;
-    if (record.customType === "spark-mode-request") messages.push(record);
-    for (const nested of Object.values(record)) {
-      if (nested && typeof nested === "object") stack.push(nested);
-    }
-  }
-  return messages;
-}
-
-function blockedSparkModeRequestReason(message: Record<string, unknown>): string | undefined {
-  const details = asRecord(message.details);
-  const status = stringField(details, "status") ?? stringField(message, "status");
-  const reason = stringField(details, "reason") ?? stringField(message, "reason");
-  const content = stringField(message, "content");
-  const normalized = `${status ?? ""} ${reason ?? ""} ${content ?? ""}`.toLocaleLowerCase();
-  if (status === "blocked") return reason || "blocked";
-  if (
-    reason &&
-    /(?:^|[_\s-])(?:no_selection|mode_selection_blocked|blocked|refused)(?:$|[_\s-])/u.test(reason)
-  )
-    return reason;
-  if (/spark auto mode selection blocked/u.test(normalized))
-    return reason || "mode_selection_blocked";
-  if (/mode selection blocked/u.test(normalized)) return reason || "mode_selection_blocked";
-  return undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function stringField(
-  record: Record<string, unknown> | undefined,
-  field: string,
-): string | undefined {
-  const value = record?.[field];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 export interface TaskClaimHeartbeatOptions {
@@ -935,7 +1030,7 @@ export interface TaskClaimHeartbeatOptions {
 
 export function startTaskClaimHeartbeat(options: TaskClaimHeartbeatOptions): () => void {
   const intervalMs =
-    options.intervalMs ?? Math.max(1_000, Math.min(30_000, Math.floor(options.leaseMs / 3)));
+    options.intervalMs ?? Math.max(1, Math.min(30_000, Math.floor(options.leaseMs / 3)));
   let stopped = false;
   let inFlight = false;
 

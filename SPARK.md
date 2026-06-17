@@ -14,7 +14,7 @@ inspired_by:
 
 ## 起源
 
-`spark` 是面向 Pi 的 Spark 工作流套件。它以 `/spark <idea>` 作为兼容入口，将项目意图、项目与任务有向无环图、结构化提问、审查、证据制品、角色执行以及 `cue-shell` 执行能力组织为可追溯的本地工作流。早期 `SPARK.md` 由占位意图生成；当前文件依据已经落地的包边界、历史任务审查和实现状态重新整理。
+`spark` 是面向 Pi 的 Spark 工作流套件。它通过意图明确的用户命令与规范化工具，将项目意图、项目与任务有向无环图、结构化提问、审查、证据制品、角色执行以及 `cue-shell` 执行能力组织为可追溯的本地工作流。早期 `SPARK.md` 由占位意图生成；当前文件依据已经落地的包边界、历史任务审查和实现状态重新整理。
 
 ## 当前工作标题
 
@@ -23,7 +23,7 @@ inspired_by:
 
 ## 目标
 
-- 让 Spark 在没有 `.spark/` 或 `SPARK.md` 预置状态时也能默认进入研究模式，并让 `/spark` 在需要项目绑定状态时从初始想法创建或恢复本地 Spark 状态，而不是依赖聊天上下文记忆。
+- 让 Spark 在没有 `.spark/` 或 `SPARK.md` 预置状态时也能默认进行轻量调查，并让 project-bound 命令在需要项目绑定状态时从用户意图创建或恢复本地 Spark 状态，而不是依赖聊天上下文记忆。
 - 用持久化的项目与任务有向无环图表达工作分解、依赖、认领、待办事项、运行记录和完成状态。
 - 用类型化证据制品记录结构化提问答案、角色执行输出、审查结果、运行轨迹和后续证据。
 - 将结构化提问作为工作流原语：在项目、任务、路线图或审查流程需要真实澄清或决策时调用，而不是展示宽泛的录入表单。
@@ -33,9 +33,9 @@ inspired_by:
 
 ## 当前包边界
 
-Spark 现在支持两个宿主目标：Pi 中的 `packages/spark/src/extension/` 仍是 `/spark` 等命令和门面策略的 Pi 扩展入口；`packages/spark-cli` 是原生 `pi-tui` 宿主，负责构造 `SparkHostRuntime`、显式内置扩展加载器、提供方注册表、模型选择器、JSONL 会话存储、三层技能解析器和 `SparkAgentLoop`。共享扩展包通过 `pi-extension-api` 在两个宿主中运行，不应依赖具体的 Pi SDK 运行时。
+Spark 现在支持两个宿主目标：Pi 中的 `packages/spark/src/extension/` 是意图命令和门面策略的 Pi 扩展入口；`packages/spark-cli` 是原生 `pi-tui` 宿主，负责构造 `SparkHostRuntime`、显式内置扩展加载器、提供方注册表、模型选择器、JSONL 会话存储、三层技能解析器和 `SparkAgentLoop`。共享扩展包通过 `pi-extension-api` 在两个宿主中运行，不应依赖具体的 Pi SDK 运行时。
 
-- `packages/spark`：Pi 扩展门面、`/spark`、`/research`、`/plan`、`/implement`、`/goal`、`/workflow`、Spark 小组件、模式与策略、内置 Spark 角色以及活动上下文提供方。
+- `packages/spark`：Pi 扩展门面、默认轻量 research 行为、`/plan`、`/implement`、`/goal`、`/loop`、`/workflow`、Spark 小组件、模式与策略、内置 Spark 角色以及活动上下文提供方。
 - `packages/spark-runtime`：单个 Spark 任务到角色执行的适配层，负责调用 `pi-roles` 并回写证据制品、运行记录和状态。
 - `packages/pi-extension-api`：共享扩展宿主与工具契约、引用、错误类型以及轻量 JSON、文件系统和时间辅助能力。
 - `packages/pi-artifacts`：证据制品元数据与二进制对象存储、来源、谱系，以及规范化 `artifact({ action })` 工具。
@@ -64,7 +64,7 @@ Spark 现在支持两个宿主目标：Pi 中的 `packages/spark/src/extension/`
 
 ## 成功信号
 
-- `/spark` 初始化或恢复不会覆盖既有状态，不会生成占位任务，也不会要求用户先填写宽泛表单。
+- Project-bound 命令初始化或恢复不会覆盖既有状态，不会生成占位任务，也不会要求用户先填写宽泛表单。
 - `task_read({ action: "status" })` 和 Spark 小组件能以低噪声方式展示当前项目、活动任务、待办事项、工作流运行状态和就绪性问题。
 - `task_write({ action: "plan" })`、`task_write({ action: "claim" })` 和 `assign({ dryRun: true })` 能区分规划、认领、实现和完成；角色执行失败或未启动不会被错误标记为任务完成。
 - `ask({ action: "ask" | "flow" })` 的聚焦与全屏流程结果语义一致：自定义输入是一等结果，决策或审批没有有效选项时会阻塞，用户界面不泄漏原始标识符。
@@ -85,7 +85,7 @@ Spark 现在支持两个宿主目标：Pi 中的 `packages/spark/src/extension/`
 
 ## 修订记录
 
-- 2026-05-18：由 `/spark` 初始生成占位项目意图。
+- 2026-05-18：早期由兼容入口初始生成占位项目意图。
 - 2026-05-22：根据历史任务审查、`pi-roles` 迁移、结构化提问、任务和 `cue` 边界，以及当时实现状态重建项目意图。
 - 2026-06-05：根据门面切换、实现下沉和 `spark-core`、`spark-tasks`、`spark-learnings`、`spark-goal`、`spark-workflows` 退场更新当前边界。
 - 2026-06-15：统一正式中文表述，保留必要代码标识符和兼容性术语。

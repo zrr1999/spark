@@ -1,4 +1,4 @@
-import { join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 
 import type { Task, TaskRef, ProjectRef } from "@zendev-lab/pi-extension-api";
 import type { TaskGraph } from "@zendev-lab/pi-tasks";
@@ -73,8 +73,12 @@ async function currentProjectCleanupCandidates(
   includeBroken: boolean,
 ): Promise<SparkStateCleanupCandidate[]> {
   const candidates: SparkStateCleanupCandidate[] = [];
-  for (const file of await listSparkStateFiles(join(root, "sessions"))) {
-    const stale = file.mtimeMs < staleCutoffMs && fileScope(file) !== currentOwnerScope;
+  const sessionsRoot = join(root, "sessions");
+  const files = (await listSparkStateFiles(sessionsRoot, true)).filter((file) =>
+    isCurrentProjectStateCacheFile(sessionsRoot, file),
+  );
+  for (const file of files) {
+    const stale = file.mtimeMs < staleCutoffMs && sessionStateFileScope(file) !== currentOwnerScope;
     const raw = await readJsonObject(file.path);
     if (!raw) {
       if (includeBroken)
@@ -94,6 +98,17 @@ async function currentProjectCleanupCandidates(
   return candidates;
 }
 
+function isCurrentProjectStateCacheFile(sessionsRoot: string, file: SparkStateFileInfo): boolean {
+  const relativePath = relative(sessionsRoot, file.path);
+  const segments = relativePath.split(/[\\/]/u);
+  if (segments.length === 1) return file.name.endsWith(".json") && file.name !== "index.json";
+  return segments.length === 2 && file.name === "state.json";
+}
+
+function sessionStateFileScope(file: SparkStateFileInfo): string {
+  return file.name === "state.json" ? basename(dirname(file.path)) : fileScope(file);
+}
+
 async function taskTodoCleanupCandidates(
   cwd: string,
   root: string,
@@ -103,7 +118,10 @@ async function taskTodoCleanupCandidates(
   includeBroken: boolean,
 ): Promise<SparkStateCleanupCandidate[]> {
   const candidates: SparkStateCleanupCandidate[] = [];
-  for (const file of await listSparkStateFiles(join(root, "todos"))) {
+  const files = (await listSparkStateFiles(join(root, "todos"))).filter((file) =>
+    file.name.endsWith(".json"),
+  );
+  for (const file of files) {
     const stale = file.mtimeMs < staleCutoffMs && fileScope(file) !== currentSessionScope;
     const raw = await readJsonObject(file.path);
     if (!raw) {

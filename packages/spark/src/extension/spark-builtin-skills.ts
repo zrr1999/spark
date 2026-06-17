@@ -31,6 +31,42 @@ export function defaultBuiltinSkillsDir(): string {
   return resolve(process.cwd(), "packages", "spark", "skills");
 }
 
+export function defaultPiCueSkillsDir(): string {
+  const hostDir = dirname(fileURLToPath(import.meta.url));
+  const fromWorkspace = resolve(hostDir, "../../../pi-cue/skills");
+  if (existsSync(fromWorkspace)) return fromWorkspace;
+  try {
+    const extensionPath = fileURLToPath(import.meta.resolve("@zendev-lab/pi-cue/extension"));
+    const fromPackage = resolve(dirname(extensionPath), "../../skills");
+    if (existsSync(fromPackage)) return fromPackage;
+  } catch {
+    // Fall through to the source-tree default below.
+  }
+  return resolve(process.cwd(), "packages", "pi-cue", "skills");
+}
+
+export function defaultPiGraftPromptFile(): string {
+  const hostDir = dirname(fileURLToPath(import.meta.url));
+  const fromWorkspace = resolve(hostDir, "../../../pi-graft/README.md");
+  if (existsSync(fromWorkspace)) return fromWorkspace;
+  try {
+    const extensionPath = fileURLToPath(import.meta.resolve("@zendev-lab/pi-graft/extension"));
+    const fromPackage = resolve(dirname(extensionPath), "../README.md");
+    if (existsSync(fromPackage)) return fromPackage;
+  } catch {
+    // Fall through to the source-tree default below.
+  }
+  return resolve(process.cwd(), "packages", "pi-graft", "README.md");
+}
+
+export function defaultBasePromptDirs(): string[] {
+  return [defaultBuiltinSkillsDir(), defaultPiCueSkillsDir()];
+}
+
+export function defaultBasePromptFiles(): string[] {
+  return [defaultPiGraftPromptFile()];
+}
+
 export async function loadBuiltinSkills(
   dir = defaultBuiltinSkillsDir(),
 ): Promise<SparkBuiltinSkill[]> {
@@ -40,30 +76,47 @@ export async function loadBuiltinSkills(
 }
 
 export function renderBuiltinSkillsForPrompt(skills: SparkBuiltinSkill[]): string {
+  return renderBaseSystemPromptFilesForPrompt(skills);
+}
+
+export function renderBaseSystemPromptFilesForPrompt(skills: SparkBuiltinSkill[]): string {
   const visible = skills.filter((skill) => !skill.disabled);
   if (visible.length === 0) return "";
   const lines = [
-    "\n\nThe following Spark builtin skills are already loaded in full.",
-    "Do not use the read tool to load these builtin skill files again; follow their instructions directly.",
+    "\n\nThe following base system prompt files are already loaded in full.",
+    "Follow these instructions directly; do not use the read tool to load these files again.",
     "",
-    "<builtin_skills>",
+    "<base_system_prompts>",
   ];
   for (const skill of visible) {
-    lines.push("  <skill>");
+    lines.push("  <prompt>");
     lines.push(`    <name>${escapeXml(skill.name)}</name>`);
     lines.push(`    <description>${escapeXml(skill.description)}</description>`);
     lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
     lines.push("    <content>");
     lines.push(skill.body.trimEnd());
     lines.push("    </content>");
-    lines.push("  </skill>");
+    lines.push("  </prompt>");
   }
-  lines.push("</builtin_skills>");
+  lines.push("</base_system_prompts>");
   return lines.join("\n");
 }
 
 export async function renderBuiltinSkillsPrompt(dir = defaultBuiltinSkillsDir()): Promise<string> {
   return renderBuiltinSkillsForPrompt(await loadBuiltinSkills(dir));
+}
+
+export async function renderBaseSystemPromptsPrompt(
+  input: {
+    dirs?: string[];
+    files?: string[];
+  } = {},
+): Promise<string> {
+  const dirs = input.dirs ?? defaultBasePromptDirs();
+  const files = input.files ?? defaultBasePromptFiles();
+  const skills = (await Promise.all(dirs.map((dir) => loadBuiltinSkills(dir)))).flat();
+  const filePrompts = await Promise.all(files.map((filePath) => loadBasePromptFile(filePath)));
+  return renderBaseSystemPromptFilesForPrompt([...skills, ...filePrompts.filter(isDefined)]);
 }
 
 export function parseSkillFrontmatter(markdown: string): {
@@ -131,6 +184,30 @@ async function loadBuiltinSkillFromFile(filePath: string): Promise<SparkBuiltinS
     frontmatter,
     body,
   };
+}
+
+async function loadBasePromptFile(filePath: string): Promise<SparkBuiltinSkill | undefined> {
+  try {
+    const body = await readFile(filePath, "utf8");
+    const baseDir = dirname(filePath);
+    return {
+      name: basename(baseDir).toLowerCase(),
+      description: `Base system prompt from ${basename(filePath)}`,
+      filePath,
+      baseDir,
+      disabled: false,
+      disableModelInvocation: true,
+      frontmatter: {},
+      body,
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function isDefined<T>(value: T | undefined): value is T {
+  return value !== undefined;
 }
 
 function parseSimpleYaml(raw: string): SparkSkillFrontmatter {

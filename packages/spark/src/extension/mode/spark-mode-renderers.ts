@@ -20,7 +20,7 @@ export const WORKFLOW_AND_SUBAGENT_ARE_TOOLS =
   "Workflow and subagent role runs are execution tools, not session modes. First select the governing mode (research, plan, or implement), then use role/workflow only within that mode's responsibility and evidence boundaries.";
 
 const RESEARCH_SUBAGENT_STRATEGY =
-  'Research mode should use subagent role calls plus main-agent synthesis when parallel inspection, cross-checking, or specialist review materially improves coverage. Call role({ action: "call", role, instruction, launch: "fresh" | "forked" }) with focused read-only research briefs; the main agent remains responsible for summarizing, reconciling, and qualifying the findings.';
+  'Default lightweight research should use subagent role calls plus main-agent synthesis when parallel inspection, cross-checking, or specialist review materially improves coverage. Call role({ action: "call", role, instruction, launch: "fresh" | "forked" }) with focused read-only research briefs; the main agent remains responsible for summarizing, reconciling, and qualifying the findings.';
 
 export const PARALLEL_EXECUTION_WORKFLOW_STRATEGY =
   'Implementation mode should use the workflow tool/runtime boundary for execution work that is parallelizable, repetitive, or suited to scripted orchestration. Discover saved workflows with workflow({ action: "list" }) and read candidates with workflow({ action: "read" }); if no workflow applies, report the missing workflow requirement or ask for direction before creating or running one.';
@@ -34,14 +34,14 @@ export function renderSparkResearchModePrompt(
     graph,
     selectedProjectRef,
     focus,
-    "Research",
+    "Default research",
     selectedProjectRef
       ? [
           "Investigate the repository, current project, task graph, artifacts, context providers, and external references needed to answer the focus.",
           WORKFLOW_AND_SUBAGENT_ARE_TOOLS,
           RESEARCH_SUBAGENT_STRATEGY,
-          "Report findings directly; do not change files or durable Spark task state in research mode unless the user explicitly asks for that change.",
-          'Do not call task_write({ action: "plan" | "claim" | "finish" }) in research mode.',
+          "Report findings directly; do not change files or durable Spark task state during default research unless the user explicitly asks for that change.",
+          'Do not call task_write({ action: "plan" | "claim" | "finish" }) during default research.',
           "When research changes task scope, suggests new work, or exposes multiple implementation directions, summarize findings and ask whether the user wants design options, durable task planning, or execution toward completing the project.",
           ASK_BEFORE_GUESSING,
         ]
@@ -97,10 +97,11 @@ export function renderSparkImplementationModePrompt(
 ): string {
   const requirements = selectedProjectRef
     ? [
-        'Read the current project/task plan and inspect ready tasks with task_read({ action: "status" }). Claim at most one concrete task with task_write({ action: "claim" }), execute it, verify the required evidence with artifact/learning/context as needed, then call task_write({ action: "finish" }). Stop after that task finishes; do not auto-claim another task or dispatch continuous work from /implement.',
+        'Read the current project/task plan and inspect ready tasks with task_read({ action: "status" }). Claim one concrete ready task at a time with task_write({ action: "claim" }), execute it, verify the required evidence with artifact/learning/context as needed, then call task_write({ action: "finish" }). After each successful finish, inspect status again and continue with the next ready task until no ready task remains, validation fails, review/ask approval is pending, or a real blocker requires user input or external action.',
+        "Implementation mode is human-blocking: use canonical ask for material user decisions and wait for the answer; do not auto-answer asks, do not make goal-style autonomous policy decisions, and do not request reviewer-gated goal completion from /implement.",
         WORKFLOW_AND_SUBAGENT_ARE_TOOLS,
         PARALLEL_EXECUTION_WORKFLOW_STRATEGY,
-        "If the user wants autonomous completion of all ready work, suggest /goal. If the user wants a scripted saved workflow, suggest /workflow.",
+        "If work becomes open-ended with no natural completion condition, suggest /loop. If the user wants autonomous completion with auto-decision policy and reviewer-gated completion, suggest /goal. If the user wants a scripted saved workflow, suggest /workflow.",
         ASK_BEFORE_GUESSING,
       ]
     : [
@@ -115,7 +116,7 @@ export function renderModePrompt(
   graph: TaskGraph,
   selectedProjectRef: ProjectRef | undefined,
   focus: string | undefined,
-  mode: "Research" | "Planning" | "Implementation" | "Workflow driver",
+  mode: "Default research" | "Planning" | "Implementation" | "Workflow driver",
   requirements: string[],
   extraContext?: string,
 ): string {
@@ -123,7 +124,12 @@ export function renderModePrompt(
     renderSparkProjectSummary(graph, selectedProjectRef),
     renderModeFocus(mode, focus),
     extraContext?.trim() || undefined,
-    [`## ${mode} mode requirements`, ...requirements.map((item) => `- ${item}`)].join("\n"),
+    [
+      mode === "Default research"
+        ? "## Default research requirements"
+        : `## ${mode} mode requirements`,
+      ...requirements.map((item) => `- ${item}`),
+    ].join("\n"),
   ].filter((section): section is string => Boolean(section));
   return sections.join("\n\n");
 }
@@ -150,12 +156,21 @@ function renderSparkProjectSummary(graph: TaskGraph, selectedProjectRef?: Projec
   }
   const tasks = graph.tasks(project.ref);
   const unfinished = tasks.filter((task) => task.status !== "done" && task.status !== "cancelled");
+  const ready = graph.readyTasks(project.ref);
   return [
     "## Spark project summary",
     `- Current project: ${project.title} (${project.ref})`,
     `- Status: ${project.status}`,
     `- Tasks: ${tasks.length} total / ${unfinished.length} unfinished`,
-  ].join("\n");
+    ready.length > 0
+      ? `- Ready frontier: ${ready
+          .slice(0, 5)
+          .map((task) => `@${task.name}: ${task.title}`)
+          .join("; ")}`
+      : undefined,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
 }
 
 export function renderSparkModeVisibleMessage(
@@ -165,7 +180,7 @@ export function renderSparkModeVisibleMessage(
 ): string {
   const title =
     mode === "research"
-      ? "Spark research mode requested"
+      ? "Spark default research requested"
       : mode === "plan"
         ? "Spark plan mode requested"
         : "Spark implement mode requested";

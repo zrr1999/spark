@@ -1,7 +1,9 @@
 import { Type } from "typebox";
 import type { RoleRegistry } from "@zendev-lab/pi-roles";
 import {
+  nowIso,
   stableId,
+  type ArtifactRef,
   type RoleRef,
   type Task,
   type TaskPlan,
@@ -24,6 +26,7 @@ import {
   taskPlanSchema,
 } from "./task-plan-tool.ts";
 import { currentSparkProject, sparkSessionKey, sparkTodoStore } from "./session-state.ts";
+import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import { isGenericInitialTaskTitle } from "./spark-graph-invariants.ts";
 import { findActiveSessionClaim, resolveSessionClaimedTask } from "./task-claim-selection.ts";
 import { taskClaimSummary } from "./task-display.ts";
@@ -31,6 +34,12 @@ import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 import { truncateInline } from "./tool-rendering.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
+import { activeSparkRoleRunProcessesForCwd } from "./background-runs.ts";
+import {
+  evaluateSparkTaskClaimRecovery,
+  recordSparkTaskClaimRecoveryArtifact,
+  type SparkTaskClaimRecoveryDecision,
+} from "./task-claim-recovery.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 
 const MAIN_TASK_CLAIM_LEASE_MS = 10 * 60 * 1_000;
@@ -40,6 +49,8 @@ interface SparkClaimTaskToolDependencies {
 }
 
 export interface NormalizedSparkClaimTaskInput {
+  projectSelector?: string;
+  taskSelector?: string;
   name?: string;
   title?: string;
   description?: string;
@@ -55,6 +66,8 @@ export function normalizeSparkClaimTaskInput(
 ): NormalizedSparkClaimTaskInput {
   const roleRefInput = normalizeOptionalToolString(params.roleRef, "roleRef");
   return {
+    projectSelector: normalizeOptionalToolString(params.projectRef ?? params.project, "project"),
+    taskSelector: normalizeOptionalToolString(params.taskRef ?? params.task, "task"),
     name: normalizeOptionalToolString(params.name, "name"),
     title: normalizeOptionalToolString(params.title, "title"),
     description: normalizeOptionalToolString(params.description, "description"),
@@ -75,6 +88,14 @@ export function registerSparkClaimTaskTool(
     description:
       'Compatibility surface for task_write({ action: "claim" }): create or update a concrete Spark task for this session. For Spark-native delegated work, tasks may include an optional roleRef hint, but assign({ dryRun: true }) assigns the concrete executor role at dispatch; do not spawn nested pi CLI sessions as pseudo-roles unless explicitly testing Pi CLI behavior.',
     parameters: Type.Object({
+      project: Type.Optional(Type.String({ description: "Optional project selector/ref/title." })),
+      projectRef: Type.Optional(
+        Type.String({ description: "Optional project ref/selector; alias for project." }),
+      ),
+      task: Type.Optional(Type.String({ description: "Existing task selector/ref/name/title." })),
+      taskRef: Type.Optional(
+        Type.String({ description: "Existing task ref/name/title selector; alias for task." }),
+      ),
       name: Type.Optional(
         Type.String({
           description: "Simple @name handle for this task (lowercase, digits, - or _).",
@@ -138,19 +159,57 @@ export function registerSparkClaimTaskTool(
           content: [{ type: "text", text: NO_SPARK_PROJECT_FOUND_HINT }],
           details: { found: false },
         };
+      const workflowRunStatus = await defaultSparkWorkflowRunStore(cwd).status();
+      const activeRoleRunProcesses = activeSparkRoleRunProcessesForCwd(cwd);
       const claimed = await store.update(
         async (graph) => {
           await sparkTodoStore(cwd, ctx).hydrate(graph);
-          const project = await currentSparkProject(cwd, ctx, graph);
+          const project = input.projectSelector
+            ? resolveClaimProject(graph, input.projectSelector)
+            : await currentSparkProject(cwd, ctx, graph);
           if (!project) return { error: "no_project" as const };
           const tasks = graph.tasks(project.ref);
-          const existing =
-            resolveSessionClaimedTask(graph, project.ref, sessionKey, input.name ?? input.title) ??
+          let existing =
+            resolveSessionClaimedTask(
+              graph,
+              project.ref,
+              sessionKey,
+              input.taskSelector ?? input.name ?? input.title,
+            ) ??
+            resolveClaimTaskSelector(tasks, input.taskSelector) ??
             tasks.find((task) => Boolean(input.name) && task.name === input.name) ??
             tasks.find((task) => Boolean(input.title) && task.title === input.title) ??
             resolveObviousTaskRenameCandidate(graph, project.ref, tasks);
-          if (existing && taskClaimedBy(existing) && !isClaimOwnedBySession(existing, sessionKey))
-            return { error: "claimed_by_other" as const, activeTask: existing };
+          let recoveredClaimArtifactRef: ArtifactRef | undefined;
+          let claimRecovery: SparkTaskClaimRecoveryDecision | undefined;
+          if (existing && taskClaimedBy(existing) && !isClaimOwnedBySession(existing, sessionKey)) {
+            claimRecovery = await evaluateSparkTaskClaimRecovery({
+              cwd,
+              task: existing,
+              projectRef: project.ref,
+              currentSessionKey: sessionKey,
+              workflowRunStatus,
+              activeRoleRunProcesses,
+              now: nowIso(),
+            });
+            if (!claimRecovery.recoverable)
+              return {
+                error: "claimed_by_other" as const,
+                activeTask: existing,
+                claimRecovery,
+              };
+            recoveredClaimArtifactRef = (
+              await recordSparkTaskClaimRecoveryArtifact({
+                cwd,
+                task: existing,
+                projectRef: project.ref,
+                decision: claimRecovery,
+                recoveredBy: sessionKey,
+              })
+            ).ref;
+            graph.releaseTaskClaim(existing.ref);
+            existing = graph.getTask(existing.ref);
+          }
           const activeClaim = findActiveSessionClaim(graph, project.ref, sessionKey, existing?.ref);
           if (isUnfinishedTaskStatus(status) && activeClaim)
             return { error: "active_claim_exists" as const, activeTask: activeClaim };
@@ -193,7 +252,12 @@ export function registerSparkClaimTaskTool(
           }
           const taskTodos = graph.taskTodos(task.ref);
           const hasActiveTodos = taskTodos.some(isActiveTaskTodo);
-          return { task: graph.getTask(task.ref), hasActiveTodos };
+          return {
+            task: graph.getTask(task.ref),
+            hasActiveTodos,
+            recoveredClaimArtifactRef,
+            claimRecovery,
+          };
         },
         { createIfMissing: false },
       );
@@ -233,13 +297,14 @@ export function registerSparkClaimTaskTool(
               text:
                 claimed.result.error === "active_claim_exists"
                   ? `Cannot claim ${claimInputLabel(input)}: this session already has unfinished claimed task ${claimed.result.activeTask.title} (${claimed.result.activeTask.ref}). Finish, fail, or cancel it before claiming another task.`
-                  : `Cannot update ${claimInputLabel(input)}: matching task is currently claimed by another session (${taskClaimSummary(claimed.result.activeTask)}).`,
+                  : `Cannot update ${claimInputLabel(input)}: matching task is currently claimed by another session (${taskClaimSummary(claimed.result.activeTask)}). Claim recovery refused: ${claimed.result.claimRecovery?.reason ?? "not_evaluated"}. ${claimed.result.claimRecovery?.guidance ?? "Inspect task_read status and retry only when the owner is inactive or the claim expires."}`,
             },
           ],
           details: {
             found: true,
             error: claimed.result.error,
             activeTask: compactTaskDetail(claimed.result.activeTask),
+            claimRecovery: claimed.result.claimRecovery,
           },
         };
       await deps.refreshSparkWidget(cwd, ctx);
@@ -247,11 +312,16 @@ export function registerSparkClaimTaskTool(
         content: [
           {
             type: "text",
-            text: renderClaimedTaskText(claimed.result.task, claimed.result.hasActiveTodos),
+            text: renderClaimedTaskText(claimed.result.task, claimed.result.hasActiveTodos, {
+              recoveredClaimArtifactRef: claimed.result.recoveredClaimArtifactRef,
+              claimRecovery: claimed.result.claimRecovery,
+            }),
           },
         ],
         details: {
           task: claimed.result.task as unknown as Record<string, unknown>,
+          recoveredClaimArtifactRef: claimed.result.recoveredClaimArtifactRef,
+          claimRecovery: claimed.result.claimRecovery,
         },
       };
     },
@@ -290,14 +360,42 @@ function titleFromTaskName(name: string | undefined): string | undefined {
 }
 
 function claimInputLabel(input: NormalizedSparkClaimTaskInput): string {
-  return input.title ?? (input.name ? `@${input.name}` : "task");
+  return input.title ?? input.taskSelector ?? (input.name ? `@${input.name}` : "task");
+}
+
+function resolveClaimProject(
+  graph: TaskGraph,
+  selector: string,
+): ReturnType<TaskGraph["projects"]>[number] | undefined {
+  return graph.projects().find((project) => project.ref === selector || project.title === selector);
+}
+
+function resolveClaimTaskSelector(
+  tasks: readonly Task[],
+  selector: string | undefined,
+): Task | undefined {
+  if (!selector) return undefined;
+  return tasks.find(
+    (task) =>
+      task.ref === selector ||
+      task.name === selector ||
+      `@${task.name}` === selector ||
+      task.title === selector,
+  );
 }
 
 function isActiveTaskTodo(todo: TaskTodo): boolean {
   return todo.status !== "done" && todo.status !== "cancelled" && todo.status !== "deleted";
 }
 
-function renderClaimedTaskText(task: Task, hasActiveTodos: boolean): string {
+function renderClaimedTaskText(
+  task: Task,
+  hasActiveTodos: boolean,
+  recovery?: {
+    recoveredClaimArtifactRef?: ArtifactRef;
+    claimRecovery?: SparkTaskClaimRecoveryDecision;
+  },
+): string {
   const plan = task.plan;
   const lines = [`Claimed Spark task: @${task.name}: ${task.title} (${task.ref})`, "", "Plan:"];
   if (!plan) {
@@ -315,6 +413,13 @@ function renderClaimedTaskText(task: Task, hasActiveTodos: boolean): string {
       `- evidenceRequired: ${renderPlanList(plan.evidenceRequired)}`,
       `- steps: ${renderPlanList(plan.steps)}`,
       `- constraints: ${renderPlanList(plan.constraints)}`,
+    );
+  }
+  if (recovery?.recoveredClaimArtifactRef) {
+    lines.push(
+      "",
+      `Recovered previous task claim: ${recovery.claimRecovery?.reason ?? "unknown"}`,
+      `Recovery evidence: ${recovery.recoveredClaimArtifactRef}`,
     );
   }
   lines.push("");

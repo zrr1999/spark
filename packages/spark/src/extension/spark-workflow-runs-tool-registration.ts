@@ -1,7 +1,11 @@
 import { Type } from "typebox";
 import type { RunRef } from "@zendev-lab/pi-extension-api";
+import { defaultArtifactStore, type JsonValue } from "@zendev-lab/pi-artifacts";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
-import { killActiveSparkRoleRunProcesses } from "@zendev-lab/spark-runtime";
+import {
+  killActiveSparkRoleRunProcesses,
+  sendInputToActiveSparkRoleRunProcesses,
+} from "@zendev-lab/spark-runtime";
 import {
   acknowledgeBackgroundWorkflowRuns,
   buildSparkBackgroundDetails,
@@ -15,11 +19,12 @@ import {
   reconcileSparkWorkflowRunsWithActiveProcesses,
   resolveBackgroundTaskRef,
 } from "./background-runs.ts";
+import { appendRoleRunActivityEvent } from "./role-run-activity-events.ts";
 import { renderSparkBackgroundRunsText } from "./background-runs-rendering.ts";
 import { appendSparkWorkflowRunPruneLines } from "./state-housekeeping-rendering.ts";
 import { activeSparkRoleRunProcessesForCwd } from "./background-runs.ts";
 import { currentSparkProject, loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
-import type { SparkToolRegistrar } from "./spark-tool-registration.ts";
+import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 
 interface SparkWorkflowRunsParams {
   action?: unknown;
@@ -31,6 +36,7 @@ interface SparkWorkflowRunsParams {
   signal?: unknown;
   forceAfterMs?: unknown;
   all?: unknown;
+  message?: unknown;
   dryRun?: unknown;
   olderThanDays?: unknown;
   keepRecent?: unknown;
@@ -66,18 +72,27 @@ export function normalizeSparkWorkflowRunsNonNegativeInteger(
   return value;
 }
 
-export function registerSparkWorkflowRunsTool(registerSparkTool: SparkToolRegistrar): void {
+function normalizeControlMessage(value: unknown, action: "reply" | "steer"): string {
+  if (typeof value !== "string" || value.trim().length === 0)
+    throw new Error(`spark_workflow_runs ${action} requires a non-empty message`);
+  return value.trim();
+}
+
+export function registerSparkWorkflowRunsTool(
+  registerSparkTool: SparkToolRegistrar,
+  deps: { refreshSparkWidget?: (cwd: string, ctx: SparkToolContext) => Promise<void> } = {},
+): void {
   registerSparkTool({
     name: "spark_workflow_runs",
     label: "Spark Workflow Runs",
     description:
-      "Inspect and control Spark background workflow runs: status/list/inspect active child role-runs, kill/reconcile/ack background work, and prune/clear retained terminal records. Compact summaries include transcript refs/tail metadata, task claims, pids, run refs, and next actions.",
+      "Inspect and control Spark background workflow runs: status/list/inspect active child role-runs, kill/reply/steer/reconcile/ack background work, and prune/clear retained terminal records. Compact summaries include transcript refs/tail metadata, task claims, pids, run refs, and next actions.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({
           default: "status",
           description:
-            "status | list | inspect | kill | reconcile | ack | prune | clear_inactive | kill_active",
+            "status | list | inspect | kill | reply | steer | reconcile | ack | prune | clear_inactive | kill_active",
         }),
       ),
       runRef: Type.Optional(
@@ -111,6 +126,12 @@ export function registerSparkWorkflowRunsTool(registerSparkTool: SparkToolRegist
         Type.Boolean({
           description:
             "Kill only; required to kill all active children when no runRef/taskRef is provided.",
+        }),
+      ),
+      message: Type.Optional(
+        Type.String({
+          description:
+            "reply/steer only; text to send to exactly one selected active background role-run stdin. Select with runRef or taskRef, or omit only when exactly one active child is visible.",
         }),
       ),
       dryRun: Type.Optional(
@@ -270,6 +291,7 @@ export function registerSparkWorkflowRunsTool(registerSparkTool: SparkToolRegist
               })
             : [];
         await reconcileSparkWorkflowRunsWithActiveProcesses(runStore, graph, cwd);
+        await deps.refreshSparkWidget?.(cwd, ctx);
         const background = await buildSparkBackgroundDetails({
           action: "kill",
           cwd,
@@ -386,6 +408,7 @@ export function registerSparkWorkflowRunsTool(registerSparkTool: SparkToolRegist
           reason: "spark_workflow_runs kill",
         });
         await reconcileSparkWorkflowRunsWithActiveProcesses(runStore, graph, cwd);
+        await deps.refreshSparkWidget?.(cwd, ctx);
         const background = await buildSparkBackgroundDetails({
           action,
           cwd,
@@ -404,6 +427,132 @@ export function registerSparkWorkflowRunsTool(registerSparkTool: SparkToolRegist
             { type: "text", text: renderSparkBackgroundRunsText(background, { includeDetails }) },
           ],
           details: { background },
+        };
+      }
+      if (action === "reply" || action === "steer") {
+        const message = normalizeControlMessage(p.message, action);
+        const before = await buildSparkBackgroundDetails({
+          action,
+          cwd,
+          graph,
+          runStore,
+          currentProjectRef,
+          projectRef: requestedProjectRef,
+          control: controlView,
+          includeHistory: true,
+          targetRunRef: runRef,
+          targetTaskRef: taskRef,
+        });
+        const activeTargets = before.childRuns.filter(
+          (child) =>
+            child.activeProcess &&
+            (!runRef || child.runRef === runRef || child.workflowRunRef === runRef) &&
+            (!taskRef || child.taskRef === taskRef),
+        );
+        if (activeTargets.length !== 1) {
+          const error =
+            activeTargets.length === 0
+              ? "control_requires_active_target"
+              : "control_target_ambiguous";
+          const guidance =
+            activeTargets.length === 0
+              ? "No active background role-run process matched the selector. Inspect with action=inspect/list or wait for a visible active child before replying or steering."
+              : "Multiple active background role-run processes matched. Provide runRef or taskRef for exactly one active child.";
+          return {
+            content: [{ type: "text", text: `${error}: ${guidance}` }],
+            details: { background: { ...before, error }, activeTargets },
+          };
+        }
+        const target = activeTargets[0]!;
+        const now = new Date().toISOString();
+        const sent = await sendInputToActiveSparkRoleRunProcesses({
+          runRef: target.runRef,
+          text: message,
+        });
+        const delivered = sent.some((entry) => entry.delivered);
+        const sentSummary: Array<Record<string, string | number | boolean>> = sent.map((entry) => ({
+          runRef: entry.runRef,
+          roleRef: entry.roleRef,
+          ...(entry.runName ? { runName: entry.runName } : {}),
+          ...(entry.pid !== undefined ? { pid: entry.pid } : {}),
+          cwd: entry.cwd,
+          startedAt: entry.startedAt,
+          bytes: entry.bytes,
+          delivered: entry.delivered,
+          ...(entry.errorMessage ? { errorMessage: entry.errorMessage } : {}),
+        }));
+        const controlBody = JSON.parse(
+          JSON.stringify({
+            action,
+            runRef: target.runRef,
+            taskRef: target.taskRef,
+            projectRef: target.taskRef ? graph.getTask(target.taskRef).projectRef : scopeProjectRef,
+            roleRef: target.roleRef,
+            runName: target.runName,
+            ownerSessionId: target.ownerSessionId,
+            message,
+            sent: sentSummary,
+            delivered,
+            createdAt: now,
+          }),
+        ) as JsonValue;
+        const artifact = await defaultArtifactStore(cwd).put({
+          kind: "record",
+          title: `Spark role-run ${action} control for ${target.runRef}`,
+          format: "json",
+          body: controlBody,
+          provenance: {
+            producer: "spark",
+            projectRef: target.taskRef ? graph.getTask(target.taskRef).projectRef : scopeProjectRef,
+            taskRef: target.taskRef,
+            runRef: target.runRef,
+          },
+        });
+        if (delivered) {
+          if (action === "reply") {
+            await appendRoleRunActivityEvent(cwd, {
+              runRef: target.runRef,
+              type: "waiting_for_user",
+              at: now,
+              message: "main session delivered a reply to this visible role-run",
+              messageRole: "system",
+              artifactRefs: [artifact.ref],
+            });
+          }
+          await appendRoleRunActivityEvent(cwd, {
+            runRef: target.runRef,
+            type: action === "reply" ? "replied" : "message_activity",
+            at: now,
+            message,
+            messageRole: "user",
+            artifactRefs: [artifact.ref],
+          });
+        }
+        await deps.refreshSparkWidget?.(cwd, ctx);
+        const background = await buildSparkBackgroundDetails({
+          action,
+          cwd,
+          graph,
+          runStore,
+          currentProjectRef,
+          projectRef: requestedProjectRef,
+          control: controlView,
+          includeHistory: true,
+          targetRunRef: target.runRef,
+          targetTaskRef: target.taskRef,
+        });
+        const sendErrors = sent.flatMap((entry) =>
+          entry.errorMessage ? [entry.errorMessage] : [],
+        );
+        const text = [
+          `Spark background role-run ${action}: ${delivered ? "sent" : "not delivered"} to ${target.runRef}`,
+          `Control artifact: ${artifact.ref}`,
+          ...sendErrors.map((error) => `Error: ${error}`),
+          renderSparkBackgroundRunsText(background, { includeDetails: true }),
+        ].join("\n");
+        return {
+          content: [{ type: "text", text }],
+          details: { background, controlArtifactRef: artifact.ref, sent },
         };
       }
       if (action === "ack") {

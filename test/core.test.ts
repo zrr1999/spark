@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { validateArtifact } from "@zendev-lab/pi-artifacts";
+import { ArtifactStore, validateArtifact } from "@zendev-lab/pi-artifacts";
 import {
   formatJsonFile,
   newRef,
@@ -77,6 +77,7 @@ void test("artifact contract validates persisted metadata shape", () => {
       },
     ],
     provenance: { producer: "spark", projectRef },
+    curation: { status: "curated", retention: "durable", reason: "contract test" },
     createdAt: "2026-05-28T00:00:00.000Z",
     updatedAt: "2026-05-28T00:00:00.000Z",
   };
@@ -90,6 +91,62 @@ void test("artifact contract validates persisted metadata shape", () => {
     () => validateArtifact({ ...artifact, bodyTruncated: true, bodyPreview: "preview" }),
     /bodySize must be a positive number/,
   );
+  assert.throws(
+    () => validateArtifact({ ...artifact, curation: { status: "kept" } }),
+    /curation.status must be valid/,
+  );
+});
+
+void test("artifact store defaults and filters curation lifecycle", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-artifact-curation-"));
+  try {
+    const store = new ArtifactStore({ rootDir: dir });
+    const trace = await store.put({
+      kind: "trace",
+      title: "Noisy run trace",
+      format: "text",
+      body: "trace",
+      provenance: { producer: "task" },
+    });
+    const document = await store.put({
+      kind: "document",
+      title: "Task essence",
+      format: "markdown",
+      body: "# Essence",
+      provenance: { producer: "task" },
+    });
+
+    assert.equal(trace.curation?.status, "raw");
+    assert.equal(trace.curation?.retention, "ephemeral");
+    assert.equal(document.curation?.status, "candidate");
+    assert.deepEqual(
+      (await store.list()).map((artifact) => artifact.ref),
+      [trace.ref, document.ref],
+    );
+    assert.deepEqual(
+      (await store.list({ includeRaw: false })).map((artifact) => artifact.ref),
+      [document.ref],
+    );
+
+    await store.update(document.ref, {
+      curation: { status: "curated", retention: "durable", reason: "final task essence" },
+    });
+    await store.update(trace.ref, {
+      curation: { status: "superseded", retention: "task", supersededBy: [document.ref] },
+    });
+    assert.deepEqual(
+      (await store.list({ curationStatus: "curated" })).map((artifact) => artifact.ref),
+      [document.ref],
+    );
+    assert.deepEqual(
+      (await store.list({ includeRaw: true, includeArchived: true })).map(
+        (artifact) => artifact.ref,
+      ),
+      [trace.ref, document.ref],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 void test("JSON and text file helpers keep optional read, formatting, and parse error semantics", async () => {
@@ -314,7 +371,7 @@ void test("task role labels prefer active claim, finished attribution, then late
 
 void test("Spark prompt is a one-line mode marker", () => {
   const prompt = renderSparkActiveSystemPrompt("");
-  assert.match(prompt, /^Spark mode: research\./);
+  assert.match(prompt, /^Spark default research lens\./);
   assert.match(prompt, /Tools:/);
   assert.match(
     prompt,

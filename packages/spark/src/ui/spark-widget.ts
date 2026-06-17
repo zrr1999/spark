@@ -10,6 +10,7 @@ export type { SessionTodoEntry, SessionTodoStatus } from "@zendev-lab/pi-tasks";
  *
  * Display model:
  *   ◆ Goal(●): active objective
+ *   ◆ Loop(●): active objective
  *   ◆ Session TODOs(pending=1)
  *   └─ ○ #3 independent session TODO
  *   ◆ Project title · Tasks(running=2 pending=1 failed=1): @agent-a, @agent-b
@@ -40,6 +41,7 @@ export interface SparkWorkflowRunWidgetEntry {
 }
 
 export interface SparkGoalWidgetEntry {
+  kind?: "goal" | "loop";
   status: "active" | "paused" | "complete";
   objective: string;
 }
@@ -248,7 +250,8 @@ function formatGoalLine(
     goalStatusColor(goal.status),
     goalStatusSymbol(goal.status, animationFrame),
   );
-  const summary = `${theme.fg("dim", "Goal(")}${status}${theme.fg("dim", `): ${goal.objective}`)}`;
+  const label = goal.kind === "loop" ? "Loop" : "Goal";
+  const summary = `${theme.fg("dim", `${label}(`)}${status}${theme.fg("dim", `): ${goal.objective}`)}`;
   return `${theme.fg("accent", "◆")} ${summary}`;
 }
 

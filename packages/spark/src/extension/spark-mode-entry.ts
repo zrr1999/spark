@@ -69,7 +69,7 @@ export async function enterSparkResearchMode(
   if (project) await saveCurrentProjectRef(ctx.cwd, ctx, project.ref);
   else await clearCurrentProjectRef(ctx.cwd, ctx);
   await deps.refreshSparkWidget(ctx.cwd, ctx);
-  ctx.ui?.notify?.("Spark research mode: investigate without changing tasks.", "info");
+  ctx.ui?.notify?.("Spark default research: investigate without changing tasks.", "info");
   dispatchSparkAgentInstruction(
     piApi,
     deps,
@@ -116,7 +116,7 @@ export async function enterSparkImplementationMode(
   if (project) await saveCurrentProjectRef(ctx.cwd, ctx, project.ref);
   else await clearCurrentProjectRef(ctx.cwd, ctx);
   await deps.refreshSparkWidget(ctx.cwd, ctx);
-  ctx.ui?.notify?.("Spark implement mode: one-task lens selected.", "info");
+  ctx.ui?.notify?.("Spark implement mode: work until the next blocker.", "info");
   dispatchSparkAgentInstruction(
     piApi,
     deps,

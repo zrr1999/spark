@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "cutover": "hard",
+  "legacyImportOnly": [".spark/projects.json", ".spark/projects.json.lock/"],
+  "indexes": {
+    "projects": {
+      "path": "projects/index.json",
+      "rebuildable": true,
+      "entries": [
+        {
+          "projectRef": "proj:demo",
+          "path": "projects/proj-demo/project.json",
+          "status": "active",
+          "updatedAt": "2026-06-17T00:00:00.000Z"
+        }
+      ]
+    }
+  },
+  "project": {
+    "path": "projects/proj-demo/project.json",
+    "value": {
+      "version": 1,
+      "ref": "proj:demo",
+      "title": "Demo V2 project",
+      "description": "Fixture project for split Spark stores.",
+      "purpose": "Exercise split project/task owner files.",
+      "status": "active",
+      "roadmapPath": "roadmap.json",
+      "dependenciesPath": "dependencies.json",
+      "tasksPath": "tasks",
+      "reviewPath": "reviews",
+      "createdAt": "2026-06-17T00:00:00.000Z",
+      "updatedAt": "2026-06-17T00:00:00.000Z"
+    }
+  },
+  "roadmap": {
+    "path": "projects/proj-demo/roadmap.json",
+    "value": {
+      "version": 1,
+      "ref": "roadmap:demo",
+      "title": "Demo V2 roadmap",
+      "status": "active",
+      "items": [
+        {
+          "ref": "roadmap-item:demo",
+          "objective": "Ship V2 store contract fixtures",
+          "taskRefs": ["task:demo"]
+        }
+      ],
+      "createdAt": "2026-06-17T00:00:00.000Z",
+      "updatedAt": "2026-06-17T00:00:00.000Z"
+    }
+  },
+  "dependencies": {
+    "path": "projects/proj-demo/dependencies.json",
+    "value": {
+      "version": 1,
+      "projectRef": "proj:demo",
+      "dependencies": [
+        {
+          "taskRef": "task:demo-next",
+          "dependsOn": "task:demo"
+        }
+      ]
+    }
+  },
+  "tasks": [
+    {
+      "path": "projects/proj-demo/tasks/task-demo/task.json",
+      "value": {
+        "version": 1,
+        "ref": "task:demo",
+        "projectRef": "proj:demo",
+        "name": "demo-task",
+        "title": "Demo split task",
+        "description": "Task fixture without embedded TODO bodies.",
+        "kind": "implement",
+        "status": "ready",
+        "inputArtifacts": [],
+        "outputArtifacts": ["artifact:curated-demo"],
+        "todoOwnerRef": "task:demo",
+        "runsPath": "runs",
+        "reviewsPath": "reviews",
+        "createdAt": "2026-06-17T00:00:00.000Z",
+        "updatedAt": "2026-06-17T00:00:00.000Z"
+      }
+    }
+  ],
+  "runs": [
+    {
+      "path": "projects/proj-demo/tasks/task-demo/runs/run-demo.json",
+      "value": {
+        "version": 1,
+        "ref": "run:demo",
+        "projectRef": "proj:demo",
+        "taskRef": "task:demo",
+        "status": "succeeded",
+        "outputArtifacts": ["artifact:curated-demo"],
+        "startedAt": "2026-06-17T00:00:00.000Z",
+        "finishedAt": "2026-06-17T00:01:00.000Z"
+      }
+    }
+  ]
+}

@@ -69,7 +69,16 @@ export interface OutboxEnvelope {
  * pi-tui application; in tests a stub returning undefined is enough to keep
  * extensions running without crashes (every call site uses optional chaining).
  */
-export type SparkHostUiTransport = ExtensionUi;
+export interface SparkHostCustomMessage {
+  customType: string;
+  content: string | Array<{ type: string; [key: string]: unknown }>;
+  display?: boolean;
+  details?: Record<string, unknown>;
+}
+
+export interface SparkHostUiTransport extends ExtensionUi {
+  customMessage?: (message: SparkHostCustomMessage) => void;
+}
 
 export interface SparkHostSessionManagerStub {
   getSessionFile?: () => string | undefined;
@@ -84,13 +93,6 @@ export type RegisteredCommandMap = Map<string, RegisteredCommand>;
 export type EventListenerMap = Map<EventName, EventListener[]>;
 
 export type ToolRegistrationListener = (info: ToolInfo) => void;
-
-export interface SparkHostCustomMessage {
-  customType: string;
-  content: string | Array<{ type: string; [key: string]: unknown }>;
-  display?: boolean;
-  details?: Record<string, unknown>;
-}
 
 export interface SparkHostMessageRenderOptions {
   expanded: boolean;

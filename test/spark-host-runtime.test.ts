@@ -109,7 +109,7 @@ void test("SparkHostRuntime sendMessage and sendUserMessage push envelopes into 
   host.sendMessage(
     {
       customType: "spark-mode-request",
-      content: "Spark research mode requested",
+      content: "Spark default research requested",
       display: true,
       details: { project: "p1" },
     },

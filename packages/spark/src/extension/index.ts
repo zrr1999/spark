@@ -12,6 +12,7 @@ import { registerSparkStateTool } from "./spark-state-tool-registration.ts";
 import { registerSparkTodoTools } from "./spark-todo-tool-registration.ts";
 import { registerSparkFinishTaskTool } from "./spark-finish-task-tool-registration.ts";
 import { registerSparkClaimTaskTool } from "./spark-claim-task-tool-registration.ts";
+import { registerSparkRecoverTaskClaimTool } from "./spark-recover-task-claim-tool-registration.ts";
 import { registerSparkRunReadyTasksTool } from "./spark-run-ready-tasks-tool-registration.ts";
 import { registerSparkGoalTool } from "./spark-goal-tool-registration.ts";
 import { registerSparkStatusTool } from "./spark-status-tool-registration.ts";
@@ -31,6 +32,7 @@ import { registerSparkModeTool } from "./mode/index.ts";
 import { sparkSessionKey } from "./session-state.ts";
 import type { SparkRegisteredToolConfig, SparkToolContext } from "./spark-tool-registration.ts";
 import { SparkWidgetController } from "./spark-widget-controller.ts";
+import { SparkRoleRunTuiController } from "./spark-role-run-tui-controller.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import { PiRolesReviewerRunner, type ReviewerRunner } from "./reviewer-runner.ts";
 
@@ -50,13 +52,23 @@ interface SparkExtensionAPI extends SparkCommandApi {
     cwd: string,
     ctx: SparkToolContext,
   ): ReviewerRunner | Promise<ReviewerRunner>;
+  registerMessageRenderer?(
+    customType: string,
+    renderer: (
+      message: { content: unknown; details?: unknown },
+      options: { expanded?: boolean },
+      theme: { fg?(color: string, text: string): string; bold?(text: string): string },
+    ) => { render(width: number): string[]; invalidate(): void },
+  ): void;
 }
 
 export default function sparkExtension(pi: SparkExtensionAPI) {
   const widgetController = new SparkWidgetController();
+  const roleRunTuiController = new SparkRoleRunTuiController(pi);
 
   async function refreshSparkWidget(cwd: string, ctx?: SparkToolContext): Promise<void> {
     await widgetController.refresh(cwd, ctx);
+    await roleRunTuiController.refresh(cwd, ctx);
   }
 
   const workflowRunManagerController = new SparkWorkflowRunManagerController({
@@ -132,6 +144,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
   registerSparkClaimTaskTool(registerSparkCompatTool, { refreshSparkWidget });
 
+  registerSparkRecoverTaskClaimTool(registerSparkCompatTool, { refreshSparkWidget });
+
   registerSparkPlanTasksTool(registerSparkCompatTool, { refreshSparkWidget });
 
   registerSparkGoalTool(registerSparkTool, { refreshSparkWidget, createReviewerRunner });
@@ -142,7 +156,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     ensureWorkflowRunManager: (cwd, ctx) => workflowRunManagerController.ensure(cwd, ctx),
   });
 
-  registerSparkWorkflowRunsTool(registerSparkCompatTool);
+  registerSparkWorkflowRunsTool(registerSparkCompatTool, { refreshSparkWidget });
 
   registerSparkAskTools(registerSparkCompatTool);
 
@@ -199,6 +213,7 @@ function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): PiTa
     claim: direct("spark_claim_task"),
     plan: direct("spark_plan_tasks"),
     finish: direct("spark_finish_task"),
+    recover: direct("spark_recover_task_claim"),
     todo_update: ({ toolCallId, params, signal, onUpdate, ctx }) => {
       const scope = normalizeTaskTodoScope(params.scope);
       return executeSparkImplementationTool(

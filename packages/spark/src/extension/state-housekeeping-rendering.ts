@@ -42,7 +42,7 @@ export function appendSparkStateDiagnosticsLines(
   appendProtectedFileDiagnostics(lines, "notes", diagnostics.notes);
   appendProtectedFileDiagnostics(lines, "role reports", diagnostics.roleReports);
   lines.push(
-    "Protected-store diagnostics are read-only; no project graph, artifact, note, role-report, workflow-run, or review-gate files were deleted.",
+    "Protected-store diagnostics are read-only; no project graph, TODO record, session state, artifact, note, role-report, workflow-run, or review-gate files were deleted.",
   );
 }
 
@@ -229,6 +229,10 @@ export function formatSparkProtectedStoreReason(reason: SparkProtectedStoreReaso
       return "artifacts";
     case "task-graph":
       return "project graph";
+    case "todo-records":
+      return "TODO records";
+    case "session-state":
+      return "session state";
     case "notes":
       return "notes";
     case "role-reports":

@@ -30,6 +30,7 @@ import {
   taskPlanSummary,
 } from "./task-display.ts";
 import { deriveTaskRoleLabel, isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
+import { staleClaimStatusHint } from "./task-claim-recovery.ts";
 import { truncateInline } from "./tool-rendering.ts";
 
 export const DEFAULT_SPARK_STATUS_ACTIVE_LIMIT = 8;
@@ -112,7 +113,11 @@ function compactSparkStatusDetails(
   const currentClaim = importantCurrentTasks.find((task) =>
     isClaimOwnedBySession(task, input.sessionKey),
   );
-  const readyTasks = importantCurrentTasks.filter((task) => task.status === "ready");
+  const readyTasks = input.currentProject
+    ? input.graph
+        .readyTasks(input.currentProject.ref)
+        .filter((task) => isImportantStatus(task.status))
+    : [];
   return {
     found: true,
     compact: true,
@@ -155,7 +160,7 @@ function compactProjectDecisionDetail(
 ): Record<string, unknown> {
   const claimed = tasks.filter((task) => taskClaimedBy(task));
   const sessionClaimed = claimed.filter((task) => isClaimOwnedBySession(task, input.sessionKey));
-  const ready = tasks.filter((task) => task.status === "ready").length;
+  const ready = input.currentProject ? input.graph.readyTasks(input.currentProject.ref).length : 0;
   return {
     ref: input.currentProject?.ref,
     title: input.currentProject?.title,
@@ -186,6 +191,7 @@ function compactRenderedProjectDecisionDetail(
           unfinished: taskCounts.unfinished,
           claimed: taskCounts.claimed,
           claimedByCurrentSession: taskCounts.claimedByCurrentSession,
+          ready: taskCounts.ready,
           statusCounts: taskCounts.statusCounts,
         }
       : undefined,
@@ -316,6 +322,8 @@ function renderProjectStatusLines(
     const claimed = tasks.filter((task) => taskClaimedBy(task));
     const sessionClaimed = claimed.filter((task) => isClaimOwnedBySession(task, input.sessionKey));
     const statusCounts = countTaskStatuses(tasks);
+    const readyTasks = input.graph.readyTasks(project.ref);
+    const readyTaskRefs = new Set(readyTasks.map((task) => task.ref));
     const allVisibleTasks = sortTasksForStatusVisibility(
       tasks.filter((task) => isImportantStatus(task.status)),
     );
@@ -345,8 +353,35 @@ function renderProjectStatusLines(
     lines.push(`\n${projectPrefix} ${project.title}${currentSuffix}${statusSuffix}`);
     if (input.view !== "active") lines.push(`  Project status: ${project.status}`);
     lines.push(
-      `  Tasks: ${tasks.length} total | ${claimed.length} claimed | ${sessionClaimed.length} current_session_claimed | ${formatTaskStatusCounts(statusCounts)}`,
+      `  Tasks: ${tasks.length} total | ${claimed.length} claimed | ${sessionClaimed.length} current_session_claimed | ready_frontier=${readyTasks.length} | ${formatTaskStatusCounts(statusCounts)}`,
     );
+    const workflowIdle =
+      input.workflowRunStatus.running === 0 && !input.workflowRunStatus.activeRun;
+    const claimRecoveryHints = tasks.flatMap((task) => {
+      const hint = staleClaimStatusHint({
+        task,
+        currentSessionKey: input.sessionKey,
+        workflowIdle,
+      });
+      return hint ? [hint] : [];
+    });
+    if (isCurrent && readyTasks.length === 0 && claimRecoveryHints.length > 0) {
+      lines.push(
+        `  Recovery: ready_frontier is blocked by ${claimRecoveryHints.length} other-session claimed task(s) while background work is ${workflowIdle ? "idle" : "active"}.`,
+      );
+      for (const hint of claimRecoveryHints.slice(0, 3)) {
+        const name = typeof hint.name === "string" ? hint.name : "unknown";
+        const claimedBy = typeof hint.claimedBy === "string" ? hint.claimedBy : "unknown";
+        const expiresAt = typeof hint.expiresAt === "string" ? hint.expiresAt : "unknown";
+        const expired = hint.expired === true ? " expired=yes" : "";
+        lines.push(
+          `    - @${name} claimed_by=${claimedBy} expires=${expiresAt}${expired}; retry claim for @${name}`,
+        );
+      }
+      lines.push(
+        '    Next: if owner is inactive, review failed with needs_changes, or claim expired, reclaim with task_write({ action: "claim", task: "@name" }); Spark will refuse active/recent owners and record recovery evidence.',
+      );
+    }
     if (isCurrent && input.sessionGoal) {
       const reason = input.sessionGoal.pauseReason ?? input.sessionGoal.completedReason;
       const reasonText = reason ? ` | reason: ${truncateInline(reason, 120)}` : "";
@@ -370,11 +405,13 @@ function renderProjectStatusLines(
         unfinished: tasks.filter((task) => isUnfinishedTaskStatus(task.status)).length,
         claimed: claimed.length,
         claimedByCurrentSession: sessionClaimed.length,
+        ready: readyTasks.length,
         statusCounts,
       },
       hiddenFinishedTasks: hiddenByView,
       hiddenByLimit,
       sessionGoal: isCurrent ? input.sessionGoal : undefined,
+      claimRecovery: claimRecoveryHints,
       tasks: renderedTaskDetails,
     };
     if (input.view === "summary") {
@@ -387,6 +424,7 @@ function renderProjectStatusLines(
       visibleTasks,
       lastRunsByTaskRef,
       renderedTaskDetails,
+      readyTaskRefs,
     });
     if (visibleTasks.length === 0) lines.push("  - none");
     renderedProjectDetails.push(renderedProjectDetail);
@@ -410,6 +448,7 @@ function appendTaskStatusLines(
     visibleTasks: ReturnType<TaskGraph["tasks"]>;
     lastRunsByTaskRef: ReturnType<typeof latestRunsByTaskRef>;
     renderedTaskDetails: Array<Record<string, unknown>>;
+    readyTaskRefs: ReadonlySet<string>;
   },
 ): void {
   lines.push(input.view === "full" ? "  Durable active tasks:" : "  Active tasks:");
@@ -423,6 +462,7 @@ function appendTaskStatusLines(
     const planSuffix = planSummary ? ` plan=${planSummary}` : "";
     const lifecycleSuffix = taskLifecycleSuffix(task);
     const taskOwnedBySession = isClaimOwnedBySession(task, input.sessionKey);
+    const readyFrontierSuffix = input.readyTaskRefs.has(task.ref) ? " ready_frontier=yes" : "";
     const taskTodos = taskOwnedBySession ? input.graph.taskTodos(task.ref) : [];
     const visibleTaskTodos =
       input.view === "active" ? taskTodos.slice(0, DEFAULT_SPARK_STATUS_TODO_LIMIT) : taskTodos;
@@ -454,7 +494,7 @@ function appendTaskStatusLines(
     });
     if (input.view === "active") {
       lines.push(
-        `  - [${task.status}] @${task.name}: ${task.title} owner=@${owner}${planSuffix}${lifecycleSuffix}`,
+        `  - [${task.status}] @${task.name}: ${task.title} owner=@${owner}${readyFrontierSuffix}${planSuffix}${lifecycleSuffix}`,
       );
       if (taskOwnedBySession) {
         for (const todo of visibleTaskTodos)
@@ -466,7 +506,7 @@ function appendTaskStatusLines(
     }
     const taskSummary = input.graph.todoSummary(task.ref);
     lines.push(
-      `  - [${task.status}] @${task.name}: ${task.title} (${task.ref}) kind=${task.kind} owner=@${owner} claimed=${taskClaimSummary(task)} todos=${taskSummary.total}/${taskSummary.inProgress}/${taskSummary.pending}/${taskSummary.done}${planSuffix}${lifecycleSuffix}`,
+      `  - [${task.status}] @${task.name}: ${task.title} (${task.ref}) kind=${task.kind} owner=@${owner} claimed=${taskClaimSummary(task)} todos=${taskSummary.total}/${taskSummary.inProgress}/${taskSummary.pending}/${taskSummary.done}${readyFrontierSuffix}${planSuffix}${lifecycleSuffix}`,
     );
     if (taskOwnedBySession) {
       for (const todo of visibleTaskTodos)

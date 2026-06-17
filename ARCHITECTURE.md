@@ -27,13 +27,13 @@ pi-tasks               # generic project/task/TODO graph, readiness, claims, tas
 pi-workflows           # saved workflow discovery/runtime primitives and DAG run store
 
 spark-runtime          # Spark task-to-role-run adapter and role-run artifacts
-spark                  # /spark facade: modes, widget, commands, builtin Spark roles, policy
+spark                  # Spark facade: modes, widget, commands, builtin Spark roles, policy
 spark-cli              # native Spark CLI host over the extension contract
 ```
 
 Allowed high-level usage:
 
-- `spark` may orchestrate Spark mode UI/policy and compose `pi-*` capabilities plus `spark-runtime`. It owns `/spark`, `/research`, `/plan`, `/implement`, `/goal`, `/workflow`, the Spark widget, active-context provider registration, and use of the three audited builtin role specs (`scout`, `reviewer`, `worker`).
+- `spark` may orchestrate Spark mode UI/policy and compose `pi-*` capabilities plus `spark-runtime`. It owns ordinary lightweight research behavior, intent-specific Spark commands such as `/plan`, `/implement`, `/goal`, `/loop`, `/workflow`, the Spark widget, active-context provider registration, and use of the three audited builtin role specs (`scout`, `reviewer`, `worker`).
 - `spark-runtime` adapts one Spark task into a `pi-roles` role run and maps completion back into task status, claims, and artifacts.
 - `pi-tasks` owns durable project/task/TODO graph state, readiness rules, task/run types, claim leases, and the canonical `task({ action })` tool. Optional task `roleRef` values are executor hints, not readiness requirements.
 - `pi-workflows` owns saved workflow discovery/runtime primitives and `.spark/workflow-runs.json` DAG/workflow-run state. Workflow is the generic superset; DAG runs are workflow runs.
@@ -57,7 +57,7 @@ A local `prek` hook and CI static checks run `pnpm run check:boundaries`, which 
 
 ## Public mental model
 
-- Users know `/spark` plus canonical tools.
+- Users know intent-specific Spark commands plus canonical tools.
 - Durable project/task inspection uses `task_read({ action: ... })`; durable project/task mutation uses `task_write({ action: ... })`.
 - Background ready-task execution is `assign({ dryRun: true })`; run inspection is `task_read({ action: "run_status" })`, while public `run_control` is not part of the default model-facing surface.
 - Evidence is `artifact({ action: ... })`.

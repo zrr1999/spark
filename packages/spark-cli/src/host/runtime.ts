@@ -146,7 +146,7 @@ export class SparkHostRuntime implements ExtensionAPI {
     },
     options?: { deliverAs?: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean },
   ): void => {
-    this.outbox.push({
+    const envelope: OutboxEnvelope = {
       kind: "custom",
       customType: message.customType,
       content: message.content,
@@ -154,6 +154,13 @@ export class SparkHostRuntime implements ExtensionAPI {
       details: message.details,
       options: { deliverAs: options?.deliverAs, triggerTurn: options?.triggerTurn },
       enqueuedAt: Date.now(),
+    };
+    this.outbox.push(envelope);
+    this.uiTransport.customMessage?.({
+      customType: message.customType,
+      content: message.content,
+      display: message.display,
+      details: message.details,
     });
     if (options?.triggerTurn) queueMicrotask(() => void this.triggerTurnHandler?.());
   };

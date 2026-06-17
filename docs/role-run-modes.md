@@ -56,6 +56,97 @@ Attribution in Spark:
 - Runtime-created artifacts use `kind: "role-run"`, `producer: "task"`, `projectRef`, `taskRef`, `roleRef`, and a note containing the concrete `runName`; the body carries the concrete run record and captured stdout/stderr/events.
 - When a task reaches a terminal status, the active claim is cleared and `finishedBy` preserves the owning session and concrete run name for post-completion display.
 
+### Spark role-run observability and controls
+
+Spark keeps role-run UI state canonical by building a `roleRunRegistry` from
+structured task runs, active process tracking, workflow parent links, usage, and
+activity events. UI renderers such as `spark-role-runs` consume that registry;
+they do not parse raw role output.
+
+Visible background roles can be inspected and stopped through the workflow-run
+surface. Reply and steer controls are intentionally deterministic:
+
+- a control message must be non-empty;
+- an explicit `runRef` or `taskRef` narrows the active target before ambiguity
+  checks;
+- a broad control is refused when multiple active background roles are visible;
+- a no-active target is refused rather than queued silently;
+- successful reply/steer attempts record a control artifact and add
+  registry-visible `waiting_for_user`/`replied` or `message_activity` events;
+- failed delivery records the failed attempt and must not create a successful
+  `replied` transition.
+
+The active child process tracker is workspace-scoped. A role-run from another
+cwd is not a valid target for inspect/stop/reply/steer in the current workspace.
+
+### Stale task-claim recovery
+
+Role-run and main-session task claims are lease-protected. If an owner disappears
+or a reviewer returns `needs_changes`, use explicit recovery instead of editing
+`.spark/projects.json` by hand:
+
+- `task_write({ action: "recover", task: "@name" })` releases an eligible
+  other-session claim, records recovery evidence, and leaves the task
+  pending/unclaimed so it returns to the ready frontier.
+- `task_write({ action: "claim", task: "@name" })` may perform the same
+  evidence checks and then claim the task in one locked update.
+- Recovery refuses current-session claims, active workflow runs, active role-run
+  processes, recent owner activity, and active leases unless there is a newer
+  `needs_changes` review and no newer owner activity.
+- Recovery never marks a task done. Evidence artifacts stay attached so the next
+  owner can address reviewer feedback.
+
+### Validation and audit disposition
+
+The role-run TUI/control/recovery work was validated against the package audit
+captured in `artifact:5a554db7-6438-441f-b525-1f57ba4aef02`, which compared
+Spark with high-download Pi subagent/status packages including
+`pi-subagents`, `@tintinweb/pi-subagents`, `@gotgenes/pi-subagents`,
+`@danchamorro/pi-subagents`, `@pi-archimedes/subagent`, `pi-hud`,
+`pi-powerline-footer`, and `pi-bar`.
+
+Audit checklist D disposition:
+
+- **Passed:** role completion links to Spark task/run records and artifact output
+  refs instead of hidden follow-up text. Evidence:
+  `artifact:a52c3ae1-43f0-4530-be24-6fc90af89491`,
+  `artifact:2dd86717-c0a9-4011-9c05-b2877796cb56`, and
+  `artifact:223c907d-7034-4e18-8818-568c34ab03fa`.
+- **Passed:** reply/steer events are durable registry activity and control
+  attempts have artifact provenance; explicit selectors are filtered before
+  ambiguity checks, and failed delivery records a failure without a successful
+  activity transition. Evidence: prior needs-change reviews
+  `artifact:d8038282-95fe-4068-b490-5c20a8366e74`,
+  `artifact:1aa3656c-cf14-43ec-8e06-b14b9acee1fc`, and
+  `artifact:f43da8ee-bf94-41ea-ba72-bb162fa5e138` were closed by
+  `artifact:223c907d-7034-4e18-8818-568c34ab03fa` and approved in
+  `artifact:c00e9bed-c67d-42f4-90f0-410dad1bb06c`. The
+  `artifact:f43da8ee-bf94-41ea-ba72-bb162fa5e138` stop-refresh and
+  failed-delivery blockers are disposed as closed by the `kill`/`kill_active`
+  `spark-role-runs` refresh assertions and selected-target failed-delivery
+  test captured in that closure evidence.
+- **Passed:** reviewer gates and the Spark task graph consume typed task/run,
+  artifact, and review records; the UI board is a projection over the
+  `roleRunRegistry` and does not scrape role output.
+- **Passed:** stale-claim recovery restores ready-frontier safety without
+  auto-completing work. Needs-change reviews were addressed by
+  `artifact:a1b457f8-796b-471c-ac68-c6eb8e052999` and approved in
+  `artifact:7dfac593-f43b-4f04-8660-6d95f59a3d49`.
+- **Deferred:** a production-grade non-Pi executor and richer optional detail
+  overlays remain future work; the current scope keeps non-focus-stealing
+  status/widget/message surfaces and deterministic controls.
+- **Non-goal:** Spark does not replace footer/HUD packages. It publishes compact
+  `ctx.ui.setStatus("spark-role-runs", ...)` and a bounded widget so packages
+  such as `pi-bar`, `pi-powerline-footer`, and `pi-hud` can coexist instead of
+  depending on a Spark-owned footer replacement.
+
+Native `spark-cli` parity is covered through the shared host UI transport:
+`SparkNativeTuiApp` renders `setStatus`/`setWidget` surfaces and bridges
+notifications, widgets, custom messages, and registered role-run completion
+renderers. Component widget factories use a bounded textual fallback in native
+mode rather than throwing; reload/resume behavior is covered through task-graph
+claim reconstruction and background role-run resume tests.
+
 ### Forked RoleRuns
 
 Use a forked run only when the child must continue from an existing session context rather than from explicit task inputs. Examples include continuing an in-progress interactive investigation, reviewing a current session's reasoning with its transcript available, or debugging a problem whose relevant context cannot yet be compacted into artifacts.

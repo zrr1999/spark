@@ -1,15 +1,10 @@
 import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import {
-  clearCurrentProjectRef,
-  currentSparkProject,
-  saveCurrentProjectRef,
-} from "./session-state.ts";
-import {
   dispatchSparkAgentInstruction,
   type SparkModeEntryDeps,
   type SparkModeMessageApi,
 } from "./spark-mode-entry.ts";
-import { renderSparkModeVisibleMessage, renderSparkResearchModePrompt } from "./mode/index.ts";
+
 import {
   renderSparkWorkflowDriverPrompt,
   renderSparkWorkflowDriverVisibleMessage,
@@ -22,30 +17,32 @@ export async function enterSparkWorkflowDriver(
   piApi: SparkModeMessageApi,
   deps: SparkModeEntryDeps,
   ctx: SparkToolContext,
-  graph: TaskGraph,
+  _graph: TaskGraph | null,
   focus?: string,
   requestedSelector?: string,
+  options: { forceNavigator?: boolean } = {},
 ): Promise<void> {
+  const interactiveSelection = await resolveInteractiveWorkflowSelection(ctx, {
+    focus,
+    requestedSelector,
+    forceNavigator: options.forceNavigator ?? false,
+  });
+  if (interactiveSelection === false) return;
+  focus = interactiveSelection.focus;
+  requestedSelector = interactiveSelection.selector;
   const workflow = await resolveWorkflowSelector(ctx, requestedSelector);
   if (workflow === false) return;
   const workflowSelector = workflow.selector;
-  const project = await currentSparkProject(ctx.cwd, ctx, graph);
-  if (project) await saveCurrentProjectRef(ctx.cwd, ctx, project.ref);
-  else await clearCurrentProjectRef(ctx.cwd, ctx);
   await deps.refreshSparkWidget(ctx.cwd, ctx);
   if (workflow.descriptor?.mode === "research") {
     ctx.sparkActiveLens = { mode: "research", driver: "workflow" };
-    ctx.ui?.notify?.("Spark research workflow selected.", "info");
-    const workflowFocus = renderBuiltinWorkflowResearchFocus(workflowSelector, focus);
+    ctx.ui?.notify?.("Builtin workflow selected.", "info");
     dispatchSparkAgentInstruction(
       piApi,
       deps,
       ctx,
-      [
-        renderSparkResearchModePrompt(graph, project?.ref, workflowFocus),
-        renderBuiltinWorkflowResearchGuidance(workflowSelector),
-      ].join("\n\n"),
-      renderSparkModeVisibleMessage("research", project?.title, workflowFocus),
+      renderStandaloneBuiltinWorkflowPrompt(workflowSelector, focus),
+      renderBuiltinWorkflowVisibleMessage(focus, workflowSelector),
     );
     return;
   }
@@ -55,9 +52,78 @@ export async function enterSparkWorkflowDriver(
     piApi,
     deps,
     ctx,
-    renderSparkWorkflowDriverPrompt(graph, project?.ref, focus, savedWorkflows, workflowSelector),
-    renderSparkWorkflowDriverVisibleMessage(project?.title, focus, workflowSelector),
+    renderSparkWorkflowDriverPrompt(focus, savedWorkflows, workflowSelector),
+    renderSparkWorkflowDriverVisibleMessage(focus, workflowSelector),
   );
+}
+
+async function resolveInteractiveWorkflowSelection(
+  ctx: SparkToolContext,
+  input: { focus?: string; requestedSelector?: string; forceNavigator: boolean },
+): Promise<{ selector?: string; focus?: string } | false> {
+  const focus = input.focus?.trim() ?? "";
+  if (input.requestedSelector && !input.forceNavigator) {
+    return { selector: input.requestedSelector, focus };
+  }
+  if (!input.forceNavigator && focus) return { selector: input.requestedSelector, focus };
+  if (!ctx.ui?.select && !ctx.ui?.selectWithCustom) {
+    return { selector: input.requestedSelector, focus };
+  }
+
+  const listing = await listSparkWorkflowRegistry(ctx.cwd);
+  const options = listing.workflows.map((workflow) => workflow.source + ":" + workflow.id);
+  if (options.length === 0) {
+    ctx.ui?.notify?.("No workflows are available to select.", "warning");
+    return false;
+  }
+
+  const selection = await promptWorkflowSelection(ctx, options);
+  if (!selection) {
+    ctx.ui?.notify?.("Workflow selection cancelled.", "info");
+    return false;
+  }
+  if (selection.customFocus) return { focus: selection.customFocus };
+  const selector = normalizeWorkflowSelector(selection.selector);
+  if (!selector) {
+    ctx.ui?.notify?.("Workflow selection was not a valid selector.", "warning");
+    return false;
+  }
+  const selectedFocus =
+    focus || ((await ctx.ui?.input?.("Workflow request/focus (optional)")) ?? "").trim();
+  return { selector, focus: selectedFocus };
+}
+
+async function promptWorkflowSelection(
+  ctx: SparkToolContext,
+  options: string[],
+): Promise<
+  { selector: string; customFocus?: never } | { selector?: never; customFocus: string } | undefined
+> {
+  const custom = await promptWorkflowSelectionWithCustom(ctx, options);
+  if (custom !== undefined) return custom;
+  const selected = await ctx.ui?.select?.("Run workflow", options);
+  if (!selected) return undefined;
+  return { selector: selected };
+}
+
+async function promptWorkflowSelectionWithCustom(
+  ctx: SparkToolContext,
+  options: string[],
+): Promise<
+  { selector: string; customFocus?: never } | { selector?: never; customFocus: string } | undefined
+> {
+  const selectWithCustom = ctx.ui?.selectWithCustom;
+  if (typeof selectWithCustom !== "function") return undefined;
+  const result = await selectWithCustom("Run workflow", {
+    options,
+    customLabel: "Describe one-off workflow request",
+  });
+  if (!result) return undefined;
+  if (typeof result === "string") return { selector: result };
+  const customText = result.customText?.trim();
+  if (customText) return { customFocus: customText };
+  if (result.value?.trim()) return { selector: result.value.trim() };
+  return undefined;
 }
 
 async function resolveWorkflowSelector(
@@ -107,26 +173,32 @@ function normalizeWorkflowSelector(selector: string | undefined): string | undef
   }
 }
 
-function renderBuiltinWorkflowResearchFocus(
+function renderStandaloneBuiltinWorkflowPrompt(
   workflowSelector: string | undefined,
   focus: string | undefined,
 ): string {
   return [
-    workflowSelector ? `Builtin workflow selector: ${workflowSelector}.` : undefined,
-    focus?.trim() ? `User focus: ${focus.trim()}` : undefined,
+    "## Builtin workflow",
+    `Selector: ${workflowSelector ?? "agent:auto"}`,
+    focus?.trim() ? `Request: ${focus.trim()}` : undefined,
+    "",
+    "Use the selected builtin workflow directly. Do not require project, task, or Spark state unless the user request explicitly asks to use those capabilities.",
+    '- If exact orchestration details are needed, inspect it with workflow({ action: "read", selector: "' +
+      (workflowSelector ?? "builtin:research") +
+      '" }).',
+    "Return the workflow result for the user.",
   ]
-    .filter((line): line is string => Boolean(line))
-    .join(" ");
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
 }
 
-function renderBuiltinWorkflowResearchGuidance(workflowSelector: string | undefined): string {
-  return [
-    "## Builtin workflow guidance",
-    `- Selected builtin workflow: ${workflowSelector ?? "unknown"}.`,
-    "- Treat the builtin workflow registry mode as authoritative routing metadata; do not look for or invent workflow meta.mode frontmatter.",
-    "- Run this as research semantics: produce a synthesized report, keep repository/task mutation out of panel model calls, and use Spark workflow/runtime boundaries for workflow-owned execution.",
-    '- Inspect the builtin script with workflow({ action: "read", selector: "' +
-      (workflowSelector ?? "builtin:fusion") +
-      '" }) when the exact orchestration details are needed.',
-  ].join("\n");
+function renderBuiltinWorkflowVisibleMessage(
+  focus: string | undefined,
+  workflowSelector?: string,
+): string {
+  const parts = ["Builtin workflow selected"];
+  if (workflowSelector && workflowSelector !== "agent:auto")
+    parts.push(`workflow: ${workflowSelector}`);
+  if (focus?.trim()) parts.push(`focus: ${focus.trim()}`);
+  return parts.join(" · ");
 }

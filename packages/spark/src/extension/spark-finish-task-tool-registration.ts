@@ -694,12 +694,12 @@ function renderFinishNextStepSuffix(
 ): string {
   if (status !== "done") return "";
   return nextReady
-    ? "\nImplementation mode stopped after one task. Next ready task: @" +
+    ? "\nImplementation mode can continue. Next ready task: @" +
         nextReady.name +
         ": " +
         nextReady.title +
-        ". Run /implement to take one more step, or /goal to continue autonomously."
-    : "\nImplementation mode stopped after one task. No ready task remains; inspect blockers or finish the project.";
+        ". Inspect current status, claim the next ready task, and continue until blocked."
+    : "\nNo ready task remains; inspect blockers or finish the project.";
 }
 function normalizeSparkFinishStatus(value: unknown): "done" | "failed" | "cancelled" {
   if (value === undefined || value === null) return "done";

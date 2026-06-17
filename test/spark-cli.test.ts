@@ -76,6 +76,14 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
     high: "high",
     xhigh: "xhigh",
   });
+  assert.deepEqual(config.models.find((model) => model.id === "gpt-5.5")?.thinkingLevelMap, {
+    minimal: "low",
+    xhigh: "xhigh",
+  });
+  assert.deepEqual(
+    config.models.find((model) => model.id === "gpt-5.5-coding-plan")?.thinkingLevelMap,
+    config.models.find((model) => model.id === "gpt-5.5")?.thinkingLevelMap,
+  );
   assert.equal(
     config.models.find((model) => model.id === "gpt-5.5")?.baseUrl,
     "https://oneapi-comate.baidu-int.com/v1",

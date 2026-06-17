@@ -39,7 +39,7 @@ void test("parseSkillFrontmatter reads skill metadata booleans and body", () => 
   assert.equal(parsed.body, "# Demo\n");
 });
 
-void test("loadBuiltinSkills and renderBuiltinSkillsForPrompt expose full builtin bodies", async () => {
+void test("loadBuiltinSkills and renderBuiltinSkillsForPrompt expose full base prompt bodies", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-builtin-skills-fulltext-"));
   try {
     await writeSkill(
@@ -56,8 +56,8 @@ void test("loadBuiltinSkills and renderBuiltinSkillsForPrompt expose full builti
     assert.match(skills[0]!.body, /Always follow builtin instructions/);
 
     const prompt = renderBuiltinSkillsForPrompt(skills);
-    assert.match(prompt, /<builtin_skills>/);
-    assert.match(prompt, /Do not use the read tool/);
+    assert.match(prompt, /<base_system_prompts>/);
+    assert.match(prompt, /Follow these instructions directly/);
     assert.match(prompt, /Always follow builtin instructions/);
   } finally {
     await rm(dir, { recursive: true, force: true });

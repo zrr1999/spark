@@ -1,5 +1,7 @@
+import { MAX_LOOP_OBJECTIVE_CHARS } from "@zendev-lab/pi-loop";
+
 export const GOAL_CUSTOM_ENTRY_TYPE = "spark-goal";
-export const MAX_OBJECTIVE_CHARS = 8000;
+export const MAX_OBJECTIVE_CHARS = MAX_LOOP_OBJECTIVE_CHARS;
 
 export type GoalStatus = "active" | "paused" | "complete";
 

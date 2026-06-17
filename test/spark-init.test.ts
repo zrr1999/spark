@@ -10,6 +10,7 @@ import {
   renderActiveSparkContextSummary,
   renderSparkActiveSystemPrompt,
 } from "../packages/spark/src/extension/spark-active-injection.ts";
+import { saveIndependentTodos } from "../packages/spark/src/extension/session-todos.ts";
 import {
   hasNonSparkProjectFiles,
   shouldMaterializeSparkMd,
@@ -119,7 +120,7 @@ void test("initializeSparkIdea does not overwrite an existing initialized projec
 
 void test("Spark prompt preserves base prompt and stays a single-line mode marker", () => {
   const prompt = renderSparkActiveSystemPrompt("Base prompt");
-  assert.match(prompt, /^Base prompt\n\nSpark mode: research\./);
+  assert.match(prompt, /^Base prompt\n\nSpark default research lens\./);
   assert.match(prompt, /Tools:/);
   assert.match(
     prompt,
@@ -280,27 +281,14 @@ void test("active Spark context omits finished history and finished TODOs", asyn
     });
     await defaultTaskGraphStore(dir).save(graph);
     await defaultTaskTodoStore(dir, "leaf:test-leaf").save(graph);
-    await mkdir(join(dir, ".spark", "session-todos"), { recursive: true });
-    await writeFile(
-      join(dir, ".spark", "session-todos", "leaf-test-leaf.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          todos: [
-            { id: "todo-active", content: "Independent active TODO", status: "pending" },
-            { id: "todo-done", content: "Independent finished TODO", status: "done" },
-          ],
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-
     const ctx = {
       cwd: dir,
       sessionManager: { getLeafId: () => "test-leaf" },
     };
+    await saveIndependentTodos(dir, ctx, [
+      { id: "todo-active", content: "Independent active TODO", status: "pending" },
+      { id: "todo-done", content: "Independent finished TODO", status: "done" },
+    ]);
     await executeSparkToolInTest("task_write", ctx, {
       action: "project_use",
       project: project.ref,

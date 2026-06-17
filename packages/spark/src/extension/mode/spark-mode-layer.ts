@@ -23,8 +23,8 @@ export function createSparkModeRegistry(): ModeRegistry {
     definitions: [
       sparkModeDefinition(
         "research",
-        "Research",
-        "investigate and answer without changing durable project state unless explicitly asked",
+        "Default research",
+        "default lightweight investigation and answering without changing durable project state unless explicitly asked",
       ),
       sparkModeDefinition(
         "plan",
@@ -34,7 +34,7 @@ export function createSparkModeRegistry(): ModeRegistry {
       sparkModeDefinition(
         "implement",
         "Implement",
-        "claim at most one concrete task, execute it, verify evidence, then stop or report blockers",
+        "claim and finish one concrete task at a time, continuing until blocked",
       ),
     ],
   });
@@ -98,7 +98,10 @@ function sparkModeDefinition(id: Mode, title: string, summary: string) {
     title,
     summary,
     builtin: true,
-    renderRequirements: () => `Spark mode: ${id}. ${SPARK_MODE_TOOLS_HINT}`,
+    renderRequirements: () =>
+      id === "research"
+        ? `Spark default research lens. ${SPARK_MODE_TOOLS_HINT}`
+        : `Spark mode: ${id}. ${SPARK_MODE_TOOLS_HINT}`,
   };
 }
 

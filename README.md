@@ -1,6 +1,6 @@
 # spark
 
-`spark` is the Spark suite for Pi: a controlled agentic development system where the Pi extension entry point is `/spark`, and Spark composes lower-level `pi-*` extension capabilities through project/task orchestration policy.
+`spark` is the Spark suite for Pi: a controlled agentic development system where intent-specific Pi commands and canonical tools compose lower-level `pi-*` extension capabilities through project/task orchestration policy.
 
 The repository also contains an MVP standalone Spark-first TUI host:
 
@@ -15,40 +15,36 @@ The standalone `spark` command is published by `@zendev-lab/spark-cli` and built
 
 Spark now has two supported host targets:
 
-- **Pi extension host**: `packages/spark/src/extension/` is loaded by `@earendil-works/pi-coding-agent` through Pi's normal extension/package discovery. This remains the canonical `/spark`, `/research`, `/plan`, `/implement`, `/goal`, `/workflow`, and Spark tool surface inside Pi.
+- **Pi extension host**: `packages/spark/src/extension/` is loaded by `@earendil-works/pi-coding-agent` through Pi's normal extension/package discovery. This remains the canonical Spark command and tool surface inside Pi, centered on ordinary default research behavior plus `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow`.
 - **Spark CLI native host**: `packages/spark-cli` starts `SparkHostRuntime` directly on `@earendil-works/pi-tui`, loads retained builtin extensions through explicit factories (`@zendev-lab/pi-ask`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-graft`, `@zendev-lab/spark`), registers providers such as `baidu-oneapi`, discovers Spark skills from builtin/workspace/user layers, and runs turns through `@earendil-works/pi-ai`.
 
 The extension packages depend on the shared `@zendev-lab/pi-extension-api` contract, not on Pi's concrete SDK package. Host-specific code belongs under `packages/spark-cli/src/host/` and TUI wrappers under `packages/spark-cli/src/tui/`; the Pi extension implementation should stay usable by Pi without importing spark-cli.
 
-### Fusion research workflow
+### Research workflow
 
-Spark Fusion-style multi-model deliberation is a builtin `pi-workflows` research workflow, not a model-picker target. Use `/workflow:fusion <question>` (or `/workflow builtin:fusion <question>`) to run a read-only expert panel followed by judge synthesis through Spark workflow/runtime plumbing. The builtin registry marks `fusion` as `mode: "research"`, so the command enters Spark research guardrails rather than implementation mode.
+Spark's multi-perspective research flow is a builtin `pi-workflows` workflow, not a model-picker target and not project/task-bound Spark mode. Use `/workflow:research <question>` (or `/workflow builtin:research <question>`) to run planning, parallel exploration, cross-checking, and report synthesis through Spark workflow/runtime plumbing. The builtin registry marks `research` as research-shaped routing metadata, but the command remains an independent workflow capability and does not require initialized Spark project state or a selected project.
 
 Workflow discovery and preview use the canonical workflow tool:
 
 ```ts
 workflow({ action: "list" });
-workflow({ action: "read", selector: "builtin:fusion" });
+workflow({ action: "read", selector: "builtin:research" });
 ```
 
-The workflow accepts `question`, `prompt`, or `task`, plus optional `panelModels`/`models`, `panelSize`, `concurrency`, `retry`, and `judgeModel` arguments. If no panel is provided, Fusion uses the host workflow model-agent fallback; if `judgeModel` is omitted, the judge also uses the host fallback. Spark CLI no longer registers the retired Fusion model-picker target, and `~/.spark/config.json#fusion` is ignored.
+The workflow accepts `question`, `prompt`, or `task`, plus optional `panelModels`/`models`, `panelSize`, `concurrency`, `retry`, `plannerModel`, `verifierModel`, and `judgeModel`/`reportModel` arguments. `fusion` and `deep-research` are folded into this user-facing research workflow; fan-out remains an internal orchestration method. Spark CLI no longer registers the retired Fusion model-picker target, and `~/.spark/config.json#fusion` is ignored.
 
-## User-facing entry point
+## User-facing commands
 
-```text
-/spark <idea>
-```
-
-`/spark` initializes local Spark state without asking the user to complete a generic intake template. Spark first records the initial intent and uses investigation tasks to gather context. It does not synthesize placeholder current tasks; the model claims one concrete task at a time within the active project. Follow-up asks should be grounded in the actual project state: when open questions or decision points would change task scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order, Spark should use context-specific `ask` questions instead of leaving those questions as prose. The output language defaults from the current request language and is confirmed only when that decision is genuinely unclear.
+Spark exposes intent-specific commands instead of a generic compatibility entry. Project-bound commands initialize local Spark state only when durable graph, review, artifact, or run state is needed. Spark first records the initial intent and uses investigation/planning work to gather context. It does not synthesize placeholder current tasks; the model claims one concrete task at a time within the active project. Follow-up asks should be grounded in the actual project state: when open questions or decision points would change task scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order, Spark should use context-specific `ask` questions instead of leaving those questions as prose. The output language defaults from the current request language and is confirmed only when that decision is genuinely unclear.
 
 Spark command modes are intentionally split:
 
-- `/research <focus>` investigates and summarizes findings without changing tasks.
+- Ordinary input defaults to lightweight investigation, clarification, and reporting unless the request needs durable planning/execution state.
 - `/plan <focus>` plans or refines the task DAG and does not execute work.
-- `/implement <focus>` implements one bounded default step, normally claiming at most one concrete task before stopping.
-- `/goal <focus>` runs autonomous verified foreground goal progress until complete or blocked. If no focus is provided, Spark derives the goal from the current project/task state and asks when ambiguous.
-- `/workflow[:selector] <focus>` runs Spark workflow scripts. Use `/workflow:fusion <question>` for the builtin Fusion research workflow, `/workflow builtin:<id>` for other builtin workflows, `/workflow workspace:<name>` for `.spark/workflows/*.js`, and `/workflow user:<name>` for `~/.agents/workflows/*.js`. Empty `/workflow` asks which workflow to use or whether to draft a workspace workflow.
-- `/spark <focus>` infers research, planning, or default implementation when high confidence. If the prompt asks for autonomous or workflow-style progress, Spark asks before selecting a goal or workflow implement strategy.
+- `/implement <focus>` works through ready project tasks until the next blocker. It claims and finishes one task at a time, continues after successful finishes, and blocks for human answers instead of auto-answering asks.
+- `/loop <focus>` starts or resumes a persistent foreground loop for open-ended continuous work such as monitoring fresh information, periodic repo checks, or ongoing observation until the user stops it. It may drive repeated concrete research/plan/implement steps, but it is not a `/goal` alias and must not request reviewer-gated completion. `/loop stop`, `/loop pause`, and Chinese pause aliases mark the loop `paused`; Spark shows it in the shared widget slot as `◆ Loop(...)`.
+- `/goal <focus>` runs autonomous verified foreground goal progress until complete or blocked. Spark builds this on loop primitives plus goal objective tracking, reviewer-backed auto-decision/auto-ask during goal work, and reviewer-gated completion at the end. A session can have either `/goal` or `/loop` as the active foreground driver, not both. If no focus is provided, Spark derives the goal from the current project/task state and asks when ambiguous.
+- `/workflow[:selector] <focus>` runs builtin or saved workflow scripts as an independent capability; it does not require initialized Spark project/task state or a selected project. Use `/workflow:research <question>` for the builtin research workflow, `/workflow:review <focus>` for skeptical review, `/workflow builtin:<id>` for other builtin workflows, `/workflow workspace:<name>` for `.spark/workflows/*.js`, and `/workflow user:<name>` for `~/.agents/workflows/*.js`. Empty `/workflow` (or `/workflows`) opens the blocking workflow navigator to choose a workflow or describe a one-off workflow request.
 
 Project-bound flows create local Spark state under `.spark/` when durable graph, review, artifact, or run state is needed:
 
@@ -60,7 +56,7 @@ Project-bound flows create local Spark state under `.spark/` when durable graph,
 - a review gate
 - a run trace artifact
 
-Spark is always available in research mode even before `.spark/` or `SPARK.md` exists. A root `SPARK.md` is only materialized by `/spark` compatibility initialization, and only when the current `cwd` looks like a concrete repo (currently: `.git` exists in `cwd`). Direct modes such as `/research`, `/plan`, `/implement`, `/goal`, and `/workflow[:selector]` do not create or overwrite root `SPARK.md`; when they initialize minimal Spark state, intent is kept in `.spark` artifacts.
+Spark is always available for lightweight investigation even before `.spark/` or `SPARK.md` exists. Direct commands such as `/plan`, `/implement`, `/goal`, and `/workflow[:selector]` do not create or overwrite root `SPARK.md`; when they initialize minimal Spark state, intent is kept in `.spark` artifacts.
 
 `.spark/` is local runtime state and should be ignored by Git. Spark learnings live separately under the ignored local `.learnings/` directory for repo/workspace-scoped recall or under the user learning directory for personal cross-project knowledge; share them through explicit Markdown exports instead of committing the local artifact store by default. Use canonical owner tools for maintenance (`task_write({ action: "cache_cleanup" })`, `artifact({ action: "compact" })`, and workflow-run retention actions as they land); cleanup remains dry-run by default and must never target protected stores such as project graph, artifacts, notes, workflow runs, or review-gate state.
 
@@ -78,7 +74,7 @@ Manage settings through the canonical role tool actions: `role({ action: "model_
 
 ## Packages
 
-- `@zendev-lab/spark` — high-level `/spark`, `/research`, `/plan`, `/implement`, `/goal`, and `/workflow[:selector]` mode facade that composes generic `pi-*` capabilities with Spark-owned orchestration policy, widget state, builtin Spark roles, and active-context provider registration.
+- `@zendev-lab/spark` — high-level `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow[:selector]` command facade plus default lightweight research behavior that composes generic `pi-*` capabilities with Spark-owned orchestration policy, widget state, builtin Spark roles, and active-context provider registration.
 - `@zendev-lab/spark-cli` — standalone Spark-first native TUI host built directly on `@earendil-works/pi-tui`; starts the `spark` command, owns its local transcript/follow-up queue, and provides a local daemon queue for detached session-run tasks.
 - `@zendev-lab/spark-runtime` — Spark single-task runtime adapter that executes one task through `@zendev-lab/pi-roles`, writes artifacts, and owns task/run/timeout mapping above `RoleRun`.
 - `@zendev-lab/pi-extension-api` — shared extension host/tool contract, refs, errors, and light JSON/fs/time helpers.

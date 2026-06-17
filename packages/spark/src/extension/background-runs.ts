@@ -30,6 +30,11 @@ import {
   selectBackgroundRuns,
   summarizeBackgroundRuns,
 } from "./background-workflow-runs.ts";
+import {
+  buildSparkRoleRunRegistry,
+  type SparkRoleRunRegistrySnapshot,
+} from "./spark-role-run-observability.ts";
+import { loadRoleRunActivityEvents } from "./role-run-activity-events.ts";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 
 export { resolveBackgroundTaskRef } from "./background-child-runs.ts";
@@ -39,6 +44,8 @@ export type SparkBackgroundAction =
   | "list"
   | "inspect"
   | "kill"
+  | "reply"
+  | "steer"
   | "reconcile"
   | "ack"
   | "prune"
@@ -49,6 +56,8 @@ const SPARK_BACKGROUND_ACTIONS: SparkBackgroundAction[] = [
   "list",
   "inspect",
   "kill",
+  "reply",
+  "steer",
   "reconcile",
   "ack",
   "prune",
@@ -142,6 +151,7 @@ export interface SparkBackgroundRunsDetails {
   };
   runs: SparkBackgroundRunView[];
   childRuns: SparkBackgroundChildRunView[];
+  roleRunRegistry: SparkRoleRunRegistrySnapshot;
   killed?: KillSparkRoleRunProcessResult[];
   acknowledged?: WorkflowRunAcknowledgeResult;
 }
@@ -151,7 +161,7 @@ export function normalizeSparkBackgroundAction(value: unknown): SparkBackgroundA
   if (SPARK_BACKGROUND_ACTIONS.includes(value as SparkBackgroundAction))
     return value as SparkBackgroundAction;
   throw new Error(
-    "spark_workflow_runs action must be status, list, inspect, kill, reconcile, ack, prune, clear_inactive, or kill_active",
+    "spark_workflow_runs action must be status, list, inspect, kill, reply, steer, reconcile, ack, prune, clear_inactive, or kill_active",
   );
 }
 
@@ -253,17 +263,35 @@ export async function buildSparkBackgroundDetails(input: {
     targetRunRef: input.targetRunRef,
     targetTaskRef: input.targetTaskRef,
   });
-  const childRuns = await enrichBackgroundChildRunsWithRoleRunArtifacts({
+  const activeProcesses = activeSparkRoleRunProcessesForCwd(input.cwd);
+  const activityEvents = await loadRoleRunActivityEvents(input.cwd);
+  const roleRunRegistry = buildSparkRoleRunRegistry({
+    graph: input.graph,
+    activeProcesses,
+    projectRef: scopeProjectRef,
+    parentChildLinks: selectedRuns.flatMap((run) =>
+      run.taskRunRefs.map((childRunRef) => ({ parentRunRef: run.ref, childRunRef })),
+    ),
+    activityEvents,
+  });
+  const collectedChildRuns = await enrichBackgroundChildRunsWithRoleRunArtifacts({
     cwd: input.cwd,
     childRuns: collectBackgroundChildRuns({
       graph: input.graph,
       workflowRuns: selectedRuns,
-      activeProcesses: activeSparkRoleRunProcessesForCwd(input.cwd),
+      activeProcesses,
       projectRef: scopeProjectRef,
       targetRunRef: input.targetRunRef,
       targetTaskRef: input.targetTaskRef,
     }),
   });
+  const targetIsWorkflowRun = Boolean(
+    input.targetRunRef && selectedRuns.some((run) => run.ref === input.targetRunRef),
+  );
+  const childRuns =
+    input.action === "inspect" && input.targetRunRef && !targetIsWorkflowRun
+      ? collectedChildRuns.filter((child) => child.runRef === input.targetRunRef)
+      : collectedChildRuns;
   const runs = selectedRuns.map((run) =>
     backgroundRunView(
       run,
@@ -279,6 +307,7 @@ export async function buildSparkBackgroundDetails(input: {
     summary,
     runs,
     childRuns,
+    roleRunRegistry,
     killed: input.killed,
     acknowledged: input.acknowledged,
   };

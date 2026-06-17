@@ -6,20 +6,27 @@ import type {
   ToolRenderTheme,
 } from "@zendev-lab/pi-extension-api";
 import {
+  ARTIFACT_CURATION_STATUSES,
   ARTIFACT_FORMATS,
   ARTIFACT_KINDS,
   ARTIFACT_LINK_RELATIONS,
   ARTIFACT_PRODUCERS,
+  ARTIFACT_RETENTIONS,
   defaultArtifactStore,
+  isArtifactCurationStatus,
   isArtifactFormat,
   isArtifactKind,
   isArtifactLinkRelation,
   isArtifactProducer,
+  isArtifactRetention,
   type Artifact,
+  type ArtifactCuration,
+  type ArtifactCurationStatus,
   type ArtifactFormat,
   type ArtifactKind,
   type ArtifactLink,
   type ArtifactRef,
+  type ArtifactRetention,
   type JsonValue,
   type Provenance,
 } from "./index.ts";
@@ -28,7 +35,15 @@ export interface PiArtifactsExtensionApi {
   registerTool(config: ToolConfig): void;
 }
 
-type ArtifactAction = "record" | "list" | "read" | "link" | "compact";
+type ArtifactAction =
+  | "record"
+  | "list"
+  | "read"
+  | "link"
+  | "compact"
+  | "promote"
+  | "archive"
+  | "supersede";
 type ArtifactListView = "ref-only" | "summary" | "full";
 
 const DEFAULT_ARTIFACT_READ_PREVIEW_CHARS = 1_500;
@@ -56,16 +71,19 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
     name: "artifact",
     label: "Artifact",
     description:
-      "Record, list, read, link, or compact artifact/evidence records with strict provenance.",
+      "Record, list, read, link, compact, or curate artifact/evidence records with strict provenance.",
     promptGuidelines: [
       "Use artifact as the canonical evidence/artifact tool; do not use package-specific artifact aliases.",
       "Use action=list/read for inspection, action=record for bounded evidence writes, and action=compact only with dryRun reviewed first.",
+      "Use artifact curation to keep only essence artifacts visible by default: raw is noisy evidence, candidate is possible essence, curated is durable signal, archived/superseded is hidden unless explicitly requested.",
       "Every recorded artifact needs concrete provenance; do not use artifacts as arbitrary scratch memory.",
       ARTIFACT_KIND_DESCRIPTION,
       ARTIFACT_PRODUCER_DESCRIPTION,
     ],
     parameters: Type.Object({
-      action: Type.String({ description: "record | list | read | link | compact" }),
+      action: Type.String({
+        description: "record | list | read | link | compact | promote | archive | supersede",
+      }),
       artifactRef: Type.Optional(Type.String({ description: "Artifact ref for read/link." })),
       from: Type.Optional(Type.String({ description: "Source artifact ref for link." })),
       to: Type.Optional(Type.String({ description: "Target ref for link." })),
@@ -84,6 +102,12 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
         Type.String({ description: "markdown | json | text for action=record." }),
       ),
       body: Type.Optional(Type.Any({ description: "Artifact body for action=record." })),
+      curation: Type.Optional(
+        Type.Any({
+          description:
+            "Optional curation metadata for action=record. status: raw | candidate | curated | archived | superseded; retention: ephemeral | task | project | durable.",
+        }),
+      ),
       provenance: Type.Optional(
         Type.Any({
           description:
@@ -118,6 +142,28 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
         }),
       ),
       linkedTo: Type.Optional(Type.String({ description: "Target ref filter for action=list." })),
+      curationStatus: Type.Optional(
+        Type.String({ description: "Curation status filter for action=list/promote." }),
+      ),
+      retention: Type.Optional(
+        Type.String({
+          description: "Retention filter or update: ephemeral | task | project | durable.",
+        }),
+      ),
+      includeRaw: Type.Optional(
+        Type.Boolean({
+          description: "Include artifacts marked raw in action=list. Default false.",
+        }),
+      ),
+      includeArchived: Type.Optional(
+        Type.Boolean({
+          description:
+            "Include artifacts marked archived/superseded in action=list. Default false.",
+        }),
+      ),
+      reason: Type.Optional(
+        Type.String({ description: "Curation reason for action=promote/archive/supersede." }),
+      ),
       limit: Type.Optional(
         Type.Number({ description: "Maximum rows for action=list. Default: 20." }),
       ),
@@ -158,6 +204,10 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
           taskRef: normalizeOptionalRefOfKind(params.taskRef, "task", "taskRef"),
           roleRef: normalizeOptionalRefOfKind(params.roleRef, "role", "roleRef"),
           linkedTo: normalizeOptionalRef(params.linkedTo, "linkedTo"),
+          curationStatus: normalizeOptionalCurationStatus(params.curationStatus, "curationStatus"),
+          retention: normalizeOptionalRetention(params.retention, "retention"),
+          includeRaw: normalizeBoolean(params.includeRaw, true, "includeRaw"),
+          includeArchived: normalizeBoolean(params.includeArchived, false, "includeArchived"),
         });
         const newest = artifacts.slice().reverse();
         const limit = normalizeLimit(params.limit, 20, "limit");
@@ -196,7 +246,7 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
         const truncated = !full && renderedBody.length < body.length;
         const lines = [
           `${artifact.ref} [${artifact.kind}] ${artifact.title}`,
-          `format=${artifact.format} producer=${artifact.provenance.producer} updated=${artifact.updatedAt}`,
+          `format=${artifact.format} producer=${artifact.provenance.producer} curation=${renderCurationLabel(artifact)} updated=${artifact.updatedAt}`,
           "",
           renderedBody,
         ];
@@ -221,7 +271,16 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
         const body = normalizeArtifactBody(params.body, format);
         const provenance = normalizeRecordProvenance(params);
         const links = normalizeArtifactLinks(params.links);
-        const artifact = await store.put({ kind, title, format, body, provenance, links });
+        const curation = normalizeOptionalCuration(params.curation, "curation");
+        const artifact = await store.put({
+          kind,
+          title,
+          format,
+          body,
+          provenance,
+          links,
+          curation,
+        });
         return toolResult(
           "artifact",
           action,
@@ -244,6 +303,72 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
         return toolResult("artifact", action, `Linked ${from} -> ${to} (${relation})`, {
           changed: true,
           refs: { artifactRef: artifact.ref, targetRef: to },
+          artifact: compactArtifactDetail(artifact),
+        });
+      }
+
+      if (action === "promote") {
+        const artifactRef = normalizeArtifactRef(params.artifactRef, "artifactRef");
+        const existing = await store.get(artifactRef);
+        const status =
+          normalizeOptionalCurationStatus(params.curationStatus, "curationStatus") ?? "curated";
+        if (status !== "candidate" && status !== "curated") {
+          throw new Error("promote curationStatus must be candidate or curated");
+        }
+        const curation: ArtifactCuration = {
+          ...(existing.curation ?? {}),
+          status,
+          retention:
+            normalizeOptionalRetention(params.retention, "retention") ??
+            existing.curation?.retention ??
+            (status === "curated" ? "durable" : "project"),
+          reason: normalizeRequiredString(params.reason, "reason"),
+        };
+        const artifact = await store.update(artifactRef, { curation });
+        return toolResult("artifact", action, `Promoted ${artifact.ref} to ${status}`, {
+          changed: true,
+          refs: { artifactRef: artifact.ref },
+          artifact: compactArtifactDetail(artifact),
+        });
+      }
+
+      if (action === "archive") {
+        const artifactRef = normalizeArtifactRef(params.artifactRef, "artifactRef");
+        const existing = await store.get(artifactRef);
+        const curation: ArtifactCuration = {
+          ...(existing.curation ?? {}),
+          status: "archived",
+          retention:
+            normalizeOptionalRetention(params.retention, "retention") ??
+            existing.curation?.retention ??
+            "ephemeral",
+          reason: normalizeRequiredString(params.reason, "reason"),
+        };
+        const artifact = await store.update(artifactRef, { curation });
+        return toolResult("artifact", action, `Archived ${artifact.ref}`, {
+          changed: true,
+          refs: { artifactRef: artifact.ref },
+          artifact: compactArtifactDetail(artifact),
+        });
+      }
+
+      if (action === "supersede") {
+        const artifactRef = normalizeArtifactRef(params.artifactRef, "artifactRef");
+        const replacementRef = normalizeArtifactRef(params.to, "to");
+        const existing = await store.get(artifactRef);
+        const supersededBy = [...(existing.curation?.supersededBy ?? [])];
+        if (!supersededBy.includes(replacementRef)) supersededBy.push(replacementRef);
+        const curation: ArtifactCuration = {
+          ...(existing.curation ?? {}),
+          status: "superseded",
+          retention: existing.curation?.retention ?? "task",
+          reason: normalizeRequiredString(params.reason, "reason"),
+          supersededBy,
+        };
+        const artifact = await store.update(artifactRef, { curation });
+        return toolResult("artifact", action, `Superseded ${artifact.ref} by ${replacementRef}`, {
+          changed: true,
+          refs: { artifactRef: artifact.ref, supersededBy: replacementRef },
           artifact: compactArtifactDetail(artifact),
         });
       }
@@ -317,6 +442,7 @@ function compactArtifactDetail(artifact: Artifact): Record<string, unknown> {
     kind: artifact.kind,
     title: artifact.title,
     format: artifact.format,
+    curation: artifact.curation,
     provenance: artifact.provenance,
     links: artifact.links,
     hash: artifact.hash,
@@ -334,6 +460,7 @@ function compactArtifactSummaryDetail(artifact: Artifact): Record<string, unknow
     kind: artifact.kind,
     title: artifact.title,
     format: artifact.format,
+    curation: artifact.curation,
     producer: artifact.provenance.producer,
     projectRef: artifact.provenance.projectRef,
     taskRef: artifact.provenance.taskRef,
@@ -347,9 +474,15 @@ function compactArtifactSummaryDetail(artifact: Artifact): Record<string, unknow
 function renderArtifactListLine(artifact: Artifact, view: ArtifactListView): string {
   if (view === "ref-only") return `- ${artifact.ref}`;
   if (view === "full") {
-    return `- [${artifact.kind}] ${artifact.ref}: ${artifact.title} format=${artifact.format} producer=${artifact.provenance.producer} links=${artifact.links.length} bodySize=${artifact.bodySize ?? "unknown"}`;
+    return `- [${artifact.kind}] ${artifact.ref}: ${artifact.title} format=${artifact.format} producer=${artifact.provenance.producer} curation=${renderCurationLabel(artifact)} links=${artifact.links.length} bodySize=${artifact.bodySize ?? "unknown"}`;
   }
-  return `- [${artifact.kind}] ${artifact.ref}: ${artifact.title}`;
+  return `- [${artifact.kind}] ${artifact.ref}: ${artifact.title} curation=${renderCurationLabel(artifact)}`;
+}
+
+function renderCurationLabel(artifact: Artifact): string {
+  const status = artifact.curation?.status ?? "legacy";
+  const retention = artifact.curation?.retention;
+  return retention ? `${status}/${retention}` : status;
 }
 
 function formatValidValuesError(
@@ -371,11 +504,16 @@ function normalizeAction(value: unknown): ArtifactAction {
     value === "list" ||
     value === "read" ||
     value === "link" ||
-    value === "compact"
+    value === "compact" ||
+    value === "promote" ||
+    value === "archive" ||
+    value === "supersede"
   ) {
     return value;
   }
-  throw new Error("artifact.action must be record, list, read, link, or compact");
+  throw new Error(
+    "artifact.action must be record, list, read, link, compact, promote, archive, or supersede",
+  );
 }
 
 function normalizeArtifactListView(value: unknown): ArtifactListView {
@@ -446,6 +584,61 @@ function normalizeOptionalProducer(
     );
   }
   return value;
+}
+
+function normalizeOptionalCurationStatus(
+  value: unknown,
+  field: string,
+): ArtifactCurationStatus | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isArtifactCurationStatus(value)) {
+    throw new Error(
+      formatValidValuesError(
+        field,
+        value,
+        "a valid artifact curation status",
+        ARTIFACT_CURATION_STATUSES,
+      ),
+    );
+  }
+  return value;
+}
+
+function normalizeOptionalRetention(value: unknown, field: string): ArtifactRetention | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isArtifactRetention(value)) {
+    throw new Error(
+      formatValidValuesError(field, value, "a valid artifact retention", ARTIFACT_RETENTIONS),
+    );
+  }
+  return value;
+}
+
+function normalizeOptionalCuration(value: unknown, field: string): ArtifactCuration | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) throw new Error(`${field} must be an object`);
+  const status = normalizeOptionalCurationStatus(value.status, `${field}.status`);
+  if (!status) throw new Error(`${field}.status is required`);
+  const curation: ArtifactCuration = { status };
+  const retention = normalizeOptionalRetention(value.retention, `${field}.retention`);
+  const reason = normalizeOptionalString(value.reason, `${field}.reason`);
+  const promotedFrom = normalizeOptionalArtifactRefArray(
+    value.promotedFrom,
+    `${field}.promotedFrom`,
+  );
+  const supersededBy = normalizeOptionalArtifactRefArray(
+    value.supersededBy,
+    `${field}.supersededBy`,
+  );
+  const compactedInto = normalizeOptionalArtifactRef(value.compactedInto, `${field}.compactedInto`);
+  const expiresAt = normalizeOptionalString(value.expiresAt, `${field}.expiresAt`);
+  if (retention) curation.retention = retention;
+  if (reason) curation.reason = reason;
+  if (promotedFrom) curation.promotedFrom = promotedFrom;
+  if (supersededBy) curation.supersededBy = supersededBy;
+  if (compactedInto) curation.compactedInto = compactedInto;
+  if (expiresAt) curation.expiresAt = expiresAt;
+  return curation;
 }
 
 function normalizeArtifactBody(value: unknown, format: ArtifactFormat): JsonValue | string {
@@ -538,6 +731,20 @@ function normalizeArtifactRef(value: unknown, field: string): ArtifactRef {
   const ref = normalizeRequiredRef(value, field);
   if (!ref.startsWith("artifact:")) throw new Error(`${field} must be an artifact ref`);
   return ref as ArtifactRef;
+}
+
+function normalizeOptionalArtifactRef(value: unknown, field: string): ArtifactRef | undefined {
+  if (value === undefined || value === null) return undefined;
+  return normalizeArtifactRef(value, field);
+}
+
+function normalizeOptionalArtifactRefArray(
+  value: unknown,
+  field: string,
+): ArtifactRef[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
+  return value.map((entry, index) => normalizeArtifactRef(entry, `${field}[${index}]`));
 }
 
 function normalizeRequiredRef(value: unknown, field: string): string {

@@ -10,33 +10,19 @@ export interface BuiltinWorkflowDefinition {
 
 export const builtinWorkflowDefinitions: readonly BuiltinWorkflowDefinition[] = [
   {
-    id: "fusion",
+    id: "research",
     mode: "research",
-    title: "fusion",
-    description: "Fusion-style multi-model deliberation with panel review and judge synthesis",
-    scriptFactory: fusionWorkflowScript,
-  },
-  {
-    id: "deep-research",
-    mode: "research",
-    title: "deep_research",
-    description: "Deep research with cross-checked claims",
-    scriptFactory: deepResearchWorkflowScript,
-  },
-  {
-    id: "fan-out-with-brief",
-    mode: "research",
-    title: "fan_out_with_brief",
+    title: "research",
     description:
-      "Fan out multiple agents from one shared briefing artifact and collect their outputs",
-    scriptFactory: fanOutWithBriefWorkflowScript,
+      "Research workflow with planning, panel exploration, verification, and report synthesis",
+    scriptFactory: researchWorkflowScript,
   },
   {
-    id: "adversarial-review",
+    id: "review",
     mode: "research",
-    title: "adversarial_review",
+    title: "review",
     description: "Findings cross-checked by skeptical reviewers",
-    scriptFactory: adversarialReviewWorkflowScript,
+    scriptFactory: reviewWorkflowScript,
   },
 ];
 
@@ -48,11 +34,11 @@ export function getBuiltinWorkflowDefinition(id: string): BuiltinWorkflowDefinit
   return builtinWorkflowDefinitions.find((workflow) => workflow.id === id);
 }
 
-export function fusionWorkflowScript(): string {
+export function researchWorkflowScript(): string {
   return `export const meta = {
-  name: 'fusion',
-  description: 'Fusion-style multi-model deliberation with panel review and judge synthesis',
-  phases: [{ title: 'Panel' }, { title: 'Synthesis' }],
+  name: 'research',
+  description: 'Research workflow with planning, panel exploration, verification, and report synthesis',
+  phases: [{ title: 'Plan' }, { title: 'Explore' }, { title: 'Verify' }, { title: 'Report' }],
 }
 
 const input = args || {}
@@ -66,11 +52,11 @@ const panelSize = Number.isFinite(requestedPanelSize)
   : 3
 const panel = configuredPanel.length > 0
   ? configuredPanel
-  : Array.from({ length: panelSize }, (_, index) => ({ label: 'panel ' + (index + 1) }))
+  : Array.from({ length: panelSize }, (_, index) => ({ label: 'researcher ' + (index + 1) }))
 
 function panelPrompt() {
   return [
-    'You are one expert in a Spark Fusion-style multi-model panel.',
+    'You are one contributor in a Spark research workflow.',
     'Answer the user request independently. Be concise, evidence-oriented, and mention uncertainty or assumptions. Do not call tools.',
     '',
     'User request:',
@@ -78,7 +64,10 @@ function panelPrompt() {
   ].join('\\n')
 }
 
-phase('Panel')
+phase('Plan')
+const plan = await agent('Plan a concise research approach for: ' + question, { label: 'research plan' })
+
+phase('Explore')
 const panelResults = await parallel(panel.map((item, index) => async () => {
   const model = typeof item === 'string'
     ? item
@@ -86,7 +75,7 @@ const panelResults = await parallel(panel.map((item, index) => async () => {
   const provider = item && typeof item === 'object' && item.provider ? String(item.provider) : undefined
   const label = item && typeof item === 'object' && (item.label || item.name)
     ? String(item.label || item.name)
-    : (model || provider || ('panel ' + (index + 1)))
+    : (model || provider || ('researcher ' + (index + 1)))
   return {
     label,
     provider,
@@ -104,58 +93,80 @@ function renderPanelResult(result, index) {
     const value = result.value || {}
     const label = value.provider && value.model
       ? value.provider + '/' + value.model
-      : (value.label || value.model || ('panel ' + (index + 1)))
-    return '## Panel ' + (index + 1) + ': ' + label + '\\n' + (value.output || '(empty response)')
+      : (value.label || value.model || ('researcher ' + (index + 1)))
+    return '## Contributor ' + (index + 1) + ': ' + label + '\\n' + (value.output || '(empty response)')
   }
   const reason = result && result.reason
     ? (result.reason.message || String(result.reason))
     : 'unknown error'
-  return '## Panel ' + (index + 1) + '\\nERROR: ' + reason
+  return '## Contributor ' + (index + 1) + '\\nERROR: ' + reason
 }
 
-phase('Synthesis')
 const renderedResults = panelResults.map(renderPanelResult).join('\\n\\n')
-const judgePrompt = [
-  'You are the judge in a Spark Fusion-style multi-model deliberation.',
-  'Compare the panel responses, then write the final answer for the user. Prefer consensus, call out contradictions only when useful, preserve unique correct insights, and do not invent unavailable evidence.',
-  'Return the final user-facing answer directly; do not include hidden analysis JSON unless the user asked for it.',
+
+phase('Verify')
+const verified = await agent([
+  'Cross-check Spark research panel results.',
   '',
   'Original user request:',
   question,
   '',
+  'Research plan:',
+  plan,
+  '',
   'Panel responses:',
   renderedResults,
+].join('\\n'), { label: 'cross-check' })
+
+phase('Report')
+const report = await agent([
+  'Write the final user-facing research answer.',
+  'Prefer verified consensus, call out contradictions only when useful, and do not invent unavailable evidence.',
   '',
-  'Synthesize a final answer. Use this comparison checklist internally: consensus, contradictions, coverage gaps, unique insights, and blind spots.',
-].join('\\n')
-const report = await agent(judgePrompt, {
-  label: 'judge synthesis',
+  'Original user request:',
+  question,
+  '',
+  'Verified notes:',
+  verified,
+  '',
+  'Panel responses:',
+  renderedResults,
+].join('\\n'), {
+  label: 'write report',
   model: input.judgeModel,
   agentType: 'model',
 })
-return { question, panelResults, report }`;
+return { question, plan, panelResults, verified, report }`;
 }
 
-export function deepResearchWorkflowScript(): string {
+export function reviewWorkflowScript(): string {
   return `export const meta = {
-  name: 'deep_research',
-  description: 'Deep research with cross-checked claims',
-  phases: [{ title: 'Queries' }, { title: 'Gather' }, { title: 'Verify' }, { title: 'Report' }],
+  name: 'review',
+  description: 'Findings cross-checked by skeptical reviewers',
+  phases: [{ title: 'Investigate' }, { title: 'Refute' }, { title: 'Consensus' }],
 }
 
-const question = (args && args.question) || ''
-phase('Queries')
-const plan = await agent('Plan diverse research queries for: ' + question, { label: 'plan queries' })
-phase('Gather')
-const gathered = await parallel([
-  () => agent('Gather source-backed claims for: ' + question, { label: 'gather claims' }),
-  () => agent('Find dissenting or missing evidence for: ' + question, { label: 'find caveats' }),
+const task = (args && args.task) || ''
+phase('Investigate')
+const findings = await agent('List concrete findings for: ' + task, { label: 'investigate' })
+phase('Refute')
+const refutations = await parallel([
+  () => agent('Try to refute these findings: ' + findings, { label: 'skeptic 1' }),
+  () => agent('Independently verify these findings: ' + findings, { label: 'skeptic 2' }),
 ])
-phase('Verify')
-const verified = await agent('Cross-check gathered research: ' + JSON.stringify(gathered), { label: 'cross-check' })
-phase('Report')
-const report = await agent('Write final cited report for: ' + question + '\\n' + verified, { label: 'write report' })
-return { question, gathered, verified, report }`;
+phase('Consensus')
+const report = await agent('Write only findings that survived review: ' + JSON.stringify(refutations), { label: 'consensus' })
+return { task, findings, refutations, report }`;
+}
+
+/** @deprecated Use researchWorkflowScript; fusion is now an implementation strategy, not a public builtin workflow id. */
+export function fusionWorkflowScript(): string {
+  return researchWorkflowScript();
+}
+
+/** @deprecated Use researchWorkflowScript; deep research is folded into the public research workflow. */
+export function deepResearchWorkflowScript(): string {
+  return researchWorkflowScript();
 }
 
 export function fanOutWithBriefWorkflowScript(): string {
@@ -205,22 +216,7 @@ phase('Fan in')
 return { briefRef: brief.ref, outputs }`;
 }
 
+/** @deprecated Use reviewWorkflowScript; adversarial review is now the review workflow strategy. */
 export function adversarialReviewWorkflowScript(): string {
-  return `export const meta = {
-  name: 'adversarial_review',
-  description: 'Findings cross-checked by skeptical reviewers',
-  phases: [{ title: 'Investigate' }, { title: 'Refute' }, { title: 'Consensus' }],
-}
-
-const task = (args && args.task) || ''
-phase('Investigate')
-const findings = await agent('List concrete findings for: ' + task, { label: 'investigate' })
-phase('Refute')
-const refutations = await parallel([
-  () => agent('Try to refute these findings: ' + findings, { label: 'skeptic 1' }),
-  () => agent('Independently verify these findings: ' + findings, { label: 'skeptic 2' }),
-])
-phase('Consensus')
-const report = await agent('Write only findings that survived review: ' + JSON.stringify(refutations), { label: 'consensus' })
-return { task, findings, refutations, report }`;
+  return reviewWorkflowScript();
 }

@@ -13,6 +13,8 @@ export type SparkStateCacheKind =
 export type SparkProtectedStoreReason =
   | "artifact-history"
   | "task-graph"
+  | "todo-records"
+  | "session-state"
   | "notes"
   | "role-reports"
   | "review-gate"

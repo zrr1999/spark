@@ -51,9 +51,15 @@ export function collectBackgroundChildRuns(input: {
       childRunRefs.add(childRunRef);
     }
   }
-  for (const process of input.activeProcesses) childRunRefs.add(process.runRef);
-  if (input.targetRunRef && !input.workflowRuns.some((run) => run.ref === input.targetRunRef))
-    childRunRefs.add(input.targetRunRef);
+  const targetRunRefIsWorkflowRun = Boolean(
+    input.targetRunRef && input.workflowRuns.some((run) => run.ref === input.targetRunRef),
+  );
+  for (const process of input.activeProcesses) {
+    if (input.targetRunRef && !targetRunRefIsWorkflowRun && process.runRef !== input.targetRunRef)
+      continue;
+    childRunRefs.add(process.runRef);
+  }
+  if (input.targetRunRef && !targetRunRefIsWorkflowRun) childRunRefs.add(input.targetRunRef);
   for (const task of allTasks) {
     if (input.projectRef && task.projectRef !== input.projectRef) continue;
     if (input.targetTaskRef && task.ref !== input.targetTaskRef) continue;
@@ -67,6 +73,8 @@ export function collectBackgroundChildRuns(input: {
   }
   const activeByRunRef = new Map(input.activeProcesses.map((process) => [process.runRef, process]));
   const views = [...childRunRefs].flatMap((runRef): SparkBackgroundChildRunView[] => {
+    if (input.targetRunRef && !targetRunRefIsWorkflowRun && runRef !== input.targetRunRef)
+      return [];
     const taskRun = taskRunByRef.get(runRef);
     const activeProcess = activeByRunRef.get(runRef);
     const task = taskRun

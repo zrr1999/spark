@@ -4,6 +4,8 @@ import { sparkSessionKey, type SparkSessionContext } from "./session-identity.ts
 export {
   clearCurrentProjectRef,
   currentSparkProject,
+  currentProjectStorePath,
+  importLegacyCurrentProjectState,
   loadCurrentProjectRef,
   loadCurrentProjectState,
   saveCurrentProjectRef,
@@ -25,11 +27,25 @@ export {
   type SparkSessionModeState,
 } from "./mode-state.ts";
 export {
+  importLegacyHiddenRoleRunInboxState,
   loadHiddenRoleRunInboxState,
   saveHiddenRoleRunInboxState,
   type HiddenRoleRunInboxState,
 } from "./hidden-role-run-inbox.ts";
 export { writeJsonFileAtomic } from "./json-store.ts";
+export {
+  currentSessionDirectoryName,
+  rebuildSessionIndex,
+  sessionDirectoryPath,
+  sessionHiddenRoleRunInboxStorePath,
+  sessionIndexStorePath,
+  sessionLoopStorePathV2,
+  sessionGoalStorePathV2,
+  sessionStateStorePath,
+  sessionTodoDisplayNumberStorePath,
+  type SparkSessionIndexEntry,
+  type SparkSessionIndexSnapshot,
+} from "./session-directory-store.ts";
 export {
   sanitizeStoreScope,
   sparkSessionKey,

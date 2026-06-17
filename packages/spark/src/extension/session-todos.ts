@@ -1,12 +1,18 @@
 import { join } from "node:path";
 
-import { nowIso, type TaskRef } from "@zendev-lab/pi-extension-api";
+import { type TaskRef } from "@zendev-lab/pi-extension-api";
 import {
+  defaultTaskTodoStore,
   isDeletedSessionTodo,
   type SessionTodoEntry,
   type SessionTodoStatus,
 } from "@zendev-lab/pi-tasks";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
+import {
+  legacyTodoDisplayNumberStorePath,
+  rebuildSessionIndex,
+  sessionTodoDisplayNumberStorePath,
+} from "./session-directory-store.ts";
 import {
   sanitizeStoreScope,
   sparkSessionKey,
@@ -31,12 +37,7 @@ interface TodoDisplayNumberStoreSnapshot {
 }
 
 function todoDisplayNumberStorePath(cwd: string, ctx: SparkSessionContext | undefined): string {
-  return join(
-    cwd,
-    ".spark",
-    "todo-display-numbers",
-    `${sanitizeStoreScope(sparkSessionKey(ctx))}.json`,
-  );
+  return sessionTodoDisplayNumberStorePath(cwd, ctx);
 }
 
 export async function loadTodoDisplayNumberState(
@@ -82,7 +83,21 @@ export async function saveTodoDisplayNumberState(
   };
   assertTodoDisplayNumberStoreSnapshot(snapshot, filePath);
   await writeJsonFileAtomic(filePath, snapshot);
+  await rebuildSessionIndex(cwd);
   state.changed = false;
+}
+
+export async function importLegacyTodoDisplayNumberState(
+  cwd: string,
+  ctx: SparkSessionContext | undefined,
+): Promise<TodoDisplayNumberState | undefined> {
+  const filePath = legacyTodoDisplayNumberStorePath(cwd, ctx);
+  const raw = await readJsonFileOptional<Record<string, unknown>>(filePath);
+  if (!raw) return undefined;
+  assertTodoDisplayNumberStoreSnapshot(raw, filePath);
+  const state: TodoDisplayNumberState = { version: 1, next: raw.next, numbers: raw.numbers };
+  await saveTodoDisplayNumberState(cwd, ctx, state);
+  return state;
 }
 
 function assertTodoDisplayNumberStoreSnapshot(
@@ -124,11 +139,7 @@ export async function loadIndependentTodos(
   cwd: string,
   ctx: SparkSessionContext | undefined,
 ): Promise<SessionTodoEntry[]> {
-  const filePath = independentTodoStorePath(cwd, ctx);
-  const raw = await readJsonFileOptional<Record<string, unknown>>(filePath);
-  if (!raw) return [];
-  assertIndependentTodoStoreSnapshot(raw, filePath);
-  return raw.todos;
+  return defaultTaskTodoStore(cwd, sparkSessionKey(ctx)).loadSessionTodos(sparkSessionKey(ctx));
 }
 
 export function visibleIndependentTodos(todos: SessionTodoEntry[]): SessionTodoEntry[] {
@@ -140,11 +151,22 @@ export async function saveIndependentTodos(
   ctx: SparkSessionContext | undefined,
   todos: SessionTodoEntry[],
 ): Promise<void> {
-  await writeJsonFileAtomic(independentTodoStorePath(cwd, ctx), {
-    version: 1,
+  await defaultTaskTodoStore(cwd, sparkSessionKey(ctx)).saveSessionTodos(
+    sparkSessionKey(ctx),
     todos,
-    updatedAt: nowIso(),
-  });
+  );
+}
+
+export async function importLegacyIndependentTodos(
+  cwd: string,
+  ctx: SparkSessionContext | undefined,
+): Promise<number> {
+  const filePath = independentTodoStorePath(cwd, ctx);
+  const raw = await readJsonFileOptional<Record<string, unknown>>(filePath);
+  if (!raw) return 0;
+  assertIndependentTodoStoreSnapshot(raw, filePath);
+  await saveIndependentTodos(cwd, ctx, raw.todos);
+  return raw.todos.length;
 }
 
 interface IndependentTodoStoreSnapshot {

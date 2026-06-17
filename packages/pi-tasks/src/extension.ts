@@ -12,6 +12,7 @@ export type PiTaskWriteAction =
   | "claim"
   | "plan"
   | "finish"
+  | "recover"
   | "todo_update"
   | "cache_cleanup";
 export type PiTaskAssignAction = "assign";
@@ -65,6 +66,7 @@ const TASK_WRITE_ACTIONS: readonly PiTaskWriteAction[] = [
   "claim",
   "plan",
   "finish",
+  "recover",
   "todo_update",
   "cache_cleanup",
 ];
@@ -126,7 +128,7 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
     parameters: Type.Object({
       action: Type.String({
         description:
-          "project_use | project_update | claim | plan | finish | todo_update | cache_cleanup",
+          "project_use | project_update | claim | plan | finish | recover | todo_update | cache_cleanup",
       }),
       scope: Type.Optional(Type.String({ description: "For todo_update: session | task." })),
       project: Type.Optional(Type.String({ description: "Project selector/ref/title." })),

@@ -19,13 +19,13 @@ export function registerSparkModeCycleShortcut(
   _deps: { refreshSparkWidget: (cwd: string, ctx?: SparkToolContext) => Promise<void> },
 ): void {
   pi.registerShortcut?.("shift+tab", {
-    description: "Show Spark per-turn mode slash command hints.",
+    description: "Show Spark per-turn command hints.",
     isActive: (ctx) => Boolean(ctx.cwd && existsSync(join(ctx.cwd, ".spark"))),
     handler(ctx) {
       const hint =
-        "/research, /plan, and /implement are per-turn Spark lenses; they no longer persist session mode.";
+        "research is the default for ordinary input; use /plan for durable planning or /implement for human-blocking execution.";
       ctx.ui?.setEditorText?.("/plan ");
-      ctx.ui?.notify?.(`Spark mode lenses are per-turn. Use ${hint}`, "info");
+      ctx.ui?.notify?.(`Spark commands are per-turn. ${hint}`, "info");
     },
   });
 }

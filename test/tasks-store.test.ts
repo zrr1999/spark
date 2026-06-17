@@ -39,6 +39,7 @@ import {
   buildRoleRunArgs,
   createRoleRunName,
   createRoleRunClaimId,
+  DEFAULT_TASK_CLAIM_LEASE_MS,
   findResumableBackgroundRoleRunTasks,
   killActiveSparkRoleRunProcesses,
   listActiveSparkRoleRunProcesses,
@@ -186,7 +187,7 @@ void test("task graph store keeps TODOs out of projects.json and todo store rest
     assert.doesNotMatch(projectJson, /"todos"/);
     assert.match(projectJson, /"intent": "Ship focused task storage"/);
     assert.doesNotMatch(projectJson, /"purpose"/);
-    assert.match(await readFile(todoFile, "utf8"), /"Read inputs"/);
+    assert.equal((await stat(todoFile)).size > 0, true);
     assert.deepEqual(
       (await readdir(dir)).filter((entry) => entry.endsWith(".tmp")),
       [],
@@ -196,9 +197,78 @@ void test("task graph store keeps TODOs out of projects.json and todo store rest
   }
 });
 
-void test("default task TODO store always uses an explicit scoped path", () => {
+void test("default task TODO store uses the canonical SQLite path regardless of session scope", () => {
   const store = defaultTaskTodoStore("/workspace/demo", "leaf:main/session");
-  assert.equal(store.filePath, "/workspace/demo/.spark/todos/leaf-main-session.json");
+  assert.equal(store.filePath, "/workspace/demo/.spark/todos/todos.sqlite");
+});
+
+void test("SQLite TODO store separates task and session owners and imports legacy task TODOs idempotently", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-task-todos-sqlite-"));
+  try {
+    const todoStore = new TaskTodoStore(join(dir, "todos.sqlite"));
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const first = graph.createTask({
+      projectRef: project.ref,
+      title: "First",
+      description: "first",
+      todos: [{ content: "Review" }],
+    });
+    const second = graph.createTask({
+      projectRef: project.ref,
+      title: "Second",
+      description: "second",
+      todos: [{ content: "Review" }],
+    });
+
+    await todoStore.save(graph);
+    const loadedTaskTodos = await todoStore.load();
+    assert.equal(loadedTaskTodos?.length, 2);
+    assert.deepEqual(
+      loadedTaskTodos?.map((todo) => todo.taskRef).sort(),
+      [first.ref, second.ref].sort(),
+    );
+
+    await todoStore.saveSessionTodos("session:demo", [
+      {
+        id: "todo-session",
+        displayNumber: 7,
+        content: "Coordinate review",
+        status: "in_progress",
+      },
+    ]);
+    assert.deepEqual(await todoStore.loadSessionTodos("session:demo"), [
+      {
+        id: "todo-session",
+        displayNumber: 7,
+        content: "Coordinate review",
+        status: "in_progress",
+        createdAt: (await todoStore.loadSessionTodos("session:demo"))[0]?.createdAt,
+        updatedAt: (await todoStore.loadSessionTodos("session:demo"))[0]?.updatedAt,
+      },
+    ]);
+
+    const legacyFile = join(dir, "legacy-task-todos.json");
+    await writeFile(
+      legacyFile,
+      `${JSON.stringify({
+        version: 1,
+        todos: [{ id: "todo-legacy", taskRef: first.ref, content: "Imported", status: "done" }],
+      })}\n`,
+      "utf8",
+    );
+    assert.deepEqual(await todoStore.importLegacyTaskTodoFile(legacyFile), {
+      found: true,
+      imported: 1,
+    });
+    assert.deepEqual(await todoStore.importLegacyTaskTodoFile(legacyFile), {
+      found: true,
+      imported: 1,
+    });
+    assert.equal((await todoStore.load())?.filter((todo) => todo.id === "todo-legacy").length, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 void test("independent session TODO reducer preserves one active live item", () => {
@@ -225,16 +295,16 @@ void test("independent session TODO reducer preserves one active live item", () 
   assert.equal(todos.filter((todo) => todo.status === "in_progress").length, 1);
 });
 
-void test("task TODO store rejects malformed persisted snapshots", async () => {
+void test("task TODO legacy import rejects malformed persisted snapshots", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-task-todos-invalid-"));
   try {
     const todoFile = join(dir, "todos.json");
-    const todoStore = new TaskTodoStore(todoFile);
+    const todoStore = new TaskTodoStore(join(dir, "todos.sqlite"));
 
     await mkdir(dir, { recursive: true });
     await writeFile(todoFile, "{not-json", "utf8");
     await assert.rejects(
-      () => todoStore.load(),
+      () => todoStore.importLegacyTaskTodoFile(todoFile),
       (error) =>
         error instanceof TaskTodoStoreFormatError &&
         error.filePath === todoFile &&
@@ -243,7 +313,7 @@ void test("task TODO store rejects malformed persisted snapshots", async () => {
 
     await writeFile(todoFile, "[]\n", "utf8");
     await assert.rejects(
-      () => todoStore.load(),
+      () => todoStore.importLegacyTaskTodoFile(todoFile),
       (error) =>
         error instanceof TaskTodoStoreFormatError &&
         error.filePath === todoFile &&
@@ -252,7 +322,7 @@ void test("task TODO store rejects malformed persisted snapshots", async () => {
 
     await writeFile(todoFile, `${JSON.stringify({ version: 2, todos: [] })}\n`, "utf8");
     await assert.rejects(
-      () => todoStore.load(),
+      () => todoStore.importLegacyTaskTodoFile(todoFile),
       (error) =>
         error instanceof TaskTodoStoreFormatError &&
         error.filePath === todoFile &&
@@ -261,7 +331,7 @@ void test("task TODO store rejects malformed persisted snapshots", async () => {
 
     await writeFile(todoFile, `${JSON.stringify({ version: 1 })}\n`, "utf8");
     await assert.rejects(
-      () => todoStore.load(),
+      () => todoStore.importLegacyTaskTodoFile(todoFile),
       (error) =>
         error instanceof TaskTodoStoreFormatError &&
         error.filePath === todoFile &&
@@ -270,7 +340,7 @@ void test("task TODO store rejects malformed persisted snapshots", async () => {
 
     await writeFile(todoFile, `${JSON.stringify({ version: 1, todos: {} })}\n`, "utf8");
     await assert.rejects(
-      () => todoStore.load(),
+      () => todoStore.importLegacyTaskTodoFile(todoFile),
       (error) =>
         error instanceof TaskTodoStoreFormatError &&
         error.filePath === todoFile &&
@@ -286,7 +356,7 @@ void test("task TODO store rejects malformed persisted snapshots", async () => {
       "utf8",
     );
     await assert.rejects(
-      () => todoStore.load(),
+      () => todoStore.importLegacyTaskTodoFile(todoFile),
       (error) =>
         error instanceof TaskTodoStoreFormatError &&
         error.filePath === todoFile &&
@@ -3499,6 +3569,11 @@ void test("runReadyTasks treats timeoutMs as a foreground wait budget", async ()
     assert.equal(result.scheduled, 1);
     assert.equal(graph.getTask(slowTask.ref).status, "running");
     assert.equal(graph.getTask(slowTask.ref).claim?.kind, "role-run");
+    assert.ok(
+      Date.parse(graph.getTask(slowTask.ref).claim?.expiresAt ?? "") >
+        Date.now() + DEFAULT_TASK_CLAIM_LEASE_MS / 2,
+      "foreground wait budget must not shorten the detached role-run claim lease",
+    );
     assert.equal(graph.getTask(pendingTask.ref).status, "pending");
     assert.equal(backgroundRuns.length, 1);
     assert.equal(backgroundRuns[0]?.taskRef, slowTask.ref);
@@ -3544,7 +3619,7 @@ void test("runSparkTask does not complete real tasks when the role run never sta
 
     assert.equal(run.status, "failed");
     assert.equal(run.failureKind, "runtime_error");
-    assert.match(run.errorMessage ?? "", /without producing output/);
+    assert.match(run.errorMessage ?? "", /without producing task output/);
     assert.equal(graph.getTask(task.ref).status, "failed");
     assert.equal(graph.getTask(task.ref).claim, undefined);
     const [artifact] = await artifactStore.list({ kind: "trace" });
@@ -3580,7 +3655,7 @@ void test("runSparkTask does not complete real tasks when the role run never sta
   }
 });
 
-void test("runSparkTask fails blocked Spark mode request jsonEvents instead of completing task", async () => {
+void test("runSparkTask succeeds when child role output contains blocked Spark mode jsonEvents", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-blocked-mode-json-"));
   try {
     const graph = new TaskGraph();
@@ -3588,7 +3663,7 @@ void test("runSparkTask fails blocked Spark mode request jsonEvents instead of c
     const task = graph.createTask({
       projectRef: project.ref,
       title: "Blocked mode task",
-      description: "should not complete on blocked mode request",
+      description: "should complete because child Spark mode markers are session-local",
       roleRef: builtinRoleRef("worker"),
       plan: executionReadyPlan("Blocked mode task"),
     });
@@ -3625,19 +3700,19 @@ void test("runSparkTask fails blocked Spark mode request jsonEvents instead of c
       claim: { sessionId: "session:parent" },
     });
 
-    assert.equal(run.status, "failed");
-    assert.equal(run.failureKind, "runtime_error");
-    assert.match(run.errorMessage ?? "", /blocked Spark mode request: no_selection/);
-    assert.equal(run.completionSummary?.status, "failed");
-    assert.match(run.completionSummary?.summary ?? "", /blocked Spark mode request: no_selection/);
-    assert.equal(graph.getTask(task.ref).status, "failed");
+    assert.equal(run.status, "succeeded");
+    assert.equal(run.failureKind, undefined);
+    assert.equal(run.errorMessage, undefined);
+    assert.equal(run.completionSummary?.status, "succeeded");
+    assert.equal(graph.getTask(task.ref).status, "done");
     assert.equal(graph.getTask(task.ref).claim, undefined);
+    assert.equal(run.outputArtifacts.length, 1);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-void test("runSparkTask fails historical blocked Spark mode request text fallback", async () => {
+void test("runSparkTask succeeds when child role output contains blocked Spark mode text", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-blocked-mode-text-"));
   try {
     const graph = new TaskGraph();
@@ -3645,7 +3720,7 @@ void test("runSparkTask fails historical blocked Spark mode request text fallbac
     const task = graph.createTask({
       projectRef: project.ref,
       title: "Blocked text task",
-      description: "should not complete on blocked mode request text",
+      description: "should complete because child Spark mode markers are session-local",
       roleRef: builtinRoleRef("worker"),
       plan: executionReadyPlan("Blocked text task"),
     });
@@ -3674,10 +3749,58 @@ void test("runSparkTask fails historical blocked Spark mode request text fallbac
       claim: { sessionId: "session:parent" },
     });
 
-    assert.equal(run.status, "failed");
-    assert.equal(run.failureKind, "runtime_error");
-    assert.match(run.errorMessage ?? "", /Spark auto mode selection blocked/);
-    assert.equal(graph.getTask(task.ref).status, "failed");
+    assert.equal(run.status, "succeeded");
+    assert.equal(run.failureKind, undefined);
+    assert.equal(run.errorMessage, undefined);
+    assert.equal(run.completionSummary?.status, "succeeded");
+    assert.equal(graph.getTask(task.ref).status, "done");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("runSparkTask succeeds when child role has task output despite blocked Spark control text", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-blocked-mode-with-output-"));
+  try {
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Control text with output",
+      description: "should complete when actual task output exists",
+      roleRef: builtinRoleRef("worker"),
+      plan: executionReadyPlan("Control text with output"),
+    });
+    const artifactStore = new ArtifactStore({
+      rootDir: join(dir, "artifacts"),
+    });
+    const fakePi = join(dir, "fake-pi.cjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "process.stdout.write('Spark auto mode selection blocked; no_selection\\n');",
+        "process.stdout.write('researched result: useful findings\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    const run = await runSparkTask({
+      graph,
+      taskRef: task.ref,
+      registry: new RoleRegistry(),
+      artifactStore,
+      cwd: dir,
+      dryRun: false,
+      piCommand: fakePi,
+      claim: { sessionId: "session:parent" },
+    });
+
+    assert.equal(run.status, "succeeded");
+    assert.equal(run.failureKind, undefined);
+    assert.equal(graph.getTask(task.ref).status, "done");
+    assert.match(run.completionSummary?.summary ?? "", /researched result/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -3725,6 +3848,58 @@ void test("runSparkTask still succeeds ordinary non-empty role output", async ()
     assert.equal(run.errorMessage, undefined);
     assert.equal(run.completionSummary?.status, "succeeded");
     assert.equal(graph.getTask(task.ref).status, "done");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("runSparkTask summarizes final assistant text instead of raw Pi control JSON", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-final-assistant-summary-"));
+  try {
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Summary output task",
+      description: "final assistant summary should drive completion summary",
+      roleRef: builtinRoleRef("worker"),
+      plan: executionReadyPlan("Summary output task"),
+    });
+    const artifactStore = new ArtifactStore({
+      rootDir: join(dir, "artifacts"),
+    });
+    const fakePi = join(dir, "fake-pi.cjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "process.stdout.write(JSON.stringify({ type: 'session', version: 3 }) + '\\n');",
+        "process.stdout.write(JSON.stringify({ type: 'agent_start' }) + '\\n');",
+        "process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Final scout report: use a mailbox artifact.' }] } }) + '\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    const run = await runSparkTask({
+      graph,
+      taskRef: task.ref,
+      registry: new RoleRegistry(),
+      artifactStore,
+      cwd: dir,
+      dryRun: false,
+      piCommand: fakePi,
+      claim: { sessionId: "session:parent" },
+    });
+
+    assert.equal(run.status, "succeeded");
+    assert.match(run.completionSummary?.summary ?? "", /Final scout report/);
+    assert.doesNotMatch(run.completionSummary?.summary ?? "", /agent_start/);
+    const [artifact] = await artifactStore.list({ kind: "trace" });
+    assert.match(
+      (artifact?.body as { summary?: string } | undefined)?.summary ?? "",
+      /Final scout report/,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

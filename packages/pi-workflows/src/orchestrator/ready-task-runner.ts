@@ -107,7 +107,7 @@ export async function runReadyTasks(input: ReadyTaskRunnerOptions): Promise<Read
           ? undefined
           : {
               sessionId: input.claim?.sessionId,
-              leaseMs: input.claim?.leaseMs ?? timeoutMs,
+              leaseMs: input.claim?.leaseMs,
             },
       })
       .catch((error: unknown) => taskRunRecordedForTaskError(input.graph, task, error))

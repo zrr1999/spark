@@ -1,3 +1,8 @@
+import {
+  LOOP_COMPLETION_BOUNDARY_GUIDANCE,
+  escapeXmlText as escapeLoopXmlText,
+} from "@zendev-lab/pi-loop";
+
 import type { Goal } from "./types.ts";
 
 const CONTINUATION_MARKER_PREFIX = '<spark_goal_continuation goal_id="';
@@ -36,7 +41,7 @@ export function continuationGoalIdFromPrompt(prompt: string): string | null {
 }
 
 export function escapeXmlText(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  return escapeLoopXmlText(value);
 }
 
 export function supersededContinuationMessage(goalId: string): string {
@@ -57,6 +62,9 @@ export function compactContinuationPrompt(goal: Goal): string {
     "",
     "Avoid repeating work that is already done. Choose the next concrete action toward the objective.",
     "",
+    "This goal continuation is layered on the lower-level pi-loop primitive; loop itself is not the completion authority.",
+    LOOP_COMPLETION_BOUNDARY_GUIDANCE,
+    "",
     `Before requesting reviewer-gated completion, audit progress against the objective and call ${goalToolReference("complete")} only when every requirement is verified.`,
     GOAL_TOOL_NAME_GUIDANCE,
     "</spark_goal_continuation>",
@@ -75,6 +83,9 @@ export function continuationPrompt(goal: Goal): string {
     "</untrusted_objective>",
     "",
     "Avoid repeating work that is already done. Choose the next concrete action toward the objective.",
+    "",
+    "This goal continuation is layered on the lower-level pi-loop primitive; loop itself is not the completion authority. Goal completion is added here as a goal-level policy.",
+    LOOP_COMPLETION_BOUNDARY_GUIDANCE,
     "",
     "Before deciding that the goal is achieved, perform a completion audit against the actual current state:",
     "- Restate the objective as concrete deliverables or success criteria.",

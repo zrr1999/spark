@@ -53,6 +53,10 @@ export interface SparkToolContext {
     confirm?: (title: string, message: string) => Promise<boolean>;
     input?: (title: string, defaultValue?: string) => Promise<string | undefined>;
     select?: (title: string, options: string[]) => Promise<string | undefined>;
+    selectWithCustom?: (
+      title: string,
+      input: { options: string[]; customLabel: string },
+    ) => Promise<{ value?: string; customText?: string } | string | undefined>;
     setWidget?: (key: string, cb: unknown, opts?: { placement?: string }) => void;
     setStatus?: (key: string, text: string | undefined) => void;
     setEditorText?: (text: string) => void;

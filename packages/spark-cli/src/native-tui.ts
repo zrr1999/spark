@@ -19,6 +19,7 @@ import type {
   SparkHostCustomMessage,
   SparkHostMessageRenderer,
   SparkHostRenderTheme,
+  SparkHostUiTransport,
 } from "./host/types.ts";
 import {
   createSparkModelPickerFromCustomUi,
@@ -74,6 +75,13 @@ export type SparkNativeResponder = (
 ) => string | Promise<string>;
 
 const MAX_TRANSCRIPT_MESSAGES = 80;
+const MAX_NATIVE_WIDGET_LINES = 12;
+
+interface SparkNativeWidget {
+  key: string;
+  lines: string[];
+  placement: "aboveEditor" | "belowEditor";
+}
 
 export class SparkNativeSession {
   readonly messages: SparkNativeMessage[] = [];
@@ -248,6 +256,21 @@ function isOverlayRequest(value: unknown): value is {
   return typeof value === "object" && value !== null;
 }
 
+function normalizeNativeWidgetLines(key: string, content: unknown): string[] {
+  if (content === undefined || content === null || content === false) return [];
+  const rawLines = Array.isArray(content)
+    ? content.flatMap((line) => String(line).split("\n"))
+    : typeof content === "string"
+      ? content.split("\n")
+      : typeof content === "function"
+        ? [`widget:${key} component factory is not supported by native spark-cli yet`]
+        : [JSON.stringify(content) ?? Object.prototype.toString.call(content)];
+  return rawLines
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .slice(0, MAX_NATIVE_WIDGET_LINES);
+}
+
 export interface SparkNativeTuiAppOptions {
   keybindings?: SparkKeybindings;
   keybindingContext?: SparkKeybindingContext;
@@ -264,6 +287,8 @@ export class SparkNativeTuiApp implements Component, Focusable {
   private readonly keybindingContext: SparkKeybindingContext;
   private cachedWidth?: number;
   private cachedLines?: string[];
+  private readonly statuses = new Map<string, string>();
+  private readonly widgets = new Map<string, SparkNativeWidget>();
   private focusedValue = false;
   private toolsExpanded = false;
   private thinkingExpanded = false;
@@ -320,6 +345,33 @@ export class SparkNativeTuiApp implements Component, Focusable {
       return;
     }
     this.editor.handleInput(data);
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
+  setStatus(key: string, text: string | undefined): void {
+    if (!key) return;
+    if (text === undefined || text.trim() === "") this.statuses.delete(key);
+    else this.statuses.set(key, text);
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
+  setWidget(
+    key: string,
+    content: unknown,
+    options?: { placement?: "aboveEditor" | "belowEditor" },
+  ): void {
+    if (!key) return;
+    const lines = normalizeNativeWidgetLines(key, content);
+    if (lines.length === 0) this.widgets.delete(key);
+    else {
+      this.widgets.set(key, {
+        key,
+        lines,
+        placement: options?.placement ?? "aboveEditor",
+      });
+    }
     this.invalidate();
     this.tui.requestRender();
   }
@@ -431,6 +483,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
     const lines: string[] = [];
     lines.push(truncateToWidth("Spark", width));
     lines.push(truncateToWidth(this.statusLine(), width));
+    lines.push(...this.renderWidgets("aboveEditor", width));
     lines.push("".padEnd(Math.min(width, 80), "─"));
 
     for (const message of this.session.messages) {
@@ -439,6 +492,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
 
     lines.push("".padEnd(Math.min(width, 80), "─"));
     lines.push(...this.editor.render(width));
+    lines.push(...this.renderWidgets("belowEditor", width));
     lines.push(truncateToWidth("Enter submit • Ctrl+C/Ctrl+D exit", width));
 
     this.cachedWidth = width;
@@ -499,6 +553,13 @@ export class SparkNativeTuiApp implements Component, Focusable {
     return lines;
   }
 
+  private renderWidgets(placement: "aboveEditor" | "belowEditor", width: number): string[] {
+    return [...this.widgets.values()]
+      .filter((widget) => widget.placement === placement)
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .flatMap((widget) => widget.lines.map((line) => truncateToWidth(line, width)));
+  }
+
   private toCustomMessage(message: SparkNativeMessage, customType: string): SparkHostCustomMessage {
     return {
       customType,
@@ -509,12 +570,21 @@ export class SparkNativeTuiApp implements Component, Focusable {
   }
 
   private statusLine(): string {
+    const statusSuffix = this.extensionStatusSuffix();
     if (this.session.isProcessing) {
       const queued =
         this.session.queuedCount > 0 ? ` • ${this.session.queuedCount} follow-up queued` : "";
-      return `native pi-tui host • busy${queued}`;
+      return `native pi-tui host • busy${queued}${statusSuffix}`;
     }
-    return "native pi-tui host • idle";
+    return `native pi-tui host • idle${statusSuffix}`;
+  }
+
+  private extensionStatusSuffix(): string {
+    const statuses = [...this.statuses.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([, text]) => text.trim())
+      .filter(Boolean);
+    return statuses.length > 0 ? ` • ${statuses.join(" • ")}` : "";
   }
 
   private messagePrefix(message: SparkNativeMessage): string {
@@ -525,6 +595,32 @@ export class SparkNativeTuiApp implements Component, Focusable {
     if (message.role === "thinking") return "thinking> ";
     return "system> ";
   }
+}
+
+export function createSparkNativeUiTransport(
+  app: SparkNativeTuiApp,
+  session: SparkNativeSession,
+): SparkHostUiTransport {
+  return {
+    notify: (message: string, level?: "info" | "warning" | "error" | "success") =>
+      session.addCustomMessage({
+        customType: "notification",
+        content: `${level ?? "info"}: ${message}`,
+        display: true,
+      }),
+    setStatus: (key, text) => app.setStatus(key, text),
+    setWidget: (key, callback, options) => app.setWidget(key, callback, options),
+    customMessage: (message) =>
+      session.addCustomMessage({
+        customType: message.customType,
+        content:
+          typeof message.content === "string" ? message.content : JSON.stringify(message.content),
+        display: message.display,
+        details: message.details,
+      }),
+    custom: (...args: unknown[]) =>
+      app.custom(args[0] as Parameters<typeof app.custom>[0], args[1]),
+  };
 }
 
 export interface RunNativeSparkTuiOptions {
@@ -565,17 +661,7 @@ export async function runNativeSparkTui(input?: string | RunNativeSparkTuiOption
       : undefined,
   });
   if (options.services) {
-    const ui = {
-      notify: (message: string, level?: "info" | "warning" | "error" | "success") =>
-        session.addCustomMessage({
-          customType: "notification",
-          content: `${level ?? "info"}: ${message}`,
-          display: true,
-        }),
-      custom: (...args: unknown[]) =>
-        app.custom(args[0] as Parameters<typeof app.custom>[0], args[1]),
-    };
-    options.services.runtime.setUiTransport(ui);
+    options.services.runtime.setUiTransport(createSparkNativeUiTransport(app, session));
     options.services.modelSelector.setPicker(createSparkModelPickerFromCustomUi(app));
   }
   tui.addChild(app);

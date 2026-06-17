@@ -32,6 +32,7 @@ import {
 } from "./session-todos.ts";
 import { ensureSparkGraphInvariants, isPlaceholderProjectTitle } from "./spark-graph-invariants.ts";
 import { loadSessionGoal } from "./spark-session-goals.ts";
+import { loadSessionLoop } from "./spark-session-loops.ts";
 import { latestRunsByTaskRef, taskPlanSummary } from "./task-display.ts";
 import { deriveTaskRoleLabel, isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 
@@ -83,10 +84,11 @@ export class SparkWidgetController {
     }));
     const project = graph ? await currentSparkProject(cwd, ctx, graph) : undefined;
     const sessionGoal = await loadSessionGoal(cwd, ctx);
+    const sessionLoop = await loadSessionLoop(cwd, ctx);
     if (!graph || !project) {
       this.state = {
         workflowRun: sparkWorkflowRunWidgetEntry(workflowRunStatus),
-        goal: sparkGoalWidgetEntry(sessionGoal),
+        goal: sparkGoalWidgetEntry(sessionGoal, sessionLoop),
         activeLens: ctx?.sparkActiveLens,
         tasks: [],
         independentTodos: numberedIndependentTodos,
@@ -109,7 +111,7 @@ export class SparkWidgetController {
     this.state = {
       projectTitle: isPlaceholderProjectTitle(project.title) ? undefined : project.title,
       workflowRun: sparkWorkflowRunWidgetEntry(workflowRunStatus, project.ref),
-      goal: sparkGoalWidgetEntry(sessionGoal),
+      goal: sparkGoalWidgetEntry(sessionGoal, sessionLoop),
       activeLens: ctx?.sparkActiveLens,
       tasks: allTasks.map((task) => ({
         title: task.title,
@@ -187,9 +189,27 @@ function mapTodoStatus(status: string): SessionTodoEntry["status"] {
   }
 }
 
-function sparkGoalWidgetEntry(sessionGoal: Awaited<ReturnType<typeof loadSessionGoal>>) {
+function sparkGoalWidgetEntry(
+  sessionGoal: Awaited<ReturnType<typeof loadSessionGoal>>,
+  sessionLoop: Awaited<ReturnType<typeof loadSessionLoop>>,
+) {
+  if (sessionGoal && sessionGoal.status !== "complete") {
+    return {
+      kind: "goal" as const,
+      status: sessionGoal.status,
+      objective: compactGoalObjective(sessionGoal.objective),
+    };
+  }
+  if (sessionLoop) {
+    return {
+      kind: "loop" as const,
+      status: sessionLoop.status,
+      objective: compactGoalObjective(sessionLoop.objective),
+    };
+  }
   return sessionGoal
     ? {
+        kind: "goal" as const,
         status: sessionGoal.status,
         objective: compactGoalObjective(sessionGoal.objective),
       }

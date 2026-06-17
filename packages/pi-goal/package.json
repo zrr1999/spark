@@ -18,5 +18,8 @@
   },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@zendev-lab/pi-loop": "workspace:^"
   }
 }

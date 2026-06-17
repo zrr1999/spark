@@ -130,6 +130,7 @@ export async function requestGoalCompletionReview(
   const preReviewBlocker = goalCompletionDeterministicBlocker(
     active.goal.objective,
     reviewContext.projectStatus,
+    reviewContext.evidenceRefs,
   );
   if (preReviewBlocker) {
     const reviewedAt = nowIso();
@@ -193,6 +194,7 @@ export async function requestGoalCompletionReview(
   const postReviewBlocker = goalCompletionDeterministicBlocker(
     active.goal.objective,
     reviewInput.projectStatus,
+    reviewInput.evidenceRefs,
   );
   const effectiveAchieved = verdict.achieved && !postReviewBlocker;
   const reviewSummary = {
@@ -239,20 +241,72 @@ export async function requestGoalCompletionReview(
 function goalCompletionDeterministicBlocker(
   objective: string,
   projectStatus: GoalReviewInput["projectStatus"] | undefined,
+  evidenceRefs: readonly ArtifactRef[],
 ): { reason: string; remainingWork: string; blockers: string[] } | undefined {
-  const unfinished = projectStatus?.taskCounts.unfinished ?? 0;
+  const unfinishedTasks = projectStatus?.unfinishedTasks ?? [];
+  const unfinished = unfinishedTasks.length || (projectStatus?.taskCounts.unfinished ?? 0);
   if (unfinished <= 0) return undefined;
   if (isPlanningOnlyGoalObjective(objective)) return undefined;
-  const readyTasks = projectStatus?.readyTasks ?? [];
+  const relevantUnfinished = unfinishedTasks.filter((task) =>
+    goalObjectiveTaskLikelyRelated(objective, task),
+  );
+  if (evidenceRefs.length > 0 && relevantUnfinished.length === 0) return undefined;
+  const blockingTasks = relevantUnfinished.length > 0 ? relevantUnfinished : unfinishedTasks;
+  const blockingTaskRefs = new Set(blockingTasks.map((task) => task.ref));
+  const readyTasks = (projectStatus?.readyTasks ?? []).filter((task) =>
+    blockingTaskRefs.size === 0 ? true : blockingTaskRefs.has(task.ref),
+  );
   const readyText = readyTasks.length
     ? readyTasks.map((task) => `@${task.name ?? task.ref}: ${task.title}`).join("; ")
     : "no ready task; inspect dependencies";
-  const reason = `Goal completion blocked by ${unfinished} unfinished project task(s).`;
+  const blockedCount = blockingTasks.length || unfinished;
+  const reason = `Goal completion blocked by ${blockedCount} unfinished project task(s).`;
   return {
     reason,
     remainingWork: `${reason} Next ready frontier: ${readyText}. Continue by claiming a ready task with task-local TODOs, or narrow the goal objective if only planning readiness is intended.`,
-    blockers: [`unfinished_project_tasks=${unfinished}`, `ready_frontier=${readyText}`],
+    blockers: [`unfinished_project_tasks=${blockedCount}`, `ready_frontier=${readyText}`],
   };
+}
+
+function goalObjectiveTaskLikelyRelated(
+  objective: string,
+  task: NonNullable<NonNullable<GoalReviewInput["projectStatus"]>["unfinishedTasks"]>[number],
+): boolean {
+  const objectiveTokens = meaningfulGoalTokens(objective);
+  if (objectiveTokens.size === 0) return false;
+  const taskTokens = meaningfulGoalTokens(
+    [task.name, task.title, task.kind].filter((item): item is string => Boolean(item)).join(" "),
+  );
+  for (const token of objectiveTokens) {
+    if (taskTokens.has(token)) return true;
+  }
+  return false;
+}
+
+function meaningfulGoalTokens(value: string): Set<string> {
+  const stopwords = new Set([
+    "active",
+    "complete",
+    "completion",
+    "driver",
+    "foreground",
+    "goal",
+    "implement",
+    "implementation",
+    "project",
+    "ready",
+    "review",
+    "spark",
+    "status",
+    "task",
+    "tasks",
+  ]);
+  return new Set(
+    value
+      .toLocaleLowerCase()
+      .match(/[\p{Letter}\p{Number}]+/gu)
+      ?.filter((token) => token.length >= 4 && !stopwords.has(token)) ?? [],
+  );
 }
 
 function isPlanningOnlyGoalObjective(objective: string): boolean {

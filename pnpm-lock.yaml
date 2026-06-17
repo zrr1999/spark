@@ -134,7 +134,11 @@ importers:
 
   packages/pi-extension-api: {}
 
-  packages/pi-goal: {}
+  packages/pi-goal:
+    dependencies:
+      '@zendev-lab/pi-loop':
+        specifier: workspace:^
+        version: link:../pi-loop
 
   packages/pi-graft:
     dependencies:
@@ -156,6 +160,8 @@ importers:
       typebox:
         specifier: ^1.2.13
         version: 1.2.13
+
+  packages/pi-loop: {}
 
   packages/pi-models:
     dependencies:
@@ -231,6 +237,9 @@ importers:
       '@zendev-lab/pi-learnings':
         specifier: workspace:^
         version: link:../pi-learnings
+      '@zendev-lab/pi-loop':
+        specifier: workspace:^
+        version: link:../pi-loop
       '@zendev-lab/pi-modes':
         specifier: workspace:^
         version: link:../pi-modes

@@ -1,12 +1,11 @@
-import { join } from "node:path";
-
 import type { RunRef } from "@zendev-lab/pi-extension-api";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {
-  sanitizeStoreScope,
-  sparkSessionOwnerKey,
-  type SparkSessionContext,
-} from "./session-identity.ts";
+  legacyHiddenRoleRunInboxStorePath,
+  rebuildSessionIndex,
+  sessionHiddenRoleRunInboxStorePath,
+} from "./session-directory-store.ts";
+import type { SparkSessionContext } from "./session-identity.ts";
 
 export interface HiddenRoleRunInboxState {
   version: 1;
@@ -29,15 +28,23 @@ export async function saveHiddenRoleRunInboxState(
   state: HiddenRoleRunInboxState,
 ): Promise<void> {
   await writeJsonFileAtomic(hiddenRoleRunInboxStorePath(cwd, ctx), state);
+  await rebuildSessionIndex(cwd);
+}
+
+export async function importLegacyHiddenRoleRunInboxState(
+  cwd: string,
+  ctx: SparkSessionContext | undefined,
+): Promise<HiddenRoleRunInboxState | undefined> {
+  const filePath = legacyHiddenRoleRunInboxStorePath(cwd, ctx);
+  const raw = await readJsonFileOptional<Record<string, unknown>>(filePath);
+  if (!raw) return undefined;
+  const state = normalizeHiddenRoleRunInboxState(raw, filePath);
+  await saveHiddenRoleRunInboxState(cwd, ctx, state);
+  return state;
 }
 
 function hiddenRoleRunInboxStorePath(cwd: string, ctx: SparkSessionContext | undefined): string {
-  return join(
-    cwd,
-    ".spark",
-    "background-role-results-inbox",
-    `${sanitizeStoreScope(sparkSessionOwnerKey(ctx))}.json`,
-  );
+  return sessionHiddenRoleRunInboxStorePath(cwd, ctx);
 }
 
 function normalizeHiddenRoleRunInboxState(

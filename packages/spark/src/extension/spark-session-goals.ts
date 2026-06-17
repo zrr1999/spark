@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 
 import { nowIso } from "@zendev-lab/pi-extension-api";
 import { isActiveSessionTodo, type SessionTodoEntry, type TaskGraph } from "@zendev-lab/pi-tasks";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {
-  sanitizeStoreScope,
-  sparkSessionOwnerKey,
-  type SparkSessionContext,
-} from "./session-identity.ts";
+  legacySessionGoalStorePath,
+  rebuildSessionIndex,
+  sessionGoalStorePathV2,
+} from "./session-directory-store.ts";
+import { sparkSessionOwnerKey, type SparkSessionContext } from "./session-identity.ts";
 
 export type SparkSessionGoalStatus = "active" | "paused" | "complete";
 export type SparkSessionGoalSource = "explicit" | "inferred" | "agent" | "reviewer";
@@ -53,8 +53,18 @@ interface SparkSessionGoalSnapshot {
 type SparkProject = ReturnType<TaskGraph["projects"]>[number];
 
 export function sessionGoalStorePath(cwd: string, ctx?: SparkSessionContext): string {
-  const fileName = `${sanitizeStoreScope(sparkSessionOwnerKey(ctx))}.json`;
-  return join(cwd, ".spark", "session-goals", fileName);
+  return sessionGoalStorePathV2(cwd, ctx);
+}
+
+export async function importLegacySessionGoal(
+  cwd: string,
+  ctx?: SparkSessionContext,
+): Promise<SparkSessionGoal | undefined> {
+  const filePath = legacySessionGoalStorePath(cwd, ctx);
+  const snapshot = await loadSessionGoalSnapshotFromPath(filePath, sparkSessionOwnerKey(ctx));
+  if (!snapshot.goal) return undefined;
+  await saveSessionGoalSnapshot(cwd, ctx, snapshot);
+  return snapshot.goal;
 }
 
 export async function loadSessionGoal(
@@ -205,7 +215,13 @@ async function loadSessionGoalSnapshot(
   cwd: string,
   ctx?: SparkSessionContext,
 ): Promise<SparkSessionGoalSnapshot> {
-  const filePath = sessionGoalStorePath(cwd, ctx);
+  return loadSessionGoalSnapshotFromPath(sessionGoalStorePath(cwd, ctx), sparkSessionOwnerKey(ctx));
+}
+
+async function loadSessionGoalSnapshotFromPath(
+  filePath: string,
+  expectedSessionKey: string,
+): Promise<SparkSessionGoalSnapshot> {
   const raw = await readJsonFileOptional<Record<string, unknown>>(filePath);
   if (!raw) return { version: 1 };
   if (raw.version !== 1) throw new JsonStoreFormatError(filePath, "version must be 1");
@@ -214,7 +230,7 @@ async function loadSessionGoalSnapshot(
     goal:
       raw.goal === undefined
         ? undefined
-        : normalizeSessionGoal(raw.goal, filePath, sparkSessionOwnerKey(ctx)),
+        : normalizeSessionGoal(raw.goal, filePath, expectedSessionKey),
   };
 }
 
@@ -224,6 +240,7 @@ async function saveSessionGoalSnapshot(
   snapshot: SparkSessionGoalSnapshot,
 ): Promise<void> {
   await writeJsonFileAtomic(sessionGoalStorePath(cwd, ctx), snapshot);
+  await rebuildSessionIndex(cwd);
 }
 
 function normalizeSessionGoal(

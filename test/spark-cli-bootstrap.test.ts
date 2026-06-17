@@ -154,10 +154,14 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
 
     const response = await submitToSparkAgent(services, "hello");
     assert.equal(response, "boot ok:1");
-    assert.match(captured.systemPrompt ?? "", /Spark mode: research\./);
+    assert.match(captured.systemPrompt ?? "", /native spark-cli host/);
+    assert.doesNotMatch(captured.systemPrompt ?? "", /You are Spark,/);
+    assert.match(captured.systemPrompt ?? "", /Spark default research lens\./);
     assert.match(captured.systemPrompt ?? "", /Tools: task_read, task_write, assign/);
-    assert.match(captured.systemPrompt ?? "", /<builtin_skills>/);
+    assert.match(captured.systemPrompt ?? "", /<base_system_prompts>/);
     assert.match(captured.systemPrompt ?? "", /# Spark/);
+    assert.match(captured.systemPrompt ?? "", /# pi-cue/);
+    assert.match(captured.systemPrompt ?? "", /# pi-graft/);
     assert.match(captured.systemPrompt ?? "", /at most one unfinished claimed task/);
     assert.match(captured.systemPrompt ?? "", /workspace-skill/);
   } finally {

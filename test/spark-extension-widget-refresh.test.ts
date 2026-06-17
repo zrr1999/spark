@@ -115,8 +115,9 @@ void test("Spark extension widget hides acknowledged DAG history and shows actio
         getLeafId: () => "leaf-widget-dag-history",
       },
       ui: {
-        setWidget(_key, cb) {
-          widgetComponent = isWidgetFactory(cb) ? cb(widgetTui, theme) : undefined;
+        setWidget(key, cb) {
+          if (key === "spark-status")
+            widgetComponent = isWidgetFactory(cb) ? cb(widgetTui, theme) : undefined;
         },
       },
     };
@@ -216,8 +217,9 @@ void test("Spark extension widget reconciles stale DAG records when an owned chi
         getLeafId: () => "leaf-widget-dag-reconcile",
       },
       ui: {
-        setWidget(_key, cb) {
-          widgetComponent = isWidgetFactory(cb) ? cb(widgetTui, theme) : undefined;
+        setWidget(key, cb) {
+          if (key === "spark-status")
+            widgetComponent = isWidgetFactory(cb) ? cb(widgetTui, theme) : undefined;
         },
       },
     };
@@ -319,8 +321,9 @@ void test("Spark extension widget shows session goal without project state", asy
         getLeafId: () => "leaf-widget-goal-no-project",
       },
       ui: {
-        setWidget(_key, cb) {
-          widgetComponent = isWidgetFactory(cb) ? cb(widgetTui, theme) : undefined;
+        setWidget(key, cb) {
+          if (key === "spark-status")
+            widgetComponent = isWidgetFactory(cb) ? cb(widgetTui, theme) : undefined;
         },
       },
     };
@@ -368,8 +371,9 @@ void test("Spark session_start creates .spark and shows session goal", async () 
         getLeafId: () => "leaf-session-start-goal",
       },
       ui: {
-        setWidget(_key, cb) {
-          widgetComponent = isWidgetFactory(cb) ? cb(widgetTui, theme) : undefined;
+        setWidget(key, cb) {
+          if (key === "spark-status")
+            widgetComponent = isWidgetFactory(cb) ? cb(widgetTui, theme) : undefined;
         },
       },
     };
@@ -430,7 +434,8 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
       ui: {
         setWidget(key, cb, opts) {
           widgetCalls.push({ key, cb, opts });
-          widgetComponent = isWidgetFactory(cb) ? cb(widgetTui, theme) : undefined;
+          if (key === "spark-status")
+            widgetComponent = isWidgetFactory(cb) ? cb(widgetTui, theme) : undefined;
         },
       },
     };

@@ -101,6 +101,42 @@ export const ARTIFACT_FORMATS = [
   "text",
 ] as const satisfies readonly ArtifactFormat[];
 
+export type ArtifactCurationStatus = "raw" | "candidate" | "curated" | "archived" | "superseded";
+
+export const ARTIFACT_CURATION_STATUSES = [
+  "raw",
+  "candidate",
+  "curated",
+  "archived",
+  "superseded",
+] as const satisfies readonly ArtifactCurationStatus[];
+
+export type ArtifactRetention = "ephemeral" | "task" | "project" | "durable";
+
+export const ARTIFACT_RETENTIONS = [
+  "ephemeral",
+  "task",
+  "project",
+  "durable",
+] as const satisfies readonly ArtifactRetention[];
+
+export interface ArtifactCuration {
+  /** Lifecycle for keeping only the useful artifact essence visible by default. */
+  status: ArtifactCurationStatus;
+  /** Intended retention horizon; storage owners may use it for sweeps. */
+  retention?: ArtifactRetention;
+  /** Human-readable justification for promotion, archive, or supersession. */
+  reason?: string;
+  /** Raw/candidate artifacts folded into this curated artifact. */
+  promotedFrom?: ArtifactRef[];
+  /** Better artifact(s) that replace this one. */
+  supersededBy?: ArtifactRef[];
+  /** Essence/summary artifact that compacted this artifact. */
+  compactedInto?: ArtifactRef;
+  /** Optional expiry for raw/ephemeral artifacts. */
+  expiresAt?: string;
+}
+
 export interface ArtifactTranscriptRetention {
   schemaVersion: 1;
   /** @deprecated Historical role-run retention marker. New retention strategies should use generic execution/run naming. */
@@ -135,6 +171,8 @@ export interface Artifact<T extends JsonValue | string = JsonValue | string> {
   bodySize?: number;
   /** True when `body` contains only a preview and `blobPath` is the full body source. */
   bodyTruncated?: boolean;
+  /** Curation lifecycle used to keep raw evidence from overwhelming default views/search. */
+  curation?: ArtifactCuration;
   /** Audit metadata for historical full transcript blob replacement. */
   transcriptRetention?: ArtifactTranscriptRetention;
   hash?: string;
@@ -168,6 +206,7 @@ export interface PutArtifactInput<T extends JsonValue | string = JsonValue | str
   body: T;
   provenance: Provenance;
   links?: Omit<ArtifactLink, "from">[];
+  curation?: ArtifactCuration;
   ref?: ArtifactRef;
 }
 
@@ -184,6 +223,12 @@ export interface ArtifactQuery {
   roleRef?: string;
   producer?: Provenance["producer"];
   linkedTo?: string;
+  curationStatus?: ArtifactCurationStatus | ArtifactCurationStatus[];
+  retention?: ArtifactRetention;
+  /** Defaults are caller-owned; when false, artifacts explicitly marked raw are hidden. */
+  includeRaw?: boolean;
+  /** Defaults are caller-owned; when false, archived/superseded artifacts are hidden. */
+  includeArchived?: boolean;
 }
 
 export interface ArtifactMetadataCompactionOptions {
@@ -291,6 +336,10 @@ export class ArtifactStore {
       body: input.body,
       links: [...parentLinks, ...(input.links ?? []).map((link) => ({ ...link, from: ref }))],
       provenance: input.provenance,
+      curation:
+        input.curation ??
+        existing?.curation ??
+        defaultArtifactCuration(input.kind, input.provenance),
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
@@ -331,6 +380,7 @@ export class ArtifactStore {
       body: patch.body ?? existing.body,
       provenance: patch.provenance ?? existing.provenance,
       links: patch.links ?? existing.links.map(({ from: _from, ...link }) => link),
+      curation: patch.curation ?? existing.curation,
     });
   }
 
@@ -597,6 +647,7 @@ export function validateArtifact(artifact: unknown): asserts artifact is Artifac
     assertPositiveNumber(artifact.bodySize, "bodySize");
     assertNonEmpty(artifact.blobPath, "blobPath");
   }
+  if (artifact.curation !== undefined) validateArtifactCuration(artifact.curation);
   if (artifact.transcriptRetention !== undefined) {
     validateArtifactTranscriptRetention(artifact.transcriptRetention);
   }
@@ -613,6 +664,14 @@ export function isArtifactKind(value: unknown): value is ArtifactKind {
 
 export function isArtifactFormat(value: unknown): value is ArtifactFormat {
   return ARTIFACT_FORMATS.includes(value as ArtifactFormat);
+}
+
+export function isArtifactCurationStatus(value: unknown): value is ArtifactCurationStatus {
+  return ARTIFACT_CURATION_STATUSES.includes(value as ArtifactCurationStatus);
+}
+
+export function isArtifactRetention(value: unknown): value is ArtifactRetention {
+  return ARTIFACT_RETENTIONS.includes(value as ArtifactRetention);
 }
 
 export function isArtifactLinkRelation(value: unknown): value is ArtifactLink["relation"] {
@@ -640,6 +699,18 @@ export function contentHash(input: string | Uint8Array): string {
 
 export function nowIso(): string {
   return new Date().toISOString();
+}
+
+export function defaultArtifactCuration(
+  kind: ArtifactKind,
+  provenance: Provenance,
+): ArtifactCuration {
+  if (kind === "knowledge") return { status: "curated", retention: "durable" };
+  if (kind === "trace") return { status: "raw", retention: "ephemeral" };
+  if (provenance.producer === "review") return { status: "raw", retention: "task" };
+  if (provenance.producer === "user") return { status: "candidate", retention: "project" };
+  if (kind === "document") return { status: "candidate", retention: "project" };
+  return { status: "raw", retention: "task" };
 }
 
 export async function writeJsonFileAtomic(filePath: string, value: unknown): Promise<void> {
@@ -688,6 +759,21 @@ function validateProvenance(provenance: unknown): void {
       assertRefValue(ref, "artifact", `provenance.parentArtifactRefs[${index}]`),
     );
   }
+}
+
+function validateArtifactCuration(curation: unknown): void {
+  if (!isRecord(curation)) throw new ArtifactValidationError("curation must be an object");
+  if (!isArtifactCurationStatus(curation.status)) {
+    throw new ArtifactValidationError("curation.status must be valid");
+  }
+  if (curation.retention !== undefined && !isArtifactRetention(curation.retention)) {
+    throw new ArtifactValidationError("curation.retention must be valid");
+  }
+  assertOptionalNonEmptyString(curation.reason, "curation.reason");
+  assertOptionalArtifactRefArray(curation.promotedFrom, "curation.promotedFrom");
+  assertOptionalArtifactRefArray(curation.supersededBy, "curation.supersededBy");
+  assertOptionalRefValue(curation.compactedInto, "artifact", "curation.compactedInto");
+  assertOptionalNonEmptyString(curation.expiresAt, "curation.expiresAt");
 }
 
 function validateArtifactTranscriptRetention(retention: unknown): void {
@@ -744,6 +830,20 @@ function matchesQuery(artifact: Artifact, query: ArtifactQuery): boolean {
   if (query.taskRef && artifact.provenance.taskRef !== query.taskRef) return false;
   if (query.roleRef && artifact.provenance.roleRef !== query.roleRef) return false;
   if (query.linkedTo && !artifact.links.some((link) => link.to === query.linkedTo)) return false;
+  if (query.retention && artifact.curation?.retention !== query.retention) return false;
+  if (query.curationStatus) {
+    const statuses = Array.isArray(query.curationStatus)
+      ? query.curationStatus
+      : [query.curationStatus];
+    if (!artifact.curation || !statuses.includes(artifact.curation.status)) return false;
+  }
+  if (query.includeRaw === false && artifact.curation?.status === "raw") return false;
+  if (
+    query.includeArchived === false &&
+    (artifact.curation?.status === "archived" || artifact.curation?.status === "superseded")
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -836,6 +936,12 @@ function assertRefValue(value: unknown, kind: string, label: string): void {
 function assertOptionalRefValue(value: unknown, kind: string, label: string): void {
   if (value === undefined) return;
   assertRefValue(value, kind, label);
+}
+
+function assertOptionalArtifactRefArray(value: unknown, label: string): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) throw new ArtifactValidationError(`${label} must be an array`);
+  value.forEach((entry, index) => assertRefValue(entry, "artifact", `${label}[${index}]`));
 }
 
 function assertString(value: unknown, label: string): void {

@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
+import { defaultTaskGraphStore, TaskGraph } from "@zendev-lab/pi-tasks";
 import { clarifyProjectPurposeIfNeeded } from "../flows/project-purpose-flow.ts";
 import {
   clearCurrentProjectRef,
@@ -8,6 +8,7 @@ import {
   loadSparkGraph,
   saveCurrentProjectRef,
 } from "./session-state.ts";
+import { ensureLocalSparkDirectory } from "./spark-activation.ts";
 import { sparkAskUi } from "./spark-ask-ui.ts";
 import {
   collectSparkProjectSummaries,
@@ -19,7 +20,6 @@ import {
   resolveSparkProject,
   saveProjectPurposeTrace,
 } from "./spark-project-tools.ts";
-import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
 import { normalizeSparkProjectListStatus } from "./spark-status.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 
@@ -150,19 +150,17 @@ export function registerSparkProjectTools(
       description: Type.Optional(
         Type.String({ description: "Description for a newly created project." }),
       ),
+      purpose: Type.Optional(Type.String({ description: "Purpose for a newly created project." })),
       outputLanguage: Type.Optional(
         Type.String({ description: "zh | en for a newly created project." }),
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd;
+      await ensureLocalSparkDirectory(cwd);
       const store = defaultTaskGraphStore(cwd);
-      const graph = await loadSparkGraph(cwd, ctx);
-      if (!graph)
-        return {
-          content: [{ type: "text", text: NO_SPARK_PROJECT_FOUND_HINT }],
-          details: { found: false },
-        };
+      let graph = await loadSparkGraph(cwd, ctx);
+      graph ??= new TaskGraph();
       const input = normalizeSparkNewProjectInput(params);
       let project = resolveSparkProject(graph, input.project);
       let created = false;

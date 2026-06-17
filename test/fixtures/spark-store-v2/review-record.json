@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "reviewRef": "review:demo",
+  "subject": {
+    "kind": "task",
+    "projectRef": "proj:demo",
+    "taskRef": "task:demo",
+    "ownerPath": "projects/proj-demo/tasks/task-demo/reviews/review-demo.json"
+  },
+  "policy": "required",
+  "status": "resolved",
+  "outcome": "approved",
+  "summary": "Reviewer approved the task completion evidence.",
+  "artifactRefs": ["artifact:review-demo"],
+  "reviewer": {
+    "producer": "review",
+    "roleRef": "role:builtin-reviewer",
+    "runRef": "run:review-demo"
+  },
+  "requestedAt": "2026-06-17T00:00:00.000Z",
+  "resolvedAt": "2026-06-17T00:02:00.000Z",
+  "indexProjection": {
+    "path": "reviews/index.json",
+    "rebuildable": true,
+    "entry": {
+      "reviewRef": "review:demo",
+      "subjectKind": "task",
+      "subjectRef": "task:demo",
+      "ownerPath": "projects/proj-demo/tasks/task-demo/reviews/review-demo.json",
+      "status": "resolved",
+      "updatedAt": "2026-06-17T00:02:00.000Z"
+    }
+  },
+  "legacyImportOnly": [".spark/review-gate.json"]
+}

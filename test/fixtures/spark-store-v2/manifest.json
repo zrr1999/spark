@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "name": "spark-store-v2-contract",
+  "cutover": "hard",
+  "runtimeModeAfterMigration": "v2-only",
+  "canonicalStores": [
+    {
+      "id": "todo-records",
+      "path": ".spark/todos/todos.sqlite",
+      "owner": "pi-tasks",
+      "kind": "canonical",
+      "notes": "Task and session TODO rows are stored here after cutover; this is not a cache."
+    },
+    {
+      "id": "session-directories",
+      "path": ".spark/sessions/<session>/",
+      "owner": "spark",
+      "kind": "canonical",
+      "notes": "Per-session state, goal, loop, and subject-owned goal reviews."
+    },
+    {
+      "id": "project-task-tree",
+      "path": ".spark/projects/<project>/",
+      "owner": "pi-tasks",
+      "kind": "canonical",
+      "notes": "Project, roadmap, dependencies, tasks, task runs, and subject-owned task/project reviews."
+    },
+    {
+      "id": "artifacts",
+      "path": ".spark/artifacts/",
+      "owner": "pi-artifacts",
+      "kind": "canonical",
+      "notes": "Artifact metadata and blobs remain separate; owners store artifact refs only."
+    }
+  ],
+  "rebuildableIndexes": [
+    ".spark/sessions/index.json",
+    ".spark/projects/index.json",
+    ".spark/reviews/index.json",
+    ".spark/cache/index.sqlite"
+  ],
+  "legacyImportOnly": [
+    ".spark/projects.json",
+    ".spark/projects.json.lock/",
+    ".spark/todos/<session>.json",
+    ".spark/todos.json",
+    ".spark/sessions/<owner>.json",
+    ".spark/session-goals/<session>.json",
+    ".spark/session-loops/<session>.json",
+    ".spark/session-todos/<session>.json",
+    ".spark/todo-display-numbers/<session>.json",
+    ".spark/review-gate.json"
+  ],
+  "doctorRules": [
+    "dry-run reports V1 sources, V2 targets, conflicts, and cutover readiness",
+    "migration creates backup, imports once, rebuilds indexes, validates invariants, and records cutover marker",
+    "runtime after cutover fails with migration_required or cutover_incomplete instead of falling back to V1",
+    "runtime must not dual-write V1 and V2 stores"
+  ]
+}

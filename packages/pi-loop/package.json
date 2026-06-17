@@ -1,0 +1,21 @@
+{
+  "name": "@zendev-lab/pi-loop",
+  "version": "0.1.0",
+  "description": "Generic non-completing loop lifecycle, tick, and continuation prompt primitives for Pi extensions.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  }
+}

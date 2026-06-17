@@ -1,7 +1,7 @@
 {
   "name": "@zendev-lab/spark",
   "version": "0.1.0",
-  "description": "High-level /spark facade for Pi.",
+  "description": "High-level Spark command and policy facade for Pi.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [
@@ -26,6 +26,7 @@
     "@zendev-lab/pi-extension-api": "workspace:^",
     "@zendev-lab/pi-goal": "workspace:^",
     "@zendev-lab/pi-learnings": "workspace:^",
+    "@zendev-lab/pi-loop": "workspace:^",
     "@zendev-lab/pi-modes": "workspace:^",
     "@zendev-lab/pi-roles": "workspace:^",
     "@zendev-lab/pi-tasks": "workspace:^",

@@ -1,6 +1,6 @@
 # pi-goal
 
-Generic durable goal state, usage accounting, and continuation prompt primitives for Pi extensions.
+Generic durable goal state, usage accounting, and continuation prompt primitives for Pi extensions, layered on `@zendev-lab/pi-loop`.
 
 Spark uses this package for project-bound `/goal` mode, but `@zendev-lab/pi-goal` does not own Spark commands, task scheduling, workflow runs, or widget policy. Historical serialized marker strings such as `"spark-goal"` remain stable for on-disk compatibility and are not package ownership markers.
 
@@ -8,6 +8,7 @@ This package vendors and rewrites selected MIT-licensed ideas from `pi-codex-goa
 
 Responsibilities:
 
+- layer goal objective/status/completion policy on lower-level non-completing `pi-loop` continuation primitives
 - model generic goal state and usage accounting
 - reconstruct goal state from session custom entries
 - render goal summaries and continuation prompts
@@ -24,6 +25,7 @@ Lifecycle semantics:
 
 Non-responsibilities:
 
+- does not make `pi-loop` a completion authority; loop can continue/wait/block/pause, while goal adds reviewer-gated completion policy
 - does not parse or run workflow scripts (`@zendev-lab/pi-workflows`)
 - does not schedule ready tasks or own workflow-run state (`@zendev-lab/pi-workflows`)
 - does not register Pi tools or slash commands (`@zendev-lab/spark` extension facade)
