@@ -34,7 +34,7 @@ void test("pi-workflows package stays isolated from runtime execution packages",
 void test("Spark production code uses generic pi-workflows imports instead of compatibility aliases", async () => {
   const sourceFiles = await listTypeScriptFiles("packages/spark/src");
   const deprecatedPiWorkflowImports =
-    /import\s+(?:type\s+)?\{[^}]*\b(?:defaultSparkDagRunStore|defaultWorkflowRunStore|workspaceWorkflowDir|SparkDag\w*|SparkWorkflow\w*|sparkDagRunNextSteps|runReadySparkTasks)\b[^}]*\}\s+from\s+["']pi-workflows["']/su;
+    /import\s+(?:type\s+)?\{[^}]*\b(?:defaultSparkDagRunStore|defaultWorkflowRunStore|workspaceWorkflowDir|SparkDag\w*|SparkWorkflow\w*|sparkDagRunNextSteps|runReadySparkTasks)\b[^}]*\}\s+from\s+["'](?:@zendev-lab\/)?pi-workflows["']/su;
   for (const file of sourceFiles) {
     const source = await readFile(file, "utf8");
     assert.doesNotMatch(

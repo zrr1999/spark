@@ -116,25 +116,3 @@ export interface WorkflowRunResult<T = unknown> {
   agentCount: number;
   journal: WorkflowJournalEntry[];
 }
-
-/** @deprecated Spark-named aliases are compatibility shims. Prefer Workflow* types in generic pi-workflows code; Spark-owned adapters may translate names at package boundaries. */
-export type SparkWorkflowPhase = WorkflowPhase;
-export type SparkWorkflowMeta = WorkflowMeta;
-export type SparkWorkflowJournalEntry = WorkflowJournalEntry;
-export type SparkWorkflowPhaseStatus = WorkflowPhaseStatus;
-export type SparkWorkflowPhaseOptions = WorkflowPhaseOptions;
-export type SparkWorkflowPhaseRun = WorkflowPhaseRun;
-export type SparkWorkflowAgentOptions = WorkflowAgentOptions;
-export type SparkWorkflowParallelOnError = WorkflowParallelOnError;
-export type SparkWorkflowParallelRetryOptions = WorkflowParallelRetryOptions;
-export type SparkWorkflowParallelOptions = WorkflowParallelOptions;
-export type SparkWorkflowParallelSettledResult<T> = WorkflowParallelSettledResult<T>;
-export type SparkWorkflowAgentDeliveryStatus = WorkflowAgentDeliveryStatus;
-export type SparkWorkflowAgentDeliverySummary = WorkflowAgentDeliverySummary;
-export type SparkWorkflowArtifactRecordInput = WorkflowArtifactRecordInput;
-export type SparkWorkflowArtifactRecordResult = WorkflowArtifactRecordResult;
-export type SparkWorkflowArtifactRecorder = WorkflowArtifactRecorder;
-export type SparkWorkflowAgentEvent = WorkflowAgentEvent;
-export type SparkWorkflowAgentRunner = WorkflowAgentRunner;
-export type SparkWorkflowRunOptions = WorkflowRunOptions;
-export type SparkWorkflowRunResult<T = unknown> = WorkflowRunResult<T>;

@@ -52,8 +52,8 @@ export function renderSparkBackgroundRunsText(
   options: { includeDetails: boolean },
 ): string {
   const lines: string[] = [];
-  const activeRunRef = details.summary.activeDagRunRef;
-  const problem = details.dagRuns.find(
+  const activeRunRef = details.summary.activeRunRef;
+  const problem = details.runs.find(
     (run) =>
       (run.status === "failed" || run.status === "stale" || run.status === "timed_out") &&
       !run.acknowledgedAt,
@@ -88,7 +88,7 @@ export function renderSparkBackgroundRunsText(
       lines.push(
         `  Role: ${child.roleRef ? shortRoleLabel(child.roleRef) : "unknown"}${child.pid ? ` pid=${child.pid}` : ""}${child.startedAt ? ` started=${child.startedAt}` : ""}`,
       );
-    if (child.dagRunRef) lines.push(`  Workflow run: ${child.dagRunRef}`);
+    if (child.workflowRunRef) lines.push(`  Workflow run: ${child.workflowRunRef}`);
     if (child.claimKind)
       lines.push(
         `  Claim: ${child.claimKind}${child.ownerSessionId ? ` owner=${child.ownerSessionId}` : ""}`,
@@ -142,7 +142,7 @@ export function renderSparkBackgroundRunsText(
     for (const child of details.childRuns) lines.push(renderBackgroundChildListLine(child));
   }
   if (options.includeDetails) {
-    for (const run of details.dagRuns) {
+    for (const run of details.runs) {
       lines.push(
         `  Workflow run ${run.runRef}: ${run.status} scheduled=${run.scheduled} completed=${run.completed} incomplete=${run.incompleteTaskRefs.join(",") || "none"}`,
       );

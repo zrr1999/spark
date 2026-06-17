@@ -34,10 +34,26 @@ export interface TaskReviewInput {
   forkFromSession?: string;
 }
 
+export interface GoalReviewEvidencePreview {
+  ref: ArtifactRef;
+  title?: string;
+  kind?: string;
+  format?: string;
+  provenance?: Record<string, unknown>;
+  bodyPreview?: string;
+  error?: string;
+}
+
 export interface GoalReviewInput {
   targetKind: "goal";
   cwd: string;
   projectRef?: ProjectRef;
+  currentProjectSelected?: boolean;
+  projectEvidenceSource?:
+    | "current_project"
+    | "project_evidence_fallback"
+    | "session_todo_disposition"
+    | "none";
   projectStatus?: {
     ref: ProjectRef;
     title: string;
@@ -64,6 +80,7 @@ export interface GoalReviewInput {
   reason?: string;
   proposedObjective?: string;
   evidenceRefs: ArtifactRef[];
+  evidencePreviews?: GoalReviewEvidencePreview[];
   sessionKey?: string;
   forkFromSession?: string;
 }
@@ -109,7 +126,19 @@ export interface ReviewerRunResult {
   record: ReviewerRunRecord;
 }
 
-const REVIEWER_INTERACTIVE_TOOLS = new Set(["ask", "ask_user", "ask_flow"]);
+const REVIEWER_FORBIDDEN_TOOLS = new Set([
+  "ask",
+  "ask_user",
+  "ask_flow",
+  "task",
+  "task_write",
+  "goal",
+  "assign",
+  "role",
+  "workflow",
+  "graft_patch",
+  "patch",
+]);
 
 export interface AskAutoAnswerInput {
   cwd: string;
@@ -209,7 +238,7 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
       instruction: renderReviewerInstruction(input),
       runGuidance: REVIEWER_JSON_SCHEMA,
       allowedTools: reviewerGateAllowedTools(role.allowedTools),
-      mode: "fresh",
+      launch: "fresh",
       sessionDir: this.#sessionDir,
       piCommand: this.#piCommand,
       cwd: input.cwd || this.#cwd,
@@ -250,21 +279,26 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
       userStore: defaultUserRoleModelSettingsStore(),
     });
     const resolvedModel = this.#model ?? roleModel?.model ?? this.#sessionModel;
-    const result = await runRole({
-      runRef: runRef as `run:${string}`,
-      roleRef: role.ref as `role:${string}`,
-      systemPrompt: buildReadOnlyReviewerSystemPrompt(role.systemPrompt),
-      model: resolvedModel,
-      instruction: renderAskAutoAnswerInstruction(input),
-      runGuidance: ASK_AUTO_ANSWER_JSON_SCHEMA,
-      allowedTools: reviewerGateAllowedTools(role.allowedTools),
-      mode: "fresh",
-      sessionDir: this.#sessionDir,
-      piCommand: this.#piCommand,
-      cwd: input.cwd || this.#cwd,
-      timeoutMs: this.#timeoutMs,
-      signal,
-    });
+    let result: RoleRunResult;
+    try {
+      result = await runRole({
+        runRef: runRef as `run:${string}`,
+        roleRef: role.ref as `role:${string}`,
+        systemPrompt: buildReadOnlyReviewerSystemPrompt(role.systemPrompt),
+        model: resolvedModel,
+        instruction: renderAskAutoAnswerInstruction(input),
+        runGuidance: ASK_AUTO_ANSWER_JSON_SCHEMA,
+        allowedTools: reviewerGateAllowedTools(role.allowedTools),
+        launch: "fresh",
+        sessionDir: this.#sessionDir,
+        piCommand: this.#piCommand,
+        cwd: input.cwd || this.#cwd,
+        timeoutMs: this.#timeoutMs,
+        signal,
+      });
+    } catch (error) {
+      return { blocked: true, reason: `reviewer role run blocked: ${unknownErrorMessage(error)}` };
+    }
     if (result.record.status !== "succeeded")
       return { blocked: true, reason: `reviewer role run ${result.record.status}` };
     return parseAskAutoAnswerResult(result.stdout);
@@ -278,7 +312,7 @@ export function buildReadOnlyReviewerSystemPrompt(basePrompt: string): string {
     "Spark reviewer gate constraints:",
     "- Read-only verdict role: inspect the provided state/evidence only.",
     "- Do not mutate tasks, goals, files, artifacts, recall, learning, asks, or project state.",
-    "- Do not call task.finish, task.plan, task.claim, goal update, file edit, write, memory, recall, ask, or learning mutation tools.",
+    "- Do not call task_write, goal update, assign, role, workflow, file edit, write, memory, recall, ask, or learning mutation tools.",
     "- Never ask interactively. If a question is required, return outcome=needs_changes or outcome=blocked and put the concrete question in findings/blockers.",
     "- Return verdict JSON only; the Spark tool that invoked you will apply any state transition.",
   ]
@@ -301,6 +335,8 @@ export function renderReviewerInstruction(input: ReviewInput): string {
       : {
           targetKind: input.targetKind,
           projectRef: input.projectRef,
+          currentProjectSelected: input.currentProjectSelected,
+          projectEvidenceSource: input.projectEvidenceSource,
           projectStatus: input.projectStatus,
           goalId: input.goalId,
           objective: input.objective,
@@ -309,12 +345,14 @@ export function renderReviewerInstruction(input: ReviewInput): string {
           reason: input.reason,
           proposedObjective: input.proposedObjective,
           evidenceRefs: input.evidenceRefs,
+          evidencePreviews: input.evidencePreviews,
           sessionKey: input.sessionKey,
         };
   return [
     "Review this Spark state transition request.",
     "Approve only if the provided evidence and current packet satisfy the requested state transition.",
     "For requestedStatus=complete, approve only when the objective is achieved; set achieved accordingly.",
+    'For requestedStatus=complete, a goal may complete without a current project only when evidenceRefs/projectStatus directly cover the objective. Otherwise, currentProjectSelected=false or projectEvidenceSource=project_evidence_fallback means the next step is research/plan: create/select a project with task_write({ action: "project_use", title, description }) and plan concrete tasks with task_write({ action: "plan" }); never use "no current project", "project cleared", or "all historical tasks are done" as the completion rationale.',
     "If projectStatus.taskCounts.unfinished > 0, default to needs_changes unless the objective explicitly says this is planning-only/readiness-only and does not ask for project/task implementation completion.",
     "When unfinished project work remains, include concrete remainingWork using projectStatus.readyTasks and unfinishedTasks instead of treating planning evidence as implementation completion.",
     "For requestedStatus=paused, reject main-agent autonomous pauses; blockers should be resolved by doing or planning blocking work, not by pausing the goal.",
@@ -400,7 +438,7 @@ function normalizeReviewerVerdictObject(value: Record<string, unknown>): ReviewV
 }
 
 function reviewerGateAllowedTools(allowedTools: string[] | undefined): string[] | undefined {
-  return allowedTools?.filter((tool) => !REVIEWER_INTERACTIVE_TOOLS.has(tool));
+  return allowedTools?.filter((tool) => !REVIEWER_FORBIDDEN_TOOLS.has(tool));
 }
 
 function roleRunRecord(

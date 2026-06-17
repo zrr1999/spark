@@ -4,11 +4,15 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promise
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
 
-export type RoleSource = "builtin" | "project" | "user";
-export type RoleOriginKind = "manual" | "generated" | "builtin";
+export type RoleSource = "builtin" | "extension" | "project" | "user";
+export type WritableRoleSource = "project" | "user";
+export type RoleOriginKind = "manual" | "generated" | "builtin" | "extension";
 export type RoleRef = `role:${string}`;
 export type RoleRunRef = `run:${string}`;
-export type RoleRunMode = "fresh" | "forked";
+export type RoleLaunchMode = "fresh" | "forked";
+
+export const ROLE_RUN_DEPTH_ENV = "PI_ROLE_DEPTH";
+export const DEFAULT_ROLE_RUN_DEPTH = 4;
 
 export interface RoleOrigin {
   kind: RoleOriginKind;
@@ -31,7 +35,7 @@ export interface RoleSpec {
 export interface RoleSpecProposal {
   artifactRef?: string;
   id: string;
-  source?: Exclude<RoleSource, "builtin">;
+  source?: WritableRoleSource;
   description: string;
   systemPrompt: string;
   rationale: string;
@@ -69,7 +73,7 @@ export interface RoleRunRecord {
 export interface RoleRunRequest {
   roleRef: RoleRef;
   instruction: string;
-  mode?: RoleRunMode;
+  launch?: RoleLaunchMode;
   systemPrompt?: string;
   /** Concrete, user-confirmed Pi model to use for this run. */
   model?: string;
@@ -92,13 +96,14 @@ export interface RoleRunLauncherInput extends RoleRunCommandInput {
   timeoutMs?: number;
   signal?: AbortSignal;
   now?: () => string;
+  env?: NodeJS.ProcessEnv;
   onChildProcess?: (child: ChildProcess, startedAt: string) => void;
   onTimeout?: () => void;
 }
 
 export interface RoleRunResult {
   record: RoleRunRecord & {
-    mode: RoleRunMode;
+    launch: RoleLaunchMode;
     model?: string;
     sessionDir?: string;
     forkFromSession?: string;
@@ -113,23 +118,36 @@ export interface RoleRunResult {
 export interface ActiveRoleRun {
   ref: RoleRunRef;
   roleRef: RoleRef;
-  mode: RoleRunMode;
+  launch: RoleLaunchMode;
   model?: string;
   child: ChildProcess;
   startedAt: string;
   cancel(reason?: string): boolean;
 }
 
-export const builtinRoleIds = ["scout", "planner", "worker", "reviewer", "oracle"] as const;
+export const builtinRoleIds = ["scout", "worker", "reviewer"] as const;
 export type BuiltinRoleId = (typeof builtinRoleIds)[number];
+
+export const ROLE_CAPABILITY_VOCAB = ["read", "write", "exec", "net", "interact", "spawn"] as const;
+export type RoleCapability = (typeof ROLE_CAPABILITY_VOCAB)[number];
+
+export const BUILTIN_ROLE_CAPABILITY_PROFILES = {
+  scout: ["read", "net"],
+  reviewer: ["read", "net", "exec"],
+  worker: ["read", "net", "exec", "write"],
+} as const satisfies Record<BuiltinRoleId, readonly RoleCapability[]>;
 
 export interface DefaultRoleRegistryOptions {
   now?: string;
 }
 
-const ROLE_OBSERVATION_TOOLS = ["context", "learning", "artifact", "task"] as const;
-const ROLE_INTERACTIVE_TOOLS = ["ask"] as const;
-const ROLE_CONTEXT_TOOLS = [...ROLE_OBSERVATION_TOOLS, ...ROLE_INTERACTIVE_TOOLS] as const;
+const ROLE_READ_TOOLS = ["read", "grep", "find", "ls", "context"] as const;
+const ROLE_NET_TOOLS = [
+  "web_search",
+  "code_search",
+  "fetch_content",
+  "get_search_content",
+] as const;
 const ROLE_EXECUTION_TOOLS = [
   "cue_exec",
   "cue_run",
@@ -138,6 +156,30 @@ const ROLE_EXECUTION_TOOLS = [
   "script_eval",
   "cue_jobs",
 ] as const;
+const ROLE_WRITE_TOOLS = ["edit", "write"] as const;
+
+const ROLE_TOOLS_BY_CAPABILITY = {
+  read: ROLE_READ_TOOLS,
+  write: ROLE_WRITE_TOOLS,
+  exec: ROLE_EXECUTION_TOOLS,
+  net: ROLE_NET_TOOLS,
+  interact: ["ask", "ask_user", "ask_flow"],
+  spawn: ["role", "assign"],
+} as const satisfies Record<RoleCapability, readonly string[]>;
+
+const FORBIDDEN_BUILTIN_ROLE_TOOLS = new Set([
+  "ask",
+  "ask_user",
+  "ask_flow",
+  "task",
+  "task_read",
+  "task_write",
+  "goal",
+  "role",
+  "assign",
+  "workflow",
+  "graft_patch",
+]);
 
 const ROLE_FRONTMATTER_KEYS = new Set([
   "id",
@@ -162,7 +204,7 @@ export function roleRefId(ref: string): string {
 }
 
 export function roleIdFromRef(ref: string): string {
-  return roleRefId(normalizeRoleRef(ref)).replace(/^(builtin-|project-|user-)/, "");
+  return roleRefId(normalizeRoleRef(ref)).replace(/^(builtin-|extension-|project-|user-)/, "");
 }
 
 export function builtinRoleRef(id: BuiltinRoleId): RoleRef {
@@ -178,49 +220,35 @@ export function normalizeRoleRef(value: string): RoleRef {
 
 export function normalizeRoleSource(value: unknown): RoleSource | undefined {
   if (value === "builtin") return "builtin";
+  if (value === "extension") return "extension";
   if (value === "project") return "project";
   if (value === "user") return "user";
   return undefined;
 }
 
 export function createBuiltinRoles(now = nowIso()): RoleSpec[] {
-  return [
+  const roles = [
     builtin(
       "scout",
       "Fast repo and context reconnaissance.",
-      "You are a Pi scout. Gather context, identify relevant files and risks, do not edit files, use the available ask tool for real ambiguities/blockers instead of only listing questions when a user decision is needed, and flag obviously placeholder/generic/stale project or task names so the host can safely improve them without changing refs.",
+      "You are a Pi scout. Gather context, identify relevant files and risks, and do not edit files. When a blocker, missing user decision, or ambiguity cannot be resolved from available context, report the blocker and the exact question needed upward in your final response instead of asking interactively. Flag clearly placeholder/generic/stale project or task names so the host can safely improve them without changing refs.",
       now,
-      ROLE_CONTEXT_TOOLS,
-    ),
-    builtin(
-      "planner",
-      "Turns context into concrete task plans.",
-      "You are a Pi planner. Produce concrete plans and dependencies without editing files, use the available ask tool for real ambiguities/blockers instead of only listing questions when a user decision is needed, treat user-reported repo behavior changes as implementation work rather than memory-only updates, and flag obviously placeholder/generic/stale project or task display names only when the new name is clear and refs stay stable.",
-      now,
-      ROLE_CONTEXT_TOOLS,
     ),
     builtin(
       "worker",
       "Executes approved implementation tasks.",
-      "You are a Pi worker. Implement only the assigned instruction, use the available ask tool for blockers or missing requirements instead of only reporting questions, and when the user reports a concrete repo behavior change, fix the implementation instead of only recording a preference. Flag obviously placeholder/generic/stale project or claimed-task @name/title when the current intent makes the better name clear while preserving refs and intentional user names.",
+      "You are a Pi worker. Implement only the assigned instruction. When a blocker, missing requirement, approval need, or ambiguity cannot be resolved from available context, stop and report the blocker and the exact question needed upward in your final response instead of asking interactively. When the user reports a concrete repo behavior change, fix the implementation instead of only recording a preference. Flag clearly placeholder/generic/stale project or claimed-task @name/title when the current intent makes the better name clear while preserving refs and intentional user names.",
       now,
-      [...ROLE_CONTEXT_TOOLS, ...ROLE_EXECUTION_TOOLS],
     ),
     builtin(
       "reviewer",
       "Reviews results and artifacts against task intent.",
-      "You are a Pi reviewer. Verify claims from fresh context and return actionable findings. Do not ask interactively; when intent or evidence is ambiguous, reject with concrete questions in findings/blockers instead of silently assuming an answer. Call out placeholder/generic/stale project or task names only when a safe improvement is obvious and would preserve refs.",
+      "You are a Pi reviewer. Verify claims from fresh context and return actionable findings. Do not ask interactively; when intent or evidence is ambiguous, reject with concrete questions in findings/blockers instead of silently assuming an answer. Call out placeholder/generic/stale project or task names only when a safe improvement is clear from context and would preserve refs.",
       now,
-      [...ROLE_OBSERVATION_TOOLS, ...ROLE_EXECUTION_TOOLS],
-    ),
-    builtin(
-      "oracle",
-      "Challenges risky decisions before execution.",
-      "You are a Pi oracle. Challenge assumptions, use the available ask tool for missing blocking decisions when a concrete user choice is required, recommend the safest next move without editing files, and preserve intentional project/task names unless a placeholder/generic/stale rename is plainly correct and ref-safe.",
-      now,
-      ROLE_CONTEXT_TOOLS,
     ),
   ];
+  validateBuiltinRoleProfiles(roles);
+  return roles;
 }
 
 export function createDefaultRoleRegistry(options: DefaultRoleRegistryOptions = {}): RoleRegistry {
@@ -228,12 +256,112 @@ export function createDefaultRoleRegistry(options: DefaultRoleRegistryOptions = 
   return new RoleRegistry(createBuiltinRoles(now));
 }
 
+const extensionRoles = new Map<RoleRef, RoleSpec>();
+
+export function createExtensionRoleSpec(
+  input: {
+    id: string;
+    description: string;
+    systemPrompt: string;
+    allowedTools?: string[];
+    origin?: RoleOrigin;
+  },
+  now = nowIso(),
+): RoleSpec {
+  const role: RoleSpec = {
+    ref: createRoleRef("extension", input.id),
+    id: input.id,
+    source: "extension",
+    description: input.description,
+    systemPrompt: input.systemPrompt,
+    allowedTools: input.allowedTools,
+    origin: input.origin ?? { kind: "extension" },
+    createdAt: now,
+    updatedAt: now,
+  };
+  validateRoleSpec(role);
+  return role;
+}
+
+export function registerExtensionRole(role: RoleSpec): void {
+  validateRoleSpec(role);
+  if (role.source !== "extension")
+    throw new Error(`extension role registry only accepts extension roles, got ${role.source}`);
+  extensionRoles.set(role.ref, role);
+}
+
+export function listExtensionRoles(): RoleSpec[] {
+  return [...extensionRoles.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+export function hydrateExtensionRoles(registry: RoleRegistry): void {
+  for (const role of listExtensionRoles()) registry.add(role);
+}
+
+export function builtinRoleAllowedTools(id: BuiltinRoleId): string[] {
+  return uniqueStrings(
+    BUILTIN_ROLE_CAPABILITY_PROFILES[id].flatMap(
+      (capability) => ROLE_TOOLS_BY_CAPABILITY[capability],
+    ),
+  );
+}
+
+export function validateBuiltinRoleProfiles(roles: readonly RoleSpec[]): void {
+  if (ROLE_CAPABILITY_VOCAB.includes("record" as RoleCapability))
+    throw new Error("builtin role capability vocab must not include record");
+  const vocabulary = new Set<RoleCapability>(ROLE_CAPABILITY_VOCAB);
+  for (const id of builtinRoleIds) {
+    const profile = BUILTIN_ROLE_CAPABILITY_PROFILES[id];
+    for (const capability of profile) {
+      if (!vocabulary.has(capability))
+        throw new Error(`builtin role ${id} declares unknown capability ${capability}`);
+    }
+    const profileCapabilities: readonly RoleCapability[] = profile;
+    if (profileCapabilities.includes("interact") || profileCapabilities.includes("spawn"))
+      throw new Error(`builtin role ${id} must not include interact or spawn capability`);
+  }
+  assertCapabilitySubset("scout", "reviewer");
+  assertCapabilitySubset("reviewer", "worker");
+
+  const rolesById = new Map(roles.map((role) => [role.id, role]));
+  for (const id of builtinRoleIds) {
+    const role = rolesById.get(id);
+    if (!role) throw new Error(`missing builtin role ${id}`);
+    const expectedTools = builtinRoleAllowedTools(id);
+    const actualTools = role.allowedTools ?? [];
+    if (!sameStrings(actualTools, expectedTools))
+      throw new Error(
+        `builtin role ${id} allowedTools must match its capability profile: expected ${expectedTools.join(",")}, got ${actualTools.join(",")}`,
+      );
+    for (const tool of actualTools) {
+      if (FORBIDDEN_BUILTIN_ROLE_TOOLS.has(tool))
+        throw new Error(`builtin role ${id} must not include forbidden tool ${tool}`);
+    }
+  }
+}
+
+function assertCapabilitySubset(left: BuiltinRoleId, right: BuiltinRoleId): void {
+  const rightCapabilities = new Set<RoleCapability>(BUILTIN_ROLE_CAPABILITY_PROFILES[right]);
+  for (const capability of BUILTIN_ROLE_CAPABILITY_PROFILES[left]) {
+    if (!rightCapabilities.has(capability))
+      throw new Error(`builtin role capability profile ${left} must be a subset of ${right}`);
+  }
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values)];
+}
+
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
 function builtin(
   id: BuiltinRoleId,
   description: string,
   systemPrompt: string,
   now: string,
-  allowedTools: readonly string[],
 ): RoleSpec {
   return {
     ref: builtinRoleRef(id),
@@ -241,7 +369,7 @@ function builtin(
     source: "builtin",
     description,
     systemPrompt,
-    allowedTools: [...allowedTools],
+    allowedTools: builtinRoleAllowedTools(id),
     origin: { kind: "builtin" },
     createdAt: now,
     updatedAt: now,
@@ -304,14 +432,14 @@ export interface RoleStore {
 
 export interface MarkdownRoleStoreOptions {
   rootDir: string;
-  source: Exclude<RoleSource, "builtin">;
+  source: WritableRoleSource;
   writable?: boolean;
   originKind?: RoleOriginKind;
 }
 
 export class MarkdownRoleStore implements RoleStore {
   readonly rootDir: string;
-  readonly source: Exclude<RoleSource, "builtin">;
+  readonly source: WritableRoleSource;
   readonly writable: boolean;
   readonly originKind: RoleOriginKind;
 
@@ -662,6 +790,7 @@ export async function hydrateDefaultRoleRegistry(
     includeUser?: boolean;
   } = {},
 ): Promise<void> {
+  hydrateExtensionRoles(registry);
   await defaultProjectRoleStore(cwd).hydrate(registry);
   if (options.includeUser) await defaultUserRoleStore(options.home).hydrate(registry);
 }
@@ -683,6 +812,7 @@ export function createRoleSpec(proposal: RoleSpecProposal, now = nowIso()): Role
 
 export function createRoleRef(source: RoleSource, id: string): RoleRef {
   if (source === "builtin") return `role:builtin-${sanitizeRoleRefPart(id)}`;
+  if (source === "extension") return `role:extension-${sanitizeRoleRefPart(id)}`;
   return `role:${source}-${stableId(id)}`;
 }
 
@@ -757,7 +887,7 @@ function idFromMarkdownPath(rootDir: string, filePath: string): string {
 export function parseRoleSpecMarkdown(
   text: string,
   input: {
-    source: Exclude<RoleSource, "builtin">;
+    source: WritableRoleSource;
     id: string;
     sourcePath?: string;
     originKind?: RoleOriginKind;
@@ -769,7 +899,8 @@ export function parseRoleSpecMarkdown(
   const id =
     stringFrontmatter(frontmatter, "id") ?? stringFrontmatter(frontmatter, "name") ?? input.id;
   const source = normalizeRoleSource(frontmatter.source) ?? input.source;
-  if (source === "builtin") throw new Error("markdown role stores cannot load builtin roles");
+  if (source === "builtin" || source === "extension")
+    throw new Error("markdown role stores cannot load builtin or extension roles");
   const description =
     stringFrontmatter(frontmatter, "description") ?? firstMarkdownParagraph(parsed.body);
   const systemPrompt = parsed.body.trim();
@@ -949,7 +1080,9 @@ function parseOrigin(value: unknown): RoleOrigin | undefined {
 }
 
 function normalizeRoleOriginKind(value: unknown): RoleOriginKind | undefined {
-  return value === "manual" || value === "generated" || value === "builtin" ? value : undefined;
+  return value === "manual" || value === "generated" || value === "builtin" || value === "extension"
+    ? value
+    : undefined;
 }
 
 function firstMarkdownParagraph(body: string): string {
@@ -1021,10 +1154,10 @@ export function cancelRoleRun(runRef: RoleRunRef, reason?: string): boolean {
   return activeRoleRuns.get(runRef)?.cancel(reason) ?? false;
 }
 
-export function normalizeRoleRunMode(value: unknown): RoleRunMode {
+export function normalizeRoleLaunchMode(value: unknown): RoleLaunchMode {
   if (value === undefined || value === null) return "fresh";
   if (value === "fresh" || value === "forked") return value;
-  throw new Error(`unsupported role run mode: ${formatUnknownValue(value)}`);
+  throw new Error(`unsupported role launch mode: ${formatUnknownValue(value)}`);
 }
 
 function formatUnknownValue(value: unknown): string {
@@ -1057,14 +1190,15 @@ export function buildRoleRunPrompt(
 export function buildRoleRunArgs(input: RoleRunCommandInput): string[] {
   if (!input.roleRef) throw new Error("role run roleRef is required");
   if (!input.instruction.trim()) throw new Error("role run instruction is required");
-  const mode = normalizeRoleRunMode(input.mode);
+  const launch = normalizeRoleLaunchMode(input.launch);
   const args = ["--print", "--mode", "json"];
   if (input.model?.trim()) args.push("--model", input.model.trim());
   const allowedTools = normalizedToolAllowlist(input.allowedTools);
   if (allowedTools.length > 0) args.push("--tools", allowedTools.join(","));
   if (input.sessionDir) args.push("--session-dir", input.sessionDir);
-  if (mode === "forked") {
-    if (!input.forkFromSession?.trim()) throw new Error("forked role run requires forkFromSession");
+  if (launch === "forked") {
+    if (!input.forkFromSession?.trim())
+      throw new Error("forked role launch requires forkFromSession");
     args.push("--fork", input.forkFromSession.trim());
   }
   args.push("--append-system-prompt", input.systemPrompt, buildRoleRunPrompt(input));
@@ -1076,13 +1210,34 @@ function normalizedToolAllowlist(value: readonly string[] | undefined): string[]
   return value.map((tool) => tool.trim()).filter(Boolean);
 }
 
+export function roleRunChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const remainingDepth = parseRoleRunDepth(env[ROLE_RUN_DEPTH_ENV]);
+  if (remainingDepth <= 0) {
+    throw new Error(`${ROLE_RUN_DEPTH_ENV} exhausted; refusing to spawn nested role run`);
+  }
+  return {
+    ...env,
+    [ROLE_RUN_DEPTH_ENV]: String(remainingDepth - 1),
+  };
+}
+
+function parseRoleRunDepth(value: string | undefined): number {
+  if (value === undefined || value.trim() === "") return DEFAULT_ROLE_RUN_DEPTH;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) {
+    throw new Error(`${ROLE_RUN_DEPTH_ENV} must be an integer`);
+  }
+  return parsed;
+}
+
 export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResult> {
   if (input.signal?.aborted) throw new RoleRunCancelledError(abortSignalReason(input.signal));
-  const mode = normalizeRoleRunMode(input.mode);
+  const launch = normalizeRoleLaunchMode(input.launch);
   const startedAt = input.now?.() ?? nowIso();
+  const childEnv = roleRunChildEnv(input.env);
   const child = spawn(input.piCommand, buildRoleRunArgs(input), {
     cwd: input.cwd,
-    env: process.env,
+    env: childEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
   input.onChildProcess?.(child, startedAt);
@@ -1095,7 +1250,7 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
   const activeRun: ActiveRoleRun = {
     ref: input.runRef,
     roleRef: input.roleRef,
-    mode,
+    launch,
     model: input.model?.trim() || undefined,
     child,
     startedAt,
@@ -1143,14 +1298,14 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
       record: {
         ref: input.runRef,
         roleRef: input.roleRef,
-        mode,
+        launch,
         model: input.model?.trim() || undefined,
         status: exitCode === 0 ? "succeeded" : "failed",
         instruction: input.instruction,
         startedAt,
         finishedAt: input.now?.() ?? nowIso(),
         sessionDir: input.sessionDir,
-        forkFromSession: mode === "forked" ? input.forkFromSession?.trim() : undefined,
+        forkFromSession: launch === "forked" ? input.forkFromSession?.trim() : undefined,
         errorMessage: exitCode === 0 ? undefined : `pi exited with code ${exitCode ?? "unknown"}`,
       },
       stdout,

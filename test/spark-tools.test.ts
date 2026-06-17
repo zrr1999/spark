@@ -18,7 +18,7 @@ import {
 } from "@zendev-lab/pi-extension-api";
 import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
 import { defaultLearningStore, LearningExportFormatError } from "@zendev-lab/pi-learnings";
-import { defaultSparkDagRunStore } from "../packages/pi-workflows/src/index.ts";
+import { defaultWorkflowRunStore } from "../packages/pi-workflows/src/index.ts";
 import {
   killActiveSparkRoleRunProcesses,
   listActiveSparkRoleRunProcesses,
@@ -39,7 +39,6 @@ import {
   loadCurrentProjectState,
   loadHiddenRoleRunInboxState,
   loadSparkMode,
-  loadSparkRunMode,
   saveCurrentProjectRef,
 } from "../packages/spark/src/extension/session-state.ts";
 import {
@@ -88,11 +87,11 @@ import {
   normalizeStringArray,
 } from "../packages/spark/src/extension/learning-tools.ts";
 import {
-  normalizeSparkDagManagerAction,
-  normalizeSparkDagManagerBoolean,
-  normalizeSparkDagManagerNonNegativeInteger,
-  normalizeSparkDagManagerRunRef,
-} from "../packages/spark/src/extension/spark-dag-manager-tool-registration.ts";
+  normalizeSparkWorkflowRunsAction,
+  normalizeSparkWorkflowRunsBoolean,
+  normalizeSparkWorkflowRunsNonNegativeInteger,
+  normalizeSparkWorkflowRunsRunRef,
+} from "../packages/spark/src/extension/spark-workflow-runs-tool-registration.ts";
 import {
   normalizeSparkNewProjectInput,
   normalizeSparkProjectOptionalString,
@@ -179,7 +178,7 @@ void test("Spark background-run normalizers reject invalid explicit parameters i
 
   assert.throws(
     () => normalizeSparkBackgroundAction("stop"),
-    /action must be status, list, inspect, kill, reconcile, or ack/,
+    /action must be status, list, inspect, kill, reconcile, ack, prune, clear_inactive, or kill_active/,
   );
   assert.throws(() => normalizeOptionalRunRef("child"), /runRef must be a run ref/);
   assert.throws(() => normalizeOptionalRunRef(123), /runRef must be a string/);
@@ -217,41 +216,41 @@ void test("Spark ready-task runner tool normalizers reject invalid explicit para
   );
 });
 
-void test("Spark DAG manager normalizers reject invalid explicit parameters", () => {
-  assert.equal(normalizeSparkDagManagerAction(undefined), "status");
-  assert.equal(normalizeSparkDagManagerAction("prune"), "prune");
+void test("Spark workflow-runs normalizers reject invalid explicit parameters", () => {
+  assert.equal(normalizeSparkWorkflowRunsAction(undefined), "status");
+  assert.equal(normalizeSparkWorkflowRunsAction("prune"), "prune");
   assert.throws(
-    () => normalizeSparkDagManagerAction("acknowledge"),
-    /action must be status, reconcile, ack, clear_inactive, prune, or kill_active/,
+    () => normalizeSparkWorkflowRunsAction("acknowledge"),
+    /action must be status, list, inspect, kill, reconcile, ack, prune, clear_inactive, or kill_active/,
   );
   assert.throws(
-    () => normalizeSparkDagManagerAction(""),
-    /action must be status, reconcile, ack, clear_inactive, prune, or kill_active/,
+    () => normalizeSparkWorkflowRunsAction(""),
+    /action must be status, list, inspect, kill, reconcile, ack, prune, clear_inactive, or kill_active/,
   );
 
-  assert.equal(normalizeSparkDagManagerRunRef(undefined), undefined);
-  assert.equal(normalizeSparkDagManagerRunRef("run:one"), "run:one");
-  assert.throws(() => normalizeSparkDagManagerRunRef("task:one"), /runRef must be a run: ref/);
+  assert.equal(normalizeSparkWorkflowRunsRunRef(undefined), undefined);
+  assert.equal(normalizeSparkWorkflowRunsRunRef("run:one"), "run:one");
+  assert.throws(() => normalizeSparkWorkflowRunsRunRef("task:one"), /runRef must be a run ref/);
 
-  assert.equal(normalizeSparkDagManagerBoolean(undefined, true, "dryRun"), true);
-  assert.equal(normalizeSparkDagManagerBoolean(false, true, "dryRun"), false);
+  assert.equal(normalizeSparkWorkflowRunsBoolean(undefined, true, "dryRun"), true);
+  assert.equal(normalizeSparkWorkflowRunsBoolean(false, true, "dryRun"), false);
   assert.throws(
-    () => normalizeSparkDagManagerBoolean("false", true, "dryRun"),
+    () => normalizeSparkWorkflowRunsBoolean("false", true, "dryRun"),
     /dryRun must be a boolean/,
   );
 
-  assert.equal(normalizeSparkDagManagerNonNegativeInteger(undefined, 10, "keepRecent"), 10);
-  assert.equal(normalizeSparkDagManagerNonNegativeInteger(0, 10, "keepRecent"), 0);
+  assert.equal(normalizeSparkWorkflowRunsNonNegativeInteger(undefined, 10, "keepRecent"), 10);
+  assert.equal(normalizeSparkWorkflowRunsNonNegativeInteger(0, 10, "keepRecent"), 0);
   assert.throws(
-    () => normalizeSparkDagManagerNonNegativeInteger("0", 10, "keepRecent"),
+    () => normalizeSparkWorkflowRunsNonNegativeInteger("0", 10, "keepRecent"),
     /keepRecent must be a finite number/,
   );
   assert.throws(
-    () => normalizeSparkDagManagerNonNegativeInteger(1.5, 10, "keepRecent"),
+    () => normalizeSparkWorkflowRunsNonNegativeInteger(1.5, 10, "keepRecent"),
     /keepRecent must be a non-negative integer/,
   );
   assert.throws(
-    () => normalizeSparkDagManagerNonNegativeInteger(-1, 10, "keepRecent"),
+    () => normalizeSparkWorkflowRunsNonNegativeInteger(-1, 10, "keepRecent"),
     /keepRecent must be a non-negative integer/,
   );
 });
@@ -584,10 +583,12 @@ type TestSparkContext = {
   notifications: TestNotification[];
   selected?: string;
   inputValue?: string;
+  editorText?: string;
   ui: {
     notify: (message: string, level?: "info" | "warning" | "error" | "success") => void;
     setWidget: (key: string, cb: unknown, opts?: { placement?: string }) => void;
     setStatus: (key: string, text: string | undefined) => void;
+    setEditorText?: (text: string) => void;
     confirm: (title: string, message: string) => Promise<boolean>;
     input: (title: string, defaultValue?: string) => Promise<string | undefined>;
     select: (title: string, options: string[]) => Promise<string | undefined>;
@@ -645,13 +646,20 @@ void test("/spark command detects empty, existing, and initialized project modes
     assert.equal(existingRun.messages.length, 0);
     assert.equal(existingRun.customMessages.length, 1);
     assert.doesNotMatch(existingRun.customMessages[0]?.content ?? "", /Spark initialized/);
-    assert.match(existingRun.customMessages[0]?.content ?? "", /Spark plan mode requested/);
-    const existingMessage = await consumeSparkModeContext(existingRun, existingCtx);
+    assert.match(customMessageVisible(existingRun.customMessages[0]), /Spark plan mode requested/);
+    const existingMessage = existingRun.customMessages[0]?.content ?? "";
     assert.match(existingMessage, /## Spark project summary/);
     assert.match(existingMessage, /## Planning mode requirements/);
     assert.match(existingMessage, /Audit existing project structure/);
-    assert.match(existingMessage, /Answer directly for a simple research\/read-and-comment turn/);
-    assert.match(existingMessage, /task\(\{ action: "plan" \}\) only for concrete executable/);
+    assert.match(existingMessage, /Answer directly only when the user explicitly asks/);
+    assert.match(
+      existingMessage,
+      /task_write\(\{ action: "plan" \}\) only for concrete executable/,
+    );
+    assert.match(
+      existingMessage,
+      /clear objectives, dependencies, success criteria, and evidence requirements/,
+    );
     assert.match(existingMessage, /context-specific ask questions/);
     assert.match(existingMessage, /do not use canned intake templates/);
     const existingProjectJson = await readFile(
@@ -665,6 +673,19 @@ void test("/spark command detects empty, existing, and initialized project modes
 
     await writeEmptySparkProject(initializedDir);
     const initializedCtx = testSparkContext(initializedDir, "main");
+    const noCurrentPlanRun = registerSparkToolsForTest();
+    const noCurrentPlanCommand = noCurrentPlanRun.commands.get("plan");
+    assert.ok(noCurrentPlanCommand, "missing /plan command");
+    await noCurrentPlanCommand.handler("Bootstrap a durable project plan", initializedCtx);
+    const noCurrentPlanPrompt = noCurrentPlanRun.customMessages.at(-1)?.content ?? "";
+    assert.match(noCurrentPlanPrompt, /No current project is selected/);
+    assert.match(
+      noCurrentPlanPrompt,
+      /task_write\(\{ action: "project_use", title, description \}\)/,
+    );
+    assert.match(noCurrentPlanPrompt, /then call task_write\(\{ action: "plan" \}\)/);
+    assert.match(noCurrentPlanPrompt, /not an answer-only escape hatch/);
+    assert.doesNotMatch(noCurrentPlanPrompt, /undefined readiness wording/);
     await defaultTaskGraphStore(initializedDir).update(async (graph) => {
       const project = graph.projects()[0];
       assert.ok(project);
@@ -685,32 +706,47 @@ void test("/spark command detects empty, existing, and initialized project modes
     const initializedCommand = initializedRun.commands.get("spark");
     assert.ok(initializedCommand, "missing /spark command");
     await initializedCommand.handler("", initializedCtx);
-    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /Spark plan mode requested/);
     assert.match(
-      await consumeSparkModeContext(initializedRun, initializedCtx),
+      customMessageVisible(initializedRun.customMessages.at(-1)),
+      /Spark plan mode requested/,
+    );
+    assert.match(
+      initializedRun.customMessages.at(-1)?.content ?? "",
       /## Planning mode requirements/,
     );
 
     await initializedCommand.handler("investigate current context", initializedCtx);
     assert.match(
-      initializedRun.customMessages.at(-1)?.content ?? "",
+      customMessageVisible(initializedRun.customMessages.at(-1)),
       /Spark research mode requested/,
     );
     {
-      const researchMsg = await consumeSparkModeContext(initializedRun, initializedCtx);
+      const researchMsg = initializedRun.customMessages.at(-1)?.content ?? "";
       assert.match(researchMsg, /## Research mode requirements/);
-      assert.match(researchMsg, /Do not call task\(\{ action: "plan" \| "claim" \| "finish" \}\)/);
+      assert.match(
+        researchMsg,
+        /Workflow and subagent role runs are execution tools, not session modes/,
+      );
+      assert.match(
+        researchMsg,
+        /Research mode should use subagent role calls plus main-agent synthesis/,
+      );
+      assert.match(researchMsg, /role\(\{ action: "call"/);
+      assert.match(
+        researchMsg,
+        /Do not call task_write\(\{ action: "plan" \| "claim" \| "finish" \}\)/,
+      );
     }
 
     initializedCtx.ui.select = async () =>
       assert.fail("clear /spark execution prompts should not ask for mode");
     await initializedCommand.handler("execute the ready task", initializedCtx);
     assert.match(
-      initializedRun.customMessages.at(-1)?.content ?? "",
+      customMessageVisible(initializedRun.customMessages.at(-1)),
       /Spark implement mode requested/,
     );
     assert.match(
-      await consumeSparkModeContext(initializedRun, initializedCtx),
+      initializedRun.customMessages.at(-1)?.content ?? "",
       /## Implementation mode requirements/,
     );
   } finally {
@@ -742,8 +778,8 @@ void test("bare /spark in an existing project infers a context planning focus", 
       ),
     );
     assert.equal(run.messages.length, 0);
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark plan mode requested/);
-    const message = await consumeSparkModeContext(run, ctx);
+    assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark plan mode requested/);
+    const message = run.customMessages.at(-1)?.content ?? "";
     assert.match(message, /Existing project/);
     assert.match(message, /focused repository for Spark workflow tests/);
     assert.match(message, /infer the current project purpose/);
@@ -774,7 +810,7 @@ void test("/research, /plan, /implement, /goal, and /workflow selector commands 
     );
     assert.match(
       existingCtx.notifications.at(-1)?.message ?? "",
-      /task\(\{ action: "project_use", title, description \}\)/,
+      /task_write\(\{ action: "project_use", title, description \}\)/,
     );
     assert.doesNotMatch(existingCtx.notifications.at(-1)?.message ?? "", /\/spark/);
 
@@ -802,41 +838,51 @@ void test("/research, /plan, /implement, /goal, and /workflow selector commands 
     await executeCommand.handler("Finish the direct execution task", initializedCtx);
     assert.equal(initializedRun.messages.length, 0);
     assert.match(
-      initializedRun.customMessages.at(-1)?.content ?? "",
+      customMessageVisible(initializedRun.customMessages.at(-1)),
       /Spark implement mode requested/,
     );
     assert.match(
       initializedRun.customMessages.at(-1)?.content ?? "",
       /Finish the direct execution task/,
     );
-    const executeMessage = await consumeSparkModeContext(initializedRun, initializedCtx);
+    const executeMessage = initializedRun.customMessages.at(-1)?.content ?? "";
     assert.match(executeMessage, /## Implementation mode requirements/);
     assert.match(executeMessage, /## Implementation focus\nFinish the direct execution task/);
     assert.match(executeMessage, /Claim at most one concrete task/);
     assert.match(executeMessage, /Stop after that task finishes/);
     assert.match(executeMessage, /suggest \/goal/);
     assert.match(executeMessage, /suggest \/workflow/);
+    assert.match(
+      executeMessage,
+      /Workflow and subagent role runs are execution tools, not session modes/,
+    );
+    assert.match(
+      executeMessage,
+      /Implementation mode should use the workflow tool\/runtime boundary/,
+    );
+    assert.match(executeMessage, /workflow\(\{ action: "list" \}\)/);
+    assert.match(executeMessage, /workflow\(\{ action: "read" \}\)/);
     assert.match(executeMessage, /user-facing open question or decision/);
     assert.match(executeMessage, /Do not guess user intent/);
     assert.doesNotMatch(executeMessage, /continue by auto-claiming/);
     assert.equal(
       initializedCtx.notifications.at(-1)?.message,
-      "Spark implement mode: default strategy selected.",
+      "Spark implement mode: one-task lens selected.",
     );
 
     initializedCtx.ui.select = async () =>
       assert.fail("/implement should not open a canned implement-strategy ask");
     await executeCommand.handler("keep going until done", initializedCtx);
-    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /strategy: default/);
+    assert.doesNotMatch(initializedRun.customMessages.at(-1)?.content ?? "", /strategy:/);
     const askedGoalState = JSON.parse(
       await readFile(
         join(initializedDir, ".spark", "sessions", `${ctxSessionStoreScope(initializedCtx)}.json`),
         "utf8",
       ),
-    ) as { executionMode?: { mode?: string; strategy?: string } };
-    assert.equal(askedGoalState.executionMode?.mode, "implement");
-    assert.equal(askedGoalState.executionMode?.strategy, "default");
-    const untilDoneExecutePrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
+    ) as { projectRef?: string; executionMode?: unknown };
+    assert.ok(askedGoalState.projectRef);
+    assert.equal(askedGoalState.executionMode, undefined);
+    const untilDoneExecutePrompt = initializedRun.customMessages.at(-1)?.content ?? "";
     assert.match(untilDoneExecutePrompt, /suggest \/goal/);
     assert.match(untilDoneExecutePrompt, /suggest \/workflow/);
     initializedCtx.ui.select = async () =>
@@ -848,7 +894,7 @@ void test("/research, /plan, /implement, /goal, and /workflow selector commands 
     assert.equal(initializedRun.commands.get("workflow:deep-research"), undefined);
     assert.equal(initializedRun.commands.get("workflow:adversarial-review"), undefined);
     await goalCommand.handler("Finish the queue until done", initializedCtx);
-    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /Spark goal active/);
+    assert.match(customMessageVisible(initializedRun.customMessages.at(-1)), /Spark goal active/);
     assert.doesNotMatch(
       initializedRun.customMessages.at(-1)?.content ?? "",
       /Spark implement mode requested/,
@@ -858,7 +904,7 @@ void test("/research, /plan, /implement, /goal, and /workflow selector commands 
       initializedRun.customMessages.at(-1)?.content ?? "",
       /Finish the queue until done/,
     );
-    const goalPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
+    const goalPrompt = initializedRun.customMessages.at(-1)?.content ?? "";
     assert.match(goalPrompt, /Spark session goal is active/);
     assert.match(goalPrompt, /Finish the queue until done/);
     const goalSessionStateRaw = await readFile(
@@ -884,7 +930,7 @@ void test("/research, /plan, /implement, /goal, and /workflow selector commands 
     assert.equal(sessionAfterGoal.executionMode, undefined);
 
     await goalCommand.handler("", initializedCtx);
-    const inferredGoalPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
+    const inferredGoalPrompt = initializedRun.customMessages.at(-1)?.content ?? "";
     assert.match(inferredGoalPrompt, /Spark foreground goal loop tick/);
     assert.match(inferredGoalPrompt, /Finish the queue until done/);
     assert.doesNotMatch(inferredGoalPrompt, /Advance project/);
@@ -907,9 +953,13 @@ void test("/research, /plan, /implement, /goal, and /workflow selector commands 
     const workflowCommand = initializedRun.commands.get("workflow");
     assert.ok(workflowCommand, "missing /workflow command");
     await workflowCommand.handler("workspace:triage Review with a workflow", initializedCtx);
-    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /strategy: workflow/);
+    assert.match(
+      customMessageVisible(initializedRun.customMessages.at(-1)),
+      /Spark workflow driver requested/,
+    );
+    assert.doesNotMatch(initializedRun.customMessages.at(-1)?.content ?? "", /strategy:/);
     assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /workflow: workspace:triage/);
-    const workflowPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
+    const workflowPrompt = initializedRun.customMessages.at(-1)?.content ?? "";
     assert.match(workflowPrompt, /Workflow selector: workspace:triage/);
     assert.match(workflowPrompt, /Selected saved workflow: workspace:triage/);
     assert.match(workflowPrompt, /Spark workflow runtime and role-run adapter boundaries/);
@@ -925,14 +975,18 @@ void test("/research, /plan, /implement, /goal, and /workflow selector commands 
     initializedCtx.ui.select = async () =>
       assert.fail("/workflow should not open a canned selector ask");
     await workflowCommand.handler("", initializedCtx);
-    assert.match(initializedRun.customMessages.at(-1)?.content ?? "", /strategy: workflow/);
+    assert.match(
+      customMessageVisible(initializedRun.customMessages.at(-1)),
+      /Spark workflow driver requested/,
+    );
+    assert.doesNotMatch(initializedRun.customMessages.at(-1)?.content ?? "", /strategy:/);
     assert.doesNotMatch(
       initializedRun.customMessages.at(-1)?.content ?? "",
       /workflow: workspace:triage/,
     );
-    const autoWorkflowPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
+    const autoWorkflowPrompt = initializedRun.customMessages.at(-1)?.content ?? "";
     assert.match(autoWorkflowPrompt, /No workflow selector was provided/);
-    assert.match(autoWorkflowPrompt, /Agent must choose an existing saved workflow or create/);
+    assert.match(autoWorkflowPrompt, /Select an existing saved workflow or prepare/);
     assert.match(autoWorkflowPrompt, /workflow\(\{ action: "list" \}\)/);
     assert.match(autoWorkflowPrompt, /\.spark\/workflows\/<name>\.js/);
     assert.doesNotMatch(autoWorkflowPrompt, /Workflow selector: workspace:triage/);
@@ -952,9 +1006,9 @@ void test("/research, /plan, /implement, /goal, and /workflow selector commands 
         "```",
       initializedCtx,
     );
-    const inlineWorkflowPrompt = await consumeSparkModeContext(initializedRun, initializedCtx);
+    const inlineWorkflowPrompt = initializedRun.customMessages.at(-1)?.content ?? "";
     assert.match(inlineWorkflowPrompt, /No workflow selector was provided/);
-    assert.match(inlineWorkflowPrompt, /Agent must choose an existing saved workflow or create/);
+    assert.match(inlineWorkflowPrompt, /Select an existing saved workflow or prepare/);
     assert.match(inlineWorkflowPrompt, /\.spark\/workflows\/<name>\.js/);
     assert.doesNotMatch(
       inlineWorkflowPrompt,
@@ -1009,7 +1063,7 @@ void test("latest direct Spark mode replaces older pending hidden mode context",
     await executeCommand.handler("take one task", ctx);
     await planCommand.handler("revise the failed task plan", ctx);
 
-    const hidden = await consumeSparkModeContext(run, ctx);
+    const hidden = run.customMessages.at(-1)?.content ?? "";
     assert.match(hidden, /## Planning mode requirements/);
     assert.match(hidden, /revise the failed task plan/);
     assert.doesNotMatch(hidden, /## Research mode requirements/);
@@ -1054,8 +1108,8 @@ void test("/plan includes active roadmap item context and matches focus to an ex
     await planCommand.handler("Roadmap assisted planning", ctx);
 
     assert.equal(run.messages.length, 0);
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark plan mode requested/);
-    const message = await consumeSparkModeContext(run, ctx);
+    assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark plan mode requested/);
+    const message = run.customMessages.at(-1)?.content ?? "";
     assert.match(message, /Roadmap planning context:/);
     assert.match(message, /Roadmap assisted planning/);
     assert.match(message, /Use roadmap item intent while planning tasks/);
@@ -1090,7 +1144,7 @@ void test("/plan rejects malformed roadmap state without entering planning mode"
     }, /invalid project roadmap: .*\.items must be an array/);
     assert.equal(run.customMessages.length, 0);
     const currentState = await loadCurrentProjectState(dir, ctx);
-    assert.equal(currentState?.planningMode, undefined);
+    assert.equal(currentState, undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -1422,7 +1476,7 @@ void test("/implement stops after one task and only hints the next ready task", 
     const executeCommand = run.commands.get("implement");
     assert.ok(executeCommand, "missing /implement command");
     await executeCommand.handler("work through the ready queue", ctx);
-    const executePrompt = await consumeSparkModeContext(run, ctx);
+    const executePrompt = run.customMessages.at(-1)?.content ?? "";
     assert.match(executePrompt, /Claim at most one concrete task/);
     assert.match(executePrompt, /Stop after that task finishes/);
     assert.doesNotMatch(executePrompt, /continue through ready tasks until blocked/i);
@@ -1484,27 +1538,25 @@ void test("/goal sets a durable session goal instead of execute-mode continuatio
     assert.ok(goalCommand, "missing /goal command");
     assert.equal(run.commands.get("workflow:goal"), undefined);
     await goalCommand.handler("work through the ready queue until done", ctx);
-    const goalPrompt = await consumeSparkModeContext(run, ctx);
+    const goalPrompt = run.customMessages.at(-1)?.content ?? "";
     assert.match(goalPrompt, /Spark session goal is active/);
     assert.match(
       goalPrompt,
-      /Main session mode decision required: choose exactly one of research, plan, or implement/,
+      /Foreground goal tick uses exactly one main session mode: research, plan, or implement/,
     );
-    assert.match(goalPrompt, /state the mode and whether you are staying or switching/);
+    assert.match(goalPrompt, /host selects the starting mode for this turn/);
     assert.match(goalPrompt, /Goal, workflow, subagent role, and role-run are not modes/);
-    assert.match(goalPrompt, /Goal is a meta-mode over research\/plan\/implement/);
-    assert.match(
-      goalPrompt,
-      /prefer subagent role \+ main-agent summary when parallel inspection helps/,
-    );
-    assert.match(
-      goalPrompt,
-      /saved workflow runtime or task run_ready for parallelizable execution when it fits/,
-    );
-    assert.match(goalPrompt, /strategy recommendations, not mandatory steps/);
-    assert.match(goalPrompt, /Goal completion is reviewer-owned/);
+    assert.match(goalPrompt, /Goal is a foreground driver, not a mode/);
+    assert.match(goalPrompt, /Selected Spark mode for goal driver: implement/);
+    assert.doesNotMatch(goalPrompt, /## Goal Mode Requirements/);
+    assert.doesNotMatch(goalPrompt, /## Research mode requirements/);
+    assert.doesNotMatch(goalPrompt, /## Planning mode requirements/);
+    assert.match(goalPrompt, /## Implementation mode requirements/);
+    assert.match(goalPrompt, /## Goal driver guidance/);
+    assert.match(goalPrompt, /Implementation mode should use the workflow tool\/runtime boundary/);
+    assert.match(goalPrompt, /reviewer-gated completion flow/);
+    assert.match(goalPrompt, /main session requests completion/);
     assert.doesNotMatch(goalPrompt, /goal\(\{ action: "complete" \}\).*concise verified reason/);
-    assert.doesNotMatch(goalPrompt, /## Implementation mode requirements/);
     assert.doesNotMatch(run.customMessages.at(-1)?.content ?? "", /strategy: goal/);
     assert.doesNotMatch(run.customMessages.at(-1)?.content ?? "", /workflow: builtin:goal/);
     const goalState = JSON.parse(
@@ -1543,8 +1595,10 @@ void test("/goal without objective dispatches an agent infer instruction without
     const goal = await loadSessionGoal(dir, ctx);
     assert.equal(goal, undefined);
     assert.match(ctx.notifications.at(-1)?.message ?? "", /no active goal/);
-    assert.match(run.customMessages.at(-1)?.content ?? "", /infer it now/);
-    const prompt = await consumeSparkModeContext(run, ctx);
+    assert.match(customMessageVisible(run.customMessages.at(-1)), /infer it now/);
+    assert.equal(run.customMessages.at(-1)?.display, false);
+    assert.equal(run.customMessages.at(-1)?.details?.purpose, "empty-goal-infer");
+    const prompt = run.customMessages.at(-1)?.content ?? "";
     assert.match(prompt, /Spark session goal is not set/);
     assert.match(prompt, /goal\(\{ action: "set"/);
     assert.doesNotMatch(prompt, /Unfinished tasks: \d+\. Ready tasks: \d+/);
@@ -1616,8 +1670,9 @@ void test("/goal restarts without overwriting an existing goal objective", async
     assert.equal(goal?.status, "active");
     assert.equal(goal?.objective, "finish the original queue");
     assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark goal continuing/);
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
-    const goalPrompt = await consumeSparkModeContext(run, ctx);
+    assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
+    assert.equal(run.customMessages.at(-1)?.details?.purpose, "foreground-goal-tick");
+    const goalPrompt = run.customMessages.at(-1)?.content ?? "";
     assert.match(goalPrompt, /Spark foreground goal loop tick/);
     assert.match(goalPrompt, /finish the original queue/);
     assert.doesNotMatch(goalPrompt, /replace with a different goal/);
@@ -1670,7 +1725,7 @@ void test("/goal handles stale inferred project goals after the project is done"
       ctx.notifications.at(-1)?.message ?? "",
       /replaced a stale completed-project goal/,
     );
-    const goalPrompt = await consumeSparkModeContext(run, ctx);
+    const goalPrompt = run.customMessages.at(-1)?.content ?? "";
     assert.match(goalPrompt, /Spark session goal is active/);
     assert.match(goalPrompt, /review 全盘代码进行改进/);
     assert.doesNotMatch(goalPrompt, /Unfinished tasks: 3/);
@@ -1801,12 +1856,12 @@ void test("/goal foreground loop reschedules active goal on session_start", asyn
     await flushAsyncWork();
 
     assert.ok(restartedRun.customMessages.length > messageCountBeforeTick);
-    assert.match(restartedRun.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
+    assert.match(customMessageVisible(restartedRun.customMessages.at(-1)), /Spark goal tick/);
     assert.equal(restartedRun.customMessages.at(-1)?.display, false);
     assert.equal(restartedRun.customMessages.at(-1)?.options?.deliverAs, "followUp");
-    const tickPrompt = await consumeSparkModeContext(restartedRun, ctx);
+    const tickPrompt = restartedRun.customMessages.at(-1)?.content ?? "";
     assert.match(tickPrompt, /Spark foreground goal loop tick/);
-    assert.match(tickPrompt, /reviewer-owned/i);
+    assert.match(tickPrompt, /reviewer-gated completion flow/i);
     assert.doesNotMatch(tickPrompt, /call goal\(\{ action: "complete" \}\)/);
   } finally {
     if (restartedRun) {
@@ -1870,7 +1925,7 @@ void test("/goal foreground loop does not duplicate awaiting continuations", asy
 
     timers[0]?.callback();
     await flushAsyncWork();
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
+    assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
     const messageCountAfterTick = run.customMessages.length;
 
     for (const handler of run.eventHandlers.get("session_start") ?? []) {
@@ -1943,7 +1998,7 @@ void test("/goal foreground loop cancels scheduled tick when a user turn starts"
 
     assert.equal(timers[0]?.cleared, true, "user turns clear the scheduled goal tick timer");
     assert.equal(
-      run.customMessages.some((message) => /Spark goal tick/.test(message.content)),
+      run.customMessages.some((message) => /Spark goal tick/.test(customMessageVisible(message))),
       false,
     );
 
@@ -1954,7 +2009,7 @@ void test("/goal foreground loop cancels scheduled tick when a user turn starts"
     assert.equal(timers.length, 2, "ordinary completed turns re-arm idle goal ticks");
     assert.equal(timers[1]?.delay, 30_000);
     assert.equal(
-      run.customMessages.some((message) => /Spark goal tick/.test(message.content)),
+      run.customMessages.some((message) => /Spark goal tick/.test(customMessageVisible(message))),
       false,
       "re-arming after a user turn must not tick immediately",
     );
@@ -2012,7 +2067,7 @@ void test("/goal foreground loop drops stale tick context after pause", async ()
     }
     timers[0]?.callback();
     await flushAsyncWork();
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
+    assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
     assert.equal(run.customMessages.at(-1)?.display, false);
     assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
 
@@ -2025,7 +2080,7 @@ void test("/goal foreground loop drops stale tick context after pause", async ()
       (rejectedPause.details as { error?: string }).error,
       "autonomous_goal_pause_forbidden",
     );
-    assert.match((await tryConsumeSparkModeContext(run, ctx)) ?? "", /foreground goal loop tick/);
+    assert.match(run.customMessages.at(-1)?.content ?? "", /foreground goal loop tick/);
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
@@ -2082,7 +2137,7 @@ void test("/goal foreground loop ignores stale awaited-turn completions after re
     await flushAsyncWork();
     const oldGoal = await loadSessionGoal(dir, ctx);
     assert.ok(oldGoal);
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
+    assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
 
     await executeSparkTool(run.tools, "goal", ctx, {
       action: "clear",
@@ -2268,18 +2323,37 @@ void test("/goal foreground loop includes completed project evidence after curre
     await flushAsyncWork();
 
     assert.equal(reviewerInput?.targetKind, "goal");
-    assert.equal(reviewerInput?.projectRef, completedProjectRef);
-    assert.equal(reviewerInput?.projectStatus?.taskCounts.total, 1);
-    assert.equal(reviewerInput?.projectStatus?.taskCounts.unfinished, 0);
-    assert.deepEqual(reviewerInput?.evidenceRefs, [evidence.ref]);
+    if (reviewerInput?.targetKind !== "goal") assert.fail("expected goal review input");
+    assert.equal(reviewerInput.projectRef, completedProjectRef);
+    assert.equal(reviewerInput.currentProjectSelected, false);
+    assert.equal(reviewerInput.projectEvidenceSource, "project_evidence_fallback");
+    assert.equal(reviewerInput.projectStatus?.taskCounts.total, 1);
+    assert.equal(reviewerInput.projectStatus?.taskCounts.unfinished, 0);
+    assert.deepEqual(reviewerInput.evidenceRefs, [evidence.ref]);
+    assert.equal(reviewerInput.evidencePreviews?.[0]?.ref, evidence.ref);
+    assert.equal(reviewerInput.evidencePreviews?.[0]?.title, "Completed project closure evidence");
+    assert.match(reviewerInput.evidencePreviews?.[0]?.bodyPreview ?? "", /All tasks are done/);
     const reviewArtifact = await defaultArtifactStore(dir).get(
       (await defaultArtifactStore(dir).list({ kind: "record" })).at(-1)!.ref,
     );
     const reviewBody = reviewArtifact.body as {
-      reviewPacket?: { projectRef?: ProjectRef; evidenceRefs?: string[] };
+      reviewPacket?: {
+        projectRef?: ProjectRef;
+        currentProjectSelected?: boolean;
+        projectEvidenceSource?: string;
+        evidenceRefs?: string[];
+        evidencePreviews?: Array<{ ref?: string; title?: string; bodyPreview?: string }>;
+      };
     };
     assert.equal(reviewBody.reviewPacket?.projectRef, completedProjectRef);
+    assert.equal(reviewBody.reviewPacket?.currentProjectSelected, false);
+    assert.equal(reviewBody.reviewPacket?.projectEvidenceSource, "project_evidence_fallback");
     assert.deepEqual(reviewBody.reviewPacket?.evidenceRefs, [evidence.ref]);
+    assert.equal(reviewBody.reviewPacket?.evidencePreviews?.[0]?.ref, evidence.ref);
+    assert.match(
+      reviewBody.reviewPacket?.evidencePreviews?.[0]?.bodyPreview ?? "",
+      /All tasks are done/,
+    );
     const goal = await loadSessionGoal(dir, ctx);
     assert.equal(goal?.status, "complete");
   } finally {
@@ -2342,7 +2416,15 @@ void test("/goal foreground loop blocks completion when project tasks remain unf
       });
     });
     assert.ok(projectRef);
-    const run = registerSparkToolsForTest({ reviewerRunner: createApprovingReviewerRunner() });
+    let reviewerCalls = 0;
+    const run = registerSparkToolsForTest({
+      reviewerRunner: {
+        async review(input: ReviewInput): Promise<ReviewerRunResult> {
+          reviewerCalls += 1;
+          return createApprovingReviewerRunner().review(input);
+        },
+      },
+    });
 
     await executeSparkTool(run.tools, "goal", ctx, {
       action: "start",
@@ -2358,6 +2440,7 @@ void test("/goal foreground loop blocks completion when project tasks remain unf
     assert.equal(goal?.status, "active");
     assert.equal(goal?.lastReview?.achieved, false);
     assert.equal(goal?.lastReview?.confidence, "deterministic-blocker");
+    assert.equal(reviewerCalls, 0);
     assert.match(goal?.lastReview?.reason ?? "", /unfinished project task/);
     assert.match(goal?.lastReview?.remainingWork ?? "", /@unfinished-ready-task/);
   } finally {
@@ -2442,13 +2525,31 @@ void test("/goal foreground loop includes project-scoped review artifacts", asyn
     assert.equal(reviewerInput?.targetKind, "goal");
     assert.equal(reviewerInput?.projectRef, projectRef);
     assert.ok(reviewerInput?.evidenceRefs.includes(projectReview.ref));
+    assert.ok(
+      reviewerInput?.targetKind === "goal" &&
+        reviewerInput.evidencePreviews?.some(
+          (preview) =>
+            preview.ref === projectReview.ref &&
+            /project plan is reviewed/.test(preview.bodyPreview ?? ""),
+        ),
+    );
     const reviewArtifact = await defaultArtifactStore(dir).get(
       (await defaultArtifactStore(dir).list({ kind: "record" })).at(-1)!.ref,
     );
     const reviewBody = reviewArtifact.body as {
-      reviewPacket?: { evidenceRefs?: string[] };
+      reviewPacket?: {
+        evidenceRefs?: string[];
+        evidencePreviews?: Array<{ ref?: string; bodyPreview?: string }>;
+      };
     };
     assert.ok(reviewBody.reviewPacket?.evidenceRefs?.includes(projectReview.ref));
+    assert.ok(
+      reviewBody.reviewPacket?.evidencePreviews?.some(
+        (preview) =>
+          preview.ref === projectReview.ref &&
+          /project plan is reviewed/.test(preview.bodyPreview ?? ""),
+      ),
+    );
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
@@ -2515,7 +2616,7 @@ void test("/goal foreground loop records unmet reviewer verdict before continuat
 
     assert.equal(reviewerCalls, 1);
     assert.ok(run.customMessages.length > messagesBefore);
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
+    assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
     assert.equal(run.customMessages.at(-1)?.display, false);
     assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
     const goal = await loadSessionGoal(dir, ctx);
@@ -2702,7 +2803,7 @@ void test("/goal foreground loop blocks completion while session TODOs are activ
 
     assert.equal(reviewerCalls, 0);
     assert.ok(run.customMessages.length > messagesBefore);
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
+    assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
     const goal = await loadSessionGoal(dir, ctx);
     assert.equal(goal?.status, "active");
     assert.equal(goal?.lastReview?.achieved, false);
@@ -3436,10 +3537,10 @@ void test("/goal foreground loop waits for idle and stops after pause", async ()
     timers[1]?.callback();
     await flushAsyncWork();
     assert.ok(run.customMessages.length > messageCountBeforeTick);
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
+    assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
     assert.equal(run.customMessages.at(-1)?.display, false);
     assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
-    assert.match(await consumeSparkModeContext(run, ctx), /Spark foreground goal loop tick/);
+    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark foreground goal loop tick/);
     assert.equal(timers.length, 2);
 
     for (const handler of run.eventHandlers.get("turn_end") ?? []) {
@@ -3484,10 +3585,10 @@ void test("/goal foreground loop waits for idle and stops after pause", async ()
     assert.equal(timers.length, 5);
     timers[4]?.callback();
     await flushAsyncWork();
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
+    assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
     assert.equal(run.customMessages.at(-1)?.display, false);
     assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
-    assert.match(await consumeSparkModeContext(run, ctx), /Spark foreground goal loop tick/);
+    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark foreground goal loop tick/);
     for (const handler of run.eventHandlers.get("turn_end") ?? []) {
       await handler(
         {
@@ -3557,7 +3658,7 @@ void test("/goal foreground loop waits for idle and stops after pause", async ()
   }
 });
 
-void test("Shift+Tab shortcut cycles Spark mode when Spark is active", async () => {
+void test("Shift+Tab shortcut shows per-turn Spark mode hints without persisting mode", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-shift-tab-mode-"));
   const inactiveDir = await mkdtemp(join(tmpdir(), "spark-shift-tab-inactive-"));
   try {
@@ -3573,18 +3674,10 @@ void test("Shift+Tab shortcut cycles Spark mode when Spark is active", async () 
     assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
 
     await shortcut.handler(ctx);
-    const planMode = await loadSparkMode(dir, ctx);
-    assert.equal(planMode.mode, "plan");
-    assert.equal(planMode.planningSource, "direct");
-    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark mode: plan/);
-
-    await shortcut.handler(ctx);
-    const implementMode = await loadSparkMode(dir, ctx);
-    assert.equal(implementMode.mode, "implement");
-    assert.equal(implementMode.executeStrategy, "default");
-
-    await shortcut.handler(ctx);
     assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
+    assert.equal(ctx.editorText, "/plan ");
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /per-turn/);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /\/research, \/plan, and \/implement/);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
     await rm(inactiveDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
@@ -3903,7 +3996,10 @@ void test("spark_claim_task explains how to create or select a project when none
     assert.equal((claimed.details as { found?: boolean }).found, false);
     assert.match(toolText(claimed), /No Spark project found\./);
     assert.match(toolText(claimed), /Create or select a project/);
-    assert.match(toolText(claimed), /task\(\{ action: "project_use", title, description \}\)/);
+    assert.match(
+      toolText(claimed),
+      /task_write\(\{ action: "project_use", title, description \}\)/,
+    );
     assert.doesNotMatch(toolText(claimed), /\/spark/);
     assert.equal(existsSync(join(dir, ".spark", "projects.json")), false);
   } finally {
@@ -4009,7 +4105,7 @@ void test("spark_claim_task renders plan summary and task TODO hint in claim tex
     assert.match(text, /steps: Render the plan; Prompt for task TODOs/);
     assert.match(text, /constraints: Keep output compact; Do not remove details\.task/);
     assert.match(text, /Next: set task-local TODOs/);
-    assert.match(text, /task\(\{ action: "todo_update", scope: "task"/);
+    assert.match(text, /task_write\(\{ action: "todo_update", scope: "task"/);
     assert.ok((claim.details as { task?: unknown } | undefined)?.task);
     assert.equal(existsSync(sessionTaskTodoPath(dir, ctx)), false);
   } finally {
@@ -4215,7 +4311,7 @@ void test("task project_update marks missing projects as tool errors", async () 
     const ctx = testSparkContext(dir, "main");
     const { tools } = registerSparkToolsForTest();
 
-    const missing = await executeSparkTool(tools, "task", ctx, {
+    const missing = await executeSparkTool(tools, "task_write", ctx, {
       action: "project_update",
       project: "Missing project",
       title: "Better project title",
@@ -4981,26 +5077,41 @@ void test("spark_finish_task refuses to cancel a claimed prerequisite with depen
   }
 });
 
-void test("task tool dispatches canonical project, plan, claim, TODO, and finish actions", async () => {
+void test("split task tools dispatch read, write, and assign actions", async () => {
   const dir = await mkdtemp(join(tmpdir(), "task-tool-canonical-"));
   try {
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
     const { tools } = registerSparkToolsForTest();
-    assert.ok(tools.has("task"), "missing canonical task tool");
-    const taskParameters = JSON.stringify(tools.get("task")?.parameters);
+    assert.equal(tools.has("task"), false, "old task multiplexer must not be public");
+    assert.ok(tools.has("task_read"), "missing task_read tool");
+    assert.ok(tools.has("task_write"), "missing task_write tool");
+    assert.ok(tools.has("assign"), "missing assign tool");
+    const taskParameters = JSON.stringify(tools.get("task_write")?.parameters);
     assert.match(taskParameters, /Compatibility executor role ref/);
     assert.match(taskParameters, /omit for normal task planning/);
     assert.doesNotMatch(taskParameters, /Preferred role ref/);
+    assert.doesNotMatch(taskParameters, /run_ready/);
+    assert.doesNotMatch(taskParameters, /run_control/);
+    const taskReadParameters = JSON.stringify(tools.get("task_read")?.parameters);
+    assert.match(taskReadParameters, /run_status/);
+    await assert.rejects(
+      () => executeSparkTool(tools, "task_read", ctx, { action: "project_use" }),
+      /task_read\.action must be one of: status, project_list, run_status/,
+    );
+    await assert.rejects(
+      () => executeSparkTool(tools, "task_write", ctx, { action: "run_ready" }),
+      /task_write\.action must be one of:/,
+    );
 
-    const created = await executeSparkTool(tools, "task", ctx, {
+    const created = await executeSparkTool(tools, "task_write", ctx, {
       action: "project_use",
       title: "Canonical task tool project",
       description: "Exercise the canonical task action tool.",
     });
     assert.match(toolText(created), /Created new Spark project/);
 
-    const planned = await executeSparkTool(tools, "task", ctx, {
+    const planned = await executeSparkTool(tools, "task_write", ctx, {
       action: "plan",
       tasks: [
         {
@@ -5014,7 +5125,19 @@ void test("task tool dispatches canonical project, plan, claim, TODO, and finish
     });
     assert.match(toolText(planned), /Planned tasks: created=1/);
 
-    const claimed = await executeSparkTool(tools, "task", ctx, {
+    const status = await executeSparkTool(tools, "task_read", ctx, {
+      action: "status",
+      view: "full",
+    });
+    assert.match(toolText(status), /Canonical task tool project/);
+
+    const assigned = await executeSparkTool(tools, "assign", ctx, {
+      dryRun: true,
+      maxConcurrency: 1,
+    });
+    assert.match(toolText(assigned), /Dry-run checked 1 Spark task run/);
+
+    const claimed = await executeSparkTool(tools, "task_write", ctx, {
       action: "claim",
       name: "canonical-task-tool",
       title: "Canonical task tool",
@@ -5023,7 +5146,7 @@ void test("task tool dispatches canonical project, plan, claim, TODO, and finish
     });
     assert.match(toolText(claimed), /Claimed Spark task/);
 
-    const todos = await executeSparkTool(tools, "task", ctx, {
+    const todos = await executeSparkTool(tools, "task_write", ctx, {
       action: "todo_update",
       scope: "task",
       ops: [
@@ -5035,7 +5158,7 @@ void test("task tool dispatches canonical project, plan, claim, TODO, and finish
     });
     assert.match(toolText(todos), /Updated TODOs/);
 
-    const finished = await executeSparkTool(tools, "task", ctx, {
+    const finished = await executeSparkTool(tools, "task_write", ctx, {
       action: "finish",
       summary: "Canonical task routing works.",
     });
@@ -5603,7 +5726,7 @@ void test("spark_use_project blocks active duplicate project creation without wr
     assert.match(toolText(blocked), /Duplicate Spark project creation blocked/);
     assert.match(toolText(blocked), /Tool persistence/);
     assert.match(toolText(blocked), /status=active/);
-    assert.match(toolText(blocked), /task\(\{ action: "project_use"/);
+    assert.match(toolText(blocked), /task_write\(\{ action: "project_use"/);
     const details = blocked.details as
       | {
           error?: string;
@@ -5717,7 +5840,7 @@ void test("canonical task project_use exposes duplicate creation gate guidance",
     const { tools } = registerSparkToolsForTest();
     const beforeCount = (await defaultTaskGraphStore(dir).load())?.projects().length ?? 0;
 
-    const blocked = await executeSparkTool(tools, "task", ctx, {
+    const blocked = await executeSparkTool(tools, "task_write", ctx, {
       action: "project_use",
       title: "Tool persistence",
       description: "Duplicate via canonical task tool surface.",
@@ -5739,7 +5862,9 @@ void test("canonical task project_use exposes duplicate creation gate guidance",
     assert.equal(details?.duplicateProject, true);
     assert.equal(details?.candidates?.[0]?.title, "Tool persistence");
     assert.equal(details?.candidates?.[0]?.status, "active");
-    assert.ok(details?.guidance?.some((line) => line.includes('task({ action: "project_use"')));
+    assert.ok(
+      details?.guidance?.some((line) => line.includes('task_write({ action: "project_use"')),
+    );
     assert.equal((await defaultTaskGraphStore(dir).load())?.projects().length ?? 0, beforeCount);
     assert.equal((await loadCurrentProjectState(dir, ctx))?.projectRef, undefined);
   } finally {
@@ -5778,8 +5903,11 @@ void test("spark_goal start with objective bootstraps when no project exists", a
 
     assert.match(toolText(started), /Spark session goal active/);
     assert.match(toolText(started), /No current Spark project is selected/);
-    assert.match(toolText(started), /task\(\{ action: "project_use", title, description \}\)/);
-    assert.match(toolText(started), /task\(\{ action: "plan" \}\)/);
+    assert.match(
+      toolText(started),
+      /task_write\(\{ action: "project_use", title, description \}\)/,
+    );
+    assert.match(toolText(started), /task_write\(\{ action: "plan" \}\)/);
     assert.notEqual((started.details as { error?: string }).error, "no_inferable_goal");
     const goal = await loadSessionGoal(dir, ctx);
     assert.equal(goal?.objective, "Ship autonomous goal bootstrap behavior");
@@ -5837,12 +5965,12 @@ void test("spark_goal foreground loop asks agent to bootstrap a project when non
     timers[0]?.callback();
     await flushAsyncWork();
 
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark goal tick/);
-    const prompt = await consumeSparkModeContext(run, ctx);
+    assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
+    const prompt = run.customMessages.at(-1)?.content ?? "";
     assert.match(prompt, /Spark foreground goal loop tick/);
     assert.match(prompt, /No current project is selected/);
-    assert.match(prompt, /task\(\{ action: "project_use", title, description \}\)/);
-    assert.match(prompt, /task\(\{ action: "plan" \}\)/);
+    assert.match(prompt, /task_write\(\{ action: "project_use", title, description \}\)/);
+    assert.match(prompt, /task_write\(\{ action: "plan" \}\)/);
     assert.doesNotMatch(prompt, /No Spark project\/task state is available to infer/);
   } finally {
     globalThis.setTimeout = originalSetTimeout;
@@ -5972,15 +6100,65 @@ void test("spark_goal tool sets and updates durable session goals", async () => 
       action: "complete",
       reason: "review passed",
     });
-    assert.match(toolText(completed), /Goal completion is reviewer-owned/);
+    assert.match(toolText(completed), /Goal completion approved by reviewer/);
     assert.equal(
-      (completed.details as { error?: string } | undefined)?.error,
-      "goal_completion_reviewer_only",
+      (completed.details as { goal?: { status?: string } } | undefined)?.goal?.status,
+      "complete",
     );
+    assert.equal((await loadSessionGoal(dir, ctx))?.status, "complete");
 
     const cleared = await executeSparkTool(tools, "goal", ctx, { action: "clear" });
     assert.match(toolText(cleared), /Cleared Spark session goal/);
     assert.equal(await loadSessionGoal(dir, ctx), undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark_goal complete uses deterministic blocker before reviewer when work remains", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-goal-complete-blocker-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    let reviewerCalls = 0;
+    const { tools } = registerSparkToolsForTest({
+      reviewerRunner: {
+        async review(input: ReviewInput): Promise<ReviewerRunResult> {
+          reviewerCalls += 1;
+          return createApprovingReviewerRunner().review(input);
+        },
+      },
+    });
+    await defaultTaskGraphStore(dir).update(async (graph) => {
+      const project = graph.projects()[0];
+      assert.ok(project);
+      await saveCurrentProjectRef(dir, ctx, project.ref);
+      graph.createTask({
+        projectRef: project.ref,
+        name: "unfinished-complete-blocker",
+        title: "Unfinished complete blocker",
+        description: "Pending task blocks goal completion requests before reviewer calls.",
+        status: "pending",
+        plan: executionReadyPlan("Unfinished complete blocker"),
+      });
+    });
+    await executeSparkTool(tools, "goal", ctx, {
+      action: "start",
+      objective: "Finish all complete blocker work",
+    });
+
+    const completed = await executeSparkTool(tools, "goal", ctx, { action: "complete" });
+
+    assert.equal(reviewerCalls, 0);
+    assert.equal(
+      (completed.details as { error?: string } | undefined)?.error,
+      "goal_completion_needs_changes",
+    );
+    assert.match(toolText(completed), /Goal completion request needs changes/);
+    assert.match(toolText(completed), /@unfinished-complete-blocker/);
+    const goal = await loadSessionGoal(dir, ctx);
+    assert.equal(goal?.status, "active");
+    assert.equal(goal?.lastReview?.confidence, "deterministic-blocker");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -6267,7 +6445,10 @@ void test("active session goal keeps canonical ask but disables raw ask tools be
     assert.ok(!run.getActiveToolNames().includes("ask_user"));
     assert.ok(!run.getActiveToolNames().includes("ask_flow"));
     assert.ok(run.getActiveToolNames().includes("goal"));
-    assert.ok(run.getActiveToolNames().includes("task"));
+    assert.ok(!run.getActiveToolNames().includes("task"));
+    assert.ok(run.getActiveToolNames().includes("task_read"));
+    assert.ok(run.getActiveToolNames().includes("task_write"));
+    assert.ok(run.getActiveToolNames().includes("assign"));
 
     await executeSparkTool(run.tools, "goal", ctx, {
       action: "pause",
@@ -6360,10 +6541,14 @@ void test("spark project tools reject invalid explicit parameters", async () => 
 
 void test("Spark extension exposes canonical tools instead of spark_* compatibility tools", () => {
   const run = registerSparkToolsForTest();
-  assert.ok(run.tools.has("task"));
+  assert.equal(run.tools.has("task"), false);
+  assert.ok(run.tools.has("task_read"));
+  assert.ok(run.tools.has("task_write"));
+  assert.ok(run.tools.has("assign"));
   assert.ok(run.tools.has("learning"));
   assert.ok(run.tools.has("ask"));
   assert.ok(run.tools.has("goal"));
+  assert.ok(run.tools.has("mode"));
   assert.deepEqual(
     run
       .getActiveToolNames()
@@ -6371,6 +6556,30 @@ void test("Spark extension exposes canonical tools instead of spark_* compatibil
       .sort(),
     [],
   );
+});
+
+void test("mode tool returns per-turn Spark lens requirements without persisted mode state", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-mode-tool-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+    await executeSparkTool(tools, "spark_use_project", ctx, { project: "Tool persistence" });
+
+    const switched = await executeSparkTool(tools, "mode", ctx, {
+      action: "plan",
+      focus: "tighten task graph",
+    });
+    assert.match(toolText(switched), /Lens set to: plan/);
+    assert.match(toolText(switched), /Spark mode: plan\./);
+    assert.deepEqual(switched.details, { mode: "plan", statusOnly: false });
+    assert.deepEqual(await loadSparkMode(dir, ctx), {
+      mode: "research",
+      projectRef: (await loadCurrentProjectState(dir, ctx))?.projectRef,
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
 });
 
 void test("spark_plan_tasks describes the public spark-tasks readiness contract", () => {
@@ -6574,7 +6783,7 @@ void test("session cache stores write JSON atomically without tmp leftovers", as
   }
 });
 
-void test("current project store rejects malformed mode snapshots", async () => {
+void test("current project store ignores legacy mode and run control blocks", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-sessions-invalid-"));
   try {
     const ctx = testSparkContext(dir, "sessions-invalid");
@@ -6615,22 +6824,6 @@ void test("current project store rejects malformed mode snapshots", async () => 
         version: 1,
         projectRef: "proj:demo",
         planningMode: { version: 1, projectRef: "proj:demo", source: "direct" },
-      })}\n`,
-      "utf8",
-    );
-    await assert.rejects(
-      () => loadCurrentProjectState(dir, ctx),
-      (error) =>
-        error instanceof JsonStoreFormatError &&
-        error.filePath === stateFile &&
-        /planningMode\.enteredAt must be a non-empty string/.test(error.message),
-    );
-
-    await writeFile(
-      stateFile,
-      `${JSON.stringify({
-        version: 1,
-        projectRef: "proj:demo",
         executionMode: {
           version: 1,
           projectRef: "proj:demo",
@@ -6640,13 +6833,10 @@ void test("current project store rejects malformed mode snapshots", async () => 
       })}\n`,
       "utf8",
     );
-    await assert.rejects(
-      () => loadCurrentProjectState(dir, ctx),
-      (error) =>
-        error instanceof JsonStoreFormatError &&
-        error.filePath === stateFile &&
-        /executionMode\.mode must be research, plan, or implement/.test(error.message),
-    );
+    assert.deepEqual(await loadCurrentProjectState(dir, ctx), {
+      version: 1,
+      projectRef: "proj:demo",
+    });
 
     await writeFile(
       stateFile,
@@ -6663,13 +6853,8 @@ void test("current project store rejects malformed mode snapshots", async () => 
       })}\n`,
       "utf8",
     );
-    await assert.rejects(
-      () => loadCurrentProjectState(dir, ctx),
-      (error) =>
-        error instanceof JsonStoreFormatError &&
-        error.filePath === stateFile &&
-        /runMode\.status must be a valid status/.test(error.message),
-    );
+    const runControlState = await loadCurrentProjectState(dir, ctx);
+    assert.deepEqual(runControlState, { version: 1, projectRef: "proj:demo" });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -6716,7 +6901,7 @@ void test("spark_status includes persisted Spark orchestrator status", async () 
   try {
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
-    const dagStore = defaultSparkDagRunStore(dir);
+    const dagStore = defaultWorkflowRunStore(dir);
     const dagRun = await dagStore.startRun({
       ownerSessionId: "session:parent",
       dryRun: false,
@@ -6746,24 +6931,27 @@ void test("spark_status includes persisted Spark orchestrator status", async () 
       ),
     );
     assert.match(text, /Next steps \(stale\):/);
-    assert.match(text, /stale: run task\(\{ action: "run_status"/);
-    const dagDetails = status.details as {
-      dag?: {
+    assert.match(text, /stale: run task_read\(\{ action: "run_status"/);
+    const workflowRunDetails = status.details as {
+      workflowRunStatus?: {
         stale?: number;
         timedOut?: number;
         nextSteps?: Array<{ status: string; nextActions: string[] }>;
       };
     };
-    assert.equal(dagDetails.dag?.stale, 1);
-    assert.equal(dagDetails.dag?.timedOut, 1);
-    assert.equal(dagDetails.dag?.nextSteps?.[0]?.status, "stale");
-    assert.match(dagDetails.dag?.nextSteps?.[0]?.nextActions.join("\n") ?? "", /stale:/);
+    assert.equal(workflowRunDetails.workflowRunStatus?.stale, 1);
+    assert.equal(workflowRunDetails.workflowRunStatus?.timedOut, 1);
+    assert.equal(workflowRunDetails.workflowRunStatus?.nextSteps?.[0]?.status, "stale");
+    assert.match(
+      workflowRunDetails.workflowRunStatus?.nextSteps?.[0]?.nextActions.join("\n") ?? "",
+      /stale:/,
+    );
     assert.deepEqual(
-      dagDetails.dag?.nextSteps?.map((step) => step.status),
+      workflowRunDetails.workflowRunStatus?.nextSteps?.map((step) => step.status),
       ["stale", "timed_out"],
     );
     assert.match(
-      dagDetails.dag?.nextSteps?.[1]?.nextActions.join("\n") ?? "",
+      workflowRunDetails.workflowRunStatus?.nextSteps?.[1]?.nextActions.join("\n") ?? "",
       /timed_out: legacy foreground timeout record/,
     );
   } finally {
@@ -6821,7 +7009,7 @@ void test("spark_status reconciles DAG runs with current workspace active childr
       false,
     );
 
-    const currentDagRun = await defaultSparkDagRunStore(dir).startRun({
+    const currentDagRun = await defaultWorkflowRunStore(dir).startRun({
       ownerSessionId: ctxSessionKey(ctx),
       dryRun: false,
       maxConcurrency: 1,
@@ -6839,7 +7027,7 @@ void test("spark_status reconciles DAG runs with current workspace active childr
       ),
     );
     assert.doesNotMatch(text, new RegExp(`Active workflow run: ${currentDagRun.ref}`));
-    const dagStatus = await defaultSparkDagRunStore(dir).status();
+    const dagStatus = await defaultWorkflowRunStore(dir).status();
     assert.equal(dagStatus.running, 0);
     assert.equal(dagStatus.stale, 1);
     assert.equal(
@@ -6859,9 +7047,9 @@ void test("spark_status reconciles DAG runs with current workspace active childr
   }
 });
 
-void test("spark_dag_manager kill_active only targets current workspace role-runs", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-kill-active-cwd-"));
-  const otherDir = await mkdtemp(join(tmpdir(), "spark-tool-dag-kill-active-other-cwd-"));
+void test("spark_workflow_runs kill_active only targets current workspace role-runs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-run-kill-active-cwd-"));
+  const otherDir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-run-kill-active-other-cwd-"));
   let otherRunRef: RunRef | undefined;
   let otherRunPromise: Promise<unknown> | undefined;
   try {
@@ -6910,11 +7098,11 @@ void test("spark_dag_manager kill_active only targets current workspace role-run
     );
 
     const { tools } = registerSparkToolsForTest();
-    const result = await executeSparkTool(tools, "spark_dag_manager", ctx, {
+    const result = await executeSparkTool(tools, "spark_workflow_runs", ctx, {
       action: "kill_active",
     });
 
-    assert.match(toolText(result), /Killed active role-run processes: 0/);
+    assert.match(toolText(result), /Stopped background child runs: 0/);
     assert.equal(((result.details as { killed?: unknown[] }).killed ?? []).length, 0);
     assert.equal(
       listActiveSparkRoleRunProcesses().some((process) => process.runRef === otherRunRef),
@@ -6933,45 +7121,46 @@ void test("spark_dag_manager kill_active only targets current workspace role-run
   }
 });
 
-void test("spark_dag_manager rejects invalid explicit control parameters", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-manager-invalid-params-"));
+void test("spark_workflow_runs rejects invalid explicit control parameters", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-runs-invalid-params-"));
   try {
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
     const { tools } = registerSparkToolsForTest();
 
     await assert.rejects(
-      () => executeSparkTool(tools, "spark_dag_manager", ctx, { action: "acknowledge" }),
-      /spark_dag_manager action must be status, reconcile, ack, clear_inactive, prune, or kill_active/,
+      () => executeSparkTool(tools, "spark_workflow_runs", ctx, { action: "acknowledge" }),
+      /spark_workflow_runs action must be status, list, inspect, kill, reconcile, ack, prune, clear_inactive, or kill_active/,
     );
     await assert.rejects(
       () =>
-        executeSparkTool(tools, "spark_dag_manager", ctx, { action: "ack", runRef: "task:one" }),
-      /spark_dag_manager runRef must be a run: ref/,
-    );
-    await assert.rejects(
-      () => executeSparkTool(tools, "spark_dag_manager", ctx, { action: "prune", dryRun: "true" }),
-      /spark_dag_manager dryRun must be a boolean/,
+        executeSparkTool(tools, "spark_workflow_runs", ctx, { action: "ack", runRef: "task:one" }),
+      /spark_workflow_runs runRef must be a run ref/,
     );
     await assert.rejects(
       () =>
-        executeSparkTool(tools, "spark_dag_manager", ctx, {
+        executeSparkTool(tools, "spark_workflow_runs", ctx, { action: "prune", dryRun: "true" }),
+      /spark_workflow_runs dryRun must be a boolean/,
+    );
+    await assert.rejects(
+      () =>
+        executeSparkTool(tools, "spark_workflow_runs", ctx, {
           action: "prune",
           keepRecent: 1.5,
         }),
-      /spark_dag_manager keepRecent must be a non-negative integer/,
+      /spark_workflow_runs keepRecent must be a non-negative integer/,
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-void test("spark_dag_manager reconciles and clears inactive records", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-manager-"));
+void test("spark_workflow_runs reconciles and clears inactive records", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-runs-"));
   try {
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
-    const dagStore = defaultSparkDagRunStore(dir);
+    const dagStore = defaultWorkflowRunStore(dir);
     const finished = await dagStore.startRun({
       dryRun: false,
       maxConcurrency: 1,
@@ -6985,39 +7174,39 @@ void test("spark_dag_manager reconciles and clears inactive records", async () =
     });
 
     const { tools } = registerSparkToolsForTest();
-    const reconciled = await executeSparkTool(tools, "spark_dag_manager", ctx, {
+    const reconciled = await executeSparkTool(tools, "spark_workflow_runs", ctx, {
       action: "reconcile",
     });
-    assert.match(toolText(reconciled), /action=reconcile/);
-    assert.match(toolText(reconciled), /failed=0/);
-    assert.match(toolText(reconciled), /stale=1/);
-    assert.match(toolText(reconciled), /Next steps \(stale\):/);
-    assert.match(toolText(reconciled), /stale: run task\(\{ action: "run_status"/);
+    assert.match(toolText(reconciled), /Reconciled workflow records changed: 1/);
+    assert.match(toolText(reconciled), /Background work: stale/);
+    assert.match(toolText(reconciled), /Next: reconcile with task runs and active processes/);
+    const reconciledDetails = reconciled.details as {
+      background?: {
+        summary?: { state?: string };
+        runs?: Array<{ status?: string; nextActions?: string[] }>;
+      };
+    };
+    assert.equal(reconciledDetails.background?.summary?.state, "stale");
     assert.match(
-      (
-        (reconciled.details as { dag?: { nextSteps?: Array<{ nextActions: string[] }> } }).dag
-          ?.nextSteps?.[0]?.nextActions ?? []
-      ).join("\n"),
-      /task graph state is consistent/,
+      reconciledDetails.background?.runs?.[0]?.nextActions?.join("\n") ?? "",
+      /reconcile with task runs and active processes/,
     );
 
-    const acknowledged = await executeSparkTool(tools, "spark_dag_manager", ctx, {
+    const acknowledged = await executeSparkTool(tools, "spark_workflow_runs", ctx, {
       action: "ack",
     });
-    assert.match(toolText(acknowledged), /action=ack/);
-    assert.match(toolText(acknowledged), /stale=1/);
-    assert.match(toolText(acknowledged), /acknowledged=1/);
-    assert.match(toolText(acknowledged), /Acknowledged workflow problem runs: 1 newly/);
-    assert.doesNotMatch(toolText(acknowledged), /Next steps \(stale\):/);
+    assert.match(toolText(acknowledged), /Acknowledged background problem runs: 1 newly/);
+    assert.doesNotMatch(toolText(acknowledged), /Next: reconcile with task runs/);
     const acknowledgedDetails = acknowledged.details as {
-      acknowledged?: { acknowledged?: string[] };
-      dag?: { acknowledged?: number; recentRuns?: Array<{ acknowledgedBySession?: string }> };
+      background?: {
+        acknowledged?: { acknowledged?: string[] };
+        runs?: Array<{ acknowledgedBySession?: string }>;
+      };
     };
-    assert.equal(acknowledgedDetails.dag?.acknowledged, 1);
-    assert.equal(acknowledgedDetails.acknowledged?.acknowledged?.length, 1);
+    assert.equal(acknowledgedDetails.background?.acknowledged?.acknowledged?.length, 1);
+    const ackSnapshot = await dagStore.load();
     assert.equal(
-      acknowledgedDetails.dag?.recentRuns?.find((run) => run.acknowledgedBySession)
-        ?.acknowledgedBySession,
+      ackSnapshot.runs.find((run) => run.acknowledgedBySession)?.acknowledgedBySession,
       ctxSessionKey(ctx),
     );
 
@@ -7031,13 +7220,12 @@ void test("spark_dag_manager reconciles and clears inactive records", async () =
     assert.match(toolText(fullStatus), /acknowledged=1/);
     assert.match(toolText(fullStatus), /Recent workflow runs:/);
 
-    const cleared = await executeSparkTool(tools, "spark_dag_manager", ctx, {
+    const cleared = await executeSparkTool(tools, "spark_workflow_runs", ctx, {
       action: "clear_inactive",
     });
-    assert.match(toolText(cleared), /action=clear_inactive/);
-    assert.match(toolText(cleared), /runs=0 recent/);
+    assert.match(toolText(cleared), /Background work: idle/);
     assert.equal(
-      (cleared.details as { dag?: { recentRuns?: unknown[] } }).dag?.recentRuns?.length,
+      (cleared.details as { background?: { runs?: unknown[] } }).background?.runs?.length,
       0,
     );
   } finally {
@@ -7050,7 +7238,7 @@ void test("spark_state prune defaults to dry-run and does not write workflow run
   try {
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
-    const dagStore = defaultSparkDagRunStore(dir);
+    const dagStore = defaultWorkflowRunStore(dir);
     const run = await dagStore.startRun({ dryRun: false, maxConcurrency: 1, timeoutMs: 100 });
     await dagStore.finishRun(run.ref, { scheduled: 0, completed: 0, timedOut: false });
     const before = await readFile(join(dir, ".spark", "workflow-runs.json"), "utf8");
@@ -7075,7 +7263,7 @@ void test("spark_state prune defaults to dry-run and does not write workflow run
   }
 });
 
-void test("spark_background_runs exposes active child runs and refuses broad kill", async () => {
+void test("spark_workflow_runs exposes active child runs and refuses broad kill", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-background-runs-active-"));
   const previousBindingHome = process.env.PI_ROLES_HOME;
   const previousPath = process.env.PATH;
@@ -7122,7 +7310,7 @@ void test("spark_background_runs exposes active child runs and refuses broad kil
     });
 
     await waitFor(async () => {
-      const status = await executeSparkTool(tools, "spark_background_runs", ctx, {
+      const status = await executeSparkTool(tools, "spark_workflow_runs", ctx, {
         action: "status",
         includeDetails: true,
       });
@@ -7138,7 +7326,7 @@ void test("spark_background_runs exposes active child runs and refuses broad kil
       );
     }, 5_000);
 
-    const status = await executeSparkTool(tools, "spark_background_runs", ctx, {
+    const status = await executeSparkTool(tools, "spark_workflow_runs", ctx, {
       action: "status",
       includeDetails: true,
     });
@@ -7167,14 +7355,14 @@ void test("spark_background_runs exposes active child runs and refuses broad kil
     assert.equal(child.claimKind, "role-run");
     assert.equal(typeof child.pid, "number");
 
-    const inspect = await executeSparkTool(tools, "spark_background_runs", ctx, {
+    const inspect = await executeSparkTool(tools, "spark_workflow_runs", ctx, {
       action: "inspect",
       runRef: child.runRef,
     });
     assert.match(toolText(inspect), new RegExp(`Background child run: ${child.runRef} active`));
     assert.match(toolText(inspect), /Task: @background-child/);
 
-    const refused = await executeSparkTool(tools, "spark_background_runs", ctx, {
+    const refused = await executeSparkTool(tools, "spark_workflow_runs", ctx, {
       action: "kill",
     });
     assert.match(toolText(refused), /kill_requires_target/);
@@ -7183,7 +7371,7 @@ void test("spark_background_runs exposes active child runs and refuses broad kil
       "kill_requires_target",
     );
 
-    const killed = await executeSparkTool(tools, "spark_background_runs", ctx, {
+    const killed = await executeSparkTool(tools, "spark_workflow_runs", ctx, {
       action: "kill",
       runRef: child.runRef,
       forceAfterMs: 0,
@@ -7197,7 +7385,7 @@ void test("spark_background_runs exposes active child runs and refuses broad kil
       const reloaded = await defaultTaskGraphStore(dir).load();
       return !reloaded?.tasks(project.ref).some((task) => task.status === "running");
     }, 5_000);
-    await waitFor(async () => (await defaultSparkDagRunStore(dir).status()).running === 0, 5_000);
+    await waitFor(async () => (await defaultWorkflowRunStore(dir).status()).running === 0, 5_000);
   } finally {
     await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
     if (existsSync(join(dir, ".spark", "workflow-runs.json"))) {
@@ -7206,7 +7394,7 @@ void test("spark_background_runs exposes active child runs and refuses broad kil
         return !reloaded?.tasks().some((task) => task.status === "running");
       }, 5_000).catch(() => undefined);
       await waitFor(
-        async () => (await defaultSparkDagRunStore(dir).status()).running === 0,
+        async () => (await defaultWorkflowRunStore(dir).status()).running === 0,
         5_000,
       ).catch(() => undefined);
     }
@@ -7217,7 +7405,7 @@ void test("spark_background_runs exposes active child runs and refuses broad kil
   }
 });
 
-void test("spark_background_runs reports failed DAG with stuck child as attention needed", async () => {
+void test("spark_workflow_runs reports failed workflow run with stuck child as attention needed", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-background-failed-active-"));
   let runPromise: Promise<unknown> | undefined;
   try {
@@ -7293,7 +7481,7 @@ void test("spark_background_runs reports failed DAG with stuck child as attentio
     );
     await store.save(graph);
 
-    const dagRunStore = defaultSparkDagRunStore(dir);
+    const dagRunStore = defaultWorkflowRunStore(dir);
     const dagRun = await dagRunStore.startRun({
       projectRef: project.ref,
       ownerSessionId: ctxSessionKey(ctx),
@@ -7321,7 +7509,7 @@ void test("spark_background_runs reports failed DAG with stuck child as attentio
     });
 
     const { tools } = registerSparkToolsForTest();
-    const status = await executeSparkTool(tools, "spark_background_runs", ctx, {
+    const status = await executeSparkTool(tools, "spark_workflow_runs", ctx, {
       action: "status",
       includeDetails: true,
       projectRef: project.ref,
@@ -7355,7 +7543,7 @@ void test("spark_background_runs reports failed DAG with stuck child as attentio
   }
 });
 
-void test("spark_background_runs inspect/list use compact role-run summaries and tail refs", async () => {
+void test("spark_workflow_runs inspect/list use compact role-run summaries and tail refs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-background-runs-role-summary-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7516,7 +7704,7 @@ void test("spark_background_runs inspect/list use compact role-run summaries and
       },
     });
     await store.save(graph);
-    const dagStore = defaultSparkDagRunStore(dir);
+    const dagStore = defaultWorkflowRunStore(dir);
     const dagRun = await dagStore.startRun({
       projectRef: project.ref,
       dryRun: false,
@@ -7551,7 +7739,7 @@ void test("spark_background_runs inspect/list use compact role-run summaries and
       runs: [failedRun, succeededRun],
     });
 
-    const inspect = await executeSparkTool(tools, "spark_background_runs", ctx, {
+    const inspect = await executeSparkTool(tools, "spark_workflow_runs", ctx, {
       action: "inspect",
       runRef: failedRunRef,
     });
@@ -7577,7 +7765,7 @@ void test("spark_background_runs inspect/list use compact role-run summaries and
     assert.equal(inspectDetails.background?.childRuns?.[0]?.stdoutTail?.truncated, true);
     assert.equal(inspectDetails.background?.childRuns?.[0]?.jsonEventsTail?.count, 42);
 
-    const list = await executeSparkTool(tools, "spark_background_runs", ctx, {
+    const list = await executeSparkTool(tools, "spark_workflow_runs", ctx, {
       action: "list",
       includeHistory: true,
     });
@@ -7590,7 +7778,7 @@ void test("spark_background_runs inspect/list use compact role-run summaries and
   }
 });
 
-void test("spark_background_runs inspect keeps legacy large role-run artifacts behind refs", async () => {
+void test("spark_workflow_runs inspect keeps legacy large role-run artifacts behind refs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-background-runs-large-role-artifact-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7636,7 +7824,7 @@ void test("spark_background_runs inspect keeps legacy large role-run artifacts b
     });
     await store.save(graph);
 
-    const inspect = await executeSparkTool(tools, "spark_background_runs", ctx, {
+    const inspect = await executeSparkTool(tools, "spark_workflow_runs", ctx, {
       action: "inspect",
       runRef,
     });
@@ -7651,7 +7839,7 @@ void test("spark_background_runs inspect keeps legacy large role-run artifacts b
   }
 });
 
-void test("spark_background_runs reconciles, acks scoped problems, and renders legacy timeouts", async () => {
+void test("spark_workflow_runs reconciles, acks scoped problems, and renders legacy timeouts", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-background-runs-records-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7660,7 +7848,7 @@ void test("spark_background_runs reconciles, acks scoped problems, and renders l
     assert.ok(graph);
     const [project] = graph.projects();
     assert.ok(project);
-    const dagStore = defaultSparkDagRunStore(dir);
+    const dagStore = defaultWorkflowRunStore(dir);
     const stale = await dagStore.startRun({
       projectRef: project.ref,
       dryRun: false,
@@ -7677,30 +7865,30 @@ void test("spark_background_runs reconciles, acks scoped problems, and renders l
 
     const { tools } = registerSparkToolsForTest();
     await useOnlySparkProject(tools, ctx);
-    const reconciled = await executeSparkTool(tools, "spark_background_runs", ctx, {
+    const reconciled = await executeSparkTool(tools, "spark_workflow_runs", ctx, {
       action: "reconcile",
       includeDetails: true,
     });
-    assert.match(toolText(reconciled), /Reconciled background records changed: 1/);
+    assert.match(toolText(reconciled), /Reconciled workflow records changed: 1/);
     assert.match(toolText(reconciled), /Legacy timeout record/);
     assert.match(toolText(reconciled), /Workflow run .*stale/);
     const reconcileDetails = reconciled.details as {
-      background?: { dagRuns?: Array<{ runRef: string; status: string; legacyTimedOut: boolean }> };
+      background?: { runs?: Array<{ runRef: string; status: string; legacyTimedOut: boolean }> };
     };
     assert.equal(
-      reconcileDetails.background?.dagRuns?.some(
+      reconcileDetails.background?.runs?.some(
         (run) => run.runRef === stale.ref && run.status === "stale",
       ),
       true,
     );
     assert.equal(
-      reconcileDetails.background?.dagRuns?.some(
+      reconcileDetails.background?.runs?.some(
         (run) => run.runRef === legacy.ref && run.legacyTimedOut,
       ),
       true,
     );
 
-    const acknowledged = await executeSparkTool(tools, "spark_background_runs", ctx, {
+    const acknowledged = await executeSparkTool(tools, "spark_workflow_runs", ctx, {
       action: "ack",
     });
     assert.match(toolText(acknowledged), /Acknowledged background problem runs: 2 newly/);
@@ -7712,14 +7900,6 @@ void test("spark_background_runs reconciles, acks scoped problems, and renders l
       [legacy.ref, stale.ref].sort(),
     );
     assert.equal(ackDetails.background?.childRuns?.length, 0);
-
-    const dagManager = await executeSparkTool(tools, "spark_dag_manager", ctx, {
-      action: "status",
-    });
-    assert.match(
-      toolText(dagManager),
-      /Low-level compatibility tool; prefer spark_background_runs/,
-    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -7793,15 +7973,15 @@ void test("spark_run_ready_tasks preflights only the current ready frontier", as
       maxConcurrency: 1,
       timeoutMs: 123,
     });
-    const runMode = await loadSparkRunMode(dir, ctx);
-    assert.equal(runMode?.policy.maxConcurrency, 1);
-    assert.equal(runMode?.policy.timeoutMs, 123);
+    const runControl = await defaultWorkflowRunStore(dir).loadControl();
+    assert.equal(runControl?.policy.maxConcurrency, 1);
+    assert.equal(runControl?.policy.timeoutMs, 123);
     const settingsFile = JSON.parse(
       await readFile(join(dir, ".agents", "role-model-settings.json"), "utf8"),
     ) as { roleModels: Record<string, string> };
     assert.deepEqual(settingsFile.roleModels, { "role:builtin-worker": "test/model" });
     await waitFor(async () => {
-      const dagStatus = await defaultSparkDagRunStore(dir).status();
+      const dagStatus = await defaultWorkflowRunStore(dir).status();
       return dagStatus.succeeded === 1 || dagStatus.failed > 0;
     }, 10_000);
   } finally {
@@ -7876,7 +8056,7 @@ void test("spark_run_ready_tasks reports workflow-run completion without queuing
     );
     await waitFor(() => !ctx.notifications.at(-1)?.message.includes("running"), 10_000);
 
-    const dagStatus = await defaultSparkDagRunStore(dir).status();
+    const dagStatus = await defaultWorkflowRunStore(dir).status();
     assert.equal(dagStatus.succeeded, 1);
     assert.equal(dagStatus.lastRun?.projectRef, project.ref);
     const reloadedGraph = await defaultTaskGraphStore(dir).load();
@@ -8038,7 +8218,7 @@ void test("spark_run_ready_tasks marks Spark workflow-run scheduler failed when 
     );
     await waitFor(() => !ctx.notifications.at(-1)?.message.includes("running"), 3_000);
 
-    const dagStatus = await defaultSparkDagRunStore(dir).status();
+    const dagStatus = await defaultWorkflowRunStore(dir).status();
     assert.equal(dagStatus.succeeded, 0);
     assert.equal(dagStatus.failed, 1);
     assert.equal(dagStatus.lastRun?.status, "failed");
@@ -8050,12 +8230,12 @@ void test("spark_run_ready_tasks marks Spark workflow-run scheduler failed when 
     );
     assert.match(
       ctx.notifications.at(-1)?.message ?? "",
-      /failed: inspect task\(\{ action: "run_status"/,
+      /failed: inspect task_read\(\{ action: "run_status"/,
     );
     const hiddenInbox = await consumeSparkModeContext(extension, ctx);
     assert.match(hiddenInbox, /Recent unread background role-run results:/);
     assert.match(hiddenInbox, /\[failed\] task=task:/);
-    assert.match(hiddenInbox, /next=inspect with task\(\{ action: "run_status"/);
+    assert.match(hiddenInbox, /next=inspect with task_read\(\{ action: "run_status"/);
     assert.doesNotMatch(hiddenInbox, /full transcript/i);
     assert.equal(await tryConsumeSparkModeContext(extension, ctx), undefined);
     await waitFor(() => existsSync(join(dir, ".spark", "todos")), 3_000);
@@ -8176,7 +8356,7 @@ void test("spark_status defaults to active view, supports full history, summary,
       }>;
       independentTodos: { total: number; todos: unknown[] };
       projects?: unknown[];
-      dag?: { recentRuns?: unknown[] };
+      workflowRunStatus?: { recentRuns?: unknown[] };
       hints?: string[];
     };
     assert.equal(jsonStatus.found, true);
@@ -8195,7 +8375,7 @@ void test("spark_status defaults to active view, supports full history, summary,
     assert.equal(jsonStatus.renderedProjects[0]?.taskCounts.claimedByCurrentSession, 1);
     assert.equal(jsonStatus.renderedProjects[0]?.tasks, undefined);
     assert.equal(jsonStatus.projects, undefined);
-    assert.equal(jsonStatus.dag?.recentRuns, undefined);
+    assert.equal(jsonStatus.workflowRunStatus?.recentRuns, undefined);
     assert.match(jsonStatus.hints?.join("\n") ?? "", /includeDetails=true/);
     assert.equal(jsonStatus.independentTodos.total, 0);
     assert.equal(json.details?.format, "json");
@@ -8208,7 +8388,7 @@ void test("spark_status defaults to active view, supports full history, summary,
       compact?: boolean;
       renderedProjects: Array<{ tasks: Array<{ name: string }> }>;
       projects: unknown[];
-      dag: { recentRuns: unknown[] };
+      workflowRunStatus: { recentRuns: unknown[] };
     };
     assert.equal(detailedStatus.compact, undefined);
     assert.deepEqual(
@@ -8216,7 +8396,7 @@ void test("spark_status defaults to active view, supports full history, summary,
       ["mine", "other"],
     );
     assert.ok(Array.isArray(detailedStatus.projects));
-    assert.ok(Array.isArray(detailedStatus.dag.recentRuns));
+    assert.ok(Array.isArray(detailedStatus.workflowRunStatus.recentRuns));
 
     const limited = await executeSparkTool(tools, "spark_status", ctx, { limit: 1 });
     const limitedText = toolText(limited);
@@ -8453,7 +8633,7 @@ void test("spark_state diagnostics reports protected-store candidates without de
     await defaultTaskGraphStore(dir).save(graph);
 
     const now = new Date().toISOString();
-    await defaultSparkDagRunStore(dir).save({
+    await defaultWorkflowRunStore(dir).save({
       version: 1,
       manager: { status: "idle", updatedAt: now },
       runs: [
@@ -9400,6 +9580,7 @@ function registerSparkToolsForTest(options: { reviewerRunner?: ReviewerRunner } 
     customType: string;
     content: string;
     display?: boolean;
+    details?: Record<string, unknown>;
     options?: { deliverAs?: string; triggerTurn?: boolean };
   }>;
   commands: Map<string, Parameters<SparkExtensionApiForTest["registerCommand"]>[1]>;
@@ -9416,6 +9597,7 @@ function registerSparkToolsForTest(options: { reviewerRunner?: ReviewerRunner } 
     customType: string;
     content: string;
     display?: boolean;
+    details?: Record<string, unknown>;
     options?: { deliverAs?: string; triggerTurn?: boolean };
   }> = [];
   const commands = new Map<string, Parameters<SparkExtensionApiForTest["registerCommand"]>[1]>();
@@ -9502,6 +9684,13 @@ function registerSparkToolsForTest(options: { reviewerRunner?: ReviewerRunner } 
   };
 }
 
+function customMessageVisible(
+  message: ReturnType<typeof registerSparkToolsForTest>["customMessages"][number] | undefined,
+): string {
+  const visible = message?.details?.visible;
+  return typeof visible === "string" ? visible : "";
+}
+
 async function tryConsumeSparkModeContext(
   run: ReturnType<typeof registerSparkToolsForTest>,
   ctx: TestSparkContext,
@@ -9554,24 +9743,6 @@ async function useOnlySparkProjectInExplicitPlanMode(
   const statePath = join(ctx.cwd, ".spark", "sessions", `${ctxSessionStoreScope(ctx)}.json`);
   const state = JSON.parse(await readFile(statePath, "utf8")) as { projectRef?: string };
   assert.ok(state.projectRef);
-  await writeFile(
-    statePath,
-    `${JSON.stringify(
-      {
-        version: 1,
-        projectRef: state.projectRef,
-        planningMode: {
-          version: 1,
-          projectRef: state.projectRef,
-          source: "direct",
-          enteredAt: new Date().toISOString(),
-        },
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
 }
 
 function testSparkContext(cwd: string, sessionName: string): TestSparkContext {
@@ -9590,6 +9761,9 @@ function testSparkContext(cwd: string, sessionName: string): TestSparkContext {
       },
       setWidget: () => undefined,
       setStatus: () => undefined,
+      setEditorText: (text) => {
+        context.editorText = text;
+      },
       confirm: async () => true,
       input: async () => context.inputValue,
       select: async () => context.selected,

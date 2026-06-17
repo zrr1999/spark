@@ -1,18 +1,6 @@
-import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
-import {
-  isActiveSessionTodo,
-  isUnfinishedTaskStatus,
-  type SessionTodoEntry,
-  type TaskGraph,
-} from "@zendev-lab/pi-tasks";
-import {
-  nowIso,
-  type ArtifactRef,
-  type JsonValue,
-  type ProjectRef,
-  type RoleRef,
-} from "@zendev-lab/pi-extension-api";
-import type { SparkEntryIntent } from "./spark-entry.ts";
+import { isActiveSessionTodo, isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
+import { nowIso, type ProjectRef } from "@zendev-lab/pi-extension-api";
+import type { SparkEntryIntent, SparkEntryMode } from "./spark-entry.ts";
 import {
   applySparkEntryResolution,
   type SparkEntryApplicationDeps,
@@ -20,6 +8,10 @@ import {
 import { detectSparkProjectState, resolveSparkEntry } from "./spark-entry-resolution.ts";
 import { currentSparkProject, loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
 import { loadIndependentTodos } from "./session-todos.ts";
+import {
+  requestGoalCompletionReview,
+  type GoalCompletionReviewOutcome,
+} from "./spark-goal-completion-review.ts";
 import { startOrInferSessionGoal } from "./spark-goal-tool-registration.ts";
 import {
   clearSessionGoal,
@@ -34,15 +26,13 @@ import {
   sparkLanguageForProject,
   type SparkLanguage,
 } from "./spark-i18n.ts";
+import { defaultSparkModeRegistry, resolveActiveMode } from "./mode/index.ts";
+import { renderSparkGoalDriverModePrompt } from "./spark-mode-prompts.ts";
+import { enterSparkWorkflowDriver } from "./spark-workflow-driver-entry.ts";
 
 type SparkProjectLike = ReturnType<TaskGraph["projects"]>[number];
-import type {
-  GoalReviewInput,
-  GoalReviewVerdict,
-  ReviewerRunResult,
-  ReviewerRunner,
-} from "./reviewer-runner.ts";
-import { isSparkReviewerLeaseActive, withSparkReviewerLease } from "./spark-reviewer-lease.ts";
+import type { ReviewerRunner } from "./reviewer-runner.ts";
+import { isSparkReviewerLeaseActive } from "./spark-reviewer-lease.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
 type SparkGoalLoopContext = SparkToolContext & {
@@ -82,7 +72,6 @@ interface SparkCommandRegistrationDeps extends SparkEntryApplicationDeps {
 const FOREGROUND_GOAL_LOOP_INTERVAL_MS = 30_000;
 const FOREGROUND_GOAL_RETRY_BACKOFF_MS = [30_000, 60_000, 120_000, 120_000, 120_000] as const;
 const FOREGROUND_GOAL_RETRY_BUDGET = 5;
-const GOAL_COMPLETION_TODO_BLOCKER_LIMIT = 3;
 const foregroundGoalTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const foregroundGoalAwaitingTurns = new Map<string, ForegroundGoalAwaitingTurn>();
 const foregroundGoalLoopGenerations = new Map<string, number>();
@@ -162,7 +151,6 @@ export function registerSparkCommands(
         kind: "direct",
         mode: "implement",
         prompt: args.trim(),
-        executeStrategy: "default",
       });
     },
   });
@@ -179,13 +167,7 @@ export function registerSparkCommands(
       "Enter Spark workflow execution mode; accepts optional selector like workspace:foo or user:foo.",
     async handler(args, ctx) {
       const parsed = parseWorkflowCommandArgs(args);
-      await handleSparkEntryCommand(pi, ctx, {
-        kind: "direct",
-        mode: "implement",
-        prompt: parsed.focus,
-        executeStrategy: "workflow",
-        workflowSelector: parsed.selector,
-      });
+      await handleSparkWorkflowCommand(pi, ctx, parsed);
     },
   });
 
@@ -239,6 +221,22 @@ export function registerSparkCommands(
     const projectState = await detectSparkProjectState(ctx.cwd, graph, ctx);
     const resolution = await resolveSparkEntry(ctx, intent, graph, projectState);
     await applySparkEntryResolution(piApi, deps, ctx, graph, resolution);
+  }
+
+  async function handleSparkWorkflowCommand(
+    piApi: SparkCommandApi,
+    ctx: SparkCommandContext,
+    parsed: { selector?: string; focus: string },
+  ): Promise<void> {
+    const graph = await loadSparkGraph(ctx.cwd, ctx);
+    if (!graph) {
+      ctx.ui?.notify?.(
+        'Spark workflow driver needs initialized Spark project state. Create or select a project with task_write({ action: "project_use", title, description }) before using /workflow.',
+        "warning",
+      );
+      return;
+    }
+    await enterSparkWorkflowDriver(piApi, deps, ctx, graph, parsed.focus, parsed.selector);
   }
 
   async function handleSparkGoalCommand(
@@ -394,18 +392,46 @@ export function registerSparkCommands(
     if (goal.source !== "inferred") return undefined;
     const projects = graph.projects();
     const candidate = projects.find((project) =>
-      inferredGoalObjectiveNamesProject(goal.objective, project.title),
+      inferredGoalObjectiveMatchesProject(goal.objective, project),
     );
     if (!candidate || candidate.status !== "done") return undefined;
     return candidate;
   }
 
-  function inferredGoalObjectiveNamesProject(objective: string, title: string): boolean {
-    return (
-      objective.includes(`Advance project “${title}”`) ||
-      objective.includes(`Advance project "${title}"`) ||
-      objective.includes(`Advance project '${title}'`)
-    );
+  function inferredGoalObjectiveMatchesProject(
+    objective: string,
+    project: SparkProjectLike,
+  ): boolean {
+    const normalized = normalizeGoalMatchText(objective);
+    const title = normalizeGoalMatchText(project.title);
+    const outcome =
+      normalizeGoalMatchText(project.purpose) || normalizeGoalMatchText(project.description);
+    const legacyTitleCandidates = [
+      `Advance project “${title}”`,
+      `Advance project "${title}"`,
+      `Advance project '${title}'`,
+    ];
+    if (legacyTitleCandidates.some((candidate) => normalized.includes(candidate))) return true;
+    const candidates = [
+      `Achieve the intended outcome of “${title}”.`,
+      `Achieve the intended outcome of "${title}".`,
+      `Achieve the intended outcome of '${title}'.`,
+      `实现“${title}”的预期成果。`,
+      `实现"${title}"的预期成果。`,
+      outcome
+        ? `Achieve the intended project outcome: ${withGoalMatchPunctuation(outcome, ".")}`
+        : undefined,
+      outcome ? `实现项目预期成果：${withGoalMatchPunctuation(outcome, "。")}` : undefined,
+    ].filter((item): item is string => Boolean(item));
+    return candidates.some((candidate) => normalized === normalizeGoalMatchText(candidate));
+  }
+
+  function normalizeGoalMatchText(value: string | undefined): string {
+    return value?.replaceAll(/\s+/gu, " ").trim() ?? "";
+  }
+
+  function withGoalMatchPunctuation(text: string, fallback: "." | "。"): string {
+    return /[.!?。！？]$/u.test(text) ? text : `${text}${fallback}`;
   }
 
   async function queueForegroundGoalStartInstruction(
@@ -416,6 +442,8 @@ export function registerSparkCommands(
     visible: string,
     language: SparkLanguage,
   ): Promise<void> {
+    const graph = await loadSparkGraph(ctx.cwd, ctx);
+    const project = graph ? await currentSparkProject(ctx.cwd, ctx, graph) : undefined;
     const sweep = await renderSessionTodoSweepLines(ctx, language);
     const instructions = goalInstructions(language);
     deps.queueSparkAgentInstruction(
@@ -428,6 +456,7 @@ export function registerSparkCommands(
         instructions.pauseLineForeground,
         instructions.loopModeDecisionContract,
         instructions.loopReviewerOwnership,
+        graph ? renderForegroundGoalModePrompt(graph, project?.ref, goal.objective) : undefined,
       ]
         .filter((line): line is string => Boolean(line))
         .join("\n"),
@@ -719,7 +748,7 @@ export function registerSparkCommands(
     const review = {
       achieved: false,
       confidence: "turn-failed",
-      reason: `Foreground goal loop turn failed; automatic review will retry: ${failure}`,
+      reason: `Foreground goal loop turn failed; foreground goal turn will retry: ${failure}`,
       remainingWork:
         consecutiveFailures >= FOREGROUND_GOAL_RETRY_BUDGET
           ? "Automatic goal review paused because the retry budget was exhausted."
@@ -886,390 +915,27 @@ export function registerSparkCommands(
     ctx: SparkGoalLoopContext,
     active: NonNullable<Awaited<ReturnType<typeof loadActiveForegroundGoal>>>,
   ): Promise<boolean> {
-    const independentTodos = await loadIndependentTodos(ctx.cwd, ctx);
-    const unresolvedSessionTodos = independentTodos
-      .filter(isActiveSessionTodo)
-      .filter(isUnresolvedSessionTodoBlocker);
-    if (unresolvedSessionTodos.length > 0) {
-      const reviewedAt = nowIso();
-      const blockers = activeSessionTodoBlockers(unresolvedSessionTodos);
-      const reason = `Goal completion blocked by ${unresolvedSessionTodos.length} unresolved session TODO(s).`;
-      const updated = await updateSessionGoalStatus(ctx.cwd, ctx, "active", {
-        review: {
-          achieved: false,
-          confidence: "deterministic-blocker",
-          reason,
-          remainingWork: `${reason} Resolve or disposition them before completing the goal.`,
-          blockers,
-          reviewedAt,
-        },
-        expectedGoalId: active.goal.goalId,
-      });
-      await deps.refreshSparkWidget(ctx.cwd, ctx);
-      return Boolean(updated);
-    }
-    const reviewContext = await goalReviewContext(ctx, active, independentTodos);
-    if (!reviewContext.projectRef && reviewContext.evidenceRefs.length === 0) {
-      const reviewedAt = nowIso();
-      const reason = "Goal progress needs a current Spark project before completion review.";
-      const updated = await updateSessionGoalStatus(ctx.cwd, ctx, "active", {
-        review: {
-          achieved: false,
-          confidence: "deterministic-blocker",
-          reason,
-          remainingWork:
-            'Create or select a project with task({ action: "project_use", title, description }) using the goal objective as the project intent, then plan initial concrete tasks with task({ action: "plan" }).',
-          blockers: ["missing_current_project"],
-          reviewedAt,
-        },
-        expectedGoalId: active.goal.goalId,
-      });
-      await deps.refreshSparkWidget(ctx.cwd, ctx);
-      return Boolean(updated);
-    }
-    const reviewerRunner = await deps.createReviewerRunner?.(ctx.cwd, ctx);
-    if (!reviewerRunner) return true;
-    const reviewInput: GoalReviewInput = {
-      targetKind: "goal",
-      cwd: ctx.cwd,
-      projectRef: reviewContext.projectRef,
-      projectStatus: reviewContext.projectStatus,
-      goalId: active.goal.goalId,
-      objective: active.goal.objective,
-      status: active.goal.status,
-      requestedStatus: "complete",
-      evidenceRefs: reviewContext.evidenceRefs,
-      sessionKey: active.goal.sessionKey,
-      forkFromSession: ctx.sessionManager?.getSessionFile?.(),
-    };
-    const leasedReview = await withSparkReviewerLease(ctx.cwd, ctx, () =>
-      runGoalReviewer(reviewerRunner, reviewInput),
+    const outcome: GoalCompletionReviewOutcome = await requestGoalCompletionReview(
+      ctx,
+      deps,
+      active,
+      { trigger: "loop" },
     );
-    if (!leasedReview.acquired || !leasedReview.result) return false;
-    const review = leasedReview.result;
-    const verdict = review.verdict as GoalReviewVerdict;
-    const artifact = await recordGoalReviewArtifact(ctx.cwd, active, review, reviewInput);
-    const reviewedAt = review.record.finishedAt || nowIso();
-    const deterministicBlocker = goalCompletionDeterministicBlocker(active, reviewInput);
-    const effectiveAchieved = verdict.achieved && !deterministicBlocker;
-    const reviewSummary = {
-      achieved: effectiveAchieved,
-      confidence: deterministicBlocker ? "deterministic-blocker" : verdict.confidence,
-      reason: deterministicBlocker?.reason ?? verdict.summary,
-      remainingWork: deterministicBlocker?.remainingWork ?? verdict.remainingWork,
-      blockers: deterministicBlocker?.blockers ?? verdict.blockers,
-      artifactRef: artifact.ref,
-      reviewedAt,
-    };
-    if (effectiveAchieved) {
-      await updateSessionGoalStatus(ctx.cwd, ctx, "complete", {
-        reason: reviewSummary.reason,
-        review: reviewSummary,
-        retryState: null,
-      });
-      await deps.refreshSparkWidget(ctx.cwd, ctx);
+    if (outcome.outcome === "completed") {
       const completionLanguage = sparkLanguageForProject({
         project: active.project,
         goal: active.goal,
-        fallbackText: verdict.summary,
+        fallbackText: outcome.reason,
       });
       const completionLabel =
         completionLanguage === "zh"
-          ? `Spark 目标已由 reviewer 完成：${compactInline(verdict.summary)}`
-          : `Spark goal completed by reviewer: ${compactInline(verdict.summary)}`;
+          ? `Spark 目标 completion 已由 reviewer 审核通过：${compactInline(outcome.reason)}`
+          : `Spark goal completion approved by reviewer: ${compactInline(outcome.reason)}`;
       ctx.ui?.notify?.(completionLabel, "info");
       return false;
     }
-    await updateSessionGoalStatus(ctx.cwd, ctx, "active", { review: reviewSummary });
-    await deps.refreshSparkWidget(ctx.cwd, ctx);
+    if (outcome.outcome === "deferred") return false;
     return true;
-  }
-
-  function goalCompletionDeterministicBlocker(
-    active: NonNullable<Awaited<ReturnType<typeof loadActiveForegroundGoal>>>,
-    reviewInput: GoalReviewInput,
-  ): { reason: string; remainingWork: string; blockers: string[] } | undefined {
-    const unfinished = reviewInput.projectStatus?.taskCounts.unfinished ?? 0;
-    if (unfinished <= 0) return undefined;
-    if (isPlanningOnlyGoalObjective(active.goal.objective)) return undefined;
-    const readyTasks = reviewInput.projectStatus?.readyTasks ?? [];
-    const readyText = readyTasks.length
-      ? readyTasks.map((task) => `@${task.name ?? task.ref}: ${task.title}`).join("; ")
-      : "no ready task; inspect dependencies";
-    const reason = `Goal completion blocked by ${unfinished} unfinished project task(s).`;
-    return {
-      reason,
-      remainingWork: `${reason} Next ready frontier: ${readyText}. Continue by claiming a ready task with task-local TODOs, or narrow the goal objective if only planning readiness is intended.`,
-      blockers: [`unfinished_project_tasks=${unfinished}`, `ready_frontier=${readyText}`],
-    };
-  }
-
-  function isPlanningOnlyGoalObjective(objective: string): boolean {
-    return (
-      /\b(planning-only|readiness-only|plan-only)\b/i.test(objective) ||
-      /仅规划|只规划|计划就绪|规划就绪/u.test(objective)
-    );
-  }
-
-  function isUnresolvedSessionTodoBlocker(todo: SessionTodoEntry): boolean {
-    if (todo.status === "blocked") return !todo.blockedBy?.length;
-    return true;
-  }
-
-  function activeSessionTodoBlockers(
-    todos: Awaited<ReturnType<typeof loadIndependentTodos>>,
-  ): string[] {
-    const visible = todos.slice(0, GOAL_COMPLETION_TODO_BLOCKER_LIMIT).map((todo) => {
-      const id = todo.id ? `${todo.id}: ` : "";
-      return `${id}${todo.content} [${todo.status}]`;
-    });
-    const hidden = todos.length - visible.length;
-    return hidden > 0 ? [...visible, `… ${hidden} more unresolved session TODO(s)`] : visible;
-  }
-
-  async function runGoalReviewer(
-    reviewerRunner: ReviewerRunner,
-    input: GoalReviewInput,
-  ): Promise<ReviewerRunResult> {
-    try {
-      return await reviewerRunner.review(input);
-    } catch (error) {
-      const timestamp = nowIso();
-      const reason = error instanceof Error ? error.message : String(error);
-      return {
-        verdict: {
-          targetKind: "goal",
-          goalId: input.goalId,
-          achieved: false,
-          outcome: "blocked",
-          summary: `reviewer failed: ${reason}`,
-          remainingWork: reason,
-          findings: [],
-          blockers: [reason],
-          confidence: "low",
-        },
-        record: {
-          roleRef: "role:builtin-reviewer" as RoleRef,
-          runName: "goal-reviewer-failed",
-          startedAt: timestamp,
-          finishedAt: timestamp,
-        },
-      };
-    }
-  }
-
-  async function goalReviewContext(
-    ctx: SparkGoalLoopContext,
-    active: NonNullable<Awaited<ReturnType<typeof loadActiveForegroundGoal>>>,
-    independentTodos: SessionTodoEntry[],
-  ): Promise<{
-    projectRef?: ProjectRef;
-    projectStatus?: GoalReviewInput["projectStatus"];
-    evidenceRefs: ArtifactRef[];
-  }> {
-    if (isSessionTodoDispositionGoal(active.goal)) {
-      const evidence = await recordSessionTodoDispositionEvidence(
-        ctx.cwd,
-        active.goal,
-        independentTodos,
-      );
-      return { evidenceRefs: [evidence.ref] };
-    }
-    const project = goalReviewEvidenceProject(active);
-    return {
-      projectRef: project?.ref,
-      projectStatus:
-        project && active.graph ? projectGoalReviewStatus(active.graph, project) : undefined,
-      evidenceRefs:
-        project && active.graph
-          ? await projectGoalEvidenceRefs(ctx.cwd, active.graph, project.ref)
-          : [],
-    };
-  }
-
-  function isSessionTodoDispositionGoal(goal: SparkSessionGoal): boolean {
-    return /session TODO/i.test(goal.objective);
-  }
-
-  async function recordSessionTodoDispositionEvidence(
-    cwd: string,
-    goal: SparkSessionGoal,
-    todos: SessionTodoEntry[],
-  ): Promise<{ ref: ArtifactRef }> {
-    const unresolvedBlockers = todos
-      .filter(isActiveSessionTodo)
-      .filter(isUnresolvedSessionTodoBlocker);
-    const statusCounts = todos.reduce<Record<string, number>>((counts, todo) => {
-      counts[todo.status] = (counts[todo.status] ?? 0) + 1;
-      return counts;
-    }, {});
-    const artifact = await defaultArtifactStore(cwd).put({
-      kind: "record",
-      title: `Session TODO disposition snapshot for goal: ${compactInline(goal.objective)}`,
-      format: "json",
-      body: {
-        goalId: goal.goalId,
-        objective: goal.objective,
-        sessionKey: goal.sessionKey,
-        recordedAt: nowIso(),
-        statusCounts,
-        unresolvedBlockerCount: unresolvedBlockers.length,
-        unresolvedBlockers: unresolvedBlockers.map(sessionTodoEvidenceEntry),
-        todos: todos.map(sessionTodoEvidenceEntry),
-      } as unknown as JsonValue,
-      provenance: {
-        producer: "task",
-        note: "Current session TODO disposition evidence for goal completion review.",
-      },
-    });
-    return { ref: artifact.ref };
-  }
-
-  function sessionTodoEvidenceEntry(todo: SessionTodoEntry): JsonValue {
-    return {
-      ...(todo.id ? { id: todo.id } : {}),
-      content: todo.content,
-      status: todo.status,
-      ...(todo.blockedBy?.length ? { blockedBy: [...todo.blockedBy] } : {}),
-      ...(todo.notes?.length ? { notes: [...todo.notes] } : {}),
-      ...(todo.updatedAt ? { updatedAt: todo.updatedAt } : {}),
-    };
-  }
-
-  function goalReviewEvidenceProject(
-    active: NonNullable<Awaited<ReturnType<typeof loadActiveForegroundGoal>>>,
-  ): SparkProjectLike | undefined {
-    if (!active.graph) return active.project;
-    if (active.project) return active.project;
-    const projectsWithEvidence = active.graph
-      .projects()
-      .filter((project) => projectTaskEvidenceRefs(active.graph!, project.ref).length > 0);
-    const completedProjects = projectsWithEvidence.filter((project) => project.status === "done");
-    return (
-      mostRecentlyUpdatedProject(completedProjects) ??
-      mostRecentlyUpdatedProject(projectsWithEvidence)
-    );
-  }
-
-  function compactProjectTaskForGoalReview(task: ReturnType<TaskGraph["tasks"]>[number]) {
-    return {
-      ref: task.ref,
-      name: task.name,
-      title: task.title,
-      status: task.status,
-      kind: task.kind,
-    };
-  }
-
-  async function projectGoalEvidenceRefs(
-    cwd: string,
-    graph: TaskGraph,
-    projectRef: ProjectRef,
-  ): Promise<ArtifactRef[]> {
-    const taskEvidenceRefs = projectTaskEvidenceRefs(graph, projectRef);
-    const projectReviewRefs = (
-      await defaultArtifactStore(cwd).list({ producer: "review", projectRef })
-    ).map((artifact) => artifact.ref);
-    return [...new Set([...taskEvidenceRefs, ...projectReviewRefs])].slice(-20);
-  }
-
-  function projectTaskEvidenceRefs(graph: TaskGraph, projectRef: ProjectRef): ArtifactRef[] {
-    return [...new Set(graph.tasks(projectRef).flatMap((task) => task.outputArtifacts))].slice(-20);
-  }
-
-  function projectGoalReviewStatus(
-    graph: TaskGraph,
-    project: SparkProjectLike,
-  ): GoalReviewInput["projectStatus"] {
-    const tasks = graph.tasks(project.ref);
-    const statusCounts = tasks.reduce<Record<string, number>>((counts, task) => {
-      counts[task.status] = (counts[task.status] ?? 0) + 1;
-      return counts;
-    }, {});
-    return {
-      ref: project.ref,
-      title: project.title,
-      status: project.status,
-      taskCounts: {
-        total: tasks.length,
-        unfinished: tasks.filter((task) => isUnfinishedTaskStatus(task.status)).length,
-        claimed: tasks.filter((task) => Boolean(task.claim)).length,
-        statusCounts,
-      },
-      readyTasks: graph.readyTasks(project.ref).slice(0, 5).map(compactProjectTaskForGoalReview),
-      unfinishedTasks: tasks
-        .filter((task) => isUnfinishedTaskStatus(task.status))
-        .slice(0, 10)
-        .map(compactProjectTaskForGoalReview),
-    };
-  }
-
-  function mostRecentlyUpdatedProject(projects: SparkProjectLike[]): SparkProjectLike | undefined {
-    return [...projects].sort(
-      (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
-    )[0];
-  }
-
-  async function recordGoalReviewArtifact(
-    cwd: string,
-    active: NonNullable<Awaited<ReturnType<typeof loadActiveForegroundGoal>>>,
-    review: ReviewerRunResult,
-    input: GoalReviewInput,
-  ) {
-    const verdict = review.verdict as GoalReviewVerdict;
-    const reviewerRun = {
-      ...(review.record.runRef ? { runRef: review.record.runRef } : {}),
-      roleRef: review.record.roleRef,
-      ...(review.record.runName ? { runName: review.record.runName } : {}),
-      startedAt: review.record.startedAt,
-      finishedAt: review.record.finishedAt,
-    };
-    const store = defaultArtifactStore(cwd);
-    const ref = goalReviewArtifactRef(active.goal.goalId);
-    const recordedAt = nowIso();
-    const reviewPacket = {
-      ...(input.projectRef ? { projectRef: input.projectRef } : {}),
-      ...(input.projectStatus ? { projectStatus: input.projectStatus } : {}),
-      evidenceRefs: input.evidenceRefs,
-    };
-    const previous = await store.tryGet(ref);
-    const reviews = [
-      ...goalReviewHistoryEntries(previous?.body).slice(-9),
-      { verdict, reviewerRun, reviewPacket, recordedAt } as unknown as JsonValue,
-    ];
-    return store.put({
-      ref,
-      kind: "record",
-      title: `Goal review for session goal: ${compactInline(active.goal.objective)}`,
-      format: "json",
-      body: {
-        goalId: active.goal.goalId,
-        ...(input.projectRef ? { projectRef: input.projectRef } : {}),
-        objective: active.goal.objective,
-        reviewPacket,
-        verdict,
-        reviewerRun,
-        reviews,
-        recordedAt,
-      } as unknown as JsonValue,
-      provenance: {
-        producer: "review",
-        projectRef: input.projectRef,
-        roleRef: review.record.roleRef,
-        runRef: review.record.runRef,
-      },
-      links: input.projectRef ? [{ to: input.projectRef, relation: "review-of" }] : undefined,
-    });
-  }
-
-  function goalReviewArtifactRef(goalId: string): ArtifactRef {
-    return `artifact:goal-review-${goalId.replace(/[^a-zA-Z0-9_-]/gu, "-")}` as ArtifactRef;
-  }
-
-  function goalReviewHistoryEntries(value: unknown): JsonValue[] {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-    const reviews = (value as { reviews?: unknown }).reviews;
-    return Array.isArray(reviews) ? (reviews as JsonValue[]) : [];
   }
 
   function renderForegroundGoalTickInstruction(
@@ -1288,9 +954,65 @@ export function registerSparkCommands(
       status,
       instructions.loopModeDecisionContract,
       instructions.loopReviewerOwnership,
+      graph ? renderForegroundGoalModePrompt(graph, project?.ref, objective) : undefined,
     ]
       .filter((line): line is string => Boolean(line))
       .join("\n");
+  }
+
+  function renderForegroundGoalModePrompt(
+    graph: TaskGraph,
+    selectedProjectRef: ProjectRef | undefined,
+    objective: string,
+  ): string {
+    const mode = resolveForegroundGoalMode(graph, selectedProjectRef, objective);
+    return [
+      `Selected Spark mode for goal driver: ${mode}.`,
+      renderSparkGoalDriverModePrompt(graph, selectedProjectRef, objective, mode),
+    ].join("\n\n");
+  }
+
+  function resolveForegroundGoalMode(
+    graph: TaskGraph,
+    selectedProjectRef: ProjectRef | undefined,
+    objective: string,
+  ): SparkEntryMode {
+    const suggested = suggestForegroundGoalMode(graph, selectedProjectRef, objective);
+    const resolved = resolveActiveMode({
+      registry: defaultSparkModeRegistry(),
+      driver: "goal",
+      suggest: suggested,
+      fallback: "implement",
+    });
+    return isSparkEntryMode(resolved.mode) ? resolved.mode : "implement";
+  }
+
+  function suggestForegroundGoalMode(
+    graph: TaskGraph,
+    selectedProjectRef: ProjectRef | undefined,
+    objective: string,
+  ): SparkEntryMode {
+    const normalized = objective.trim();
+    if (/(调研|研究|审阅|review|research|investigate|inspect|audit)/iu.test(normalized))
+      return "research";
+    if (/(规划|计划|拆分|plan|clarify|decompose|break down)/iu.test(normalized)) return "plan";
+    if (
+      /(执行|完成|修复|继续|跑完|ready queue|until done|finish|fix|implement|execute)/iu.test(
+        normalized,
+      )
+    )
+      return "implement";
+    if (!selectedProjectRef) return "plan";
+    const ready = graph.readyTasks(selectedProjectRef);
+    if (ready.length > 0) return "implement";
+    const unfinished = graph
+      .tasks(selectedProjectRef)
+      .filter((task) => isUnfinishedTaskStatus(task.status));
+    return unfinished.length > 0 ? "plan" : "implement";
+  }
+
+  function isSparkEntryMode(mode: string): mode is SparkEntryMode {
+    return mode === "research" || mode === "plan" || mode === "implement";
   }
 
   function renderForegroundGoalTickStatus(
@@ -1308,8 +1030,8 @@ export function registerSparkCommands(
 
   function renderGoalBootstrapStatus(language: SparkLanguage): string {
     return language === "zh"
-      ? '当前 goal 尚未绑定项目。下一步：用 task({ action: "project_use", title, description }) 基于目标创建或选择项目，然后用 task({ action: "plan" }) 规划初始具体任务。不要等待用户手动建项目，除非目标意图确实不明确。'
-      : 'No current project is selected for this goal. Next: create or select a project with task({ action: "project_use", title, description }) using the goal objective as project intent, then plan initial concrete tasks with task({ action: "plan" }). Do not wait for the user to create the project manually unless the goal intent is genuinely ambiguous.';
+      ? '当前 goal 尚未绑定项目。下一步：用 task_write({ action: "project_use", title, description }) 基于目标创建或选择项目，然后用 task_write({ action: "plan" }) 规划初始具体任务。不要等待用户手动建项目，除非目标意图确实不明确。'
+      : 'No current project is selected for this goal. Next: create or select a project with task_write({ action: "project_use", title, description }) using the goal objective as project intent, then plan initial concrete tasks with task_write({ action: "plan" }). Do not wait for the user to create the project manually unless the goal intent is genuinely ambiguous.';
   }
 
   function foregroundGoalLoopKey(cwd: string, ctx: SparkToolContext): string {

@@ -10,18 +10,19 @@ import {
   defaultUserRoleModelSettingsStore,
   defaultUserRoleStore,
   hydrateDefaultRoleRegistry,
-  normalizeRoleRunMode,
+  normalizeRoleLaunchMode,
   resolveRoleModelSetting,
   runRole,
   validateRoleModel,
   type ResolvedRoleModelSetting,
   type RoleModelSettingsEntry,
   type RoleModelSettingsSource,
-  type RoleRunMode,
+  type RoleLaunchMode,
   type RoleRunRef,
   type RoleSource,
   type RoleSpec,
   type RoleSpecProposal,
+  type WritableRoleSource,
 } from "./index.ts";
 
 export interface PiRolesExtensionApi {
@@ -86,7 +87,7 @@ class ToolCallText implements ToolCallComponent {
 export interface CallRoleToolParams {
   role: string;
   instruction: string;
-  mode?: RoleRunMode;
+  launch?: RoleLaunchMode;
   piCommand?: string;
   cwd?: string;
   sessionDir?: string;
@@ -109,10 +110,12 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
   registerRoleActionTool({
     name: "list_roles",
     label: "List Roles",
-    description: "List builtin, project, and optionally user Pi role specs.",
+    description: "List builtin, extension, project, and optionally user Pi role specs.",
     parameters: Type.Object({
       source: Type.Optional(
-        Type.String({ description: "builtin | project | user. Omit to list all loaded roles." }),
+        Type.String({
+          description: "builtin | extension | project | user. Omit to list all loaded roles.",
+        }),
       ),
       includeUser: Type.Optional(
         Type.Boolean({
@@ -163,7 +166,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
   registerRoleActionTool({
     name: "get_role",
     label: "Get Role",
-    description: "Inspect one builtin, project, or user Pi role spec.",
+    description: "Inspect one builtin, extension, project, or user Pi role spec.",
     parameters: Type.Object({
       role: Type.String({
         description: "Role id or full role ref, e.g. worker or role:builtin-worker.",
@@ -281,13 +284,13 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     name: "call_role",
     label: "Call Role",
     description:
-      "Call one reusable Pi role directly with an explicit instruction. This is a one-off role invocation and is not attached to managed task graphs or workflow runs. Launches a fresh child Pi run by default, or an explicitly forked child run when mode=forked.",
+      "Call one reusable Pi role directly with an explicit instruction. This is a one-off role invocation and is not attached to managed task graphs or workflow runs. Launches a fresh child Pi run by default, or an explicitly forked child run when launch=forked.",
     parameters: Type.Object({
       role: Type.String({
         description: "Role id or full role ref, e.g. worker or role:builtin-worker.",
       }),
       instruction: Type.String({ description: "Concrete instruction for this one role call." }),
-      mode: Type.Optional(
+      launch: Type.Optional(
         Type.Union([Type.Literal("fresh"), Type.Literal("forked")], {
           description: "fresh | forked. Defaults to fresh; forked requires forkFromSession.",
         }),
@@ -299,7 +302,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       sessionDir: Type.Optional(Type.String({ description: "Explicit Pi session directory." })),
       forkFromSession: Type.Optional(
         Type.String({
-          description: "Parent session/context for forked mode. Required when mode=forked.",
+          description: "Parent session/context for forked launch. Required when launch=forked.",
         }),
       ),
       timeoutMs: Type.Optional(Type.Number({ description: "Child run timeout in milliseconds." })),
@@ -320,7 +323,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         "call_role",
         [
           formatStringArg(args.role),
-          formatStringArg(args.mode, { fallback: "fresh" }),
+          formatStringArg(args.launch, { fallback: "fresh" }),
           formatNumberArg(args.timeoutMs, { prefix: "timeout=" }),
           formatStringArg(args.cwd, { prefix: "cwd=" }),
           formatStringArg(args.model, { prefix: "model=" }),
@@ -334,7 +337,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       const registry = createDefaultRoleRegistry();
       await hydrateDefaultRoleRegistry(registry, cwd, { includeUser: p.includeUser });
       const role = registry.select(p.role);
-      const mode = p.mode ?? "fresh";
+      const launch = p.launch ?? "fresh";
       const runRef = `run:${randomUUID()}` as RoleRunRef;
       const model = await resolveRoleModelForCall({
         role,
@@ -348,7 +351,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       const commandInput = {
         runRef,
         roleRef: role.ref,
-        mode,
+        launch,
         systemPrompt: role.systemPrompt,
         model,
         instruction: p.instruction,
@@ -374,7 +377,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         `Role call ${result.record.status}: ${role.id} (${role.ref})`,
         formatRoleRunIdentity({
           runRef: result.record.ref,
-          mode: result.record.mode,
+          launch: result.record.launch,
           model: result.record.model,
           sessionDir: result.record.sessionDir,
           forkFromSession: result.record.forkFromSession,
@@ -392,7 +395,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         content: [{ type: "text", text: summary }],
         details: {
           role: compactRole(role),
-          mode,
+          launch,
           runRef,
           cwd,
           model,
@@ -561,7 +564,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       expectedUses: Type.Optional(Type.Array(Type.String())),
       allowedTools: Type.Optional(Type.Array(Type.String())),
       instruction: Type.Optional(Type.String({ description: "Instruction for call." })),
-      mode: Type.Optional(Type.String({ description: "fresh | forked for call." })),
+      launch: Type.Optional(Type.String({ description: "fresh | forked for call." })),
       piCommand: Type.Optional(Type.String()),
       cwd: Type.Optional(Type.String()),
       sessionDir: Type.Optional(Type.String()),
@@ -764,7 +767,9 @@ async function resolveRoleModelForCall(input: {
 function normalizeCallRoleToolParams(params: Record<string, unknown>): CallRoleToolParams {
   const role = normalizeRequiredString(params.role, "call_role role");
   const instruction = normalizeRequiredString(params.instruction, "call_role instruction");
-  const mode = normalizeRoleRunMode(params.mode);
+  if (Object.hasOwn(params, "mode"))
+    throw new Error("call_role mode was renamed to launch; use launch=fresh or launch=forked");
+  const launch = normalizeRoleLaunchMode(params.launch);
   if (Object.hasOwn(params, "dryRun"))
     throw new Error(
       "call_role dryRun is no longer supported; call_role always launches a child run",
@@ -773,12 +778,12 @@ function normalizeCallRoleToolParams(params: Record<string, unknown>): CallRoleT
     params.forkFromSession,
     "call_role forkFromSession",
   );
-  if (mode === "forked" && !forkFromSession)
-    throw new Error("call_role forked mode requires forkFromSession");
+  if (launch === "forked" && !forkFromSession)
+    throw new Error("call_role forked launch requires forkFromSession");
   return {
     role,
     instruction,
-    mode,
+    launch,
     piCommand: normalizeOptionalString(params.piCommand, "call_role piCommand"),
     cwd: normalizeOptionalString(params.cwd, "call_role cwd"),
     sessionDir: normalizeOptionalString(params.sessionDir, "call_role sessionDir"),
@@ -791,11 +796,12 @@ function normalizeCallRoleToolParams(params: Record<string, unknown>): CallRoleT
 
 function normalizeRoleSource(value: unknown, field: string): RoleSource | undefined {
   if (value === undefined || value === null) return undefined;
-  if (value === "builtin" || value === "project" || value === "user") return value;
-  throw new Error(`${field} must be builtin, project, or user`);
+  if (value === "builtin" || value === "extension" || value === "project" || value === "user")
+    return value;
+  throw new Error(`${field} must be builtin, extension, project, or user`);
 }
 
-function normalizeWritableRoleSource(value: unknown): Exclude<RoleSource, "builtin"> {
+function normalizeWritableRoleSource(value: unknown): WritableRoleSource {
   if (value === undefined || value === null) return "project";
   if (value === "user") return "user";
   if (value === "project") return "project";
@@ -905,14 +911,14 @@ function truncateInline(value: string, maxLength: number): string {
 
 function formatRoleRunIdentity(input: {
   runRef: string;
-  mode: RoleRunMode;
+  launch: RoleLaunchMode;
   model?: string;
   sessionDir?: string;
   forkFromSession?: string;
 }): string {
   return compactKeyValues([
     ["runRef", input.runRef],
-    ["mode", input.mode],
+    ["launch", input.launch],
     ["model", input.model],
     ["sessionDir", input.sessionDir],
     ["forkFromSession", input.forkFromSession],

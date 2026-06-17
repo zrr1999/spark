@@ -2,13 +2,12 @@ import { Type } from "typebox";
 import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
 import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import { nowIso, type JsonValue, type RoleRef } from "@zendev-lab/pi-extension-api";
-import {
-  clearSparkExecutionMode,
-  currentSparkProject,
-  loadSparkGraph,
-  sparkSessionKey,
-} from "./session-state.ts";
+import { currentSparkProject, loadSparkGraph, sparkSessionKey } from "./session-state.ts";
 import { loadIndependentTodos } from "./session-todos.ts";
+import {
+  requestGoalCompletionReview,
+  type GoalCompletionReviewOutcome,
+} from "./spark-goal-completion-review.ts";
 import {
   clearSessionGoal,
   editSessionGoalObjective,
@@ -56,12 +55,12 @@ export function registerSparkGoalTool(
     name: "goal",
     label: "Spark Goal",
     description:
-      "Manage the current Pi session's durable goal state. Actions: status, set, start, pause, resume, clear, edit. Goal completion is reviewer-owned. Autonomous pause is rejected; blockers must be resolved instead of pausing.",
+      "Manage the current Pi session's durable goal state. Actions: status, set, start, pause, resume, clear, edit, complete. Goal completion is reviewer-gated: the main session requests completion, the reviewer audits, and Spark applies the approved state transition. Autonomous pause is rejected; blockers must be resolved instead of pausing.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({
           description:
-            "status | set | start | pause | resume | clear | edit. Defaults to status. Completion is reviewer-owned; autonomous pause requests are rejected.",
+            "status | set | start | pause | resume | clear | edit | complete. Defaults to status. Completion requests are reviewer-gated; autonomous pause requests are rejected.",
         }),
       ),
       objective: Type.Optional(
@@ -114,7 +113,6 @@ export function registerSparkGoalTool(
           source,
           status: "active",
         });
-        await clearSparkExecutionMode(cwd, ctx);
         await deps.refreshSparkWidget(cwd, ctx);
         return goalResult(goal, action, renderGoalActivationResult(goal, graph, project));
       }
@@ -125,9 +123,16 @@ export function registerSparkGoalTool(
           content: [{ type: "text", text: "No session goal is set." }],
           details: { found: false, action, error: "no_goal" },
         };
-      if (action === "complete") return reviewerOwnedGoalCompletionResult(existingGoal, action);
+      if (action === "complete") {
+        const completion = await requestGoalCompletionReview(
+          ctx,
+          deps,
+          { graph: graph ?? undefined, project, goal: existingGoal },
+          { trigger: "tool" },
+        );
+        return goalCompletionResult(existingGoal, action, completion);
+      }
       if (action === "clear") {
-        await clearSparkExecutionMode(cwd, ctx);
         await clearSessionGoal(cwd, ctx);
         await deps.refreshSparkWidget(cwd, ctx);
         return {
@@ -151,7 +156,6 @@ export function registerSparkGoalTool(
             ],
             details: { found: true, action, error: "goal_already_complete", goal: existingGoal },
           };
-        await clearSparkExecutionMode(cwd, ctx);
         const resumed = await updateSessionGoalStatus(cwd, ctx, "active", { retryState: null });
         await deps.refreshSparkWidget(cwd, ctx);
         return goalResult(resumed, action, renderGoalStatus(resumed ?? existingGoal));
@@ -253,7 +257,6 @@ export async function startOrInferSessionGoal(
     explicitObjective?.trim() ||
     (graph ? inferSessionGoalObjective(graph, project, independentTodos) : undefined);
   if (!objective) return undefined;
-  await clearSparkExecutionMode(cwd, ctx);
   return setSessionGoal(cwd, ctx, {
     objective,
     source: explicitObjective?.trim() ? "explicit" : "inferred",
@@ -266,7 +269,6 @@ export async function pauseCurrentSessionGoal(
   ctx: SparkToolContext,
   reason?: string,
 ): Promise<SparkSessionGoal | undefined> {
-  await clearSparkExecutionMode(cwd, ctx);
   return updateSessionGoalStatus(cwd, ctx, "paused", { reason });
 }
 
@@ -320,7 +322,6 @@ async function reviewedEditCurrentSessionGoal(
   });
   if (verdict.outcome !== "approved")
     return { goal: existingGoal, approved: false, review, reviewArtifactRef: artifact.ref };
-  await clearSparkExecutionMode(cwd, ctx);
   const edited = await editSessionGoalObjective(cwd, ctx, proposedObjective);
   await deps.refreshSparkWidget(cwd, ctx);
   return { goal: edited, approved: true, review, reviewArtifactRef: artifact.ref };
@@ -364,7 +365,6 @@ export async function reviewedPauseCurrentSessionGoal(
       review,
       reviewArtifactRef: artifact.ref,
     };
-  await clearSparkExecutionMode(cwd, ctx);
   const goal = await updateSessionGoalStatus(cwd, ctx, "paused", {
     reason,
     review: {
@@ -479,7 +479,7 @@ function forbiddenAutonomousPauseResult(
         type: "text" as const,
         text:
           `Autonomous goal pause is not allowed for session goal: ${oneLine(goal.objective)}\n` +
-          'If progress is blocked, resolve the blocker first: inspect tasks, create or revise concrete blocking work with task({ action: "plan" }), claim/finish the blocking task, or use ask({ autoAnswer: "reviewer" }) only for reviewer-backed decisions when the host provides it. Do not reduce the goal or pause it to avoid hard work.',
+          'If progress is blocked, resolve the blocker first: inspect tasks, create or revise concrete blocking work with task_write({ action: "plan" }), claim/finish the blocking task, or use ask({ autoAnswer: "reviewer" }) only for reviewer-backed decisions when the host provides it. Do not reduce the goal or pause it to avoid hard work.',
       },
     ],
     details: {
@@ -521,24 +521,72 @@ function renderGoalPauseRejectedMessage(
   return `Goal pause blocked by reviewer for session goal: ${oneLine(goal.objective)}\nReview outcome: ${verdict?.outcome ?? "blocked"}\nReview summary: ${summary}${blockers}${artifact}`;
 }
 
-function reviewerOwnedGoalCompletionResult(goal: SparkSessionGoal, action: SparkGoalToolAction) {
+function goalCompletionResult(
+  originalGoal: SparkSessionGoal,
+  action: SparkGoalToolAction,
+  result: GoalCompletionReviewOutcome,
+) {
+  if (result.outcome === "completed") {
+    const goal = result.goal ?? originalGoal;
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Goal completion approved by reviewer for session goal: ${oneLine(originalGoal.objective)}\nReview summary: ${oneLine(result.reason)}\nReview artifact: ${result.artifactRef}`,
+        },
+      ],
+      details: {
+        found: true,
+        action,
+        goal,
+        outcome: result.outcome,
+        review: result.review.verdict,
+        reviewArtifact: result.artifactRef,
+      },
+    };
+  }
+  if (result.outcome === "blocked") {
+    const blockers = result.blockers.length ? `\nBlockers: ${result.blockers.join("; ")}` : "";
+    const remainingWork = result.remainingWork ? `\nRemaining work: ${result.remainingWork}` : "";
+    const artifact = result.artifactRef ? `\nReview artifact: ${result.artifactRef}` : "";
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Goal completion request needs changes for session goal: ${oneLine(originalGoal.objective)}\nReason: ${result.reason}${remainingWork}${blockers}${artifact}`,
+        },
+      ],
+      details: {
+        found: true,
+        action,
+        error: "goal_completion_needs_changes",
+        goal: result.goal ?? originalGoal,
+        outcome: result.outcome,
+        review: result.review?.verdict,
+        reviewArtifact: result.artifactRef,
+      },
+    };
+  }
   return {
     content: [
       {
         type: "text" as const,
-        text: `Goal completion is reviewer-owned for session goal: ${oneLine(goal.objective)}. The main agent cannot mark goals complete; keep evidence/status accurate and wait for the Spark reviewer loop to apply an achieved verdict. If blocked, resolve the blocker instead of pausing or weakening the goal.`,
+        text:
+          result.outcome === "deferred"
+            ? `Goal completion review is already running for this session goal: ${oneLine(originalGoal.objective)}. Retry after the active reviewer gate finishes.`
+            : `Goal completion review is unavailable for session goal: ${oneLine(originalGoal.objective)}. ${result.reason}`,
       },
     ],
     details: {
       found: true,
       action,
-      error: "goal_completion_reviewer_only",
-      goal,
-      guidance: [
-        "The main agent must not request goal completion directly.",
-        "The Spark reviewer loop completes goals internally after an achieved verdict.",
-        "Do not pause autonomously when blocked; create or complete the blocking work first.",
-      ],
+      error:
+        result.outcome === "deferred"
+          ? "goal_completion_review_deferred"
+          : "goal_completion_reviewer_unavailable",
+      goal: originalGoal,
+      outcome: result.outcome,
+      reason: result.reason,
     },
   };
 }
@@ -570,7 +618,7 @@ function renderGoalActivationResult(
   if (!graph || !project) {
     lines.push(
       "No current Spark project is selected for this goal yet.",
-      'Next autonomous step: create or select a project with task({ action: "project_use", title, description }), using the goal objective as the project intent; then plan initial concrete tasks with task({ action: "plan" }).',
+      'Next autonomous step: create or select a project with task_write({ action: "project_use", title, description }), using the goal objective as the project intent; then plan initial concrete tasks with task_write({ action: "plan" }).',
       `Goal objective: ${oneLine(goal.objective)}`,
     );
   }
@@ -590,7 +638,7 @@ function renderGoalStatus(goal: SparkSessionGoal): string {
       `Retry state: ${goal.retryState.consecutiveFailures} failure(s), nextDelayMs=${goal.retryState.nextDelayMs ?? "unknown"}.`,
     );
   lines.push(
-    'Actions: goal({ action: "status" }), goal({ action: "resume" }), goal({ action: "edit", objective, reason }), goal({ action: "clear" }), goal({ action: "start" }); completion is reviewer-owned, and autonomous pause is forbidden.',
+    'Actions: goal({ action: "status" }), goal({ action: "resume" }), goal({ action: "edit", objective, reason }), goal({ action: "complete" }), goal({ action: "clear" }), goal({ action: "start" }); completion is reviewer-gated (main session requests, reviewer audits, Spark applies approved state), and autonomous pause is forbidden.',
   );
   return lines.join("\n");
 }

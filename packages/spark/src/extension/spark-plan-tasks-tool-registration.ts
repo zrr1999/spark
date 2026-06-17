@@ -38,7 +38,7 @@ const SPARK_PLAN_TASKS_READINESS_RULES = [
   "Readiness rules:",
   "- Tasks must be concrete executable/review/validation/research work; do not create standalone design/planning tasks. Discuss design with the user first, then place the chosen design and rationale inside each concrete task.plan.",
   renderTaskPlanReadinessRules(),
-  '- dependsOn resolution is active-project scoped and includes both existing project tasks and every task created/updated in the same task({ action: "plan" }) batch before dependencies are added. Use a bare task name (displayed as @name, passed without @), exact task title, or task:* ref; unresolved dependencies block the plan, and cross-project dependencies are unsupported.',
+  '- dependsOn resolution is active-project scoped and includes both existing project tasks and every task created/updated in the same task_write({ action: "plan" }) batch before dependencies are added. Use a bare task name (displayed as @name, passed without @), exact task title, or task:* ref; unresolved dependencies block the plan, and cross-project dependencies are unsupported.',
 ].join("\n");
 
 interface SparkPlanTasksToolDeps {
@@ -66,7 +66,7 @@ export function registerSparkPlanTasksTool(
     name: "spark_plan_tasks",
     label: "Spark Plan Tasks",
     description: [
-      'Compatibility surface for task({ action: "plan" }): create or update multiple durable Spark tasks in the active project from a concrete task plan. Tasks must be concrete executable/review/validation/research work, not standalone design/planning placeholders; design discussion belongs in conversation with the user and in each task.plan after decisions are clear. The tool writes directly after readiness checks pass, so clarify all planning-affecting questions before calling it and refine by calling it again with concrete updates.',
+      'Compatibility surface for task_write({ action: "plan" }): create or update multiple durable Spark tasks in the active project from a concrete task plan. Tasks must be concrete executable/review/validation/research work, not standalone design/planning placeholders; design discussion belongs in conversation with the user and in each task.plan after decisions are clear. The tool writes directly once tasks have clear objectives, dependencies, success criteria, and evidence requirements, so clarify all planning-affecting questions before calling it and refine by calling it again with concrete updates.',
       "",
       SPARK_PLAN_TASKS_READINESS_RULES,
     ].join("\n"),
@@ -103,7 +103,7 @@ export function registerSparkPlanTasksTool(
           roleRef: Type.Optional(
             Type.String({
               description:
-                "Optional builtin/project/user Spark role spec id or ref, e.g. scout, planner, reviewer, worker. This is a preferred executor hint, not a readiness requirement.",
+                "Optional builtin/extension/project/user Spark role spec id or ref, e.g. scout, reviewer, worker, or role:extension-patcher. This is a preferred executor hint, not a readiness requirement.",
             }),
           ),
           plan: Type.Optional(taskPlanSchema()),

@@ -17,47 +17,41 @@ import {
   collectWorkflowRunNextSteps,
   completionDigestFromTaskRuns,
   createWorkflowRunCompletionFollowUp,
-} from "./dag-run-completion.ts";
-import { reconcileDagRunCounters } from "./dag-run-counters.ts";
-import { reconcileWorkflowRunSnapshot } from "./dag-run-reconcile.ts";
+} from "./workflow-run-completion.ts";
+import { reconcileWorkflowRunCounters } from "./workflow-run-counters.ts";
+import { reconcileWorkflowRunSnapshot } from "./workflow-run-reconcile.ts";
 import {
   normalizeWorkflowRunPruneOptions,
   planWorkflowRunPrune,
   type WorkflowRunPruneOptions,
   type WorkflowRunPruneResult,
-} from "./dag-run-retention.ts";
+} from "./workflow-run-retention.ts";
 import {
-  isAcknowledgeableDagRun,
-  isAcknowledgedDagRunProblem,
-  isActionableDagRunProblem,
-  isTerminalDagRunStatus,
-} from "./dag-run-status.ts";
-import { emptyWorkflowRunSnapshot, loadWorkflowRunStoreSnapshot } from "./dag-run-serialization.ts";
+  isAcknowledgeableWorkflowRun,
+  isAcknowledgedWorkflowRunProblem,
+  isActionableWorkflowRunProblem,
+  isTerminalWorkflowRunStatus,
+} from "./workflow-run-status.ts";
+import {
+  emptyWorkflowRunSnapshot,
+  loadWorkflowRunStoreSnapshot,
+} from "./workflow-run-serialization.ts";
 
 export {
   DEFAULT_READY_TASK_MAX_CONCURRENCY,
   DEFAULT_READY_TASK_TIMEOUT_MS,
 } from "@zendev-lab/pi-extension-api";
-export { workflowRunNextSteps, sparkDagRunNextSteps } from "./dag-run-completion.ts";
-export {
-  WorkflowRunStoreFormatError,
-  SparkDagRunStoreFormatError,
-} from "./dag-run-serialization.ts";
+export { workflowRunNextSteps } from "./workflow-run-completion.ts";
+export { WorkflowRunStoreFormatError } from "./workflow-run-serialization.ts";
 export type {
   WorkflowRunPruneOptions,
   WorkflowRunPruneResult,
   WorkflowRunRetentionCandidateReason,
   WorkflowRunRetentionEntry,
   WorkflowRunRetentionKeepReason,
-  SparkDagRunPruneOptions,
-  SparkDagRunPruneResult,
-  SparkDagRunRetentionCandidateReason,
-  SparkDagRunRetentionEntry,
-  SparkDagRunRetentionKeepReason,
-} from "./dag-run-retention.ts";
+} from "./workflow-run-retention.ts";
 export {
   runReadyTasks,
-  runReadySparkTasks,
   type ReadyTaskRun,
   type ReadyTaskRunInput,
   type ReadyTaskRunKiller,
@@ -66,14 +60,6 @@ export {
   type ReadyTaskRunnerProgress,
   type ReadyTaskRunnerResult,
   type ReadyTaskRunnerSchedule,
-  type SparkReadyTaskRun,
-  type SparkReadyTaskRunInput,
-  type SparkReadyTaskRunKiller,
-  type SparkReadyTaskRunKillerInput,
-  type SparkReadyTaskRunnerOptions,
-  type SparkReadyTaskRunnerProgress,
-  type SparkReadyTaskRunnerResult,
-  type SparkReadyTaskRunnerSchedule,
 } from "./ready-task-runner.ts";
 
 export type WorkflowRunManagerStatus = "idle" | "running" | "failed";
@@ -146,6 +132,37 @@ export interface WorkflowRunStoreSnapshot {
   version: 1;
   manager: WorkflowRunManagerState;
   runs: WorkflowRunRecord[];
+  /**
+   * Standing background-run control intent for this store. Collapsed here from
+   * the former Spark `runMode` marker so there is a single durable
+   * background-run representation: the run records (data plane) plus this
+   * control block (the scheduler's lifecycle/policy/focus intent).
+   */
+  control?: WorkflowRunControl;
+}
+
+export type WorkflowRunControlStatus =
+  | "running"
+  | "paused"
+  | "blocked"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+export interface WorkflowRunControl {
+  projectRef: ProjectRef;
+  focus?: string;
+  status: WorkflowRunControlStatus;
+  policy: { maxConcurrency: number; timeoutMs: number };
+  enteredAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowRunControlInput {
+  projectRef: ProjectRef;
+  focus?: string;
+  status?: WorkflowRunControlStatus;
+  policy: { maxConcurrency: number; timeoutMs: number };
 }
 
 export interface WorkflowRunStatusSummary {
@@ -205,24 +222,6 @@ export interface WorkflowRunFinishInput {
   runs?: TaskRun[];
 }
 
-/** @deprecated SparkDag* aliases are compatibility shims. Prefer WorkflowRun* types in generic pi-workflows code; Spark-owned adapters should own Spark naming. */
-export type SparkDagManagerStatus = WorkflowRunManagerStatus;
-export type SparkDagRunStatus = WorkflowRunStatus;
-export type SparkDagManagerState = WorkflowRunManagerState;
-export type SparkDagCompletionFollowUp = WorkflowRunCompletionFollowUp;
-export type SparkDagRunNextSteps = WorkflowRunNextSteps;
-export type SparkDagRunAcknowledgeInput = WorkflowRunAcknowledgeInput;
-export type SparkDagRunAcknowledgeResult = WorkflowRunAcknowledgeResult;
-export type SparkDagRunRecord = WorkflowRunRecord;
-export type SparkDagRunStoreSnapshot = WorkflowRunStoreSnapshot;
-export type SparkDagStatusSummary = WorkflowRunStatusSummary;
-export type SparkDagStatusQueryOptions = WorkflowRunStatusQueryOptions;
-export type SparkDagRunReconcileInput = WorkflowRunReconcileInput;
-export type SparkDagRunStartInput = WorkflowRunStartInput;
-export type SparkDagRunScheduleInput = WorkflowRunScheduleInput;
-export type SparkDagRunProgressInput = WorkflowRunProgressInput;
-export type SparkDagRunFinishInput = WorkflowRunFinishInput;
-
 export class WorkflowRunStore {
   readonly filePath: string;
   readonly lockPath: string;
@@ -239,13 +238,13 @@ export class WorkflowRunStore {
   async clearInactiveRuns(): Promise<WorkflowRunStoreSnapshot> {
     let cleared: WorkflowRunStoreSnapshot | undefined;
     await this.updateSnapshot((snapshot) => {
-      snapshot.runs = snapshot.runs.filter(shouldKeepDagRunWhenClearingInactive);
+      snapshot.runs = snapshot.runs.filter(shouldKeepWorkflowRunWhenClearingInactive);
       const activeRun =
         snapshot.manager.activeRunRef &&
         snapshot.runs.find(
           (run) => run.ref === snapshot.manager.activeRunRef && run.status === "running",
         );
-      const runningRun = activeRun ?? latestRunningDagRun(snapshot.runs);
+      const runningRun = activeRun ?? latestRunningWorkflowRun(snapshot.runs);
       snapshot.manager.activeRunRef = runningRun?.ref;
       snapshot.manager.lastRunRef = runningRun?.ref ?? snapshot.runs.at(-1)?.ref;
       snapshot.manager.status = runningRun ? "running" : "idle";
@@ -306,10 +305,10 @@ export class WorkflowRunStore {
     await this.updateSnapshot((snapshot) => {
       const targets = input.runRef
         ? snapshot.runs.filter((run) => run.ref === input.runRef)
-        : snapshot.runs.filter(isAcknowledgeableDagRun);
+        : snapshot.runs.filter(isAcknowledgeableWorkflowRun);
       if (input.runRef && targets.length === 0) result.missing.push(input.runRef);
       for (const record of targets) {
-        if (!isAcknowledgeableDagRun(record)) {
+        if (!isAcknowledgeableWorkflowRun(record)) {
           result.skipped.push(record.ref);
           continue;
         }
@@ -354,6 +353,53 @@ export class WorkflowRunStore {
     await writeJsonFileAtomic(this.filePath, snapshot);
   }
 
+  /** Read the standing background-run control intent, if any. */
+  async loadControl(): Promise<WorkflowRunControl | undefined> {
+    return (await this.load()).control;
+  }
+
+  /** Set/replace the standing background-run control intent (status defaults to running). */
+  async setControl(input: WorkflowRunControlInput): Promise<WorkflowRunControl> {
+    const now = nowIso();
+    let control: WorkflowRunControl | undefined;
+    await this.updateSnapshot((snapshot) => {
+      const existing = snapshot.control;
+      const enteredAt =
+        existing && existing.projectRef === input.projectRef ? existing.enteredAt : now;
+      control = {
+        projectRef: input.projectRef,
+        focus: input.focus?.trim() || undefined,
+        status: input.status ?? "running",
+        policy: input.policy,
+        enteredAt,
+        updatedAt: now,
+      };
+      snapshot.control = control;
+    });
+    if (!control) throw new Error("failed to set workflow run control");
+    return control;
+  }
+
+  /** Update only the status of the standing control intent, preserving policy/focus. */
+  async updateControlStatus(
+    status: WorkflowRunControlStatus,
+  ): Promise<WorkflowRunControl | undefined> {
+    let control: WorkflowRunControl | undefined;
+    await this.updateSnapshot((snapshot) => {
+      if (!snapshot.control) return;
+      snapshot.control = { ...snapshot.control, status, updatedAt: nowIso() };
+      control = snapshot.control;
+    });
+    return control;
+  }
+
+  /** Drop the standing control intent (e.g. when leaving background-run mode). */
+  async clearControl(): Promise<void> {
+    await this.updateSnapshot((snapshot) => {
+      snapshot.control = undefined;
+    });
+  }
+
   async startRun(input: WorkflowRunStartInput): Promise<WorkflowRunRecord> {
     let created: WorkflowRunRecord | undefined;
     await this.updateSnapshot((snapshot) => {
@@ -391,23 +437,23 @@ export class WorkflowRunStore {
 
   async recordSchedule(runRef: RunRef, input: WorkflowRunScheduleInput): Promise<void> {
     await this.updateRun(runRef, (record) => {
-      if (isTerminalDagRunStatus(record.status)) return false;
+      if (isTerminalWorkflowRunStatus(record.status)) return false;
       if (!record.scheduledTaskRefs.includes(input.taskRef))
         record.scheduledTaskRefs.push(input.taskRef);
       if (input.runRef && !record.taskRunRefs.includes(input.runRef))
         record.taskRunRefs.push(input.runRef);
-      reconcileDagRunCounters(record, { scheduledFallback: input.scheduled });
+      reconcileWorkflowRunCounters(record, { scheduledFallback: input.scheduled });
       return true;
     });
   }
 
   async recordProgress(runRef: RunRef, input: WorkflowRunProgressInput): Promise<void> {
     await this.updateRun(runRef, (record) => {
-      if (isTerminalDagRunStatus(record.status)) return false;
+      if (isTerminalWorkflowRunStatus(record.status)) return false;
       if (!record.completedTaskRefs.includes(input.taskRef))
         record.completedTaskRefs.push(input.taskRef);
       if (!record.taskRunRefs.includes(input.run.ref)) record.taskRunRefs.push(input.run.ref);
-      reconcileDagRunCounters(record, { completedFallback: input.completed });
+      reconcileWorkflowRunCounters(record, { completedFallback: input.completed });
       return true;
     });
   }
@@ -425,14 +471,14 @@ export class WorkflowRunStore {
       const failedChildren = result.failed ?? 0;
       const cancelledChildren = result.cancelled ?? 0;
       const hasFailedChildren = failedChildren > 0 || cancelledChildren > 0;
-      if (isTerminalDagRunStatus(record.status)) {
+      if (isTerminalWorkflowRunStatus(record.status)) {
         followUp = record.completionFollowUp;
         return;
       }
       const foregroundDetached =
         Boolean(result.foregroundTimedOut || result.detached) && !error && !hasFailedChildren;
       record.timedOut = result.timedOut && !foregroundDetached;
-      reconcileDagRunCounters(record, {
+      reconcileWorkflowRunCounters(record, {
         scheduledFallback: result.scheduled,
         completedFallback: result.completed,
       });
@@ -499,7 +545,7 @@ export class WorkflowRunStore {
     await this.withLock(async () => {
       const snapshot = await this.load();
       update(snapshot);
-      for (const record of snapshot.runs) reconcileDagRunCounters(record);
+      for (const record of snapshot.runs) reconcileWorkflowRunCounters(record);
       await this.save(snapshot);
     });
   }
@@ -514,11 +560,11 @@ export class WorkflowRunStore {
   }
 }
 
-function shouldKeepDagRunWhenClearingInactive(run: WorkflowRunRecord): boolean {
-  return run.status === "running" || isActionableDagRunProblem(run);
+function shouldKeepWorkflowRunWhenClearingInactive(run: WorkflowRunRecord): boolean {
+  return run.status === "running" || isActionableWorkflowRunProblem(run);
 }
 
-function latestRunningDagRun(runs: WorkflowRunRecord[]): WorkflowRunRecord | undefined {
+function latestRunningWorkflowRun(runs: WorkflowRunRecord[]): WorkflowRunRecord | undefined {
   for (let index = runs.length - 1; index >= 0; index -= 1) {
     const run = runs[index];
     if (run?.status === "running") return run;
@@ -569,11 +615,6 @@ export function defaultWorkflowRunStore(cwd: string): WorkflowRunStore {
   return new WorkflowRunStore(join(cwd, ".spark", "workflow-runs.json"));
 }
 
-/** @deprecated Spark-named alias kept for compatibility. Prefer WorkflowRunStore with explicit host-owned paths. */
-export const SparkDagRunStore = WorkflowRunStore;
-/** @deprecated Spark-named alias kept for compatibility. Prefer defaultWorkflowRunStore only for compatibility, or explicit host-owned paths for new code. */
-export const defaultSparkDagRunStore = defaultWorkflowRunStore;
-
 export function summarizeWorkflowRuns(
   snapshot: WorkflowRunStoreSnapshot,
   options: WorkflowRunStatusQueryOptions = {},
@@ -589,7 +630,7 @@ export function summarizeWorkflowRuns(
     ? snapshot.runs.find((run) => run.ref === snapshot.manager.lastRunRef)
     : sorted[0];
   const recentRuns = sorted.slice(0, limit);
-  const actionableRuns = sorted.filter(isActionableDagRunProblem);
+  const actionableRuns = sorted.filter(isActionableWorkflowRunProblem);
   const actionableRun = actionableRuns[0];
   return {
     manager: snapshot.manager,
@@ -602,11 +643,8 @@ export function summarizeWorkflowRuns(
     failed: snapshot.runs.filter((run) => run.status === "failed").length,
     stale: snapshot.runs.filter((run) => run.status === "stale").length,
     timedOut: snapshot.runs.filter((run) => run.status === "timed_out").length,
-    acknowledged: snapshot.runs.filter(isAcknowledgedDagRunProblem).length,
+    acknowledged: snapshot.runs.filter(isAcknowledgedWorkflowRunProblem).length,
     actionable: actionableRuns.length,
     nextSteps: collectWorkflowRunNextSteps([actionableRun, lastRun, ...recentRuns]),
   };
 }
-
-/** @deprecated SparkDag* alias kept for compatibility. Prefer summarizeWorkflowRuns. */
-export const summarizeSparkDagRuns = summarizeWorkflowRuns;

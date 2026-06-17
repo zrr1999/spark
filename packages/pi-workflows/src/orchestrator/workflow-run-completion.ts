@@ -10,7 +10,10 @@ import type {
   WorkflowRunNextSteps,
   WorkflowRunRecord,
 } from "./index.ts";
-import { isAcknowledgeableDagRun, isAcknowledgedDagRunProblem } from "./dag-run-status.ts";
+import {
+  isAcknowledgeableWorkflowRun,
+  isAcknowledgedWorkflowRunProblem,
+} from "./workflow-run-status.ts";
 
 export function createWorkflowRunCompletionFollowUp(
   run: WorkflowRunRecord,
@@ -59,7 +62,7 @@ export function collectWorkflowRunNextSteps(
 }
 
 export function workflowRunNextSteps(run: WorkflowRunRecord): WorkflowRunNextSteps | undefined {
-  if (!isAcknowledgeableDagRun(run) || isAcknowledgedDagRunProblem(run)) return undefined;
+  if (!isAcknowledgeableWorkflowRun(run) || isAcknowledgedWorkflowRunProblem(run)) return undefined;
   return {
     runRef: run.ref,
     status: run.status,
@@ -90,18 +93,18 @@ function workflowRunNextActions(run: WorkflowRunRecord): string[] {
   const nextActions: string[] = [];
   if (run.status === "failed") {
     nextActions.push(
-      'failed: inspect task({ action: "run_status", runAction: "inspect" }) plus child task-run artifacts/logs to find the failed or cancelled child run.',
+      'failed: inspect task_read({ action: "run_status", runAction: "inspect" }) plus child task-run artifacts/logs to find the failed or cancelled child run.',
       "failed: fix the task, executor, model, or dependency error, then rerun ready background work for the remaining ready frontier.",
     );
   } else if (run.status === "stale") {
     nextActions.push(
-      'stale: run task({ action: "run_status", runAction: "reconcile" }) and compare background records with task runs/claims; the manager lost track of child process completion.',
-      'stale: preserve useful evidence, acknowledge known stale failures with task({ action: "run_control", control: "ack" }) if no more action is needed, then retry ready tasks only after the task graph state is consistent.',
+      'stale: run task_read({ action: "run_status", runAction: "reconcile" }) and compare background records with task runs/claims; the manager lost track of child process completion.',
+      "stale: preserve useful evidence, resolve known stale failures in the task graph, then retry assignment only after the task graph state is consistent.",
     );
   } else if (run.status === "timed_out") {
     nextActions.push(
-      'timed_out: legacy foreground timeout record; inspect task({ action: "run_status" }) for active child runs or reconcile before retrying.',
-      'timed_out: if child work is still active, kill stuck children with task({ action: "run_control", control: "kill" }) only when you explicitly want to stop it.',
+      'timed_out: legacy foreground timeout record; inspect task_read({ action: "run_status" }) for active child runs or reconcile before retrying.',
+      "timed_out: if child work is still active, stop stuck children through explicit host run-management controls only when you intend to cancel them.",
     );
   }
   if (run.scheduled === 0)
@@ -110,16 +113,9 @@ function workflowRunNextActions(run: WorkflowRunRecord): string[] {
     );
   if (run.completed < run.scheduled)
     nextActions.push(
-      'Review incomplete scheduled task runs in task({ action: "status", view: "full" }) before launching another workflow wave.',
+      'Review incomplete scheduled task runs in task_read({ action: "status", view: "full" }) before launching another workflow wave.',
     );
   if (nextActions.length === 0)
     nextActions.push("Review task outputs and continue with newly unblocked ready tasks if any.");
   return nextActions;
 }
-
-/** @deprecated SparkDag* alias kept for compatibility. Prefer createWorkflowRunCompletionFollowUp. */
-export const createSparkDagCompletionFollowUp = createWorkflowRunCompletionFollowUp;
-/** @deprecated SparkDag* alias kept for compatibility. Prefer collectWorkflowRunNextSteps. */
-export const collectSparkDagRunNextSteps = collectWorkflowRunNextSteps;
-/** @deprecated SparkDag* alias kept for compatibility. Prefer workflowRunNextSteps. */
-export const sparkDagRunNextSteps = workflowRunNextSteps;

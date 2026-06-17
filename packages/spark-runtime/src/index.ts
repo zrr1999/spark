@@ -11,7 +11,7 @@ import {
   RoleRunTimeoutError as PiRoleRunTimeoutError,
   runRole,
   type RoleRegistry,
-  type RoleRunMode,
+  type RoleLaunchMode,
 } from "@zendev-lab/pi-roles";
 import type { ArtifactStore } from "@zendev-lab/pi-artifacts";
 import {
@@ -62,7 +62,7 @@ export {
 
 export interface SparkRoleRunResult {
   record: RoleRunRecord & {
-    mode?: RoleRunMode;
+    launch?: RoleLaunchMode;
     model?: string;
     sessionDir?: string;
     forkFromSession?: string;
@@ -72,7 +72,7 @@ export interface SparkRoleRunResult {
   jsonEvents: unknown[];
 }
 
-export { type RoleRunMode } from "@zendev-lab/pi-roles";
+export { type RoleLaunchMode } from "@zendev-lab/pi-roles";
 
 export interface ActiveSparkRoleRunProcess {
   runRef: RunRef;
@@ -333,14 +333,14 @@ export interface PiRoleCommandInput {
   model?: string;
   allowedTools?: string[];
   sessionDir?: string;
-  mode?: RoleRunMode;
+  launch?: RoleLaunchMode;
   forkFromSession?: string;
 }
 
 export function buildRoleRunArgs(input: PiRoleCommandInput): string[] {
   return buildGenericRoleRunArgs({
     roleRef: input.roleRef,
-    mode: input.mode,
+    launch: input.launch,
     systemPrompt: input.systemPrompt,
     instruction: input.instruction,
     model: input.model,
@@ -359,7 +359,7 @@ export interface RoleRunnerOptions {
   signal?: AbortSignal;
   sessionDir?: string;
   runName?: string;
-  mode?: RoleRunMode;
+  launch?: RoleLaunchMode;
   forkFromSession?: string;
   sessionModel?: string;
 }
@@ -379,7 +379,7 @@ export interface SparkTaskRunOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
   sessionDir?: string;
-  mode?: RoleRunMode;
+  launch?: RoleLaunchMode;
   forkFromSession?: string;
   sessionModel?: string;
   heartbeatIntervalMs?: number;
@@ -516,7 +516,7 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
         signal: runSignal,
         sessionDir: input.sessionDir,
         runName,
-        mode: input.mode,
+        launch: input.launch,
         forkFromSession: input.forkFromSession,
         sessionModel: input.sessionModel,
       },
@@ -702,7 +702,7 @@ function taskTodoInstructionRank(todo: TaskTodo): number {
 
 function boundTaskRoleInstruction(instruction: string): string {
   if (instruction.length <= MAX_TASK_ROLE_INSTRUCTION_CHARS) return instruction;
-  return `${instruction.slice(0, MAX_TASK_ROLE_INSTRUCTION_CHARS).trimEnd()}\n\n… task instruction truncated; inspect task({ action: "status" }) and artifact({ action: "read" }) if more context is needed.`;
+  return `${instruction.slice(0, MAX_TASK_ROLE_INSTRUCTION_CHARS).trimEnd()}\n\n… task instruction truncated; inspect task_read({ action: "status" }) and artifact({ action: "read" }) if more context is needed.`;
 }
 
 function createRoleRunArtifactBody(input: {
@@ -1009,7 +1009,7 @@ export async function runRoleInstructionOnly(
       signal: options.signal,
       sessionDir: options.sessionDir,
       runName: baseRecord.runName,
-      mode: options.mode,
+      launch: options.launch,
       forkFromSession: options.forkFromSession,
       sessionModel: options.sessionModel,
     },
@@ -1027,7 +1027,7 @@ async function runPiJsonRole(
   options: Required<Pick<RoleRunnerOptions, "cwd" | "piCommand" | "timeoutMs">> &
     Pick<
       RoleRunnerOptions,
-      "signal" | "sessionDir" | "runName" | "mode" | "forkFromSession" | "sessionModel"
+      "signal" | "sessionDir" | "runName" | "launch" | "forkFromSession" | "sessionModel"
     >,
   runRef: RunRef,
 ): Promise<SparkRoleRunResult> {
@@ -1052,7 +1052,7 @@ async function runPiJsonRole(
       instruction: instruction.instruction,
       runGuidance: sparkRoleRunGuidance(),
       sessionDir: options.sessionDir,
-      mode: options.mode,
+      launch: options.launch,
       forkFromSession: options.forkFromSession,
       piCommand: options.piCommand,
       cwd: options.cwd,
@@ -1080,7 +1080,7 @@ async function runPiJsonRole(
         roleRef: role.ref,
         runName: options.runName,
         instruction: instruction.instruction,
-        mode: result.record.mode,
+        launch: result.record.launch,
         model,
         status: result.record.status as RoleRunStatus,
         startedAt: result.record.startedAt,
@@ -1106,21 +1106,20 @@ export function sparkTaskExecutorRoleRef(task: Task, defaultRoleRef?: RoleRef): 
 
 function defaultRoleRefForTaskKind(kind: Task["kind"]): RoleRef {
   if (kind === "research") return "role:builtin-scout" as RoleRef;
-  if (kind === "plan") return "role:builtin-planner" as RoleRef;
   if (kind === "review") return "role:builtin-reviewer" as RoleRef;
   return "role:builtin-worker" as RoleRef;
 }
 
 function sparkRoleRunGuidance(): string {
   return [
-    "Spark role-run ask policy:",
-    "- You have access to ask tools in this run. If the task is blocked by missing user intent, an approval gate, or a real ambiguity that cannot be resolved from repository context, use the canonical ask tool rather than only writing questions in your final response.",
-    "- Do not ask for routine implementation choices you can safely infer from the assigned task and repository context; proceed and document the decision.",
-    "- If an ask times out or returns no selection for a decision/approval gate, stop and report the blocked state rather than continuing.",
+    "Spark role-run interaction policy:",
+    "- You do not have interactive ask tools in this run. If the task is blocked by missing user intent, an approval gate, or a real ambiguity that cannot be resolved from repository context, stop and report the blocker plus the exact question needed upward in your final response.",
+    "- Do not stop for routine implementation choices you can safely infer from the assigned task and repository context; proceed and document the decision.",
+    "- If a required decision cannot be made from the available context, do not continue past the gate; report the blocked state and required decision.",
     "",
     "Spark naming quality policy:",
     "- Judge whether the active project title and your task @name/title are placeholder, generic, stale, too broad, or inconsistent with the current instruction.",
-    '- When the improvement is obvious, update Spark display names without asking: use task({ action: "project_update" }) for the project, and task({ action: "claim" }) with the existing task ref/name intent to improve your claimed task @name/title/description. Stable refs must remain unchanged.',
+    '- When the improvement is obvious, update Spark display names without asking: use task_write({ action: "project_update" }) for the project, and task_write({ action: "claim" }) with the existing task ref/name intent to improve your claimed task @name/title/description. Stable refs must remain unchanged.',
     "- Preserve user-specific intentional names and distinctive project/code names; ask only if multiple plausible names require a real user decision.",
   ].join("\n");
 }

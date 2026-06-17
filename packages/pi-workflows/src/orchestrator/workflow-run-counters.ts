@@ -1,6 +1,6 @@
 import type { WorkflowRunRecord } from "./index.ts";
 
-export function reconcileDagRunCounters(
+export function reconcileWorkflowRunCounters(
   record: WorkflowRunRecord,
   fallbacks: { scheduledFallback?: number; completedFallback?: number } = {},
 ): void {

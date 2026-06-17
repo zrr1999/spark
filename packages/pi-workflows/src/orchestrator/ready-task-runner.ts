@@ -71,7 +71,7 @@ export interface ReadyTaskRunnerResult {
   succeeded: number;
   failed: number;
   cancelled: number;
-  /** Legacy DAG timeout flag. New foreground wait expiry is reported via foregroundTimedOut/detached. */
+  /** Legacy workflow-run timeout flag. New foreground wait expiry is reported via foregroundTimedOut/detached. */
   timedOut: boolean;
   foregroundTimedOut: boolean;
   detached: boolean;
@@ -288,15 +288,3 @@ function sleep(ms: number): Promise<void> {
     timer.unref?.();
   });
 }
-
-/** @deprecated Spark-named aliases are compatibility shims. Prefer ReadyTask* types in generic pi-workflows code. */
-export type SparkReadyTaskRunInput = ReadyTaskRunInput;
-export type SparkReadyTaskRun = ReadyTaskRun;
-export type SparkReadyTaskRunKillerInput = ReadyTaskRunKillerInput;
-export type SparkReadyTaskRunKiller = ReadyTaskRunKiller;
-export type SparkReadyTaskRunnerOptions = ReadyTaskRunnerOptions;
-export type SparkReadyTaskRunnerSchedule = ReadyTaskRunnerSchedule;
-export type SparkReadyTaskRunnerProgress = ReadyTaskRunnerProgress;
-export type SparkReadyTaskRunnerResult = ReadyTaskRunnerResult;
-/** @deprecated Spark-named alias kept for compatibility. Prefer runReadyTasks. */
-export const runReadySparkTasks = runReadyTasks;

@@ -18,9 +18,9 @@ export const TOOL_PROMPT_GUIDELINES = [
   `Use ${goalToolReference("resume")} only to continue a paused goal that is still valid.`,
   `Use ${goalToolReference("clear")} only when the user explicitly wants to forget the current goal instead of completing it.`,
   `Use ${goalToolReference("edit")} only when the user explicitly changes the current goal objective; do not silently redefine a goal to make it easier.`,
-  `Use ${goalToolReference("complete")} only after a completion audit proves the objective is actually achieved and no required work remains.`,
-  `Before using ${goalToolReference("complete")}, map every explicit requirement in the goal to concrete evidence from files, command output, test results, PR state, or other real artifacts; uncertainty means the goal is not complete.`,
-  `Do not use ${goalToolReference("complete")} merely because work is stopping, substantial progress was made, or tests passed without covering every requirement.`,
+  `Use ${goalToolReference("complete")} only as a reviewer-gated completion request after a completion audit proves the objective is actually achieved and no required work remains; the reviewer audits the request and the host applies any approved state transition.`,
+  `Before requesting completion with ${goalToolReference("complete")}, map every explicit requirement in the goal to concrete evidence from files, command output, test results, PR state, or other real artifacts; uncertainty means the goal is not complete.`,
+  `Do not request completion with ${goalToolReference("complete")} merely because work is stopping, substantial progress was made, or tests passed without covering every requirement.`,
   "When a goal is active, keep working through clear low-risk next steps instead of stopping at a plan.",
 ];
 
@@ -57,7 +57,7 @@ export function compactContinuationPrompt(goal: Goal): string {
     "",
     "Avoid repeating work that is already done. Choose the next concrete action toward the objective.",
     "",
-    `Before marking the goal complete, audit progress against the objective and call ${goalToolReference("complete")} only when every requirement is verified.`,
+    `Before requesting reviewer-gated completion, audit progress against the objective and call ${goalToolReference("complete")} only when every requirement is verified.`,
     GOAL_TOOL_NAME_GUIDANCE,
     "</spark_goal_continuation>",
   ].join("\n");
@@ -85,9 +85,9 @@ export function continuationPrompt(goal: Goal): string {
     "- Identify any missing, incomplete, weakly verified, or uncovered requirement.",
     "- Treat uncertainty as not achieved; do more verification or continue the work.",
     "",
-    `Do not rely on intent, partial progress, elapsed effort, memory of earlier work, or a plausible final answer as proof of completion. Only mark the goal achieved when the audit shows that the objective has actually been achieved and no required work remains. If any requirement is missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, call ${goalToolReference("complete")}.`,
+    `Do not rely on intent, partial progress, elapsed effort, memory of earlier work, or a plausible final answer as proof of completion. Only request reviewer-gated completion when the audit shows that the objective has actually been achieved and no required work remains. If any requirement is missing, incomplete, or unverified, keep working instead of requesting completion. If the objective is achieved, call ${goalToolReference("complete")}.`,
     "",
-    `Do not call ${goalToolReference("complete")} unless the goal is complete. Do not mark a goal complete merely because you are stopping work.`,
+    `Do not call ${goalToolReference("complete")} unless the goal is complete. Do not request completion merely because you are stopping work.`,
     "",
     GOAL_TOOL_NAME_GUIDANCE,
     "</spark_goal_continuation>",

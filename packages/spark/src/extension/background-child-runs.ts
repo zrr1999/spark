@@ -27,7 +27,7 @@ export function resolveBackgroundTaskRef(
 
 export function collectBackgroundChildRuns(input: {
   graph: TaskGraph;
-  dagRuns: WorkflowRunRecord[];
+  workflowRuns: WorkflowRunRecord[];
   activeProcesses: ActiveSparkRoleRunProcess[];
   projectRef?: ProjectRef;
   targetRunRef?: RunRef;
@@ -37,22 +37,22 @@ export function collectBackgroundChildRuns(input: {
   const taskByRef = new Map(allTasks.map((task) => [task.ref, task]));
   const allTaskRuns = input.graph.runs();
   const taskRunByRef = new Map(allTaskRuns.map((run) => [run.ref, run]));
-  const dagRunRefByChild = new Map<RunRef, RunRef>();
+  const workflowRunRefByChild = new Map<RunRef, RunRef>();
   const childRunRefs = new Set<RunRef>();
-  for (const dagRun of input.dagRuns) {
-    for (const childRunRef of dagRun.taskRunRefs) {
+  for (const workflowRun of input.workflowRuns) {
+    for (const childRunRef of workflowRun.taskRunRefs) {
       if (
         input.targetRunRef &&
-        input.targetRunRef !== dagRun.ref &&
+        input.targetRunRef !== workflowRun.ref &&
         input.targetRunRef !== childRunRef
       )
         continue;
-      dagRunRefByChild.set(childRunRef, dagRun.ref);
+      workflowRunRefByChild.set(childRunRef, workflowRun.ref);
       childRunRefs.add(childRunRef);
     }
   }
   for (const process of input.activeProcesses) childRunRefs.add(process.runRef);
-  if (input.targetRunRef && !input.dagRuns.some((run) => run.ref === input.targetRunRef))
+  if (input.targetRunRef && !input.workflowRuns.some((run) => run.ref === input.targetRunRef))
     childRunRefs.add(input.targetRunRef);
   for (const task of allTasks) {
     if (input.projectRef && task.projectRef !== input.projectRef) continue;
@@ -80,7 +80,7 @@ export function collectBackgroundChildRuns(input: {
       : (taskRun?.status ?? (task?.status === "running" ? "running" : "unknown"));
     const view: SparkBackgroundChildRunView = {
       runRef,
-      dagRunRef: dagRunRefByChild.get(runRef),
+      workflowRunRef: workflowRunRefByChild.get(runRef),
       taskRef: task?.ref ?? taskRun?.taskRef,
       taskName: task?.name,
       taskTitle: task?.title,
@@ -143,7 +143,7 @@ export async function enrichBackgroundChildRunsWithRoleRunArtifacts(input: {
 
 function backgroundChildNextAction(child: SparkBackgroundChildRunView): string | undefined {
   if (child.activeProcess)
-    return `wait for completion, or kill ${child.runRef} if this child is stuck`;
+    return `wait for completion, or kill ${child.runRef} if this child is non-responsive`;
   if (child.status === "failed")
     return "inspect failed task/run evidence, fix the cause, then rerun";
   if (child.status === "queued" || child.status === "running")

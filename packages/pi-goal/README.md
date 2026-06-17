@@ -12,7 +12,7 @@ Responsibilities:
 - reconstruct goal state from session custom entries
 - render goal summaries and continuation prompts
 - keep goal tool-name guidance and continuation markers in one package
-- document canonical goal actions used by host extensions: `status`, `start`, `pause`, `resume`, `clear`, `edit`, and reviewer-owned `complete`
+- document canonical goal actions used by host extensions: `status`, `start`, `pause`, `resume`, `clear`, `edit`, and reviewer-gated `complete`
 
 Lifecycle semantics:
 
@@ -20,11 +20,11 @@ Lifecycle semantics:
 - `start` creates or replaces a completed goal; host extensions must reject conflicting non-complete goals instead of silently switching
 - `pause` stops automatic continuation without deleting the goal; `resume` only restarts a still-valid paused goal
 - `edit` changes the objective deliberately and clears stale review/retry state; `clear` forgets the current goal without completing it
-- `complete` remains reviewer-owned; there is no standalone `goal_complete` alias
+- `complete` is a reviewer-gated completion request: the main session requests completion, the reviewer audits and returns a verdict, and the host extension applies the approved state transition; there is no standalone `goal_complete` alias
 
 Non-responsibilities:
 
 - does not parse or run workflow scripts (`@zendev-lab/pi-workflows`)
 - does not schedule ready tasks or own workflow-run state (`@zendev-lab/pi-workflows`)
 - does not register Pi tools or slash commands (`@zendev-lab/spark` extension facade)
-- does not expose a standalone `goal_complete` tool; Spark completion remains reviewer-owned through the canonical `goal({ action: "complete" })` boundary
+- does not expose a standalone `goal_complete` tool; Spark completion remains reviewer-gated through the canonical `goal({ action: "complete" })` request boundary

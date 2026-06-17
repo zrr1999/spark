@@ -22,7 +22,7 @@ export interface SparkStateTerminalProjectCandidate {
   updatedAt: string;
 }
 
-export interface SparkStateInactiveDagRunCandidate {
+export interface SparkStateInactiveWorkflowRunCandidate {
   ref: RunRef;
   projectRef?: ProjectRef;
   status: WorkflowRunStatus;
@@ -72,10 +72,10 @@ export interface SparkStateDiagnosticsSummary {
     shown: number;
     candidates: SparkStateTerminalProjectCandidate[];
   };
-  inactiveDagRuns: {
+  inactiveWorkflowRuns: {
     count: number;
     shown: number;
-    candidates: SparkStateInactiveDagRunCandidate[];
+    candidates: SparkStateInactiveWorkflowRunCandidate[];
   };
   largeArtifacts: {
     count: number;
@@ -125,8 +125,8 @@ export async function collectSparkStateDiagnostics(
     .filter((project) => project.status === "done" || project.unfinishedTasks === 0)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
-  const dagSnapshot = await defaultSparkWorkflowRunStore(cwd).load();
-  const allInactiveDagRuns = dagSnapshot.runs
+  const workflowRunSnapshot = await defaultSparkWorkflowRunStore(cwd).load();
+  const allInactiveWorkflowRuns = workflowRunSnapshot.runs
     .filter((run) => run.status !== "running")
     .map((run) => ({
       ref: run.ref,
@@ -151,7 +151,7 @@ export async function collectSparkStateDiagnostics(
     boundedLimit: SPARK_STATE_DIAGNOSTIC_ITEM_LIMIT,
     largeArtifactThresholdBytes: SPARK_STATE_LARGE_ARTIFACT_THRESHOLD_BYTES,
     terminalProjects: boundedDiagnostics(allTerminalProjects),
-    inactiveDagRuns: boundedDiagnostics(allInactiveDagRuns),
+    inactiveWorkflowRuns: boundedDiagnostics(allInactiveWorkflowRuns),
     largeArtifacts: boundedDiagnostics(artifactInventory.largeArtifacts),
     orphanBlobs: boundedDiagnostics(artifactInventory.orphanBlobs),
     notes: boundedDiagnostics(noteCandidates),

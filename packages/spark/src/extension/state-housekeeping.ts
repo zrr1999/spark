@@ -18,7 +18,7 @@ export {
   SPARK_STATE_LARGE_ARTIFACT_THRESHOLD_BYTES,
   collectSparkStateDiagnostics,
   type SparkStateDiagnosticsSummary,
-  type SparkStateInactiveDagRunCandidate,
+  type SparkStateInactiveWorkflowRunCandidate,
   type SparkStateLargeArtifactCandidate,
   type SparkStateOrphanBlobCandidate,
   type SparkStateProtectedFileCandidate,

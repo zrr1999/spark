@@ -26,6 +26,7 @@
     "@zendev-lab/pi-extension-api": "workspace:^",
     "@zendev-lab/pi-goal": "workspace:^",
     "@zendev-lab/pi-learnings": "workspace:^",
+    "@zendev-lab/pi-modes": "workspace:^",
     "@zendev-lab/pi-roles": "workspace:^",
     "@zendev-lab/pi-tasks": "workspace:^",
     "@zendev-lab/pi-workflows": "workspace:^",

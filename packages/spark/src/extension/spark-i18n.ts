@@ -163,9 +163,9 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
     goalLine: (objective) => `Goal: ${objective}`,
     loopTickHeader: "Spark foreground goal loop tick.",
     loopModeDecisionContract:
-      "Main session mode decision required: choose exactly one of research, plan, or implement for this tick; state the mode and whether you are staying or switching, with a brief reason. Goal, workflow, subagent role, and role-run are not modes.",
+      "Foreground goal tick uses exactly one main session mode: research, plan, or implement. The host selects the starting mode for this turn; state if you follow it or need to switch, with a brief reason. Goal, workflow, subagent role, and role-run are not modes.",
     loopReviewerOwnership:
-      "Goal is a meta-mode over research/plan/implement. Use research for investigation (prefer subagent role + main-agent summary when parallel inspection helps), plan for task decomposition, implement for bounded work (prefer saved workflow runtime or task run_ready for parallelizable execution when it fits). These are strategy recommendations, not mandatory steps. Goal completion is reviewer-owned; when blocked, resolve the blocking work instead of pausing or weakening the goal.",
+      "Goal is a foreground driver, not a mode. The host selects one mode for this tick; goal supplies the objective, idle tick loop, and reviewer-gated completion flow: the main session requests completion, the reviewer audits, and Spark applies the approved state transition. When blocked, resolve the blocking work instead of pausing or weakening the goal.",
     emptyGoalNotSet: "Spark session goal is not set.",
     emptyGoalReadContext:
       "Read the Spark project/task context below and decide a concrete, stable session goal. Default to the substantive project outcome described by the project purpose/description/title; use planning/readiness-only wording only when the user explicitly asked for that scope.",
@@ -178,10 +178,10 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
       `Session TODO sweep: ${count} active session TODO(s) before the first goal tick:`,
     todoSweepMore: (hidden) => `\n- … ${hidden} more active session TODO(s)`,
     todoSweepDisposition:
-      'Decide each TODO before doing goal work: finish/cancel/delete via task({ action: "todo_update", scope: "session", ops: [...] }).',
+      'Decide each TODO before doing goal work: finish/cancel/delete via task_write({ action: "todo_update", scope: "session", ops: [...] }).',
     notSetVisible: "Spark goal needs to be set; agent will infer it now.",
     pauseLineForeground:
-      "Spark foreground goal loop runs idle-only ticks; goal completion is reviewer-owned.",
+      "Spark foreground goal loop runs idle-only ticks; goal completion is reviewer-gated.",
   },
   zh: {
     goalActiveHeader: "Spark 会话目标已激活。",
@@ -189,9 +189,9 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
     goalLine: (objective) => `目标：${objective}`,
     loopTickHeader: "Spark 前台目标循环节拍。",
     loopModeDecisionContract:
-      "必须选择本 tick 的主 session 模式：只能从 research、plan、implement 中选一个；说明本 tick 的模式，以及是保持还是切换，并给出简短理由。goal、workflow、subagent role、role-run 都不是模式。",
+      "前台 goal tick 只使用一个主 session mode：research、plan 或 implement。host 会为本 turn 选择起始 mode；说明你是遵循它还是需要切换，并给出简短理由。goal、workflow、subagent role、role-run 都不是模式。",
     loopReviewerOwnership:
-      "goal 是覆盖 research/plan/implement 的元模式。research 用于调查（并行检查有帮助时优先 subagent role + 主 agent 汇总），plan 用于任务拆解，implement 用于有边界的执行（适合并行且匹配时优先 saved workflow runtime 或 task run_ready）。这些是策略建议，不是强制步骤。目标完成由 reviewer 决定；遇到阻塞时先解决阻塞工作，不要自主暂停或降低目标难度。",
+      "goal 是前台 driver，不是模式。host 为本 tick 选择一个 mode；goal 提供目标、空闲节拍循环与 reviewer-gated completion 流程：主 session 发起完成请求，reviewer 审核裁决，Spark 应用通过后的状态转换。遇到阻塞时先解决阻塞工作，不要自主暂停或降低目标难度。",
     emptyGoalNotSet: "尚未设置 Spark 会话目标。",
     emptyGoalReadContext:
       "阅读下方 Spark 项目/任务上下文，给出一个具体且稳定的会话目标。默认目标应表达 project purpose/description/title 所描述的实质成果；只有用户明确要求仅规划/仅就绪时才写成 planning-only/readiness-only。",
@@ -202,9 +202,9 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
     todoSweepHeader: (count) => `会话 TODO 巡检：第一个目标节拍前有 ${count} 条活动会话 TODO：`,
     todoSweepMore: (hidden) => `\n- … 还有 ${hidden} 条活动会话 TODO`,
     todoSweepDisposition:
-      '在推进目标工作前先处置每一条 TODO：finish/cancel/delete，通过 task({ action: "todo_update", scope: "session", ops: [...] })。',
+      '在推进目标工作前先处置每一条 TODO：finish/cancel/delete，通过 task_write({ action: "todo_update", scope: "session", ops: [...] })。',
     notSetVisible: "需要设置 Spark 目标；agent 现在会自行推断。",
-    pauseLineForeground: "Spark 前台目标循环只在空闲时触发；目标完成由 reviewer 决定。",
+    pauseLineForeground: "Spark 前台目标循环只在空闲时触发；目标 completion 是 reviewer-gated。",
   },
 };
 
@@ -281,7 +281,7 @@ const ACTIVE_CONTEXT: Record<SparkLanguage, ActiveSparkContextStrings> = {
     header: "Spark context:",
     noProjectHeader: "Spark available: no project selected for this session.",
     noProjectGuidance:
-      '- Use task({ action: "project_use" }) to select or create a current project before planning, claiming, or updating project-bound tasks.',
+      '- Use task_write({ action: "project_use" }) to select or create a current project before planning, claiming, or updating project-bound tasks.',
     currentProjectLine: (title, ref) => `- Current project: ${title} (${ref})`,
     taskCountsLine: ({ unfinished, claimed, sessionClaimed, total }) =>
       `- Unfinished tasks: ${unfinished} / claimed: ${claimed} / current_session_claimed: ${sessionClaimed} (${total} total)`,
@@ -297,7 +297,7 @@ const ACTIVE_CONTEXT: Record<SparkLanguage, ActiveSparkContextStrings> = {
     },
     myClaimedTodosHidden: (hidden) => `  - … ${hidden} more active TODOs`,
     hiddenSessionClaimed: (hidden) =>
-      `- … ${hidden} more claimed task(s); use task({ action: "status" }) for details`,
+      `- … ${hidden} more claimed task(s); use task_read({ action: "status" }) for details`,
     projectsCountsLine: (total, active) => `- Projects: ${total} total / ${active} active`,
     sparkMdHeader: "SPARK.md (intent excerpt):",
     sparkMdReadFull: "… (read SPARK.md for full intent)",
@@ -306,7 +306,7 @@ const ACTIVE_CONTEXT: Record<SparkLanguage, ActiveSparkContextStrings> = {
     header: "Spark 上下文：",
     noProjectHeader: "Spark 可用：当前会话尚未选择项目。",
     noProjectGuidance:
-      '- 在规划、认领或更新项目内任务前，先用 task({ action: "project_use" }) 选择或创建当前项目。',
+      '- 在规划、认领或更新项目内任务前，先用 task_write({ action: "project_use" }) 选择或创建当前项目。',
     currentProjectLine: (title, ref) => `- 当前项目：${title}（${ref}）`,
     taskCountsLine: ({ unfinished, claimed, sessionClaimed, total }) =>
       `- 未完成任务：${unfinished} / 已认领：${claimed} / 当前会话已认领：${sessionClaimed}（共 ${total} 条）`,
@@ -322,7 +322,7 @@ const ACTIVE_CONTEXT: Record<SparkLanguage, ActiveSparkContextStrings> = {
     },
     myClaimedTodosHidden: (hidden) => `  - … 还有 ${hidden} 条活动 TODO`,
     hiddenSessionClaimed: (hidden) =>
-      `- … 还有 ${hidden} 条已认领任务；用 task({ action: "status" }) 查看详情`,
+      `- … 还有 ${hidden} 条已认领任务；用 task_read({ action: "status" }) 查看详情`,
     projectsCountsLine: (total, active) => `- 项目：${total} 个 / ${active} 个活跃`,
     sparkMdHeader: "SPARK.md（intent 摘录）：",
     sparkMdReadFull: "…（完整 intent 见 SPARK.md）",

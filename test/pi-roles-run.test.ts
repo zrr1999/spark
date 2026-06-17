@@ -13,10 +13,11 @@ import {
   hydrateDefaultRoleRegistry,
   listActiveRoleRuns,
   normalizeRoleRef,
-  normalizeRoleRunMode,
+  normalizeRoleLaunchMode,
   normalizeRoleSource,
   parsePiJsonlEvents,
   parseRoleSpecMarkdown,
+  ROLE_RUN_DEPTH_ENV,
   RoleRegistry,
   resolveRoleModelSetting,
   RoleModelSettingsStoreFormatError,
@@ -30,7 +31,7 @@ import { buildRoleRunArgs, runRoleInstructionOnly } from "@zendev-lab/spark-runt
 void test("pi-roles builds fresh JSON Pi role args without accidental fork session reuse", () => {
   const args = buildRoleRunArgs({
     roleRef: "role:project-svg-assembler",
-    mode: "fresh",
+    launch: "fresh",
     systemPrompt: "You are a worker.",
     instruction: "Implement the task.",
     sessionDir: "/tmp/sessions",
@@ -48,7 +49,7 @@ void test("pi-roles builds fresh JSON Pi role args without accidental fork sessi
   assert.equal(args.includes("--fork"), false);
   assert.equal(args.includes("session-parent.json"), false);
   assert.equal(args.at(-2), "You are a worker.");
-  assert.equal(args.at(-1)?.includes("Spark role-run ask policy:"), true);
+  assert.equal(args.at(-1)?.includes("Spark role-run interaction policy:"), true);
   assert.equal(args.at(-1)?.includes("Spark naming quality policy:"), true);
   assert.equal(args.at(-1)?.includes("Instruction:\n\nImplement the task."), true);
 });
@@ -56,7 +57,7 @@ void test("pi-roles builds fresh JSON Pi role args without accidental fork sessi
 void test("pi-roles includes resolved user model in JSON Pi role args", () => {
   const args = buildRoleRunArgs({
     roleRef: "role:builtin-worker",
-    mode: "fresh",
+    launch: "fresh",
     systemPrompt: "You are a worker.",
     model: "openai/gpt-5.5",
     instruction: "Implement.",
@@ -68,7 +69,7 @@ void test("pi-roles includes resolved user model in JSON Pi role args", () => {
 void test("pi-roles can pass a child Pi tool allowlist", () => {
   const args = buildRoleRunArgs({
     roleRef: "role:builtin-worker",
-    mode: "fresh",
+    launch: "fresh",
     systemPrompt: "You are a worker.",
     instruction: "Create a patch.",
     allowedTools: ["graft_read", " graft_write ", "", "graft_validate"],
@@ -79,10 +80,10 @@ void test("pi-roles can pass a child Pi tool allowlist", () => {
   assert.equal(args[index + 1], "graft_read,graft_write,graft_validate");
 });
 
-void test("pi-roles builds forked JSON Pi role args only when forked mode is explicit", () => {
+void test("pi-roles builds forked JSON Pi role args only when forked launch is explicit", () => {
   const args = buildRoleRunArgs({
     roleRef: "role:builtin-reviewer",
-    mode: "forked",
+    launch: "forked",
     systemPrompt: "You are a reviewer.",
     instruction: "Review the task.",
     sessionDir: "/tmp/sessions",
@@ -101,16 +102,16 @@ void test("pi-roles builds forked JSON Pi role args only when forked mode is exp
   ]);
 });
 
-void test("pi-roles requires fork source for forked mode", () => {
+void test("pi-roles requires fork source for forked launch", () => {
   assert.throws(
     () =>
       buildRoleRunArgs({
         roleRef: "role:builtin-worker",
-        mode: "forked",
+        launch: "forked",
         systemPrompt: "You are a worker.",
         instruction: "Implement.",
       }),
-    /forked role run requires forkFromSession/,
+    /forked role launch requires forkFromSession/,
   );
 });
 
@@ -211,7 +212,7 @@ void test("pi-roles resolves role model settings with project and user precedenc
     );
     assert.equal(
       await resolveRoleModelSetting({
-        roleRef: "role:builtin-planner",
+        roleRef: "role:builtin-scout",
         projectStore,
         userStore,
       }),
@@ -355,6 +356,13 @@ void test("pi-roles rejects role spec model frontmatter", () => {
   );
 });
 
+function roleDepthTestEnv(depth?: string): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env[ROLE_RUN_DEPTH_ENV];
+  if (depth !== undefined) env[ROLE_RUN_DEPTH_ENV] = depth;
+  return env;
+}
+
 void test("pi-roles launches Pi, captures JSONL events, and records run metadata", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-roles-launcher-"));
   try {
@@ -388,7 +396,7 @@ void test("pi-roles launches Pi, captures JSONL events, and records run metadata
 
     assert.equal(result.record.ref, "run:launcher-test");
     assert.equal(result.record.roleRef, "role:builtin-worker");
-    assert.equal(result.record.mode, "fresh");
+    assert.equal(result.record.launch, "fresh");
     assert.equal(result.record.status, "succeeded");
     assert.equal(result.record.startedAt, "2026-05-21T00:00:00.000Z");
     assert.equal(result.record.finishedAt, "2026-05-21T00:00:00.000Z");
@@ -398,6 +406,79 @@ void test("pi-roles launches Pi, captures JSONL events, and records run metadata
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+void test("pi-roles decrements role run depth for child Pi processes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-depth-env-"));
+  try {
+    const fakePi = join(dir, "fake-pi.cjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        `process.stdout.write(JSON.stringify({ type: 'depth', depth: process.env.${ROLE_RUN_DEPTH_ENV} }) + '\\n');`,
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    const defaultDepth = await runRole({
+      runRef: "run:default-depth-test",
+      roleRef: "role:builtin-worker",
+      systemPrompt: "You are a worker.",
+      instruction: "Report depth.",
+      piCommand: fakePi,
+      cwd: dir,
+      env: roleDepthTestEnv(),
+    });
+    assert.deepEqual(defaultDepth.jsonEvents.at(-1), { type: "depth", depth: "3" });
+
+    const explicitDepth = await runRole({
+      runRef: "run:explicit-depth-test",
+      roleRef: "role:builtin-worker",
+      systemPrompt: "You are a worker.",
+      instruction: "Report depth.",
+      piCommand: fakePi,
+      cwd: dir,
+      env: roleDepthTestEnv("2"),
+    });
+    assert.deepEqual(explicitDepth.jsonEvents.at(-1), { type: "depth", depth: "1" });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("pi-roles refuses to spawn when role run depth is exhausted", async () => {
+  let spawned = false;
+  await assert.rejects(
+    runRole({
+      runRef: "run:depth-exhausted-test",
+      roleRef: "role:builtin-worker",
+      systemPrompt: "You are a worker.",
+      instruction: "Should not spawn.",
+      piCommand: "pi",
+      cwd: process.cwd(),
+      env: roleDepthTestEnv("0"),
+      onChildProcess: () => {
+        spawned = true;
+      },
+    }),
+    /PI_ROLE_DEPTH exhausted/,
+  );
+  assert.equal(spawned, false);
+
+  await assert.rejects(
+    runRole({
+      runRef: "run:negative-depth-test",
+      roleRef: "role:builtin-worker",
+      systemPrompt: "You are a worker.",
+      instruction: "Should not spawn.",
+      piCommand: "pi",
+      cwd: process.cwd(),
+      env: roleDepthTestEnv("-1"),
+    }),
+    /PI_ROLE_DEPTH exhausted/,
+  );
 });
 
 void test("pi-roles tracks and cancels active runs", async () => {
@@ -463,11 +544,11 @@ void test("pi-roles enforces timeout control", async () => {
   }
 });
 
-void test("pi-roles defaults omitted run mode but rejects unknown modes", () => {
-  assert.equal(normalizeRoleRunMode(undefined), "fresh");
-  assert.equal(normalizeRoleRunMode("fresh"), "fresh");
-  assert.equal(normalizeRoleRunMode("forked"), "forked");
-  assert.throws(() => normalizeRoleRunMode("legacy-mode"), /unsupported role run mode/);
+void test("pi-roles defaults omitted role launch but rejects unknown launches", () => {
+  assert.equal(normalizeRoleLaunchMode(undefined), "fresh");
+  assert.equal(normalizeRoleLaunchMode("fresh"), "fresh");
+  assert.equal(normalizeRoleLaunchMode("forked"), "forked");
+  assert.throws(() => normalizeRoleLaunchMode("legacy-mode"), /unsupported role launch mode/);
 });
 
 void test("pi-roles parses JSONL tolerantly", () => {
@@ -482,6 +563,7 @@ void test("pi-roles rejects legacy role aliases instead of normalizing them", ()
     () => normalizeRoleRef("agent:builtin-worker"),
     /legacy agent refs are not supported/,
   );
+  assert.equal(normalizeRoleSource("extension"), "extension");
   assert.equal(normalizeRoleSource("predefined"), undefined);
   assert.equal(normalizeRoleSource("managed"), undefined);
   assert.equal(normalizeRoleSource("workspace"), undefined);

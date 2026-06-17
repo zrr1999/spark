@@ -5,9 +5,6 @@ export interface ParsedWorkflowScript {
   body: string;
 }
 
-/** @deprecated Spark-named alias kept for compatibility. Prefer ParsedWorkflowScript. */
-export type ParsedSparkWorkflowScript = ParsedWorkflowScript;
-
 export function parseWorkflowScript(script: string): ParsedWorkflowScript {
   const marker = "export const meta";
   const markerIndex = script.indexOf(marker);
@@ -56,9 +53,6 @@ function findBalancedObjectEnd(source: string, start: number): number {
   }
   throw new Error("Workflow meta object is not balanced");
 }
-
-/** @deprecated Spark-named alias kept for compatibility. Prefer parseWorkflowScript. */
-export const parseSparkWorkflowScript = parseWorkflowScript;
 
 export function parseMetaLiteral(source: string): WorkflowMeta {
   try {
@@ -299,6 +293,3 @@ export function normalizeWorkflowMeta(value: unknown): WorkflowMeta {
   }
   return meta;
 }
-
-/** @deprecated Spark-named alias kept for compatibility. Prefer normalizeWorkflowMeta. */
-export const normalizeSparkWorkflowMeta = normalizeWorkflowMeta;

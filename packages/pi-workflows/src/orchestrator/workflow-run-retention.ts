@@ -1,7 +1,10 @@
 import { nowIso, type RunRef, type ProjectRef } from "@zendev-lab/pi-extension-api";
 
 import type { WorkflowRunRecord, WorkflowRunStoreSnapshot } from "./index.ts";
-import { isAcknowledgeableDagRun, isTerminalDagRunStatus } from "./dag-run-status.ts";
+import {
+  isAcknowledgeableWorkflowRun,
+  isTerminalWorkflowRunStatus,
+} from "./workflow-run-status.ts";
 
 export type WorkflowRunRetentionCandidateReason = "old-succeeded" | "old-acknowledged-problem";
 
@@ -97,7 +100,7 @@ export function planWorkflowRunPrune(
   const activeRunRefs = new Set(options.activeRunRefs);
   if (snapshot.manager.activeRunRef) activeRunRefs.add(snapshot.manager.activeRunRef);
   const terminalRuns = snapshot.runs
-    .filter((run) => isTerminalDagRunStatus(run.status))
+    .filter((run) => isTerminalWorkflowRunStatus(run.status))
     .sort(compareWorkflowRunRetentionDateDesc);
   const globallyRecent = new Set(terminalRuns.slice(0, options.keepRecent).map((run) => run.ref));
   const recentlyByProject = new Set<RunRef>();
@@ -168,13 +171,13 @@ function workflowRunRetentionDecision(
   )
     return entry("active-run");
   if (run.status === "running") return entry("running");
-  if (!isTerminalDagRunStatus(run.status)) return entry("non-terminal");
+  if (!isTerminalWorkflowRunStatus(run.status)) return entry("non-terminal");
   if (windows.globallyRecent.has(run.ref)) return entry("global-recent-window");
   if (windows.recentlyByProject.has(run.ref)) return entry("project-recent-window");
   if (!Number.isFinite(retentionMs)) return entry("invalid-timestamp");
   if (retentionMs >= options.cutoffMs) return entry("within-retention-age");
   if (run.status === "succeeded") return entry("old-succeeded");
-  if (isAcknowledgeableDagRun(run)) {
+  if (isAcknowledgeableWorkflowRun(run)) {
     if (!run.acknowledgedAt) return entry("unacknowledged-problem");
     return entry("old-acknowledged-problem");
   }
@@ -190,15 +193,3 @@ function compareWorkflowRunRetentionDateDesc(a: WorkflowRunRecord, b: WorkflowRu
   if (byDate !== 0) return byDate;
   return b.ref.localeCompare(a.ref);
 }
-
-/** @deprecated SparkDag* aliases are compatibility shims. Prefer WorkflowRun* retention symbols. */
-export type SparkDagRunRetentionCandidateReason = WorkflowRunRetentionCandidateReason;
-export type SparkDagRunRetentionKeepReason = WorkflowRunRetentionKeepReason;
-export type SparkDagRunRetentionEntry = WorkflowRunRetentionEntry;
-export type SparkDagRunPruneOptions = WorkflowRunPruneOptions;
-export type SparkDagRunPruneResult = WorkflowRunPruneResult;
-export type NormalizedSparkDagRunPruneOptions = NormalizedWorkflowRunPruneOptions;
-/** @deprecated SparkDag* alias kept for compatibility. Prefer normalizeWorkflowRunPruneOptions. */
-export const normalizeSparkDagRunPruneOptions = normalizeWorkflowRunPruneOptions;
-/** @deprecated SparkDag* alias kept for compatibility. Prefer planWorkflowRunPrune. */
-export const planSparkDagRunPrune = planWorkflowRunPrune;

@@ -6,7 +6,11 @@ import type {
   TaskStatus,
   ProjectRef,
 } from "@zendev-lab/pi-extension-api";
-import type { WorkflowRunAcknowledgeResult, WorkflowRunStatus } from "@zendev-lab/pi-workflows";
+import type {
+  WorkflowRunAcknowledgeResult,
+  WorkflowRunControlStatus,
+  WorkflowRunStatus,
+} from "@zendev-lab/pi-workflows";
 import {
   listActiveSparkRoleRunProcesses,
   type KillSparkRoleRunProcessResult,
@@ -21,33 +25,26 @@ import {
   resolveBackgroundTaskRef,
 } from "./background-child-runs.ts";
 import {
-  backgroundDagRunView,
-  dagRunInProjectScope,
-  isActionableProblemDagRun,
-  selectBackgroundDagRuns,
+  backgroundRunView,
+  runInProjectScope,
+  isActionableProblemRun,
+  selectBackgroundRuns,
   summarizeBackgroundRuns,
-} from "./background-dag-runs.ts";
+} from "./background-workflow-runs.ts";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 
 export { resolveBackgroundTaskRef } from "./background-child-runs.ts";
 
-export type SparkBackgroundRunModeStatus =
-  | "running"
-  | "paused"
-  | "blocked"
-  | "done"
-  | "failed"
-  | "cancelled";
-
-export interface SparkBackgroundRunModeState {
-  runRef: RunRef;
-  projectRef: ProjectRef;
-  status: SparkBackgroundRunModeStatus;
-  focus?: string;
-  policy: { maxConcurrency: number; timeoutMs: number };
-}
-
-export type SparkBackgroundAction = "status" | "list" | "inspect" | "kill" | "reconcile" | "ack";
+export type SparkBackgroundAction =
+  | "status"
+  | "list"
+  | "inspect"
+  | "kill"
+  | "reconcile"
+  | "ack"
+  | "prune"
+  | "clear_inactive"
+  | "kill_active";
 const SPARK_BACKGROUND_ACTIONS: SparkBackgroundAction[] = [
   "status",
   "list",
@@ -55,6 +52,9 @@ const SPARK_BACKGROUND_ACTIONS: SparkBackgroundAction[] = [
   "kill",
   "reconcile",
   "ack",
+  "prune",
+  "clear_inactive",
+  "kill_active",
 ];
 const SPARK_BACKGROUND_KILL_SIGNALS = new Set<NodeJS.Signals>([
   "SIGTERM",
@@ -77,7 +77,7 @@ export type SparkBackgroundChildStatus =
   | "cancelled"
   | "unknown";
 
-export interface SparkBackgroundDagRunView {
+export interface SparkBackgroundRunView {
   runRef: RunRef;
   status: WorkflowRunStatus;
   legacyTimedOut: boolean;
@@ -96,7 +96,7 @@ export interface SparkBackgroundDagRunView {
 
 export interface SparkBackgroundChildRunView {
   runRef: RunRef;
-  dagRunRef?: RunRef;
+  workflowRunRef?: RunRef;
   taskRef?: TaskRef;
   taskName?: string;
   taskTitle?: string;
@@ -126,23 +126,22 @@ export interface SparkBackgroundChildRunView {
 export interface SparkBackgroundRunsDetails {
   action: SparkBackgroundAction;
   currentProjectRef?: ProjectRef;
-  runMode?: {
-    runRef: RunRef;
+  control?: {
     projectRef: ProjectRef;
-    status: SparkBackgroundRunModeStatus;
+    status: WorkflowRunControlStatus;
     focus?: string;
     policy: { maxConcurrency: number; foregroundTimeoutMs?: number };
   };
   summary: {
     state: SparkBackgroundSummaryState;
-    activeDagRunRef?: RunRef;
+    activeRunRef?: RunRef;
     activeChildren: number;
     scheduled: number;
     completed: number;
     actionableProblems: number;
     nextAction: string;
   };
-  dagRuns: SparkBackgroundDagRunView[];
+  runs: SparkBackgroundRunView[];
   childRuns: SparkBackgroundChildRunView[];
   killed?: KillSparkRoleRunProcessResult[];
   acknowledged?: WorkflowRunAcknowledgeResult;
@@ -153,7 +152,7 @@ export function normalizeSparkBackgroundAction(value: unknown): SparkBackgroundA
   if (SPARK_BACKGROUND_ACTIONS.includes(value as SparkBackgroundAction))
     return value as SparkBackgroundAction;
   throw new Error(
-    "spark_background_runs action must be status, list, inspect, kill, reconcile, or ack",
+    "spark_workflow_runs action must be status, list, inspect, kill, reconcile, ack, prune, clear_inactive, or kill_active",
   );
 }
 
@@ -220,12 +219,12 @@ export function activeSparkRoleRunProcessesForCwd(cwd: string) {
   return listActiveSparkRoleRunProcesses().filter((process) => process.cwd === cwd);
 }
 
-export async function reconcileSparkDagRunsWithActiveProcesses(
-  dagRunStore: ReturnType<typeof defaultSparkWorkflowRunStore>,
+export async function reconcileSparkWorkflowRunsWithActiveProcesses(
+  runStore: ReturnType<typeof defaultSparkWorkflowRunStore>,
   graph: TaskGraph | undefined,
   cwd: string,
 ): Promise<void> {
-  await dagRunStore.reconcile({
+  await runStore.reconcile({
     graph,
     activeRunRefs: activeSparkRoleRunProcessesForCwd(cwd).map((process) => process.runRef),
   });
@@ -235,20 +234,20 @@ export async function buildSparkBackgroundDetails(input: {
   action: SparkBackgroundAction;
   cwd: string;
   graph: TaskGraph;
-  dagRunStore: ReturnType<typeof defaultSparkWorkflowRunStore>;
+  runStore: ReturnType<typeof defaultSparkWorkflowRunStore>;
   currentProjectRef?: ProjectRef;
   projectRef?: ProjectRef;
-  runMode?: SparkBackgroundRunModeState;
+  control?: SparkBackgroundRunsDetails["control"];
   includeHistory: boolean;
   targetRunRef?: RunRef;
   targetTaskRef?: TaskRef;
   killed?: SparkBackgroundRunsDetails["killed"];
   acknowledged?: SparkBackgroundRunsDetails["acknowledged"];
 }): Promise<SparkBackgroundRunsDetails> {
-  const snapshot = await input.dagRunStore.load();
-  const runMode = input.runMode;
+  const snapshot = await input.runStore.load();
+  const control = input.control;
   const scopeProjectRef = input.projectRef ?? input.currentProjectRef;
-  const selectedDagRuns = selectBackgroundDagRuns({
+  const selectedRuns = selectBackgroundRuns({
     runs: snapshot.runs,
     projectRef: scopeProjectRef,
     includeHistory: input.includeHistory,
@@ -259,59 +258,48 @@ export async function buildSparkBackgroundDetails(input: {
     cwd: input.cwd,
     childRuns: collectBackgroundChildRuns({
       graph: input.graph,
-      dagRuns: selectedDagRuns,
+      workflowRuns: selectedRuns,
       activeProcesses: activeSparkRoleRunProcessesForCwd(input.cwd),
       projectRef: scopeProjectRef,
       targetRunRef: input.targetRunRef,
       targetTaskRef: input.targetTaskRef,
     }),
   });
-  const dagRuns = selectedDagRuns.map((run) =>
-    backgroundDagRunView(
+  const runs = selectedRuns.map((run) =>
+    backgroundRunView(
       run,
-      childRuns.filter((child) => child.dagRunRef === run.ref && child.activeProcess),
+      childRuns.filter((child) => child.workflowRunRef === run.ref && child.activeProcess),
     ),
   );
-  const summary = summarizeBackgroundRuns({ dagRuns, childRuns });
+  const summary = summarizeBackgroundRuns({ runs, childRuns });
   return {
     action: input.action,
     currentProjectRef: input.currentProjectRef,
-    runMode:
-      runMode && (!scopeProjectRef || runMode.projectRef === scopeProjectRef)
-        ? {
-            runRef: runMode.runRef,
-            projectRef: runMode.projectRef,
-            status: runMode.status,
-            focus: runMode.focus,
-            policy: {
-              maxConcurrency: runMode.policy.maxConcurrency,
-              foregroundTimeoutMs: runMode.policy.timeoutMs,
-            },
-          }
-        : undefined,
+    control:
+      control && (!scopeProjectRef || control.projectRef === scopeProjectRef) ? control : undefined,
     summary,
-    dagRuns,
+    runs,
     childRuns,
     killed: input.killed,
     acknowledged: input.acknowledged,
   };
 }
 
-export async function acknowledgeBackgroundDagRuns(input: {
-  dagRunStore: ReturnType<typeof defaultSparkWorkflowRunStore>;
+export async function acknowledgeBackgroundWorkflowRuns(input: {
+  runStore: ReturnType<typeof defaultSparkWorkflowRunStore>;
   snapshot: Awaited<ReturnType<ReturnType<typeof defaultSparkWorkflowRunStore>["load"]>>;
   sessionId: string;
   projectRef?: ProjectRef;
   runRef?: RunRef;
 }): Promise<NonNullable<SparkBackgroundRunsDetails["acknowledged"]>> {
   if (input.runRef)
-    return input.dagRunStore.acknowledgeFailures({
+    return input.runStore.acknowledgeFailures({
       runRef: input.runRef,
       sessionId: input.sessionId,
     });
   const targets = input.snapshot.runs
-    .filter((run) => dagRunInProjectScope(run, input.projectRef))
-    .filter(isActionableProblemDagRun)
+    .filter((run) => runInProjectScope(run, input.projectRef))
+    .filter(isActionableProblemRun)
     .map((run) => run.ref);
   let result: NonNullable<SparkBackgroundRunsDetails["acknowledged"]> = {
     snapshot: input.snapshot,
@@ -321,7 +309,7 @@ export async function acknowledgeBackgroundDagRuns(input: {
     missing: [],
   };
   for (const runRef of targets) {
-    const next = await input.dagRunStore.acknowledgeFailures({
+    const next = await input.runStore.acknowledgeFailures({
       runRef,
       sessionId: input.sessionId,
     });

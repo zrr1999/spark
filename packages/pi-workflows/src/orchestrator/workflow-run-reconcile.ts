@@ -4,8 +4,8 @@ import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import {
   completionDigestFromTaskRuns,
   createWorkflowRunCompletionFollowUp,
-} from "./dag-run-completion.ts";
-import { reconcileDagRunCounters, uniqueRefs } from "./dag-run-counters.ts";
+} from "./workflow-run-completion.ts";
+import { reconcileWorkflowRunCounters, uniqueRefs } from "./workflow-run-counters.ts";
 import type { WorkflowRunRecord, WorkflowRunStoreSnapshot } from "./index.ts";
 
 export interface WorkflowRunSnapshotReconcileInput {
@@ -56,7 +56,7 @@ function reconcileStaleWorkflowRun(
   )) {
     if (!record.completedTaskRefs.includes(run.taskRef)) record.completedTaskRefs.push(run.taskRef);
   }
-  reconcileDagRunCounters(record, {
+  reconcileWorkflowRunCounters(record, {
     completedFallback: taskRuns.filter((run) => run.status !== "queued" && run.status !== "running")
       .length,
   });
@@ -127,8 +127,3 @@ function isActiveSchedulingWindow(
     record.taskRunRefs.length === 0
   );
 }
-
-/** @deprecated SparkDag* aliases are compatibility shims. Prefer WorkflowRun* reconciliation symbols. */
-export type SparkDagRunSnapshotReconcileInput = WorkflowRunSnapshotReconcileInput;
-/** @deprecated SparkDag* alias kept for compatibility. Prefer reconcileWorkflowRunSnapshot. */
-export const reconcileSparkDagRunSnapshot = reconcileWorkflowRunSnapshot;

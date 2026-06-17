@@ -349,15 +349,3 @@ function parseWorkflowAgentDelivery(value: unknown): WorkflowAgentDeliverySummar
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
-/** @deprecated Spark-named exports are compatibility shims. Prefer Workflow* exports in generic pi-workflows code; Spark-owned adapters should own Spark naming. */
-export const sparkWorkflowCallHash = workflowCallHash;
-export const runSparkWorkflowScript = runWorkflowScript;
-export const normalizeSparkWorkflowAgentOptions = normalizeWorkflowAgentOptions;
-export const applySparkWorkflowPhaseModel = applyWorkflowPhaseModel;
-export const normalizeSparkWorkflowArtifactRecordInput = normalizeWorkflowArtifactRecordInput;
-export const normalizeSparkWorkflowPhaseStatus = normalizeWorkflowPhaseStatus;
-export const renderSparkWorkflowAgentPrompt = renderWorkflowAgentPrompt;
-export const runSparkWorkflowParallel = runWorkflowParallel;
-export const normalizeSparkWorkflowParallelOptions = normalizeWorkflowParallelOptions;
-export const summarizeSparkWorkflowAgentDelivery = summarizeWorkflowAgentDelivery;

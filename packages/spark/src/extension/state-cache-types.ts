@@ -16,7 +16,7 @@ export type SparkProtectedStoreReason =
   | "notes"
   | "role-reports"
   | "review-gate"
-  | "dag-runs";
+  | "workflow-runs";
 
 export interface SparkStateCacheSummary {
   path: string;

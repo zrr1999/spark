@@ -6,10 +6,11 @@ import {
   readJsonFileOptional,
 } from "@zendev-lab/pi-extension-api";
 
-import { normalizeTaskRunCompletionSummaries } from "./dag-run-completion.ts";
-import { reconcileDagRunCounters } from "./dag-run-counters.ts";
+import { normalizeTaskRunCompletionSummaries } from "./workflow-run-completion.ts";
+import { reconcileWorkflowRunCounters } from "./workflow-run-counters.ts";
 import type {
   WorkflowRunCompletionFollowUp,
+  WorkflowRunControl,
   WorkflowRunManagerState,
   WorkflowRunManagerStatus,
   WorkflowRunRecord,
@@ -17,9 +18,13 @@ import type {
   WorkflowRunStoreSnapshot,
 } from "./index.ts";
 
-type LoadableWorkflowRunStoreSnapshot = Omit<WorkflowRunStoreSnapshot, "manager" | "runs"> & {
+type LoadableWorkflowRunStoreSnapshot = Omit<
+  WorkflowRunStoreSnapshot,
+  "manager" | "runs" | "control"
+> & {
   manager: Partial<WorkflowRunManagerState>;
   runs: Array<Partial<WorkflowRunRecord>>;
+  control?: unknown;
 };
 
 export class WorkflowRunStoreFormatError extends Error {
@@ -62,18 +67,58 @@ function assertWorkflowRunStoreSnapshot(
   if (!isRecord(value.manager)) {
     throw new WorkflowRunStoreFormatError(filePath, "manager must be an object");
   }
-  assertOptionalDagRunStoreString(value.manager.activeRunRef, filePath, "manager.activeRunRef");
-  assertOptionalDagRunStoreString(value.manager.lastRunRef, filePath, "manager.lastRunRef");
-  assertOptionalDagRunStoreString(value.manager.updatedAt, filePath, "manager.updatedAt");
+  assertOptionalWorkflowRunStoreString(
+    value.manager.activeRunRef,
+    filePath,
+    "manager.activeRunRef",
+  );
+  assertOptionalWorkflowRunStoreString(value.manager.lastRunRef, filePath, "manager.lastRunRef");
+  assertOptionalWorkflowRunStoreString(value.manager.updatedAt, filePath, "manager.updatedAt");
   if (value.manager.status !== undefined && !isWorkflowRunManagerStatus(value.manager.status)) {
     throw new WorkflowRunStoreFormatError(filePath, "manager.status must be a valid status");
   }
   if (!Array.isArray(value.runs)) {
     throw new WorkflowRunStoreFormatError(filePath, "runs must be an array");
   }
+  if (value.control !== undefined) {
+    assertWorkflowRunControl(value.control, filePath);
+  }
   value.runs.forEach((run, index) => {
     assertWorkflowRunStoreRecord(run, filePath, index);
   });
+}
+
+function assertWorkflowRunControl(value: unknown, filePath: string): void {
+  if (!isRecord(value)) {
+    throw new WorkflowRunStoreFormatError(filePath, "control must be an object");
+  }
+  if (typeof value.projectRef !== "string" || !value.projectRef.trim()) {
+    throw new WorkflowRunStoreFormatError(
+      filePath,
+      "control.projectRef must be a non-empty string",
+    );
+  }
+  assertOptionalWorkflowRunStoreString(value.focus, filePath, "control.focus");
+  assertOptionalWorkflowRunStoreString(value.enteredAt, filePath, "control.enteredAt");
+  assertOptionalWorkflowRunStoreString(value.updatedAt, filePath, "control.updatedAt");
+  if (value.status !== undefined && !isWorkflowRunControlStatus(value.status)) {
+    throw new WorkflowRunStoreFormatError(filePath, "control.status must be a valid status");
+  }
+  if (value.policy !== undefined) {
+    if (!isRecord(value.policy)) {
+      throw new WorkflowRunStoreFormatError(filePath, "control.policy must be an object");
+    }
+    assertOptionalWorkflowRunStoreNumber(
+      value.policy.maxConcurrency,
+      filePath,
+      "control.policy.maxConcurrency",
+    );
+    assertOptionalWorkflowRunStoreNumber(
+      value.policy.timeoutMs,
+      filePath,
+      "control.policy.timeoutMs",
+    );
+  }
 }
 
 function assertWorkflowRunStoreRecord(
@@ -84,39 +129,55 @@ function assertWorkflowRunStoreRecord(
   if (!isRecord(value)) {
     throw new WorkflowRunStoreFormatError(filePath, `runs[${index}] must be an object`);
   }
-  assertOptionalDagRunStoreString(value.ref, filePath, `runs[${index}].ref`);
-  assertOptionalDagRunStoreString(value.projectRef, filePath, `runs[${index}].projectRef`);
-  assertOptionalDagRunStoreString(value.ownerSessionId, filePath, `runs[${index}].ownerSessionId`);
-  assertOptionalDagRunStoreString(value.startedAt, filePath, `runs[${index}].startedAt`);
-  assertOptionalDagRunStoreString(value.updatedAt, filePath, `runs[${index}].updatedAt`);
-  assertOptionalDagRunStoreString(value.finishedAt, filePath, `runs[${index}].finishedAt`);
-  assertOptionalDagRunStoreString(value.errorMessage, filePath, `runs[${index}].errorMessage`);
-  assertOptionalDagRunStoreString(value.acknowledgedAt, filePath, `runs[${index}].acknowledgedAt`);
-  assertOptionalDagRunStoreString(
+  assertOptionalWorkflowRunStoreString(value.ref, filePath, `runs[${index}].ref`);
+  assertOptionalWorkflowRunStoreString(value.projectRef, filePath, `runs[${index}].projectRef`);
+  assertOptionalWorkflowRunStoreString(
+    value.ownerSessionId,
+    filePath,
+    `runs[${index}].ownerSessionId`,
+  );
+  assertOptionalWorkflowRunStoreString(value.startedAt, filePath, `runs[${index}].startedAt`);
+  assertOptionalWorkflowRunStoreString(value.updatedAt, filePath, `runs[${index}].updatedAt`);
+  assertOptionalWorkflowRunStoreString(value.finishedAt, filePath, `runs[${index}].finishedAt`);
+  assertOptionalWorkflowRunStoreString(value.errorMessage, filePath, `runs[${index}].errorMessage`);
+  assertOptionalWorkflowRunStoreString(
+    value.acknowledgedAt,
+    filePath,
+    `runs[${index}].acknowledgedAt`,
+  );
+  assertOptionalWorkflowRunStoreString(
     value.acknowledgedBySession,
     filePath,
     `runs[${index}].acknowledgedBySession`,
   );
-  assertOptionalDagRunStoreNumber(value.maxConcurrency, filePath, `runs[${index}].maxConcurrency`);
-  assertOptionalDagRunStoreNumber(value.timeoutMs, filePath, `runs[${index}].timeoutMs`);
-  assertOptionalDagRunStoreNumber(value.scheduled, filePath, `runs[${index}].scheduled`);
-  assertOptionalDagRunStoreNumber(value.completed, filePath, `runs[${index}].completed`);
-  assertOptionalDagRunStoreBoolean(value.dryRun, filePath, `runs[${index}].dryRun`);
-  assertOptionalDagRunStoreBoolean(value.timedOut, filePath, `runs[${index}].timedOut`);
+  assertOptionalWorkflowRunStoreNumber(
+    value.maxConcurrency,
+    filePath,
+    `runs[${index}].maxConcurrency`,
+  );
+  assertOptionalWorkflowRunStoreNumber(value.timeoutMs, filePath, `runs[${index}].timeoutMs`);
+  assertOptionalWorkflowRunStoreNumber(value.scheduled, filePath, `runs[${index}].scheduled`);
+  assertOptionalWorkflowRunStoreNumber(value.completed, filePath, `runs[${index}].completed`);
+  assertOptionalWorkflowRunStoreBoolean(value.dryRun, filePath, `runs[${index}].dryRun`);
+  assertOptionalWorkflowRunStoreBoolean(value.timedOut, filePath, `runs[${index}].timedOut`);
   if (value.status !== undefined && !isWorkflowRunStatus(value.status)) {
     throw new WorkflowRunStoreFormatError(filePath, `runs[${index}].status must be a valid status`);
   }
-  assertOptionalDagRunStoreStringArray(
+  assertOptionalWorkflowRunStoreStringArray(
     value.scheduledTaskRefs,
     filePath,
     `runs[${index}].scheduledTaskRefs`,
   );
-  assertOptionalDagRunStoreStringArray(
+  assertOptionalWorkflowRunStoreStringArray(
     value.completedTaskRefs,
     filePath,
     `runs[${index}].completedTaskRefs`,
   );
-  assertOptionalDagRunStoreStringArray(value.taskRunRefs, filePath, `runs[${index}].taskRunRefs`);
+  assertOptionalWorkflowRunStoreStringArray(
+    value.taskRunRefs,
+    filePath,
+    `runs[${index}].taskRunRefs`,
+  );
   if (value.completionDigest !== undefined && !Array.isArray(value.completionDigest)) {
     throw new WorkflowRunStoreFormatError(
       filePath,
@@ -139,24 +200,32 @@ function assertWorkflowRunCompletionFollowUp(
       `${runPath}.completionFollowUp must be an object`,
     );
   }
-  assertOptionalDagRunStoreString(
+  assertOptionalWorkflowRunStoreString(
     value.createdAt,
     filePath,
     `${runPath}.completionFollowUp.createdAt`,
   );
-  assertOptionalDagRunStoreString(value.runRef, filePath, `${runPath}.completionFollowUp.runRef`);
-  assertOptionalDagRunStoreNumber(
+  assertOptionalWorkflowRunStoreString(
+    value.runRef,
+    filePath,
+    `${runPath}.completionFollowUp.runRef`,
+  );
+  assertOptionalWorkflowRunStoreNumber(
     value.scheduled,
     filePath,
     `${runPath}.completionFollowUp.scheduled`,
   );
-  assertOptionalDagRunStoreNumber(
+  assertOptionalWorkflowRunStoreNumber(
     value.completed,
     filePath,
     `${runPath}.completionFollowUp.completed`,
   );
-  assertOptionalDagRunStoreString(value.summary, filePath, `${runPath}.completionFollowUp.summary`);
-  assertOptionalDagRunStoreStringArray(
+  assertOptionalWorkflowRunStoreString(
+    value.summary,
+    filePath,
+    `${runPath}.completionFollowUp.summary`,
+  );
+  assertOptionalWorkflowRunStoreStringArray(
     value.nextActions,
     filePath,
     `${runPath}.completionFollowUp.nextActions`,
@@ -175,25 +244,37 @@ function assertWorkflowRunCompletionFollowUp(
   }
 }
 
-function assertOptionalDagRunStoreString(value: unknown, filePath: string, path: string): void {
+function assertOptionalWorkflowRunStoreString(
+  value: unknown,
+  filePath: string,
+  path: string,
+): void {
   if (value !== undefined && typeof value !== "string") {
     throw new WorkflowRunStoreFormatError(filePath, `${path} must be a string`);
   }
 }
 
-function assertOptionalDagRunStoreNumber(value: unknown, filePath: string, path: string): void {
+function assertOptionalWorkflowRunStoreNumber(
+  value: unknown,
+  filePath: string,
+  path: string,
+): void {
   if (value !== undefined && typeof value !== "number") {
     throw new WorkflowRunStoreFormatError(filePath, `${path} must be a number`);
   }
 }
 
-function assertOptionalDagRunStoreBoolean(value: unknown, filePath: string, path: string): void {
+function assertOptionalWorkflowRunStoreBoolean(
+  value: unknown,
+  filePath: string,
+  path: string,
+): void {
   if (value !== undefined && typeof value !== "boolean") {
     throw new WorkflowRunStoreFormatError(filePath, `${path} must be a boolean`);
   }
 }
 
-function assertOptionalDagRunStoreStringArray(
+function assertOptionalWorkflowRunStoreStringArray(
   value: unknown,
   filePath: string,
   path: string,
@@ -206,6 +287,17 @@ function assertOptionalDagRunStoreStringArray(
 
 function isWorkflowRunManagerStatus(value: unknown): value is WorkflowRunManagerStatus {
   return value === "idle" || value === "running" || value === "failed";
+}
+
+function isWorkflowRunControlStatus(value: unknown): boolean {
+  return (
+    value === "running" ||
+    value === "paused" ||
+    value === "blocked" ||
+    value === "done" ||
+    value === "failed" ||
+    value === "cancelled"
+  );
 }
 
 function isWorkflowRunStatus(value: unknown): value is WorkflowRunStatus {
@@ -238,6 +330,33 @@ function normalizeWorkflowRunSnapshot(
       updatedAt: raw.manager?.updatedAt ?? fallback.manager.updatedAt,
     },
     runs: (raw.runs ?? []).map(normalizeWorkflowRunRecord),
+    control: normalizeWorkflowRunControl(raw.control),
+  };
+}
+
+function normalizeWorkflowRunControl(value: unknown): WorkflowRunControl | undefined {
+  if (!isRecord(value)) return undefined;
+  if (typeof value.projectRef !== "string" || !value.projectRef.trim()) return undefined;
+  const now = nowIso();
+  const status = isWorkflowRunControlStatus(value.status)
+    ? (value.status as WorkflowRunControl["status"])
+    : "running";
+  const policy = isRecord(value.policy) ? value.policy : {};
+  const enteredAt = typeof value.enteredAt === "string" ? value.enteredAt : now;
+  return {
+    projectRef: value.projectRef as WorkflowRunControl["projectRef"],
+    focus: typeof value.focus === "string" ? value.focus.trim() || undefined : undefined,
+    status,
+    policy: {
+      maxConcurrency:
+        typeof policy.maxConcurrency === "number"
+          ? policy.maxConcurrency
+          : DEFAULT_READY_TASK_MAX_CONCURRENCY,
+      timeoutMs:
+        typeof policy.timeoutMs === "number" ? policy.timeoutMs : DEFAULT_READY_TASK_TIMEOUT_MS,
+    },
+    enteredAt,
+    updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : enteredAt,
   };
 }
 
@@ -290,13 +409,6 @@ function normalizeWorkflowRunRecord(raw: Partial<WorkflowRunRecord>): WorkflowRu
         }
       : undefined,
   };
-  reconcileDagRunCounters(record);
+  reconcileWorkflowRunCounters(record);
   return record;
 }
-
-/** @deprecated SparkDag* alias kept for compatibility. Prefer WorkflowRunStoreFormatError. */
-export const SparkDagRunStoreFormatError = WorkflowRunStoreFormatError;
-/** @deprecated SparkDag* alias kept for compatibility. Prefer loadWorkflowRunStoreSnapshot. */
-export const loadSparkDagRunStoreSnapshot = loadWorkflowRunStoreSnapshot;
-/** @deprecated SparkDag* alias kept for compatibility. Prefer emptyWorkflowRunSnapshot. */
-export const emptySparkDagRunSnapshot = emptyWorkflowRunSnapshot;

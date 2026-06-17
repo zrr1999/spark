@@ -36,7 +36,7 @@ export function appendSparkStateDiagnosticsLines(
     `Bounded output: showing at most ${diagnostics.boundedLimit} item(s) per category; large artifact threshold=${formatByteSize(diagnostics.largeArtifactThresholdBytes)}.`,
   );
   appendTerminalProjectDiagnostics(lines, diagnostics.terminalProjects);
-  appendInactiveDagRunDiagnostics(lines, diagnostics.inactiveDagRuns);
+  appendInactiveWorkflowRunDiagnostics(lines, diagnostics.inactiveWorkflowRuns);
   appendLargeArtifactDiagnostics(lines, diagnostics.largeArtifacts);
   appendOrphanBlobDiagnostics(lines, diagnostics.orphanBlobs);
   appendProtectedFileDiagnostics(lines, "notes", diagnostics.notes);
@@ -121,9 +121,9 @@ function appendTerminalProjectDiagnostics(
     );
 }
 
-function appendInactiveDagRunDiagnostics(
+function appendInactiveWorkflowRunDiagnostics(
   lines: string[],
-  summary: SparkStateDiagnosticsSummary["inactiveDagRuns"],
+  summary: SparkStateDiagnosticsSummary["inactiveWorkflowRuns"],
 ): void {
   lines.push(
     `Inactive workflow runs: ${summary.count}${summary.shown < summary.count ? ` (showing ${summary.shown})` : ""}`,
@@ -134,7 +134,10 @@ function appendInactiveDagRunDiagnostics(
     );
 }
 
-export function appendSparkDagRunPruneLines(lines: string[], prune: WorkflowRunPruneResult): void {
+export function appendSparkWorkflowRunPruneLines(
+  lines: string[],
+  prune: WorkflowRunPruneResult,
+): void {
   lines.push(
     `Retention: olderThanDays=${prune.olderThanDays} cutoff=${prune.cutoffIso} keepRecent=${prune.keepRecent} keepRecentPerProject=${prune.keepRecentPerProject} before=${prune.before} after=${prune.after}`,
   );
@@ -232,7 +235,7 @@ export function formatSparkProtectedStoreReason(reason: SparkProtectedStoreReaso
       return "role reports";
     case "review-gate":
       return "review gate";
-    case "dag-runs":
+    case "workflow-runs":
       return "workflow runs";
   }
 }

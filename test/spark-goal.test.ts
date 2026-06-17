@@ -38,6 +38,7 @@ void test("pi-goal helpers create goals and continuation prompts", () => {
   assert.match(prompt, /<spark_goal_continuation/);
   assert.match(prompt, /goal\(\{ action: "status" \}\)/);
   assert.match(prompt, /goal\(\{ action: "complete" \}\)/);
+  assert.match(prompt, /requesting reviewer-gated completion/);
   assert.equal(continuationGoalIdFromPrompt(prompt), goal.goalId);
 
   const response = goalToolResponse(goal);
