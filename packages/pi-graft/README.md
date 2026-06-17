@@ -43,7 +43,7 @@ These tools do not override Pi built-ins. Each scratch tool accepts either `base
 ### Graft lifecycle and inspection tools
 
 - `graft_help` — show maintained workflow guidance (`agent-workflow`) or command help.
-- `graft_init` — bootstrap or register a workspace through direct `graft init`.
+- `graft_init` — bootstrap or register a workspace through direct `graft workspace init`.
 - `graft_patch` — run a Graft-owned worker child with only Graft-related tools available. If the patch instruction is unclear, the child must request clarification upward instead of editing directly or creating a candidate.
 - `graft_status` — inspect pi-graft convenience state and graftd status.
 - `graft_ps` — show global daemon and registry status.
@@ -57,7 +57,7 @@ These tools do not override Pi built-ins. Each scratch tool accepts either `base
 - `graft_search` — search admitted patches.
 - `graft_materialize` — plan or materialize an admitted patch target; dry-run defaults to true.
 - `graft_repo` — manage configured repositories with the current `repo add/list/sync/lock/update` flow. `add/sync/lock/update` use daemon-owned CLI execution; `list` uses the direct local CLI path.
-- `graft_cli_exec` — allowlisted argv-only path for low-frequency read-only or diagnostic commands; bootstrap and mutation commands use dedicated tools.
+- `graft_cli_exec` — allowlisted argv-only path for low-frequency advanced CLI workflows from `graft explain agent-workflow`, including explicit repo/sync/bundle/workspace-gc/patch-promote style operations; high-frequency scratch and patch lifecycle commands use dedicated typed tools.
 
 ## Example
 
@@ -88,7 +88,7 @@ The extension talks to `$GRAFT_HOME/run/daemon.sock` (default `$HOME/.graft/run/
 graftd start --cwd <cwd> --socket "$GRAFT_HOME/run/daemon.sock"
 ```
 
-Routed wire requests include `workspace_id` and `workspace_root` (the Pi cwd). The extension resolves `workspace_id` from `GRAFT_WORKSPACE` first, then from `graft --json status` / `graft_init` output, then from restored Pi session state; only an uninitialized or undiscoverable workspace falls back to `ws:default` and lets graftd report the precise routing error. Lifecycle/materialize/repo write tools route through `graftd cli_exec` with `graft --cwd <cwd> ...`; read-only query, help, bootstrap, and diagnostics paths can run the direct `graft` binary. Set `GRAFT_BIN`/`GRAFT_DAEMON_BIN` if they are not on `PATH`.
+Routed wire requests include `workspace_id` and `workspace_root` (the Pi cwd). The extension resolves `workspace_id` from `GRAFT_WORKSPACE` first, then from `graft --json workspace status` / `graft_init` output, then from restored Pi session state; only an uninitialized or undiscoverable workspace falls back to `ws:default` and lets graftd report the precise routing error. Lifecycle/materialize/repo write tools route through `graftd cli_exec` with `graft --cwd <cwd> ...`; read-only query, help, bootstrap, and diagnostics paths can run the direct `graft` binary. `graft_cli_exec` validates its argv against a narrow low-frequency allowlist before choosing the direct or daemon route. Set `GRAFT_BIN`/`GRAFT_DAEMON_BIN` if they are not on `PATH`.
 
 The current implementation is UTF-8-text first. Binary, image, and directory behavior follows the current graft scratch wire errors and should fail loudly rather than falling back to disk reads or writes.
 
@@ -98,7 +98,7 @@ Verdict: **ship as an early integrated slice, with known caveats**.
 
 - P1 — future default tool replacement would change core Pi semantics. Current mitigation: scratch operations are explicit `graft_*` tools, while Pi built-ins remain available.
 - P1 — scratch state is not durable across daemon restart, and full multi-workspace scratch isolation depends on graftd's global-daemon workspace-state support. Mitigation: scratch ids are returned from each tool and pi-graft's convenience state is optional; lost scratch ids fail through graftd wire errors instead of hidden recovery.
-- P1 — current graft property/admission behavior can still require project-specific policy tuning. Mitigation: `graft_candidate_from_scratch`, `graft_validate`, and `graft_admit` are explicit separate steps; graft_read/graft_write/graft_edit/graft_delete never auto-create candidates or auto-admit.
+- P1 — current graft constraint/admission behavior can still require project-specific policy tuning. Mitigation: `graft_candidate_from_scratch`, `graft_validate`, and `graft_admit` are explicit separate steps; graft_read/graft_write/graft_edit/graft_delete never auto-create candidates or auto-admit.
 - P2 — file kind support is text-first. Mitigation: no passthrough fallback is implemented, so unsupported file kinds fail loudly.
 - P2 — integration depends on Pi's command/tool registration surface staying stable. Mitigation: `@zendev-lab/pi-graft` exports a narrow boundary type and the registration test asserts the exact commands and tools it installs.
 

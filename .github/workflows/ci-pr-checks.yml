@@ -24,6 +24,6 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Check PR title
-        uses: zrr1999/zendev/actions/validate-title@v0.0.6
+        uses: zrr1999/zendev/actions/validate-title@v0.0.7
         with:
           text: ${{ github.event.pull_request.title }}

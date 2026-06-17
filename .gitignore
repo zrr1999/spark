@@ -4,6 +4,7 @@ coverage/
 .DS_Store
 .env
 .pnpm-store/
+.test-tmp/
 
 # logs
 npm-debug.log*

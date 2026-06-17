@@ -216,7 +216,7 @@ async function workspaceIdForRequest(cwd: string): Promise<string> {
   if (fromEnv) return fromEnv;
 
   try {
-    const execution = await runDirectGraft(cwd, ["--json", "status"]);
+    const execution = await runDirectGraft(cwd, ["--json", "workspace", "status"]);
     const envelope = tryParseJsonRecord(execution.stdout);
     const workspaceId = workspaceIdFromEnvelope(envelope);
     if (workspaceId) {
@@ -620,7 +620,44 @@ function cliArgvParam(params: Record<string, unknown>): string[] {
       );
     }
   }
+  assertCliExecAllowed(argv);
   return argv;
+}
+
+function assertCliExecAllowed(argv: string[]): void {
+  const primary = primaryCliCommand(argv);
+  if (!primary) throw new Error("graft_cli_exec argv must include a graft command.");
+  const secondary = secondaryCliCommand(argv, primary);
+  if (isAllowedCliExecCommand(primary, secondary)) return;
+  const command = secondary ? `${primary} ${secondary}` : primary;
+  throw new Error(
+    `graft_cli_exec does not allow graft ${command}. Use typed pi-graft tools for scratch/patch lifecycle operations, or graft_help for supported low-frequency CLI workflows.`,
+  );
+}
+
+function isAllowedCliExecCommand(primary: string, secondary: string | undefined): boolean {
+  if (primary === "explain" || primary === "sync") return true;
+  if (primary === "get" || primary === "run") return true;
+  if (primary === "bundle") return secondary === "export" || secondary === "import";
+  if (primary === "repo")
+    return ["add", "list", "sync", "lock", "update"].includes(secondary ?? "");
+  if (primary === "workspace") {
+    return ["init", "status", "attach", "detach", "ps", "doctor", "gc"].includes(secondary ?? "");
+  }
+  if (primary === "patch") {
+    return [
+      "list",
+      "show",
+      "search",
+      "incoming",
+      "diff",
+      "compose",
+      "migrate",
+      "revert",
+      "promote",
+    ].includes(secondary ?? "");
+  }
+  return false;
 }
 
 const DIRECT_CLI_COMMANDS = new Set([
@@ -635,10 +672,8 @@ const DIRECT_CLI_COMMANDS = new Set([
   "doctor",
   "evidence",
   "explain",
-  "incoming",
   "init",
   "ps",
-  "property",
   "scratch",
   "search",
   "show",
@@ -691,6 +726,15 @@ function shouldRunDirectCli(argv: string[]): boolean {
   if (primary === "repo") {
     const subcommand = secondaryCliCommand(argv, primary);
     return subcommand === "list";
+  }
+  if (primary === "workspace") {
+    const subcommand = secondaryCliCommand(argv, primary);
+    if (subcommand === "gc") return !argv.includes("--apply");
+    return ["init", "status", "attach", "detach", "ps", "doctor"].includes(subcommand ?? "");
+  }
+  if (primary === "patch") {
+    const subcommand = secondaryCliCommand(argv, primary);
+    return ["incoming", "list", "show", "search"].includes(subcommand ?? "");
   }
   if (primary === "registry") {
     return secondaryCliCommand(argv, primary) !== "import";
@@ -1017,7 +1061,8 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     description: "Attach cwd to a graft workspace route: /graft-attach [workspace-id|--status]",
     handler: async (args: string, ctx: PiGraftCommandContext) => {
       const trimmed = args.trim();
-      const argv = trimmed === "--status" ? ["attach", "--status"] : ["attach"];
+      const argv =
+        trimmed === "--status" ? ["workspace", "attach", "--status"] : ["workspace", "attach"];
       if (trimmed && trimmed !== "--status") argv.push("--workspace", trimmed);
       await notifyCliExec(ctx, argv, "Attached graft workspace route.");
     },
@@ -1026,21 +1071,21 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   pi.registerCommand("graft-detach", {
     description: "Detach cwd from its graft workspace route: /graft-detach",
     handler: async (_args: string, ctx: PiGraftCommandContext) => {
-      await notifyCliExec(ctx, ["detach"], "Detached graft workspace route.");
+      await notifyCliExec(ctx, ["workspace", "detach"], "Detached graft workspace route.");
     },
   });
 
   pi.registerCommand("graft-ps", {
     description: "Show graft global daemon and registry status: /graft-ps",
     handler: async (_args: string, ctx: PiGraftCommandContext) => {
-      await notifyCliExec(ctx, ["ps"], "Graft ps completed.");
+      await notifyCliExec(ctx, ["workspace", "ps"], "Graft ps completed.");
     },
   });
 
   pi.registerCommand("graft-doctor", {
     description: "Diagnose graft registry state: /graft-doctor [--rebuild-registry]",
     handler: async (args: string, ctx: PiGraftCommandContext) => {
-      const argv = ["doctor"];
+      const argv = ["workspace", "doctor"];
       const flags = args.trim() ? args.trim().split(/\s+/) : [];
       for (const flag of flags) {
         if (flag !== "--rebuild-registry") {
@@ -1122,7 +1167,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = optionalStringParam(params, "cwd") ?? toolCwd(ctx, activeState, lastCwd);
-      const argv = ["--json", "init"];
+      const argv = ["--json", "workspace", "init"];
       if (optionalBooleanParam(params, "registerOnly")) argv.push("--register-only");
       const { envelope, execution } = await directCliJson(cwd, argv);
       const workspaceId = workspaceIdFromEnvelope(envelope);
@@ -1174,7 +1219,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
-      const { envelope, execution } = await directCliJson(cwd, ["--json", "ps"]);
+      const { envelope, execution } = await directCliJson(cwd, ["--json", "workspace", "ps"]);
       return envelopeToolResult(envelope, { execution });
     },
   });
@@ -1196,7 +1241,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
-      const argv = ["--json", "doctor"];
+      const argv = ["--json", "workspace", "doctor"];
       if (optionalBooleanParam(params, "rebuildRegistry")) argv.push("--rebuild-registry");
       const { envelope, execution } = await directCliJson(cwd, argv);
       return envelopeToolResult(envelope, { execution });
@@ -1421,7 +1466,9 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ),
       expected: Type.Optional(
         Type.Array(
-          Type.String({ description: "Expected workspace property, e.g. CargoTestsPass" }),
+          Type.String({
+            description: "Expected whole-state constraint primitive, e.g. tests_pass",
+          }),
         ),
       ),
       producer: Type.Optional(
@@ -1486,7 +1533,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         }),
       ),
       expected: Type.Optional(
-        Type.Array(Type.String({ description: "Additional expected property." })),
+        Type.Array(Type.String({ description: "Additional expected constraint primitive." })),
       ),
     }),
     async execute(
@@ -1503,7 +1550,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         throw new Error(
           "graft_validate requires target or a previous graft_candidate_from_scratch candidate.",
         );
-      const argv = ["validate", target];
+      const argv = ["patch", "validate", target];
       for (const expected of normalizeStringList(params.expected)) argv.push("--expect", expected);
       const envelope = await cliExec(cwd, argv);
       return { content: [{ type: "text", text: formatEnvelope(envelope) }], details: { envelope } };
@@ -1521,7 +1568,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         }),
       ),
       required: Type.Optional(
-        Type.Array(Type.String({ description: "Required passed property." })),
+        Type.Array(Type.String({ description: "Required passing constraint primitive." })),
       ),
     }),
     async execute(
@@ -1538,7 +1585,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
         throw new Error(
           "graft_admit requires candidate or a previous graft_candidate_from_scratch candidate.",
         );
-      const argv = ["admit", candidate];
+      const argv = ["patch", "admit", candidate];
       for (const required of normalizeStringList(params.required)) argv.push("--require", required);
       const envelope = await cliExec(cwd, argv);
       const patch =
@@ -1575,7 +1622,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const target =
         optionalStringParam(params, "target") ?? state?.lastPatch ?? state?.lastCandidate;
       if (!target) throw new Error("graft_show requires target or a previous candidate/patch.");
-      const argv = ["--json", "show", target];
+      const argv = ["--json", "patch", "show", target];
       if (optionalBooleanParam(params, "evidence")) argv.push("--evidence");
       if (optionalBooleanParam(params, "change")) argv.push("--change");
       const { text, details } = await executeCliArgv(cwd, argv);
@@ -1613,7 +1660,9 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     label: "Graft Candidates",
     description: "List unadmitted candidates.",
     parameters: Type.Object({
-      property: Type.Optional(Type.String({ description: "Filter by expected property." })),
+      constraint: Type.Optional(
+        Type.String({ description: "Filter by expected constraint primitive." }),
+      ),
       failed: Type.Optional(Type.Boolean({ description: "Show only failed candidates." })),
       producer: Type.Optional(Type.String({ description: "Filter by producer." })),
     }),
@@ -1625,10 +1674,12 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
+      if ("property" in params)
+        throw new Error("graft_candidates property was renamed to constraint.");
       const argv = ["--json", "candidates"];
-      const property = optionalStringParam(params, "property");
+      const constraint = optionalStringParam(params, "constraint");
       const producer = optionalStringParam(params, "producer");
-      if (property) argv.push("--property", property);
+      if (constraint) argv.push("--constraint", constraint);
       if (optionalBooleanParam(params, "failed")) argv.push("--failed");
       if (producer) argv.push("--producer", producer);
       const { text, details } = await executeCliArgv(cwd, argv);
@@ -1641,11 +1692,11 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     label: "Graft Search",
     description: "Search admitted patches.",
     parameters: Type.Object({
-      property: Type.Optional(Type.String({ description: "Filter by property." })),
+      constraint: Type.Optional(Type.String({ description: "Filter by constraint primitive." })),
       base: Type.Optional(Type.String({ description: "Filter by base state." })),
       producer: Type.Optional(Type.String({ description: "Filter by producer." })),
       hasEvidence: Type.Optional(
-        Type.String({ description: "Filter by passing evidence property." }),
+        Type.String({ description: "Filter by passing evidence for this whole-state constraint." }),
       ),
     }),
     async execute(
@@ -1656,12 +1707,13 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       ctx?: PiGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
-      const argv = ["--json", "search"];
-      const property = optionalStringParam(params, "property");
+      if ("property" in params) throw new Error("graft_search property was renamed to constraint.");
+      const argv = ["--json", "patch", "search"];
+      const constraint = optionalStringParam(params, "constraint");
       const base = optionalStringParam(params, "base");
       const producer = optionalStringParam(params, "producer");
       const hasEvidence = optionalStringParam(params, "hasEvidence");
-      if (property) argv.push("--property", property);
+      if (constraint) argv.push("--constraint", constraint);
       if (base) argv.push("--base", base);
       if (producer) argv.push("--producer", producer);
       if (hasEvidence) argv.push("--has-evidence", hasEvidence);
@@ -1681,8 +1733,6 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       dryRun: Type.Optional(
         Type.Boolean({ description: "Plan without writing; defaults to true." }),
       ),
-      asCommit: Type.Optional(Type.Boolean({ description: "Write a detached Git commit." })),
-      ref: Type.Optional(Type.String({ description: "Git ref for materialized commit." })),
     }),
     async execute(
       _toolCallId: string,
@@ -1695,11 +1745,8 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const state = stateForCwd(activeState, cwd);
       const patch = optionalStringParam(params, "patch") ?? state?.lastPatch;
       if (!patch) throw new Error("graft_materialize requires patch or a previous admitted patch.");
-      const argv = ["materialize", patch];
+      const argv = ["patch", "materialize", patch];
       if (optionalBooleanParam(params, "dryRun", true)) argv.push("--dry-run");
-      if (optionalBooleanParam(params, "asCommit")) argv.push("--as-commit");
-      const ref = optionalStringParam(params, "ref");
-      if (ref) argv.push("--ref", ref);
       const envelope = await cliExec(cwd, argv);
       return envelopeToolResult(envelope, { state });
     },
@@ -1774,7 +1821,8 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   pi.registerTool({
     name: "graft_cli_exec",
     label: "Graft CLI Exec",
-    description: "Run allowlisted low-frequency read-only or diagnostic graft CLI argv safely.",
+    description:
+      "Run allowlisted low-frequency Graft CLI argv: explain/sync/get/run, bundle export/import, repo add/list/sync/lock/update, workspace init/status/attach/detach/ps/doctor/gc, and patch incoming/list/show/search/diff/compose/migrate/revert/promote.",
     parameters: Type.Object({
       argv: Type.Array(
         Type.String({ description: "Graft CLI arguments, excluding the graft binary." }),

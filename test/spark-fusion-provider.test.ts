@@ -15,7 +15,7 @@ import {
 
 type AssistantMessage = any;
 type Context = any;
-type Model<T = string> = any;
+type Model = any;
 type SimpleStreamOptions = any;
 
 function model(id: string): ProviderModelDefinition {
@@ -65,11 +65,7 @@ function registryWithFakeProvider(captured: { judgePrompt?: string; panelPrompts
     name: "fake",
     baseUrl: "https://fake.test",
     api: "openai-completions",
-    streamSimple: (
-      selectedModel: Model<string>,
-      context: Context,
-      _options?: SimpleStreamOptions,
-    ) => {
+    streamSimple: (selectedModel: Model, context: Context, _options?: SimpleStreamOptions) => {
       const last = context.messages.at(-1);
       const prompt = typeof last?.content === "string" ? last.content : "";
       if (selectedModel.id === "judge") {
@@ -86,7 +82,7 @@ function registryWithFakeProvider(captured: { judgePrompt?: string; panelPrompts
   return registry;
 }
 
-function fusionModel(): Model<string> {
+function fusionModel(): Model {
   return {
     id: SPARK_FUSION_MODEL,
     name: "Spark Fusion",

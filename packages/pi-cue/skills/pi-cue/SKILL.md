@@ -3,8 +3,8 @@ name: pi-cue
 description: |
    Use cue-shell as the only execution backend (bash is disabled).
    cue-shell uses direct-exec with its own composition operators:
-   |> pipes stdout, -> runs in serial on success, || runs in parallel,
-   ~> runs in serial ignoring failures.
+   |> pipes stdout inside one job, &&/|| are job-internal logical operators,
+   -> and ~> run jobs serially, and |||/|?| compose jobs in parallel/race chains.
    Use cue_exec for direct commands; pass resource requirements with cue_exec needs={...}, not embedded :run(need...). Use cue_run for .cue files, cue_script for inline .cue scripts, and script_run/script_eval for explicit-language generic scripts.
    cue_jobs to list/status/wait/stop, cue_resources to inspect providers/resources, cue_schedule for scheduled tasks.
    cue-shell has its own grammar — not bash-compatible.
@@ -30,8 +30,8 @@ SSH profiles, that cwd must be valid on the remote host.
 | **Exec**      | `cue_exec`      | Execute a direct command and create a job   | `command`, `background?`, `timeout?`, `cwd?`, `pty?`, `needs?`, `tail_bytes?`           |
 | **Script**    | `cue_run`       | Run a `.cue` file (`cue run <file.cue>`)    | `path`, `timeout?`, `tail_bytes?`                                                       |
 | **Script**    | `cue_script`    | Run an inline `.cue` script body            | `script`, `pathLabel?`, `timeout?`, `tail_bytes?`                                       |
-| **Script**    | `script_run`    | Run a script file with explicit language    | `path`, `language`, `timeout?`, `tail_bytes?`                                           |
-| **Script**    | `script_eval`   | Run an inline script with explicit language | `script`, `language`, `pathLabel?`, `timeout?`, `tail_bytes?`                           |
+| **Script**    | `script_run`    | Run a script file with explicit language    | `path`, `language`, `timeout?`, `tail_bytes?`, `venv?`, `scope?`                        |
+| **Script**    | `script_eval`   | Run an inline script with explicit language | `script`, `language`, `pathLabel?`, `timeout?`, `tail_bytes?`, `venv?`, `scope?`        |
 | **Jobs**      | `cue_jobs`      | List/status/wait/stop jobs                  | `action` (list/status/wait/stop), `id?`, `status?`, `limit?`, `timeout?`, `tail_bytes?` |
 | **Resources** | `cue_resources` | Inspect providers and resource snapshots    | `action?` (providers/resources)                                                         |
 | **Schedule**  | `cue_schedule`  | Add/list/pause/resume/remove scheduled jobs | `action` (add/list/pause/resume/remove), `schedule?`, `command?`, `id?`, `limit?`       |
@@ -39,6 +39,8 @@ SSH profiles, that cwd must be valid on the remote host.
 | **History**   | `cue_history`   | Show recent history for a job/cron or all   | `id?`, `limit?`, `tail_bytes?`                                                          |
 
 Tool names are resource-oriented: `cue_exec` is for direct commands, `cue_run` is for real `.cue` files, `cue_script` is for inline `.cue` script bodies, and `script_run`/`script_eval` are generic explicit-language script runners. Compact managers cover jobs, schedules, scopes, and history.
+
+For `script_run` and `script_eval`, `venv` is valid only with `language="python"` and selects `<venv>/bin/python`; `scope` is valid only with `language="cue-shell"` and selects the RunScript base scope.
 
 `cue_exec` runs without a PTY by default (`pty=false`) so non-interactive commands get separate stdout/stderr and do not trigger terminal capability probes. Use `pty=true` only when a command genuinely needs terminal semantics; for sustained interactive work, use the cue TUI and `:fg` instead.
 
@@ -60,43 +62,50 @@ with native composition operators.
 | `\|&>`   | Pipe stdout+stderr → next stdin | `make \|&> tee build.log`   |
 | `\|!>`   | Pipe stderr-only → next stdin   | `cargo test \|!> grep FAIL` |
 
+**Job logical operators** (inside one job):
+
+| Operator | Effect                                      |
+| -------- | ------------------------------------------- |
+| `&&`     | Run right side only if left side succeeds   |
+| `\|\|`   | Run right side only if left side fails      |
+
 **Chain operators** (between jobs — each step is tracked individually):
 
 | Operator | Effect                                      |
 | -------- | ------------------------------------------- |
-| `->`     | Run next only if previous succeeds (exit 0) |
-| `~>`     | Run next regardless of previous exit code   |
-| `\|\|`   | Run both concurrently                       |
-| `\|\|?`  | Run concurrently, stop when first succeeds  |
+| `->`     | Run next job only if previous succeeds      |
+| `~>`     | Run next job regardless of previous exit    |
+| `\|\|\|` | Run both jobs concurrently                  |
+| `\|?\|`  | Run jobs concurrently, stop after success   |
 
 ### Precedence and grouping
 
 ```text
-pipe (|>)  >  parallel (||)  >  serial (->)
+pipe (|>)  >  job logical (&&/||)  >  chain parallel (|||/|?|)  >  serial (->/~>)
 
-a |> b -> c || d    =    (a |> b) -> (c || d)
+a |> b -> c ||| d    =    (a |> b) -> (c ||| d)
 ```
 
 Group with `()` for explicit precedence:
 
 ```text
-cue_exec(command="(cargo build || cargo audit) -> cargo test")
+cue_exec(command="(cargo build ||| cargo audit) -> cargo test")
 ```
 
 **⚠️ `cue_exec(command="...")` still sends `:run ...` to cue-shell.** Parentheses immediately after
 `:run` are parsed as mode parameters. The adapter inserts the needed space before grouped commands.
 
 ```text
-✅  cue_exec(command="(sleep 0.5 || echo fast) -> echo done")
+✅  cue_exec(command="(sleep 0.5 ||| echo fast) -> echo done")
 ```
 
 ### Converting from shell syntax
 
 | Shell                      | cue-shell        |
 | -------------------------- | ---------------- |
-| `cmd1 && cmd2`             | `cmd1 -> cmd2`   |
-| `cmd1 \|\| cmd2`           | `cmd1 ~> cmd2`   |
-| `cmd1 & cmd2` (background) | `cmd1 \|\| cmd2` |
+| `cmd1 && cmd2`             | `cmd1 && cmd2` inside one job, or `cmd1 -> cmd2` for tracked jobs |
+| `cmd1 \|\| cmd2`           | `cmd1 \|\| cmd2` inside one job, or `cmd1 ~> cmd2` to ignore left failure before a tracked next job |
+| `cmd1 & cmd2` (background) | `cmd1 \|\|\| cmd2` |
 | `cmd1 \| cmd2`             | `cmd1 \|> cmd2`  |
 | `cmd1 2>&1 \| cmd2`        | `cmd1 \|&> cmd2` |
 
@@ -109,8 +118,8 @@ cue_exec(command="(cargo build || cargo audit) -> cargo test")
 ```text
 cue_exec(command="cargo build |> grep -E 'error|warning'")
 cue_exec(command="cargo build -> cargo test")
-cue_exec(command="cargo clippy || cargo test")
-cue_exec(command="(cargo build || cargo audit) -> cargo test")
+cue_exec(command="cargo clippy ||| cargo test")
+cue_exec(command="(cargo build ||| cargo audit) -> cargo test")
 ```
 
 ### File operations
@@ -244,7 +253,7 @@ or error out:
 | ---------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------- | -------------------------------------- |
 | `ls *.pdf` / `rm *.tmp`            | `find . -name '*.pdf'`                                            | cue-shell does no glob expansion                        |
 | `cmd 2>/dev/null`                  | `cmd ~> echo ok` or check stderr via `cue_jobs(action="status")`  | No shell redirect syntax; stderr is buffered per-job    |
-| `cmd1 && cmd2`                     | `cmd1 -> cmd2`                                                    | `&&` is bash; use `->` for serial-on-success            |
+| `cmd1 && cmd2`                     | Keep `cmd1 && cmd2` inside one job, or use `cmd1 -> cmd2` for tracked jobs | `&&` is valid cue-shell job logic; `->` is tracked serial-on-success |
 | `echo $(date)`                     | Not supported                                                     | No command substitution (`$()` / backtick)              |
 | heredoc: `cat << EOF ... EOF`      | Write a file first, then `cue_exec(command="cat /tmp/x")`         | heredoc syntax not available                            |
 | `python3 -c "...nested quotes..."` | Write a temp script, then `cue_exec(command="python3 /tmp/s.py")` | Quote nesting in `-c` is fragile; use a temp file       |
@@ -256,8 +265,8 @@ catch yourself writing bash-isms, check the operator table above first.
 
 **⚠️ Multiple sync `cue_exec()` calls in the same function_call block may be
 merged by the agent framework into a single job.** If you need true
-parallelism, use the `||` operator inside a single command string:
-`cue_exec(command="cmd1 || cmd2 || cmd3")` or start background jobs
+parallelism, use the `|||` chain operator inside a single command string:
+`cue_exec(command="cmd1 ||| cmd2 ||| cmd3")` or start background jobs
 (`cue_exec(background=true)`).
 
 ## Failed jobs and stderr

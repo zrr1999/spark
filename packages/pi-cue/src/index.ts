@@ -890,8 +890,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     description:
       "Execute a command in cue-shell using the active cue-client transport profile (Unix socket or SSH gateway). " +
       "SSH profiles connect through the configured remote `cued gateway --stdio`; pi-cue does not auto-start remote daemons. " +
-      "cue-shell is direct-exec (execvp), not bash: do not use shell-only syntax such as &&, semicolon command lists, redirection, subshell tests, or bash-style ||. " +
-      "Its composition operators are: |> pipes stdout, -> runs in serial on success, || runs in parallel (not OR), ~> runs in serial ignoring failure. " +
+      "cue-shell is direct-exec (execvp), not bash: do not use shell-only syntax such as semicolon command lists, redirection, or subshell tests. " +
+      "Its composition operators are: |> pipes stdout within one job, &&/|| are job-internal logical operators, -> runs jobs serially on success, ~> runs serially ignoring failure, ||| runs jobs in parallel, and |?| races jobs until one succeeds. " +
       "Prefer direct-exec commands and Pi file tools; do not use shell wrappers for shell-only syntax. " +
       "Set background=true to start without waiting; track with cue_jobs action=status/wait, stop with cue_jobs action=stop. " +
       "For resource-gated jobs, pass needs={ gpu: 1, gpu_mem: '24GiB' } instead of embedding :run(need...) in command. " +
@@ -900,7 +900,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     parameters: Type.Object({
       command: Type.String({
         description:
-          "Command to execute in cue-shell, not bash. Use cue operators: '|>' pipe, '->' serial on success, '~>' serial ignoring failure, '||' parallel. Do not use bash-style && or || for logical control; prefer separate tool calls/Pi file tools and avoid shell wrappers for shell-only syntax. Examples: 'cargo build |> grep error -> cargo test', '(cargo build || cargo audit) -> cargo test'.",
+          "Command to execute in cue-shell, not bash. Use cue operators: '|>' for an in-job pipe, '&&'/'||' for job-internal logical operators, '->' for serial-on-success jobs, '~>' for serial ignoring failure, '|||' for parallel jobs, and '|?|' for any-success race jobs. Prefer separate tool calls/Pi file tools over shell wrappers. Examples: 'cargo build |> grep error -> cargo test', '(cargo build ||| cargo audit) -> cargo test'.",
       }),
       background: Type.Optional(
         Type.Boolean({
@@ -1160,7 +1160,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     description:
       "Run a .cue file in cue-shell, mirroring `cue run <file.cue>`. " +
       "Top-level items execute sequentially with fail-fast semantics inside a fresh isolated scope forked from HEAD. " +
-      "Each item may use cue-shell composition operators (`|>`, `->`, `~>`, `||`, `||?`) but must not use bash-shell syntax (`&&`, `;`, redirection). " +
+      "Each item may use cue-shell composition operators (`|>`, `&&`, `||`, `->`, `~>`, `|||`, `|?|`) but must not use bash-shell syntax (`;`, redirection). " +
       "For inline bodies (no file on disk) use cue_script instead. " +
       "Foreground only: blocks until ScriptFinished or `timeout` seconds elapse, in which case the script is reported as timed out (its jobs may continue running and can be inspected via cue_jobs).",
     parameters: Type.Object({
@@ -1233,7 +1233,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     description:
       "Run an inline .cue script body in cue-shell. " +
       "Top-level items execute sequentially with fail-fast semantics inside a fresh isolated scope forked from HEAD. " +
-      "Each item may use cue-shell composition operators (`|>`, `->`, `~>`, `||`, `||?`) but must not use bash-shell syntax (`&&`, `;`, redirection). " +
+      "Each item may use cue-shell composition operators (`|>`, `&&`, `||`, `->`, `~>`, `|||`, `|?|`) but must not use bash-shell syntax (`;`, redirection). " +
       "If you have a real .cue file on disk, prefer cue_run. " +
       "Optionally provide `pathLabel` to label the inline script in TUI history. " +
       "Foreground only: blocks until ScriptFinished or `timeout` seconds elapse, in which case the script is reported as timed out (its jobs may continue running and can be inspected via cue_jobs).",

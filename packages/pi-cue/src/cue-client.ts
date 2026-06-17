@@ -717,11 +717,15 @@ export class CueClient {
    *     `|&>`  stdout+stderr pipe
    *     `|!>`  stderr-only pipe
    *
+   *   Job logical (inside one job):
+   *     `&&`   logical AND
+   *     `||`   logical OR
+   *
    *   Chain (between jobs, scheduler-managed):
    *     `->`   serial, success-continue
    *     `~>`   serial, ignore-failure
-   *     `||`   parallel, all
-   *     `||?`  parallel, any-success
+   *     `|||`  parallel, all
+   *     `|?|`  parallel, any-success race
    */
   async eval(input: string, mode: Mode = "Job", opts: RunEvalOptions = {}): Promise<number> {
     const modeParams: string[] = [];
