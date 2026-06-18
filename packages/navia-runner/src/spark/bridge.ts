@@ -266,12 +266,7 @@ export async function runNaviaCommandThroughSpark(
     });
     const terminalStatus = naviaStatusForRun(run);
     recordInvocationStatus(input.db, invocationId, terminalStatus, completedAt);
-    const taskStatus =
-      terminalStatus === "succeeded"
-        ? "done"
-        : terminalStatus === "cancelled"
-          ? "failed"
-          : "failed";
+    const taskStatus = terminalStatus === "succeeded" ? "done" : "failed";
     input.emit(
       taskGraphSnapshot(
         taskGraphForCommand(command, taskRuntimeId, invocationId, taskStatus, 2, outputArtifactIds),

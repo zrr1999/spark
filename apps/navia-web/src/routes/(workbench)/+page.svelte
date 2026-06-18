@@ -142,12 +142,27 @@
   }
 
   function slugifyWorkspaceIdentifier(value: string) {
-    return value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 48);
+    const result: string[] = [];
+    let pendingDash = false;
+
+    for (const char of value.trim().toLowerCase()) {
+      const code = char.charCodeAt(0);
+      const isSlugChar =
+        (code >= 48 && code <= 57) || (code >= 97 && code <= 122);
+      if (isSlugChar) {
+        if (pendingDash && result.length > 0 && result.length < 48) {
+          result.push("-");
+        }
+        pendingDash = false;
+        if (result.length < 48) {
+          result.push(char);
+        }
+      } else {
+        pendingDash = result.length > 0;
+      }
+    }
+
+    return result.join("");
   }
 
   $effect(() => {

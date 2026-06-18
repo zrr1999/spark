@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createId } from "@navia-dev/protocol";
+import { asciiSlug, gitCommand } from "@navia-dev/system";
 import { parse, stringify } from "smol-toml";
 
 export const workspaceProfileSchemaVersion = "navia.profile/v1";
@@ -138,7 +139,7 @@ export function loadWorkspaceProfileFromGitHubUrl(profileUrl: string): Workspace
       cloneArgs.push("--branch", parsed.ref);
     }
     cloneArgs.push(parsed.cloneUrl, checkoutRoot);
-    execFileSync("git", cloneArgs, { stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync(gitCommand(), cloneArgs, { stdio: ["ignore", "pipe", "pipe"] });
 
     const profileRoot = parsed.sourcePath ? join(checkoutRoot, parsed.sourcePath) : checkoutRoot;
     const profile = loadWorkspaceProfileFromDirectory(profileRoot);
@@ -826,7 +827,7 @@ function compactObject<T extends Record<string, unknown>>(value: T): T {
 
 function gitOutput(root: string, args: string[]) {
   try {
-    return execFileSync("git", ["-C", root, ...args], {
+    return execFileSync(gitCommand(), ["-C", root, ...args], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
@@ -836,10 +837,5 @@ function gitOutput(root: string, args: string[]) {
 }
 
 function slugify(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
+  return asciiSlug(value, { maxLength: 48 });
 }

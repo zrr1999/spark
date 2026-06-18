@@ -57,9 +57,9 @@ hooks = [
   {
     id = "vp-check",
     name = "vp check --fix",
-    entry = "env NO_COLOR=1 vp check --fix",
+    entry = "pnpm run check:fix",
     language = "system",
-    pass_filenames = true,
+    pass_filenames = false,
     stages = ["pre-commit"]
   },
 ]

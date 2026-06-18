@@ -1,4 +1,5 @@
 import { fail, redirect, type Cookies } from "@sveltejs/kit";
+import { asciiSlug } from "@navia-dev/system";
 import type { DatabaseSync } from "node:sqlite";
 import { getRequestDictionary, localeCookieName, type AppMessages } from "$lib/i18n";
 import { ensureCurrentOwnerSession } from "$lib/server/auth";
@@ -572,10 +573,5 @@ function shellQuote(value: string): string {
 }
 
 function slugify(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
+  return asciiSlug(value, { maxLength: 48 });
 }

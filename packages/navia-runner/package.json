@@ -32,7 +32,7 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.74.1",
+    "@earendil-works/pi-coding-agent": "0.79.4",
     "@navia-dev/db": "workspace:*",
     "@navia-dev/protocol": "workspace:*",
     "@navia-dev/system": "workspace:*",

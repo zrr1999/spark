@@ -18,8 +18,8 @@ describe("defaultDatabasePath", () => {
   });
 
   it("keeps NAVIA_DATA_DIR as a deprecated server data override", () => {
-    process.env = { HOME: "/Users/example", NAVIA_DATA_DIR: "/tmp/legacy-navia" };
+    process.env = { HOME: "/Users/example", NAVIA_DATA_DIR: "/Users/example/legacy-navia" };
 
-    expect(defaultDatabasePath()).toBe(join("/tmp/legacy-navia", "navia.sqlite"));
+    expect(defaultDatabasePath()).toBe(join("/Users/example/legacy-navia", "navia.sqlite"));
   });
 });

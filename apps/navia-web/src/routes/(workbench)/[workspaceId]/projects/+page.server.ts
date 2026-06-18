@@ -1,4 +1,5 @@
 import { fail, redirect } from "@sveltejs/kit";
+import { asciiSlug } from "@navia-dev/system";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { getDatabase } from "$lib/server/db";
 import { formText } from "$lib/server/form-data";
@@ -84,10 +85,5 @@ export const actions: Actions = {
 };
 
 function slugify(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
+  return asciiSlug(value, { maxLength: 48 });
 }

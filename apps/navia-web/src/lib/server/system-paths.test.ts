@@ -18,8 +18,8 @@ describe("server system paths", () => {
   });
 
   it("honors NAVIA_SERVER_CACHE_DIR for artifact previews", () => {
-    process.env = { HOME: "/Users/example", NAVIA_SERVER_CACHE_DIR: "/tmp/navia-cache" };
+    process.env = { HOME: "/Users/example", NAVIA_SERVER_CACHE_DIR: "/Users/example/navia-cache" };
 
-    expect(defaultArtifactCacheRoot()).toBe(join("/tmp/navia-cache", "artifacts"));
+    expect(defaultArtifactCacheRoot()).toBe(join("/Users/example/navia-cache", "artifacts"));
   });
 });

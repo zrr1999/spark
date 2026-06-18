@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
 import { createConnection, createServer, type Socket } from "node:net";
 import { dirname, join } from "node:path";
@@ -625,7 +626,7 @@ function isWorkspaceStatus(value: unknown): value is RunnerWorkspace["status"] {
 }
 
 function localRequestId(): string {
-  return `local_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  return `local_${Date.now().toString(36)}_${randomUUID()}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

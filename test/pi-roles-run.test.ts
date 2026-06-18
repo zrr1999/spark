@@ -34,7 +34,7 @@ void test("pi-roles builds fresh JSON Pi role args without accidental fork sessi
     launch: "fresh",
     systemPrompt: "You are a worker.",
     instruction: "Implement the task.",
-    sessionDir: "/tmp/sessions",
+    sessionDir: "/Users/example/sessions",
     forkFromSession: "session-parent.json",
   });
 
@@ -43,7 +43,7 @@ void test("pi-roles builds fresh JSON Pi role args without accidental fork sessi
     "--mode",
     "json",
     "--session-dir",
-    "/tmp/sessions",
+    "/Users/example/sessions",
     "--append-system-prompt",
   ]);
   assert.equal(args.includes("--fork"), false);
@@ -87,7 +87,7 @@ void test("pi-roles can launch ephemeral no-session role runs", () => {
     systemPrompt: "You are a reviewer.",
     instruction: "Review without saving child session state.",
     noSession: true,
-    sessionDir: "/tmp/sessions",
+    sessionDir: "/Users/example/sessions",
   });
 
   assert.deepEqual(args.slice(0, 7), [
@@ -96,7 +96,7 @@ void test("pi-roles can launch ephemeral no-session role runs", () => {
     "json",
     "--no-session",
     "--session-dir",
-    "/tmp/sessions",
+    "/Users/example/sessions",
     "--append-system-prompt",
   ]);
   assert.throws(
@@ -119,7 +119,7 @@ void test("pi-roles builds forked JSON Pi role args only when forked launch is e
     launch: "forked",
     systemPrompt: "You are a reviewer.",
     instruction: "Review the task.",
-    sessionDir: "/tmp/sessions",
+    sessionDir: "/Users/example/sessions",
     forkFromSession: "session-parent.json",
   });
 
@@ -128,7 +128,7 @@ void test("pi-roles builds forked JSON Pi role args only when forked launch is e
     "--mode",
     "json",
     "--session-dir",
-    "/tmp/sessions",
+    "/Users/example/sessions",
     "--fork",
     "session-parent.json",
     "--append-system-prompt",

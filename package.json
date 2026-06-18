@@ -19,7 +19,8 @@
   },
   "type": "module",
   "scripts": {
-    "check": "vp check",
+    "check": "pnpm run svelte:sync && vp check",
+    "check:fix": "pnpm run svelte:sync && vp check --fix",
     "check:boundaries": "node scripts/check-pi-boundaries.mjs",
     "check:tsc": "tsc -p tsconfig.json --noEmit",
     "check:packages": "pnpm -r --filter './packages/*' run check",
@@ -31,6 +32,7 @@
     "test:file": "node --experimental-strip-types --test",
     "verify": "pnpm run check && pnpm test",
     "prepare": "pnpx @j178/prek install --hook-type commit-msg --hook-type pre-commit",
+    "svelte:sync": "pnpm --filter @navia-dev/web exec svelte-kit sync",
     "navia:check": "pnpm --filter '@navia-dev/*' run check",
     "navia:test": "pnpm --filter '@navia-dev/*' run test",
     "navia:e2e": "pnpm --filter @navia-dev/runner exec vp test run src/daemon.test.ts -t 'streams ack, running, log chunks, and succeeded updates from the Spark bridge'",
@@ -59,6 +61,8 @@
   },
   "devDependencies": {
     "@earendil-works/pi-tui": "0.79.4",
+    "@navia-dev/protocol": "workspace:*",
+    "@navia-dev/system": "workspace:*",
     "@types/node": "^25.9.3",
     "oxlint": "1.70.0",
     "typescript": "^6.0.3",

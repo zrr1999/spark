@@ -2,6 +2,7 @@ import {
   runtimeWorkspaceRegistrationRequestSchema,
   runtimeWorkspaceRegistrationResponseSchema,
 } from "@navia-dev/protocol";
+import { bearerTokenFromAuthorization } from "@navia-dev/system";
 import { json, type RequestHandler } from "@sveltejs/kit";
 import { getDatabase } from "$lib/server/db";
 import { errorJson } from "$lib/server/json";
@@ -61,5 +62,5 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 };
 
 function bearerToken(request: Request) {
-  return request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1] ?? null;
+  return bearerTokenFromAuthorization(request.headers.get("authorization") ?? undefined);
 }

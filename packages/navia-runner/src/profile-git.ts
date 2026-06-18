@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { gitCommand } from "@navia-dev/system";
 
 export interface ProfileGitAccess {
   canRead: boolean;
@@ -47,7 +48,7 @@ export function detectProfileGitAccess(
 }
 
 function defaultGitCommandRunner(args: string[]): GitCommandResult {
-  const result = spawnSync("git", args, { encoding: "utf8" });
+  const result = spawnSync(gitCommand(), args, { encoding: "utf8" });
   return {
     status: result.status ?? 1,
     stdout: result.stdout,

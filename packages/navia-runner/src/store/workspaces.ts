@@ -3,6 +3,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createId, type RuntimeWorkspaceBindingSummary } from "@navia-dev/protocol";
+import { asciiSlug } from "@navia-dev/system";
 
 export interface WorkspaceProfileRegistration {
   sourceKind: "builtin" | "git";
@@ -841,10 +842,5 @@ export function workspaceNameForPath(localPath: string): string {
 }
 
 function slugify(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
+  return asciiSlug(value, { maxLength: 48 });
 }

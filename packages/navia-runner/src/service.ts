@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
-import type { NaviaPaths } from "@navia-dev/system";
+import { launchctlCommand, type NaviaPaths } from "@navia-dev/system";
 
 const launchdLabel = "dev.navia.runner";
 
@@ -213,7 +213,7 @@ function serviceEnvironment(): Record<string, string> {
 }
 
 function runLaunchctl(args: string[]) {
-  return spawnSync("launchctl", args, { encoding: "utf8" });
+  return spawnSync(launchctlCommand(), args, { encoding: "utf8" });
 }
 
 function readCurrentUid(): number {

@@ -290,7 +290,7 @@ describe("workspace profiles", () => {
 
     const files = exportWorkspaceProfileToml(db, workspace.id);
 
-    expect([...files.keys()].sort()).toEqual([
+    expect([...files.keys()].sort((left, right) => left.localeCompare(right))).toEqual([
       "agents/reviewer/agent.toml",
       "repos/paddle.toml",
       "settings.toml",

@@ -5,6 +5,7 @@ import {
   type RuntimeRegistrationRequest,
   type RuntimeWorkspaceRegistrationRequest,
 } from "@navia-dev/protocol";
+import { asciiSlug } from "@navia-dev/system";
 import { hashSecret } from "./auth";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -673,13 +674,7 @@ function replaceActiveOwnerBinding(
 }
 
 function slugify(value: string): string {
-  return (
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "workspace"
-  );
+  return asciiSlug(value, { fallback: "workspace" });
 }
 
 function insertRuntimeToken(

@@ -15,6 +15,7 @@ import {
   taskGraphSnapshotEnvelopeSchema,
   workspaceSnapshotEnvelopeSchema,
 } from "@navia-dev/protocol";
+import { bearerTokenFromAuthorization } from "@navia-dev/system";
 import { hashSecret } from "./auth";
 import {
   appendEvent,
@@ -161,7 +162,7 @@ export function authenticateRuntimeToken(
   runtimeId: string,
   authorization: string | undefined,
 ): string | null {
-  const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+  const token = bearerTokenFromAuthorization(authorization);
   if (!token) {
     return null;
   }

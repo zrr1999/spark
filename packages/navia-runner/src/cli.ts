@@ -13,7 +13,7 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { ensureNaviaPathDirs, resolveNaviaPaths } from "@navia-dev/system";
+import { ensureNaviaPathDirs, gitCommand, resolveNaviaPaths } from "@navia-dev/system";
 import { defaultRunnerConfig, readRunnerConfig, writeRunnerConfig } from "./config.js";
 import { runnerVersion, startRunnerDaemon } from "./daemon.js";
 import {
@@ -1696,7 +1696,7 @@ function gitCommitForProfile(profilePath: string | null): { commit?: string } {
     return {};
   }
 
-  const result = spawnSync("git", ["-C", profilePath, "rev-parse", "HEAD"], {
+  const result = spawnSync(gitCommand(), ["-C", profilePath, "rev-parse", "HEAD"], {
     encoding: "utf8",
   });
   const commit = result.status === 0 ? result.stdout.trim() : "";
@@ -1875,18 +1875,18 @@ async function readStdinLine(io: CliIo, name: string): Promise<string> {
   const stdin = io.stdin ?? process.stdin;
   const prompt = createInterface({ input: stdin, crlfDelay: Infinity });
   try {
-    for await (const line of prompt) {
-      const value = line.trim();
-      if (!value) {
-        throw new Error(`Empty ${name} from stdin.`);
-      }
-      return value;
+    const { value: line, done } = await prompt[Symbol.asyncIterator]().next();
+    if (done) {
+      throw new Error(`Missing ${name} on stdin.`);
     }
+    const value = line.trim();
+    if (!value) {
+      throw new Error(`Empty ${name} from stdin.`);
+    }
+    return value;
   } finally {
     prompt.close();
   }
-
-  throw new Error(`Missing ${name} on stdin.`);
 }
 
 async function confirmAction(
