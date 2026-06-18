@@ -90,8 +90,6 @@ async function currentProjectCleanupCandidates(
     const project = projectRef ? projectByRef.get(projectRef) : undefined;
     if (!project)
       candidates.push(cleanupCandidate(cwd, file, "sessions", "missing-project", stale));
-    else if (project.status === "done")
-      candidates.push(cleanupCandidate(cwd, file, "sessions", "done-project", stale));
     else if (stale)
       candidates.push(cleanupCandidate(cwd, file, "sessions", "stale-sessions", stale));
   }

@@ -41,7 +41,6 @@ export interface SparkProtectedStoreSummary {
 export type SparkStateCleanupReason =
   | "broken-json"
   | "missing-project"
-  | "done-project"
   | "stale-sessions"
   | "empty-task-todos"
   | "stale-terminal-task-todos"

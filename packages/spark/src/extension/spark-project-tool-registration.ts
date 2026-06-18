@@ -1,13 +1,7 @@
 import { Type } from "typebox";
 import { defaultTaskGraphStore, TaskGraph } from "@zendev-lab/pi-tasks";
 import { clarifyProjectPurposeIfNeeded } from "../flows/project-purpose-flow.ts";
-import {
-  clearCurrentProjectRef,
-  currentSparkProject,
-  loadCurrentProjectRef,
-  loadSparkGraph,
-  saveCurrentProjectRef,
-} from "./session-state.ts";
+import { currentSparkProject, loadSparkGraph, saveCurrentProjectRef } from "./session-state.ts";
 import { ensureLocalSparkDirectory } from "./spark-activation.ts";
 import { sparkAskUi } from "./spark-ask-ui.ts";
 import {
@@ -116,12 +110,6 @@ export function registerSparkProjectTools(
           details: { found: false, error: "no_project" },
           isError: true,
         };
-      const currentProjectRef = await loadCurrentProjectRef(cwd, ctx);
-      if (
-        updated.result.project.status === "done" &&
-        currentProjectRef === updated.result.project.ref
-      )
-        await clearCurrentProjectRef(cwd, ctx);
       await deps.refreshSparkWidget(cwd, ctx);
       return {
         content: [

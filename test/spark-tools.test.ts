@@ -2487,7 +2487,7 @@ void test("/goal foreground loop completes active goal when reviewer says achiev
   }
 });
 
-void test("/goal foreground loop includes completed project evidence after current project clears", async () => {
+void test("/goal foreground loop includes completed current project evidence", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-completed-project-evidence-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -2570,8 +2570,8 @@ void test("/goal foreground loop includes completed project evidence after curre
     assert.equal(reviewerInput?.targetKind, "goal");
     if (reviewerInput?.targetKind !== "goal") assert.fail("expected goal review input");
     assert.equal(reviewerInput.projectRef, completedProjectRef);
-    assert.equal(reviewerInput.currentProjectSelected, false);
-    assert.equal(reviewerInput.projectEvidenceSource, "project_evidence_fallback");
+    assert.equal(reviewerInput.currentProjectSelected, true);
+    assert.equal(reviewerInput.projectEvidenceSource, "current_project");
     assert.equal(reviewerInput.projectStatus?.taskCounts.total, 1);
     assert.equal(reviewerInput.projectStatus?.taskCounts.unfinished, 0);
     assert.deepEqual(reviewerInput.evidenceRefs, [evidence.ref]);
@@ -2591,8 +2591,8 @@ void test("/goal foreground loop includes completed project evidence after curre
       };
     };
     assert.equal(reviewBody.reviewPacket?.projectRef, completedProjectRef);
-    assert.equal(reviewBody.reviewPacket?.currentProjectSelected, false);
-    assert.equal(reviewBody.reviewPacket?.projectEvidenceSource, "project_evidence_fallback");
+    assert.equal(reviewBody.reviewPacket?.currentProjectSelected, true);
+    assert.equal(reviewBody.reviewPacket?.projectEvidenceSource, "current_project");
     assert.deepEqual(reviewBody.reviewPacket?.evidenceRefs, [evidence.ref]);
     assert.equal(reviewBody.reviewPacket?.evidencePreviews?.[0]?.ref, evidence.ref);
     assert.match(
@@ -7544,14 +7544,14 @@ void test("current project store ignores legacy mode and run control blocks", as
   }
 });
 
-void test("done projects are cleared from current selection and not auto-reactivated", async () => {
+void test("done projects remain visible as current selection and are not auto-reactivated", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-done-project-current-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
     const graph = new TaskGraph();
     const doneProject = graph.createProject({
       title: "Completed workflow",
-      description: "Should not remain current.",
+      description: "Should remain current for status/history visibility.",
       status: "done",
     });
     graph.createProject({
@@ -7565,14 +7565,14 @@ void test("done projects are cleared from current selection and not auto-reactiv
     await executeSparkTool(tools, "spark_use_project", ctx, { project: doneProject.ref });
     const status = await executeSparkTool(tools, "spark_status", ctx, {});
     const statusDetails = status.details as { activeProjectRef?: string } | undefined;
-    assert.equal(statusDetails?.activeProjectRef, undefined);
-    assert.match(toolText(status), /Spark available: no project selected/);
+    assert.equal(statusDetails?.activeProjectRef, doneProject.ref);
+    assert.doesNotMatch(toolText(status), /Spark available: no project selected/);
     assert.doesNotMatch(toolText(status), /Next workflow \[current\]/);
-    assert.doesNotMatch(toolText(status), /Completed workflow \[current\]/);
+    assert.match(toolText(status), /Completed workflow \[current\] \[done\]/);
     const summary = await executeSparkTool(tools, "spark_status", ctx, { view: "summary" });
-    assert.match(toolText(summary), /Next workflow/);
+    assert.match(toolText(summary), /Completed workflow \[current\] \[done\]/);
 
-    await assert.rejects(() => readFile(currentProjectStatePath(dir, ctx), "utf8"));
+    assert.equal((await loadCurrentProjectState(dir, ctx))?.projectRef, doneProject.ref);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

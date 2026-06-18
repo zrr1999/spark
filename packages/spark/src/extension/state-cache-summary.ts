@@ -79,7 +79,7 @@ async function summarizeCurrentProjectCache(
     const projectRef =
       typeof raw.projectRef === "string" ? (raw.projectRef as ProjectRef) : undefined;
     const project = projectRef ? projectByRef.get(projectRef) : undefined;
-    const safe = !project || project.status === "done" || stale;
+    const safe = !project || stale;
     if (safe) safeToDeleteFiles += 1;
     else activeFiles += 1;
   }

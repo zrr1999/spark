@@ -73,7 +73,7 @@ export async function currentSparkProject(
   const stored = await loadCurrentProjectRef(cwd, ctx);
   if (!stored) return undefined;
   const selected = projects.find((project) => project.ref === stored);
-  if (selected && selected.status !== "done") return selected;
+  if (selected) return selected;
   await clearCurrentProjectRef(cwd, ctx);
   return undefined;
 }
