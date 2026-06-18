@@ -17,7 +17,7 @@ graft_validate / graft_admit / graft_show / graft_evidence / graft_materialize -
 graft_repo { action: "add" | "list" | "sync" | "lock" | "update" }          -> managed repo config/cache/lock workflow
 ```
 
-The extension keeps only convenience metadata (`base`, `lastScratch`, `lastCandidate`, and `lastPatch`) so later tool calls can omit `from`/`scratch` in the same workspace. That state is not the protocol entrance: every scratch tool accepts explicit `base` or `from`, and every result includes the returned scratch id in `details.result.scratch` for the next call. Rename has no separate operation yet; express it as `graft_delete` for the old path followed by `graft_write` for the new path.
+The extension keeps only convenience metadata (`base`, `lastScratch`, `lastCandidate`, and `lastPatch`) so later tool calls can omit `from`/`scratch` in the same workspace. That state is not the protocol entrance: every scratch tool accepts explicit `base` or `from`, and every result includes the returned scratch id in `details.result.scratch` for the next call. Pass `base` only for the first operation from a materialized ref; pass `from` only when continuing an existing scratch. Never pass both in one scratch tool call. Rename has no separate operation yet; express it as `graft_delete` for the old path followed by `graft_write` for the new path.
 
 A scratch is daemon-instance-scoped. Use `graft_scratch_pin` when a scratch must survive cleanup pressure; release the lease with `graft_scratch_unpin`. If `graftd` restarts, pass a fresh `base` or a still-reachable `from` scratch id; unsupported or unknown scratch ids fail through graftd's wire errors. Graft v3 treats cwd as an attach/routing key, not as the workspace identity; cwd may be a Git worktree.
 
@@ -31,7 +31,7 @@ pi-graft also registers the explicit extension role `role:extension-patcher` (`i
 
 ### Scratch file tools
 
-These tools do not override Pi built-ins. Each scratch tool accepts either `base` (first operation) or `from` (continue a returned scratch), matching CLI `graft scratch ... --base/--from`.
+These tools do not override Pi built-ins. Each scratch tool accepts either `base` (first operation) or `from` (continue a returned scratch), matching CLI `graft scratch ... --base/--from`. Treat them as mutually exclusive source selectors: do not include `base` once you have a `scratch:*` id to pass as `from`.
 
 - `graft_read` — read a UTF-8 text file and return `LINE#HASH:` anchors; `details.result.scratch` is the source scratch id.
 - `graft_write` — write complete UTF-8 text content and return a new scratch id.
@@ -62,6 +62,8 @@ These tools do not override Pi built-ins. Each scratch tool accepts either `base
 - `graft_repo` — manage configured repositories with the current `repo add/list/sync/lock/update` flow through `graft --json repo ...`; the Rust CLI decides local vs daemon execution.
 - `graft_cli_exec` — allowlisted argv-only path for low-frequency read-only or diagnostic commands; bootstrap and mutation commands use dedicated tools.
 
+When several Graft lifecycle or inspection calls share one workspace/daemon state, issue them sequentially instead of in parallel. In validation, parallel `graft_show`/`graft_evidence` calls could contend on the local writer lock; the same calls succeeded when sequenced.
+
 ## Example
 
 ```text
@@ -83,6 +85,38 @@ graft_delete { from: "scratch:...", path: "obsolete.txt" }
 graft_candidate_from_scratch { scratch: "scratch:...", expected: ["CargoTestsPass"], message: "ready" }
 ```
 
+## Replacement readiness
+
+As of the 2026-06-18 validation pass, pi-graft is ready to cover the normal UTF-8 text file workflow that agents previously handled with direct `read`/`write`/`edit` tools, provided the agent explicitly uses `graft_*` tools and keeps the lifecycle explicit:
+
+```text
+graft_init -> graft_write/read/edit/delete -> graft_candidate_from_scratch
+           -> graft_validate -> graft_admit -> graft_show/graft_evidence
+           -> graft_materialize --dry-run
+```
+
+Validated coverage:
+
+- create/overwrite UTF-8 text files with `graft_write`;
+- inspect full files or bounded slices with `graft_read` hashline anchors;
+- replace, prepend, and append lines with strict `graft_edit` anchors;
+- delete files with `graft_delete`;
+- continue scratches by passing returned `scratch:*` ids through `from`;
+- create candidates, validate, admit patches, inspect evidence/change, and materialize dry-run output;
+- run the above from `pi -p` with built-in file tools disabled and no direct file-tool fallback.
+
+Not covered as replacement-ready: binary/image/directory editing, automatic candidate/admit side effects, automatic cwd materialization, external promote/sync flows, and hiding or removing Pi built-in tools globally. Unsupported file kinds should fail loudly instead of falling back to disk access.
+
+Validation evidence used:
+
+```bash
+pnpm --filter @zendev-lab/pi-graft run check
+node --experimental-strip-types --test test/pi-graft-extension.test.ts
+PI_GRAFT_E2E=1 node --experimental-strip-types --test test/pi-graft-extension.test.ts
+```
+
+Final `pi -p` validation used an explicit graft-only tool allowlist and produced `patch:e0548b83a15a` from a workflow covering read slices, replace, prepend, append, delete, candidate, validate/admit, show/evidence, and materialize dry-run.
+
 ## Runtime assumptions
 
 The extension shells `GRAFT_BIN` when set, otherwise `graft`, always passing `--cwd <cwd>`. Non-help paths use `graft --json ...`; help/explain paths keep plain text output. Large scratch payloads go over stdin with `--content-stdin` and `--edits-stdin` so argv stays small and literal `"-"` file content remains possible.
@@ -93,7 +127,7 @@ The current implementation is UTF-8-text first. Binary, image, and directory beh
 
 ## Risk review
 
-Verdict: **ship as an early integrated slice, with known caveats**.
+Verdict: **ready as the explicit UTF-8 text replacement path, with known caveats**.
 
 - P1 — future default tool replacement would change core Pi semantics. Current mitigation: scratch operations are explicit `graft_*` tools, while Pi built-ins remain available.
 - P1 — scratch state is not durable across daemon restart, and full multi-workspace scratch isolation depends on graftd's global-daemon workspace-state support. Mitigation: scratch ids are returned from each tool and pi-graft's convenience state is optional; lost scratch ids fail through graftd wire errors instead of hidden recovery.
@@ -106,7 +140,7 @@ Verdict: **ship as an early integrated slice, with known caveats**.
 Focused static check:
 
 ```bash
-pnpm --filter pi-graft run check
+pnpm --filter @zendev-lab/pi-graft run check
 ```
 
 Default test (real graftd E2E skipped unless opted in):

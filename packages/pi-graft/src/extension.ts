@@ -580,10 +580,15 @@ function scratchSourceSchema(): Record<string, unknown> {
     base: Type.Optional(
       Type.String({
         description:
-          "Base ref for the first scratch operation: graft:empty, tree:<id>, candidate:<id>, or patch:<id>.",
+          "Base ref for the first scratch operation: graft:empty, tree:<id>, candidate:<id>, or patch:<id>. Mutually exclusive with from; omit from when base is set.",
       }),
     ),
-    from: Type.Optional(Type.String({ description: "Scratch id to continue editing." })),
+    from: Type.Optional(
+      Type.String({
+        description:
+          "Scratch id to continue editing. Mutually exclusive with base; omit base when continuing a scratch.",
+      }),
+    ),
   };
 }
 

@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
 import { RoleRegistry, hydrateExtensionRoles, listExtensionRoles } from "@zendev-lab/pi-roles";
 import {
@@ -84,6 +84,83 @@ async function writeMockGraft(dir: string, scriptBody: string): Promise<string> 
   return path;
 }
 
+let envMutationLock: Promise<void> = Promise.resolve();
+
+async function withEnvMutationLock<T>(callback: () => Promise<T>): Promise<T> {
+  const previous = envMutationLock;
+  let release!: () => void;
+  envMutationLock = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await callback();
+  } finally {
+    release();
+  }
+}
+
+function envTest(name: string, callback: (t: TestContext) => Promise<void>): void {
+  void test(name, async (t) => {
+    await withEnvMutationLock(() => callback(t));
+  });
+}
+
+type SimpleGraftRouteCase = {
+  name: string;
+  tempPrefix: string;
+  toolName: string;
+  params?: (paths: { dir: string; project: string }) => Record<string, unknown>;
+  ctx?: (paths: { dir: string; project: string }) => PiGraftToolContext;
+  mockOutput: string;
+  expectedText: RegExp;
+  expectedArgv: (paths: { dir: string; project: string }) => string[];
+  expectedEnvelope?: Record<string, unknown>;
+};
+
+async function assertSimpleGraftRoute(route: SimpleGraftRouteCase): Promise<void> {
+  await withEnvMutationLock(async () => {
+    const dir = await mkdtemp(join(tmpdir(), route.tempPrefix));
+    const project = join(dir, "project");
+    const argvFile = join(dir, "argv.txt");
+    const previousGraftBin = process.env.GRAFT_BIN;
+    const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
+    await mkdir(project, { recursive: true });
+    process.env.PI_GRAFT_MOCK_ARGV = argvFile;
+    process.env.GRAFT_BIN = await writeMockGraft(
+      dir,
+      `printf '%s\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\n${route.mockOutput}`,
+    );
+
+    try {
+      const { pi, tools } = createFakePi();
+      registerPiGraftExtension(pi);
+      const paths = { dir, project };
+      const result = await executeTool(
+        tools.get(route.toolName),
+        route.toolName,
+        route.params?.(paths) ?? {},
+        route.ctx?.(paths) ?? { cwd: dir },
+      );
+      assert.match(result.content[0].text, route.expectedText, route.name);
+      if (route.expectedEnvelope) {
+        assert.deepEqual(result.details?.envelope, route.expectedEnvelope, route.name);
+      }
+      assert.deepEqual(
+        (await readFile(argvFile, "utf8")).trim().split("\n"),
+        route.expectedArgv(paths),
+        route.name,
+      );
+    } finally {
+      if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+      else process.env.GRAFT_BIN = previousGraftBin;
+      if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
+      else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
+      await rm(dir, { force: true, recursive: true });
+    }
+  });
+}
+
 void test("pi-graft registers the final high-frequency direct tool set and extension patcher role", () => {
   const { pi, tools, handlers } = createFakePi();
   registerPiGraftExtension(pi);
@@ -146,7 +223,7 @@ void test("pi-graft registers the final high-frequency direct tool set and exten
   );
 });
 
-void test("graft_help defaults to the maintained agent workflow topic", async () => {
+envTest("graft_help defaults to the maintained agent workflow topic", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-graft-help-"));
   const argvFile = join(dir, "argv.txt");
   const previousGraftBin = process.env.GRAFT_BIN;
@@ -207,107 +284,92 @@ void test("graft_cli_exec validates argv before daemon work", async () => {
   );
 });
 
-void test("graft_ps tool uses the graft --json CLI route", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-graft-ps-"));
-  const argvFile = join(dir, "argv.txt");
-  const previousGraftBin = process.env.GRAFT_BIN;
-  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
-  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
-  process.env.GRAFT_BIN = await writeMockGraft(
-    dir,
-    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\nprintf '{"message":"ps direct"}\\n'`,
-  );
+void test("simple pi-graft tools use graft --json CLI routes", async () => {
+  const routes: SimpleGraftRouteCase[] = [
+    {
+      name: "graft_ps",
+      tempPrefix: "pi-graft-ps-",
+      toolName: "graft_ps",
+      mockOutput: `printf '{"message":"ps direct"}\n'`,
+      expectedText: /ps direct/,
+      expectedArgv: ({ dir }) => ["--cwd", dir, "--json", "ps"],
+    },
+    {
+      name: "graft_init",
+      tempPrefix: "pi-graft-init-",
+      toolName: "graft_init",
+      params: ({ project }) => ({ cwd: project }),
+      mockOutput: `printf '{"status":"ok","message":"initialized mock"}\n'`,
+      expectedText: /initialized mock/,
+      expectedEnvelope: { status: "ok", message: "initialized mock" },
+      expectedArgv: ({ project }) => ["--cwd", project, "--json", "init"],
+    },
+    {
+      name: "graft_doctor",
+      tempPrefix: "pi-graft-doctor-",
+      toolName: "graft_doctor",
+      params: () => ({ rebuildRegistry: true }),
+      mockOutput: `printf '{"message":"doctor ok"}\n'`,
+      expectedText: /doctor ok/,
+      expectedArgv: ({ dir }) => ["--cwd", dir, "--json", "doctor", "--rebuild-registry"],
+    },
+    {
+      name: "graft_validate",
+      tempPrefix: "pi-graft-validate-cli-",
+      toolName: "graft_validate",
+      params: () => ({ target: "candidate:abc" }),
+      ctx: ({ project }) => ({ cwd: project }),
+      mockOutput: `printf '{"message":"validation completed"}\n'`,
+      expectedText: /validation completed/,
+      expectedArgv: ({ project }) => ["--cwd", project, "--json", "validate", "candidate:abc"],
+    },
+    {
+      name: "graft_status",
+      tempPrefix: "pi-graft-status-cli-",
+      toolName: "graft_status",
+      ctx: ({ project }) => ({ cwd: project }),
+      mockOutput: `printf '{"message":"status","result":{"status":"ok","daemon":"graftd"}}\n'`,
+      expectedText: /graftd: ok/,
+      expectedArgv: ({ project }) => ["--cwd", project, "--json", "scratch", "status"],
+    },
+    {
+      name: "graft_repo list",
+      tempPrefix: "pi-graft-repo-list-",
+      toolName: "graft_repo",
+      params: () => ({ action: "list" }),
+      mockOutput: `printf '{"message":"spark present .graft/repos/spark local"}\n'`,
+      expectedText: /spark/,
+      expectedArgv: ({ dir }) => ["--cwd", dir, "--json", "repo", "list"],
+    },
+    {
+      name: "graft_repo add",
+      tempPrefix: "pi-graft-repo-add-",
+      toolName: "graft_repo",
+      params: () => ({
+        action: "add",
+        repoId: "spark",
+        url: "/repos/spark",
+        defaultBranch: "main",
+      }),
+      ctx: ({ project }) => ({ cwd: project }),
+      mockOutput: `printf '{"message":"added repo spark"}\n'`,
+      expectedText: /added repo spark/,
+      expectedArgv: ({ project }) => [
+        "--cwd",
+        project,
+        "--json",
+        "repo",
+        "add",
+        "spark",
+        "/repos/spark",
+        "--default-branch",
+        "main",
+      ],
+    },
+  ];
 
-  try {
-    const { pi, tools } = createFakePi();
-    registerPiGraftExtension(pi);
-    const result = await executeTool(tools.get("graft_ps"), "graft_ps", {}, { cwd: dir });
-    assert.match(result.content[0].text, /ps direct/);
-    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
-      "--cwd",
-      dir,
-      "--json",
-      "ps",
-    ]);
-  } finally {
-    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
-    else process.env.GRAFT_BIN = previousGraftBin;
-    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
-    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
-    await rm(dir, { force: true, recursive: true });
-  }
-});
-
-void test("graft_init uses direct CLI bootstrap path", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-graft-init-"));
-  const project = join(dir, "project");
-  const argvFile = join(dir, "argv.txt");
-  const previousGraftBin = process.env.GRAFT_BIN;
-  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
-  await mkdir(project, { recursive: true });
-  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
-  process.env.GRAFT_BIN = await writeMockGraft(
-    dir,
-    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\nprintf '{"status":"ok","message":"initialized mock"}\\n'`,
-  );
-
-  try {
-    const { pi, tools } = createFakePi();
-    registerPiGraftExtension(pi);
-    const init = tools.get("graft_init");
-    assert.ok(init, "expected graft_init to be registered");
-    const result = await init.execute("graft_init", { cwd: project });
-    assert.match(result.content[0].text, /initialized mock/);
-    assert.deepEqual(result.details?.envelope, { status: "ok", message: "initialized mock" });
-    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
-      "--cwd",
-      project,
-      "--json",
-      "init",
-    ]);
-  } finally {
-    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
-    else process.env.GRAFT_BIN = previousGraftBin;
-    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
-    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
-    await rm(dir, { force: true, recursive: true });
-  }
-});
-
-void test("graft_doctor tool passes the rebuild flag through graft --json", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-graft-doctor-"));
-  const argvFile = join(dir, "argv.txt");
-  const previousGraftBin = process.env.GRAFT_BIN;
-  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
-  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
-  process.env.GRAFT_BIN = await writeMockGraft(
-    dir,
-    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\nprintf '{"message":"doctor ok"}\\n'`,
-  );
-
-  try {
-    const { pi, tools } = createFakePi();
-    registerPiGraftExtension(pi);
-    const result = await executeTool(
-      tools.get("graft_doctor"),
-      "graft_doctor",
-      { rebuildRegistry: true },
-      { cwd: dir },
-    );
-    assert.match(result.content[0].text, /doctor ok/);
-    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
-      "--cwd",
-      dir,
-      "--json",
-      "doctor",
-      "--rebuild-registry",
-    ]);
-  } finally {
-    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
-    else process.env.GRAFT_BIN = previousGraftBin;
-    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
-    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
-    await rm(dir, { force: true, recursive: true });
+  for (const route of routes) {
+    await assertSimpleGraftRoute(route);
   }
 });
 
@@ -323,46 +385,7 @@ void test("pi-graft tools require explicit cwd or restored session state", async
   );
 });
 
-void test("graft_validate uses the graft --json CLI path", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-graft-validate-cli-"));
-  const project = join(dir, "project");
-  const argvFile = join(dir, "argv.txt");
-  const previousGraftBin = process.env.GRAFT_BIN;
-  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
-  await mkdir(project, { recursive: true });
-  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
-  process.env.GRAFT_BIN = await writeMockGraft(
-    dir,
-    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\nprintf '{"message":"validation completed"}\\n'`,
-  );
-
-  try {
-    const { pi, tools } = createFakePi();
-    registerPiGraftExtension(pi);
-    const result = await executeTool(
-      tools.get("graft_validate"),
-      "graft_validate",
-      { target: "candidate:abc" },
-      { cwd: project },
-    );
-    assert.match(result.content[0].text, /validation completed/);
-    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
-      "--cwd",
-      project,
-      "--json",
-      "validate",
-      "candidate:abc",
-    ]);
-  } finally {
-    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
-    else process.env.GRAFT_BIN = previousGraftBin;
-    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
-    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
-    await rm(dir, { force: true, recursive: true });
-  }
-});
-
-void test("graft scratch lifecycle tools use graft --json CLI argv", async () => {
+envTest("graft scratch lifecycle tools use graft --json CLI argv", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-graft-scratch-cli-"));
   const project = join(dir, "project");
   const argvFile = join(dir, "argv.txt");
@@ -439,7 +462,7 @@ esac`,
   }
 });
 
-void test("graft write/edit pass large payloads over stdin flags", async () => {
+envTest("graft write/edit pass large payloads over stdin flags", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-graft-stdin-cli-"));
   const project = join(dir, "project");
   const argvFile = join(dir, "argv.txt");
@@ -506,7 +529,7 @@ esac`,
   }
 });
 
-void test("graft_candidate_from_scratch maps expected to CLI --expect flags", async () => {
+envTest("graft_candidate_from_scratch maps expected to CLI --expect flags", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-graft-candidate-cli-"));
   const project = join(dir, "project");
   const argvFile = join(dir, "argv.txt");
@@ -550,131 +573,7 @@ void test("graft_candidate_from_scratch maps expected to CLI --expect flags", as
   }
 });
 
-void test("graft_status uses graft --json scratch status", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-graft-status-cli-"));
-  const project = join(dir, "project");
-  const argvFile = join(dir, "argv.txt");
-  const previousGraftBin = process.env.GRAFT_BIN;
-  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
-  await mkdir(project, { recursive: true });
-  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
-  process.env.GRAFT_BIN = await writeMockGraft(
-    dir,
-    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\nprintf '{"message":"status","result":{"status":"ok","daemon":"graftd"}}\\n'`,
-  );
-
-  try {
-    const { pi, tools } = createFakePi();
-    registerPiGraftExtension(pi);
-    const result = await executeTool(
-      tools.get("graft_status"),
-      "graft_status",
-      {},
-      { cwd: project },
-    );
-    assert.match(result.content[0].text, /graftd: ok/);
-    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
-      "--cwd",
-      project,
-      "--json",
-      "scratch",
-      "status",
-    ]);
-  } finally {
-    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
-    else process.env.GRAFT_BIN = previousGraftBin;
-    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
-    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
-    await rm(dir, { force: true, recursive: true });
-  }
-});
-
-void test("graft_repo list uses the graft --json CLI route", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-graft-repo-list-"));
-  const argvFile = join(dir, "argv.txt");
-  const previousGraftBin = process.env.GRAFT_BIN;
-  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
-  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
-  process.env.GRAFT_BIN = await writeMockGraft(
-    dir,
-    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\nprintf '{"message":"spark present .graft/repos/spark local"}\\n'`,
-  );
-
-  try {
-    const { pi, tools } = createFakePi();
-    registerPiGraftExtension(pi);
-    const result = await executeTool(
-      tools.get("graft_repo"),
-      "graft_repo",
-      { action: "list" },
-      { cwd: dir },
-    );
-    assert.match(result.content[0].text, /spark/);
-    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
-      "--cwd",
-      dir,
-      "--json",
-      "repo",
-      "list",
-    ]);
-  } finally {
-    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
-    else process.env.GRAFT_BIN = previousGraftBin;
-    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
-    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
-    await rm(dir, { force: true, recursive: true });
-  }
-});
-
-void test("graft_repo add shells through graft --json without TS routing", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-graft-repo-add-"));
-  const project = join(dir, "project");
-  const argvFile = join(dir, "argv.txt");
-  const previousGraftBin = process.env.GRAFT_BIN;
-  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
-  await mkdir(project, { recursive: true });
-  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
-  process.env.GRAFT_BIN = await writeMockGraft(
-    dir,
-    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\nprintf '{"message":"added repo spark"}\\n'`,
-  );
-
-  try {
-    const { pi, tools } = createFakePi();
-    registerPiGraftExtension(pi);
-    const result = await executeTool(
-      tools.get("graft_repo"),
-      "graft_repo",
-      {
-        action: "add",
-        repoId: "spark",
-        url: "/repos/spark",
-        defaultBranch: "main",
-      },
-      { cwd: project },
-    );
-    assert.match(result.content[0].text, /added repo spark/);
-    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
-      "--cwd",
-      project,
-      "--json",
-      "repo",
-      "add",
-      "spark",
-      "/repos/spark",
-      "--default-branch",
-      "main",
-    ]);
-  } finally {
-    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
-    else process.env.GRAFT_BIN = previousGraftBin;
-    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
-    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
-    await rm(dir, { force: true, recursive: true });
-  }
-});
-
-void test("pi-graft controls real graftd scratch lifecycle through canonical protocol", async (t) => {
+envTest("pi-graft controls real graftd scratch lifecycle through canonical protocol", async (t) => {
   if (process.env.PI_GRAFT_E2E !== "1") {
     t.skip("set PI_GRAFT_E2E=1 to run the real graftd scratch lifecycle test");
     return;

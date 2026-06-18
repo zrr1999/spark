@@ -32,6 +32,9 @@ export {
   saveHiddenRoleRunInboxState,
   type HiddenRoleRunInboxState,
 } from "./hidden-role-run-inbox.ts";
+export { importLegacySessionGoal } from "./spark-session-goals.ts";
+export { importLegacySessionLoop } from "./spark-session-loops.ts";
+export { importLegacyTodoDisplayNumberState } from "./session-todos.ts";
 export { writeJsonFileAtomic } from "./json-store.ts";
 export {
   currentSessionDirectoryName,
