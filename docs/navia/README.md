@@ -7,7 +7,7 @@
 **Status.** Early `0.1.x` Spark-monorepo product line. The current merged build
 supports local owner setup, token-based workspace registration, local workspace
 connections, workspace and project cockpit surfaces, command delivery, and
-Spark-runtime-backed task execution through `@zendev-lab/navia-runner`. Remaining work
+Spark-runtime-backed task execution through `@zendev-lab/spark-daemon`. Remaining work
 is tracked in [docs/plans/release-roadmap.md](./docs/plans/release-roadmap.md).
 
 ## Contents
@@ -49,10 +49,10 @@ This is a pnpm + Vite-Plus monorepo.
 ```
 spark/
 ├─ apps/
-│  └─ navia-web/          # SvelteKit web cockpit (private; bundled inside the server)
+│  ├─ navia-web/          # SvelteKit web cockpit (private; bundled inside the server)
+│  └─ spark-daemon/       # Spark daemon CLI/service entry
 ├─ packages/
-│  ├─ navia-runner/       # navia CLI and local service daemon entry
-│  ├─ navia-protocol/     # runner ↔ server protocol schemas, envelopes, identifiers
+│  ├─ navia-protocol/     # daemon ↔ server protocol schemas, envelopes, identifiers
 │  ├─ navia-db/           # SQLite migrations and database helpers
 │  ├─ navia-domain/       # shared domain utilities
 │  ├─ navia-system/       # local path and private-file helpers
@@ -65,7 +65,7 @@ Published surface (npm, scoped `@zendev-lab/navia-*`):
 
 | Package               | Role                                                   |
 | --------------------- | ------------------------------------------------------ |
-| `@zendev-lab/navia-runner`   | `navia` CLI and local service daemon; routes task execution through Spark runtime |
+| `@zendev-lab/spark-daemon`   | Spark daemon CLI/service; routes task execution through Spark runtime |
 | `@zendev-lab/navia-protocol` | Runner/server protocol schemas, envelopes, identifiers |
 | `@zendev-lab/navia-db`       | SQLite migrations and database helpers                 |
 | `@zendev-lab/navia-domain`   | Shared domain utilities                                |
@@ -83,13 +83,13 @@ Navia distinguishes the product flow from the wire protocol:
 - **Workspace registration** is the product setup flow. Users run
   `navia ws register` against a local directory; Navia then
   surfaces a server-visible workspace backed by that directory.
-- **Runner** names the internal `@zendev-lab/navia-runner` package boundary behind
-  workspace registration and Spark runtime bridging. The user-facing binary is
-  `navia`.
+- **Spark daemon** names the internal `@zendev-lab/spark-daemon` package boundary behind
+  workspace registration and Spark runtime bridging. The package binary is
+  `spark-daemon`; public Spark CLI integration will route through `spark daemon`.
 - **Runtime** is reserved for protocol, API route, database, and
   wire-contract names: `/api/v1/runtime/*`, `runtime.hello`,
   `runtime_workspace_bindings`, and similar identifiers. Spark runtime remains
-  the execution owner behind the runner bridge.
+  the execution owner behind the daemon bridge.
 
 UI copy, setup docs, npm-facing docs, and release notes prefer
 _workspace registration_ and _workspace directory_ language unless they
@@ -105,12 +105,12 @@ identifier.
 
 ```bash
 pnpm install
-pnpm run navia:web
-pnpm --filter @zendev-lab/navia-runner run cli -- --help
+pnpm run cockpit:web
+pnpm run spark-daemon:cli -- --help
 ```
 
-`pnpm run navia:web` starts the local SvelteKit cockpit from the Spark root.
-The runner CLI can be inspected with `pnpm --filter @zendev-lab/navia-runner run cli -- --help` and can
+`pnpm run cockpit:web` starts the local SvelteKit cockpit from the Spark root.
+The Spark daemon CLI can be inspected with `pnpm run spark-daemon:cli -- --help` and can
 register workspace directories once the server shows a registration command.
 
 The production-style data layout uses XDG locations such as
@@ -146,9 +146,9 @@ their hash; if you lose a token, generate a new one.
 The fast inner loop:
 
 ```bash
-pnpm run navia:check
-pnpm run navia:test
-pnpm run navia:build
+pnpm run cockpit:check
+pnpm run cockpit:test
+pnpm run cockpit:build
 pnpm run verify:merged
 ```
 
@@ -166,7 +166,7 @@ Layered gates, smallest first:
 | `pnpm pack:check`          | Validates each publishable package's `npm pack` output.                               |
 
 `pnpm release:e2e` is retained for historical standalone release work. In the
-merged Spark repo, prefer `pnpm run navia:e2e`, `pnpm run verify:navia`, and
+merged Spark repo, prefer `pnpm run spark-daemon:e2e`, `pnpm run verify:cockpit`, and
 `pnpm run verify:merged`. For the contract and trade-offs see
 [docs/release/e2e-gate.md](./docs/release/e2e-gate.md); for failure modes
 see [docs/release/troubleshooting.md](./docs/release/troubleshooting.md).

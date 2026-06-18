@@ -818,7 +818,7 @@
           "status": "ready"
         },
         {
-          "title": "Start the local Navia service",
+          "title": "Start the Spark daemon",
           "description": "The local service owns the server WebSocket and workspace registry, then invokes Spark runtime primitives for task, artifact, and ask/review projections.",
           "status": "planned"
         },

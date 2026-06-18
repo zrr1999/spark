@@ -4,7 +4,8 @@ Spark monorepo: agent-oriented docs for contributors and automation. Product ove
 
 ## Layout
 
-- `packages/*` — TypeScript libraries wired into Pi and Spark (`spark`, `spark-runtime`, `pi-tasks`, `pi-workflows`, `pi-cue`, …) plus isolated Navia packages (`navia-runner`, `navia-protocol`, `navia-db`, `navia-domain`, `navia-system`, `navia-ui`).
+- `packages/*` — TypeScript libraries wired into Pi and Spark (`spark`, `spark-runtime`, `pi-tasks`, `pi-workflows`, `pi-cue`, …) plus isolated Navia/cockpit packages (`navia-protocol`, `navia-db`, `navia-domain`, `navia-system`, `navia-ui`).
+- `apps/spark-daemon` — Spark daemon service package that owns the former local runner/service implementation.
 - `apps/navia-web` — Navia SvelteKit local web cockpit/projection app. Keep SvelteKit/browser-specific checks isolated from the non-Svelte Spark package checks.
 - `docs/navia/` — Navia product, design, architecture, and release-readiness documentation imported from the standalone Navia repository.
 
@@ -23,12 +24,13 @@ Spark monorepo: agent-oriented docs for contributors and automation. Product ove
 | `pnpm install`       | Install dependencies                                             |
 | `vp check`           | Format + lint + type check (same path CI expects via pre-commit) |
 | `pnpm run verify`    | Spark-only `vp check` then `pnpm test`                           |
-| `pnpm run check:tsc` | Spark-only TypeScript check (`tsc --noEmit`); Navia packages are checked by `pnpm run navia:check` |
-| `pnpm run navia:check` | Type-check Navia packages and the SvelteKit app from the Spark root |
-| `pnpm run navia:test` | Run Navia package/app tests through Vite+ (`vp test run`)        |
-| `pnpm run navia:build` | Build Navia runner and web app                                  |
-| `pnpm run verify:navia` | `navia:check` then `navia:test` then `navia:build`             |
-| `pnpm run verify:merged` | Combined gate: Spark boundaries, Spark tsc, Spark tests, then Navia verify |
+| `pnpm run check:tsc` | Spark-only TypeScript check (`tsc --noEmit`); Navia packages are checked by `pnpm run cockpit:check` |
+| `pnpm run cockpit:check` | Type-check Navia packages and the SvelteKit app from the Spark root |
+| `pnpm run cockpit:test` | Run Navia package/app tests through Vite+ (`vp test run`)        |
+| `pnpm run cockpit:build` | Build the Navia web cockpit app                                 |
+| `pnpm run verify:cockpit` | `cockpit:check` then `cockpit:test` then `cockpit:build`        |
+| `pnpm run verify:spark-daemon` | Spark daemon check/test/build                            |
+| `pnpm run verify:merged` | Combined gate: Spark boundaries, Spark tsc, Spark tests, daemon verify, then cockpit verify |
 | `pnpm run test:file -- test/foo.test.ts` | Run one Node test file without also running the full suite |
 
 ## CI

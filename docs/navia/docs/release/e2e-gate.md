@@ -1,9 +1,9 @@
 # Runner end-to-end gate
 
 Historical standalone `pnpm release:e2e` (and the umbrella `pnpm release:gate`)
-drives the **real `navia-runner` daemon** end-to-end against an isolated,
+drives the **real `spark-daemon` daemon** end-to-end against an isolated,
 project-local Navia server. In the merged Spark repo, prefer the Spark-root
-`pnpm run navia:e2e`, `pnpm run verify:navia`, and `pnpm run verify:merged`
+`pnpm run spark-daemon:e2e`, `pnpm run verify:cockpit`, and `pnpm run verify:merged`
 gates; this document remains the contract for the runner/server happy path in
 [release-roadmap.md](../plans/release-roadmap.md).
 
@@ -20,7 +20,7 @@ The gate covers Gate B "Real task happy path":
    randomly allocated port.
 2. Mint a workspace registration token via the same `createRuntimeEnrollmentToken`
    helper Settings uses.
-3. Register a real `navia-runner` daemon **in-process** against the server,
+3. Register a real `spark-daemon` daemon **in-process** against the server,
    using the runtime registration API and the enrollment token.
 4. Register a local workspace directory under a temp root and let the daemon
    open the runtime WebSocket, send `runtime.hello`, and start its heartbeat.
@@ -57,8 +57,8 @@ end-to-end rather than re-validating an upstream provider SDK on every change.
 ## Commands
 
 ```bash
-pnpm run navia:e2e       # Spark-root stubbed runner happy path
-pnpm run verify:navia    # Navia check + test + build
+pnpm run spark-daemon:e2e       # Spark-root stubbed runner happy path
+pnpm run verify:cockpit    # Navia check + test + build
 pnpm run verify:merged   # Spark boundaries/tsc/tests plus Navia verify
 
 # Historical standalone compatibility commands:
@@ -78,10 +78,10 @@ Useful flags:
 
 The gate creates three temp roots:
 
-- `navia-runner-e2e-XXXX` — server data/cache/state (`NAVIA_SERVER_DATA_DIR`,
+- `spark-daemon-e2e-XXXX` — server data/cache/state (`NAVIA_SERVER_DATA_DIR`,
   `NAVIA_SERVER_CACHE_DIR`, `NAVIA_SERVER_STATE_DIR`).
-- `navia-runner-e2e-home-XXXX` — runner `HOME`/data/cache/state directories.
-- `navia-runner-e2e-workspace-XXXX` — local workspace directory the runner
+- `spark-daemon-e2e-home-XXXX` — runner `HOME`/data/cache/state directories.
+- `spark-daemon-e2e-workspace-XXXX` — local workspace directory the runner
   binds to.
 
 All three are removed on a clean run unless `--keep-data` is passed.

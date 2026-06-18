@@ -60,6 +60,9 @@ function classifyBoundary(packageDir, manifest) {
   const pathName = packageDir.split(/[/\\]/u).at(-1) ?? "";
   const packageName = typeof manifest.name === "string" ? manifest.name : "";
   if (pathName.startsWith("pi-") || packageName.startsWith("@zendev-lab/pi-")) return "pi";
+  if (pathName === "spark-daemon" || packageName === "@zendev-lab/spark-daemon") {
+    return "navia";
+  }
   if (pathName.startsWith("navia-") || packageName.startsWith("@zendev-lab/navia-")) return "navia";
   if (pathName.startsWith("spark") || packageName.startsWith("@zendev-lab/spark")) {
     return "spark";

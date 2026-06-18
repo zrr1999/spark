@@ -18,22 +18,22 @@ describe("resolveNaviaPaths", () => {
     expect(paths.runtimeDir).toBe(join(home, ".local", "state", "navia", "server", "run"));
   });
 
-  it("uses XDG defaults for runner-specific paths", () => {
-    const paths = resolveNaviaPaths({ app: "runner", env: { HOME: home }, cwd: "/" });
+  it("uses XDG defaults for daemon-specific paths", () => {
+    const paths = resolveNaviaPaths({ app: "daemon", env: { HOME: home }, cwd: "/" });
 
-    expect(paths.configFile).toBe(join(home, ".config", "navia", "runner.toml"));
+    expect(paths.configFile).toBe(join(home, ".config", "spark", "daemon.toml"));
     expect(paths.databasePath).toBe(
-      join(home, ".local", "share", "navia", "runner", "runner.sqlite"),
+      join(home, ".local", "share", "spark", "daemon", "daemon.sqlite"),
     );
     expect(paths.artifactBlobsDir).toBe(
-      join(home, ".local", "share", "navia", "runner", "artifacts", "blobs", "sha256"),
+      join(home, ".local", "share", "spark", "daemon", "artifacts", "blobs", "sha256"),
     );
-    expect(paths.piAgentDir).toBe(join(home, ".local", "share", "navia", "runner", "pi-agent"));
+    expect(paths.piAgentDir).toBe(join(home, ".local", "share", "spark", "daemon", "pi-agent"));
   });
 
   it("honors explicit XDG homes and runtime dir", () => {
     const paths = resolveNaviaPaths({
-      app: "runner",
+      app: "daemon",
       env: {
         HOME: home,
         XDG_CONFIG_HOME: "/xdg/config",
@@ -45,11 +45,11 @@ describe("resolveNaviaPaths", () => {
       cwd: "/",
     });
 
-    expect(paths.configFile).toBe("/xdg/config/navia/runner.toml");
-    expect(paths.dataDir).toBe("/xdg/data/navia/runner");
-    expect(paths.cacheDir).toBe("/xdg/cache/navia/runner");
-    expect(paths.stateDir).toBe("/xdg/state/navia/runner");
-    expect(paths.runtimeDir).toBe("/xdg/runtime/navia/runner");
+    expect(paths.configFile).toBe("/xdg/config/spark/daemon.toml");
+    expect(paths.dataDir).toBe("/xdg/data/spark/daemon");
+    expect(paths.cacheDir).toBe("/xdg/cache/spark/daemon");
+    expect(paths.stateDir).toBe("/xdg/state/spark/daemon");
+    expect(paths.runtimeDir).toBe("/xdg/runtime/spark/daemon");
   });
 
   it("honors app-specific overrides before the deprecated NAVIA_DATA_DIR alias", () => {
@@ -77,20 +77,20 @@ describe("resolveNaviaPaths", () => {
       env: { HOME: home, NAVIA_DATA_DIR: "/legacy" },
       cwd: "/",
     });
-    const runnerPaths = resolveNaviaPaths({
-      app: "runner",
+    const daemonPaths = resolveNaviaPaths({
+      app: "daemon",
       env: { HOME: home, NAVIA_DATA_DIR: "/legacy" },
       cwd: "/",
     });
 
     expect(serverPaths.dataDir).toBe("/legacy");
     expect(serverPaths.deprecatedDataDirAlias).toBe("/legacy");
-    expect(runnerPaths.dataDir).toBe(join(home, ".local", "share", "navia", "runner"));
+    expect(daemonPaths.dataDir).toBe(join(home, ".local", "share", "spark", "daemon"));
   });
 
   it("honors direct test overrides", () => {
     const paths = resolveNaviaPaths({
-      app: "runner",
+      app: "daemon",
       env: { HOME: home },
       cwd: "/repo",
       overrides: {

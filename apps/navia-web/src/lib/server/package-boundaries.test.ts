@@ -6,10 +6,10 @@ import { describe, expect, it } from "vitest";
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 
 describe("package boundaries", () => {
-  it("does not import runner internals from the web app", () => {
+  it("does not import Spark daemon internals from the web app", () => {
     const sourceFiles = collectSourceFiles(join(webRoot, "src"));
     const violations = sourceFiles.filter((file) =>
-      readFileSync(file, "utf8").includes("@zendev-lab/navia-runner"),
+      readFileSync(file, "utf8").includes("@zendev-lab/spark-daemon"),
     );
 
     expect(violations).toEqual([]);

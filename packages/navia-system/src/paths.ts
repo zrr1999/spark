@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-export type NaviaApp = "server" | "runner";
+export type NaviaApp = "server" | "daemon";
 
 export interface NaviaPathOverrides {
   configFile?: string;
@@ -39,7 +39,7 @@ export interface NaviaPaths {
 
 const appDatabaseNames: Record<NaviaApp, string> = {
   server: "navia.sqlite",
-  runner: "runner.sqlite",
+  daemon: "daemon.sqlite",
 };
 
 export function resolveNaviaPaths(options: ResolveNaviaPathsOptions): NaviaPaths {
@@ -47,7 +47,7 @@ export function resolveNaviaPaths(options: ResolveNaviaPathsOptions): NaviaPaths
   const cwd = options.cwd ?? process.cwd();
   const home = env.HOME || homedir();
   const app = options.app;
-  const prefix = `NAVIA_${app.toUpperCase()}`;
+  const prefix = app === "daemon" ? "SPARK_DAEMON" : `NAVIA_${app.toUpperCase()}`;
   const overrides = options.overrides ?? {};
 
   const configHome = absoluteDir(env.XDG_CONFIG_HOME ?? join(home, ".config"), cwd);
@@ -55,26 +55,30 @@ export function resolveNaviaPaths(options: ResolveNaviaPathsOptions): NaviaPaths
   const cacheHome = absoluteDir(env.XDG_CACHE_HOME ?? join(home, ".cache"), cwd);
   const stateHome = absoluteDir(env.XDG_STATE_HOME ?? join(home, ".local", "state"), cwd);
 
-  const configDir = join(configHome, "navia");
+  const namespace = app === "daemon" ? "spark" : "navia";
+  const configDir = join(configHome, namespace);
   const configFile = absoluteDir(overrides.configFile ?? join(configDir, `${app}.toml`), cwd);
   const explicitDataDir = env[`${prefix}_DATA_DIR`];
   const deprecatedDataDirAlias =
     app === "server" && !explicitDataDir ? env.NAVIA_DATA_DIR : undefined;
   const dataDir = absoluteDir(
-    overrides.dataDir ?? explicitDataDir ?? deprecatedDataDirAlias ?? join(dataHome, "navia", app),
+    overrides.dataDir ??
+      explicitDataDir ??
+      deprecatedDataDirAlias ??
+      join(dataHome, namespace, app),
     cwd,
   );
   const cacheDir = absoluteDir(
-    overrides.cacheDir ?? env[`${prefix}_CACHE_DIR`] ?? join(cacheHome, "navia", app),
+    overrides.cacheDir ?? env[`${prefix}_CACHE_DIR`] ?? join(cacheHome, namespace, app),
     cwd,
   );
   const stateDir = absoluteDir(
-    overrides.stateDir ?? env[`${prefix}_STATE_DIR`] ?? join(stateHome, "navia", app),
+    overrides.stateDir ?? env[`${prefix}_STATE_DIR`] ?? join(stateHome, namespace, app),
     cwd,
   );
   const runtimeDir = absoluteDir(
     overrides.runtimeDir ??
-      (env.XDG_RUNTIME_DIR ? join(env.XDG_RUNTIME_DIR, "navia", app) : join(stateDir, "run")),
+      (env.XDG_RUNTIME_DIR ? join(env.XDG_RUNTIME_DIR, namespace, app) : join(stateDir, "run")),
     cwd,
   );
   const artifactCacheDir = join(cacheDir, "artifacts");
@@ -90,10 +94,10 @@ export function resolveNaviaPaths(options: ResolveNaviaPathsOptions): NaviaPaths
     databasePath: join(dataDir, appDatabaseNames[app]),
     artifactCacheDir,
     artifactBlobsDir:
-      app === "runner"
+      app === "daemon"
         ? join(dataDir, "artifacts", "blobs", "sha256")
         : join(artifactCacheDir, "blobs", "sha256"),
-    piAgentDir: app === "runner" ? join(dataDir, "pi-agent") : undefined,
+    piAgentDir: app === "daemon" ? join(dataDir, "pi-agent") : undefined,
     logDir: join(stateDir, "logs"),
     logFile: join(stateDir, "logs", `${app}.jsonl`),
     pidFile: join(runtimeDir, `${app}.pid`),

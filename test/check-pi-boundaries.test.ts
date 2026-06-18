@@ -37,8 +37,8 @@ void test("boundary checker rejects Spark packages importing Navia packages", as
 
 void test("boundary checker rejects Navia packages importing Spark CLI host internals", async () => {
   const root = await fixtureRoot();
-  await writePackage(root, "apps/navia-runner", {
-    name: "@zendev-lab/navia-runner",
+  await writePackage(root, "apps/navia-web", {
+    name: "@zendev-lab/navia-web",
     source: 'import { createSparkCliHostServices } from "@zendev-lab/spark-cli/host";\n',
   });
 
@@ -54,6 +54,22 @@ void test("boundary checker allows isolated Navia package dependencies", async (
     name: "@zendev-lab/navia-db",
     dependencies: { "@zendev-lab/navia-system": "workspace:*" },
     source: 'import { resolveNaviaPath } from "@zendev-lab/navia-system";\n',
+  });
+
+  const result = runBoundaryCheck(root);
+
+  assert.equal(result.status, 0, result.stderr);
+});
+
+void test("boundary checker treats spark-daemon as the daemon/cockpit adapter", async () => {
+  const root = await fixtureRoot();
+  await writePackage(root, "apps/spark-daemon", {
+    name: "@zendev-lab/spark-daemon",
+    dependencies: {
+      "@zendev-lab/navia-protocol": "workspace:*",
+      "@zendev-lab/spark-runtime": "workspace:^",
+    },
+    source: 'import { runtimeMessageSchema } from "@zendev-lab/navia-protocol";\n',
   });
 
   const result = runBoundaryCheck(root);

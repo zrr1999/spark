@@ -24,14 +24,15 @@ The extension packages depend on the shared `@zendev-lab/pi-extension-api` contr
 
 Spark's multi-perspective research flow is a builtin `pi-workflows` workflow, not a model-picker target and not project/task-bound Spark mode. Use `/workflow:research <question>` (or `/workflow builtin:research <question>`) to run planning, parallel exploration, cross-checking, and report synthesis through Spark workflow/runtime plumbing. The builtin registry marks `research` as research-shaped routing metadata, but the command remains an independent workflow capability and does not require initialized Spark project state or a selected project.
 
-Workflow discovery and preview use the canonical workflow tool:
+Workflow discovery and preview use the canonical workflow tool; explicit dynamic execution uses Spark's `workflow_run` surface:
 
 ```ts
 workflow({ action: "list" });
 workflow({ action: "read", selector: "builtin:research" });
+workflow_run({ selector: "builtin:research", args: { question: "..." } });
 ```
 
-The workflow accepts `question`, `prompt`, or `task`, plus optional `panelModels`/`models`, `panelSize`, `concurrency`, `retry`, `plannerModel`, `verifierModel`, and `judgeModel`/`reportModel` arguments. `fusion` and `deep-research` are folded into this user-facing research workflow; fan-out remains an internal orchestration method. Spark CLI no longer registers the retired Fusion model-picker target, and `~/.spark/config.json#fusion` is ignored.
+Generated one-off scripts passed to `workflow_run({ script })` must be metadata-first JavaScript and run through Spark workflow role-run boundaries (`agent`, `parallel`, `pipeline`, `phase`, `workflow`, `verify`, `judgePanel`, `loopUntilDry`, `completenessCheck`, `retry`, `gate`, `budget`, and `artifactRecord`). The research workflow accepts `question`, `prompt`, or `task`, plus optional `panelModels`/`models`, `panelSize`, `concurrency`, `retry`, `plannerModel`, `verifierModel`, and `judgeModel`/`reportModel` arguments. `fusion` and `deep-research` are folded into this user-facing research workflow; fan-out remains an internal orchestration method. Spark CLI no longer registers the retired Fusion model-picker target, and `~/.spark/config.json#fusion` is ignored.
 
 ## User-facing commands
 
@@ -91,15 +92,15 @@ Manage settings through the canonical role tool actions: `role({ action: "model_
 Navia is integrated as Spark's local web cockpit/projection product line while retaining separate package boundaries:
 
 - `@zendev-lab/navia-web` — private SvelteKit local cockpit app under `apps/navia-web`; it renders Spark-owned task/run/artifact state from Navia SQLite projections and caches.
-- `@zendev-lab/navia-runner` — Navia CLI/local service package under `apps/navia-runner`; task execution is routed through the Spark runtime bridge, while workspace registration and protocol delivery stay in the Navia boundary.
+- `@zendev-lab/spark-daemon` — Spark daemon package under `apps/spark-daemon`; task execution is routed through the Spark runtime bridge, while workspace registration and protocol delivery stay in the cockpit/protocol boundary.
 - `@zendev-lab/navia-protocol`, `@zendev-lab/navia-db`, `@zendev-lab/navia-domain`, `@zendev-lab/navia-system`, and `@zendev-lab/navia-ui` — Navia protocol, SQLite projection, domain, path, and UI packages under `packages/navia-*`.
 
 Typical merged-repo Navia development commands:
 
 ```text
-pnpm run navia:web                              # start the SvelteKit cockpit
-pnpm --filter @zendev-lab/navia-runner run cli -- --help
-pnpm run verify:navia                           # Navia check/test/build
+pnpm run cockpit:web                              # start the SvelteKit cockpit
+pnpm run spark-daemon:cli -- --help
+pnpm run verify:cockpit                           # Navia check/test/build
 ```
 
 Retired migration packages (`spark-core`, `spark-tasks`, `spark-learnings`, `spark-goal`, and `spark-workflows`) are no longer workspaces. No compatibility packages, long-lived `spark_*` tool aliases, or dual public/default tool surfaces are planned. Public action tools render as `tool action=<value> ...`. `spark-github` is intentionally deferred.
@@ -111,7 +112,7 @@ Pi package loading is manifest-first: the root `pi` manifest explicitly lists ea
 ```text
 pnpm install
 pnpm run verify          # Spark package checks/tests
-pnpm run verify:navia    # Navia check/test/build
+pnpm run verify:cockpit    # Navia check/test/build
 apps/spark/bin/spark --help
 apps/spark/bin/spark daemon --help
 ```
