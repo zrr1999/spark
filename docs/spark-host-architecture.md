@@ -69,7 +69,7 @@ Spark has two host targets that share extension packages through `pi-extension-a
 - Owns terminal UI components through `@earendil-works/pi-tui`.
 - Stores native sessions as Pi-compatible JSONL v3 files under `~/.spark/sessions/<workspaceHash>/`.
 - Owns a local daemon-only queue under `~/.spark/daemon/` plus `~/.spark/runtime/daemon.lock` for detached `session.run` execution.
-- Resolves skills from builtin, workspace, and user layers: `packages/spark/skills/**`, `<cwd>/.spark/skills/**`, and `~/.spark/skills/**`.
+- Resolves workspace and user skills from `<cwd>/.spark/skills/**` and `~/.spark/skills/**`. The Spark product no longer bundles project-idea/SPARK.md workflow prompts under `packages/spark/skills/**`; those live in external skill repositories such as `zrr1999/skills`.
 
 ## Boundary rules
 

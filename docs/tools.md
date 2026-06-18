@@ -13,10 +13,10 @@ Commands:
 
 Tools:
 
-- `task_read` — read-only project/task/TODO/run graph inspection. Use `action: "status" | "project_list" | "run_status"` for Spark project/task status, project lists, and workflow-run inspection/reconciliation.
-- `task_write` — project/task/TODO graph mutations. Use `action: "project_use" | "project_update" | "claim" | "plan" | "finish" | "todo_update" | "cache_cleanup"`; creating or claiming a task is plan-locked, and every task must have a bound `task.plan` before claim succeeds. Claiming does not seed implementation TODOs; initialize task-local TODOs explicitly with `task_write({ action: "todo_update", scope: "task", ops: [{ op: "init", items: [...] }] })` before implementation work.
+- `task_read` — read-only project/task/TODO/run graph inspection. Use `action: "task_status" | "project_status" | "workspace_status" | "project_list" | "run_status"` for one-task status, one-project status, broad workspace status, project lists, and workflow-run inspection/reconciliation. Scoped status actions are strict: use `workspace_status` for all-project summaries, `project_status` for one project, and `task_status` with `taskRef`/`task` for one task.
+- `task_write` — project/task/TODO graph mutations. Use `action: "project_use" | "project_finish" | "project_rename" | "project_status_update" | "project_metadata_update" | "claim" | "plan" | "finish" | "todo_update" | "cache_cleanup"`; project mutations are intent-specific, creating or claiming a task is plan-locked, and every task must have a bound `task.plan` before claim succeeds. `project_finish` only marks project state done; it does not complete a session goal. When an active goal exists, project finish results include `goalCompletionAvailable=true`, `goalCompletionRecommendedAction='goal({ action: "complete" })'`, and goal metadata so the caller can request the separate reviewer-gated goal completion transition explicitly. Planning and claiming sync concrete `task.plan.steps`/`successCriteria` into task TODOs when the task has no active TODOs; use `todo_update` ops `sync_from_plan` to fill missing plan TODOs later, `upsert_done` to intentionally create-and-complete one exact item, and strict `done` when a typo should fail.
 - `assign` — explicit Spark assignment/spawn surface. Use `assign({ dryRun: true })` to inspect the ready frontier and `assign({ dryRun: false })` only when dispatching ready tasks through the workflow runtime; `task_write` does not expose `run_ready`, and public `run_control` is not part of the default tool surface.
-- `goal` — Spark goal facade. Use `action: "status" | "set" | "start" | "pause" | "resume" | "clear" | "edit" | "complete"`. Goals are session-scoped and automatically reflect the current project/session work; `set`/`start` infer the objective from the current project/session TODOs when no objective is given, so there is no separate read-only infer action. Only one goal can be active per session: starting or setting a goal updates the active session goal in place. Active goal turns may use reviewer-backed canonical ask auto-answer for material decisions; this is scoped to goal work and is separate from final completion approval. Goal completion is reviewer-gated: the main session requests completion with `goal({ action: "complete" })`, the reviewer audits and returns a verdict, and Spark applies the approved state transition. Manual/public pause is also reviewer-gated: the reviewer evaluates whether the pause reason justifies stopping without completion, and rejected pause reviews leave the goal active. A session goal cannot complete while active session TODOs remain; the deterministic pre-review gate records an unmet review state and asks the main agent to finish or disposition those TODOs first. Blocked `action: "complete"` requests return structured remaining-work details such as `goal_completion_needs_changes`; approved requests persist the completed goal state. `/goal` command policy is stricter than the low-level tool: it requires an explicit objective for new command-started goals, does not overwrite existing active/paused goals, uses idle-interval foreground ticks rather than queue/backlog semantics, drops stale goal tick context when the goal pauses/changes, and session reset shutdowns (`reload`, `resume`, `new`, `fork`, `revert`, `reset`) auto-pause active goals before the reset. Generic goal primitives live in `pi-goal`, while Spark owns goal storage, widget integration, reviewer loop policy, and command policy.
+- `goal` — Spark goal facade. Use `action: "status" | "set" | "start" | "pause" | "resume" | "clear" | "edit" | "complete"`. Goals are session-scoped and automatically reflect the current project/session work; `set`/`start` infer the objective from the current project/session TODOs when no objective is given, so there is no separate read-only infer action. `goal({ action: "status" })` treats durable goal state as authoritative: when no goal is set it says so explicitly, warns that compact/historical summaries are hints only, and reports the current project relationship/recommended next action when a project is selected. Only one goal can be active per session: starting or setting a goal updates the active session goal in place. Active goal turns may use reviewer-backed canonical ask auto-answer for material decisions; this is scoped to goal work and is separate from final completion approval. Goal completion is reviewer-gated: the main session requests completion with `goal({ action: "complete" })`, the reviewer audits and returns a verdict, and Spark applies the approved state transition. Manual/public pause is also reviewer-gated: the reviewer evaluates whether the pause reason justifies stopping without completion, and rejected pause reviews leave the goal active. A session goal cannot complete while active session TODOs remain; the deterministic pre-review gate records an unmet review state and asks the main agent to finish or disposition those TODOs first. Blocked `action: "complete"` requests return structured remaining-work details such as `goal_completion_needs_changes`; approved requests persist the completed goal state. `/goal` command policy is stricter than the low-level tool: it requires an explicit objective for new command-started goals, does not overwrite existing active/paused goals, uses idle-interval foreground ticks rather than queue/backlog semantics, drops stale goal tick context when the goal pauses/changes, and session reset shutdowns (`reload`, `resume`, `new`, `fork`, `revert`, `reset`) auto-pause active goals before the reset. Generic goal primitives live in `pi-goal`, while Spark owns goal storage, widget integration, reviewer loop policy, and command policy.
 - `ask` — canonical generic ask tool. Use `action: "ask"` for structured asks and `action: "flow"` when the fullscreen multi-question flow renderer is required. Focused and flow implementations are internal behind this public surface, not active public/default tools.
 - `artifact` — canonical generic artifact/evidence tool. Use `action: "list"`, `"read"`, `"record"`, `"link"`, or `"compact"`; reads are truncated by default and full reads are explicit. `kind` classifies what an artifact IS on a single functional axis (origin lives in `provenance.producer`, lifecycle in record `status`): `document` (prose/markdown deliverables), `record` (structured JSON records of decisions/results/events), `trace` (execution output/transcripts), and `knowledge` (reusable learning material). Legacy names are normalized on read (`research`/`plan`/`review`/`verification`/`role-run`/`ask-answer`/`run-trace`/learning lifecycle names, plus older planning/handoff/cue names); the record path accepts only the four canonical kinds and rejects retired names with a directed hint.
 - `learning` — canonical generic evidence-backed learning tool. Use `action: "record" | "search" | "list" | "read" | "mark_stale" | "supersede" | "reject" | "export_markdown" | "import_markdown"`. Learnings remain distinct from recall/memory and use ignored plural local `.learnings/` stores unless explicitly exported.
@@ -42,8 +42,8 @@ Automatic behavior:
    - active turns receive a default research lens marker even before `.spark/` or `SPARK.md` exists
    - project-bound context is appended only after a graph/current project exists
    - explicit `/plan` and `/implement` remain project-bound and guide the user to create/select a project when no graph exists
-2. Compatibility initialization does not start with a generic intake template:
-   - Spark records the initial intent and builds
+2. Project-bound initialization does not include project-idea capture templates:
+   - Spark records an initial intent only when durable graph state is needed by the host/tool path and builds
      investigation/planning tasks first
    - Spark does not create placeholder projects/tasks or a
      fake current task just to populate UI; the model should
@@ -61,9 +61,9 @@ Automatic behavior:
    - the output language defaults from the current request
      language; do not ask a separate language question when the
      language is clear from context
-3. Root-file materialization is separate from always-available mode guidance:
+3. SPARK.md idea-capture workflows are external skills, not Spark product defaults:
    - `.spark/` is local runtime state and is created only when durable state is needed by the host/tool path
-   - root `SPARK.md` is only written when `.git` exists in the current cwd
+   - compatibility initialization may materialize root `SPARK.md` only when `.git` exists in the current cwd; direct commands and external skills should not rely on that as the default deliverable
 4. Natural-language detection follows command guidance:
    - ordinary input stays in default lightweight research/answering unless it explicitly needs durable planning/execution state
    - ordinary coding tasks are not intercepted
@@ -106,10 +106,10 @@ Automatic behavior:
      retryable `pending` tasks, while runtime execution timeouts
      are marked as failed runs
    - Spark workflow-run scheduler invocations are persisted outside the task graph
-     in `.spark/workflow-runs.json`; `task_read({ action: "status" })` includes the
-     workflow-run summary, last/active workflow run, unacknowledged problem
-     counts, acknowledged known-failure counts, and timeout/stale
-     signals
+     in `.spark/workflow-runs.json`; `task_read({ action: "workspace_status" })`
+     includes the workflow-run summary, last/active workflow run,
+     unacknowledged problem counts, acknowledged known-failure counts,
+     and timeout/stale signals
    - Spark lenses are per-turn and are not persisted in
      `.spark/sessions/<session>.json`; that session file keeps only
      the selected current project pointer. Goal and workflow are drivers
@@ -159,9 +159,17 @@ Automatic behavior:
      Spark resolves the claimed task, runs a read-only fresh reviewer
      through the `ReviewerRunner` boundary, persists a `kind="record"`
      artifact with `producer="review"`, and marks the task done only when the verdict approves.
-     Rejected, blocked, malformed, or failed reviewer verdicts return
-     transparent feedback (`task_review_failed`) and leave the task
-     unfinished/claimed.
+     `finish` can also accept structured `evidence` (`changedFiles`,
+     `sourceRefs`, `validationCommands`, `notes`) and Spark will create a
+     bounded task evidence artifact with `producer="task"`, `projectRef`,
+     `taskRef`, and `candidate/task` curation before the reviewer gate.
+     Finish results include structured `statusBefore`/`statusAfter`,
+     `transition.committed`, `reviewRequired`, reviewer verdict/artifact
+     refs, generated and explicit evidence refs, remaining ready tasks, and a
+     `projectCompletionCandidate` hint for the separate `project_finish`
+     transition. Rejected, blocked, malformed, or failed reviewer verdicts
+     return transparent feedback (`task_review_failed`) and leave the task
+     unfinished/claimed with a non-committed transition.
    - research/review/plan task completion has a deterministic follow-up
      disposition precheck before reviewer execution: P0/P1/P2/TODO,
      follow-up, recommended-route, next-action, or action-item signals
@@ -180,8 +188,7 @@ Automatic behavior:
    - no placeholder task content is shown when no task is claimed
    - active Spark turns include SPARK.md as persistent
      project intent in the system prompt
-   - `task_read({ action: "status" })` defaults to an active, limited diagnostic view;
-     use full history explicitly when needed
+   - `task_read({ action: "project_status" })` defaults to an active, limited diagnostic view for the current project; use `workspace_status` for broad all-project summaries and full history explicitly when needed
 7. When Spark is active, a turn hint reminds the model to
    use `task_read`, `task_write`, `assign`, `artifact`, `ask`, `role`, `learning`, `context`, `recall`, `workflow`, `pi-cue`, and `pi-graft` tools.
 8. Spark display-name quality is model-maintained when inspected context
@@ -203,8 +210,8 @@ Automatic behavior:
      about ask UX, or a claimed task titled `Investigate CI` after
      the user has narrowed the task to `Fix Node test runner flags`
    - context-supported fixes can be made without asking by using
-     `task_write({ action: "project_update" })` for project metadata and
-     `task_write({ action: "claim" })` for the claimed task. Display names are
+     `task_write({ action: "project_rename" })` or `project_metadata_update`
+     for project display/metadata and `task_write({ action: "claim" })` for the claimed task. Display names are
      mutable labels only: underlying `project:*` and `task:*` refs,
      dependency edges, runs, artifacts, and TODO state continue to
      point at the same entities after a rename

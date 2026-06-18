@@ -86,7 +86,13 @@ export function registerSparkGoalTool(
 
       if (action === "status") {
         const goal = await loadSessionGoal(cwd, ctx);
-        return goalResult(goal, action, goal ? renderGoalStatus(goal) : "No session goal is set.");
+        const relationship = describeGoalProjectRelationship(goal, graph, project);
+        return goalResult(
+          goal,
+          action,
+          goal ? renderGoalStatus(goal, relationship) : renderNoGoalStatus(relationship),
+          { goalProjectRelationship: relationship },
+        );
       }
 
       if (action === "set" || action === "start") {
@@ -159,7 +165,17 @@ export function registerSparkGoalTool(
           };
         const resumed = await updateSessionGoalStatus(cwd, ctx, "active", { retryState: null });
         await deps.refreshSparkWidget(cwd, ctx);
-        return goalResult(resumed, action, renderGoalStatus(resumed ?? existingGoal));
+        const relationship = describeGoalProjectRelationship(
+          resumed ?? existingGoal,
+          graph,
+          project,
+        );
+        return goalResult(
+          resumed,
+          action,
+          renderGoalStatus(resumed ?? existingGoal, relationship),
+          { goalProjectRelationship: relationship },
+        );
       }
       if (action === "edit") {
         const objective = normalizeGoalObjective(params.objective);
@@ -190,10 +206,16 @@ export function registerSparkGoalTool(
               reviewArtifact: editResult.reviewArtifactRef,
             },
           };
+        const relationship = describeGoalProjectRelationship(
+          editResult.goal ?? existingGoal,
+          graph,
+          project,
+        );
         return goalResult(
           editResult.goal,
           action,
-          renderGoalStatus(editResult.goal ?? existingGoal),
+          renderGoalStatus(editResult.goal ?? existingGoal, relationship),
+          { goalProjectRelationship: relationship },
         );
       }
       const autonomousPauseGuard = forbiddenAutonomousPauseResult(ctx, existingGoal, action);
@@ -222,7 +244,13 @@ export function registerSparkGoalTool(
             reviewArtifact: pauseResult.reviewArtifactRef,
           },
         };
-      return goalResult(pauseResult.goal, action, renderGoalStatus(pauseResult.goal));
+      const relationship = describeGoalProjectRelationship(pauseResult.goal, graph, project);
+      return goalResult(
+        pauseResult.goal,
+        action,
+        renderGoalStatus(pauseResult.goal, relationship),
+        { goalProjectRelationship: relationship },
+      );
     },
   });
 }
@@ -614,10 +642,15 @@ function resolveGoalObjective(
   return graph ? inferSessionGoalObjective(graph, project, independentTodos) : undefined;
 }
 
-function goalResult(goal: SparkSessionGoal | undefined, action: string, text: string) {
+function goalResult(
+  goal: SparkSessionGoal | undefined,
+  action: string,
+  text: string,
+  extraDetails: Record<string, unknown> = {},
+) {
   return {
     content: [{ type: "text" as const, text }],
-    details: { found: Boolean(goal), action, goal },
+    details: { found: Boolean(goal), action, goal, ...extraDetails },
   };
 }
 
@@ -637,7 +670,93 @@ function renderGoalActivationResult(
   return lines.join("\n");
 }
 
-function renderGoalStatus(goal: SparkSessionGoal): string {
+interface GoalProjectRelationshipDetail {
+  hasGoal: boolean;
+  durableState: "active" | "paused" | "complete" | "none";
+  currentProject?: {
+    ref: string;
+    title: string;
+    status: string;
+    unfinishedTaskCount: number;
+    readyTaskCount: number;
+  };
+  binding: "current_project" | "no_current_project";
+  note: string;
+  recommendedAction?: string;
+}
+
+function describeGoalProjectRelationship(
+  goal: SparkSessionGoal | undefined,
+  graph: TaskGraph | null,
+  project: Awaited<ReturnType<typeof currentSparkProject>>,
+): GoalProjectRelationshipDetail {
+  const currentProject =
+    graph && project
+      ? {
+          ref: project.ref,
+          title: project.title,
+          status: project.status,
+          unfinishedTaskCount: graph
+            .tasks(project.ref)
+            .filter((task) => task.status !== "done" && task.status !== "cancelled").length,
+          readyTaskCount: graph.readyTasks(project.ref).length,
+        }
+      : undefined;
+  const hasGoal = Boolean(goal);
+  const durableState = goal?.status ?? "none";
+  if (!currentProject) {
+    return {
+      hasGoal,
+      durableState,
+      binding: "no_current_project",
+      note: hasGoal
+        ? "Durable goal exists, but no current project is selected; goal work must inspect/select or create a project before claiming project tasks."
+        : "No durable goal exists and no current project is selected; historical compact summaries are hints only, not goal state.",
+      recommendedAction: hasGoal
+        ? 'task_write({ action: "project_use", project }) or task_write({ action: "project_use", title, description })'
+        : 'Inspect projects with task_read({ action: "project_list" }) or start a goal with goal({ action: "start", objective }).',
+    };
+  }
+  return {
+    hasGoal,
+    durableState,
+    currentProject,
+    binding: "current_project",
+    note: hasGoal
+      ? "Goal is session-scoped and is currently related to the selected project; project_finish does not complete the goal automatically."
+      : "No durable goal exists; the selected project can seed a new session goal, but compact/historical summaries must not be treated as current goal state.",
+    recommendedAction: hasGoal
+      ? currentProject.status === "done"
+        ? 'If the goal objective is achieved, request goal({ action: "complete" }) after reviewing project evidence.'
+        : 'Continue project work; when the project is done, use task_write({ action: "project_finish" }) and then goal({ action: "complete" }) if the goal is achieved.'
+      : 'Use goal({ action: "start" }) to infer from the current project, or goal({ action: "set", objective }) for an explicit goal.',
+  };
+}
+
+function renderNoGoalStatus(relationship: GoalProjectRelationshipDetail): string {
+  const lines = [
+    "No session goal is set in durable session state.",
+    "Historical compact summaries are context hints only; they do not prove a current goal exists.",
+  ];
+  if (relationship.currentProject) {
+    const project = relationship.currentProject;
+    lines.push(
+      `Current project: ${oneLine(project.title)} (${project.ref}) status=${project.status} unfinishedTasks=${project.unfinishedTaskCount} readyTasks=${project.readyTaskCount}.`,
+    );
+  } else {
+    lines.push("Current project: none selected; no recent project binding is available.");
+  }
+  lines.push(
+    `Goal/project relationship: ${relationship.note}`,
+    `Recommended next action: ${relationship.recommendedAction}`,
+  );
+  return lines.join("\n");
+}
+
+function renderGoalStatus(
+  goal: SparkSessionGoal,
+  relationship: GoalProjectRelationshipDetail,
+): string {
   const lines = [`Spark session goal ${goal.status}`, `Goal: ${oneLine(goal.objective)}`];
   const reason = goal.pauseReason ?? goal.completedReason;
   if (reason) lines.push(`Reason: ${reason}`);
@@ -649,6 +768,17 @@ function renderGoalStatus(goal: SparkSessionGoal): string {
     lines.push(
       `Retry state: ${goal.retryState.consecutiveFailures} failure(s), nextDelayMs=${goal.retryState.nextDelayMs ?? "unknown"}.`,
     );
+  if (relationship.currentProject) {
+    const project = relationship.currentProject;
+    lines.push(
+      `Current project: ${oneLine(project.title)} (${project.ref}) status=${project.status} unfinishedTasks=${project.unfinishedTaskCount} readyTasks=${project.readyTaskCount}.`,
+    );
+  } else {
+    lines.push("Current project: none selected for this session goal.");
+  }
+  lines.push(`Goal/project relationship: ${relationship.note}`);
+  if (relationship.recommendedAction)
+    lines.push(`Recommended next action: ${relationship.recommendedAction}`);
   lines.push(
     'Actions: goal({ action: "status" }), goal({ action: "resume" }), goal({ action: "edit", objective, reason }), goal({ action: "complete" }), goal({ action: "clear" }), goal({ action: "start" }); active goal work may use reviewer-backed ask auto-answer for decisions, completion is reviewer-gated (main session requests, reviewer audits, Spark applies approved state), and autonomous pause is forbidden.',
   );

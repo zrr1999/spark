@@ -113,7 +113,7 @@ function workflowRunNextActions(run: WorkflowRunRecord): string[] {
     );
   if (run.completed < run.scheduled)
     nextActions.push(
-      'Review incomplete scheduled task runs in task_read({ action: "status", view: "full" }) before launching another workflow wave.',
+      'Review incomplete scheduled task runs in task_read({ action: "project_status", view: "full" }) before launching another workflow wave.',
     );
   if (nextActions.length === 0)
     nextActions.push("Review task outputs and continue with newly unblocked ready tasks if any.");

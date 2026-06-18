@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
-import { defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
+import { defaultTaskGraphStore, type TaskGraph } from "@zendev-lab/pi-tasks";
+import type { Project, ProjectRef, Task } from "@zendev-lab/pi-extension-api";
 import { reconcileSparkWorkflowRunsWithActiveProcesses } from "./background-runs.ts";
 import { collectRecentRoleRunCompletions } from "./role-run-completions.ts";
 import {
@@ -20,6 +21,7 @@ import { loadSessionGoal } from "./spark-session-goals.ts";
 import {
   normalizeSparkStatusFormat,
   normalizeSparkStatusLimit,
+  normalizeSparkStatusScope,
   normalizeSparkStatusShowFinished,
   normalizeSparkStatusView,
 } from "./spark-status.ts";
@@ -40,8 +42,31 @@ export function registerSparkStatusTool(
     name: "spark_status",
     label: "Spark Status",
     description:
-      'Compatibility surface for task_read({ action: "status" }): show Spark project/task status. Defaults to an active view focused on unfinished work and current session state; use view=full for all history.',
+      "Internal implementation for task_read scoped status actions: workspace_status, project_status, and task_status. Defaults to an active view focused on unfinished work and current session state; use view=full for history.",
     parameters: Type.Object({
+      scope: Type.Optional(
+        Type.String({
+          default: "workspace",
+          description:
+            "workspace | project | task. task_read sets this internally from task_status/project_status/workspace_status.",
+        }),
+      ),
+      project: Type.Optional(Type.String({ description: "Project selector/ref/title." })),
+      projectRef: Type.Optional(Type.String({ description: "Project ref/title selector." })),
+      task: Type.Optional(Type.String({ description: "Task selector/ref/name/title." })),
+      taskRef: Type.Optional(Type.String({ description: "Task ref/name/title selector." })),
+      includeWorkspaceSummary: Type.Optional(
+        Type.Boolean({
+          default: false,
+          description: "For project/task scopes, include broad workspace summary fields.",
+        }),
+      ),
+      includeStateSummary: Type.Optional(
+        Type.Boolean({
+          default: false,
+          description: "Include Spark state/cache summary regardless of view.",
+        }),
+      ),
       view: Type.Optional(
         Type.String({
           default: "active",
@@ -96,6 +121,7 @@ export function registerSparkStatusTool(
         };
       }
       if (ensureSparkGraphInvariants(graph)) await saveSparkGraphAndTodos(cwd, graph, ctx, store);
+      const scope = normalizeSparkStatusScope(params);
       const view = normalizeSparkStatusShowFinished(params)
         ? "full"
         : normalizeSparkStatusView(params);
@@ -111,23 +137,49 @@ export function registerSparkStatusTool(
       const sessionKey = sparkSessionKey(ctx);
       const independentTodos = await loadIndependentTodos(cwd, ctx);
       const currentProject = await currentSparkProject(cwd, ctx, graph);
+      const scoped = resolveSparkStatusScope(graph, currentProject, params, scope);
+      if (!scoped.ok)
+        return {
+          content: [{ type: "text", text: scoped.message }],
+          details: {
+            found: false,
+            scope,
+            error: scoped.error,
+            selector: scoped.selector,
+            format,
+          },
+        };
+      const includeWorkspaceSummary = normalizeSparkStatusBoolean(
+        params.includeWorkspaceSummary,
+        false,
+        "includeWorkspaceSummary",
+      );
+      const includeStateSummary = normalizeSparkStatusBoolean(
+        params.includeStateSummary,
+        false,
+        "includeStateSummary",
+      );
       const sessionGoal = await loadSessionGoal(cwd, ctx);
       const recentRoleRunCompletions =
         view === "summary"
           ? []
           : collectRecentRoleRunCompletions({
               graph,
-              projectRef: currentProject?.ref,
+              projectRef: scoped.project?.ref ?? currentProject?.ref,
               limit: DEFAULT_SPARK_STATUS_RECENT_COMPLETIONS_LIMIT,
             });
       const state =
-        view === "full"
+        view === "full" || includeStateSummary
           ? await collectSparkStateHousekeeping(cwd, sparkStateSessionScopes(ctx), graph)
           : undefined;
       const rendered = renderSparkStatus({
         graph,
+        scope,
         view,
         taskLimit,
+        targetProjectRef: scoped.project?.ref,
+        targetTaskRef: scoped.task?.ref,
+        includeWorkspaceSummary,
         sessionKey,
         currentProject,
         workflowRunStatus,
@@ -159,6 +211,99 @@ export function registerSparkStatusTool(
       };
     },
   });
+}
+
+type SparkStatusScopeResolution =
+  | { ok: true; project?: Project; task?: Task }
+  | { ok: false; error: string; message: string; selector?: string };
+
+function resolveSparkStatusScope(
+  graph: TaskGraph,
+  currentProject: Project | undefined,
+  params: Record<string, unknown>,
+  scope: "workspace" | "project" | "task",
+): SparkStatusScopeResolution {
+  if (scope === "workspace") return { ok: true };
+  const projectSelector = normalizeOptionalSparkStatusSelector(
+    params.projectRef ?? params.project,
+    "project",
+  );
+  const taskSelector = normalizeOptionalSparkStatusSelector(params.taskRef ?? params.task, "task");
+  if (scope === "project") {
+    const project = projectSelector
+      ? resolveSparkStatusProject(graph, projectSelector)
+      : currentProject;
+    if (!project)
+      return {
+        ok: false,
+        error: projectSelector ? "project_not_found" : "no_current_project",
+        selector: projectSelector,
+        message: projectSelector
+          ? `No Spark project matched ${projectSelector}. Use projectRef=proj:... or inspect task_read({ action: "project_list" }).`
+          : `${NO_SPARK_PROJECT_FOUND_HINT} Use task_read({ action: "workspace_status" }) or task_read({ action: "project_list" }) to inspect projects first.`,
+      };
+    return { ok: true, project };
+  }
+  if (!taskSelector)
+    return {
+      ok: false,
+      error: "task_selector_required",
+      message:
+        'task_status requires task or taskRef. Use task_read({ action: "project_status" }) for a project view or pass taskRef="task:...".',
+    };
+  const project = projectSelector
+    ? resolveSparkStatusProject(graph, projectSelector)
+    : currentProject;
+  if (projectSelector && !project)
+    return {
+      ok: false,
+      error: "project_not_found",
+      selector: projectSelector,
+      message: `No Spark project matched ${projectSelector}. Use projectRef=proj:... or omit projectRef when taskRef is globally unique.`,
+    };
+  const task = resolveSparkStatusTask(graph, taskSelector, project?.ref);
+  if (!task)
+    return {
+      ok: false,
+      error: "task_not_found",
+      selector: taskSelector,
+      message: project
+        ? `No Spark task matched ${taskSelector} in project ${project.title} (${project.ref}).`
+        : `No Spark task matched ${taskSelector}. Use taskRef=task:..., @name, or exact title.`,
+    };
+  const ownerProject = graph.getProject(task.projectRef);
+  return { ok: true, project: ownerProject, task };
+}
+
+function normalizeOptionalSparkStatusSelector(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") throw new Error(`spark_status ${field} must be a string`);
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function resolveSparkStatusProject(graph: TaskGraph, selector: string): Project | undefined {
+  const needle = selector.trim();
+  return graph.projects().find((project) => project.ref === needle || project.title === needle);
+}
+
+function resolveSparkStatusTask(
+  graph: TaskGraph,
+  selector: string,
+  projectRef?: ProjectRef,
+): Task | undefined {
+  const needle = selector.trim();
+  const normalized = needle.startsWith("@") ? needle.slice(1) : needle;
+  return graph
+    .tasks(projectRef)
+    .find(
+      (task) =>
+        task.ref === needle ||
+        task.ref === normalized ||
+        task.name === normalized ||
+        task.title === needle ||
+        task.title === normalized,
+    );
 }
 
 function normalizeSparkStatusBoolean(value: unknown, fallback: boolean, field: string): boolean {

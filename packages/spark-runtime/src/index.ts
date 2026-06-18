@@ -799,7 +799,7 @@ function taskTodoInstructionRank(todo: TaskTodo): number {
 
 function boundTaskRoleInstruction(instruction: string): string {
   if (instruction.length <= MAX_TASK_ROLE_INSTRUCTION_CHARS) return instruction;
-  return `${instruction.slice(0, MAX_TASK_ROLE_INSTRUCTION_CHARS).trimEnd()}\n\n… task instruction truncated; inspect task_read({ action: "status" }) and artifact({ action: "read" }) if more context is needed.`;
+  return `${instruction.slice(0, MAX_TASK_ROLE_INSTRUCTION_CHARS).trimEnd()}\n\n… task instruction truncated; inspect task_read({ action: "task_status", taskRef: "task:..." }) and artifact({ action: "read" }) if more context is needed.`;
 }
 
 function createRoleRunArtifactBody(input: {
@@ -1216,7 +1216,7 @@ function sparkRoleRunGuidance(): string {
     "",
     "Spark naming quality policy:",
     "- Judge whether the active project title and your task @name/title are placeholder, generic, stale, too broad, or inconsistent with the current instruction.",
-    '- When the improvement is obvious, update Spark display names without asking: use task_write({ action: "project_update" }) for the project, and task_write({ action: "claim" }) with the existing task ref/name intent to improve your claimed task @name/title/description. Stable refs must remain unchanged.',
+    '- When the improvement is obvious, update Spark display names without asking: use task_write({ action: "project_rename" }) for the project title, project_metadata_update for project metadata, and task_write({ action: "claim" }) with the existing task ref/name intent to improve your claimed task @name/title/description. Stable refs must remain unchanged.',
     "- Preserve user-specific intentional names and distinctive project/code names; ask only if multiple plausible names require a real user decision.",
   ].join("\n");
 }

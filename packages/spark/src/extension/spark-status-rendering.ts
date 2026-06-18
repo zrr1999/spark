@@ -1,6 +1,11 @@
 import type { TaskGraph, SessionTodoEntry } from "@zendev-lab/pi-tasks";
 import { isUnfinishedTaskStatus } from "@zendev-lab/pi-tasks";
-import type { TaskRunCompletionSummary, TaskStatus } from "@zendev-lab/pi-extension-api";
+import type {
+  ProjectRef,
+  TaskRef,
+  TaskRunCompletionSummary,
+  TaskStatus,
+} from "@zendev-lab/pi-extension-api";
 import type { WorkflowRunControl, WorkflowRunStatusSummary } from "@zendev-lab/pi-workflows";
 import { appendRecentRoleRunCompletionLines } from "./role-run-completions.ts";
 import type { SparkSessionGoal } from "./spark-session-goals.ts";
@@ -19,6 +24,7 @@ import {
   isImportantStatus,
   shouldRenderProjectInSparkStatus,
   sortTasksForStatusVisibility,
+  type SparkStatusScope,
   type SparkStatusView,
 } from "./spark-status.ts";
 import type { SparkStateHousekeepingSummary } from "./state-housekeeping.ts";
@@ -39,8 +45,12 @@ export const DEFAULT_SPARK_STATUS_RECENT_COMPLETIONS_LIMIT = 5;
 
 export interface SparkStatusRenderInput {
   graph: TaskGraph;
+  scope?: SparkStatusScope;
   view: SparkStatusView;
   taskLimit: number | undefined;
+  targetProjectRef?: ProjectRef;
+  targetTaskRef?: TaskRef;
+  includeWorkspaceSummary?: boolean;
   sessionKey: string;
   currentProject?: ReturnType<TaskGraph["projects"]>[number];
   workflowRunStatus: WorkflowRunStatusSummary;
@@ -56,12 +66,16 @@ export function renderSparkStatus(input: SparkStatusRenderInput): {
   details: Record<string, unknown>;
   compactDetails: Record<string, unknown>;
 } {
+  const scope = input.scope ?? "workspace";
+  const includeWorkspaceSummary = scope === "workspace" || input.includeWorkspaceSummary === true;
   const lines = [
-    `Spark tasks (${input.view} view${typeof input.taskLimit === "number" ? `, limit=${input.taskLimit}` : ""}):`,
+    `Spark ${scope === "workspace" ? "tasks" : `${scope} status`} (${input.view} view${typeof input.taskLimit === "number" ? `, limit=${input.taskLimit}` : ""}):`,
   ];
-  if (input.runControl) lines.push(sparkRunControlStatusLine(input.runControl));
-  appendWorkflowRunStatusLines(lines, input.view, input.workflowRunStatus);
-  if (input.recentRoleRunCompletions.length > 0)
+  if (includeWorkspaceSummary && input.runControl)
+    lines.push(sparkRunControlStatusLine(input.runControl));
+  if (includeWorkspaceSummary)
+    appendWorkflowRunStatusLines(lines, input.view, input.workflowRunStatus);
+  if (includeWorkspaceSummary && input.recentRoleRunCompletions.length > 0)
     appendRecentRoleRunCompletionLines(lines, input.recentRoleRunCompletions);
   if (input.view === "active" && !input.currentProject)
     lines.push(
@@ -70,21 +84,41 @@ export function renderSparkStatus(input: SparkStatusRenderInput): {
 
   const renderedProjectDetails = renderProjectStatusLines(lines, input);
   if (renderedProjectDetails.length === 0) lines.push("\nNo Spark projects matched this view.");
-  const independentTodoDetails = appendIndependentTodoStatusLines(lines, input);
+  const independentTodoDetails = includeWorkspaceSummary
+    ? appendIndependentTodoStatusLines(lines, input)
+    : emptyIndependentTodoDetails();
   if (input.state) appendSparkStateHousekeepingLines(lines, input.state);
 
+  const selectedProject = input.targetProjectRef
+    ? renderedProjectDetails.find((project) => project.ref === input.targetProjectRef)
+    : undefined;
+  const selectedTask = input.targetTaskRef
+    ? selectedProject?.tasks instanceof Array
+      ? selectedProject.tasks.find(
+          (task): task is Record<string, unknown> =>
+            isRecord(task) && task.ref === input.targetTaskRef,
+        )
+      : undefined
+    : undefined;
   const details = {
     found: true,
+    scope,
     view: input.view,
     limit: input.taskLimit,
     activeProjectRef: input.currentProject?.ref,
+    selectedProject,
+    selectedTask,
     renderedProjects: renderedProjectDetails,
-    independentTodos: independentTodoDetails,
-    projects: compactProjectStatusSummaries(input.graph, input.sessionKey),
-    workflowRunStatus: input.workflowRunStatus,
-    runControl: input.runControl,
+    ...(includeWorkspaceSummary ? { independentTodos: independentTodoDetails } : {}),
+    ...(includeWorkspaceSummary
+      ? { projects: compactProjectStatusSummaries(input.graph, input.sessionKey) }
+      : {}),
+    ...(includeWorkspaceSummary ? { workflowRunStatus: input.workflowRunStatus } : {}),
+    ...(includeWorkspaceSummary ? { runControl: input.runControl } : {}),
     sessionGoal: input.sessionGoal,
-    recentRoleRunCompletions: input.recentRoleRunCompletions,
+    ...(includeWorkspaceSummary
+      ? { recentRoleRunCompletions: input.recentRoleRunCompletions }
+      : {}),
     ...(input.state ? { state: input.state } : {}),
   };
   return {
@@ -118,29 +152,55 @@ function compactSparkStatusDetails(
         .readyTasks(input.currentProject.ref)
         .filter((task) => isImportantStatus(task.status))
     : [];
+  const scope = input.scope ?? "workspace";
+  const includeWorkspaceSummary = scope === "workspace" || input.includeWorkspaceSummary === true;
+  const selectedProject = input.targetProjectRef
+    ? renderedProjectDetails.find((project) => project.ref === input.targetProjectRef)
+    : undefined;
+  const selectedTask = input.targetTaskRef
+    ? selectedProject?.tasks instanceof Array
+      ? selectedProject.tasks.find(
+          (task): task is Record<string, unknown> =>
+            isRecord(task) && task.ref === input.targetTaskRef,
+        )
+      : undefined
+    : undefined;
   return {
     found: true,
     compact: true,
+    scope,
     view: input.view,
     limit: input.taskLimit,
     activeProjectRef: input.currentProject?.ref,
+    selectedProject: selectedProject
+      ? compactRenderedProjectDecisionDetail(selectedProject)
+      : undefined,
+    selectedTask,
     activeProject: input.currentProject
       ? compactProjectDecisionDetail(input, currentProjectTasks)
       : undefined,
     currentClaim: currentClaim ? compactTaskDecisionDetail(input, currentClaim) : undefined,
     ready: readyTasks.slice(0, taskLimit).map((task) => compactTaskDecisionDetail(input, task)),
     renderedProjects: renderedProjectDetails.map(compactRenderedProjectDecisionDetail),
-    independentTodos: compactIndependentTodoDecisionDetail(independentTodoDetails),
-    workflowRunStatus: compactWorkflowRunDecisionDetail(input.workflowRunStatus),
-    runControl: input.runControl
+    ...(includeWorkspaceSummary
+      ? { independentTodos: compactIndependentTodoDecisionDetail(independentTodoDetails) }
+      : {}),
+    ...(includeWorkspaceSummary
+      ? { workflowRunStatus: compactWorkflowRunDecisionDetail(input.workflowRunStatus) }
+      : {}),
+    ...(includeWorkspaceSummary
       ? {
-          status: input.runControl.status,
-          projectRef: input.runControl.projectRef,
-          focus: input.runControl.focus,
-          maxConcurrency: input.runControl.policy.maxConcurrency,
-          timeoutMs: input.runControl.policy.timeoutMs,
+          runControl: input.runControl
+            ? {
+                status: input.runControl.status,
+                projectRef: input.runControl.projectRef,
+                focus: input.runControl.focus,
+                maxConcurrency: input.runControl.policy.maxConcurrency,
+                timeoutMs: input.runControl.policy.timeoutMs,
+              }
+            : undefined,
         }
-      : undefined,
+      : {}),
     sessionGoal: input.sessionGoal
       ? {
           status: input.sessionGoal.status,
@@ -318,16 +378,18 @@ function renderProjectStatusLines(
 ): Array<Record<string, unknown>> {
   const renderedProjectDetails: Array<Record<string, unknown>> = [];
   for (const project of input.graph.projects()) {
+    if (input.targetProjectRef && project.ref !== input.targetProjectRef) continue;
     const tasks = input.graph.tasks(project.ref);
     const claimed = tasks.filter((task) => taskClaimedBy(task));
     const sessionClaimed = claimed.filter((task) => isClaimOwnedBySession(task, input.sessionKey));
     const statusCounts = countTaskStatuses(tasks);
     const readyTasks = input.graph.readyTasks(project.ref);
     const readyTaskRefs = new Set(readyTasks.map((task) => task.ref));
-    const allVisibleTasks = sortTasksForStatusVisibility(
-      tasks.filter((task) => isImportantStatus(task.status)),
-    );
+    const allVisibleTasks = input.targetTaskRef
+      ? tasks.filter((task) => task.ref === input.targetTaskRef)
+      : sortTasksForStatusVisibility(tasks.filter((task) => isImportantStatus(task.status)));
     if (
+      !input.targetProjectRef &&
       !shouldRenderProjectInSparkStatus({
         view: input.view,
         projectRef: project.ref,
@@ -387,6 +449,10 @@ function renderProjectStatusLines(
       const reasonText = reason ? ` | reason: ${truncateInline(reason, 120)}` : "";
       lines.push(
         `  Session goal: ${input.sessionGoal.status} | ${truncateInline(input.sessionGoal.objective, 180)}${reasonText}`,
+      );
+    } else if (isCurrent) {
+      lines.push(
+        '  Session goal: none in durable session state; historical compact summaries are hints only. Use goal({ action: "start" }) to bind a goal to this project when needed.',
       );
     }
     if (hiddenByView > 0)
@@ -544,6 +610,10 @@ function appendIndependentTodoStatusLines(
       notes: todo.notes,
     })),
   };
+}
+
+function emptyIndependentTodoDetails(): Record<string, unknown> {
+  return { total: 0, hidden: 0, todos: [] };
 }
 
 function sparkRunControlStatusLine(control: WorkflowRunControl): string {

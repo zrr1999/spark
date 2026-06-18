@@ -16,7 +16,7 @@ The standalone `spark` command is published by `@zendev-lab/spark-cli` and built
 Spark now has two supported host targets:
 
 - **Pi extension host**: `packages/spark/src/extension/` is loaded by `@earendil-works/pi-coding-agent` through Pi's normal extension/package discovery. This remains the canonical Spark command and tool surface inside Pi, centered on ordinary default research behavior plus `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow`.
-- **Spark CLI native host**: `apps/spark` starts `SparkHostRuntime` directly on `@earendil-works/pi-tui`, loads retained builtin extensions through explicit factories (`@zendev-lab/pi-ask`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-graft`, `@zendev-lab/spark`), registers providers such as `baidu-oneapi`, discovers Spark skills from builtin/workspace/user layers, and runs turns through `@earendil-works/pi-ai`.
+- **Spark CLI native host**: `apps/spark` starts `SparkHostRuntime` directly on `@earendil-works/pi-tui`, loads retained builtin extensions through explicit factories (`@zendev-lab/pi-ask`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-graft`, `@zendev-lab/spark`), registers providers such as `baidu-oneapi`, discovers workspace/user skills, and runs turns through `@earendil-works/pi-ai`. Spark product defaults no longer bundle project-idea or SPARK.md creation prompts; those live in external skills such as `project-spark`.
 
 The extension packages depend on the shared `@zendev-lab/pi-extension-api` contract, not on Pi's concrete SDK package. Host-specific code belongs under `apps/spark/src/host/` and TUI wrappers under `apps/spark/src/tui/`; the Pi extension implementation should stay usable by Pi without importing spark-cli.
 

@@ -97,6 +97,7 @@ export interface TaskTodoOp {
     | "append"
     | "start"
     | "done"
+    | "upsert_done"
     | "block"
     | "cancel"
     | "delete"

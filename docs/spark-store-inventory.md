@@ -97,8 +97,8 @@ Legacy import-only paths after V2 cutover:
 
 Migration/doctor rules:
 
-1. `spark_state({ action: "doctor" })` reports discovered V1 stores, target V2 paths, conflicts, and whether hard cutover can proceed.
-2. `spark_state({ action: "migrate-v2", dryRun: true })` previews backup/import/index actions; `dryRun: false` creates a timestamped `.spark/backups/store-v2-*` backup, imports legacy state into V2 owner stores, and rebuilds indexes. The apply path is idempotent and leaves legacy files import-only for manual verification/removal.
+1. `spark_state({ action: "state_doctor" })` reports discovered V1 stores, target V2 paths, conflicts, and whether hard cutover can proceed.
+2. `spark_state({ action: "store_v2_migrate", dryRun: true })` previews backup/import/index actions; `dryRun: false` creates a timestamped `.spark/backups/store-v2-*` backup, imports legacy state into V2 owner stores, and rebuilds indexes. The apply path is idempotent and leaves legacy files import-only for manual verification/removal.
 3. Runtime V2 code must not dual-write V1 and V2 stores. If a V2 canonical store is missing, fail with an actionable migration diagnostic instead of reading legacy state implicitly.
 4. Index rebuilds may delete and recreate `.spark/sessions/index.json`, `.spark/projects/index.json`, `.spark/reviews/index.json`, and `.spark/cache/index.sqlite`; they must not rewrite canonical owner files except through typed repair actions.
 5. Review gate policy is transition logic. Review records are entities owned by their task, project, or session goal; a global `reviews/gate.json` is not part of V2.

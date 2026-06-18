@@ -68,6 +68,7 @@ function renderActiveSparkProjectSummary(
   const sessionClaimed = claimed.filter((task) => isClaimOwnedBySession(task, sessionKey));
   const lines = [
     strings.header,
+    strings.durableStateHint,
     strings.currentProjectLine(project.title, project.ref),
     strings.taskCountsLine({
       unfinished: unfinishedTasks.length,
@@ -136,6 +137,7 @@ function renderNoCurrentSparkProjectSummary(
   const activeProjects = projects.filter((project) => project.status !== "done");
   const lines = [
     strings.noProjectHeader,
+    strings.durableStateHint,
     strings.projectsCountsLine(projects.length, activeProjects.length),
   ];
   if (sessionGoal) {

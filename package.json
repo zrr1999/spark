@@ -2,7 +2,7 @@
   "name": "spark",
   "version": "0.1.0",
   "private": true,
-  "description": "Spark suite for Pi: idea-to-task graph workflow with controlled agents, tasks, artifacts, review, ask, and cue execution primitives.",
+  "description": "Spark suite for Pi: project/task orchestration with controlled agents, artifacts, review, ask, and cue execution primitives.",
   "keywords": [
     "agentic-workflow",
     "pi",
@@ -40,7 +40,8 @@
     "verify:navia": "pnpm run navia:check && pnpm run navia:test && pnpm run navia:build",
     "verify:merged": "pnpm run check:boundaries && pnpm run check:tsc && pnpm test && pnpm run verify:navia",
     "navia:web": "pnpm --filter @zendev-lab/navia-web run dev",
-    "navia:runner": "pnpm --filter @zendev-lab/navia-runner"
+    "navia:runner": "pnpm --filter @zendev-lab/navia-runner run cli",
+    "navia:install": "pnpm --filter @zendev-lab/navia-runner run build && node scripts/link-navia-runner.mjs"
   },
   "dependencies": {
     "@zendev-lab/pi-artifacts": "workspace:^",

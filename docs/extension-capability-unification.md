@@ -51,7 +51,7 @@ Domain-specific command families that are not duplicated by Spark, such as `pi-c
 
 Spark should not own generic mechanisms. It should provide:
 
-- Spark compatibility entry plus `/research`, `/plan`, `/implement`, `/goal`, `/workflow` commands.
+- Spark default research behavior plus `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow` commands.
 - Spark research-default mode prompt and activation rules.
 - Spark context providers over active project/task/workflow state.
 - Spark function/workflow presets and orchestration policy.
@@ -155,8 +155,8 @@ Exports live in `pi-tasks` after promotion:
 Canonical tools:
 
 ```ts
-task_read({ action: "status" | "project_list" | "run_status", ... })
-task_write({ action: "project_use" | "project_update" | "claim" | "plan" | "finish" | "todo_update" | "cache_cleanup", ... })
+task_read({ action: "task_status" | "project_status" | "workspace_status" | "project_list" | "run_status", ... })
+task_write({ action: "project_use" | "project_finish" | "project_rename" | "project_status_update" | "project_metadata_update" | "claim" | "plan" | "finish" | "todo_update" | "cache_cleanup", ... })
 assign({ dryRun?: boolean, maxConcurrency?: number, timeoutMs?: number })
 ```
 
@@ -164,16 +164,21 @@ Actions:
 
 | Surface/action                | Required inputs                                                 | Controlled behavior                                                | Replaces / borrows from                                      |
 | ----------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------ |
-| `task_read.status`            | optional `view`, `limit`, `format`                              | active view by default, bounded output                             | `spark_status`                                               |
+| `task_read.task_status`       | task selector plus optional `view`, `limit`, `format`           | one-task scoped status; no unrelated projects by default           | `spark_status` scoped internally                             |
+| `task_read.project_status`    | project selector or current project plus optional view/format   | one-project scoped status; no unrelated projects by default        | `spark_status` scoped internally                             |
+| `task_read.workspace_status`  | optional `view`, `limit`, `format`                              | explicit broad workspace status                                    | `spark_status` scoped internally                             |
 | `task_read.project_list`      | optional status filter                                          | read-only                                                          | `spark_list_projects`                                        |
 | `task_read.run_status`        | run/task/project selectors                                      | read/reconcile status                                              | `spark_background_runs`, `spark_dag_manager status`          |
 | `task_write.project_use`      | existing selector or creation input                             | session-scoped selection; project creation through graph API       | `spark_use_project`                                          |
-| `task_write.project_update`   | project selector + explicit changed fields                      | no arbitrary patch                                                 | `spark_rename_project`                                       |
+| `task_write.project_finish`   | project selector + optional summary                             | refuses unfinished tasks; marks project done only through finish   | `spark_rename_project` scoped internally                     |
+| `task_write.project_rename`   | project selector + title                                        | title-only rename                                                  | `spark_rename_project` scoped internally                     |
+| `task_write.project_status_update` | project selector + status/reason                         | non-finish status transitions; done routes to project_finish       | `spark_rename_project` scoped internally                     |
+| `task_write.project_metadata_update` | project selector + description/purpose/outputLanguage    | metadata-only updates                                              | `spark_rename_project` scoped internally                     |
 | `task_write.claim`            | stable task identity + plan metadata when creating/updating     | one unfinished claim per session                                   | `spark_claim_task`                                           |
 | `task_write.plan`             | concrete tasks with plan/readiness fields                       | blocks open questions and missing evidence/steps                   | `spark_plan_tasks`                                           |
 | `task_write.finish`           | claimed task + terminal status + summary                        | completion evidence check remains enforced                         | `spark_finish_task`                                          |
 | `task_write.todo_update`      | `scope: "session" \| "task"`, ops array, optional task selector | task scope requires a current claimed task unless explicit owner   | `spark_update_todos`, `spark_update_task_todos`, `rpiv-todo` |
-| `task_write.cache_cleanup`    | `dryRun` default true, staleness options                        | only task-owned/session TODO caches; protected graph never deleted | safe subset of `spark_state cleanup`                         |
+| `task_write.cache_cleanup`    | `dryRun` default true, staleness options                        | only task-owned/session TODO caches; protected graph never deleted | safe subset of `spark_state({ action: "cache_cleanup" })`                         |
 | `assign`                     | dryRun default true, concurrency/timeout                        | explicit ready-frontier scheduling/spawn surface                   | `spark_run_ready_tasks`, workflow runtime async UX           |
 
 TODO is not a separate package or tool. It is a sub-action of the canonical task-write capability.
@@ -259,7 +264,7 @@ Actions:
 | `status`        | optional detail level                                       | provider budgets, token estimates, skipped reasons                   | `context-mode ctx_stats`, `pi-lens /lens-health`                                      |
 | `handoff`       | reason + typed summary fields or generated provider summary | writes artifact/recall candidate; no arbitrary system injection      | `pi-memory session_before_compact`, `gentle-engram mem_session_summary`               |
 | `reinject`      | provider/budget/reason                                      | sends provider-generated hidden context only                         | current `spark-active-injection.ts`                                                   |
-| `cache_cleanup` | dryRun default true                                         | session/context caches only; protected task/artifact stores excluded | safe subset of `spark_state cleanup`                                                  |
+| `cache_cleanup` | dryRun default true                                         | session/context caches only; protected task/artifact stores excluded | safe subset of `spark_state({ action: "cache_cleanup" })`                                                  |
 
 Provider contract:
 
@@ -320,11 +325,11 @@ Execution and workflow-run retention remain host/Spark policy rather than public
 
 `packages/spark` should register Spark commands and Spark-specific providers/policy only:
 
-- Spark compatibility entry
-- `/research`
+- Spark default research behavior
 - `/plan`
 - `/implement`
 - `/goal`
+- `/loop`
 - `/workflow`
 - Spark context provider registration
 - Spark function/workflow presets over core roles
@@ -336,10 +341,10 @@ It should not register duplicate canonical tools for task, artifact, ask, role, 
 
 | Current tool/command                      | Canonical replacement                                                                              | Keep?              | Notes                                                                   |
 | ----------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------ | ----------------------------------------------------------------------- |
-| `spark_status`                            | `task_read({ action: "status" })` plus owner-specific status/context diagnostics                        | No long-term alias | Status rendering can stay shared internally.                            |
+| `spark_status`                            | `task_read({ action: "workspace_status" })`, `project_status`, or `task_status` by scope                    | Internal only       | Status rendering can stay shared internally; broad status must be explicit. |
 | `spark_list_projects`                     | `task_read({ action: "project_list" })`                                                                 | No                 | Generic task capability owns project lists.                             |
 | `spark_use_project`                       | `task_write({ action: "project_use" })`                                                                  | No                 | Session-scoped selection remains.                                       |
-| `spark_rename_project`                    | `task_write({ action: "project_update" })`                                                               | No                 | Rename/status/output language under explicit fields.                    |
+| `spark_rename_project`                    | `task_write({ action: "project_rename" })`, `project_metadata_update`, `project_status_update`, or `project_finish` | Internal only      | Project mutations are intent-specific; finish is gated on no unfinished tasks. |
 | `spark_claim_task`                        | `task_write({ action: "claim" })`                                                                        | No                 | Preserve one-claim-per-session rule.                                    |
 | `spark_plan_tasks`                        | `task_write({ action: "plan" })`                                                                         | No                 | Preserve readiness blocking rules.                                      |
 | `spark_finish_task`                       | `task_write({ action: "finish" })`                                                                       | No                 | Preserve completion evidence requirement.                               |
@@ -348,10 +353,10 @@ It should not register duplicate canonical tools for task, artifact, ask, role, 
 | `spark_run_ready_tasks`                   | `assign({ dryRun: true })`                                                                    | No                 | Spark role scheduling remains an adapter behind task capability.        |
 | `spark_background_runs`                   | `task_read({ action: "run_status" })`                                                            | No                 | Read/reconcile status remains visible; public run_control is not default. |
 | `spark_dag_manager`                       | `task_read({ action: "run_status" })` / internal workflow-run maintenance                         | No                 | Low-level compatibility/debug surface is not canonical.                 |
-| `spark_state status/doctor`               | owner-specific status actions                                                                      | No                 | Avoid one broad state dumping ground.                                   |
-| `spark_state cleanup`                     | `task_write({ action: "cache_cleanup" })` plus owner-specific cleanup actions                            | No                 | Owner-scoped dry-run cleanup only.                                      |
-| `spark_state prune`                       | Spark workflow-run retention policy                                                                | No                 | Workflow-run store owner handles retention; not a public workflow tool action. |
-| `spark_state compact-role-run-artifacts`  | `artifact({ action: "compact" })`                                                                  | No                 | Artifact owner handles blob retention.                                  |
+| `spark_state({ action: "state_status" | "state_doctor" })` | owner-specific state status and doctor actions | No | Avoid one broad state dumping ground. |
+| `spark_state({ action: "cache_cleanup" })` | `task_write({ action: "cache_cleanup" })` plus owner-specific cleanup actions | No | Owner-scoped dry-run cleanup only. |
+| `spark_state({ action: "workflow_run_prune" })` | Spark workflow-run retention policy | No | Workflow-run store owner handles retention; not a public workflow tool action. |
+| `spark_state({ action: "role_run_artifact_compact" })` | `artifact({ action: "compact" })` | No | Artifact owner handles blob retention. |
 | `spark_list_artifacts`                    | `artifact({ action: "list" })`                                                                     | No                 | Generic artifact capability.                                            |
 | `spark_get_artifact`                      | `artifact({ action: "read" })`                                                                     | No                 | Generic artifact capability.                                            |
 | `spark_ask`                               | `ask({ action: "ask", persistence: { artifact: true }, ... })`                                     | No                 | Pi ask owns UI and persistence adapter.                                 |
@@ -372,7 +377,7 @@ It should not register duplicate canonical tools for task, artifact, ask, role, 
 | `spark_learning_export_markdown`          | `learning({ action: "export_markdown" })`                                                          | No                 | Generic export.                                                         |
 | `spark_learning_import_markdown`          | `learning({ action: "import_markdown" })`                                                          | No                 | Generic import.                                                         |
 | Spark compatibility entry                   | Spark compatibility entry                                            | Yes                | Retained for existing callers; new guidance should prefer canonical tools and explicit mode commands. |
-| `/research`, `/plan`, `/implement`, `/goal` | same                                                                 | Yes                | Spark mode commands.                                                    |
+| default research behavior, `/plan`, `/implement`, `/goal`, `/loop` | same                                                                 | Yes                | Spark mode/driver surfaces.                                             |
 | `/workflow`                                 | `/workflow` through Spark host/runtime policy over saved workflows   | Yes                | Saved scripts only.                                                     |
 | `/workflow:goal`                          | none                                                                                               | No                 | Goal is not workflow.                                                   |
 | `cue_*`, `graft_*`                        | unchanged for this pass                                                                            | Yes                | Not duplicated Spark concepts; explicit schemas remain safer until a dedicated migration is designed. |

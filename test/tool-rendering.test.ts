@@ -41,7 +41,7 @@ void test("Spark extension canonical facade tools render parameter-aware tool ca
   assertAllToolsHaveCallRenderers(tools);
   t.assert.fileSnapshot(
     renderCallCases(tools, [
-      { name: "task_read", args: { action: "status", view: "full", limit: 5 } },
+      { name: "task_read", args: { action: "workspace_status", view: "full", limit: 5 } },
       { name: "task_read", args: { action: "project_list", status: "all" } },
       {
         name: "task_write",

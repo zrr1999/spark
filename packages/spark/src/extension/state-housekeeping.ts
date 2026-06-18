@@ -12,6 +12,7 @@ import {
   type SparkStateCleanupSkippedSummary,
   type SparkStateSessionScopes,
 } from "./state-cache-cleanup.ts";
+import { existingLegacyImportOnlyPaths } from "./store-v2-migration.ts";
 
 export {
   SPARK_STATE_DIAGNOSTIC_ITEM_LIMIT,
@@ -40,6 +41,7 @@ export interface SparkStateHousekeepingSummary {
   generatedAt: string;
   caches: SparkStateCacheSummary[];
   protectedStores: SparkProtectedStoreSummary[];
+  legacyImportOnly: string[];
 }
 
 export interface SparkStateCleanupPlan {
@@ -66,6 +68,7 @@ export async function collectSparkStateHousekeeping(
     generatedAt: nowIso(),
     caches: await collectSparkStateCacheSummaries(root, scopes, graph, staleCutoffMs),
     protectedStores: await collectSparkProtectedStoreSummaries(root),
+    legacyImportOnly: await existingLegacyImportOnlyPaths(cwd),
   };
 }
 

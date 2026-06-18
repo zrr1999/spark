@@ -637,6 +637,8 @@ export function applyTodoListOp<T extends TodoReducerItem>(
     }
     case "done":
       return patchTodoListStatus(todos, op, options, "done", now, "todo item is required for done");
+    case "upsert_done":
+      return upsertTodoListDone(todos, op, options, now);
     case "block":
       return patchTodoListStatus(
         todos,
@@ -709,6 +711,46 @@ export function materializeTodoListItems<T extends TodoReducerItem>(
     next.push(options.createItem(content, existing.length + next.length, now));
   }
   return next;
+}
+
+export function upsertTodoListDone<T extends TodoReducerItem>(
+  todos: T[],
+  op: Pick<TaskTodoOp, "id" | "item">,
+  options: TodoReducerOptions<T>,
+  now: string,
+): T[] {
+  const content = op.item?.trim();
+  if (!content) throw new Error("todo item is required for upsert_done");
+  const id = op.id?.trim();
+  const target = id
+    ? (todos.find((todo) => todo.id === id) ?? todos.find((todo) => todo.content === content))
+    : todos.find((todo) => todo.content === content);
+  if (target) {
+    return cloneTodoList(todos).map((todo) => {
+      if (!sameTodoItem(todo, target)) return todo;
+      return {
+        ...todo,
+        status: "done",
+        deletedAt: undefined,
+        notes: appendTodoNote(todo.notes, `upsert_done marked this TODO done at ${now}`),
+        updatedAt: now,
+      };
+    });
+  }
+  const created = options.createItem(content, todos.length, now);
+  return [
+    ...cloneTodoList(todos),
+    {
+      ...created,
+      status: "done",
+      notes: [`upsert_done created this TODO as done at ${now}`],
+      updatedAt: now,
+    },
+  ];
+}
+
+function appendTodoNote(notes: string[] | undefined, note: string): string[] {
+  return notes ? [...notes, note] : [note];
 }
 
 export function patchTodoListStatus<T extends TodoReducerItem>(

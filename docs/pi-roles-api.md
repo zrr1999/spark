@@ -54,12 +54,15 @@ export interface RoleRunRequest {
    roleRef: RoleRef;
    launch?: RoleLaunchMode;
    instruction: string;
+   model?: string;
    forkFromSession?: string;
 }
 ```
 
 Generated roles use `origin.kind: "generated"`; generated is not a `RoleSource`.
 Extension roles use `source: "extension"` and are registered by extension packages at runtime; they are not Markdown-writable project/user roles.
+
+Role runs default to the current Pi session model supplied by the host. A call-time `model` is a one-run override and should not be required for normal role execution.
 
 ## Source and storage terminology
 

@@ -121,6 +121,20 @@ function testDagRunRecord(
   };
 }
 
+type WorkflowRunStore = ReturnType<typeof defaultWorkflowRunStore>;
+
+type RunSparkTaskResult = Awaited<ReturnType<typeof runSparkTask>>;
+
+type ChildOutputSuccessCase = {
+  name: string;
+  tempPrefix: string;
+  taskTitle: string;
+  taskDescription: string;
+  planObjective: string;
+  fakePiLines: string[];
+  assertRun?: (run: RunSparkTaskResult, graph: TaskGraph, taskRef: TaskRef) => void | Promise<void>;
+};
+
 function testSparkContext(cwd: string, sessionName: string) {
   const sessionFile = join(cwd, ".pi-sessions", `${sessionName}.json`);
   return {
@@ -130,6 +144,62 @@ function testSparkContext(cwd: string, sessionName: string) {
       getLeafId: () => `${sessionName}-leaf`,
     },
   };
+}
+
+async function withWorkflowRunStore<T>(
+  tempPrefix: string,
+  run: (context: { dir: string; store: WorkflowRunStore }) => Promise<T>,
+): Promise<T> {
+  const dir = await mkdtemp(join(tmpdir(), tempPrefix));
+  try {
+    return await run({ dir, store: defaultWorkflowRunStore(dir) });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function assertRunSparkTaskSucceedsWithChildOutput(
+  testCase: ChildOutputSuccessCase,
+): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), testCase.tempPrefix));
+  try {
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Demo", description: "demo" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: testCase.taskTitle,
+      description: testCase.taskDescription,
+      roleRef: builtinRoleRef("worker"),
+      plan: executionReadyPlan(testCase.planObjective),
+    });
+    const artifactStore = new ArtifactStore({
+      rootDir: join(dir, "artifacts"),
+    });
+    const fakePi = join(dir, "fake-pi.cjs");
+    await writeFile(fakePi, ["#!/usr/bin/env node", ...testCase.fakePiLines].join("\n"), "utf8");
+    await chmod(fakePi, 0o755);
+
+    const run = await runSparkTask({
+      graph,
+      taskRef: task.ref,
+      registry: new RoleRegistry(),
+      artifactStore,
+      cwd: dir,
+      dryRun: false,
+      piCommand: fakePi,
+      claim: { sessionId: "session:parent" },
+    });
+
+    assert.equal(run.status, "succeeded");
+    assert.equal(run.failureKind, undefined);
+    assert.equal(run.errorMessage, undefined);
+    assert.equal(run.completionSummary?.status, "succeeded");
+    assert.equal(graph.getTask(task.ref).status, "done");
+    assert.equal(graph.getTask(task.ref).claim, undefined);
+    await testCase.assertRun?.(run, graph, task.ref);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 2_000) {
@@ -3043,111 +3113,98 @@ void test("Spark DAG run store can clear inactive manager records", async () => 
   }
 });
 
-void test("Spark DAG run store prunes old succeeded runs with dry-run preview first", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-prune-succeeded-"));
-  try {
-    const store = defaultWorkflowRunStore(dir);
-    const run = await store.startRun({ dryRun: false, maxConcurrency: 1, timeoutMs: 100 });
-    await store.finishRun(run.ref, { scheduled: 0, completed: 0, timedOut: false });
+const oldWorkflowRunPruneOptions = {
+  now: "2030-01-01T00:00:00.000Z",
+  olderThanDays: 30,
+  keepRecent: 0,
+  keepRecentPerProject: 0,
+} as const;
 
-    const preview = await store.pruneRuns({
-      dryRun: true,
-      now: "2030-01-01T00:00:00.000Z",
-      olderThanDays: 30,
-      keepRecent: 0,
-      keepRecentPerProject: 0,
-    });
-    assert.deepEqual(
-      preview.candidates.map((candidate) => [candidate.ref, candidate.reason]),
-      [[run.ref, "old-succeeded"]],
-    );
-    assert.deepEqual(preview.deleted, []);
-    assert.equal((await store.load()).runs.length, 1);
+const workflowRunPruneCases: Array<{
+  name: string;
+  tempPrefix: string;
+  assertPrune: (store: WorkflowRunStore) => Promise<void>;
+}> = [
+  {
+    name: "Spark DAG run store prunes old succeeded runs with dry-run preview first",
+    tempPrefix: "spark-dag-run-prune-succeeded-",
+    async assertPrune(store) {
+      const run = await store.startRun({ dryRun: false, maxConcurrency: 1, timeoutMs: 100 });
+      await store.finishRun(run.ref, { scheduled: 0, completed: 0, timedOut: false });
 
-    const applied = await store.pruneRuns({
-      dryRun: false,
-      now: "2030-01-01T00:00:00.000Z",
-      olderThanDays: 30,
-      keepRecent: 0,
-      keepRecentPerProject: 0,
-    });
-    assert.deepEqual(
-      applied.deleted.map((candidate) => candidate.ref),
-      [run.ref],
-    );
-    assert.equal(applied.after, 0);
-    assert.equal((await store.load()).runs.length, 0);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
+      const preview = await store.pruneRuns({ ...oldWorkflowRunPruneOptions, dryRun: true });
+      assert.deepEqual(
+        preview.candidates.map((candidate) => [candidate.ref, candidate.reason]),
+        [[run.ref, "old-succeeded"]],
+      );
+      assert.deepEqual(preview.deleted, []);
+      assert.equal((await store.load()).runs.length, 1);
 
-void test("Spark DAG run store keeps unacknowledged failed runs during prune", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-prune-unack-failed-"));
-  try {
-    const store = defaultWorkflowRunStore(dir);
-    const failed = await store.startRun({ dryRun: false, maxConcurrency: 1, timeoutMs: 100 });
-    await store.finishRun(failed.ref, {
-      scheduled: 1,
-      completed: 1,
-      failed: 1,
-      cancelled: 0,
-      timedOut: false,
-    });
+      const applied = await store.pruneRuns({ ...oldWorkflowRunPruneOptions, dryRun: false });
+      assert.deepEqual(
+        applied.deleted.map((candidate) => candidate.ref),
+        [run.ref],
+      );
+      assert.equal(applied.after, 0);
+      assert.equal((await store.load()).runs.length, 0);
+    },
+  },
+  {
+    name: "Spark DAG run store keeps unacknowledged failed runs during prune",
+    tempPrefix: "spark-dag-run-prune-unack-failed-",
+    async assertPrune(store) {
+      const failed = await store.startRun({ dryRun: false, maxConcurrency: 1, timeoutMs: 100 });
+      await store.finishRun(failed.ref, {
+        scheduled: 1,
+        completed: 1,
+        failed: 1,
+        cancelled: 0,
+        timedOut: false,
+      });
 
-    const pruned = await store.pruneRuns({
-      dryRun: false,
-      now: "2030-01-01T00:00:00.000Z",
-      olderThanDays: 30,
-      keepRecent: 0,
-      keepRecentPerProject: 0,
-    });
-    assert.deepEqual(pruned.candidates, []);
-    assert.deepEqual(pruned.deleted, []);
-    assert.equal(
-      pruned.kept.find((run) => run.ref === failed.ref)?.reason,
-      "unacknowledged-problem",
-    );
-    assert.equal((await store.load()).runs.length, 1);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
+      const pruned = await store.pruneRuns({ ...oldWorkflowRunPruneOptions, dryRun: false });
+      assert.deepEqual(pruned.candidates, []);
+      assert.deepEqual(pruned.deleted, []);
+      assert.equal(
+        pruned.kept.find((run) => run.ref === failed.ref)?.reason,
+        "unacknowledged-problem",
+      );
+      assert.equal((await store.load()).runs.length, 1);
+    },
+  },
+  {
+    name: "Spark DAG run store prunes acknowledged failed runs",
+    tempPrefix: "spark-dag-run-prune-ack-failed-",
+    async assertPrune(store) {
+      const failed = await store.startRun({ dryRun: false, maxConcurrency: 1, timeoutMs: 100 });
+      await store.finishRun(failed.ref, {
+        scheduled: 1,
+        completed: 1,
+        failed: 1,
+        cancelled: 0,
+        timedOut: false,
+      });
+      await store.acknowledgeFailures({
+        runRef: failed.ref,
+        sessionId: "session:reviewer",
+        now: "2026-01-02T00:00:00.000Z",
+      });
 
-void test("Spark DAG run store prunes acknowledged failed runs", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-prune-ack-failed-"));
-  try {
-    const store = defaultWorkflowRunStore(dir);
-    const failed = await store.startRun({ dryRun: false, maxConcurrency: 1, timeoutMs: 100 });
-    await store.finishRun(failed.ref, {
-      scheduled: 1,
-      completed: 1,
-      failed: 1,
-      cancelled: 0,
-      timedOut: false,
-    });
-    await store.acknowledgeFailures({
-      runRef: failed.ref,
-      sessionId: "session:reviewer",
-      now: "2026-01-02T00:00:00.000Z",
-    });
+      const pruned = await store.pruneRuns({ ...oldWorkflowRunPruneOptions, dryRun: false });
+      assert.deepEqual(
+        pruned.deleted.map((candidate) => [candidate.ref, candidate.reason]),
+        [[failed.ref, "old-acknowledged-problem"]],
+      );
+      assert.equal((await store.load()).runs.length, 0);
+    },
+  },
+];
 
-    const pruned = await store.pruneRuns({
-      dryRun: false,
-      now: "2030-01-01T00:00:00.000Z",
-      olderThanDays: 30,
-      keepRecent: 0,
-      keepRecentPerProject: 0,
-    });
-    assert.deepEqual(
-      pruned.deleted.map((candidate) => [candidate.ref, candidate.reason]),
-      [[failed.ref, "old-acknowledged-problem"]],
-    );
-    assert.equal((await store.load()).runs.length, 0);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
+for (const pruneCase of workflowRunPruneCases) {
+  void test(pruneCase.name, async () => {
+    await withWorkflowRunStore(pruneCase.tempPrefix, ({ store }) => pruneCase.assertPrune(store));
+  });
+}
 
 void test("Spark DAG run store keeps active and recent terminal runs during prune", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-run-prune-active-recent-"));
@@ -3866,203 +3923,67 @@ void test("runSparkTask does not complete real tasks when the role run never sta
   }
 });
 
-void test("runSparkTask succeeds when child role output contains blocked Spark mode jsonEvents", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-blocked-mode-json-"));
-  try {
-    const graph = new TaskGraph();
-    const project = graph.createProject({ title: "Demo", description: "demo" });
-    const task = graph.createTask({
-      projectRef: project.ref,
-      title: "Blocked mode task",
-      description: "should complete because child Spark mode markers are session-local",
-      roleRef: builtinRoleRef("worker"),
-      plan: executionReadyPlan("Blocked mode task"),
-    });
-    const artifactStore = new ArtifactStore({
-      rootDir: join(dir, "artifacts"),
-    });
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "process.stdout.write(JSON.stringify({",
-        "  type: 'message_start',",
-        "  message: {",
-        "    role: 'custom',",
-        "    customType: 'spark-mode-request',",
-        "    content: 'Spark mode request could not proceed.',",
-        "    details: { status: 'blocked', reason: 'no_selection' },",
-        "  },",
-        "}) + '\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
+const childOutputSuccessCases: ChildOutputSuccessCase[] = [
+  {
+    name: "runSparkTask succeeds when child role output contains blocked Spark mode jsonEvents",
+    tempPrefix: "spark-blocked-mode-json-",
+    taskTitle: "Blocked mode task",
+    taskDescription: "should complete because child Spark mode markers are session-local",
+    planObjective: "Blocked mode task",
+    fakePiLines: [
+      "process.stdout.write(JSON.stringify({",
+      "  type: 'message_start',",
+      "  message: {",
+      "    role: 'custom',",
+      "    customType: 'spark-mode-request',",
+      "    content: 'Spark mode request could not proceed.',",
+      "    details: { status: 'blocked', reason: 'no_selection' },",
+      "  },",
+      "}) + '\\n');",
+    ],
+    assertRun(run) {
+      assert.equal(run.outputArtifacts.length, 1);
+    },
+  },
+  {
+    name: "runSparkTask succeeds when child role output contains blocked Spark mode text",
+    tempPrefix: "spark-blocked-mode-text-",
+    taskTitle: "Blocked text task",
+    taskDescription: "should complete because child Spark mode markers are session-local",
+    planObjective: "Blocked text task",
+    fakePiLines: ["process.stdout.write('Spark auto mode selection blocked; no_selection\\n');"],
+  },
+  {
+    name: "runSparkTask succeeds when child role has task output despite blocked Spark control text",
+    tempPrefix: "spark-blocked-mode-with-output-",
+    taskTitle: "Control text with output",
+    taskDescription: "should complete when actual task output exists",
+    planObjective: "Control text with output",
+    fakePiLines: [
+      "process.stdout.write('Spark auto mode selection blocked; no_selection\\n');",
+      "process.stdout.write('researched result: useful findings\\n');",
+    ],
+    assertRun(run) {
+      assert.match(run.completionSummary?.summary ?? "", /researched result/);
+    },
+  },
+  {
+    name: "runSparkTask still succeeds ordinary non-empty role output",
+    tempPrefix: "spark-ordinary-role-output-",
+    taskTitle: "Ordinary output task",
+    taskDescription: "ordinary successful output should still complete",
+    planObjective: "Ordinary output task",
+    fakePiLines: [
+      "process.stdout.write(JSON.stringify({ type: 'done', summary: 'ordinary completion' }) + '\\n');",
+    ],
+  },
+];
 
-    const run = await runSparkTask({
-      graph,
-      taskRef: task.ref,
-      registry: new RoleRegistry(),
-      artifactStore,
-      cwd: dir,
-      dryRun: false,
-      piCommand: fakePi,
-      claim: { sessionId: "session:parent" },
-    });
-
-    assert.equal(run.status, "succeeded");
-    assert.equal(run.failureKind, undefined);
-    assert.equal(run.errorMessage, undefined);
-    assert.equal(run.completionSummary?.status, "succeeded");
-    assert.equal(graph.getTask(task.ref).status, "done");
-    assert.equal(graph.getTask(task.ref).claim, undefined);
-    assert.equal(run.outputArtifacts.length, 1);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-void test("runSparkTask succeeds when child role output contains blocked Spark mode text", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-blocked-mode-text-"));
-  try {
-    const graph = new TaskGraph();
-    const project = graph.createProject({ title: "Demo", description: "demo" });
-    const task = graph.createTask({
-      projectRef: project.ref,
-      title: "Blocked text task",
-      description: "should complete because child Spark mode markers are session-local",
-      roleRef: builtinRoleRef("worker"),
-      plan: executionReadyPlan("Blocked text task"),
-    });
-    const artifactStore = new ArtifactStore({
-      rootDir: join(dir, "artifacts"),
-    });
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "process.stdout.write('Spark auto mode selection blocked; no_selection\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
-    const run = await runSparkTask({
-      graph,
-      taskRef: task.ref,
-      registry: new RoleRegistry(),
-      artifactStore,
-      cwd: dir,
-      dryRun: false,
-      piCommand: fakePi,
-      claim: { sessionId: "session:parent" },
-    });
-
-    assert.equal(run.status, "succeeded");
-    assert.equal(run.failureKind, undefined);
-    assert.equal(run.errorMessage, undefined);
-    assert.equal(run.completionSummary?.status, "succeeded");
-    assert.equal(graph.getTask(task.ref).status, "done");
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-void test("runSparkTask succeeds when child role has task output despite blocked Spark control text", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-blocked-mode-with-output-"));
-  try {
-    const graph = new TaskGraph();
-    const project = graph.createProject({ title: "Demo", description: "demo" });
-    const task = graph.createTask({
-      projectRef: project.ref,
-      title: "Control text with output",
-      description: "should complete when actual task output exists",
-      roleRef: builtinRoleRef("worker"),
-      plan: executionReadyPlan("Control text with output"),
-    });
-    const artifactStore = new ArtifactStore({
-      rootDir: join(dir, "artifacts"),
-    });
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "process.stdout.write('Spark auto mode selection blocked; no_selection\\n');",
-        "process.stdout.write('researched result: useful findings\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
-    const run = await runSparkTask({
-      graph,
-      taskRef: task.ref,
-      registry: new RoleRegistry(),
-      artifactStore,
-      cwd: dir,
-      dryRun: false,
-      piCommand: fakePi,
-      claim: { sessionId: "session:parent" },
-    });
-
-    assert.equal(run.status, "succeeded");
-    assert.equal(run.failureKind, undefined);
-    assert.equal(graph.getTask(task.ref).status, "done");
-    assert.match(run.completionSummary?.summary ?? "", /researched result/);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-void test("runSparkTask still succeeds ordinary non-empty role output", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-ordinary-role-output-"));
-  try {
-    const graph = new TaskGraph();
-    const project = graph.createProject({ title: "Demo", description: "demo" });
-    const task = graph.createTask({
-      projectRef: project.ref,
-      title: "Ordinary output task",
-      description: "ordinary successful output should still complete",
-      roleRef: builtinRoleRef("worker"),
-      plan: executionReadyPlan("Ordinary output task"),
-    });
-    const artifactStore = new ArtifactStore({
-      rootDir: join(dir, "artifacts"),
-    });
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "process.stdout.write(JSON.stringify({ type: 'done', summary: 'ordinary completion' }) + '\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
-    const run = await runSparkTask({
-      graph,
-      taskRef: task.ref,
-      registry: new RoleRegistry(),
-      artifactStore,
-      cwd: dir,
-      dryRun: false,
-      piCommand: fakePi,
-      claim: { sessionId: "session:parent" },
-    });
-
-    assert.equal(run.status, "succeeded");
-    assert.equal(run.failureKind, undefined);
-    assert.equal(run.errorMessage, undefined);
-    assert.equal(run.completionSummary?.status, "succeeded");
-    assert.equal(graph.getTask(task.ref).status, "done");
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
+for (const testCase of childOutputSuccessCases) {
+  void test(testCase.name, async () => {
+    await assertRunSparkTaskSucceedsWithChildOutput(testCase);
+  });
+}
 
 void test("runSparkTask summarizes final assistant text instead of raw Pi control JSON", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-final-assistant-summary-"));

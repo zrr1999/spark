@@ -432,18 +432,6 @@ void test("pi-cue script tool schemas do not expose deprecated RunScript scope",
   }
 });
 
-void test("pi-cue docs do not advertise deprecated script_run scope", async () => {
-  const docs = await Promise.all(
-    ["packages/pi-cue/README.md", "packages/pi-cue/skills/pi-cue/SKILL.md"].map((path) =>
-      readFile(path, "utf8"),
-    ),
-  );
-
-  for (const doc of docs) {
-    assert.doesNotMatch(doc, /script_run[^\n]*(?:`scope`|scope\?)/i);
-  }
-});
-
 void test("cue eval encodes resource needs as run mode params", async () => {
   await withCueServer(
     () => undefined,

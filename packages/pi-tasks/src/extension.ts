@@ -5,10 +5,18 @@ import type {
   ToolRenderTheme,
 } from "@zendev-lab/pi-extension-api";
 
-export type PiTaskReadAction = "status" | "project_list" | "run_status";
+export type PiTaskReadAction =
+  | "task_status"
+  | "project_status"
+  | "workspace_status"
+  | "project_list"
+  | "run_status";
 export type PiTaskWriteAction =
   | "project_use"
-  | "project_update"
+  | "project_finish"
+  | "project_rename"
+  | "project_status_update"
+  | "project_metadata_update"
   | "claim"
   | "plan"
   | "finish"
@@ -58,11 +66,20 @@ class ToolCallText implements ToolRenderComponent {
   }
 }
 
-const TASK_READ_ACTIONS: readonly PiTaskReadAction[] = ["status", "project_list", "run_status"];
+const TASK_READ_ACTIONS: readonly PiTaskReadAction[] = [
+  "task_status",
+  "project_status",
+  "workspace_status",
+  "project_list",
+  "run_status",
+];
 
 const TASK_WRITE_ACTIONS: readonly PiTaskWriteAction[] = [
   "project_use",
-  "project_update",
+  "project_finish",
+  "project_rename",
+  "project_status_update",
+  "project_metadata_update",
   "claim",
   "plan",
   "finish",
@@ -76,27 +93,45 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
     name: "task_read",
     label: "Task Read",
     description:
-      "Read-only project/task/TODO/run graph capability. Use action to inspect project/task status, list projects, or inspect task-run status.",
+      "Read-only project/task/TODO/run graph capability. Use action=task_status for one task, project_status for one project, workspace_status for the broad workspace summary, project_list for project lists, or run_status for task-run status.",
     promptGuidelines: [
       "Use task_read for project/task/TODO/run graph inspection only.",
       "Use task_write for project/task/TODO graph mutations.",
       "Use assign for explicit role-run spawning; task_read never schedules or controls child runs.",
     ],
     parameters: Type.Object({
-      action: Type.String({ description: "status | project_list | run_status" }),
+      action: Type.String({
+        description: "task_status | project_status | workspace_status | project_list | run_status",
+      }),
       project: Type.Optional(Type.String({ description: "Project selector/ref/title." })),
       projectRef: Type.Optional(Type.String({ description: "Project ref filter or selector." })),
       task: Type.Optional(Type.String({ description: "Task selector/ref/name/title." })),
       taskRef: Type.Optional(Type.String({ description: "Task ref/name/title selector." })),
-      status: Type.Optional(Type.String({ description: "Status filter or status view." })),
+      status: Type.Optional(Type.String({ description: "Project-list status filter." })),
       includeHistory: Type.Optional(Type.Boolean({ description: "Include terminal run history." })),
       includeDetails: Type.Optional(Type.Boolean({ description: "Expand task/run records." })),
+      includeWorkspaceSummary: Type.Optional(
+        Type.Boolean({
+          description: "For scoped status actions, include broad workspace summary.",
+        }),
+      ),
+      includeStateSummary: Type.Optional(
+        Type.Boolean({ description: "For status actions, include Spark state/cache summary." }),
+      ),
       runRef: Type.Optional(Type.String({ description: "Run ref selector." })),
       runAction: Type.Optional(
         Type.String({ description: "For run_status: status | list | inspect | reconcile." }),
       ),
-      view: Type.Optional(Type.String({ description: "For status: active | summary | full." })),
-      format: Type.Optional(Type.String({ description: "For status: text | json." })),
+      view: Type.Optional(
+        Type.String({
+          description: "For workspace_status/project_status/task_status: active | summary | full.",
+        }),
+      ),
+      format: Type.Optional(
+        Type.String({
+          description: "For workspace_status/project_status/task_status: text | json.",
+        }),
+      ),
       limit: Type.Optional(Type.Number({ description: "Bounded row/list limit." })),
       showFinished: Type.Optional(Type.Boolean({ description: "Deprecated full status alias." })),
     }),
@@ -119,7 +154,7 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
     name: "task_write",
     label: "Task Write",
     description:
-      "Project/task/TODO graph mutation capability. Use action to select/update projects, claim/plan/finish tasks, update TODOs, or clean task-owned caches.",
+      "Project/task/TODO graph mutation capability. Use intent-specific actions to select/finish/rename/update projects, claim/plan/finish tasks, update TODOs, or clean task-owned caches.",
     promptGuidelines: [
       "Use task_write for project/task/TODO graph mutations.",
       "Creating or claiming a task is plan-locked: every task must have a bound task.plan before claim/creation completes.",
@@ -128,7 +163,7 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
     parameters: Type.Object({
       action: Type.String({
         description:
-          "project_use | project_update | claim | plan | finish | recover | todo_update | cache_cleanup",
+          "project_use | project_finish | project_rename | project_status_update | project_metadata_update | claim | plan | finish | recover | todo_update | cache_cleanup",
       }),
       scope: Type.Optional(Type.String({ description: "For todo_update: session | task." })),
       project: Type.Optional(Type.String({ description: "Project selector/ref/title." })),
@@ -162,11 +197,18 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
         Type.Array(
           Type.String({
             description:
-              "Low-level initial task TODOs for task-creation handlers that explicitly support them; otherwise initialize TODOs with todo_update.",
+              "Low-level initial task TODOs for task-creation handlers that explicitly support them; plan-aware handlers may also derive TODOs from task.plan.",
           }),
         ),
       ),
-      ops: Type.Optional(Type.Array(Type.Any({ description: "TODO operation entries." }))),
+      ops: Type.Optional(
+        Type.Array(
+          Type.Any({
+            description:
+              "TODO operation entries, e.g. init/append/start/done/upsert_done/sync_from_plan/block/cancel/delete/restore/remove/note.",
+          }),
+        ),
+      ),
       items: Type.Optional(Type.Array(Type.String({ description: "TODO item text list." }))),
       item: Type.Optional(Type.String({ description: "TODO item text." })),
       id: Type.Optional(Type.String({ description: "TODO id." })),
@@ -176,6 +218,12 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
       summary: Type.Optional(Type.String({ description: "Task completion/failure summary." })),
       evidenceRefs: Type.Optional(
         Type.Array(Type.String({ description: "Artifact refs that evidence task completion." })),
+      ),
+      evidence: Type.Optional(
+        Type.Any({
+          description:
+            "Optional structured finish evidence. Spark can turn validationCommands, changedFiles, sourceRefs, and notes into a bounded task evidence artifact automatically.",
+        }),
       ),
       dryRun: Type.Optional(
         Type.Boolean({ description: "Dry-run for task-owned cache cleanup actions." }),

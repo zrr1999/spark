@@ -15,9 +15,15 @@ import {
   type RoleRef,
   type Task,
   type TaskCompletionReadiness,
+  type TaskStatus,
   type TaskTodo,
 } from "@zendev-lab/pi-extension-api";
-import { defaultTaskGraphStore, taskCompletionReadiness } from "@zendev-lab/pi-tasks";
+import {
+  defaultTaskGraphStore,
+  isUnfinishedTaskStatus,
+  taskCompletionReadiness,
+  type TaskGraph,
+} from "@zendev-lab/pi-tasks";
 import {
   currentSparkProject,
   saveCurrentProjectRef,
@@ -52,14 +58,36 @@ interface NormalizedSparkFinishTaskInput {
   status: "done" | "failed" | "cancelled";
   summary?: string;
   evidenceRefs: ArtifactRef[];
+  evidence?: SparkFinishEvidenceInput;
+}
+
+interface SparkFinishEvidenceInput {
+  title?: string;
+  notes?: string;
+  changedFiles: string[];
+  sourceRefs: string[];
+  validationCommands: string[];
+}
+
+interface FinishProjectCompletionCandidate {
+  projectRef: ProjectRef;
+  projectStatus: "active" | "done";
+  ready: boolean;
+  unfinishedTaskCount: number;
+  unfinishedTasks: Array<ReturnType<typeof compactTaskDetail>>;
+  suggestedAction?: string;
 }
 
 interface FinishTaskSuccessResult {
   error?: undefined;
   task: Task;
+  statusBefore: TaskStatus;
+  statusAfter: TaskStatus;
   completionReadiness?: TaskCompletionReadiness;
   projectRef: ProjectRef;
+  remainingReadyTasks: Task[];
   nextReady?: Task;
+  projectCompletionCandidate: FinishProjectCompletionCandidate;
 }
 
 interface FinishTaskErrorResult {
@@ -129,6 +157,7 @@ export function normalizeSparkFinishTaskInput(
     status: normalizeSparkFinishStatus(params.status),
     summary: normalizeOptionalToolString(params.summary, "summary"),
     evidenceRefs: normalizeFinishEvidenceRefs(params.evidenceRefs),
+    evidence: normalizeSparkFinishEvidenceInput(params.evidence),
   };
 }
 
@@ -140,6 +169,37 @@ function normalizeFinishEvidenceRefs(value: unknown): ArtifactRef[] {
     if (!isRef(ref, "artifact")) throw new Error(`evidenceRefs[${index}] must be an artifact: ref`);
     return ref;
   });
+}
+
+function normalizeSparkFinishEvidenceInput(value: unknown): SparkFinishEvidenceInput | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) throw new Error("evidence must be an object");
+  const evidence: SparkFinishEvidenceInput = {
+    title: normalizeOptionalToolString(value.title, "evidence.title"),
+    notes: normalizeOptionalToolString(value.notes, "evidence.notes"),
+    changedFiles: normalizeFinishEvidenceStringArray(value.changedFiles, "evidence.changedFiles"),
+    sourceRefs: normalizeFinishEvidenceStringArray(value.sourceRefs, "evidence.sourceRefs"),
+    validationCommands: normalizeFinishEvidenceStringArray(
+      value.validationCommands,
+      "evidence.validationCommands",
+    ),
+  };
+  if (
+    !evidence.title &&
+    !evidence.notes &&
+    evidence.changedFiles.length === 0 &&
+    evidence.sourceRefs.length === 0 &&
+    evidence.validationCommands.length === 0
+  )
+    return undefined;
+  return evidence;
+}
+
+function normalizeFinishEvidenceStringArray(value: unknown, path: string): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string"))
+    throw new Error(`${path} must be an array of strings`);
+  return value.map((item) => item.trim()).filter(Boolean);
 }
 
 function taskWithFinishEvidenceRefs(task: Task, evidenceRefs: ArtifactRef[]): Task {
@@ -186,6 +246,21 @@ export function registerSparkFinishTaskTool(
       evidenceRefs: Type.Optional(
         Type.Array(Type.String({ description: "Artifact refs that evidence completion." })),
       ),
+      evidence: Type.Optional(
+        Type.Object({
+          title: Type.Optional(Type.String({ description: "Evidence artifact title." })),
+          notes: Type.Optional(Type.String({ description: "Bounded evidence notes." })),
+          changedFiles: Type.Optional(
+            Type.Array(Type.String({ description: "Changed file path." })),
+          ),
+          sourceRefs: Type.Optional(
+            Type.Array(Type.String({ description: "Source file:line refs." })),
+          ),
+          validationCommands: Type.Optional(
+            Type.Array(Type.String({ description: "Validation command and concise result." })),
+          ),
+        }),
+      ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd;
@@ -193,8 +268,10 @@ export function registerSparkFinishTaskTool(
       const store = defaultTaskGraphStore(cwd);
       let reviewArtifact: Artifact<JsonValue> | undefined;
       let reviewResult: ReviewerRunResult | undefined;
+      let finishEvidenceRefs = input.evidenceRefs;
+      let generatedEvidenceArtifact: Artifact<JsonValue> | undefined;
       if (input.status === "done") {
-        const candidate = await resolveFinishReviewCandidate(store, cwd, ctx, input);
+        let candidate = await resolveFinishReviewCandidate(store, cwd, ctx, input);
         if (isFinishTaskErrorResult(candidate)) {
           if (candidate.error === "no_project")
             return {
@@ -251,6 +328,19 @@ export function registerSparkFinishTaskTool(
             },
           };
         }
+        if (input.evidence) {
+          generatedEvidenceArtifact = await recordTaskFinishEvidenceArtifact(
+            cwd,
+            candidate.projectRef,
+            candidate.persistedTask,
+            input,
+          );
+          finishEvidenceRefs = [...finishEvidenceRefs, generatedEvidenceArtifact.ref];
+          candidate = {
+            ...candidate,
+            task: taskWithFinishEvidenceRefs(candidate.task, [generatedEvidenceArtifact.ref]),
+          };
+        }
         const reviewInput: TaskReviewInput = {
           targetKind: "task",
           cwd,
@@ -290,6 +380,7 @@ export function registerSparkFinishTaskTool(
         );
         if (!verdict.approved) {
           await deps.refreshSparkWidget(cwd, ctx);
+          const progress = await readFinishProjectProgress(store, candidate.projectRef);
           return {
             content: [
               {
@@ -297,20 +388,35 @@ export function registerSparkFinishTaskTool(
                 text: renderTaskReviewRejectedMessage(candidate.task, verdict, reviewArtifact.ref),
               },
             ],
-            details: {
-              found: true,
+            details: renderFinishTransitionDetails({
               error: "task_review_failed",
-              task: compactTaskDetail(candidate.task),
+              projectRef: candidate.projectRef,
+              requestedStatus: input.status,
+              task: candidate.persistedTask,
+              statusBefore: candidate.persistedTask.status,
+              statusAfter: candidate.persistedTask.status,
+              committed: false,
+              transitionBlocker: "task_review_failed",
+              completionReadiness: undefined,
+              inputEvidenceRefs: finishEvidenceRefs,
+              reviewEvidenceRefs: candidate.task.outputArtifacts,
+              reviewRequired: true,
               review: verdict,
-              reviewArtifact: reviewArtifact.ref,
-            },
+              reviewArtifactRef: reviewArtifact.ref,
+              generatedEvidenceArtifactRef: generatedEvidenceArtifact?.ref,
+              remainingReadyTasks: progress.remainingReadyTasks,
+              projectCompletionCandidate: progress.projectCompletionCandidate,
+            }),
           };
         }
       }
 
       let updated: Awaited<ReturnType<typeof store.update>>;
       try {
-        updated = await commitFinishedTask(store, cwd, ctx, input);
+        updated = await commitFinishedTask(store, cwd, ctx, {
+          ...input,
+          evidenceRefs: finishEvidenceRefs,
+        });
       } catch (error) {
         if (error instanceof DependencyError) {
           return {
@@ -352,28 +458,38 @@ export function registerSparkFinishTaskTool(
               .join("; ")}`
           : "";
       const candidateSuffix = learningCandidate
-        ? `\nLearning candidate: ${learningCandidate.artifact.ref}`
+        ? `\nLearning candidate: ${learningCandidate.artifact.ref} — ${learningCandidate.artifact.body.title}`
+        : "";
+      const generatedEvidenceSuffix = generatedEvidenceArtifact
+        ? `\nGenerated evidence artifact: ${generatedEvidenceArtifact.ref}`
         : "";
       const executionSuffix = renderFinishNextStepSuffix(finishedResult.nextReady, input.status);
       return {
         content: [
           {
             type: "text",
-            text: `Finished Spark task: [${finishedResult.task.status}] @${finishedResult.task.name}: ${finishedResult.task.title}${summarySuffix}${completionIssueSuffix}${candidateSuffix}${executionSuffix}`,
+            text: `Finished Spark task: [${finishedResult.task.status}] @${finishedResult.task.name}: ${finishedResult.task.title}${summarySuffix}${completionIssueSuffix}${candidateSuffix}${generatedEvidenceSuffix}${executionSuffix}`,
           },
         ],
-        details: {
-          task: compactTaskDetail(finishedResult.task),
+        details: renderFinishTransitionDetails({
+          projectRef: finishedResult.projectRef,
+          requestedStatus: input.status,
+          task: finishedResult.task,
+          statusBefore: finishedResult.statusBefore,
+          statusAfter: finishedResult.statusAfter,
+          committed: true,
           completionReadiness: finishedResult.completionReadiness,
-          nextReadyTask: finishedResult.nextReady
-            ? compactTaskDetail(finishedResult.nextReady)
-            : undefined,
-          learningCandidate: learningCandidate
-            ? compactLearningDetail(learningCandidate.artifact, learningCandidate.location)
-            : undefined,
-          review: reviewResult?.verdict,
-          reviewArtifact: reviewArtifact?.ref,
-        },
+          inputEvidenceRefs: finishEvidenceRefs,
+          reviewEvidenceRefs: finishedResult.task.outputArtifacts,
+          reviewRequired: input.status === "done",
+          review: reviewResult?.verdict as TaskReviewVerdict | undefined,
+          reviewArtifactRef: reviewArtifact?.ref,
+          generatedEvidenceArtifactRef: generatedEvidenceArtifact?.ref,
+          remainingReadyTasks: finishedResult.remainingReadyTasks,
+          projectCompletionCandidate: finishedResult.projectCompletionCandidate,
+          nextReadyTask: finishedResult.nextReady,
+          learningCandidate,
+        }),
       };
     },
   });
@@ -583,7 +699,13 @@ async function resolveFinishReviewCandidate(
   input: NormalizedSparkFinishTaskInput,
 ): Promise<
   | { error: "no_project" | "no_matching_claimed_task" }
-  | { error?: undefined; projectRef: ProjectRef; task: Task; openTodos: TaskTodo[] }
+  | {
+      error?: undefined;
+      projectRef: ProjectRef;
+      task: Task;
+      persistedTask: Task;
+      openTodos: TaskTodo[];
+    }
 > {
   const updated = await store.update(
     async (graph) => {
@@ -593,14 +715,25 @@ async function resolveFinishReviewCandidate(
       const task = resolveSessionClaimedTask(graph, project.ref, sparkSessionKey(ctx), input.task);
       if (!task) return { error: "no_matching_claimed_task" as const };
       const candidateTask = taskWithFinishEvidenceRefs(task, input.evidenceRefs);
-      return { projectRef: project.ref, task: candidateTask, openTodos: graph.taskTodos(task.ref) };
+      return {
+        projectRef: project.ref,
+        task: candidateTask,
+        persistedTask: task,
+        openTodos: graph.taskTodos(task.ref),
+      };
     },
     { createIfMissing: false },
   );
   if (!updated.graph) return { error: "no_project" };
   return updated.result as
     | { error: "no_project" | "no_matching_claimed_task" }
-    | { error?: undefined; projectRef: ProjectRef; task: Task; openTodos: TaskTodo[] };
+    | {
+        error?: undefined;
+        projectRef: ProjectRef;
+        task: Task;
+        persistedTask: Task;
+        openTodos: TaskTodo[];
+      };
 }
 
 async function commitFinishedTask(
@@ -617,6 +750,7 @@ async function commitFinishedTask(
       const sessionKey = sparkSessionKey(ctx);
       let task = resolveSessionClaimedTask(graph, project.ref, sessionKey, input.task);
       if (!task) return { error: "no_matching_claimed_task" as const };
+      const statusBefore = task.status;
       task = attachFinishEvidenceRefs(graph, task, input.evidenceRefs);
       const finished = graph.setTaskStatus(task.ref, input.status);
       const completionReadiness =
@@ -625,17 +759,192 @@ async function commitFinishedTask(
               openTodos: graph.taskTodos(finished.ref),
             })
           : undefined;
-      const nextReady = input.status === "done" ? graph.readyTasks(project.ref)[0] : undefined;
+      const progress = finishProjectProgress(graph, project.ref);
+      const nextReady = input.status === "done" ? progress.remainingReadyTasks[0] : undefined;
       await sparkTodoStore(cwd, ctx).save(graph);
       return {
         task: finished,
+        statusBefore,
+        statusAfter: finished.status,
         completionReadiness,
         projectRef: project.ref,
+        remainingReadyTasks: progress.remainingReadyTasks,
         nextReady,
+        projectCompletionCandidate: progress.projectCompletionCandidate,
       } satisfies FinishTaskSuccessResult;
     },
     { createIfMissing: false },
   );
+}
+
+interface FinishTransitionDetailsInput {
+  error?: string;
+  projectRef: ProjectRef;
+  requestedStatus: "done" | "failed" | "cancelled";
+  task: Task;
+  statusBefore: TaskStatus;
+  statusAfter: TaskStatus;
+  committed: boolean;
+  transitionBlocker?: string;
+  completionReadiness?: TaskCompletionReadiness;
+  inputEvidenceRefs: ArtifactRef[];
+  reviewEvidenceRefs: ArtifactRef[];
+  reviewRequired: boolean;
+  review?: TaskReviewVerdict;
+  reviewArtifactRef?: ArtifactRef;
+  generatedEvidenceArtifactRef?: ArtifactRef;
+  remainingReadyTasks: Task[];
+  projectCompletionCandidate: FinishProjectCompletionCandidate;
+  nextReadyTask?: Task;
+  learningCandidate?: { artifact: Artifact<LearningRecord>; location: LearningLocation };
+}
+
+function renderFinishTransitionDetails(
+  input: FinishTransitionDetailsInput,
+): Record<string, unknown> {
+  const learningCandidate = input.learningCandidate
+    ? compactLearningDetail(input.learningCandidate.artifact, input.learningCandidate.location)
+    : undefined;
+  return {
+    found: true,
+    ...(input.error ? { error: input.error } : {}),
+    projectRef: input.projectRef,
+    requestedStatus: input.requestedStatus,
+    statusBefore: input.statusBefore,
+    statusAfter: input.statusAfter,
+    transition: {
+      requestedStatus: input.requestedStatus,
+      statusBefore: input.statusBefore,
+      statusAfter: input.statusAfter,
+      committed: input.committed,
+      ...(input.transitionBlocker ? { blocker: input.transitionBlocker } : {}),
+    },
+    task: compactTaskDetail(input.task),
+    evidenceRefs: input.task.outputArtifacts,
+    inputEvidenceRefs: input.inputEvidenceRefs,
+    reviewEvidenceRefs: input.reviewEvidenceRefs,
+    generatedEvidenceArtifact: input.generatedEvidenceArtifactRef,
+    completionReadiness: input.completionReadiness,
+    nextReadyTask: input.nextReadyTask ? compactTaskDetail(input.nextReadyTask) : undefined,
+    remainingReadyTasks: input.remainingReadyTasks.map(compactTaskDetail),
+    projectCompletionCandidate: input.projectCompletionCandidate,
+    learningCandidate,
+    reviewRequired: input.reviewRequired,
+    review: input.review,
+    reviewArtifact: input.reviewArtifactRef,
+    reviewer: {
+      required: input.reviewRequired,
+      approved: input.review?.approved,
+      outcome: input.review?.outcome,
+      summary: input.review?.summary,
+      findings: input.review?.findings,
+      blockers: input.review?.blockers,
+      confidence: input.review?.confidence,
+      artifactRef: input.reviewArtifactRef,
+      generatedEvidenceArtifactRef: input.generatedEvidenceArtifactRef,
+    },
+  };
+}
+
+async function readFinishProjectProgress(
+  store: ReturnType<typeof defaultTaskGraphStore>,
+  projectRef: ProjectRef,
+): Promise<{
+  remainingReadyTasks: Task[];
+  projectCompletionCandidate: FinishProjectCompletionCandidate;
+}> {
+  const graph = await store.load();
+  if (!graph) return emptyFinishProjectProgress(projectRef);
+  return finishProjectProgress(graph, projectRef);
+}
+
+function finishProjectProgress(
+  graph: TaskGraph,
+  projectRef: ProjectRef,
+): { remainingReadyTasks: Task[]; projectCompletionCandidate: FinishProjectCompletionCandidate } {
+  const project = graph.getProject(projectRef);
+  const unfinishedTasks = graph
+    .tasks(projectRef)
+    .filter((task) => isUnfinishedTaskStatus(task.status));
+  const remainingReadyTasks = graph.readyTasks(projectRef);
+  return {
+    remainingReadyTasks,
+    projectCompletionCandidate: {
+      projectRef,
+      projectStatus: project.status,
+      ready: unfinishedTasks.length === 0 && project.status !== "done",
+      unfinishedTaskCount: unfinishedTasks.length,
+      unfinishedTasks: unfinishedTasks.slice(0, 8).map(compactTaskDetail),
+      ...(unfinishedTasks.length === 0 && project.status !== "done"
+        ? { suggestedAction: 'task_write({ action: "project_finish" })' }
+        : {}),
+    },
+  };
+}
+
+function emptyFinishProjectProgress(projectRef: ProjectRef): {
+  remainingReadyTasks: Task[];
+  projectCompletionCandidate: FinishProjectCompletionCandidate;
+} {
+  return {
+    remainingReadyTasks: [],
+    projectCompletionCandidate: {
+      projectRef,
+      projectStatus: "active",
+      ready: false,
+      unfinishedTaskCount: 0,
+      unfinishedTasks: [],
+    },
+  };
+}
+
+async function recordTaskFinishEvidenceArtifact(
+  cwd: string,
+  projectRef: ProjectRef,
+  task: Task,
+  input: NormalizedSparkFinishTaskInput,
+): Promise<Artifact<JsonValue>> {
+  const title = input.evidence?.title ?? `Task evidence for @${task.name}: ${task.title}`;
+  const body = renderTaskFinishEvidenceMarkdown(task, input);
+  return defaultArtifactStore(cwd).put({
+    kind: "trace",
+    title,
+    format: "markdown",
+    body,
+    provenance: {
+      producer: "task",
+      projectRef,
+      taskRef: task.ref,
+    },
+    links: [{ to: task.ref, relation: "output" }],
+    curation: { status: "candidate", retention: "task" },
+  });
+}
+
+function renderTaskFinishEvidenceMarkdown(
+  task: Task,
+  input: NormalizedSparkFinishTaskInput,
+): string {
+  const evidence = input.evidence;
+  const lines = [
+    `# ${evidence?.title ?? `Task evidence for @${task.name}: ${task.title}`}`,
+    "",
+    `Task: @${task.name}: ${task.title} (${task.ref})`,
+    `Requested status: ${input.status}`,
+  ];
+  if (input.summary) lines.push(`Summary: ${input.summary}`);
+  if (evidence?.notes) lines.push("", "## Notes", evidence.notes);
+  appendEvidenceList(lines, "Changed files", evidence?.changedFiles ?? []);
+  appendEvidenceList(lines, "Source refs", evidence?.sourceRefs ?? []);
+  appendEvidenceList(lines, "Validation commands", evidence?.validationCommands ?? []);
+  return lines.join("\n");
+}
+
+function appendEvidenceList(lines: string[], title: string, items: string[]): void {
+  if (items.length === 0) return;
+  lines.push("", `## ${title}`);
+  for (const item of items.slice(0, 40)) lines.push(`- ${truncateInline(item, 300)}`);
+  if (items.length > 40) lines.push(`- … ${items.length - 40} more item(s) omitted`);
 }
 
 async function recordTaskReviewArtifact(
@@ -710,6 +1019,10 @@ function renderFinishNextStepSuffix(
         ". Inspect current status, claim the next ready task, and continue until blocked."
     : "\nNo ready task remains; inspect blockers or finish the project.";
 }
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function normalizeSparkFinishStatus(value: unknown): "done" | "failed" | "cancelled" {
   if (value === undefined || value === null) return "done";
   if (value === "done" || value === "failed" || value === "cancelled") return value;

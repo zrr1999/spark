@@ -37,22 +37,22 @@ export async function clarifyProjectPurposeIfNeeded(input: {
   const request: SparkAskToolParams = {
     mode: "clarification",
     flow: "project-purpose-refinement",
-    title: `Clarify project purpose for “${copy.title}”`,
+    title: `Clarify workstream for “${copy.title}”`,
     context: [
-      `Proposed project title: ${copy.title}`,
+      `Proposed project label: ${copy.title}`,
       `Current description: ${copy.description}`,
-      `Reason for asking: “${copy.title}” does not yet identify the related work this project should group.`,
+      `Reason for asking: “${copy.title}” does not yet identify the concrete work this project should group.`,
     ].join("\n"),
     questions: [
       {
         id: "purpose",
-        prompt: `For the placeholder project “${copy.title}”, which concrete workstream, feature, bug, or decision family should its tasks belong to?`,
+        prompt: `For “${copy.title}”, which concrete workstream, feature, bug, or decision family should its tasks belong to?`,
         type: "freeform",
         required: false,
       },
       {
         id: "doneWhen",
-        prompt: `For that “${copy.title}” workstream, what observable outcome would make this project complete enough to close?`,
+        prompt: `For that “${copy.title}” workstream, what observable outcome would make it complete enough to close?`,
         type: "freeform",
         required: false,
       },

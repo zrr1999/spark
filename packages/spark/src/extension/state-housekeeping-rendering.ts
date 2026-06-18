@@ -20,12 +20,15 @@ export function appendSparkStateHousekeepingLines(
       `  ${formatSparkStateCacheKind(cache.kind)}: ${cache.files} files, ${formatByteSize(cache.bytes)}, active=${cache.activeFiles}, stale=${cache.staleFiles}, broken=${cache.brokenFiles}, safe-to-delete=${cache.safeToDeleteFiles}`,
     );
   }
-  lines.push("Protected stores:");
+  lines.push("V2 canonical stores (protected):");
   for (const store of summary.protectedStores) {
     lines.push(
       `  ${formatSparkProtectedStoreReason(store.reason)}: ${store.files} files, ${formatByteSize(store.bytes)} (${store.path})`,
     );
   }
+  lines.push("Legacy import-only paths:");
+  if (summary.legacyImportOnly.length === 0) lines.push("  none");
+  for (const path of summary.legacyImportOnly) lines.push(`  ${path}`);
 }
 
 export function appendSparkStateDiagnosticsLines(

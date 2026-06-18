@@ -65,7 +65,7 @@ Spark 现在支持两个宿主目标：Pi 中的 `packages/spark/src/extension/`
 ## 成功信号
 
 - Project-bound 命令初始化或恢复不会覆盖既有状态，不会生成占位任务，也不会要求用户先填写宽泛表单。
-- `task_read({ action: "status" })` 和 Spark 小组件能以低噪声方式展示当前项目、活动任务、待办事项、工作流运行状态和就绪性问题。
+- `task_read({ action: "project_status" })`、`task_read({ action: "workspace_status" })` 和 Spark 小组件能以低噪声方式展示当前项目、活动任务、待办事项、工作流运行状态和就绪性问题。
 - `task_write({ action: "plan" })`、`task_write({ action: "claim" })` 和 `assign({ dryRun: true })` 能区分规划、认领、实现和完成；角色执行失败或未启动不会被错误标记为任务完成。
 - `ask({ action: "ask" | "flow" })` 的聚焦与全屏流程结果语义一致：自定义输入是一等结果，决策或审批没有有效选项时会阻塞，用户界面不泄漏原始标识符。
 - `pi-roles` 角色规范与运行工具同 Spark 工作流运行边界清晰，直接 `role({ action: "call" })` 不冒充任务执行。

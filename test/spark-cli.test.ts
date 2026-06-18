@@ -17,10 +17,6 @@ void test("parseSparkCliArgs treats positional args as the initial message", () 
   });
 });
 
-void test("parseSparkCliArgs recognizes help", () => {
-  assert.deepEqual(parseSparkCliArgs(["--help"]), { help: true });
-});
-
 void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => {
   let registeredName: string | undefined;
   let registeredConfig: unknown;

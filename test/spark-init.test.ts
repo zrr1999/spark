@@ -217,7 +217,7 @@ void test("active Spark context keeps strict limits for intent, claimed tasks, a
       action: "project_use",
       project: project.ref,
     });
-    await executeSparkToolInTest("task_read", ctx, { action: "status" });
+    await executeSparkToolInTest("task_read", ctx, { action: "workspace_status" });
 
     const summary = await renderActiveSparkContextSummary(dir, ctx);
     assert.ok(summary);
@@ -225,6 +225,8 @@ void test("active Spark context keeps strict limits for intent, claimed tasks, a
     assert.doesNotMatch(summary, /Intent line 18/);
     assert.match(summary, /read SPARK\.md for full intent/);
     assert.match(summary, /Claimed task 0/);
+    assert.match(summary, /Durable state is authoritative; compact summaries\/history are hints/);
+    assert.match(summary, /task_read\(\{ action: "project_status" \}\)/);
     assert.doesNotMatch(summary, /Other claimed task/);
     assert.match(summary, /Visible bounded TODO 0-2/);
     assert.doesNotMatch(summary, /Visible bounded TODO 0-3/);
@@ -296,7 +298,7 @@ void test("active Spark context omits finished history and finished TODOs", asyn
       action: "project_use",
       project: project.ref,
     });
-    await executeSparkToolInTest("task_read", ctx, { action: "status" });
+    await executeSparkToolInTest("task_read", ctx, { action: "workspace_status" });
     const summary = await renderActiveSparkContextSummary(dir, ctx);
 
     assert.ok(summary);
@@ -304,6 +306,7 @@ void test("active Spark context omits finished history and finished TODOs", asyn
     assert.match(summary, /Keep the active prompt compact/);
     assert.doesNotMatch(summary, /Finished historical note/);
     assert.match(summary, /Spark context/);
+    assert.match(summary, /Durable state is authoritative; compact summaries\/history are hints/);
     assert.match(
       summary,
       /Unfinished tasks: 1 \/ claimed: 1 \/ current_session_claimed: 1 \(2 total\)/,

@@ -71,7 +71,7 @@ export function renderSparkGoalModePrompt(
         SPARK_GOAL_DECISION_RULE,
       ]
     : [
-        'No current project is selected for goal driver execution. Inspect projects with task_read({ action: "status" }) or task_read({ action: "project_list" }), select the active project only when the inspected state identifies a single intended project, or stop and report when multiple active projects or scopes could be the intended goal.',
+        'No current project is selected for goal driver execution. Inspect projects with task_read({ action: "workspace_status" }) or task_read({ action: "project_list" }), select the active project only when the inspected state identifies a single intended project, or stop and report when multiple active projects or scopes could be the intended goal.',
         "Do not claim project-bound work until a current project is selected.",
         ASK_BEFORE_GUESSING,
       ];
@@ -88,7 +88,7 @@ function renderGoalAction(hasExplicitGoal: boolean): string {
     ? "Use the explicit goal focus as the target objective."
     : "Infer the target objective from the current project purpose, description, title, task plans, required evidence, recent artifacts, and blockers.";
   return (
-    'Run Spark goal mode: read the current project/task plan and inspect ready tasks with task_read({ action: "status" }). ' +
+    'Run Spark goal mode: read the current project/task plan and inspect ready tasks with task_read({ action: "project_status" }). ' +
     goalSource +
     ' If the inspected state identifies a single next goal, state that derived goal briefly and work toward it by claiming one ready concrete task at a time with task_write({ action: "claim" }), executing it, verifying required evidence, and calling task_write({ action: "finish" }). Continue to the next ready task after each successful finish until the goal is complete, no ready task remains, validation fails, or a required decision cannot be resolved by reviewer auto-answer.'
   );

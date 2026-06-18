@@ -311,7 +311,7 @@ export class SparkAgentLoop {
       return errorToolResult(toolCall, `unknown tool: ${toolCall.name}`);
     }
 
-    const ctx: ExtensionContext = this.host.makeContext();
+    const ctx: ExtensionContext = this.host.makeContext({ model: this.getModel() });
     try {
       const onUpdate = () => undefined;
       const result = await tool.config.execute(

@@ -10,7 +10,7 @@ export function renderProjectRoadmapContext(project: Project): string {
   if (activeItem) {
     const title = activeItem.title?.trim() || activeItem.objective.trim() || activeItem.ref;
     lines.push(`- Active item: ${title} (${activeItem.ref})`);
-    lines.push(`- Item intent: ${activeItem.objective}`);
+    lines.push(`- Milestone: ${activeItem.objective}`);
   } else {
     lines.push(`- Items: ${roadmap.items.length} (no active item selected)`);
   }

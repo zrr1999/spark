@@ -4,7 +4,15 @@ import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 
 export type SparkStatusView = "active" | "summary" | "full";
 export type SparkStatusFormat = "text" | "json";
+export type SparkStatusScope = "workspace" | "project" | "task";
 export type SparkProjectListStatus = "active" | "done" | "all";
+
+export function normalizeSparkStatusScope(params: Record<string, unknown>): SparkStatusScope {
+  const value = params.scope;
+  if (value === undefined || value === null) return "workspace";
+  if (value === "workspace" || value === "project" || value === "task") return value;
+  throw new Error("spark_status scope must be workspace, project, or task");
+}
 
 export function normalizeSparkStatusView(params: Record<string, unknown>): SparkStatusView {
   const value = params.view;

@@ -18,79 +18,99 @@ function asClient(fake: FakeClient): CueClient {
   return fake as unknown as CueClient;
 }
 
-void test("compareSemver orders dotted release tags numerically", () => {
-  assert.equal(compareSemver("0.1.0", "0.1.0"), 0);
-  assert.equal(compareSemver("0.0.9", "0.1.0"), -1);
-  assert.equal(compareSemver("0.1.0", "0.0.9"), 1);
-  assert.equal(compareSemver("0.10.0", "0.9.0"), 1, "numeric, not lexicographic");
-  assert.equal(compareSemver("v0.1.0", "0.1.0"), 0, "tolerates leading 'v'");
+void test("compareSemver orders release tags numerically", () => {
+  const cases: Array<[left: string, right: string, expected: number, message?: string]> = [
+    ["0.1.0", "0.1.0", 0],
+    ["0.0.9", "0.1.0", -1],
+    ["0.1.0", "0.0.9", 1],
+    ["0.10.0", "0.9.0", 1, "numeric, not lexicographic"],
+    ["v0.1.0", "0.1.0", 0, "tolerates leading 'v'"],
+    ["0.1", "0.1.0", -1],
+    ["0.1.0", "0.1", 1],
+  ];
+
+  for (const [left, right, expected, message] of cases) {
+    assert.equal(compareSemver(left, right), expected, message);
+  }
 });
 
-void test("compareSemver handles uneven part counts", () => {
-  assert.equal(compareSemver("0.1", "0.1.0"), -1);
-  assert.equal(compareSemver("0.1.0", "0.1"), 1);
+void test("classifyDaemonVersion handles match, no-latest, outdated, and unknown cases", () => {
+  const cases = [
+    {
+      name: "reported daemon with unknown latest is silent",
+      daemon: { kind: "reported" as const, version: "0.1.0" },
+      latest: null,
+      expected: { kind: "match" },
+    },
+    {
+      name: "unknown daemon and unknown latest is no-latest",
+      daemon: { kind: "unknown" as const },
+      latest: null,
+      expected: { kind: "no-latest", daemon: { kind: "unknown" } },
+      renderedWarning: null,
+    },
+    {
+      name: "reported daemon older than latest is outdated",
+      daemon: { kind: "reported" as const, version: "0.0.9" },
+      latest: "0.1.0",
+      expected: {
+        kind: "outdated",
+        daemon: { kind: "reported", version: "0.0.9" },
+        latest: "0.1.0",
+      },
+    },
+    {
+      name: "reported daemon at latest is a match",
+      daemon: { kind: "reported" as const, version: "0.1.0" },
+      latest: "0.1.0",
+      expected: { kind: "match" },
+    },
+    {
+      name: "reported daemon ahead of latest is a match",
+      daemon: { kind: "reported" as const, version: "0.2.0" },
+      latest: "0.1.0",
+      expected: { kind: "match" },
+    },
+    {
+      name: "unknown daemon with known latest is actionable",
+      daemon: { kind: "unknown" as const },
+      latest: "0.1.0",
+      expected: { kind: "unknown-running", latest: "0.1.0" },
+    },
+  ];
+
+  for (const { name, daemon, latest, expected, renderedWarning } of cases) {
+    const verdict = classifyDaemonVersion(daemon, latest);
+    assert.deepEqual(verdict, expected, name);
+    if (renderedWarning !== undefined) {
+      assert.equal(renderCuedVersionWarning(verdict), renderedWarning, name);
+    }
+  }
 });
 
-void test("classifyDaemonVersion is silent when latest is unknown and daemon reports", () => {
-  const verdict = classifyDaemonVersion({ kind: "reported", version: "0.1.0" }, null);
-  assert.deepEqual(verdict, { kind: "match" });
-});
-
-void test("classifyDaemonVersion stays silent for unknown daemon when latest is also unknown", () => {
-  // Without an upstream reference we cannot make an actionable claim.
-  const verdict = classifyDaemonVersion({ kind: "unknown" }, null);
-  assert.deepEqual(verdict, { kind: "no-latest", daemon: { kind: "unknown" } });
-  assert.equal(renderCuedVersionWarning(verdict), null);
-});
-
-void test("classifyDaemonVersion flags reported daemons older than latest", () => {
-  const verdict = classifyDaemonVersion({ kind: "reported", version: "0.0.9" }, "0.1.0");
-  assert.deepEqual(verdict, {
-    kind: "outdated",
-    daemon: { kind: "reported", version: "0.0.9" },
-    latest: "0.1.0",
-  });
-});
-
-void test("classifyDaemonVersion stays silent when daemon is at or above latest", () => {
-  assert.deepEqual(classifyDaemonVersion({ kind: "reported", version: "0.1.0" }, "0.1.0"), {
-    kind: "match",
-  });
-  // Local dev builds can be ahead of the last published release; do not
-  // nag developers in that case.
-  assert.deepEqual(classifyDaemonVersion({ kind: "reported", version: "0.2.0" }, "0.1.0"), {
-    kind: "match",
-  });
-});
-
-void test("classifyDaemonVersion flags unknown daemon when latest is known", () => {
-  const verdict = classifyDaemonVersion({ kind: "unknown" }, "0.1.0");
-  assert.deepEqual(verdict, { kind: "unknown-running", latest: "0.1.0" });
-});
-
-void test("renderCuedVersionWarning returns null for match and no-latest", () => {
+void test("renderCuedVersionWarning renders only actionable warnings", () => {
   assert.equal(renderCuedVersionWarning({ kind: "match" }), null);
   assert.equal(renderCuedVersionWarning({ kind: "no-latest", daemon: { kind: "unknown" } }), null);
-});
 
-void test("renderCuedVersionWarning explains outdated daemons", () => {
-  const text = renderCuedVersionWarning({
+  const outdated = renderCuedVersionWarning({
     kind: "outdated",
     daemon: { kind: "reported", version: "0.0.9" },
     latest: "0.1.0",
   });
-  assert.ok(text);
-  assert.match(text, /cued 0\.0\.9 is older than latest cue-shell release 0\.1\.0/);
-  assert.match(text, /cued upgrade/);
-  assert.match(text, /cued restart/);
-  assert.match(text, /PI_CUE_NO_VERSION_CHECK/);
-});
+  assert.ok(outdated);
+  for (const pattern of [
+    /cued 0\.0\.9 is older than latest cue-shell release 0\.1\.0/,
+    /cued upgrade/,
+    /cued restart/,
+    /PI_CUE_NO_VERSION_CHECK/,
+  ]) {
+    assert.match(outdated, pattern);
+  }
 
-void test("renderCuedVersionWarning explains unknown-running with known latest", () => {
-  const text = renderCuedVersionWarning({ kind: "unknown-running", latest: "0.1.0" });
-  assert.ok(text);
-  assert.match(text, /does not report its version/);
-  assert.match(text, /latest cue-shell release is 0\.1\.0/);
+  const unknownRunning = renderCuedVersionWarning({ kind: "unknown-running", latest: "0.1.0" });
+  assert.ok(unknownRunning);
+  assert.match(unknownRunning, /does not report its version/);
+  assert.match(unknownRunning, /latest cue-shell release is 0\.1\.0/);
 });
 
 void test("checkCuedVersionAndWarn warns once when daemon is older than upstream", async () => {

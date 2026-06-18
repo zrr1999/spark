@@ -26,9 +26,7 @@ export interface SparkBuiltinSkill {
 
 export function defaultBuiltinSkillsDir(): string {
   const hostDir = dirname(fileURLToPath(import.meta.url));
-  const fromPackage = resolve(hostDir, "../../skills");
-  if (existsSync(fromPackage)) return fromPackage;
-  return resolve(process.cwd(), "packages", "spark", "skills");
+  return resolve(hostDir, "../../skills");
 }
 
 export function defaultPiCueSkillsDir(): string {

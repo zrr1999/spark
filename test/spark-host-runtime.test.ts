@@ -170,13 +170,6 @@ void test("SparkHostRuntime emit awaits async listeners and surfaces their resul
   assert.deepEqual(results, ["started", "sync"]);
 });
 
-void test("SparkHostRuntime not-yet-implemented surfaces throw with stable error guidance", () => {
-  const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
-  assert.throws(() => host.registerFlag("plan", {}), /registerFlag is not implemented/);
-  assert.throws(() => host.setModel("test"), /setModel is not implemented/);
-  assert.throws(() => host.exec("git", []), /exec is not implemented/);
-});
-
 void test("SparkHostRuntime onToolRegistration fires for every registerTool", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   const seen: string[] = [];

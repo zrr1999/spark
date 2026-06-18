@@ -111,15 +111,13 @@ void test("ask flow render keeps all lines within terminal width", () => {
 void test("ask flow render wraps long prompt and option copy", () => {
   const question = {
     id: "decision",
-    prompt:
-      "Confirm whether the implementation plan should preserve the current state model while changing only the display behavior for very long ask text.",
+    prompt: "PROMPT_TOKEN ".repeat(12),
     type: "single" as const,
     options: [
       {
         value: "wrap",
-        label: "Wrap long ask copy across multiple terminal rows",
-        description:
-          "Keep the full label and explanation visible instead of truncating it after the first row.",
+        label: "OPTION_LABEL_TOKEN ".repeat(4),
+        description: "OPTION_DESCRIPTION_TOKEN ".repeat(6),
       },
     ],
   };
@@ -135,30 +133,30 @@ void test("ask flow render wraps long prompt and option copy", () => {
     },
     width: 48,
     language: "en",
-    title: "Ask with a deliberately long title that should wrap instead of disappearing",
-    context:
-      "Context can also be a longer paragraph and should remain readable on narrow terminals.",
+    title: "TITLE_TOKEN ".repeat(8),
+    context: "CONTEXT_TOKEN ".repeat(8),
   });
 
   assert.ok(
     lines.every((line) => visibleWidth(line) <= 48),
     lines.join("\n"),
   );
+  const rendered = lines.join("\n");
+  for (const token of [
+    "TITLE_TOKEN",
+    "CONTEXT_TOKEN",
+    "PROMPT_TOKEN",
+    "OPTION_LABEL_TOKEN",
+    "OPTION_DESCRIPTION_TOKEN",
+  ]) {
+    assert.match(rendered, new RegExp(token));
+  }
+  assert.ok(lines.filter((line) => line.includes("PROMPT_TOKEN")).length > 1, rendered);
   assert.ok(
-    lines.some((line) => line.includes("long title that should")),
-    lines.join("\n"),
-  );
-  assert.ok(
-    lines.some((line) => line.includes("remain readable")),
-    lines.join("\n"),
-  );
-  assert.ok(
-    lines.some((line) => line.includes("changing only the display")),
-    lines.join("\n"),
-  );
-  assert.ok(
-    lines.some((line) => line.includes("instead of truncating")),
-    lines.join("\n"),
+    lines.filter(
+      (line) => line.includes("OPTION_LABEL_TOKEN") || line.includes("OPTION_DESCRIPTION_TOKEN"),
+    ).length > 1,
+    rendered,
   );
 });
 

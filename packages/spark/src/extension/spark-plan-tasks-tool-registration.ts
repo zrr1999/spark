@@ -32,6 +32,7 @@ import {
   taskKindDescription,
   taskPlanSchema,
 } from "./task-plan-tool.ts";
+import { syncTaskTodosFromPlan } from "./task-plan-todos.ts";
 
 const DEFAULT_SPARK_PLAN_TASK_OUTPUT_LIMIT = 5;
 const SPARK_PLAN_TASKS_READINESS_RULES = [
@@ -204,6 +205,10 @@ export function registerSparkPlanTasksTool(
           },
         };
       }
+      const planTodoSync = [...result.created, ...result.updated].map((task) => ({
+        taskRef: task.ref,
+        items: syncTaskTodosFromPlan(graph, task),
+      }));
       const changedRefs = [...result.created, ...result.updated].map((task) => task.ref);
       const updatedRoadmapItem = attachRoadmapPlanningRefs(
         graph,
@@ -232,6 +237,7 @@ export function registerSparkPlanTasksTool(
         details: {
           result: compactTaskPlanResult(result),
           planDecisions,
+          planTodoSync,
           roadmapItem: updatedRoadmapItem as unknown as Record<string, unknown> | undefined,
         },
       };

@@ -35,6 +35,7 @@ import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import { isGenericInitialTaskTitle } from "./spark-graph-invariants.ts";
 import { findActiveSessionClaim, resolveSessionClaimedTask } from "./task-claim-selection.ts";
 import { taskClaimSummary } from "./task-display.ts";
+import { syncTaskTodosFromPlan } from "./task-plan-todos.ts";
 import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 import { truncateInline } from "./tool-rendering.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
@@ -255,6 +256,7 @@ export function registerSparkClaimTaskTool(
               leaseMs: MAIN_TASK_CLAIM_LEASE_MS,
             });
           }
+          if (!graph.taskTodos(task.ref).some(isActiveTaskTodo)) syncTaskTodosFromPlan(graph, task);
           const taskTodos = graph.taskTodos(task.ref);
           const hasActiveTodos = taskTodos.some(isActiveTaskTodo);
           return {
@@ -302,7 +304,7 @@ export function registerSparkClaimTaskTool(
               text:
                 claimed.result.error === "active_claim_exists"
                   ? `Cannot claim ${claimInputLabel(input)}: this session already has unfinished claimed task ${claimed.result.activeTask.title} (${claimed.result.activeTask.ref}). Finish, fail, or cancel it before claiming another task.`
-                  : `Cannot update ${claimInputLabel(input)}: matching task is currently claimed by another session (${taskClaimSummary(claimed.result.activeTask)}). Claim recovery refused: ${claimed.result.claimRecovery?.reason ?? "not_evaluated"}. ${claimed.result.claimRecovery?.guidance ?? "Inspect task_read status and retry only when the owner is inactive or the claim expires."}`,
+                  : `Cannot update ${claimInputLabel(input)}: matching task is currently claimed by another session (${taskClaimSummary(claimed.result.activeTask)}). Claim recovery refused: ${claimed.result.claimRecovery?.reason ?? "not_evaluated"}. ${claimed.result.claimRecovery?.guidance ?? 'Inspect task_read({ action: "project_status" }) and retry only when the owner is inactive or the claim expires.'}`,
             },
           ],
           details: {

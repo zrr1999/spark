@@ -61,8 +61,14 @@ export function createPiGraftPatcherRoleSpec(): RoleSpec {
   });
 }
 
+export interface PiGraftCurrentModel {
+  id?: string;
+  provider?: string;
+}
+
 export interface PiGraftSessionContext {
   cwd?: string;
+  model?: PiGraftCurrentModel;
   sessionManager?: {
     getBranch?: () => unknown[];
     getEntries?: () => unknown[];

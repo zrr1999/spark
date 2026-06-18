@@ -1,5 +1,5 @@
 # task_read
-task_read action=status
+task_read action=workspace_status
 
 # task_read
 task_read action=project_list

@@ -19,6 +19,9 @@ const NO_CANNED_ASKS =
 export const WORKFLOW_AND_SUBAGENT_ARE_TOOLS =
   "Workflow and subagent role runs are execution tools, not session modes. First select the governing mode (research, plan, or implement), then use role/workflow only within that mode's responsibility and evidence boundaries.";
 
+export const DURABLE_STATE_AUTHORITY =
+  'Compact summaries, restored conversation history, and hidden mode text are historical hints only. Before planning, claiming, finishing, or deciding a goal/project transition, verify durable state with scoped tools: task_read({ action: "project_status" }) for the selected project, task_read({ action: "workspace_status" }) or task_read({ action: "project_list" }) before selecting a project, and goal({ action: "status" }) before relying on a goal.';
+
 const RESEARCH_SUBAGENT_STRATEGY =
   'Default lightweight research should use subagent role calls plus main-agent synthesis when parallel inspection, cross-checking, or specialist review materially improves coverage. Call role({ action: "call", role, instruction, launch: "fresh" | "forked" }) with focused read-only research briefs; the main agent remains responsible for summarizing, reconciling, and qualifying the findings.';
 
@@ -48,7 +51,7 @@ export function renderSparkResearchModePrompt(
       : [
           WORKFLOW_AND_SUBAGENT_ARE_TOOLS,
           RESEARCH_SUBAGENT_STRATEGY,
-          'Select a current project with task_write({ action: "project_use" }) before project-scoped research; use task_read({ action: "status" }) or context preview to inspect available projects first if needed.',
+          'Select a current project with task_write({ action: "project_use" }) before project-scoped research; use task_read({ action: "workspace_status" }) or context preview to inspect available projects first if needed.',
           ASK_BEFORE_GUESSING,
         ],
   );
@@ -80,7 +83,7 @@ export function renderSparkPlanningModePrompt(
     ? [
         ...sharedRequirements,
         'Answer directly only when the user explicitly asks for read-only research or commentary instead of durable planning; otherwise keep planning toward task_write({ action: "plan" }).',
-        'Call task_write({ action: "project_update" }) only when inspected context clearly supports a more specific label than a stale or generic bootstrap title.',
+        'Call task_write({ action: "project_rename" }) only when inspected context clearly supports a more specific label than a stale or generic bootstrap title; use project_metadata_update for description/purpose/output language changes.',
       ]
     : [
         ...sharedRequirements,
@@ -97,7 +100,7 @@ export function renderSparkImplementationModePrompt(
 ): string {
   const requirements = selectedProjectRef
     ? [
-        'Read the current project/task plan and inspect ready tasks with task_read({ action: "status" }). Claim one concrete ready task at a time with task_write({ action: "claim" }), execute it, verify the required evidence with artifact/learning/context as needed, then call task_write({ action: "finish" }). After each successful finish, inspect status again and continue with the next ready task until no ready task remains, validation fails, review/ask approval is pending, or a real blocker requires user input or external action.',
+        'Read the current project/task plan and inspect ready tasks with task_read({ action: "project_status" }). Claim one concrete ready task at a time with task_write({ action: "claim" }), execute it, verify the required evidence with artifact/learning/context as needed, then call task_write({ action: "finish" }). After each successful finish, inspect project_status again and continue with the next ready task until no ready task remains, validation fails, review/ask approval is pending, or a real blocker requires user input or external action. When all project tasks are terminal and the project itself should close, use task_write({ action: "project_finish" }); do not use project_status_update status=done or request goal completion from /implement.',
         "Implementation mode is human-blocking: use canonical ask for material user decisions and wait for the answer; do not auto-answer asks, do not make goal-style autonomous policy decisions, and do not request reviewer-gated goal completion from /implement.",
         WORKFLOW_AND_SUBAGENT_ARE_TOOLS,
         PARALLEL_EXECUTION_WORKFLOW_STRATEGY,
@@ -105,7 +108,7 @@ export function renderSparkImplementationModePrompt(
         ASK_BEFORE_GUESSING,
       ]
     : [
-        'Select a current project with task_write({ action: "project_use" }) before claiming project-bound work; use task_read({ action: "status" }) to inspect available projects first if needed.',
+        'Select a current project with task_write({ action: "project_use" }) before claiming project-bound work; use task_read({ action: "workspace_status" }) to inspect available projects first if needed.',
         "Do not claim project-bound work until a current project is selected.",
         ASK_BEFORE_GUESSING,
       ];
@@ -120,6 +123,7 @@ export function renderModePrompt(
   requirements: string[],
   extraContext?: string,
 ): string {
+  const scopedRequirements = [DURABLE_STATE_AUTHORITY, ...requirements];
   const sections = [
     renderSparkProjectSummary(graph, selectedProjectRef),
     renderModeFocus(mode, focus),
@@ -128,7 +132,7 @@ export function renderModePrompt(
       mode === "Default research"
         ? "## Default research requirements"
         : `## ${mode} mode requirements`,
-      ...requirements.map((item) => `- ${item}`),
+      ...scopedRequirements.map((item) => `- ${item}`),
     ].join("\n"),
   ].filter((section): section is string => Boolean(section));
   return sections.join("\n\n");

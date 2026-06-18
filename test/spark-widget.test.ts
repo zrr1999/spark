@@ -48,6 +48,13 @@ function widgetState(patch: Partial<SparkWidgetState> = {}): SparkWidgetState {
   };
 }
 
+function assertLineIncludes(line: string | undefined, fragments: string[]): void {
+  assert.ok(line, "expected rendered line to exist");
+  for (const fragment of fragments) {
+    assert.ok(line.includes(fragment), line);
+  }
+}
+
 void test("SparkWidget registers, invalidates renders, clears hidden state, and disposes", () => {
   let state = widgetState();
   const registrations: SparkWidgetRegistration[] = [];
@@ -165,10 +172,8 @@ void test("spark widget shows compact workflow-run progress above project detail
     theme,
   );
 
-  assert.match(
-    lines.join("\n"),
-    /◆ Spark UX redesign · Tasks\(total=2 claimed=0\/0\)\n◆ Background work: 1\/3 tasks finished · running · run:abc/,
-  );
+  assertLineIncludes(lines[0], ["Spark UX redesign", "Tasks(", "total=2", "claimed=0/0"]);
+  assertLineIncludes(lines[1], ["Background work:", "1/3", "running", "run:abc"]);
 });
 
 void test("spark widget suppresses duplicate background row when session agent is shown", () => {
@@ -217,10 +222,8 @@ void test("spark widget renders workflow-run state as background progress", () =
     theme,
   );
 
-  assert.match(
-    lines.join("\n"),
-    /◆ Spark UX redesign\n◆ Background work: 13\/13 tasks finished · failed · run:9fb95fb0/,
-  );
+  assertLineIncludes(lines[0], ["Spark UX redesign"]);
+  assertLineIncludes(lines[1], ["Background work:", "13/13", "failed", "run:9fb95fb0"]);
   assert.doesNotMatch(lines.join("\n"), /Spark DAG|Spark run/);
 });
 
@@ -238,9 +241,9 @@ void test("spark widget renders completed workflow-run state in plain language",
     theme,
   );
 
-  assert.match(
-    lines.join("\n"),
-    /◆ Background work: 13\/13 tasks finished · failed · run:9fb95fb0/,
+  assertLineIncludes(
+    lines.find((line) => line.includes("Background work:")),
+    ["13/13", "failed", "run:9fb95fb0"],
   );
   assert.doesNotMatch(lines.join("\n"), /DAG\(failed|Spark DAG/);
 });

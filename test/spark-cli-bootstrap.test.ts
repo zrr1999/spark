@@ -159,10 +159,10 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
     assert.match(captured.systemPrompt ?? "", /Spark default research lens\./);
     assert.match(captured.systemPrompt ?? "", /Tools: task_read, task_write, assign/);
     assert.match(captured.systemPrompt ?? "", /<base_system_prompts>/);
-    assert.match(captured.systemPrompt ?? "", /# Spark/);
+    assert.doesNotMatch(captured.systemPrompt ?? "", /# Spark/);
     assert.match(captured.systemPrompt ?? "", /# pi-cue/);
     assert.match(captured.systemPrompt ?? "", /# pi-graft/);
-    assert.match(captured.systemPrompt ?? "", /at most one unfinished claimed task/);
+    assert.doesNotMatch(captured.systemPrompt ?? "", /at most one unfinished claimed task/);
     assert.match(captured.systemPrompt ?? "", /workspace-skill/);
   } finally {
     await rm(dir, { recursive: true, force: true });

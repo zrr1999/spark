@@ -75,7 +75,7 @@ export interface RoleRunRequest {
   instruction: string;
   launch?: RoleLaunchMode;
   systemPrompt?: string;
-  /** Concrete, user-confirmed Pi model to use for this run. */
+  /** Concrete Pi model to use for this run (usually current session model, unless overridden). */
   model?: string;
   /** Optional child Pi tool allowlist. Hosts/presets own which tools are appropriate. */
   allowedTools?: string[];

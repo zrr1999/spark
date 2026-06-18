@@ -1518,7 +1518,7 @@ export function registerSparkCommands(
     project: SparkProjectLike | undefined,
   ): string | undefined {
     if (!graph || !project) {
-      return 'No current project is selected. If durable task state is needed, use task_read({ action: "status" }) and task_write({ action: "project_use", title, description }) explicitly.';
+      return 'No current project is selected. If durable task state is needed, use task_read({ action: "workspace_status" }) and task_write({ action: "project_use", title, description }) explicitly.';
     }
     const tasks = graph.tasks(project.ref);
     const unfinished = tasks.filter((task) => isUnfinishedTaskStatus(task.status));

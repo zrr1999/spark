@@ -203,13 +203,38 @@ function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): PiTa
         signal,
         onUpdate,
         ctx,
-      })) satisfies NonNullable<PiTaskToolHandlers["status"]>;
+      })) satisfies NonNullable<PiTaskToolHandlers["project_list"]>;
+
+  const scopedStatus = (scope: "task" | "project" | "workspace") =>
+    (({ toolCallId, params, signal, onUpdate, ctx }) =>
+      executeSparkImplementationTool(resolveTool, "spark_status", {
+        toolCallId,
+        params: { ...stripTaskAction(params), scope },
+        signal,
+        onUpdate,
+        ctx,
+      })) satisfies NonNullable<PiTaskToolHandlers["task_status"]>;
+
+  const projectMutation = (intent: "finish" | "rename" | "status_update" | "metadata_update") =>
+    (({ toolCallId, params, signal, onUpdate, ctx }) =>
+      executeSparkImplementationTool(resolveTool, "spark_rename_project", {
+        toolCallId,
+        params: { ...stripTaskAction(params), intent },
+        signal,
+        onUpdate,
+        ctx,
+      })) satisfies NonNullable<PiTaskToolHandlers["project_finish"]>;
 
   return {
-    status: direct("spark_status"),
+    task_status: scopedStatus("task"),
+    project_status: scopedStatus("project"),
+    workspace_status: scopedStatus("workspace"),
     project_list: direct("spark_list_projects"),
     project_use: direct("spark_use_project"),
-    project_update: direct("spark_rename_project"),
+    project_finish: projectMutation("finish"),
+    project_rename: projectMutation("rename"),
+    project_status_update: projectMutation("status_update"),
+    project_metadata_update: projectMutation("metadata_update"),
     claim: direct("spark_claim_task"),
     plan: direct("spark_plan_tasks"),
     finish: direct("spark_finish_task"),
@@ -244,7 +269,7 @@ function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): PiTa
     cache_cleanup: ({ toolCallId, params, signal, onUpdate, ctx }) =>
       executeSparkImplementationTool(resolveTool, "spark_state", {
         toolCallId,
-        params: { ...stripTaskAction(params), action: "cleanup" },
+        params: { ...stripTaskAction(params), action: "cache_cleanup" },
         signal,
         onUpdate,
         ctx,

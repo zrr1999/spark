@@ -272,6 +272,7 @@ export interface ActiveSparkContextStrings {
   myClaimedTodosHidden: (hidden: number) => string;
   hiddenSessionClaimed: (hidden: number) => string;
   projectsCountsLine: (total: number, active: number) => string;
+  durableStateHint: string;
   sparkMdHeader: string;
   sparkMdReadFull: string;
 }
@@ -297,8 +298,10 @@ const ACTIVE_CONTEXT: Record<SparkLanguage, ActiveSparkContextStrings> = {
     },
     myClaimedTodosHidden: (hidden) => `  - … ${hidden} more active TODOs`,
     hiddenSessionClaimed: (hidden) =>
-      `- … ${hidden} more claimed task(s); use task_read({ action: "status" }) for details`,
+      `- … ${hidden} more claimed task(s); use task_read({ action: "project_status" }) for details`,
     projectsCountsLine: (total, active) => `- Projects: ${total} total / ${active} active`,
+    durableStateHint:
+      '- Durable state is authoritative; compact summaries/history are hints. Verify with task_read({ action: "project_status" }) or task_read({ action: "workspace_status" }) before changing project/task/goal state.',
     sparkMdHeader: "SPARK.md (intent excerpt):",
     sparkMdReadFull: "… (read SPARK.md for full intent)",
   },
@@ -322,8 +325,10 @@ const ACTIVE_CONTEXT: Record<SparkLanguage, ActiveSparkContextStrings> = {
     },
     myClaimedTodosHidden: (hidden) => `  - … 还有 ${hidden} 条活动 TODO`,
     hiddenSessionClaimed: (hidden) =>
-      `- … 还有 ${hidden} 条已认领任务；用 task_read({ action: "status" }) 查看详情`,
+      `- … 还有 ${hidden} 条已认领任务；用 task_read({ action: "project_status" }) 查看详情`,
     projectsCountsLine: (total, active) => `- 项目：${total} 个 / ${active} 个活跃`,
+    durableStateHint:
+      '- durable state 是权威；compact summary/历史记录只是线索。修改项目/任务/goal 前，先用 task_read({ action: "project_status" }) 或 task_read({ action: "workspace_status" }) 核对。',
     sparkMdHeader: "SPARK.md（intent 摘录）：",
     sparkMdReadFull: "…（完整 intent 见 SPARK.md）",
   },
