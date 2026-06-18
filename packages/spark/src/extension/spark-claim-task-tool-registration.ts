@@ -25,7 +25,12 @@ import {
   taskKindDescription,
   taskPlanSchema,
 } from "./task-plan-tool.ts";
-import { currentSparkProject, sparkSessionKey, sparkTodoStore } from "./session-state.ts";
+import {
+  currentSparkProject,
+  saveCurrentProjectRef,
+  sparkSessionKey,
+  sparkTodoStore,
+} from "./session-state.ts";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import { isGenericInitialTaskTitle } from "./spark-graph-invariants.ts";
 import { findActiveSessionClaim, resolveSessionClaimedTask } from "./task-claim-selection.ts";
@@ -307,6 +312,12 @@ export function registerSparkClaimTaskTool(
             claimRecovery: claimed.result.claimRecovery,
           },
         };
+      await saveCurrentProjectRef(
+        cwd,
+        ctx,
+        claimed.result.task.projectRef,
+        claimed.result.task.ref,
+      );
       await deps.refreshSparkWidget(cwd, ctx);
       return {
         content: [

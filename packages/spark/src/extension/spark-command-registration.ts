@@ -1267,7 +1267,6 @@ export function registerSparkCommands(
     if (goal.status === "complete") return;
     await updateSessionGoalStatus(ctx.cwd, ctx, goal.status, {
       reason: goal.pauseReason,
-      review: goal.lastReview,
       retryState: null,
     });
     await deps.refreshSparkWidget(ctx.cwd, ctx);

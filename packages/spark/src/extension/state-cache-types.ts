@@ -17,7 +17,7 @@ export type SparkProtectedStoreReason =
   | "session-state"
   | "notes"
   | "role-reports"
-  | "review-gate"
+  | "reviews"
   | "workflow-runs";
 
 export interface SparkStateCacheSummary {

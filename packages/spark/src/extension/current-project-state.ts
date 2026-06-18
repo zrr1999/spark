@@ -1,6 +1,10 @@
 import { rm } from "node:fs/promises";
 
-import { DEFAULT_READY_TASK_MAX_CONCURRENCY, type ProjectRef } from "@zendev-lab/pi-extension-api";
+import {
+  DEFAULT_READY_TASK_MAX_CONCURRENCY,
+  type ProjectRef,
+  type TaskRef,
+} from "@zendev-lab/pi-extension-api";
 import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import {
   normalizeCurrentProjectStoreSnapshot,
@@ -43,8 +47,13 @@ export async function saveCurrentProjectRef(
   cwd: string,
   ctx: SparkSessionContext | undefined,
   projectRef: ProjectRef,
+  currentTaskRef?: TaskRef,
 ): Promise<void> {
-  await saveCurrentProjectState(cwd, ctx, { version: 1, projectRef });
+  await saveCurrentProjectState(cwd, ctx, {
+    version: 1,
+    projectRef,
+    ...(currentTaskRef ? { currentTaskRef } : {}),
+  });
 }
 
 export function sparkRunStrategyMaxConcurrency(strategy: SparkRunStrategy): number {

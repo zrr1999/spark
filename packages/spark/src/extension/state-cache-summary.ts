@@ -43,14 +43,14 @@ export async function collectSparkProtectedStoreSummaries(
   root: string,
 ): Promise<SparkProtectedStoreSummary[]> {
   return [
-    await summarizeProtectedSparkStore(root, "projects.json", "task-graph", false),
+    await summarizeProtectedSparkStore(root, "projects", "task-graph", true),
     await summarizeProtectedSparkStore(root, join("todos", "todos.sqlite"), "todo-records", false),
     await summarizeProtectedSparkStore(root, "sessions", "session-state", true),
     await summarizeProtectedSparkStore(root, "artifacts", "artifact-history", true),
     await summarizeProtectedSparkStore(root, "notes", "notes", true),
     await summarizeProtectedSparkStore(root, "role-reports", "role-reports", true),
     await summarizeProtectedSparkStore(root, "workflow-runs.json", "workflow-runs", false),
-    await summarizeProtectedSparkStore(root, "review-gate.json", "review-gate", false),
+    await summarizeProtectedSparkStore(root, "reviews", "reviews", true),
   ];
 }
 

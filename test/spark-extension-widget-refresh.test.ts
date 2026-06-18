@@ -200,7 +200,8 @@ void test("Spark extension widget reconciles stale DAG records when an owned chi
       roleRef: builtinRoleRef("worker"),
       plan: executionReadyPlan("Keep the widget DAG active"),
     });
-    await defaultTaskGraphStore(dir).save(graph);
+    const graphStore = defaultTaskGraphStore(dir);
+    await graphStore.save(graph);
 
     const tools = new Map<string, SparkToolConfig>();
     const handlers = new Map<string, SparkEventHandler>();
@@ -277,7 +278,9 @@ void test("Spark extension widget reconciles stale DAG records when an owned chi
     const activeProcess = listActiveSparkRoleRunProcesses().find((process) => process.cwd === dir);
     assert.ok(activeProcess);
     activeRunRef = activeProcess.runRef;
-    await defaultTaskGraphStore(dir).save(graph);
+    await graphStore.update((latest) => {
+      latest.mergeTaskProgressFrom(graph, [task.ref]);
+    });
 
     await handlers.get("session_tree")?.({}, ctx);
 

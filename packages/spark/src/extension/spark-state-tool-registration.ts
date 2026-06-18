@@ -36,6 +36,7 @@ import {
   type SparkStateSessionScopes,
 } from "./state-housekeeping.ts";
 import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
+import { migrateStoreV2 } from "./store-v2-migration.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 
 interface SparkStateToolDependencies {
@@ -46,6 +47,7 @@ type SparkStateAction =
   | "status"
   | "diagnostics"
   | "doctor"
+  | "migrate-v2"
   | "cleanup"
   | "prune"
   | "compact-role-run-artifacts";
@@ -54,6 +56,7 @@ const SPARK_STATE_ACTIONS: SparkStateAction[] = [
   "status",
   "diagnostics",
   "doctor",
+  "migrate-v2",
   "cleanup",
   "prune",
   "compact-role-run-artifacts",
@@ -63,7 +66,7 @@ export function normalizeSparkStateAction(value: unknown): SparkStateAction {
   if (value === undefined || value === null) return "status";
   if (SPARK_STATE_ACTIONS.includes(value as SparkStateAction)) return value as SparkStateAction;
   throw new Error(
-    "action must be status, diagnostics, doctor, cleanup, prune, or compact-role-run-artifacts",
+    "action must be status, diagnostics, doctor, migrate-v2, cleanup, prune, or compact-role-run-artifacts",
   );
 }
 
@@ -85,13 +88,13 @@ export function registerSparkStateTool(
     name: "spark_state",
     label: "Spark State",
     description:
-      "Inspect or explicitly clean safe Spark session/cache state. action=status and action=diagnostics/doctor are read-only; action=cleanup defaults to dryRun=true and never deletes protected stores such as project graph, TODO records, session state, artifacts, notes, role-reports, workflow-runs, or review-gate. action=compact-role-run-artifacts previews or applies historical role-run transcript blob replacement and defaults to dry-run.",
+      "Inspect, migrate, or explicitly clean safe Spark session/cache state. action=status and action=diagnostics/doctor are read-only; action=migrate-v2 previews or applies explicit V2 legacy imports with backups; action=cleanup defaults to dryRun=true and never deletes protected stores such as project graph, TODO records, session state, artifacts, notes, role-reports, workflow-runs, or review indexes. action=compact-role-run-artifacts previews or applies historical role-run transcript blob replacement and defaults to dry-run.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({
           default: "status",
           description:
-            "status | diagnostics | doctor | cleanup | prune | compact-role-run-artifacts. status summarizes cache/protected stores; diagnostics/doctor reports protected-store candidates read-only; cleanup previews or deletes safe cache files; prune previews or applies typed workflow-run retention; compact-role-run-artifacts previews/applies role-run transcript blob replacement.",
+            "status | diagnostics | doctor | migrate-v2 | cleanup | prune | compact-role-run-artifacts. status summarizes cache/protected stores; diagnostics/doctor reports protected-store candidates read-only; migrate-v2 previews/applies explicit legacy imports with backups; cleanup previews or deletes safe cache files; prune previews or applies typed workflow-run retention; compact-role-run-artifacts previews/applies role-run transcript blob replacement.",
         }),
       ),
       dryRun: Type.Optional(
@@ -203,6 +206,26 @@ export function registerSparkStateTool(
         "includeBroken",
       );
       await deps.ensureSparkStateForActiveWorkspace(cwd, ctx);
+      if (action === "migrate-v2") {
+        const migration = await migrateStoreV2(cwd, ctx, { dryRun });
+        const lines = [`Spark store V2 migration ${dryRun ? "dry-run" : "apply"}:`];
+        lines.push(`Actions: ${migration.actions.length}`);
+        if (migration.backupDir) lines.push(`Backup: ${migration.backupDir}`);
+        if (migration.legacyImportOnly.length)
+          lines.push(`Legacy import-only: ${migration.legacyImportOnly.join(", ")}`);
+        for (const item of migration.actions.slice(0, limit)) {
+          const target = item.target ? ` -> ${item.target}` : "";
+          const imported = item.imported === undefined ? "" : ` imported=${item.imported}`;
+          const reason = item.reason ? ` (${item.reason})` : "";
+          lines.push(
+            `- ${item.status} ${item.kind}: ${item.path ?? ""}${target}${imported}${reason}`,
+          );
+        }
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
+          details: { found: true, action, migration },
+        };
+      }
       const graph = await loadSparkGraph(cwd, ctx);
       if (!graph)
         return {

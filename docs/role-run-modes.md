@@ -83,7 +83,7 @@ cwd is not a valid target for inspect/stop/reply/steer in the current workspace.
 
 Role-run and main-session task claims are lease-protected. If an owner disappears
 or a reviewer returns `needs_changes`, use explicit recovery instead of editing
-`.spark/projects.json` by hand:
+`.spark/projects/<project>/tasks/<task>/task.json` by hand:
 
 - `task_write({ action: "recover", task: "@name" })` releases an eligible
   other-session claim, records recovery evidence, and leaves the task

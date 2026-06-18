@@ -18,7 +18,12 @@ import {
   type TaskTodo,
 } from "@zendev-lab/pi-extension-api";
 import { defaultTaskGraphStore, taskCompletionReadiness } from "@zendev-lab/pi-tasks";
-import { currentSparkProject, sparkSessionKey, sparkTodoStore } from "./session-state.ts";
+import {
+  currentSparkProject,
+  saveCurrentProjectRef,
+  sparkSessionKey,
+  sparkTodoStore,
+} from "./session-state.ts";
 import { resolveSessionClaimedTask } from "./task-claim-selection.ts";
 import { compactTaskDetail, normalizeOptionalToolString } from "./task-plan-tool.ts";
 import { compactLearningDetail } from "./learning-tools.ts";
@@ -32,6 +37,7 @@ import type {
   TaskReviewVerdict,
 } from "./reviewer-runner.ts";
 import { withSparkReviewerLease } from "./spark-reviewer-lease.ts";
+import { recordTaskSubjectReview } from "./subject-review-store.ts";
 
 interface SparkFinishTaskToolDependencies {
   refreshSparkWidget: (cwd: string, ctx?: SparkToolContext) => Promise<void>;
@@ -332,6 +338,7 @@ export function registerSparkFinishTaskTool(
         };
       }
       const finishedResult = finishResult;
+      await saveCurrentProjectRef(cwd, ctx, finishedResult.projectRef);
       await deps.refreshSparkWidget(cwd, ctx);
       const learningCandidate =
         input.status === "done" && input.summary
@@ -651,7 +658,7 @@ async function recordTaskReviewArtifact(
       ? { stderrPreview: truncateReviewRunOutput(review.record.stderr, 4_000) }
       : {}),
   };
-  return defaultArtifactStore(cwd).put({
+  const artifact = await defaultArtifactStore(cwd).put({
     kind: "record",
     title: `Task finish review for @${task.name}: ${task.title}`,
     format: "json",
@@ -671,6 +678,8 @@ async function recordTaskReviewArtifact(
     },
     links: [{ to: task.ref, relation: "review-of" }],
   });
+  await recordTaskSubjectReview(cwd, projectRef, task, artifact, review);
+  return artifact;
 }
 
 function truncateReviewRunOutput(value: string, maxChars: number): string {

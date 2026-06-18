@@ -21,6 +21,7 @@ export {
   type SparkStateInactiveWorkflowRunCandidate,
   type SparkStateLargeArtifactCandidate,
   type SparkStateOrphanBlobCandidate,
+  type SparkStateDoctorFinding,
   type SparkStateProtectedFileCandidate,
   type SparkStateTerminalProjectCandidate,
 } from "./state-diagnostics.ts";

@@ -177,6 +177,8 @@ async function buildSessionIndexEntry(
     todoOwnerRef: sessionKey,
     currentProjectRef:
       typeof state?.projectRef === "string" ? (state.projectRef as ProjectRef) : undefined,
+    currentTaskRef:
+      typeof state?.currentTaskRef === "string" ? (state.currentTaskRef as TaskRef) : undefined,
     activeGoal: goalObject?.status === "active",
     activeLoop: loopObject?.status === "active",
     updatedAt,

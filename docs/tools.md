@@ -72,8 +72,8 @@ Automatic behavior:
    - stale current-task refs are cleared, but Spark never
      synthesizes a placeholder task for display
    - task graph snapshots persist project/task/dependency/run
-     state in `.spark/projects.json`; task TODOs are intentionally
-     excluded from that snapshot
+     state in the V2 `.spark/projects/<project>/...` file tree;
+     task TODOs are intentionally excluded from those files
    - Project creation compares the requested title/description against
      all existing Projects, including `done` Projects. Likely duplicates
      are a hard block (`duplicate_project`) with candidate refs/titles/status
@@ -81,27 +81,26 @@ Automatic behavior:
      ambiguous. This slice does not implement destructive Project merge,
      task moving, or artifact relinking; "merge" means selecting the existing
      Project.
-   - `TaskGraphStore` serializes graph writes with a filesystem
-     lock directory at `.spark/projects.json.lock`; the lock is
-     acquired with `mkdir`, records `owner.json` heartbeat
-     metadata, retries for up to 10s at 25ms intervals, and
-     removes lock directories older than 60s as stale
-   - `TaskGraphStore` writes `.spark/projects.json` atomically by
-     writing a temporary file in `.spark/` and renaming it into
-     place
+   - `TaskGraphStore` coordinates V2 graph writes with a small
+     index lock at `.spark/projects/index.lock` and project-owner
+     lock directories at `.spark/projects/locks/<project>.lock`;
+     locks are acquired with `mkdir`, record `owner.json` heartbeat
+     metadata, retry for up to 10s at 25ms intervals, and remove
+     lock directories older than 60s as stale
+   - `TaskGraphStore` writes the project tree by materializing a temporary
+     `.spark/projects.tmp-*` tree and renaming it into place
    - stale direct saves of previously loaded graphs are rejected:
-     if `.spark/projects.json` has changed or disappeared since
+     if the `.spark/projects/` tree has changed or disappeared since
      that graph was loaded, `save()` throws
      `TaskGraphStoreConflictError` instead of overwriting newer
      state; use `update()` for locked read/modify/write flows
-   - task-scoped TODO state is loaded from and saved outside
-     `.spark/projects.json`; active sessions use a session-scoped
-     `.spark/todos/<session>.json` path to avoid concurrent
-     role-run overwrites
-   - independent session TODOs from `task_write({ action: "todo_update", scope: "session" })` are
-     stored separately in `.spark/session-todos/<session>.json`;
-     TODO display numbers are stored in
-     `.spark/todo-display-numbers/<session>.json`
+   - task-scoped and session-scoped TODO state is loaded from and saved outside
+     `.spark/projects/`; V2 stores both in canonical SQLite at
+     `.spark/todos/todos.sqlite` to avoid concurrent role-run overwrites
+   - independent session TODOs from `task_write({ action: "todo_update", scope: "session" })` use
+     TODO SQLite rows owned by the session; legacy `.spark/session-todos/<session>.json`
+     files are import-only; TODO display numbers are stored with the session directory
+     at `.spark/sessions/<session>/todo-display-numbers.json`
    - expired task claims are swept on active Spark turns and by
      a lightweight background interval; stale claims become
      retryable `pending` tasks, while runtime execution timeouts

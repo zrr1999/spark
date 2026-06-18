@@ -30,6 +30,7 @@ import {
   defaultTaskTodoStore,
   renderTaskPlanReadinessRules,
   TaskGraph,
+  TaskGraphStore,
 } from "@zendev-lab/pi-tasks";
 import { registerPiArtifactTool } from "@zendev-lab/pi-artifacts/extension";
 import piAskExtension from "../packages/pi-ask/src/extension.ts";
@@ -72,6 +73,12 @@ import {
 import { normalizeSparkPlanTaskInputs } from "../packages/spark/src/extension/spark-plan-tasks-tool-registration.ts";
 import { normalizeSparkClaimTaskInput } from "../packages/spark/src/extension/spark-claim-task-tool-registration.ts";
 import { normalizeSparkFinishTaskInput } from "../packages/spark/src/extension/spark-finish-task-tool-registration.ts";
+import {
+  goalReviewDirectory,
+  rebuildWorkspaceReviewIndex,
+  subjectReviewRecordPath,
+  taskReviewDirectory,
+} from "../packages/spark/src/extension/subject-review-store.ts";
 import { normalizeSparkTodoOps } from "../packages/spark/src/extension/spark-todo-tool-registration.ts";
 import {
   normalizeArtifactBoolean,
@@ -620,7 +627,7 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
     const planCommand = existingRun.commands.get("plan");
     assert.ok(planCommand, "missing /plan command");
     await planCommand.handler("Audit current task flow", existingCtx);
-    assert.equal(existsSync(join(existingDir, ".spark", "projects.json")), true);
+    assert.equal(existsSync(projectTreeIndexPath(existingDir)), true);
     assert.equal(existsSync(join(existingDir, "SPARK.md")), false);
     assert.equal(existingRun.messages.length, 0);
     assert.equal(existingRun.customMessages.length, 1);
@@ -1033,12 +1040,19 @@ void test("/plan rejects malformed roadmap state without entering planning mode"
   const dir = await mkdtemp(join(tmpdir(), "spark-plan-roadmap-malformed-"));
   try {
     await writeEmptySparkProject(dir);
-    const projectsPath = join(dir, ".spark", "projects.json");
-    const snapshot = JSON.parse(await readFile(projectsPath, "utf8")) as {
-      projects: Array<{ roadmap?: { items?: unknown } }>;
-    };
-    snapshot.projects[0]!.roadmap!.items = "not-array";
-    await writeFile(projectsPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+    const graph = await defaultTaskGraphStore(dir).load();
+    const project = graph?.projects()[0];
+    assert.ok(project);
+    const roadmapPath = join(
+      dir,
+      ".spark",
+      "projects",
+      projectTreeDirName(project.ref),
+      "roadmap.json",
+    );
+    const snapshot = JSON.parse(await readFile(roadmapPath, "utf8")) as { items?: unknown };
+    snapshot.items = "not-array";
+    await writeFile(roadmapPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
     const ctx = testSparkContext(dir, "main");
     const run = registerSparkToolsForTest();
     const planCommand = run.commands.get("plan");
@@ -1245,7 +1259,7 @@ void test("spark_plan_tasks blocks mixed readiness without saving", async () => 
   const dir = await mkdtemp(join(tmpdir(), "spark-plan-readiness-mixed-"));
   try {
     await writeEmptySparkProject(dir);
-    const before = await readFile(join(dir, ".spark", "projects.json"), "utf8");
+    const before = await taskGraphSnapshotText(dir);
     const ctx = testSparkContext(dir, "main");
     const { tools } = registerSparkToolsForTest();
     await useOnlySparkProject(tools, ctx);
@@ -1284,7 +1298,7 @@ void test("spark_plan_tasks blocks mixed readiness without saving", async () => 
     assert.equal(details?.result?.created?.length, 2);
     assert.equal(details?.planDecisions?.[0]?.accepted, true);
     assert.equal(details?.planDecisions?.[1]?.blocked, true);
-    assert.equal(await readFile(join(dir, ".spark", "projects.json"), "utf8"), before);
+    assert.equal(await taskGraphSnapshotText(dir), before);
     assert.equal((await defaultTaskGraphStore(dir).load())?.tasks().length, 0);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -1295,7 +1309,7 @@ void test("spark_plan_tasks reports all-rejected readiness without saving", asyn
   const dir = await mkdtemp(join(tmpdir(), "spark-plan-rejected-"));
   try {
     await writeEmptySparkProject(dir);
-    const before = await readFile(join(dir, ".spark", "projects.json"), "utf8");
+    const before = await taskGraphSnapshotText(dir);
     const ctx = testSparkContext(dir, "main");
     ctx.ui.select = async () => assert.fail("readiness validation should not open a task-plan ask");
     ctx.ui.custom = async () =>
@@ -1338,7 +1352,7 @@ void test("spark_plan_tasks reports all-rejected readiness without saving", asyn
       details?.planDecisions?.every((decision) => decision.blocked),
       true,
     );
-    assert.equal(await readFile(join(dir, ".spark", "projects.json"), "utf8"), before);
+    assert.equal(await taskGraphSnapshotText(dir), before);
     assert.equal((await defaultTaskGraphStore(dir).load())?.tasks().length, 0);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -1616,7 +1630,7 @@ void test("goal status surfaces lifecycle actions, usage, review, and retry stat
     assert.doesNotMatch(statusText, /Spark session goal active:/);
     assert.doesNotMatch(statusText, /Usage:/);
     assert.doesNotMatch(statusText, /tokens/);
-    assert.match(statusText, /Last review: achieved=false confidence=medium/);
+    assert.match(statusText, /Last review: unrecorded at 2026-06-10T00:00:00.000Z/);
     assert.match(statusText, /Retry state: 1 failure\(s\), nextDelayMs=30000/);
     assert.doesNotMatch(statusText, /goal\(\{ action: "pause"/);
     assert.match(statusText, /autonomous pause is forbidden/);
@@ -2477,9 +2491,25 @@ void test("/goal foreground loop completes active goal when reviewer says achiev
     assert.equal(reviewerCalls, 1);
     assert.equal(run.customMessages.length, messagesBefore);
     const goal = await loadSessionGoal(dir, ctx);
-    assert.equal(goal?.status, "complete");
-    assert.equal(goal?.lastReview?.achieved, true);
+    assert.ok(goal);
+    assert.equal(goal.status, "complete");
+    const goalReviewArtifactRef = goal.lastReviewArtifactRef;
+    assert.ok(goalReviewArtifactRef);
+    assert.ok(goal.lastReviewedAt);
     assert.equal((await defaultArtifactStore(dir).list({ kind: "record" })).length, 1);
+    const reviewDir = goalReviewDirectory(dir, goal);
+    const reviewIndex = JSON.parse(await readFile(join(reviewDir, "index.json"), "utf8")) as {
+      reviews: Array<{ subjectKind?: string; subjectRef?: string; artifactRef?: string }>;
+    };
+    assert.equal(reviewIndex.reviews[0]?.subjectKind, "goal");
+    assert.equal(reviewIndex.reviews[0]?.subjectRef, goal.goalId);
+    assert.equal(reviewIndex.reviews[0]?.artifactRef, goalReviewArtifactRef);
+    const subjectReview = JSON.parse(
+      await readFile(subjectReviewRecordPath(reviewDir, goalReviewArtifactRef), "utf8"),
+    ) as { subjectKind?: string; subjectRef?: string; outcome?: string };
+    assert.equal(subjectReview.subjectKind, "goal");
+    assert.equal(subjectReview.subjectRef, goal.goalId);
+    assert.equal(subjectReview.outcome, "approved");
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
@@ -2683,11 +2713,9 @@ void test("/goal foreground loop blocks completion when project tasks remain unf
 
     const goal = await loadSessionGoal(dir, ctx);
     assert.equal(goal?.status, "active");
-    assert.equal(goal?.lastReview?.achieved, false);
-    assert.equal(goal?.lastReview?.confidence, "deterministic-blocker");
+    assert.ok(goal?.lastReviewedAt);
+    assert.equal(goal?.lastReviewArtifactRef, undefined);
     assert.equal(reviewerCalls, 0);
-    assert.match(goal?.lastReview?.reason ?? "", /unfinished project task/);
-    assert.match(goal?.lastReview?.remainingWork ?? "", /@unfinished-ready-task/);
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
@@ -2865,10 +2893,25 @@ void test("/goal foreground loop records unmet reviewer verdict before continuat
     assert.equal(run.customMessages.at(-1)?.display, false);
     assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
     const goal = await loadSessionGoal(dir, ctx);
-    assert.equal(goal?.status, "active");
-    assert.equal(goal?.lastReview?.achieved, false);
-    assert.match(goal?.lastReview?.remainingWork ?? "", /goal needs one more verified task/);
+    assert.ok(goal);
+    assert.equal(goal.status, "active");
+    const goalReviewArtifactRef = goal.lastReviewArtifactRef;
+    assert.ok(goalReviewArtifactRef);
+    assert.ok(goal.lastReviewedAt);
     assert.equal((await defaultArtifactStore(dir).list({ kind: "record" })).length, 1);
+    const reviewDir = goalReviewDirectory(dir, goal);
+    const reviewIndex = JSON.parse(await readFile(join(reviewDir, "index.json"), "utf8")) as {
+      reviews: Array<{ subjectKind?: string; subjectRef?: string; artifactRef?: string }>;
+    };
+    assert.equal(reviewIndex.reviews[0]?.subjectKind, "goal");
+    assert.equal(reviewIndex.reviews[0]?.subjectRef, goal.goalId);
+    assert.equal(reviewIndex.reviews[0]?.artifactRef, goalReviewArtifactRef);
+    const subjectReview = JSON.parse(
+      await readFile(subjectReviewRecordPath(reviewDir, goalReviewArtifactRef), "utf8"),
+    ) as { subjectKind?: string; subjectRef?: string; outcome?: string };
+    assert.equal(subjectReview.subjectKind, "goal");
+    assert.equal(subjectReview.subjectRef, goal.goalId);
+    assert.equal(subjectReview.outcome, "needs_changes");
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
@@ -3051,13 +3094,8 @@ void test("/goal foreground loop blocks completion while session TODOs are activ
     assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
     const goal = await loadSessionGoal(dir, ctx);
     assert.equal(goal?.status, "active");
-    assert.equal(goal?.lastReview?.achieved, false);
-    assert.equal(goal?.lastReview?.confidence, "deterministic-blocker");
-    assert.match(goal?.lastReview?.reason ?? "", /1 unresolved session TODO/);
-    assert.match(
-      goal?.lastReview?.blockers.join("\n") ?? "",
-      /Resolve session blocker \[pending\]/,
-    );
+    assert.ok(goal?.lastReviewedAt);
+    assert.equal(goal?.lastReviewArtifactRef, undefined);
     assert.equal((await defaultArtifactStore(dir).list({ kind: "record" })).length, 0);
   } finally {
     globalThis.setTimeout = originalSetTimeout;
@@ -3133,7 +3171,7 @@ void test("/goal foreground loop allows blocked session TODOs with wait conditio
     assert.equal(reviewerCalls, 1);
     const goal = await loadSessionGoal(dir, ctx);
     assert.equal(goal?.status, "complete");
-    assert.notEqual(goal?.lastReview?.confidence, "deterministic-blocker");
+    assert.ok(goal?.lastReviewArtifactRef);
     assert.equal((await defaultArtifactStore(dir).list({ kind: "record" })).length, 1);
   } finally {
     globalThis.setTimeout = originalSetTimeout;
@@ -3332,8 +3370,8 @@ void test("goal reviewer state machine covers restart, idle review, and task fin
     assert.equal(restarted.customMessages.at(-1)?.options?.deliverAs, "followUp");
     let goal = await loadSessionGoal(dir, ctx);
     assert.equal(goal?.status, "active");
-    assert.equal(goal?.lastReview?.achieved, false);
-    assert.match(goal?.lastReview?.remainingWork ?? "", /project goal still needs one task/);
+    assert.ok(goal?.lastReviewArtifactRef);
+    assert.ok(goal?.lastReviewedAt);
 
     for (const handler of restarted.eventHandlers.get("agent_end") ?? []) {
       await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
@@ -3346,7 +3384,7 @@ void test("goal reviewer state machine covers restart, idle review, and task fin
     assert.equal(restarted.customMessages.length, messagesBeforeAchieved);
     goal = await loadSessionGoal(dir, ctx);
     assert.equal(goal?.status, "complete");
-    assert.equal(goal?.lastReview?.achieved, true);
+    assert.ok(goal?.lastReviewArtifactRef);
 
     await executeSparkTool(run.tools, "spark_claim_task", ctx, {
       name: "e2e-task-finish-gate",
@@ -3850,17 +3888,11 @@ void test("/goal foreground loop waits for idle and stops after pause", async ()
       );
     }
     const failedGoalState = JSON.parse(await readFile(sessionGoalPath(dir, ctx), "utf8")) as {
-      goal?: { status?: string; lastReview?: { reason?: string; blockers?: string[] } };
+      goal?: { status?: string; lastReview?: unknown; lastReviewedAt?: string };
     };
     assert.equal(failedGoalState.goal?.status, "active");
-    assert.match(
-      failedGoalState.goal?.lastReview?.reason ?? "",
-      /Context overflow recovery failed: invalidated oauth token/,
-    );
-    assert.match(
-      failedGoalState.goal?.lastReview?.blockers?.join("\n") ?? "",
-      /Context overflow recovery failed: invalidated oauth token/,
-    );
+    assert.equal(failedGoalState.goal?.lastReview, undefined);
+    assert.ok(failedGoalState.goal?.lastReviewedAt);
     assert.equal(timers.length, 6);
     assert.equal(timers[5]?.delay, 30_000);
 
@@ -4187,7 +4219,7 @@ void test("spark_plan_tasks refuses to cancel tasks that still have dependents",
       });
       graph.addDependency(dependent.ref, prerequisite.ref);
     });
-    const before = await readFile(join(dir, ".spark", "projects.json"), "utf8");
+    const before = await taskGraphSnapshotText(dir);
     const { tools } = registerSparkToolsForTest();
     await useOnlySparkProject(tools, ctx);
 
@@ -4206,7 +4238,7 @@ void test("spark_plan_tasks refuses to cancel tasks that still have dependents",
     assert.match(toolText(planned), /Task plan dependency error/);
     assert.match(toolText(planned), /cannot be cancelled/);
     assert.equal((planned.details as { error?: string }).error, "task_dependency_error");
-    assert.equal(await readFile(join(dir, ".spark", "projects.json"), "utf8"), before);
+    assert.equal(await taskGraphSnapshotText(dir), before);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -4708,10 +4740,7 @@ void test("spark_claim_task and spark_update_task_todos persist task TODOs acros
         ["Run focused tests", "pending"],
       ],
     );
-    assert.doesNotMatch(
-      await readFile(join(dir, ".spark", "projects.json"), "utf8"),
-      /Read sources/,
-    );
+    assert.doesNotMatch(await taskGraphSnapshotText(dir), /Read sources/);
 
     await executeSparkTool(tools, "spark_update_task_todos", ctx, {
       ops: [
@@ -5108,6 +5137,28 @@ void test("spark_finish_task completes this session's claimed task", async () =>
     assert.ok(loaded);
     assert.equal(loaded.getTask(taskRef).status, "done");
     assert.equal(loaded.getTask(taskRef).claim, undefined);
+    const reviewArtifacts = await defaultArtifactStore(dir).list({ kind: "record" });
+    assert.equal(reviewArtifacts.length, 1);
+    const reviewDir = taskReviewDirectory(dir, loaded.getTask(taskRef).projectRef, taskRef);
+    const reviewIndex = JSON.parse(await readFile(join(reviewDir, "index.json"), "utf8")) as {
+      reviews: Array<{ subjectKind?: string; subjectRef?: string; artifactRef?: string }>;
+    };
+    assert.equal(reviewIndex.reviews[0]?.subjectKind, "task");
+    assert.equal(reviewIndex.reviews[0]?.subjectRef, taskRef);
+    assert.equal(reviewIndex.reviews[0]?.artifactRef, reviewArtifacts[0]?.ref);
+    const subjectReview = JSON.parse(
+      await readFile(subjectReviewRecordPath(reviewDir, reviewArtifacts[0]!.ref), "utf8"),
+    ) as { subjectKind?: string; subjectRef?: string; outcome?: string };
+    assert.equal(subjectReview.subjectKind, "task");
+    assert.equal(subjectReview.subjectRef, taskRef);
+    assert.equal(subjectReview.outcome, "approved");
+    const workspaceReviewIndex = await rebuildWorkspaceReviewIndex(dir);
+    const reviewEntry = workspaceReviewIndex.reviews.find((entry) => entry.subjectRef === taskRef);
+    assert.equal(reviewEntry?.subjectKind, "task");
+    assert.match(
+      reviewEntry?.path ?? "",
+      /projects\/proj-.*\/tasks\/task-.*\/reviews\/artifact-.*\.json/,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -5295,6 +5346,19 @@ void test("spark_finish_task keeps task unfinished when reviewer rejects done tr
       reviewArtifact?.body as { reviewerRun?: { stdoutPreview?: string } } | undefined
     )?.reviewerRun;
     assert.match(reviewerRun?.stdoutPreview ?? "", /test reviewer raw stdout/);
+    const reviewDir = taskReviewDirectory(dir, loaded.getTask(taskRef).projectRef, taskRef);
+    const reviewIndex = JSON.parse(await readFile(join(reviewDir, "index.json"), "utf8")) as {
+      reviews: Array<{ subjectKind?: string; subjectRef?: string; artifactRef?: string }>;
+    };
+    assert.equal(reviewIndex.reviews[0]?.subjectKind, "task");
+    assert.equal(reviewIndex.reviews[0]?.subjectRef, taskRef);
+    assert.equal(reviewIndex.reviews[0]?.artifactRef, reviewArtifacts[0]?.ref);
+    const subjectReview = JSON.parse(
+      await readFile(subjectReviewRecordPath(reviewDir, reviewArtifacts[0]!.ref), "utf8"),
+    ) as { subjectKind?: string; subjectRef?: string; outcome?: string };
+    assert.equal(subjectReview.subjectKind, "task");
+    assert.equal(subjectReview.subjectRef, taskRef);
+    assert.equal(subjectReview.outcome, "needs_changes");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -6651,7 +6715,9 @@ void test("spark_goal tool sets and updates durable session goals", async () => 
     const editedGoal = await loadSessionGoal(dir, ctx);
     assert.equal(editedGoal?.goalId, pausedGoal.goalId);
     assert.equal(editedGoal?.objective, "Finish the edited durable goal slice");
-    assert.equal(editedGoal?.lastReview, undefined);
+    assert.equal(editedGoal?.lastReviewRef, undefined);
+    assert.equal(editedGoal?.lastReviewArtifactRef, undefined);
+    assert.equal(editedGoal?.lastReviewedAt, undefined);
 
     const completed = await executeSparkTool(tools, "goal", ctx, {
       action: "complete",
@@ -6715,7 +6781,8 @@ void test("spark_goal complete uses deterministic blocker before reviewer when w
     assert.match(toolText(completed), /@unfinished-complete-blocker/);
     const goal = await loadSessionGoal(dir, ctx);
     assert.equal(goal?.status, "active");
-    assert.equal(goal?.lastReview?.confidence, "deterministic-blocker");
+    assert.ok(goal?.lastReviewedAt);
+    assert.equal(goal?.lastReviewArtifactRef, undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -6782,7 +6849,7 @@ void test("spark_goal complete allows evidenced narrow goal despite unrelated pr
     assert.match(toolText(completed), /Goal completion approved by reviewer/);
     const goal = await loadSessionGoal(dir, ctx);
     assert.equal(goal?.status, "complete");
-    assert.notEqual(goal?.lastReview?.confidence, "deterministic-blocker");
+    assert.ok(goal?.lastReviewArtifactRef);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -8343,7 +8410,6 @@ void test("spark_workflow_runs reply records failed delivery without successful 
       () => listActiveSparkRoleRunProcesses().some((process) => process.cwd === dir),
       5_000,
     );
-    await store.save(graph);
     const active = listActiveSparkRoleRunProcesses().find((process) => process.cwd === dir);
     assert.ok(active);
     await waitFor(() => existsSync(closedStdinFile), 5_000);
@@ -8388,8 +8454,8 @@ void test("spark_workflow_runs reply records failed delivery without successful 
       (candidate) => candidate.runRef === active.runRef,
     );
     assert.deepEqual(
-      entry?.events
-        ?.filter((event) => event.type === "waiting_for_user" || event.type === "replied")
+      (entry?.events ?? [])
+        .filter((event) => event.type === "waiting_for_user" || event.type === "replied")
         .map((event) => event.type),
       [],
     );
@@ -9494,7 +9560,7 @@ void test("spark_status defaults to active view, supports full history, summary,
     assert.match(fullText, /Spark state cache:/);
     assert.match(fullText, /sessions: \d+ files/);
     assert.match(fullText, /Protected stores:/);
-    assert.match(fullText, /project graph: 1 files/);
+    assert.match(fullText, /project graph: \d+ files, .*\.spark\/projects/);
     assert.doesNotMatch(fullText, /Hidden finished tasks/);
     assert.equal(full.details?.view, "full");
     assert.equal(full.details?.limit, undefined);
@@ -9511,7 +9577,7 @@ void test("spark_status defaults to active view, supports full history, summary,
     assert.ok(state);
     assert.ok(state.caches.some((cache) => cache.kind === "sessions" && cache.files >= 1));
     assert.ok(
-      state.protectedStores.some((store) => store.reason === "task-graph" && store.files === 1),
+      state.protectedStores.some((store) => store.reason === "task-graph" && store.files >= 1),
     );
 
     const fullFromLegacyFlag = await executeSparkTool(tools, "spark_status", ctx, {
@@ -9542,6 +9608,7 @@ void test("spark_state cleanup previews and deletes only safe cache files", asyn
     const artifactsDir = join(dir, ".spark", "artifacts");
     const notesDir = join(dir, ".spark", "notes");
     const roleReportsDir = join(dir, ".spark", "role-reports");
+    const reviewsDir = join(dir, ".spark", "reviews");
     await mkdir(currentProjectDir, { recursive: true });
     await mkdir(taskTodoDir, { recursive: true });
     await mkdir(sessionTodoDir, { recursive: true });
@@ -9549,6 +9616,7 @@ void test("spark_state cleanup previews and deletes only safe cache files", asyn
     await mkdir(artifactsDir, { recursive: true });
     await mkdir(notesDir, { recursive: true });
     await mkdir(roleReportsDir, { recursive: true });
+    await mkdir(reviewsDir, { recursive: true });
 
     const missingProjectFile = join(currentProjectDir, "old-owner.json");
     const emptyOtherTaskTodos = join(taskTodoDir, "other-session.json");
@@ -9557,7 +9625,7 @@ void test("spark_state cleanup previews and deletes only safe cache files", asyn
     const staleDisplayNumbers = join(displayNumberDir, "other-session.json");
     const protectedArtifact = join(artifactsDir, "keep.txt");
     const protectedWorkflowRuns = join(dir, ".spark", "workflow-runs.json");
-    const protectedReviewGate = join(dir, ".spark", "review-gate.json");
+    const protectedReviewsIndex = join(reviewsDir, "index.json");
     const protectedNote = join(notesDir, "keep.md");
     const protectedRoleReport = join(roleReportsDir, "keep.md");
 
@@ -9580,7 +9648,7 @@ void test("spark_state cleanup previews and deletes only safe cache files", asyn
       }),
       "utf8",
     );
-    await writeFile(protectedReviewGate, JSON.stringify({ ref: "review:keep" }), "utf8");
+    await writeFile(protectedReviewsIndex, JSON.stringify({ version: 1, reviews: [] }), "utf8");
     await writeFile(protectedNote, "keep", "utf8");
     await writeFile(protectedRoleReport, "keep", "utf8");
     await utimes(terminalOtherSessionTodos, oldDate, oldDate);
@@ -9610,10 +9678,10 @@ void test("spark_state cleanup previews and deletes only safe cache files", asyn
     assert.equal(existsSync(terminalOtherSessionTodos), false);
     assert.equal(existsSync(staleDisplayNumbers), false);
     assert.equal(existsSync(currentTaskTodos), true);
-    assert.equal(existsSync(join(dir, ".spark", "projects.json")), true);
+    assert.equal(existsSync(projectTreeIndexPath(dir)), true);
     assert.equal(existsSync(protectedArtifact), true);
     assert.equal(existsSync(protectedWorkflowRuns), true);
-    assert.equal(existsSync(protectedReviewGate), true);
+    assert.equal(existsSync(protectedReviewsIndex), true);
     assert.equal(existsSync(protectedNote), true);
     assert.equal(existsSync(protectedRoleReport), true);
 
@@ -9739,14 +9807,15 @@ void test("spark_state diagnostics reports protected-store candidates without de
     const orphanBlob = join(dir, ".spark", "artifacts", "blobs", "orphan-diagnostics.txt");
     const noteFile = join(dir, ".spark", "notes", "diagnostics-note.md");
     const roleReportFile = join(dir, ".spark", "role-reports", "diagnostics-report.md");
-    const reviewGateFile = join(dir, ".spark", "review-gate.json");
+    const reviewsIndexFile = join(dir, ".spark", "reviews", "index.json");
     await mkdir(join(dir, ".spark", "artifacts", "blobs"), { recursive: true });
     await mkdir(join(dir, ".spark", "notes"), { recursive: true });
     await mkdir(join(dir, ".spark", "role-reports"), { recursive: true });
+    await mkdir(join(dir, ".spark", "reviews"), { recursive: true });
     await writeFile(orphanBlob, "orphan", "utf8");
     await writeFile(noteFile, "note", "utf8");
     await writeFile(roleReportFile, "role report", "utf8");
-    await writeFile(reviewGateFile, JSON.stringify({ ref: "review:diagnostics" }), "utf8");
+    await writeFile(reviewsIndexFile, JSON.stringify({ version: 1, reviews: [] }), "utf8");
 
     const ctx = testSparkContext(dir, "main");
     const { tools } = registerSparkToolsForTest();
@@ -9785,13 +9854,215 @@ void test("spark_state diagnostics reports protected-store candidates without de
     );
     assert.equal(details.diagnostics?.terminalProjects.candidates[0]?.ref, terminalProject.ref);
 
-    assert.equal(existsSync(join(dir, ".spark", "projects.json")), true);
+    assert.equal(existsSync(projectTreeIndexPath(dir)), true);
     assert.equal(existsSync(defaultArtifactStore(dir).pathFor(artifact.ref)), true);
     assert.equal(existsSync(orphanBlob), true);
     assert.equal(existsSync(noteFile), true);
     assert.equal(existsSync(roleReportFile), true);
-    assert.equal(existsSync(reviewGateFile), true);
+    assert.equal(existsSync(reviewsIndexFile), true);
     assert.equal(existsSync(join(dir, ".spark", "workflow-runs.json")), true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark_state doctor reports store-v2 migration diagnostics with stable codes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-state-doctor-store-v2-"));
+  try {
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Doctor project", description: "doctor" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Doctor task",
+      description: "doctor task",
+    });
+    await defaultTaskGraphStore(dir).save(graph);
+
+    await writeFile(join(dir, ".spark", "projects.json"), "{}", "utf8");
+    await writeFile(join(dir, ".spark", "review-gate.json"), "{}", "utf8");
+    await mkdir(join(dir, ".spark", "sessions"), { recursive: true });
+    await writeFile(
+      join(dir, ".spark", "sessions", "legacy-owner.json"),
+      `${JSON.stringify({ version: 1, projectRef: "proj:missing" })}\n`,
+      "utf8",
+    );
+    await mkdir(join(dir, ".spark", "sessions", "dangling-session"), { recursive: true });
+    await writeFile(
+      join(dir, ".spark", "sessions", "dangling-session", "state.json"),
+      `${JSON.stringify({ version: 1, projectRef: "proj:missing", currentTaskRef: "task:missing" })}\n`,
+      "utf8",
+    );
+    const reviewDir = join(
+      dir,
+      ".spark",
+      "projects",
+      storeDirNameForTest(project.ref),
+      "tasks",
+      storeDirNameForTest(task.ref),
+      "reviews",
+    );
+    await mkdir(reviewDir, { recursive: true });
+    await writeFile(
+      join(reviewDir, "artifact-dangling-review.json"),
+      `${JSON.stringify({
+        version: 1,
+        subjectKind: "task",
+        subjectRef: "task:missing",
+        artifactRef: "artifact:dangling-review",
+        outcome: "approved",
+        summary: "dangling review",
+        reviewedAt: "2026-06-18T00:00:00.000Z",
+        recordedAt: "2026-06-18T00:00:00.000Z",
+        reviewerRun: {},
+        verdict: {},
+        legacyImportOnly: [".spark/review-gate.json"],
+      })}\n`,
+      "utf8",
+    );
+
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+    const doctor = await executeSparkTool(tools, "spark_state", ctx, { action: "doctor" });
+    const text = toolText(doctor);
+    assert.match(text, /Store V2 doctor findings:/);
+    assert.match(text, /STORE_V2_LEGACY_IMPORT_ONLY_PRESENT/);
+    assert.match(text, /\.spark\/sessions\/legacy-owner\.json/);
+    assert.match(text, /STORE_V2_DANGLING_CURRENT_PROJECT_REF/);
+    assert.match(text, /STORE_V2_DANGLING_CURRENT_TASK_REF/);
+    assert.match(text, /STORE_V2_REVIEW_INDEX_MISSING/);
+    assert.match(text, /STORE_V2_REVIEW_SUBJECT_MISSING_TASK/);
+    const codes = new Set(
+      (
+        doctor.details as {
+          diagnostics?: { doctor?: { findings?: Array<{ code?: string }> } };
+        }
+      ).diagnostics?.doctor?.findings?.map((finding) => finding.code),
+    );
+    assert.equal(codes.has("STORE_V2_LEGACY_IMPORT_ONLY_PRESENT"), true);
+    assert.equal(codes.has("STORE_V2_DANGLING_CURRENT_PROJECT_REF"), true);
+    assert.equal(codes.has("STORE_V2_DANGLING_CURRENT_TASK_REF"), true);
+    assert.equal(codes.has("STORE_V2_REVIEW_INDEX_MISSING"), true);
+    assert.equal(codes.has("STORE_V2_REVIEW_SUBJECT_MISSING_TASK"), true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark_state migrate-v2 previews, backs up, applies legacy graph import idempotently", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-state-migrate-v2-"));
+  try {
+    await mkdir(join(dir, ".spark"), { recursive: true });
+    const legacyGraph = new TaskGraph();
+    const project = legacyGraph.createProject({ title: "Legacy project", description: "legacy" });
+    const task = legacyGraph.createTask({
+      projectRef: project.ref,
+      title: "Legacy task",
+      description: "legacy task",
+    });
+    await new TaskGraphStore(join(dir, ".spark", "projects.json")).save(legacyGraph);
+    await mkdir(join(dir, ".spark", "sessions"), { recursive: true });
+    await mkdir(join(dir, ".spark", "todos"), { recursive: true });
+    await mkdir(join(dir, ".spark", "session-todos"), { recursive: true });
+    await writeFile(
+      join(dir, ".spark", "sessions", "legacy-owner.json"),
+      `${JSON.stringify({ version: 1, projectRef: project.ref, currentTaskRef: task.ref })}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(dir, ".spark", "todos", "legacy-owner.json"),
+      `${JSON.stringify({
+        version: 1,
+        todos: [
+          {
+            id: "todo-task-legacy",
+            taskRef: task.ref,
+            content: "Imported task TODO",
+            status: "done",
+          },
+        ],
+      })}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(dir, ".spark", "session-todos", "legacy-owner.json"),
+      `${JSON.stringify({
+        version: 1,
+        todos: [{ id: "todo-session-legacy", content: "Imported session TODO", status: "pending" }],
+      })}\n`,
+      "utf8",
+    );
+    await writeFile(join(dir, ".spark", "review-gate.json"), "{}\n", "utf8");
+
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+    const dryRun = await executeSparkTool(tools, "spark_state", ctx, {
+      action: "migrate-v2",
+      dryRun: true,
+    });
+    assert.match(toolText(dryRun), /Spark store V2 migration dry-run:/);
+    assert.match(toolText(dryRun), /import-project-graph/);
+    assert.match(toolText(dryRun), /import-session-state/);
+    assert.match(toolText(dryRun), /import-task-todos/);
+    assert.match(toolText(dryRun), /import-session-todos/);
+    assert.match(toolText(dryRun), /record-cutover-marker/);
+    assert.match(toolText(dryRun), /Legacy import-only: .*\.spark\/projects\.json/);
+    assert.match(toolText(dryRun), /\.spark\/sessions\/legacy-owner\.json/);
+    assert.match(toolText(dryRun), /\.spark\/todos\/legacy-owner\.json/);
+    assert.match(toolText(dryRun), /\.spark\/session-todos\/legacy-owner\.json/);
+    assert.match(toolText(dryRun), /\.spark\/review-gate\.json/);
+    await assert.rejects(() => readFile(projectTreeIndexPath(dir), "utf8"));
+
+    const apply = await executeSparkTool(tools, "spark_state", ctx, {
+      action: "migrate-v2",
+      dryRun: false,
+    });
+    assert.match(toolText(apply), /Spark store V2 migration apply:/);
+    const backupDir = (apply.details as { migration?: { backupDir?: string } }).migration
+      ?.backupDir;
+    assert.ok(backupDir);
+    assert.equal(existsSync(join(dir, backupDir, "projects.json")), true);
+    assert.equal(existsSync(join(dir, backupDir, "sessions", "legacy-owner.json")), true);
+    assert.equal(existsSync(join(dir, backupDir, "todos", "legacy-owner.json")), true);
+    assert.equal(existsSync(join(dir, backupDir, "session-todos", "legacy-owner.json")), true);
+    assert.equal(existsSync(join(dir, backupDir, "review-gate.json")), true);
+    const migrated = await defaultTaskGraphStore(dir).load();
+    assert.equal(migrated?.getTask(task.ref).title, "Legacy task");
+    assert.equal(existsSync(projectTreeIndexPath(dir)), true);
+    assert.equal(existsSync(join(dir, ".spark", "sessions", "index.json")), true);
+    assert.equal(existsSync(join(dir, ".spark", "reviews", "index.json")), true);
+    assert.equal(existsSync(join(dir, ".spark", "sessions", "legacy-owner", "state.json")), true);
+    assert.equal(
+      (await defaultTaskTodoStore(dir, "migration").load())?.[0]?.id,
+      "todo-task-legacy",
+    );
+    assert.equal(
+      (await defaultTaskTodoStore(dir, "migration").loadSessionTodos("legacy-owner"))[0]?.id,
+      "todo-session-legacy",
+    );
+    assert.equal(existsSync(join(dir, ".spark", "projects.json")), true);
+    const marker = JSON.parse(
+      await readFile(join(dir, ".spark", "store-v2-cutover.json"), "utf8"),
+    ) as { version?: number; storeVersion?: string; status?: string };
+    assert.deepEqual(
+      { version: marker.version, storeVersion: marker.storeVersion, status: marker.status },
+      { version: 1, storeVersion: "v2", status: "complete" },
+    );
+    const actionKinds = (
+      apply.details as { migration?: { actions?: Array<{ kind: string; status: string }> } }
+    ).migration?.actions?.map((action) => action.kind);
+    assert.equal(actionKinds?.at(-1), "record-cutover-marker");
+    assert.ok(
+      actionKinds &&
+        actionKinds.indexOf("validate-invariants") >= 0 &&
+        actionKinds.indexOf("validate-invariants") < actionKinds.indexOf("record-cutover-marker"),
+    );
+
+    const secondApply = await executeSparkTool(tools, "spark_state", ctx, {
+      action: "migrate-v2",
+      dryRun: false,
+    });
+    assert.match(toolText(secondApply), /Spark store V2 migration apply:/);
+    assert.equal((await defaultTaskGraphStore(dir).load())?.getTask(task.ref).title, "Legacy task");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -9840,7 +10111,7 @@ void test("spark_state rejects invalid explicit action and path parameters", asy
 
     await assert.rejects(
       () => executeSparkTool(tools, "spark_state", ctx, { action: "repair" }),
-      /action must be status, diagnostics, doctor, cleanup, prune, or compact-role-run-artifacts/,
+      /action must be status, diagnostics, doctor, migrate-v2, cleanup, prune, or compact-role-run-artifacts/,
     );
     await assert.rejects(
       () =>
@@ -10218,10 +10489,7 @@ void test("spark_update_todos persists independent session TODOs across reload",
         ["Archive notes", "pending", []],
       ],
     );
-    assert.doesNotMatch(
-      await readFile(join(dir, ".spark", "projects.json"), "utf8"),
-      /Coordinate review/,
-    );
+    assert.doesNotMatch(await taskGraphSnapshotText(dir), /Coordinate review/);
 
     const reloaded = registerSparkToolsForTest();
     const status = await executeSparkTool(reloaded.tools, "spark_status", ctx, {});
@@ -10813,6 +11081,10 @@ async function useOnlySparkProjectInExplicitPlanMode(
   assert.ok(state.projectRef);
 }
 
+function storeDirNameForTest(ref: string): string {
+  return ref.replace(/[^a-zA-Z0-9._-]/gu, "-").replace(/-+/gu, "-");
+}
+
 function testSparkContext(cwd: string, sessionName: string): TestSparkContext {
   const sessionFile = join(cwd, ".pi-sessions", `${sessionName}.json`);
   const context: TestSparkContext = {
@@ -10882,6 +11154,19 @@ function hiddenRoleRunInboxPath(cwd: string, ctx: TestSparkContext): string {
 
 function currentProjectStatePath(cwd: string, ctx: TestSparkContext): string {
   return join(sessionDirectoryPath(cwd, ctx), "state.json");
+}
+
+function projectTreeIndexPath(cwd: string): string {
+  return join(cwd, ".spark", "projects", "index.json");
+}
+
+function projectTreeDirName(ref: string): string {
+  return ref.replace(/[^a-zA-Z0-9._-]/gu, "-").replace(/-+/gu, "-");
+}
+
+async function taskGraphSnapshotText(cwd: string): Promise<string> {
+  const graph = await defaultTaskGraphStore(cwd).load();
+  return JSON.stringify(graph?.snapshot() ?? null, null, 2);
 }
 
 function sessionGoalPath(cwd: string, ctx: TestSparkContext): string {

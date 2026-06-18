@@ -28,6 +28,7 @@ import type {
   ReviewerRunner,
 } from "./reviewer-runner.ts";
 import { withSparkReviewerLease } from "./spark-reviewer-lease.ts";
+import { recordGoalSubjectReview } from "./subject-review-store.ts";
 
 export type SparkGoalToolAction =
   | "status"
@@ -307,19 +308,23 @@ async function reviewedEditCurrentSessionGoal(
     requestedStatus: "edited",
     proposedObjective,
     reason,
-    evidenceRefs: existingGoal.lastReview?.artifactRef
-      ? [existingGoal.lastReview.artifactRef as `artifact:${string}`]
-      : [],
+    evidenceRefs: existingGoal.lastReviewArtifactRef ? [existingGoal.lastReviewArtifactRef] : [],
     sessionKey: sparkSessionKey(ctx),
     forkFromSession: ctx.sessionManager?.getSessionFile?.(),
   };
   const review = await runGoalReviewer(cwd, ctx, reviewerRunner, reviewInput, signal);
   const verdict = review.verdict as GoalReviewVerdict;
-  const artifact = await recordGoalTransitionReviewArtifact(cwd, existingGoal, review, {
-    requestedStatus: "edited",
-    proposedObjective,
-    reason,
-  });
+  const artifact = await recordGoalTransitionReviewArtifact(
+    cwd,
+    existingGoal,
+    review,
+    reviewInput,
+    {
+      requestedStatus: "edited",
+      proposedObjective,
+      reason,
+    },
+  );
   if (verdict.outcome !== "approved")
     return { goal: existingGoal, approved: false, review, reviewArtifactRef: artifact.ref };
   const edited = await editSessionGoalObjective(cwd, ctx, proposedObjective);
@@ -346,18 +351,22 @@ export async function reviewedPauseCurrentSessionGoal(
     status: existingGoal.status,
     requestedStatus: "paused",
     reason,
-    evidenceRefs: existingGoal.lastReview?.artifactRef
-      ? [existingGoal.lastReview.artifactRef as `artifact:${string}`]
-      : [],
+    evidenceRefs: existingGoal.lastReviewArtifactRef ? [existingGoal.lastReviewArtifactRef] : [],
     sessionKey: sparkSessionKey(ctx),
     forkFromSession: ctx.sessionManager?.getSessionFile?.(),
   };
   const review = await runGoalReviewer(cwd, ctx, reviewerRunner, reviewInput, signal);
   const verdict = review.verdict as GoalReviewVerdict;
-  const artifact = await recordGoalTransitionReviewArtifact(cwd, existingGoal, review, {
-    requestedStatus: "paused",
-    reason,
-  });
+  const artifact = await recordGoalTransitionReviewArtifact(
+    cwd,
+    existingGoal,
+    review,
+    reviewInput,
+    {
+      requestedStatus: "paused",
+      reason,
+    },
+  );
   if (verdict.outcome !== "approved")
     return {
       goal: existingGoal,
@@ -436,6 +445,7 @@ async function recordGoalTransitionReviewArtifact(
   cwd: string,
   goal: SparkSessionGoal,
   review: ReviewerRunResult,
+  input: GoalReviewInput,
   request: { requestedStatus: "paused" | "edited"; reason?: string; proposedObjective?: string },
 ) {
   const reviewerRun = {
@@ -445,7 +455,7 @@ async function recordGoalTransitionReviewArtifact(
     startedAt: review.record.startedAt,
     finishedAt: review.record.finishedAt,
   };
-  return defaultArtifactStore(cwd).put({
+  const artifact = await defaultArtifactStore(cwd).put({
     kind: "record",
     title: `Goal ${request.requestedStatus} review for session goal: ${oneLine(goal.objective)}`,
     format: "json",
@@ -465,6 +475,8 @@ async function recordGoalTransitionReviewArtifact(
       runRef: review.record.runRef,
     },
   });
+  await recordGoalSubjectReview(cwd, goal, artifact, review, input);
+  return artifact;
 }
 
 function forbiddenAutonomousPauseResult(
@@ -629,9 +641,9 @@ function renderGoalStatus(goal: SparkSessionGoal): string {
   const lines = [`Spark session goal ${goal.status}`, `Goal: ${oneLine(goal.objective)}`];
   const reason = goal.pauseReason ?? goal.completedReason;
   if (reason) lines.push(`Reason: ${reason}`);
-  if (goal.lastReview)
+  if (goal.lastReviewRef || goal.lastReviewArtifactRef || goal.lastReviewedAt)
     lines.push(
-      `Last review: achieved=${goal.lastReview.achieved} confidence=${goal.lastReview.confidence ?? "unknown"} at ${goal.lastReview.reviewedAt}; ${oneLine(goal.lastReview.reason)}`,
+      `Last review: ${goal.lastReviewRef ?? "unrecorded"}${goal.lastReviewArtifactRef ? ` artifact=${goal.lastReviewArtifactRef}` : ""}${goal.lastReviewedAt ? ` at ${goal.lastReviewedAt}` : ""}`,
     );
   if (goal.retryState?.consecutiveFailures)
     lines.push(

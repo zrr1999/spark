@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { nowIso } from "@zendev-lab/pi-extension-api";
+import { nowIso, type ArtifactRef } from "@zendev-lab/pi-extension-api";
 import { isActiveSessionTodo, type SessionTodoEntry, type TaskGraph } from "@zendev-lab/pi-tasks";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {
@@ -19,6 +19,7 @@ export interface SparkSessionGoalReviewSummary {
   reason: string;
   remainingWork?: string;
   blockers: string[];
+  reviewRef?: string;
   artifactRef?: string;
   reviewedAt: string;
 }
@@ -39,7 +40,9 @@ export interface SparkSessionGoal {
   source: SparkSessionGoalSource;
   pauseReason?: string;
   completedReason?: string;
-  lastReview?: SparkSessionGoalReviewSummary;
+  lastReviewRef?: string;
+  lastReviewArtifactRef?: ArtifactRef;
+  lastReviewedAt?: string;
   retryState?: SparkSessionGoalRetryState;
   createdAt: string;
   updatedAt: string;
@@ -120,7 +123,9 @@ export async function editSessionGoalObjective(
     ...existing,
     objective: normalizeGoalObjective(objective),
     source: "explicit",
-    lastReview: undefined,
+    lastReviewRef: undefined,
+    lastReviewArtifactRef: undefined,
+    lastReviewedAt: undefined,
     retryState: undefined,
     updatedAt: nowIso(),
   };
@@ -143,12 +148,13 @@ export async function updateSessionGoalStatus(
   const existing = snapshot.goal;
   if (!existing) return undefined;
   if (options.expectedGoalId && existing.goalId !== options.expectedGoalId) return undefined;
+  const reviewPointer = options.review ? goalReviewPointerFields(options.review) : {};
   const goal: SparkSessionGoal = {
     ...existing,
     status,
     pauseReason: status === "paused" ? normalizeOptionalReason(options.reason) : undefined,
     completedReason: status === "complete" ? normalizeOptionalReason(options.reason) : undefined,
-    lastReview: options.review ?? existing.lastReview,
+    ...reviewPointer,
     retryState:
       options.retryState === undefined ? existing.retryState : (options.retryState ?? undefined),
     updatedAt: nowIso(),
@@ -264,8 +270,7 @@ function normalizeSessionGoal(
     source,
     pauseReason: optionalString(value.pauseReason, filePath, "goal.pauseReason"),
     completedReason: optionalString(value.completedReason, filePath, "goal.completedReason"),
-    lastReview:
-      value.lastReview === undefined ? undefined : normalizeGoalReview(value.lastReview, filePath),
+    ...normalizeGoalReviewPointer(value, filePath),
     retryState:
       value.retryState === undefined
         ? undefined
@@ -275,17 +280,45 @@ function normalizeSessionGoal(
   };
 }
 
-function normalizeGoalReview(value: unknown, filePath: string): SparkSessionGoalReviewSummary {
-  if (!isRecord(value))
-    throw new JsonStoreFormatError(filePath, "goal.lastReview must be an object");
+function goalReviewPointerFields(
+  review: SparkSessionGoalReviewSummary,
+): Pick<SparkSessionGoal, "lastReviewRef" | "lastReviewArtifactRef" | "lastReviewedAt"> {
+  const artifactRef = review.artifactRef as ArtifactRef | undefined;
   return {
-    achieved: requireBoolean(value.achieved, filePath, "goal.lastReview.achieved"),
-    confidence: optionalString(value.confidence, filePath, "goal.lastReview.confidence"),
-    reason: requireString(value.reason, filePath, "goal.lastReview.reason"),
-    remainingWork: optionalString(value.remainingWork, filePath, "goal.lastReview.remainingWork"),
-    blockers: normalizeStringArray(value.blockers, filePath, "goal.lastReview.blockers"),
-    artifactRef: optionalString(value.artifactRef, filePath, "goal.lastReview.artifactRef"),
-    reviewedAt: requireString(value.reviewedAt, filePath, "goal.lastReview.reviewedAt"),
+    lastReviewRef: review.reviewRef ?? artifactRef,
+    lastReviewArtifactRef: artifactRef,
+    lastReviewedAt: review.reviewedAt,
+  };
+}
+
+function normalizeGoalReviewPointer(
+  value: Record<string, unknown>,
+  filePath: string,
+): Pick<SparkSessionGoal, "lastReviewRef" | "lastReviewArtifactRef" | "lastReviewedAt"> {
+  const legacyReview = value.lastReview;
+  const legacyArtifactRef = isRecord(legacyReview)
+    ? optionalString(legacyReview.artifactRef, filePath, "goal.lastReview.artifactRef")
+    : undefined;
+  const legacyReviewedAt = isRecord(legacyReview)
+    ? optionalString(legacyReview.reviewedAt, filePath, "goal.lastReview.reviewedAt")
+    : undefined;
+  const lastReviewRef = optionalString(value.lastReviewRef, filePath, "goal.lastReviewRef");
+  const lastReviewArtifactRef = optionalString(
+    value.lastReviewArtifactRef,
+    filePath,
+    "goal.lastReviewArtifactRef",
+  );
+  const lastReviewedAt = optionalString(value.lastReviewedAt, filePath, "goal.lastReviewedAt");
+  return {
+    ...(lastReviewRef || legacyArtifactRef
+      ? { lastReviewRef: lastReviewRef ?? legacyArtifactRef }
+      : {}),
+    ...(lastReviewArtifactRef || legacyArtifactRef
+      ? { lastReviewArtifactRef: (lastReviewArtifactRef ?? legacyArtifactRef) as ArtifactRef }
+      : {}),
+    ...(lastReviewedAt || legacyReviewedAt
+      ? { lastReviewedAt: lastReviewedAt ?? legacyReviewedAt }
+      : {}),
   };
 }
 
@@ -321,17 +354,6 @@ function normalizeGoalSource(value: unknown, filePath: string): SparkSessionGoal
     filePath,
     "goal.source must be explicit, inferred, agent, or reviewer",
   );
-}
-
-function normalizeStringArray(value: unknown, filePath: string, path: string): string[] {
-  if (!Array.isArray(value)) throw new JsonStoreFormatError(filePath, `${path} must be an array`);
-  return value.map((entry, index) => requireString(entry, filePath, `${path}[${index}]`));
-}
-
-function requireBoolean(value: unknown, filePath: string, path: string): boolean {
-  if (typeof value !== "boolean")
-    throw new JsonStoreFormatError(filePath, `${path} must be a boolean`);
-  return value;
 }
 
 function requireNonNegativeInteger(value: unknown, filePath: string, path: string): number {

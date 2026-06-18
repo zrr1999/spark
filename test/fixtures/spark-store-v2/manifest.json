@@ -16,7 +16,7 @@
       "path": ".spark/sessions/<session>/",
       "owner": "spark",
       "kind": "canonical",
-      "notes": "Per-session state, goal, loop, and subject-owned goal reviews."
+      "notes": "Per-session state, goal, loop, TODO display metadata, hidden role-run inbox, and subject-owned goal reviews."
     },
     {
       "id": "project-task-tree",
@@ -49,6 +49,7 @@
     ".spark/session-loops/<session>.json",
     ".spark/session-todos/<session>.json",
     ".spark/todo-display-numbers/<session>.json",
+    ".spark/background-role-results-inbox/<session>.json",
     ".spark/review-gate.json"
   ],
   "doctorRules": [

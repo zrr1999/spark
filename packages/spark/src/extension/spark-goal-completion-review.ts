@@ -22,6 +22,7 @@ import type {
   ReviewerRunner,
 } from "./reviewer-runner.ts";
 import { withSparkReviewerLease } from "./spark-reviewer-lease.ts";
+import { recordGoalSubjectReview } from "./subject-review-store.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
 type SparkProjectLike = ReturnType<TaskGraph["projects"]>[number];
@@ -601,7 +602,7 @@ async function recordGoalReviewArtifact(
     ...goalReviewHistoryEntries(previous?.body).slice(-9),
     { verdict, reviewerRun, reviewPacket, recordedAt } as unknown as JsonValue,
   ];
-  return store.put({
+  const artifact = await store.put({
     ref,
     kind: "record",
     title: `Goal review for session goal: ${compactInline(active.goal.objective)}`,
@@ -624,6 +625,8 @@ async function recordGoalReviewArtifact(
     },
     links: input.projectRef ? [{ to: input.projectRef, relation: "review-of" }] : undefined,
   });
+  await recordGoalSubjectReview(cwd, active.goal, artifact, review, input);
+  return artifact;
 }
 
 function goalReviewArtifactRef(goalId: string): ArtifactRef {

@@ -12,8 +12,8 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
    - preserves physical Spark artifact layout under `.spark/artifacts` through `defaultArtifactStore(cwd)`
 - `pi-tasks`
    - generic project/task/TODO/run graph capability and canonical `task({ action })` tool
-   - `TaskGraphStore` backed by `.spark/projects.json`, atomic writes, filesystem lock directory `.spark/projects.json.lock`, stale direct-save protection, dependency/readiness checks, task names/titles/descriptions, run state, unified claim/lease schema, heartbeat and stale-claim expiry
-   - task-scoped TODO state outside `.spark/projects.json`, including session-scoped `.spark/todos/<session>.json`; independent session TODOs under `.spark/session-todos/<session>.json`; stable display numbers under `.spark/todo-display-numbers/<session>.json`
+   - `TaskGraphStore` backed by the V2 `.spark/projects/` project/task file tree, content-aware owner-file writes, `.spark/projects/index.lock` plus `.spark/projects/locks/<project>.lock` lock directories, stale direct-save protection, dependency/readiness checks, task names/titles/descriptions, run state, unified claim/lease schema, heartbeat and stale-claim expiry
+   - task-scoped and session-scoped TODO state outside `.spark/projects/` in canonical `.spark/todos/todos.sqlite`; legacy TODO JSON files are import-only; stable session display numbers live under `.spark/sessions/<session>/todo-display-numbers.json`
 - `pi-learnings`
    - generic evidence-backed `learning` / `learning-candidate` / `learning-export` records
    - canonical `learning({ action })` tool

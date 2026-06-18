@@ -13,7 +13,6 @@ import {
   type JsonValue,
   type SparkRunTrace,
   type ProjectRef,
-  type ReviewGate,
 } from "@zendev-lab/pi-extension-api";
 import { defaultTaskGraphStore, TaskGraph, type TaskTodoSummary } from "@zendev-lab/pi-tasks";
 import { pathExists, readActiveSparkMd, shouldMaterializeSparkMd } from "./spark-activation.ts";
@@ -24,7 +23,6 @@ import {
   type SparkInitClarificationData,
 } from "./spark-md-rendering.ts";
 import { renderRolePlan, type SparkInitResult } from "./spark-init-rendering.ts";
-import { defaultReviewGateStore } from "./review-gate-store.ts";
 import { saveSparkGraphAndTodos } from "./session-state.ts";
 
 export interface SparkInitOptions {
@@ -93,23 +91,13 @@ export async function initializeSparkIdea(
     },
   });
 
-  const gate: ReviewGate = {
-    ref: newRef("review"),
-    subject: rolePlanArtifact.ref,
-    lens: "artifact",
-    policy: "required",
-    outcome: "blocked",
-    summary: "Initial Spark flow created a review gate; reviewer execution is pending.",
-    createdAt: nowIso(),
-  };
-
   const trace: SparkRunTrace = {
     ref: newRef("spark"),
     idea,
     projectRef: project.ref,
     sparkMdArtifactRef: sparkMdArtifact.ref,
     taskRefs: graph.tasks(project.ref).map((task) => task.ref),
-    reviewRefs: [gate.ref],
+    reviewRefs: [],
     askRefs: options.askRefs ?? [],
     createdAt: nowIso(),
     updatedAt: nowIso(),
@@ -127,7 +115,6 @@ export async function initializeSparkIdea(
     },
   });
   await saveSparkGraphAndTodos(cwd, graph, undefined, defaultTaskGraphStore(cwd));
-  await defaultReviewGateStore(cwd).save(gate);
 
   const currentTask = graph.currentTask(project.ref);
   const todoSummary = currentTask ? graph.todoSummary(currentTask.ref) : emptyTodoSummary();
@@ -198,7 +185,7 @@ function createInitialSparkTasks(
         scopedClarification.successSignal
           ? `Success signal: ${scopedClarification.successSignal}`
           : "Verify the implemented slice against the clarified objective.",
-        "Report whether another ask, review gate, or follow-up task is needed.",
+        "Report whether another ask, subject review, or follow-up task is needed.",
       ]),
       kind: "review",
       roleRef: builtinRoleRef("reviewer"),

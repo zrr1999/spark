@@ -197,6 +197,217 @@ void test("task graph store keeps TODOs out of projects.json and todo store rest
   }
 });
 
+void test("default task graph store writes V2 project/task file tree without legacy projects.json", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-task-graph-v2-"));
+  try {
+    const store = defaultTaskGraphStore(dir);
+    assert.equal(store.lockPath, join(dir, ".spark", "projects", "index.lock"));
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Split project", description: "V2 file tree" });
+    const prerequisite = graph.createTask({
+      projectRef: project.ref,
+      name: "first-task",
+      title: "First task",
+      description: "First split task",
+      status: "done",
+      plan: executionReadyPlan("First split task"),
+    });
+    const dependent = graph.createTask({
+      projectRef: project.ref,
+      name: "second-task",
+      title: "Second task",
+      description: "Second split task",
+      status: "pending",
+      plan: executionReadyPlan("Second split task"),
+    });
+    graph.addDependency(dependent.ref, prerequisite.ref);
+    graph.recordRun({
+      ref: "run:v2-demo" as RunRef,
+      projectRef: project.ref,
+      taskRef: dependent.ref,
+      status: "succeeded",
+      outputArtifacts: [],
+    });
+
+    await store.save(graph);
+
+    await assert.rejects(() => readFile(join(dir, ".spark", "projects.json"), "utf8"));
+    const projectDir = join(dir, ".spark", "projects", project.ref.replace(":", "-"));
+    const index = JSON.parse(
+      await readFile(join(dir, ".spark", "projects", "index.json"), "utf8"),
+    ) as { projects?: Array<{ projectRef?: string; taskCount?: number }> };
+    assert.deepEqual(
+      index.projects?.map((entry) => [entry.projectRef, entry.taskCount]),
+      [[project.ref, 2]],
+    );
+    assert.match(await readFile(join(projectDir, "project.json"), "utf8"), /Split project/);
+    assert.match(await readFile(join(projectDir, "roadmap.json"), "utf8"), /roadmap:/);
+    assert.match(
+      await readFile(join(projectDir, "dependencies.json"), "utf8"),
+      new RegExp(dependent.ref),
+    );
+    assert.deepEqual(
+      (await readdir(join(projectDir, "tasks"))).sort(),
+      [prerequisite.ref.replace(":", "-"), dependent.ref.replace(":", "-")].sort(),
+    );
+    assert.match(
+      await readFile(
+        join(projectDir, "tasks", dependent.ref.replace(":", "-"), "task.json"),
+        "utf8",
+      ),
+      /"todoOwnerRef": "task:/,
+    );
+    assert.deepEqual(
+      await readdir(join(projectDir, "tasks", dependent.ref.replace(":", "-"), "runs")),
+      ["run-v2-demo.json"],
+    );
+    assert.equal(
+      (await readdir(join(dir, ".spark"))).some((entry) => entry.startsWith("projects.tmp-")),
+      false,
+    );
+
+    const loaded = await store.load();
+    assert.equal(loaded?.projects()[0]?.ref, project.ref);
+    assert.equal(loaded?.tasks(project.ref).length, 2);
+    assert.deepEqual(loaded?.dependencies(), [
+      { taskRef: dependent.ref, dependsOn: prerequisite.ref },
+    ]);
+    assert.equal(loaded?.runs()[0]?.ref, "run:v2-demo");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("default task graph store rebuilds stale project indexes and rejects stale tree saves", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-task-graph-v2-index-"));
+  try {
+    const store = defaultTaskGraphStore(dir);
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Indexed project", description: "index" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      name: "indexed-task",
+      title: "Indexed task",
+      description: "indexed task",
+      status: "pending",
+      plan: executionReadyPlan("Indexed task"),
+    });
+    await store.save(graph);
+
+    const indexPath = join(dir, ".spark", "projects", "index.json");
+    await writeFile(
+      indexPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          rebuildable: true,
+          generatedAt: "2026-01-01T00:00:00.000Z",
+          legacyImportOnly: [],
+          projects: [
+            {
+              projectRef: "proj:stale",
+              path: "projects/proj-stale",
+              projectPath: "projects/proj-stale/project.json",
+              roadmapPath: "projects/proj-stale/roadmap.json",
+              dependenciesPath: "projects/proj-stale/dependencies.json",
+              tasksPath: "projects/proj-stale/tasks",
+              status: "active",
+              title: "Stale index entry",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+              taskCount: 99,
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const loadedFromOwnerFiles = await store.load();
+    assert.equal(loadedFromOwnerFiles?.projects()[0]?.ref, project.ref);
+    assert.equal(loadedFromOwnerFiles?.tasks(project.ref)[0]?.ref, task.ref);
+    await store.save(loadedFromOwnerFiles!);
+    const rebuiltIndex = JSON.parse(await readFile(indexPath, "utf8")) as {
+      projects?: Array<{ projectRef?: string; taskCount?: number }>;
+    };
+    assert.deepEqual(
+      rebuiltIndex.projects?.map((entry) => [entry.projectRef, entry.taskCount]),
+      [[project.ref, 1]],
+    );
+
+    const stale = await store.load();
+    assert.ok(stale);
+    await store.update((locked) => {
+      locked.createTask({
+        projectRef: project.ref,
+        name: "fresh-task",
+        title: "Fresh task",
+        description: "fresh task",
+        status: "pending",
+        plan: executionReadyPlan("Fresh task"),
+      });
+    });
+    stale.updateTask(task.ref, { description: "stale overwrite" });
+    await assert.rejects(() => store.save(stale), TaskGraphStoreConflictError);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("default task graph store enforces project-owner locks during V2 writes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-task-graph-v2-project-lock-"));
+  try {
+    const store = defaultTaskGraphStore(dir);
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Locked project", description: "lock scope" });
+    graph.createTask({
+      projectRef: project.ref,
+      name: "locked-task",
+      title: "Locked task",
+      description: "locked task",
+      status: "pending",
+      plan: executionReadyPlan("Locked task"),
+    });
+    await store.save(graph);
+
+    const projectLockPath = join(
+      dir,
+      ".spark",
+      "projects",
+      "locks",
+      `${project.ref.replace(":", "-")}.lock`,
+    );
+    await mkdir(projectLockPath, { recursive: true });
+    await writeFile(
+      join(projectLockPath, "owner.json"),
+      `${JSON.stringify({ ownerId: "active-project-writer", heartbeatAt: nowIso() })}\n`,
+      "utf8",
+    );
+
+    await assert.rejects(
+      () =>
+        store.update(
+          (locked) => {
+            locked.createTask({
+              projectRef: project.ref,
+              name: "blocked-by-project-lock",
+              title: "Blocked by project lock",
+              description: "blocked by project lock",
+              status: "pending",
+              plan: executionReadyPlan("Blocked by project lock"),
+            });
+          },
+          { timeoutMs: 10, retryIntervalMs: 1, staleMs: 60_000 },
+        ),
+      (error) =>
+        error instanceof TaskGraphStoreLockTimeoutError && error.lockPath === projectLockPath,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("default task TODO store uses the canonical SQLite path regardless of session scope", () => {
   const store = defaultTaskTodoStore("/workspace/demo", "leaf:main/session");
   assert.equal(store.filePath, "/workspace/demo/.spark/todos/todos.sqlite");

@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+
+import {
+  rebuildSessionIndex,
+  sessionDirectoryNameForKey,
+} from "../packages/spark/src/extension/session-directory-store.ts";
 
 type JsonObject = Record<string, unknown>;
 
@@ -214,11 +220,97 @@ void test("Spark store V2 sessions index fixture is rebuildable and points at pe
   assert.equal(session.statePath, "sessions/session-demo/state.json");
   assert.equal(session.goalPath, "sessions/session-demo/goal.json");
   assert.equal(session.loopPath, "sessions/session-demo/loop.json");
+  assert.equal(session.todoDisplayNumbersPath, "sessions/session-demo/todo-display-numbers.json");
+  assert.equal(session.hiddenRoleRunInboxPath, "sessions/session-demo/hidden-role-run-inbox.json");
   assert.equal(session.todoOwnerRef, session.sessionKey);
+  assert.equal(session.currentTaskRef, "task:demo");
   assert.equal(String(session.path).endsWith(".json"), false, "sessions must be directories in V2");
-  assert.ok(
-    stringArrayField(index, "legacyImportOnly").includes(".spark/session-goals/<session>.json"),
-  );
+  const legacyImportOnly = stringArrayField(index, "legacyImportOnly");
+  assert.ok(legacyImportOnly.includes(".spark/session-goals/<session>.json"));
+  assert.ok(legacyImportOnly.includes(".spark/background-role-results-inbox/<session>.json"));
+});
+
+void test("Spark store V2 sessions index rebuilds from per-session directories", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-store-v2-session-index-"));
+  try {
+    const sessionsRoot = join(dir, ".spark", "sessions");
+    const sessionDir = join(sessionsRoot, sessionDirectoryNameForKey("session:demo"));
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(
+      join(sessionDir, "state.json"),
+      `${JSON.stringify({ version: 1, projectRef: "proj:demo", currentTaskRef: "task:demo" }, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(sessionDir, "goal.json"),
+      `${JSON.stringify({ version: 1, goal: { status: "active" } }, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(sessionDir, "loop.json"),
+      `${JSON.stringify({ version: 1, loop: { status: "paused" } }, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(join(sessionDir, "hidden-role-run-inbox.json"), '{"version":1}\n', "utf8");
+
+    const secondSessionDir = join(sessionsRoot, sessionDirectoryNameForKey("session:other"));
+    await mkdir(secondSessionDir, { recursive: true });
+    await writeFile(
+      join(secondSessionDir, "state.json"),
+      `${JSON.stringify({ version: 1, projectRef: "proj:other" }, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(secondSessionDir, "goal.json"),
+      `${JSON.stringify({ version: 1, goal: { status: "paused" } }, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(secondSessionDir, "loop.json"),
+      `${JSON.stringify({ version: 1, loop: { status: "active" } }, null, 2)}\n`,
+      "utf8",
+    );
+
+    const indexPath = join(sessionsRoot, "index.json");
+    await writeFile(indexPath, '{"version":1,"sessions":[{"sessionKey":"stale"}]}\n', "utf8");
+
+    let rebuilt = await rebuildSessionIndex(dir);
+    assert.equal(rebuilt.rebuildable, true);
+    assert.equal(rebuilt.sessions.length, 2);
+    const demo = rebuilt.sessions.find((entry) => entry.sessionKey === "session:demo");
+    assert.deepEqual(demo, {
+      sessionKey: "session:demo",
+      path: "sessions/session-demo",
+      statePath: "sessions/session-demo/state.json",
+      goalPath: "sessions/session-demo/goal.json",
+      loopPath: "sessions/session-demo/loop.json",
+      todoDisplayNumbersPath: "sessions/session-demo/todo-display-numbers.json",
+      hiddenRoleRunInboxPath: "sessions/session-demo/hidden-role-run-inbox.json",
+      todoOwnerRef: "session:demo",
+      currentProjectRef: "proj:demo",
+      currentTaskRef: "task:demo",
+      activeGoal: true,
+      activeLoop: false,
+      updatedAt: demo?.updatedAt,
+    });
+    const other = rebuilt.sessions.find((entry) => entry.sessionKey === "session:other");
+    assert.equal(other?.currentProjectRef, "proj:other");
+    assert.equal(other?.currentTaskRef, undefined);
+    assert.equal(other?.activeGoal, false);
+    assert.equal(other?.activeLoop, true);
+    assert.equal(
+      rebuilt.sessions.some((entry) => entry.sessionKey === "stale"),
+      false,
+    );
+
+    await rm(indexPath, { force: true });
+    rebuilt = await rebuildSessionIndex(dir);
+    assert.equal(rebuilt.sessions.length, 2);
+    const persisted = JSON.parse(await readFile(indexPath, "utf8")) as { sessions?: unknown[] };
+    assert.equal(persisted.sessions?.length, 2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 void test("Spark store V2 project/task tree fixture splits graph state and keeps TODOs external", async () => {
@@ -260,7 +352,10 @@ void test("Spark store V2 review fixture is subject-owned and keeps global revie
 
   const subject = objectField(review, "subject");
   assert.equal(subject.kind, "task");
-  assert.equal(subject.ownerPath, "projects/proj-demo/tasks/task-demo/reviews/review-demo.json");
+  assert.equal(
+    subject.ownerPath,
+    "projects/proj-demo/tasks/task-demo/reviews/artifact-review-demo.json",
+  );
   assert.doesNotMatch(String(subject.ownerPath), /reviews\/gate\.json/);
 
   const indexProjection = objectField(review, "indexProjection");

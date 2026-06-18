@@ -41,8 +41,9 @@ export function appendSparkStateDiagnosticsLines(
   appendOrphanBlobDiagnostics(lines, diagnostics.orphanBlobs);
   appendProtectedFileDiagnostics(lines, "notes", diagnostics.notes);
   appendProtectedFileDiagnostics(lines, "role reports", diagnostics.roleReports);
+  appendStoreV2DoctorFindings(lines, diagnostics.doctor);
   lines.push(
-    "Protected-store diagnostics are read-only; no project graph, TODO record, session state, artifact, note, role-report, workflow-run, or review-gate files were deleted.",
+    "Protected-store diagnostics are read-only; no project graph, TODO record, session state, artifact, note, role-report, workflow-run, or review index files were deleted.",
   );
 }
 
@@ -196,6 +197,20 @@ function appendOrphanBlobDiagnostics(
     lines.push(`  - ${blob.path} ${formatByteSize(blob.bytes)} mtime=${blob.mtime}`);
 }
 
+function appendStoreV2DoctorFindings(
+  lines: string[],
+  summary: SparkStateDiagnosticsSummary["doctor"],
+): void {
+  lines.push(
+    `Store V2 doctor findings: ${summary.count}${summary.shown < summary.count ? ` (showing ${summary.shown})` : ""}`,
+  );
+  for (const finding of summary.findings) {
+    const path = finding.path ? ` (${finding.path})` : "";
+    lines.push(`  - [${finding.severity}] ${finding.code}${path}: ${finding.message}`);
+    lines.push(`    repair: ${finding.repair}`);
+  }
+}
+
 function appendProtectedFileDiagnostics(
   lines: string[],
   label: string,
@@ -237,8 +252,8 @@ export function formatSparkProtectedStoreReason(reason: SparkProtectedStoreReaso
       return "notes";
     case "role-reports":
       return "role reports";
-    case "review-gate":
-      return "review gate";
+    case "reviews":
+      return "reviews";
     case "workflow-runs":
       return "workflow runs";
   }

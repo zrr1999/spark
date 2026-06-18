@@ -1,4 +1,4 @@
-import { type ProjectRef } from "@zendev-lab/pi-extension-api";
+import { type ProjectRef, type TaskRef } from "@zendev-lab/pi-extension-api";
 import { JsonStoreFormatError } from "./json-store.ts";
 
 export type SparkRunStrategy = "sequential" | "parallel";
@@ -8,6 +8,7 @@ export type SparkAgentMode = "research" | "plan" | "implement";
 export interface CurrentProjectStoreSnapshot {
   version: 1;
   projectRef?: ProjectRef;
+  currentTaskRef?: TaskRef;
 }
 
 export function normalizeCurrentProjectStoreSnapshot(
@@ -22,7 +23,10 @@ export function normalizeCurrentProjectStoreSnapshot(
     throw new JsonStoreFormatError(filePath, "version must be 1");
   }
   const projectRef = requireString(raw.projectRef, filePath, "projectRef") as ProjectRef;
-  return { version: 1, projectRef };
+  const currentTaskRef = optionalString(raw.currentTaskRef, filePath, "currentTaskRef") as
+    | TaskRef
+    | undefined;
+  return { version: 1, projectRef, ...(currentTaskRef ? { currentTaskRef } : {}) };
 }
 
 function requireString(value: unknown, filePath: string, path: string): string {
@@ -30,4 +34,11 @@ function requireString(value: unknown, filePath: string, path: string): string {
     throw new JsonStoreFormatError(filePath, `${path} must be a non-empty string`);
   }
   return value;
+}
+
+function optionalString(value: unknown, filePath: string, path: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string")
+    throw new JsonStoreFormatError(filePath, `${path} must be a string`);
+  return value.trim() || undefined;
 }

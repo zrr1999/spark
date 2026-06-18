@@ -249,7 +249,8 @@ void test("Spark extension publishes role-run footer status, below-editor widget
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
     const graph = graphWithRuns([]);
-    await defaultTaskGraphStore(dir).save(graph);
+    const graphStore = defaultTaskGraphStore(dir);
+    await graphStore.save(graph);
 
     const tools = new Map<string, SparkToolConfig>();
     const handlers = new Map<string, SparkEventHandler[]>();
@@ -315,8 +316,9 @@ void test("Spark extension publishes role-run footer status, below-editor widget
     assert.ok(sparkStatusWidget);
 
     const running = taskRun({ ref: "run:dddddddd44444444" as RunRef });
-    graph.recordRun(running);
-    await defaultTaskGraphStore(dir).save(graph);
+    await graphStore.update((latest) => {
+      latest.recordRun(running);
+    });
     for (const handler of handlers.get("session_tree") ?? []) await handler({}, ctx);
 
     assert.equal(messages.length, 0);
@@ -331,13 +333,14 @@ void test("Spark extension publishes role-run footer status, below-editor widget
     assert.match(roleWidgetText, /Role runs \(stale=1\)/);
     assert.match(roleWidgetText, /@role-tui-task/);
 
-    graph.recordRun({
-      ...running,
-      status: "succeeded",
-      finishedAt: "2026-06-17T00:00:12.000Z",
-      outputArtifacts: ["artifact:trace"],
+    await graphStore.update((latest) => {
+      latest.recordRun({
+        ...running,
+        status: "succeeded",
+        finishedAt: "2026-06-17T00:00:12.000Z",
+        outputArtifacts: ["artifact:trace"],
+      });
     });
-    await defaultTaskGraphStore(dir).save(graph);
     for (const handler of handlers.get("session_tree") ?? []) await handler({}, ctx);
 
     assert.equal(messages.length, 1);

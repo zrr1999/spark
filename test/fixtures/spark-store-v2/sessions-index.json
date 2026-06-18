@@ -8,7 +8,8 @@
     ".spark/session-goals/<session>.json",
     ".spark/session-loops/<session>.json",
     ".spark/session-todos/<session>.json",
-    ".spark/todo-display-numbers/<session>.json"
+    ".spark/todo-display-numbers/<session>.json",
+    ".spark/background-role-results-inbox/<session>.json"
   ],
   "sessions": [
     {
@@ -18,6 +19,7 @@
       "goalPath": "sessions/session-demo/goal.json",
       "loopPath": "sessions/session-demo/loop.json",
       "todoDisplayNumbersPath": "sessions/session-demo/todo-display-numbers.json",
+      "hiddenRoleRunInboxPath": "sessions/session-demo/hidden-role-run-inbox.json",
       "todoOwnerRef": "session:demo",
       "currentProjectRef": "proj:demo",
       "currentTaskRef": "task:demo",

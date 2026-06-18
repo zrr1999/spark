@@ -48,17 +48,16 @@ Spark command modes are intentionally split:
 
 Project-bound flows create local Spark state under `.spark/` when durable graph, review, artifact, or run state is needed:
 
-- `.spark/projects.json`
-- `.spark/review-gate.json`
+- `.spark/projects/` project/task file-tree state
+- `.spark/reviews/index.json` rebuilt from subject-owned review records
 - typed artifacts under `.spark/artifacts/`
 - an initial task DAG
 - an initial role plan artifact
-- a review gate
 - a run trace artifact
 
 Spark is always available for lightweight investigation even before `.spark/` or `SPARK.md` exists. Direct commands such as `/plan`, `/implement`, `/goal`, and `/workflow[:selector]` do not create or overwrite root `SPARK.md`; when they initialize minimal Spark state, intent is kept in `.spark` artifacts.
 
-`.spark/` is local runtime state and should be ignored by Git. Spark learnings live separately under the ignored local `.learnings/` directory for repo/workspace-scoped recall or under the user learning directory for personal cross-project knowledge; share them through explicit Markdown exports instead of committing the local artifact store by default. Use canonical owner tools for maintenance (`task_write({ action: "cache_cleanup" })`, `artifact({ action: "compact" })`, and workflow-run retention actions as they land); cleanup remains dry-run by default and must never target protected stores such as project graph, artifacts, notes, workflow runs, or review-gate state.
+`.spark/` is local runtime state and should be ignored by Git. Spark learnings live separately under the ignored local `.learnings/` directory for repo/workspace-scoped recall or under the user learning directory for personal cross-project knowledge; share them through explicit Markdown exports instead of committing the local artifact store by default. Use canonical owner tools for maintenance (`task_write({ action: "cache_cleanup" })`, `artifact({ action: "compact" })`, and workflow-run retention actions as they land); cleanup remains dry-run by default and must never target protected stores such as project graph, artifacts, notes, workflow runs, or subject-owned review records/indexes.
 
 ## Role model settings
 

@@ -52,7 +52,8 @@ void test("workspace-like cwd keeps Spark state under .spark without root SPARK.
     assert.equal(result.sparkMdPath, undefined);
     assert.equal(result.taskCount, 0);
     assert.equal(result.currentTaskRef, undefined);
-    const projectJson = await readFile(join(dir, ".spark", "projects.json"), "utf8");
+    const graph = await defaultTaskGraphStore(dir).load();
+    const projectJson = JSON.stringify(graph?.snapshot(), null, 2);
     assert.doesNotMatch(projectJson, /Maintain current interaction context/);
     assert.doesNotMatch(projectJson, /Analyze project intent/);
     assert.doesNotMatch(projectJson, /Plan targeted clarification/);
@@ -60,8 +61,8 @@ void test("workspace-like cwd keeps Spark state under .spark without root SPARK.
     assert.doesNotMatch(projectJson, /do not start with a generic intake template/);
     assert.doesNotMatch(projectJson, /"currentTaskRef"/);
     assert.doesNotMatch(projectJson, /"todos"/);
-    const reviewGateJson = await readFile(join(dir, ".spark", "review-gate.json"), "utf8");
-    assert.match(reviewGateJson, /"outcome": "blocked"/);
+    await assert.rejects(() => readFile(join(dir, ".spark", "projects.json"), "utf8"));
+    await assert.rejects(() => readFile(join(dir, ".spark", "review-gate.json"), "utf8"));
     assert.deepEqual(
       (await readdir(join(dir, ".spark"))).filter((entry) => entry.endsWith(".tmp")),
       [],
@@ -89,13 +90,15 @@ void test("repo-like cwd materializes root SPARK.md as well", async () => {
     assert.doesNotMatch(rootSpark, /## 生态关系/);
     assert.equal(result.taskCount, 0);
     assert.equal(result.currentTaskRef, undefined);
-    const projectJson = await readFile(join(dir, ".spark", "projects.json"), "utf8");
+    const graph = await defaultTaskGraphStore(dir).load();
+    const projectJson = JSON.stringify(graph?.snapshot(), null, 2);
     assert.doesNotMatch(projectJson, /Analyze project intent/);
     assert.doesNotMatch(projectJson, /Plan targeted clarification/);
     assert.doesNotMatch(projectJson, /Review initial direction/);
     assert.doesNotMatch(projectJson, /Maintain current interaction context/);
     assert.doesNotMatch(projectJson, /"currentTaskRef"/);
     assert.doesNotMatch(projectJson, /"todos"/);
+    await assert.rejects(() => readFile(join(dir, ".spark", "projects.json"), "utf8"));
     await assert.rejects(() => readFile(join(dir, ".spark", "todos.json"), "utf8"));
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -355,12 +358,14 @@ void test("initializeSparkIdea preserves clarified title and trace ask refs", as
     });
     assert.equal(result.projectTitle, "Hypha v0: VS Code-first IDE experience for Spore");
     assert.deepEqual(result.askArtifactRefs, ["artifact:ask-test"]);
-    const projectJson = await readFile(join(dir, ".spark", "projects.json"), "utf8");
+    const graph = await defaultTaskGraphStore(dir).load();
+    const projectJson = JSON.stringify(graph?.snapshot(), null, 2);
     assert.match(projectJson, /Hypha v0: VS Code-first IDE experience for Spore/);
     assert.match(projectJson, /Execute smallest confirmed slice/);
     assert.match(projectJson, /A documented next-step plan for diagnostics and editor UX/);
     assert.doesNotMatch(projectJson, /Plan targeted clarification/);
     assert.doesNotMatch(projectJson, /Maintain current interaction context/);
+    await assert.rejects(() => readFile(join(dir, ".spark", "projects.json"), "utf8"));
     const artifactFiles = await readdir(join(dir, ".spark", "artifacts"));
     let traceBody: unknown;
     let traceProducer: unknown;
