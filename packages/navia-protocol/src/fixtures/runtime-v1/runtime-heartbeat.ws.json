@@ -1,0 +1,12 @@
+{
+  "protocolVersion": "navia.runtime.v1alpha1",
+  "messageId": "msg_22222222222242222222222222222222",
+  "type": "runtime.heartbeat",
+  "sentAt": "2026-05-21T00:00:15.000Z",
+  "payload": {
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "runtimeSessionId": "rtsn_11111111111141111111111111111111",
+    "sequence": 1,
+    "observedAt": "2026-05-21T00:00:15.000Z"
+  }
+}

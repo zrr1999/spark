@@ -11,14 +11,14 @@ import {
   type ProviderConfig,
   type ProviderModelDefinition,
   type SparkConfig,
-} from "../packages/spark-cli/src/host/index.ts";
+} from "../apps/spark/src/host/index.ts";
 import {
   createSparkModelPickerFromCustomUi,
   createSparkModelSelectorComponent,
   type SparkModelSelectorCustomUi,
   type SparkModelSelectorTheme,
   type SparkModelSelectorTuiLike,
-} from "../packages/spark-cli/src/tui/model-selector.ts";
+} from "../apps/spark/src/tui/model-selector.ts";
 
 const fakeStream: ProviderConfig["streamSimple"] = () => ({}) as unknown;
 

@@ -9,7 +9,7 @@ import {
   SparkSessionStore,
   parseSparkSessionEntries,
   workspaceSessionHash,
-} from "../packages/spark-cli/src/host/index.ts";
+} from "../apps/spark/src/host/index.ts";
 
 void test("SparkSessionStore uses ~/.spark-style sessions root and workspace hash, never ~/.pi", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-path-"));

@@ -1,0 +1,57 @@
+# Reference Repos for Navia Product and UI
+
+Date: 2026-05-22
+
+This note tracks open-source products worth studying while shaping Navia's workspace-first agent dashboard. It is intentionally selective: each repo should teach a product pattern, not just add visual noise.
+
+For the concrete follow-up with implementation recommendations, see [Navia Product and UI Reference Research](./product-ui-research-2026-05-22.md).
+
+## Primary References
+
+| Repo                                                        | Why study it                                                                                                   | Borrow for Navia                                                                                                                          | Avoid copying                                                                               |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| [multica-ai/multica](https://github.com/multica-ai/multica) | Closest product neighbor: managed coding agents, multi-workspace, runtimes, CLI/daemon, issue/task assignment. | Workspace isolation, runtime enrollment mental model, agent-as-teammate framing, command/daemon onboarding, user/workspace menu behavior. | Issue-centric product model wholesale; Navia should stay evidence/projection/project-first. |
+| [zrr1999/bonehub](https://github.com/zrr1999/bonehub)       | Local Svelte reference for personal product taste and compact app composition.                                 | Small, direct Svelte component organization and personal design conventions.                                                              | Treating a personal site/app pattern as sufficient for an operations cockpit.               |
+| [zrr1999/zrr.dev](https://github.com/zrr1999/zrr.dev)       | Local content/design baseline with existing authorial style.                                                   | Typography restraint, docs/content quality, self-owned design language.                                                                   | Astro/site structure; Navia remains SvelteKit app-first.                                    |
+
+## Agent Runtime and Orchestration Products
+
+| Repo                                                                                            | Why study it                                                                                                                                             | Borrow for Navia                                                                                   | Priority |
+| ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------- |
+| [builderz-labs/mission-control](https://github.com/builderz-labs/mission-control)               | Self-hosted AI agent orchestration with SQLite, WebSocket/SSE updates, panels for tasks, agents, logs, tokens, skills, cron, alerts, webhooks, security. | Operational density, security/audit panels, task flow controls, "local control center" onboarding. | High     |
+| [stoneforge-ai/stoneforge](https://github.com/stoneforge-ai/stoneforge)                         | Web dashboard plus runtime for coding agents; CLI starts local dashboard/server.                                                                         | CLI-to-dashboard bridge, project initialization flow, split between orchestration API and web UI.  | High     |
+| [23blocks-OS/ai-maestro](https://github.com/23blocks-OS/ai-maestro)                             | Dashboard for Claude/Codex agents across tmux, Docker, EC2/ECS, machines.                                                                                | Multi-machine/runtime inventory, tree/grouping of agents, deployment mode labels.                  | High     |
+| [kcosr/agent-runner](https://github.com/kcosr/agent-runner)                                     | Persistent run state, tasks, reviews, attachments, scheduling, local daemon and web dashboard.                                                           | Sidecar/daemon semantics, review state, one daemon shared by CLI and web UI.                       | High     |
+| [Owloops/browserbird](https://github.com/Owloops/browserbird)                                   | Agent orchestrator with browser/VNC, cron scheduler, dashboard, CLI, Slack.                                                                              | Scheduled automations, browser evidence capture, onboarding for API keys/config.                   | Medium   |
+| [catlog22/maestro-flow](https://github.com/catlog22/maestro-flow)                               | CLI + MCP endpoint + real-time dashboard with Kanban, Gantt, sortable table, command center.                                                             | Multiple views over same task state; command center pattern.                                       | Medium   |
+| [hoangsonww/Claude-Code-Agent-Monitor](https://github.com/hoangsonww/Claude-Code-Agent-Monitor) | Real-time Claude Code monitoring with sessions, health, tool usage, MCP integration, i18n docs.                                                          | Session/activity monitoring, health tab composition, localized dashboard structure.                | Medium   |
+| [JPeetz/Hermes-Studio](https://github.com/JPeetz/Hermes-Studio)                                 | Web UI for chat, memory, skills, terminal, approvals, operations dashboard, Kanban.                                                                      | Approval surface, skill/memory UI grouping, terminal-adjacent dashboard patterns.                  | Medium   |
+| [abhi1693/openclaw-mission-control](https://github.com/abhi1693/openclaw-mission-control)       | OpenClaw-specific orchestration dashboard.                                                                                                               | OpenClaw/gateway adapter vocabulary and agent task UI.                                             | Low      |
+
+## Mature SaaS and Devtool Dashboards
+
+| Repo                                                                      | Why study it                                                                | Borrow for Navia                                                                   |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| [twentyhq/twenty](https://github.com/twentyhq/twenty)                     | Open-source CRM with polished object navigation and record/detail surfaces. | Dense list/detail ergonomics, object settings, sidebar hierarchy.                  |
+| [makeplane/plane](https://github.com/makeplane/plane)                     | Open-source Linear/Jira alternative for tasks, sprints, docs, triage.       | Project/task navigation, issue triage, lightweight product management views.       |
+| [dubinc/dub](https://github.com/dubinc/dub)                               | Modern multi-tenant SaaS dashboard with workspace and settings patterns.    | Workspace switcher, settings IA, clean operational polish.                         |
+| [triggerdotdev/trigger.dev](https://github.com/triggerdotdev/trigger.dev) | Runs, logs, tracing, tags, replay/cancel workflow dashboard.                | Run tables, task metadata, bulk actions, replay/cancel affordances.                |
+| [langfuse/langfuse](https://github.com/langfuse/langfuse)                 | LLM observability, traces, evals, prompt/dataset management.                | Trace/detail layout, evaluation/reporting surfaces, filtering for evidence.        |
+| [Infisical/infisical](https://github.com/Infisical/infisical)             | Security-heavy settings product for secrets, certs, access management.      | Settings navigation, token/key tables, security language, empty-state seriousness. |
+| [openstatusHQ/openstatus](https://github.com/openstatusHQ/openstatus)     | Status page and uptime/API monitoring as code.                              | Connection health, incidents, monitor tables, status semantics.                    |
+| [formbricks/formbricks](https://github.com/formbricks/formbricks)         | Survey/feedback SaaS with team/project settings.                            | Form-like settings flows, segmentation/filtering, clean empty states.              |
+| [documenso/documenso](https://github.com/documenso/documenso)             | Document workflow product with teams, recipients, signing states.           | Workflow state labels, document/artifact lifecycle UI.                             |
+| [directus/directus](https://github.com/directus/directus)                 | Data/admin app with permissions, collections, settings.                     | Admin-grade settings IA and table/detail density.                                  |
+| [supabase/supabase](https://github.com/supabase/supabase)                 | Large developer platform with project/org console.                          | Project-level navigation, API/key settings, database-style operational UI.         |
+| [PostHog/posthog](https://github.com/PostHog/posthog)                     | Analytics and feature platform with many product surfaces.                  | Activity/event analytics, filters, feature flags, product-health framing.          |
+| [actualbudget/actual](https://github.com/actualbudget/actual)             | Local-first app with disciplined, compact workflows.                        | Local-first sync/status cues and quiet UI rhythm.                                  |
+| [nocodb/nocodb](https://github.com/nocodb/nocodb)                         | Self-hosted Airtable alternative.                                           | Resource/table navigation and schema-like workspace concepts.                      |
+| [grafana/grafana](https://github.com/grafana/grafana)                     | Mature observability dashboard.                                             | Query/filter mental model, panels when data is actually high-density.              |
+
+## Near-Term Application to Navia
+
+1. Keep the app shell closer to Multica/Dub: left sidebar owns workspace search, primary nav, and account/workspace switcher; topbar stays light.
+2. Let Settings feel like a compact control console: sections, tables, small status strips, token/runtime rows, no oversized hero.
+3. Use agent-runtime references for domain vocabulary: runtime, daemon, session, heartbeat, command delivery, task projection, approval, audit.
+4. Use SaaS references for UX polish: workspaces, settings IA, empty states, table density, local-first/account affordances.
+5. Avoid dark terminal-heavy dashboards as the default; Navia should remain light, precise, and operational.

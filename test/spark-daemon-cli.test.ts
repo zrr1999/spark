@@ -4,13 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { parseSparkCliCommand } from "../packages/spark-cli/src/cli.ts";
+import { parseSparkCliCommand } from "../apps/spark/src/cli.ts";
 import {
   handleSparkDaemonCliCommand,
   parseSparkDaemonCliArgs,
   runSparkDaemonCliCommand,
-} from "../packages/spark-cli/src/cli/daemon.ts";
-import { readSparkDaemonLock } from "../packages/spark-cli/src/host/index.ts";
+} from "../apps/spark/src/cli/daemon.ts";
+import { readSparkDaemonLock } from "../apps/spark/src/host/index.ts";
 
 void test("parseSparkCliCommand routes daemon subcommands without changing default TUI parsing", () => {
   assert.deepEqual(parseSparkCliCommand(["build", "this"]), {

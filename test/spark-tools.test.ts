@@ -1910,8 +1910,9 @@ void test("session_start schedules goal instead of loop when both persisted stat
     if (fake) fake.cleared = true;
   }) as typeof clearTimeout;
 
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+  async function flushAsyncWork(until?: () => boolean): Promise<void> {
+    for (let index = 0; index < 100; index += 1) {
+      if (until?.()) return;
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -1935,7 +1936,7 @@ void test("session_start schedules goal instead of loop when both persisted stat
     }
     assert.equal(timers.filter((timer) => !timer.cleared).length, 1);
     timers[0]?.callback();
-    await flushAsyncWork();
+    await flushAsyncWork(() => run.customMessages.at(-1)?.customType === "spark-goal-request");
     assert.equal(run.customMessages.at(-1)?.customType, "spark-goal-request");
     assert.match(run.customMessages.at(-1)?.content ?? "", /Persisted goal wins over loop/);
     for (const handler of run.eventHandlers.get("session_shutdown") ?? []) {
@@ -2306,8 +2307,9 @@ void test("/goal foreground loop drops stale tick context after pause", async ()
     const fake = timer as unknown as FakeTimer | undefined;
     if (fake) fake.cleared = true;
   }) as typeof clearTimeout;
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+  async function flushAsyncWork(until?: () => boolean): Promise<void> {
+    for (let index = 0; index < 100; index += 1) {
+      if (until?.()) return;
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -2325,7 +2327,9 @@ void test("/goal foreground loop drops stale tick context after pause", async ()
       await handler({}, ctx);
     }
     timers[0]?.callback();
-    await flushAsyncWork();
+    await flushAsyncWork(() =>
+      /Spark goal tick/.test(customMessageVisible(run.customMessages.at(-1))),
+    );
     assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
     assert.equal(run.customMessages.at(-1)?.display, false);
     assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
@@ -2374,8 +2378,9 @@ void test("/goal foreground loop ignores stale awaited-turn completions after re
     const fake = timer as unknown as FakeTimer | undefined;
     if (fake) fake.cleared = true;
   }) as typeof clearTimeout;
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+  async function flushAsyncWork(until?: () => boolean): Promise<void> {
+    for (let index = 0; index < 100; index += 1) {
+      if (until?.()) return;
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -2393,7 +2398,9 @@ void test("/goal foreground loop ignores stale awaited-turn completions after re
       await handler({}, ctx);
     }
     timers[0]?.callback();
-    await flushAsyncWork();
+    await flushAsyncWork(() =>
+      /Spark goal tick/.test(customMessageVisible(run.customMessages.at(-1))),
+    );
     const oldGoal = await loadSessionGoal(dir, ctx);
     assert.ok(oldGoal);
     assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
@@ -3314,10 +3321,20 @@ void test("goal reviewer state machine covers restart, idle review, and task fin
     const fake = timer as unknown as FakeTimer | undefined;
     if (fake) fake.cleared = true;
   }) as typeof clearTimeout;
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+  async function flushAsyncWork(until?: () => boolean): Promise<void> {
+    for (let index = 0; index < 100; index += 1) {
+      if (until?.()) return;
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
+  }
+
+  async function waitForGoalStatus(status: "active" | "complete") {
+    for (let index = 0; index < 100; index += 1) {
+      const goal = await loadSessionGoal(dir, testSparkContext(dir, "main"));
+      if (goal?.status === status) return goal;
+      await new Promise((resolve) => originalSetTimeout(resolve, 0));
+    }
+    return await loadSessionGoal(dir, testSparkContext(dir, "main"));
   }
 
   try {
@@ -3363,7 +3380,9 @@ void test("goal reviewer state machine covers restart, idle review, and task fin
 
     const messagesBeforeUnmet = restarted.customMessages.length;
     timers[0]?.callback();
-    await flushAsyncWork();
+    await flushAsyncWork(
+      () => goalReviewerCalls === 1 && restarted.customMessages.length > messagesBeforeUnmet,
+    );
     assert.equal(goalReviewerCalls, 1);
     assert.ok(restarted.customMessages.length > messagesBeforeUnmet);
     assert.equal(restarted.customMessages.at(-1)?.display, false);
@@ -3379,10 +3398,10 @@ void test("goal reviewer state machine covers restart, idle review, and task fin
     assert.equal(timers.length, 2);
     const messagesBeforeAchieved = restarted.customMessages.length;
     timers[1]?.callback();
-    await flushAsyncWork();
+    await flushAsyncWork(() => goalReviewerCalls === 2);
     assert.equal(goalReviewerCalls, 2);
     assert.equal(restarted.customMessages.length, messagesBeforeAchieved);
-    goal = await loadSessionGoal(dir, ctx);
+    goal = await waitForGoalStatus("complete");
     assert.equal(goal?.status, "complete");
     assert.ok(goal?.lastReviewArtifactRef);
 

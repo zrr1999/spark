@@ -13,15 +13,17 @@
   "author": "zrr1999",
   "workspaces": {
     "packages": [
+      "apps/*",
       "packages/*"
     ]
   },
   "type": "module",
   "scripts": {
-    "check": "vp check",
+    "check": "pnpm run svelte:sync && vp check",
+    "check:fix": "pnpm run svelte:sync && vp check --fix",
     "check:boundaries": "node scripts/check-pi-boundaries.mjs",
     "check:tsc": "tsc -p tsconfig.json --noEmit",
-    "check:packages": "pnpm -r --filter './packages/*' run check",
+    "check:packages": "pnpm -r --filter './packages/*' --filter './apps/*' run check",
     "format": "vp fmt . --write",
     "format:check": "vp fmt . --check",
     "lint": "vp lint . --fix",
@@ -29,7 +31,16 @@
     "test": "node --experimental-strip-types --test \"test/*.test.ts\"",
     "test:file": "node --experimental-strip-types --test",
     "verify": "pnpm run check && pnpm test",
-    "prepare": "pnpx @j178/prek install --hook-type commit-msg --hook-type pre-commit"
+    "prepare": "pnpx @j178/prek install --hook-type commit-msg --hook-type pre-commit",
+    "svelte:sync": "pnpm --filter @zendev-lab/navia-web exec svelte-kit sync",
+    "navia:check": "pnpm --filter '@zendev-lab/navia-*' run check",
+    "navia:test": "pnpm --filter '@zendev-lab/navia-*' run test",
+    "navia:e2e": "pnpm --filter @zendev-lab/navia-runner exec vp test run src/daemon.test.ts -t 'streams ack, running, log chunks, and succeeded updates from the Spark bridge'",
+    "navia:build": "pnpm --filter @zendev-lab/navia-runner run build && pnpm --filter @zendev-lab/navia-web run build",
+    "verify:navia": "pnpm run navia:check && pnpm run navia:test && pnpm run navia:build",
+    "verify:merged": "pnpm run check:boundaries && pnpm run check:tsc && pnpm test && pnpm run verify:navia",
+    "navia:web": "pnpm --filter @zendev-lab/navia-web run dev",
+    "navia:runner": "pnpm --filter @zendev-lab/navia-runner"
   },
   "dependencies": {
     "@zendev-lab/pi-artifacts": "workspace:^",
@@ -51,10 +62,17 @@
   "devDependencies": {
     "@earendil-works/pi-tui": "0.79.4",
     "@types/node": "^25.9.3",
+    "@zendev-lab/navia-protocol": "workspace:*",
+    "@zendev-lab/navia-system": "workspace:*",
     "oxlint": "1.70.0",
     "typescript": "^6.0.3",
     "vite": "catalog:",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+  },
+  "engines": {
+    "node": ">=26.0.0 <27",
+    "pnpm": ">=11 <12"
   },
   "packageManager": "pnpm@11.7.0",
   "pi": {
@@ -68,7 +86,7 @@
       "./packages/pi-recall/src/extension-entry.ts",
       "./packages/pi-workflows/src/extension-entry.ts",
       "./packages/pi-graft/src/extension-entry.ts",
-      "./packages/spark-cli/src/baidu-oneapi-provider.ts",
+      "./apps/spark/src/baidu-oneapi-provider.ts",
       "./packages/spark/src/extension/index.ts"
     ],
     "skills": [

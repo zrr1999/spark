@@ -1,0 +1,12 @@
+{
+  "runtimeId": "rt_11111111111141111111111111111111",
+  "runtimeToken": "navia_runtime_token_example_0000000000000000",
+  "runtimeTokenExpiresAt": "2026-05-21T01:00:00.000Z",
+  "refreshToken": "navia_runtime_refresh_token_example_000000",
+  "refreshTokenExpiresAt": "2026-06-20T00:00:00.000Z",
+  "protocolVersion": "navia.runtime.v1alpha1",
+  "webSocketUrl": "/api/v1/runtime/runtimes/rt_11111111111141111111111111111111/ws",
+  "heartbeatIntervalMs": 15000,
+  "staleAfterMs": 45000,
+  "registeredAt": "2026-05-21T00:00:00.000Z"
+}

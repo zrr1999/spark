@@ -16,8 +16,8 @@ import {
   switchSparkSessionLeaf,
   type SparkSessionEntry,
   type SparkSessionRecord,
-} from "../packages/spark-cli/src/host/index.ts";
-import { createSparkSessionTreeComponent } from "../packages/spark-cli/src/tui/session-tree.ts";
+} from "../apps/spark/src/host/index.ts";
+import { createSparkSessionTreeComponent } from "../apps/spark/src/tui/session-tree.ts";
 
 function makeBranchedRecord(store: SparkSessionStore): SparkSessionRecord {
   const record = store.createSession({ id: "nav", timestamp: "2026-06-03T04:00:00.000Z" });

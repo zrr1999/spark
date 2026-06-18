@@ -10,7 +10,7 @@ import {
   loadBuiltinExtensionFactories,
   loadPlugins,
   loadSparkExtensions,
-} from "../packages/spark-cli/src/host/index.ts";
+} from "../apps/spark/src/host/index.ts";
 
 void test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin extension set", () => {
   assert.deepEqual(

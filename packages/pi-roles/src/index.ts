@@ -79,6 +79,8 @@ export interface RoleRunRequest {
   model?: string;
   /** Optional child Pi tool allowlist. Hosts/presets own which tools are appropriate. */
   allowedTools?: string[];
+  /** Launch Pi without saving or reusing a session. Useful for short verifier gates. */
+  noSession?: boolean;
   sessionDir?: string;
   forkFromSession?: string;
   /** Adapter-specific guidance appended between the role prompt and instruction. */
@@ -1206,7 +1208,11 @@ export function buildRoleRunArgs(input: RoleRunCommandInput): string[] {
   if (!input.roleRef) throw new Error("role run roleRef is required");
   if (!input.instruction.trim()) throw new Error("role run instruction is required");
   const launch = normalizeRoleLaunchMode(input.launch);
+  if (input.noSession && launch === "forked") {
+    throw new Error("noSession role runs cannot use forked launch");
+  }
   const args = ["--print", "--mode", "json"];
+  if (input.noSession) args.push("--no-session");
   if (input.model?.trim()) args.push("--model", input.model.trim());
   const allowedTools = normalizedToolAllowlist(input.allowedTools);
   if (allowedTools.length > 0) args.push("--tools", allowedTools.join(","));

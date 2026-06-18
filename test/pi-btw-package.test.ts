@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { DEFAULT_SPARK_CONFIG } from "../packages/spark-cli/src/host/config.ts";
+import { DEFAULT_SPARK_CONFIG } from "../apps/spark/src/host/config.ts";
 
 interface PackageJson {
   dependencies?: Record<string, string>;

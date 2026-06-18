@@ -1,0 +1,23 @@
+{
+  "protocolVersion": "navia.runtime.v1alpha1",
+  "messageId": "msg_11111111111141111111111111111111",
+  "type": "runtime.hello",
+  "sentAt": "2026-05-21T00:00:01.000Z",
+  "payload": {
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "runtimeVersion": "0.1.0",
+    "supportedFeatures": ["ws-control-v1", "multi-workspace-runtime-v1", "workspace-snapshot-v1"],
+    "workspaceBindings": [
+      {
+        "bindingId": "rtwb_11111111111141111111111111111111",
+        "localWorkspaceKey": "local-dev",
+        "displayName": "Local development workspace",
+        "status": "available",
+        "capabilities": {},
+        "diagnostics": {
+          "platform": "darwin"
+        }
+      }
+    ]
+  }
+}

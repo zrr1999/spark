@@ -34,7 +34,7 @@ void test("pi-roles builds fresh JSON Pi role args without accidental fork sessi
     launch: "fresh",
     systemPrompt: "You are a worker.",
     instruction: "Implement the task.",
-    sessionDir: "/tmp/sessions",
+    sessionDir: "/Users/example/sessions",
     forkFromSession: "session-parent.json",
   });
 
@@ -43,7 +43,7 @@ void test("pi-roles builds fresh JSON Pi role args without accidental fork sessi
     "--mode",
     "json",
     "--session-dir",
-    "/tmp/sessions",
+    "/Users/example/sessions",
     "--append-system-prompt",
   ]);
   assert.equal(args.includes("--fork"), false);
@@ -80,13 +80,46 @@ void test("pi-roles can pass a child Pi tool allowlist", () => {
   assert.equal(args[index + 1], "graft_read,graft_write,graft_validate");
 });
 
+void test("pi-roles can launch ephemeral no-session role runs", () => {
+  const args = buildRoleRunArgs({
+    roleRef: "role:builtin-reviewer",
+    launch: "fresh",
+    systemPrompt: "You are a reviewer.",
+    instruction: "Review without saving child session state.",
+    noSession: true,
+    sessionDir: "/Users/example/sessions",
+  });
+
+  assert.deepEqual(args.slice(0, 7), [
+    "--print",
+    "--mode",
+    "json",
+    "--no-session",
+    "--session-dir",
+    "/Users/example/sessions",
+    "--append-system-prompt",
+  ]);
+  assert.throws(
+    () =>
+      buildRoleRunArgs({
+        roleRef: "role:builtin-reviewer",
+        launch: "forked",
+        systemPrompt: "You are a reviewer.",
+        instruction: "Invalid forked no-session run.",
+        noSession: true,
+        forkFromSession: "session-parent.json",
+      }),
+    /noSession role runs cannot use forked launch/,
+  );
+});
+
 void test("pi-roles builds forked JSON Pi role args only when forked launch is explicit", () => {
   const args = buildRoleRunArgs({
     roleRef: "role:builtin-reviewer",
     launch: "forked",
     systemPrompt: "You are a reviewer.",
     instruction: "Review the task.",
-    sessionDir: "/tmp/sessions",
+    sessionDir: "/Users/example/sessions",
     forkFromSession: "session-parent.json",
   });
 
@@ -95,7 +128,7 @@ void test("pi-roles builds forked JSON Pi role args only when forked launch is e
     "--mode",
     "json",
     "--session-dir",
-    "/tmp/sessions",
+    "/Users/example/sessions",
     "--fork",
     "session-parent.json",
     "--append-system-prompt",

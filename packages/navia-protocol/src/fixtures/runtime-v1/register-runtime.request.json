@@ -1,0 +1,15 @@
+{
+  "installationId": "dev-macbook-pro",
+  "displayName": "Development MacBook Pro",
+  "runtimeVersion": "0.1.0",
+  "supportedFeatures": [
+    "ws-control-v1",
+    "multi-workspace-runtime-v1",
+    "workspace-snapshot-v1",
+    "command-routing-v1",
+    "human-request-v1"
+  ],
+  "labels": {
+    "environment": "development"
+  }
+}

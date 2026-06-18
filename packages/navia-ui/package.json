@@ -1,0 +1,35 @@
+{
+  "name": "@zendev-lab/navia-ui",
+  "version": "0.1.0",
+  "description": "Navia Svelte UI package marker and shared UI exports.",
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "package.json",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vp test run --passWithNoTests"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "jsdom": "^27.0.0",
+    "svelte": "^5.38.8",
+    "typescript": "^6.0.3",
+    "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+  },
+  "peerDependencies": {
+    "svelte": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=26.0.0 <27"
+  }
+}

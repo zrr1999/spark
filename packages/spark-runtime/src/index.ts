@@ -425,6 +425,7 @@ export interface PiRoleCommandInput {
   instruction: string;
   model?: string;
   allowedTools?: string[];
+  noSession?: boolean;
   sessionDir?: string;
   launch?: RoleLaunchMode;
   forkFromSession?: string;
@@ -438,6 +439,7 @@ export function buildRoleRunArgs(input: PiRoleCommandInput): string[] {
     instruction: input.instruction,
     model: input.model,
     allowedTools: input.allowedTools,
+    noSession: input.noSession,
     runGuidance: sparkRoleRunGuidance(),
     sessionDir: input.sessionDir,
     forkFromSession: input.forkFromSession,

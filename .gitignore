@@ -21,3 +21,9 @@ package-lock.json
 **/.pi-lens/
 .learnings/
 .graft/
+build/
+.svelte-kit/
+playwright-report/
+test-results/
+*.tsbuildinfo
+.navia/

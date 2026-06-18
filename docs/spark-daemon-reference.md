@@ -28,7 +28,7 @@ Spark mapping:
 
 ```text
 SPARK_HOME/runtime/daemon.lock
-packages/spark-cli/src/host/daemon/lock.ts
+apps/spark/src/host/daemon/lock.ts
 ```
 
 Keep the same JSON payload shape plus a `cwd`/`workspaceHash` field if useful for status output.
@@ -57,7 +57,7 @@ Spark should start smaller:
 Spark mapping:
 
 ```text
-packages/spark-cli/src/host/daemon/runtime-worker.ts
+apps/spark/src/host/daemon/runtime-worker.ts
 createSparkDaemonWorkerContext({ sparkHome, cwd? })
 runSparkDaemonWorkerLoop({ context, isStopped, label })
 ```
@@ -80,7 +80,7 @@ Spark mapping:
 SPARK_HOME/daemon/inbox/*.json
 SPARK_HOME/daemon/processed/*.json
 SPARK_HOME/daemon/failed/*.json
-packages/spark-cli/src/host/daemon/queue.ts
+apps/spark/src/host/daemon/queue.ts
 ```
 
 Initial Spark task schema should be only:
@@ -113,7 +113,7 @@ It refuses to launch two queue items for the same session concurrently. That is 
 Spark mapping:
 
 ```text
-packages/spark-cli/src/host/daemon/queue-worker.ts
+apps/spark/src/host/daemon/queue-worker.ts
 createSparkDaemonActiveTasks(): { files: Set<string>; sessions: Set<string> }
 ```
 
@@ -131,7 +131,7 @@ nyakore uses a small `createSignals()` helper from [`src/app/signals.ts`](https:
 Spark mapping:
 
 ```text
-packages/spark-cli/src/host/daemon/signals.ts
+apps/spark/src/host/daemon/signals.ts
 createSparkDaemonSignals(): { stopped, stop(), dispose() }
 ```
 
@@ -153,13 +153,13 @@ registerGatewayCommands(cli)
 Spark should not necessarily add `cac` now, but should adopt the same separation:
 
 ```text
-packages/spark-cli/src/cli.ts              thin root
-packages/spark-cli/src/cli/commands.ts     command router/registration
-packages/spark-cli/src/cli/daemon.ts       daemon command handlers
-packages/spark-cli/src/cli/shared.ts       args/output helpers
+apps/spark/src/cli.ts              thin root
+apps/spark/src/cli/commands.ts     command router/registration
+apps/spark/src/cli/daemon.ts       daemon command handlers
+apps/spark/src/cli/shared.ts       args/output helpers
 ```
 
-Current Spark CLI (`packages/spark-cli/src/cli.ts`) only parses `--help` and treats everything else as initial TUI message. That is now too small for daemon work. We should preserve default TUI behavior but add explicit subcommands.
+Current Spark CLI (`apps/spark/src/cli.ts`) only parses `--help` and treats everything else as initial TUI message. That is now too small for daemon work. We should preserve default TUI behavior but add explicit subcommands.
 
 ### Compound command normalization
 
@@ -189,7 +189,7 @@ If Spark does not adopt `cac`, a hand-written parser can still normalize the fir
 Spark should copy this idea, not the whole implementation:
 
 ```text
-packages/spark-cli/src/cli/shared.ts
+apps/spark/src/cli/shared.ts
 - printJson(value)
 - formatCliOutput(value)
 - shouldPrintJson(args)
@@ -206,8 +206,8 @@ nyakore's [`src/cli/queue.ts`](https://github.com/ShigureLab/nyakore/blob/main/s
 Spark mapping:
 
 ```text
-packages/spark-cli/src/cli/daemon.ts       register/parse daemon commands
-packages/spark-cli/src/cli/daemon-ops.ts   handleDaemonRun/Status/Enqueue/Queue
+apps/spark/src/cli/daemon.ts       register/parse daemon commands
+apps/spark/src/cli/daemon-ops.ts   handleDaemonRun/Status/Enqueue/Queue
 ```
 
 Recommended commands:
@@ -238,7 +238,7 @@ These are useful references but should not be implemented in the current Spark d
 ### Proposed files
 
 ```text
-packages/spark-cli/src/host/daemon/
+apps/spark/src/host/daemon/
 ├── lock.ts
 ├── queue.ts
 ├── queue-worker.ts
@@ -247,7 +247,7 @@ packages/spark-cli/src/host/daemon/
 ├── signals.ts
 └── types.ts
 
-packages/spark-cli/src/cli/
+apps/spark/src/cli/
 ├── args.ts
 ├── commands.ts
 ├── daemon.ts
@@ -267,7 +267,7 @@ export interface SparkDaemonWorkerContext {
 }
 ```
 
-Use `createSparkCliHostServices()` from `packages/spark-cli/src/host/bootstrap.ts` for host runtime construction. Do not duplicate provider/extension/session/skill initialization in daemon code.
+Use `createSparkCliHostServices()` from `apps/spark/src/host/bootstrap.ts` for host runtime construction. Do not duplicate provider/extension/session/skill initialization in daemon code.
 
 ### Worker loop tick order
 
