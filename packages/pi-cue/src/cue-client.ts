@@ -10,17 +10,21 @@
  * Max message size: 16 MiB.
  */
 
+import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { env } from "node:process";
+import { cwd, env, pid } from "node:process";
 
 // ── Default socket path ────────────────────────────────────────────────────
 
 const APP_DIR = "cue-shell";
 const SOCK_NAME = "cued.sock";
+const PROCESS_SESSION_ID = `cue-${pid}-${Date.now()}-${randomUUID()}`;
+const MISSING_SESSION_CODE = "INVALID_REQUEST";
+const MISSING_SESSION_MESSAGE = "client session handshake required";
 
 /** Resolve the default cue-shell daemon socket path. */
 export function defaultSocketPath(): string {
@@ -208,6 +212,7 @@ export interface RequestEnvelope {
 export type RequestPayload =
   | { Eval: { input: string; mode: Mode } }
   | { RunScript: { path: string; input: string; scope?: string } }
+  | { Handshake: { session_id: string; cwd: string; env: Record<string, string> } }
   | { Subscribe: { channels: string[] } }
   | { Unsubscribe: { channels: string[] } }
   | { ListJobs: { limit?: number | null } }
@@ -526,7 +531,14 @@ interface CueClientStream {
 function connectUnixCueClient(path: string): Promise<CueClient> {
   return new Promise((resolve, reject) => {
     const socket = createConnection({ path }, () => {
-      resolve(new CueClient(socket));
+      const client = new CueClient(socket);
+      client
+        .handshake()
+        .then(() => resolve(client))
+        .catch((error) => {
+          client.close();
+          reject(error);
+        });
     });
     socket.on("error", reject);
   });
@@ -538,6 +550,7 @@ async function connectSshCueClient(
   const stream = SshCueClientStream.spawn(transport);
   const client = new CueClient(stream);
   try {
+    await client.handshake();
     await client.pingForVersion();
     return client;
   } catch (error) {
@@ -695,6 +708,27 @@ export class CueClient {
   }
 
   // ── Requests ────────────────────────────────────────────────────────
+
+  /** Bind this transport connection to the stable logical cue session. */
+  async handshake(): Promise<void> {
+    const requestId = await this.#send({
+      Handshake: {
+        session_id: PROCESS_SESSION_ID,
+        cwd: cwd(),
+        env: Object.fromEntries(
+          Object.entries(env).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        ),
+      },
+    });
+    const response = await this.#waitForResponse(requestId);
+    if ("Err" in response) throw new CueError(response.Err.code, response.Err.message);
+    const ok = (response as { Ok: Record<string, unknown> }).Ok;
+    if (!ok || !("Ack" in ok)) {
+      throw new CueError("UNEXPECTED_RESPONSE", "expected handshake Ack response");
+    }
+  }
 
   /** Send an Eval request for literal cue-shell commands (:kill, :jobs, :out). */
   async #rawEval(input: string, mode: Mode = "Job"): Promise<number> {

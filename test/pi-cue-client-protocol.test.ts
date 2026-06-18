@@ -87,11 +87,30 @@ async function startCueServer(
   };
 }
 
+function handleHandshake(message: CueFrame, socket: Socket): boolean {
+  const id = message.id as number;
+  const payload = requestPayload(message);
+  if ("Handshake" in payload) {
+    sendFrame(socket, { type: "response", id, payload: { Ok: { Ack: {} } } });
+    return true;
+  }
+  return false;
+}
+
+function findPayload(requests: CueFrame[], key: string): Record<string, unknown> {
+  const request = requests.find((candidate) => key in requestPayload(candidate));
+  assert.ok(request, `expected ${key} request`);
+  return requestPayload(request);
+}
+
 async function withCueServer(
   handler: (message: CueFrame, socket: Socket) => void,
   run: (client: CueClient, requests: CueFrame[]) => Promise<void>,
 ): Promise<void> {
-  const server = await startCueServer(handler);
+  const server = await startCueServer((message, socket) => {
+    if (handleHandshake(message, socket)) return;
+    handler(message, socket);
+  });
   const client = await CueClient.connect(server.socketPath);
   try {
     await run(client, server.requests);
@@ -119,6 +138,7 @@ function registerCueToolsForProtocolTest(): Map<string, RegisteredPiCueTool> {
 
 function singleJobCueServer(label: string) {
   return (message: CueFrame, socket: Socket) => {
+    if (handleHandshake(message, socket)) return;
     const id = message.id as number;
     const payload = requestPayload(message);
     if ("Subscribe" in payload) {
@@ -161,6 +181,32 @@ function singleJobCueServer(label: string) {
     }
   };
 }
+
+void test("CueClient.connect sends session handshake before normal requests", async () => {
+  await withCueServer(
+    (message, socket) => {
+      const id = message.id as number;
+      const payload = requestPayload(message);
+      if ("Ping" in payload) {
+        sendFrame(socket, {
+          type: "response",
+          id,
+          payload: { Ok: { Pong: { version: "9.9.9" } } },
+        });
+      }
+    },
+    async (client, requests) => {
+      const firstPayload = requestPayload(requests[0]!);
+      assert.ok("Handshake" in firstPayload, "first client request must bind a cue session");
+      const handshake = firstPayload.Handshake as Record<string, unknown>;
+      assert.equal(typeof handshake.session_id, "string");
+      assert.equal(typeof handshake.cwd, "string");
+      assert.ok(handshake.env && typeof handshake.env === "object");
+
+      assert.equal(await client.pingForVersion(), "9.9.9");
+    },
+  );
+});
 
 void test("resolveCueTransport uses cue-client target resolver JSON", async () => {
   await withTempPath(
@@ -278,6 +324,13 @@ process.stdin.on("data", (chunk) => {
     if (buffer.length < 4 + len) return;
     const message = JSON.parse(buffer.subarray(4, 4 + len).toString("utf8"));
     buffer = buffer.subarray(4 + len);
+    if (message.payload && message.payload.Handshake) {
+      process.stdout.write(frame({
+        type: "response",
+        id: message.id,
+        payload: { Ok: { Ack: {} } },
+      }));
+    }
     if (message.payload && message.payload.Ping) {
       process.stdout.write(frame({
         type: "response",
@@ -313,7 +366,7 @@ void test("implicit CueClient.connect fails ssh profiles without local daemon au
   await withTempPath(
     {
       "cue-client": `#!/bin/sh\nprintf '%s\n' '{"schema_version":1,"profile_name":"remote","transport":"ssh","destination":"devbox","gateway_command":"cued gateway --stdio","start_command":"cued start"}'\n`,
-      ssh: `#!/bin/sh\necho 'remote cued socket missing' >&2\nexit 42\n`,
+      ssh: `#!/bin/sh\nsleep 0.05\necho 'remote cued socket missing' >&2\nexit 42\n`,
     },
     async () => {
       await assert.rejects(
@@ -397,7 +450,7 @@ void test("cue RunScript request matches the current strict daemon schema", asyn
       const result = await client.runScript({ path: "build.cue", input: ":run echo ok" });
 
       assert.equal(result.scriptId, "R1");
-      const scriptPayload = requestPayload(requests[1]!);
+      const scriptPayload = findPayload(requests, "RunScript");
       assert.deepEqual(scriptPayload.RunScript, { path: "build.cue", input: ":run echo ok" });
       assert.equal(
         "mode" in (scriptPayload.RunScript as Record<string, unknown>),
@@ -419,7 +472,7 @@ void test("cue eval encodes resource needs as run mode params", async () => {
       });
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      const payload = requestPayload(requests[0]!);
+      const payload = findPayload(requests, "Eval");
       assert.deepEqual(payload.Eval, {
         input: ':run(pty=false,cwd="/tmp/work dir",need.gpu=1,need.gpu_mem=24GiB) echo ok',
         mode: "Job",
@@ -667,9 +720,12 @@ void test("cue typed list, output, and log responses are parsed", async () => {
       }
     },
     async (client, requests) => {
+      const typedRequests = () =>
+        requests.filter((request) => !("Handshake" in requestPayload(request)));
+
       const jobs = await client.listJobs(1);
       assert.deepEqual(
-        requestPayload(requests[0]!).ListJobs,
+        requestPayload(typedRequests()[0]!).ListJobs,
         { limit: 1 },
         "listJobs should use typed ListJobs",
       );
@@ -677,7 +733,7 @@ void test("cue typed list, output, and log responses are parsed", async () => {
       assert.equal(jobs[0]?.pending_reason, "license: busy");
 
       const output = await client.jobOutput("J1", 1024);
-      assert.deepEqual(requestPayload(requests[1]!).JobOutput, {
+      assert.deepEqual(requestPayload(typedRequests()[1]!).JobOutput, {
         id: "J1",
         stdout_bytes: 1024,
         stderr_bytes: 1024,
@@ -685,7 +741,7 @@ void test("cue typed list, output, and log responses are parsed", async () => {
       assert.deepEqual(output, { stdout: "ok\n", stderr: "warn\n", truncated: false });
 
       const log = await client.showLog("J1", 10, 2048);
-      assert.deepEqual(requestPayload(requests[2]!).ShowLog, {
+      assert.deepEqual(requestPayload(typedRequests()[2]!).ShowLog, {
         id: "J1",
         limit: 10,
         tail_bytes: 2048,
@@ -693,7 +749,7 @@ void test("cue typed list, output, and log responses are parsed", async () => {
       assert.equal(log, "recent log\n");
 
       const stderr = await client.jobError("J1", 512);
-      assert.deepEqual(requestPayload(requests[3]!).JobOutput, {
+      assert.deepEqual(requestPayload(typedRequests()[3]!).JobOutput, {
         id: "J1",
         stdout_bytes: null,
         stderr_bytes: 512,
