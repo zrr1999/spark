@@ -1,0 +1,29 @@
+{
+  "name": "@navia-dev/system",
+  "version": "0.1.0",
+  "description": "Navia filesystem path, permission, and local runtime helpers.",
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "package.json",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vp test run"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+  },
+  "engines": {
+    "node": ">=26.0.0 <27"
+  }
+}

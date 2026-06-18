@@ -88,6 +88,20 @@ Manage settings through the canonical role tool actions: `role({ action: "model_
 - `@zendev-lab/pi-ask` — canonical public/default `ask` action tool with shared focused/flow protocol, state, renderer, and direct custom input handling behind that surface.
 - `@zendev-lab/pi-roles` — canonical `role` action tool plus reusable `RoleSpec` definitions, builtin/extension/project/user role discovery, project/user Markdown stores, role model settings, and task-agnostic direct role calls. It owns fresh/forked CLI launch, timeout/cancel, stdout/stderr capture, model-setting resolution, and tolerant JSONL parsing; it does not own Spark task DAGs, asks, artifacts, review gates, or package-specific role semantics.
 
+Navia is integrated as Spark's local web cockpit/projection product line while retaining separate package boundaries:
+
+- `@navia-dev/web` — private SvelteKit local cockpit app under `apps/navia-web`; it renders Spark-owned task/run/artifact state from Navia SQLite projections and caches.
+- `@navia-dev/runner` — Navia CLI/local service package under `packages/navia-runner`; task execution is routed through the Spark runtime bridge, while workspace registration and protocol delivery stay in the Navia boundary.
+- `@navia-dev/protocol`, `@navia-dev/db`, `@navia-dev/domain`, `@navia-dev/system`, and `@navia-dev/ui` — Navia protocol, SQLite projection, domain, path, and UI packages under `packages/navia-*`.
+
+Typical merged-repo Navia development commands:
+
+```text
+pnpm run navia:web                              # start the SvelteKit cockpit
+pnpm --filter @navia-dev/runner run cli -- --help
+pnpm run verify:navia                           # Navia check/test/build
+```
+
 Retired migration packages (`spark-core`, `spark-tasks`, `spark-learnings`, `spark-goal`, and `spark-workflows`) are no longer workspaces. No compatibility packages, long-lived `spark_*` tool aliases, or dual public/default tool surfaces are planned. Public action tools render as `tool action=<value> ...`. `spark-github` is intentionally deferred.
 
 Pi package loading is manifest-first: the root `pi` manifest explicitly lists each user-visible extension entry (`@zendev-lab/pi-ask`, `@zendev-lab/pi-artifacts`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-recall`, `@zendev-lab/pi-workflows`, `@zendev-lab/pi-graft`, the Baidu OneAPI provider, and `@zendev-lab/spark`). Library-only packages stay as dependencies. `pi-* -> spark-*` regressions are guarded by `pnpm run check:boundaries`, a `prek` hook, and the CI static-check workflow.
@@ -96,10 +110,13 @@ Pi package loading is manifest-first: the root `pi` manifest explicitly lists ea
 
 ```text
 pnpm install
-pnpm run verify
+pnpm run verify          # Spark package checks/tests
+pnpm run verify:navia    # Navia check/test/build
 packages/spark-cli/bin/spark --help
 packages/spark-cli/bin/spark daemon --help
 ```
+
+Use Node `>=26.0.0 <27` and pnpm `>=11 <12`; root `engines` plus `.npmrc` `engine-strict=true` make Node 26 mandatory for installs and scripts.
 
 Tooling (pnpm, Vite+ / `vp`, prek hooks, CI) matches the stack documented in [`AGENTS.md`](./AGENTS.md).
 

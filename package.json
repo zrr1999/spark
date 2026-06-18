@@ -13,6 +13,7 @@
   "author": "zrr1999",
   "workspaces": {
     "packages": [
+      "apps/*",
       "packages/*"
     ]
   },
@@ -29,7 +30,15 @@
     "test": "node --experimental-strip-types --test \"test/*.test.ts\"",
     "test:file": "node --experimental-strip-types --test",
     "verify": "pnpm run check && pnpm test",
-    "prepare": "pnpx @j178/prek install --hook-type commit-msg --hook-type pre-commit"
+    "prepare": "pnpx @j178/prek install --hook-type commit-msg --hook-type pre-commit",
+    "navia:check": "pnpm --filter '@navia-dev/*' run check",
+    "navia:test": "pnpm --filter '@navia-dev/*' run test",
+    "navia:e2e": "pnpm --filter @navia-dev/runner exec vp test run src/daemon.test.ts -t 'streams ack, running, log chunks, and succeeded updates from the Spark bridge'",
+    "navia:build": "pnpm --filter @navia-dev/runner run build && pnpm --filter @navia-dev/web run build",
+    "verify:navia": "pnpm run navia:check && pnpm run navia:test && pnpm run navia:build",
+    "verify:merged": "pnpm run check:boundaries && pnpm run check:tsc && pnpm test && pnpm run verify:navia",
+    "navia:web": "pnpm --filter @navia-dev/web run dev",
+    "navia:runner": "pnpm --filter @navia-dev/runner"
   },
   "dependencies": {
     "@zendev-lab/pi-artifacts": "workspace:^",
@@ -54,7 +63,12 @@
     "oxlint": "1.70.0",
     "typescript": "^6.0.3",
     "vite": "catalog:",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+  },
+  "engines": {
+    "node": ">=26.0.0 <27",
+    "pnpm": ">=11 <12"
   },
   "packageManager": "pnpm@11.7.0",
   "pi": {

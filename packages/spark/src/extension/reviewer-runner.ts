@@ -140,6 +140,15 @@ const REVIEWER_FORBIDDEN_TOOLS = new Set([
   "patch",
 ]);
 
+const REVIEWER_EXECUTION_TOOLS = new Set([
+  "cue_exec",
+  "cue_run",
+  "cue_script",
+  "script_run",
+  "script_eval",
+  "cue_jobs",
+]);
+
 export interface AskAutoAnswerInput {
   cwd: string;
   request: unknown;
@@ -238,6 +247,7 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
       instruction: renderReviewerInstruction(input),
       runGuidance: REVIEWER_JSON_SCHEMA,
       allowedTools: reviewerGateAllowedTools(role.allowedTools),
+      noSession: true,
       launch: "fresh",
       sessionDir: this.#sessionDir,
       piCommand: this.#piCommand,
@@ -290,6 +300,7 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
         instruction: renderAskAutoAnswerInstruction(input),
         runGuidance: ASK_AUTO_ANSWER_JSON_SCHEMA,
         allowedTools: reviewerGateAllowedTools(role.allowedTools),
+        noSession: true,
         launch: "fresh",
         sessionDir: this.#sessionDir,
         piCommand: this.#piCommand,
@@ -440,7 +451,9 @@ function normalizeReviewerVerdictObject(value: Record<string, unknown>): ReviewV
 }
 
 function reviewerGateAllowedTools(allowedTools: string[] | undefined): string[] | undefined {
-  return allowedTools?.filter((tool) => !REVIEWER_FORBIDDEN_TOOLS.has(tool));
+  return allowedTools?.filter(
+    (tool) => !REVIEWER_FORBIDDEN_TOOLS.has(tool) && !REVIEWER_EXECUTION_TOOLS.has(tool),
+  );
 }
 
 function roleRunRecord(

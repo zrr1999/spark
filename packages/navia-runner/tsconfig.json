@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.navia.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "exactOptionalPropertyTypes": false,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src/**/*.ts"]
+}

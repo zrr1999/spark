@@ -1,0 +1,318 @@
+[
+  {
+    "protocolVersion": "navia.runtime.v1alpha1",
+    "messageId": "msg_12121212121242121212121212121212",
+    "type": "runtime.reconcile.request",
+    "sentAt": "2026-05-21T00:00:10.000Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "payload": {
+      "reason": "startup",
+      "requestedAt": "2026-05-21T00:00:10.000Z",
+      "scopes": ["workspace_bindings", "commands", "artifacts"]
+    }
+  },
+  {
+    "protocolVersion": "navia.runtime.v1alpha1",
+    "messageId": "msg_13131313131343131313131313131313",
+    "type": "runtime.reconcile.report",
+    "sentAt": "2026-05-21T00:00:12.000Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "payload": {
+      "observedAt": "2026-05-21T00:00:12.000Z",
+      "workspaceBindings": [
+        {
+          "bindingId": "rtwb_11111111111141111111111111111111",
+          "localWorkspaceKey": "local-default",
+          "displayName": "Local development workspace",
+          "status": "available",
+          "capabilities": {},
+          "diagnostics": {}
+        }
+      ],
+      "pendingOutboxCount": 0,
+      "activeInvocationCount": 0,
+      "artifacts": {
+        "availableCount": 1,
+        "missingCount": 0
+      },
+      "diagnostics": {}
+    }
+  },
+  {
+    "protocolVersion": "navia.runtime.v1alpha1",
+    "messageId": "msg_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "type": "workspace.snapshot",
+    "sentAt": "2026-05-21T00:00:16.000Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "workspaceBindingId": "rtwb_11111111111141111111111111111111",
+    "workspaceId": "ws_22222222222242222222222222222222",
+    "payload": {
+      "displayName": "Local development workspace",
+      "status": "available",
+      "projects": [
+        {
+          "projectId": "proj_33333333333343333333333333333333",
+          "title": "Runtime protocol",
+          "status": "running"
+        }
+      ],
+      "unresolvedInboxCount": 1,
+      "activeInvocationCount": 1,
+      "latestArtifactIds": ["art_99999999999949999999999999999999"]
+    }
+  },
+  {
+    "protocolVersion": "navia.runtime.v1alpha1",
+    "messageId": "msg_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "type": "server.command",
+    "sentAt": "2026-05-21T00:01:00.000Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "workspaceBindingId": "rtwb_11111111111141111111111111111111",
+    "workspaceId": "ws_22222222222242222222222222222222",
+    "projectId": "proj_33333333333343333333333333333333",
+    "commandId": "cmd_44444444444444444444444444444444",
+    "idempotencyKey": "idem_55555555555545555555555555555555",
+    "payload": {
+      "kind": "task.start.request",
+      "title": "Investigate TypeScript check failure",
+      "payloadRef": {
+        "url": "/api/v1/runtime/commands/cmd_44444444444444444444444444444444/payload",
+        "contentType": "application/json"
+      }
+    }
+  },
+  {
+    "protocolVersion": "navia.runtime.v1alpha1",
+    "messageId": "msg_cccccccccccccccccccccccccccccccc",
+    "type": "runtime.command.ack",
+    "sentAt": "2026-05-21T00:01:00.250Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "workspaceBindingId": "rtwb_11111111111141111111111111111111",
+    "workspaceId": "ws_22222222222242222222222222222222",
+    "projectId": "proj_33333333333343333333333333333333",
+    "commandId": "cmd_44444444444444444444444444444444",
+    "invocationId": "inv_66666666666646666666666666666666",
+    "ackOf": "msg_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "idempotencyKey": "idem_55555555555545555555555555555555",
+    "payload": {
+      "accepted": true,
+      "invocationId": "inv_66666666666646666666666666666666"
+    }
+  },
+  {
+    "protocolVersion": "navia.runtime.v1alpha1",
+    "messageId": "msg_cdcdcdcdcdcd4dcdcdcdcdcdcdcdcdcd",
+    "type": "runtime.command.reject",
+    "sentAt": "2026-05-21T00:01:01.000Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "workspaceBindingId": "rtwb_11111111111141111111111111111111",
+    "workspaceId": "ws_22222222222242222222222222222222",
+    "projectId": "proj_33333333333343333333333333333333",
+    "commandId": "cmd_44444444444444444444444444444444",
+    "ackOf": "msg_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "idempotencyKey": "idem_55555555555545555555555555555555",
+    "payload": {
+      "reasonCode": "CAPABILITY_UNAVAILABLE",
+      "message": "claude-code CLI is not logged in for this workspace",
+      "retryable": true
+    }
+  },
+  {
+    "protocolVersion": "navia.runtime.v1alpha1",
+    "messageId": "msg_dddddddddddddddddddddddddddddddd",
+    "type": "human.request.created",
+    "sentAt": "2026-05-21T00:02:00.000Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "workspaceBindingId": "rtwb_11111111111141111111111111111111",
+    "workspaceId": "ws_22222222222242222222222222222222",
+    "projectId": "proj_33333333333343333333333333333333",
+    "commandId": "cmd_44444444444444444444444444444444",
+    "invocationId": "inv_66666666666646666666666666666666",
+    "humanRequestId": "hreq_77777777777747777777777777777777",
+    "idempotencyKey": "idem_77777777777747777777777777777777",
+    "payload": {
+      "kind": "ask_user",
+      "toolCallId": "toolu_01",
+      "title": "Choose implementation direction",
+      "prompt": "Should I update the protocol docs only, or also adjust the implementation plan?",
+      "questions": [
+        {
+          "id": "scope",
+          "type": "single",
+          "prompt": "What scope should I apply?",
+          "required": true,
+          "options": [
+            {
+              "id": "protocol-only",
+              "label": "Protocol only",
+              "description": "Only update protocol-facing contracts and fixtures."
+            },
+            {
+              "id": "all-docs",
+              "label": "All docs",
+              "description": "Update all affected planning and RFC documents."
+            }
+          ]
+        }
+      ],
+      "contextArtifactRefs": []
+    }
+  },
+  {
+    "protocolVersion": "navia.runtime.v1alpha1",
+    "messageId": "msg_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "type": "human.response.deliver",
+    "sentAt": "2026-05-21T00:05:00.000Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "workspaceBindingId": "rtwb_11111111111141111111111111111111",
+    "workspaceId": "ws_22222222222242222222222222222222",
+    "projectId": "proj_33333333333343333333333333333333",
+    "commandId": "cmd_44444444444444444444444444444444",
+    "invocationId": "inv_66666666666646666666666666666666",
+    "humanRequestId": "hreq_77777777777747777777777777777777",
+    "humanResponseId": "hres_88888888888848888888888888888888",
+    "idempotencyKey": "idem_88888888888848888888888888888888",
+    "payload": {
+      "status": "answered",
+      "answers": {
+        "scope": "all-docs"
+      },
+      "responseArtifactRefs": []
+    }
+  },
+  {
+    "protocolVersion": "navia.runtime.v1alpha1",
+    "messageId": "msg_fefefefefefe4efefefefefefefefefe",
+    "type": "human.response.ack",
+    "sentAt": "2026-05-21T00:05:00.100Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "workspaceBindingId": "rtwb_11111111111141111111111111111111",
+    "workspaceId": "ws_22222222222242222222222222222222",
+    "humanRequestId": "hreq_77777777777747777777777777777777",
+    "humanResponseId": "hres_88888888888848888888888888888888",
+    "ackOf": "msg_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "payload": {
+      "returnedToTool": true
+    }
+  },
+  {
+    "protocolVersion": "navia.runtime.v1alpha1",
+    "messageId": "msg_abababababab4abababababababababa",
+    "type": "task_graph.snapshot",
+    "sentAt": "2026-05-21T00:06:00.000Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "workspaceBindingId": "rtwb_11111111111141111111111111111111",
+    "workspaceId": "ws_22222222222242222222222222222222",
+    "projectId": "proj_33333333333343333333333333333333",
+    "payload": {
+      "runtimeSnapshotId": "snap-001",
+      "snapshotVersion": 1,
+      "clusters": [
+        {
+          "runtimeClusterId": "cluster-main",
+          "name": "main",
+          "title": "Main plan",
+          "status": "running",
+          "sortKey": "001"
+        }
+      ],
+      "tasks": [
+        {
+          "runtimeTaskId": "task-design",
+          "runtimeClusterId": "cluster-main",
+          "name": "design",
+          "title": "Design protocol",
+          "status": "completed",
+          "outputArtifactIds": ["art_99999999999949999999999999999999"],
+          "runIds": ["inv_66666666666646666666666666666666"]
+        },
+        {
+          "runtimeTaskId": "task-implement",
+          "runtimeClusterId": "cluster-main",
+          "name": "implement",
+          "title": "Implement protocol",
+          "status": "running"
+        }
+      ],
+      "dependencies": [
+        {
+          "fromTaskRuntimeId": "task-design",
+          "toTaskRuntimeId": "task-implement",
+          "kind": "depends_on"
+        }
+      ]
+    }
+  },
+  {
+    "protocolVersion": "navia.runtime.v1alpha1",
+    "messageId": "msg_acacacacacac4acacacacacacacacaca",
+    "type": "invocation.updated",
+    "sentAt": "2026-05-21T00:06:05.000Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "workspaceBindingId": "rtwb_11111111111141111111111111111111",
+    "workspaceId": "ws_22222222222242222222222222222222",
+    "projectId": "proj_33333333333343333333333333333333",
+    "commandId": "cmd_44444444444444444444444444444444",
+    "invocationId": "inv_66666666666646666666666666666666",
+    "payload": {
+      "runtimeInvocationId": "inv_66666666666646666666666666666666",
+      "taskRuntimeId": "task-implement",
+      "agentName": "pi",
+      "status": "running",
+      "startedAt": "2026-05-21T00:01:00.300Z"
+    }
+  },
+  {
+    "protocolVersion": "navia.runtime.v1alpha1",
+    "messageId": "msg_adadadadadad4adadadadadadadadada",
+    "type": "invocation.log_chunk",
+    "sentAt": "2026-05-21T00:06:06.000Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "workspaceBindingId": "rtwb_11111111111141111111111111111111",
+    "workspaceId": "ws_22222222222242222222222222222222",
+    "projectId": "proj_33333333333343333333333333333333",
+    "commandId": "cmd_44444444444444444444444444444444",
+    "invocationId": "inv_66666666666646666666666666666666",
+    "payload": {
+      "runtimeInvocationId": "inv_66666666666646666666666666666666",
+      "stream": "stdout",
+      "sequence": 1,
+      "content": "pnpm check...\n"
+    }
+  },
+  {
+    "protocolVersion": "navia.runtime.v1alpha1",
+    "messageId": "msg_aeaeaeaeaeae4aeaeaeaeaeaeaeaeaea",
+    "type": "artifact.projected",
+    "sentAt": "2026-05-21T00:06:10.000Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "workspaceBindingId": "rtwb_11111111111141111111111111111111",
+    "workspaceId": "ws_22222222222242222222222222222222",
+    "projectId": "proj_33333333333343333333333333333333",
+    "invocationId": "inv_66666666666646666666666666666666",
+    "payload": {
+      "artifactId": "art_99999999999949999999999999999999",
+      "scope": "project",
+      "kind": "report",
+      "title": "Protocol implementation report",
+      "format": "markdown",
+      "source": "runtime",
+      "hash": "sha256:abc123",
+      "sizeBytes": 1024,
+      "contentRef": {
+        "runtimePathRef": "artifact://local/protocol-report.md"
+      },
+      "provenance": {
+        "runtimeInvocationId": "inv_66666666666646666666666666666666",
+        "producedBy": "pi"
+      },
+      "links": [
+        {
+          "targetKind": "task",
+          "targetId": "task-implement",
+          "relation": "output"
+        }
+      ]
+    }
+  }
+]

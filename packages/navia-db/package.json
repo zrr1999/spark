@@ -1,0 +1,33 @@
+{
+  "name": "@navia-dev/db",
+  "version": "0.1.0",
+  "description": "Navia SQLite migrations, database client, and Node SQLite dialect.",
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "package.json",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "@navia-dev/system": "workspace:*",
+    "kysely": "^0.28.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+  },
+  "engines": {
+    "node": ">=26.0.0 <27"
+  }
+}

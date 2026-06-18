@@ -1,39 +1,47 @@
 [[repos]]
 repo = "builtin"
 hooks = [
-  { id = "check-added-large-files" },
-  { id = "check-case-conflict" },
-  { id = "check-executables-have-shebangs" },
-  { id = "check-yaml" },
-  { id = "check-json" },
-  { id = "check-merge-conflict" },
-  { id = "end-of-file-fixer" },
-  { id = "mixed-line-ending" },
-  { id = "trailing-whitespace" },
+  { id = "check-added-large-files", stages = ["pre-commit"] },
+  { id = "check-case-conflict", stages = ["pre-commit"] },
+  { id = "check-executables-have-shebangs", stages = ["pre-commit"] },
+  { id = "check-yaml", stages = ["pre-commit"] },
+  { id = "check-json", stages = ["pre-commit"] },
+  { id = "check-merge-conflict", stages = ["pre-commit"] },
+  { id = "end-of-file-fixer", stages = ["pre-commit"] },
+  { id = "mixed-line-ending", stages = ["pre-commit"] },
+  { id = "trailing-whitespace", stages = ["pre-commit"] },
 ]
 
 [[repos]]
 repo = "https://github.com/tombi-toml/tombi-pre-commit"
 rev = "v0.9.20"
 hooks = [
-  { id = "tombi-format", exclude = "^Cargo\\.lock$" },
-  { id = "tombi-lint", args = ["--error-on-warnings"] },
+  {
+    id = "tombi-format",
+    exclude = "^Cargo\\.lock$",
+    stages = ["pre-commit"]
+  },
+  {
+    id = "tombi-lint",
+    args = ["--error-on-warnings"],
+    stages = ["pre-commit"]
+  },
 ]
 
 [[repos]]
 repo = "https://github.com/rhysd/actionlint"
 rev = "v1.7.12"
-hooks = [{ id = "actionlint" }]
+hooks = [{ id = "actionlint", stages = ["pre-commit"] }]
 
 [[repos]]
 repo = "https://github.com/crate-ci/typos"
 rev = "v1.33.1"
-hooks = [{ id = "typos", args = ["--force-exclude"] }]
+hooks = [{ id = "typos", args = ["--force-exclude"], stages = ["pre-commit"] }]
 
 [[repos]]
 repo = "https://github.com/zrr1999/zendev"
 rev = "v0.0.6"
-hooks = [{ id = "zendev-commit-msg" }]
+hooks = [{ id = "zendev-commit-msg", stages = ["commit-msg"] }]
 
 [[repos]]
 repo = "local"
@@ -43,13 +51,15 @@ hooks = [
     name = "pi package boundary check",
     entry = "pnpm run check:boundaries",
     language = "system",
-    pass_filenames = true
+    pass_filenames = true,
+    stages = ["pre-commit"]
   },
   {
     id = "vp-check",
     name = "vp check --fix",
     entry = "env NO_COLOR=1 vp check --fix",
     language = "system",
-    pass_filenames = true
+    pass_filenames = true,
+    stages = ["pre-commit"]
   },
 ]

@@ -80,6 +80,39 @@ void test("pi-roles can pass a child Pi tool allowlist", () => {
   assert.equal(args[index + 1], "graft_read,graft_write,graft_validate");
 });
 
+void test("pi-roles can launch ephemeral no-session role runs", () => {
+  const args = buildRoleRunArgs({
+    roleRef: "role:builtin-reviewer",
+    launch: "fresh",
+    systemPrompt: "You are a reviewer.",
+    instruction: "Review without saving child session state.",
+    noSession: true,
+    sessionDir: "/tmp/sessions",
+  });
+
+  assert.deepEqual(args.slice(0, 7), [
+    "--print",
+    "--mode",
+    "json",
+    "--no-session",
+    "--session-dir",
+    "/tmp/sessions",
+    "--append-system-prompt",
+  ]);
+  assert.throws(
+    () =>
+      buildRoleRunArgs({
+        roleRef: "role:builtin-reviewer",
+        launch: "forked",
+        systemPrompt: "You are a reviewer.",
+        instruction: "Invalid forked no-session run.",
+        noSession: true,
+        forkFromSession: "session-parent.json",
+      }),
+    /noSession role runs cannot use forked launch/,
+  );
+});
+
 void test("pi-roles builds forked JSON Pi role args only when forked launch is explicit", () => {
   const args = buildRoleRunArgs({
     roleRef: "role:builtin-reviewer",
