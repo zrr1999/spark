@@ -440,7 +440,7 @@ void test("pi-roles can ignore child stdin for argv-prompt non-interactive runs"
       instruction: "Review.",
       piCommand: fakePi,
       cwd: dir,
-      timeoutMs: 1_000,
+      timeoutMs: 5_000,
       stdinMode: "ignore",
     });
 

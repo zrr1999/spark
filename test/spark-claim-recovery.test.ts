@@ -10,7 +10,7 @@ import type { WorkflowRunStatusSummary } from "@zendev-lab/pi-workflows";
 import type { ActiveSparkRoleRunProcess } from "@zendev-lab/spark-runtime";
 import { TaskGraph } from "@zendev-lab/pi-tasks";
 import { evaluateSparkTaskClaimRecovery } from "../packages/spark/src/extension/task-claim-recovery.ts";
-import { sanitizeStoreScope } from "../packages/spark/src/extension/session-identity.ts";
+import { sessionDirectoryNameForKey } from "../packages/spark/src/extension/session-directory-store.ts";
 
 const IDLE_WORKFLOW_STATUS: WorkflowRunStatusSummary = {
   manager: { status: "idle", updatedAt: "2026-06-17T00:00:00.000Z" },
@@ -162,9 +162,15 @@ void test("stale claim recovery refuses when owner activity is newer than needs_
       body: { verdict: { outcome: "needs_changes", summary: "Needs changes." } },
       provenance: { producer: "review", projectRef: project.ref, taskRef: task.ref },
     });
-    await mkdir(join(dir, ".spark", "session-goals"), { recursive: true });
+    const ownerSessionDir = join(
+      dir,
+      ".spark",
+      "sessions",
+      sessionDirectoryNameForKey("session:owner"),
+    );
+    await mkdir(ownerSessionDir, { recursive: true });
     await writeFile(
-      join(dir, ".spark", "session-goals", `${sanitizeStoreScope("session:owner")}.json`),
+      join(ownerSessionDir, "goal.json"),
       `${JSON.stringify({ goal: { updatedAt: "2999-01-01T00:00:00.000Z" } }, null, 2)}\n`,
       "utf8",
     );

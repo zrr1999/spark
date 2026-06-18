@@ -1496,6 +1496,63 @@ void test("/goal sets a durable session goal instead of execute-mode continuatio
   }
 });
 
+void test("foreground drivers plan empty-frontier research-progress objectives", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-foreground-empty-frontier-plan-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const run = registerSparkToolsForTest();
+    await useOnlySparkProject(run.tools, ctx);
+    const objective = "不断学习其他项目，调研，考虑优化 Spark 方案，创建任务并完成它们";
+
+    const goalCommand = run.commands.get("goal");
+    assert.ok(goalCommand, "missing /goal command");
+    await goalCommand.handler(objective, ctx);
+    const goalPrompt = run.customMessages.at(-1)?.content ?? "";
+    assert.match(goalPrompt, /Selected Spark mode for goal driver: plan/);
+    assert.match(goalPrompt, /## Planning mode requirements/);
+    assert.doesNotMatch(goalPrompt, /## Default research requirements/);
+
+    const loopCommand = run.commands.get("loop");
+    assert.ok(loopCommand, "missing /loop command");
+    await loopCommand.handler(objective, ctx);
+    const loopPrompt = run.customMessages.at(-1)?.content ?? "";
+    assert.match(loopPrompt, /Selected Spark mode for loop driver: plan/);
+    assert.match(loopPrompt, /Use the selected mode's tool policy/);
+    assert.doesNotMatch(loopPrompt, /Selected Spark mode for loop driver: research/);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("foreground drivers preserve pure empty-frontier research objectives", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-foreground-empty-frontier-research-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const run = registerSparkToolsForTest();
+    await useOnlySparkProject(run.tools, ctx);
+    const objective = "调研其他项目并总结发现";
+
+    const goalCommand = run.commands.get("goal");
+    assert.ok(goalCommand, "missing /goal command");
+    await goalCommand.handler(objective, ctx);
+    const goalPrompt = run.customMessages.at(-1)?.content ?? "";
+    assert.match(goalPrompt, /Selected Spark mode for goal driver: research/);
+    assert.match(goalPrompt, /## Default research requirements/);
+    assert.doesNotMatch(goalPrompt, /## Planning mode requirements/);
+
+    const loopCommand = run.commands.get("loop");
+    assert.ok(loopCommand, "missing /loop command");
+    await loopCommand.handler(objective, ctx);
+    const loopPrompt = run.customMessages.at(-1)?.content ?? "";
+    assert.match(loopPrompt, /Selected Spark mode for loop driver: research/);
+    assert.doesNotMatch(loopPrompt, /Selected Spark mode for loop driver: plan/);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
 void test("/goal without objective dispatches an agent infer instruction without writing", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-empty-infer-"));
   try {

@@ -10,7 +10,7 @@ import {
 } from "@zendev-lab/pi-artifacts";
 import type { WorkflowRunStatusSummary } from "@zendev-lab/pi-workflows";
 import type { ActiveSparkRoleRunProcess } from "@zendev-lab/spark-runtime";
-import { sanitizeStoreScope } from "./session-identity.ts";
+import { sessionDirectoryNameForKey } from "./session-directory-store.ts";
 
 export type SparkTaskClaimRecoveryReason = "claim_expired" | "review_needs_changes_owner_inactive";
 
@@ -288,7 +288,7 @@ function reviewSummary(artifact: Artifact): string | undefined {
 }
 
 async function ownerSessionActivity(cwd: string, owner: string): Promise<OwnerSessionActivity> {
-  const filePath = join(cwd, ".spark", "session-goals", `${sanitizeStoreScope(owner)}.json`);
+  const filePath = join(cwd, ".spark", "sessions", sessionDirectoryNameForKey(owner), "goal.json");
   try {
     const text = await readFile(filePath, "utf8");
     const parsed = JSON.parse(text) as { goal?: { updatedAt?: unknown } };
