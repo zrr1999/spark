@@ -244,6 +244,7 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
       cwd: input.cwd || this.#cwd,
       timeoutMs: this.#timeoutMs,
       signal,
+      stdinMode: "ignore",
     });
     const finishedAt = result.record.finishedAt ?? this.#now();
     if (result.record.status !== "succeeded")
@@ -295,6 +296,7 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
         cwd: input.cwd || this.#cwd,
         timeoutMs: this.#timeoutMs,
         signal,
+        stdinMode: "ignore",
       });
     } catch (error) {
       return { blocked: true, reason: `reviewer role run blocked: ${unknownErrorMessage(error)}` };

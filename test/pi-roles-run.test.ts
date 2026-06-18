@@ -408,6 +408,49 @@ void test("pi-roles launches Pi, captures JSONL events, and records run metadata
   }
 });
 
+void test("pi-roles can ignore child stdin for argv-prompt non-interactive runs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-ignore-stdin-"));
+  try {
+    const fakePi = join(dir, "fake-pi.cjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "let ended = false;",
+        "process.stdin.on('end', () => {",
+        "  ended = true;",
+        "  process.stdout.write(JSON.stringify({ type: 'stdin', ended }) + '\\n');",
+        "});",
+        "process.stdin.resume();",
+        "setTimeout(() => {",
+        "  if (!ended) {",
+        "    process.stdout.write(JSON.stringify({ type: 'stdin', ended }) + '\\n');",
+        "    process.exit(2);",
+        "  }",
+        "}, 200);",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    const result = await runRole({
+      runRef: "run:ignore-stdin-test",
+      roleRef: "role:builtin-reviewer",
+      systemPrompt: "You are a reviewer.",
+      instruction: "Review.",
+      piCommand: fakePi,
+      cwd: dir,
+      timeoutMs: 1_000,
+      stdinMode: "ignore",
+    });
+
+    assert.equal(result.record.status, "succeeded");
+    assert.deepEqual(result.jsonEvents.at(-1), { type: "stdin", ended: true });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("pi-roles bounded capture keeps tail JSONL results from large output", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-roles-tail-capture-"));
   try {

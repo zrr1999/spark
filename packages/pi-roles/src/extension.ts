@@ -361,6 +361,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         cwd,
         timeoutMs: p.timeoutMs,
         signal,
+        stdinMode: "ignore" as const,
       };
 
       const result = await runRole(commandInput);

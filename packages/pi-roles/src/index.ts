@@ -97,6 +97,13 @@ export interface RoleRunLauncherInput extends RoleRunCommandInput {
   signal?: AbortSignal;
   now?: () => string;
   env?: NodeJS.ProcessEnv;
+  /**
+   * Non-interactive role runs pass the prompt through argv and should not keep a
+   * child stdin pipe open, because Pi --print may wait for stdin EOF when stdin
+   * is a pipe. Interactive/background adapters can keep the default pipe for
+   * best-effort follow-up delivery.
+   */
+  stdinMode?: "pipe" | "ignore";
   onChildProcess?: (child: ChildProcess, startedAt: string) => void;
   onTimeout?: () => void;
 }
@@ -1246,13 +1253,13 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
   const child = spawn(input.piCommand, buildRoleRunArgs(input), {
     cwd: input.cwd,
     env: childEnv,
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio: [input.stdinMode === "ignore" ? "ignore" : "pipe", "pipe", "pipe"],
   });
   input.onChildProcess?.(child, startedAt);
   const stdoutCapture = createBoundedOutputCapture("stdout");
   const stderrCapture = createBoundedOutputCapture("stderr");
-  child.stdout.on("data", (chunk: Buffer) => stdoutCapture.push(chunk));
-  child.stderr.on("data", (chunk: Buffer) => stderrCapture.push(chunk));
+  child.stdout?.on("data", (chunk: Buffer) => stdoutCapture.push(chunk));
+  child.stderr?.on("data", (chunk: Buffer) => stderrCapture.push(chunk));
 
   let cancellationReason: string | undefined;
   const activeRun: ActiveRoleRun = {
