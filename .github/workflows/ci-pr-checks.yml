@@ -21,11 +21,11 @@ jobs:
     name: PR title
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
 
       - name: Check PR title
-        uses: zrr1999/zendev/actions/validate-title@b4ec684c958fe0055cfd5c800e2b1621157693ab # v0.0.7
+        uses: zrr1999/zendev/actions/validate-title@v0.0.7
         with:
           text: ${{ github.event.pull_request.title }}
