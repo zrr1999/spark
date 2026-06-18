@@ -9,7 +9,7 @@ describe("package boundaries", () => {
   it("does not import runner internals from the web app", () => {
     const sourceFiles = collectSourceFiles(join(webRoot, "src"));
     const violations = sourceFiles.filter((file) =>
-      readFileSync(file, "utf8").includes("@navia-dev/runner"),
+      readFileSync(file, "utf8").includes("@zendev-lab/navia-runner"),
     );
 
     expect(violations).toEqual([]);

@@ -1,5 +1,5 @@
 {
-  "name": "@navia-dev/system",
+  "name": "@zendev-lab/navia-system",
   "version": "0.1.0",
   "description": "Navia filesystem path, permission, and local runtime helpers.",
   "files": [
@@ -20,7 +20,7 @@
     "test": "vp test run"
   },
   "devDependencies": {
-    "typescript": "^5.9.2",
+    "typescript": "^6.0.3",
     "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
   },
   "engines": {

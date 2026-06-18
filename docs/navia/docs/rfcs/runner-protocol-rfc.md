@@ -5,7 +5,7 @@ Date: 2026-05-21
 
 ## Summary
 
-Navia's runner should be treated as a larger runner/capability concept, not only as a thin task executor. In the merged Spark monorepo the v0.1 runner is `packages/navia-runner` / `navia-runner`: a separate process that may manage multiple workspaces, owns local registration/protocol safety, and routes task execution through Spark runtime primitives while reporting projections back to the web cockpit.
+Navia's runner should be treated as a larger runner/capability concept, not only as a thin task executor. In the merged Spark monorepo the v0.1 runner is `apps/navia-runner` / `navia-runner`: a separate process that may manage multiple workspaces, owns local registration/protocol safety, and routes task execution through Spark runtime primitives while reporting projections back to the web cockpit.
 
 In v0.1, each server-visible workspace is created under exactly one owning runner workspace binding. A runner can own/manage many workspaces, but a workspace is managed by one runner binding at a time. Other runners cannot route commands into or manage that workspace unless an explicit future rebinding/migration flow changes ownership.
 
@@ -195,7 +195,7 @@ Rules:
 
 | Decision                | Selected default                                                                                                                                                   |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Runner concept          | Runner is a larger workspace/capability hub, implemented as `packages/navia-runner` daemon CLI with a Spark runtime bridge, not a thin executor or extension.      |
+| Runner concept          | Runner is a larger workspace/capability hub, implemented as `apps/navia-runner` daemon CLI with a Spark runtime bridge, not a thin executor or extension.      |
 | Server role             | Server is primarily the communication plane: auth, sessions, routing, delivery, projections, audit.                                                                |
 | Workspace scope         | One runner can manage multiple workspace bindings; each server-visible workspace is fixed to one owning runner binding at creation in v0.1.                        |
 | Frontend emphasis       | Frontend is workspace/project first and should downplay runner as a primary concept.                                                                               |

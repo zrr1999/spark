@@ -5,13 +5,13 @@ import { basename, join } from "node:path";
 import test from "node:test";
 
 import { stableId } from "../packages/pi-extension-api/src/index.ts";
-import { parseSparkCliArgs } from "../packages/spark-cli/src/cli.ts";
+import { parseSparkCliArgs } from "../apps/spark/src/cli.ts";
 import {
   createProviderRegistryWorkflowModelRunner,
   createSparkCliHostServices,
   submitToSparkAgent,
   type SparkConfig,
-} from "../packages/spark-cli/src/host/index.ts";
+} from "../apps/spark/src/host/index.ts";
 
 function assistant(text: string): Record<string, unknown> {
   return {
@@ -270,7 +270,7 @@ void test("provider registry workflow model runner rejects unknown provider and 
 });
 
 void test("spark-cli package keeps pi-coding-agent out of runtime dependencies", async () => {
-  const pkg = JSON.parse(await readFile("packages/spark-cli/package.json", "utf8")) as {
+  const pkg = JSON.parse(await readFile("apps/spark/package.json", "utf8")) as {
     dependencies?: Record<string, string>;
   };
   assert.equal(pkg.dependencies?.["@earendil-works/pi-coding-agent"], undefined);

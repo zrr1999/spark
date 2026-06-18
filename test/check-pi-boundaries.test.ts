@@ -11,7 +11,7 @@ void test("boundary checker rejects pi package imports from Spark and Navia", as
   const root = await fixtureRoot();
   await writePackage(root, "packages/pi-sample", {
     name: "@zendev-lab/pi-sample",
-    dependencies: { "@navia-dev/protocol": "workspace:*" },
+    dependencies: { "@zendev-lab/navia-protocol": "workspace:*" },
     source: 'import { runSparkTask } from "@zendev-lab/spark-runtime";\n',
   });
 
@@ -26,7 +26,7 @@ void test("boundary checker rejects Spark packages importing Navia packages", as
   const root = await fixtureRoot();
   await writePackage(root, "packages/spark-sample", {
     name: "@zendev-lab/spark-sample",
-    source: 'import { runtimeMessageSchema } from "@navia-dev/protocol";\n',
+    source: 'import { runtimeMessageSchema } from "@zendev-lab/navia-protocol";\n',
   });
 
   const result = runBoundaryCheck(root);
@@ -37,8 +37,8 @@ void test("boundary checker rejects Spark packages importing Navia packages", as
 
 void test("boundary checker rejects Navia packages importing Spark CLI host internals", async () => {
   const root = await fixtureRoot();
-  await writePackage(root, "packages/navia-runner", {
-    name: "@navia-dev/runner",
+  await writePackage(root, "apps/navia-runner", {
+    name: "@zendev-lab/navia-runner",
     source: 'import { createSparkCliHostServices } from "@zendev-lab/spark-cli/host";\n',
   });
 
@@ -51,9 +51,9 @@ void test("boundary checker rejects Navia packages importing Spark CLI host inte
 void test("boundary checker allows isolated Navia package dependencies", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "packages/navia-db", {
-    name: "@navia-dev/db",
-    dependencies: { "@navia-dev/system": "workspace:*" },
-    source: 'import { resolveNaviaPath } from "@navia-dev/system";\n',
+    name: "@zendev-lab/navia-db",
+    dependencies: { "@zendev-lab/navia-system": "workspace:*" },
+    source: 'import { resolveNaviaPath } from "@zendev-lab/navia-system";\n',
   });
 
   const result = runBoundaryCheck(root);

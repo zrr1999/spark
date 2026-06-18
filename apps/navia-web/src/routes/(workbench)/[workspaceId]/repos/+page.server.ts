@@ -1,11 +1,11 @@
-import { createId } from "@navia-dev/protocol";
+import { createId } from "@zendev-lab/navia-protocol";
 import { fail, redirect } from "@sveltejs/kit";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { getDatabase } from "$lib/server/db";
 import { formText } from "$lib/server/form-data";
 import { requireWorkspaceByRouteId } from "$lib/server/workspace-routing";
 import { workspacePath } from "$lib/workspace-routes";
-import type { Actions, PageServerLoad } from "./$types";
+import type { Actions, PageServerLoad, RequestEvent } from "./$types";
 
 type ResourceKind = "repo" | "doc" | "url" | "file" | "secret_ref" | "tool" | "other";
 
@@ -67,6 +67,28 @@ export const load: PageServerLoad = ({ params }) => {
   return { workspace, resources, counts };
 };
 
+async function updateResourceStatus(
+  { cookies, params, request }: RequestEvent,
+  status: "archived" | "available",
+) {
+  const t = getRequestDictionary({
+    cookieLocale: cookies.get(localeCookieName),
+    acceptLanguage: request.headers.get("accept-language"),
+  }).repos.formMessages;
+  const workspace = requireWorkspaceByRouteId(getDatabase(), params.workspaceId);
+  const formData = await request.formData();
+  const resourceId = formText(formData, "resourceId");
+  if (!resourceId) {
+    return fail(400, { message: t.missingId });
+  }
+
+  getDatabase()
+    .prepare("UPDATE resources SET status = ?, updated_at = ? WHERE id = ? AND workspace_id = ?")
+    .run(status, new Date().toISOString(), resourceId, workspace.id);
+
+  redirect(303, workspacePath(workspace, "/repos"));
+}
+
 export const actions: Actions = {
   createResource: async ({ cookies, params, request }) => {
     const t = getRequestDictionary({
@@ -108,47 +130,11 @@ export const actions: Actions = {
     redirect(303, workspacePath(workspace, "/repos"));
   },
 
-  archiveResource: async ({ cookies, params, request }) => {
-    const t = getRequestDictionary({
-      cookieLocale: cookies.get(localeCookieName),
-      acceptLanguage: request.headers.get("accept-language"),
-    }).repos.formMessages;
-    const workspace = requireWorkspaceByRouteId(getDatabase(), params.workspaceId);
-    const formData = await request.formData();
-    const resourceId = formText(formData, "resourceId");
-    if (!resourceId) {
-      return fail(400, { message: t.missingId });
-    }
-
-    const now = new Date().toISOString();
-    getDatabase()
-      .prepare(
-        "UPDATE resources SET status = 'archived', updated_at = ? WHERE id = ? AND workspace_id = ?",
-      )
-      .run(now, resourceId, workspace.id);
-
-    redirect(303, workspacePath(workspace, "/repos"));
+  archiveResource: async (event) => {
+    return await updateResourceStatus(event, "archived");
   },
 
-  restoreResource: async ({ cookies, params, request }) => {
-    const t = getRequestDictionary({
-      cookieLocale: cookies.get(localeCookieName),
-      acceptLanguage: request.headers.get("accept-language"),
-    }).repos.formMessages;
-    const workspace = requireWorkspaceByRouteId(getDatabase(), params.workspaceId);
-    const formData = await request.formData();
-    const resourceId = formText(formData, "resourceId");
-    if (!resourceId) {
-      return fail(400, { message: t.missingId });
-    }
-
-    const now = new Date().toISOString();
-    getDatabase()
-      .prepare(
-        "UPDATE resources SET status = 'available', updated_at = ? WHERE id = ? AND workspace_id = ?",
-      )
-      .run(now, resourceId, workspace.id);
-
-    redirect(303, workspacePath(workspace, "/repos"));
+  restoreResource: async (event) => {
+    return await updateResourceStatus(event, "available");
   },
 };

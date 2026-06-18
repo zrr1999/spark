@@ -9,7 +9,7 @@ import {
   loadSparkConfig,
   mergeSparkConfigWithDefault,
   saveSparkConfig,
-} from "../packages/spark-cli/src/host/index.ts";
+} from "../apps/spark/src/host/index.ts";
 
 void test("loadSparkConfig returns default config when file is missing", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-config-missing-"));

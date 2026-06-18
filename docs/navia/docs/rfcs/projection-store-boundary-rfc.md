@@ -48,7 +48,7 @@ route runtime protocol messages, reconnect safely, and cache artifact previews.
 
 ## Implementation hooks
 
-- `packages/navia-runner/src/spark/bridge.ts` emits Spark-backed Navia protocol
+- `apps/navia-runner/src/spark/bridge.ts` emits Spark-backed Navia protocol
   envelopes with Spark refs in payload/content refs.
 - `apps/navia-web/src/lib/server/runtime-ws.ts` records runtime message receipts
   before acknowledging projection ingestion, and skips already-seen messages on

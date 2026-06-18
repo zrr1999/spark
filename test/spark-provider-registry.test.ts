@@ -1,11 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  SparkProviderRegistry,
-  type ProviderConfig,
-} from "../packages/spark-cli/src/host/index.ts";
-import registerBaiduOneApiProvider from "../packages/spark-cli/src/baidu-oneapi-provider.ts";
+import { SparkProviderRegistry, type ProviderConfig } from "../apps/spark/src/host/index.ts";
+import registerBaiduOneApiProvider from "../apps/spark/src/baidu-oneapi-provider.ts";
 
 function fakeStream(_model: unknown, _context: unknown, _options?: unknown) {
   return {} as unknown;

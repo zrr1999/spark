@@ -1,5 +1,5 @@
 import { fail, redirect } from "@sveltejs/kit";
-import { asciiSlug } from "@navia-dev/system";
+import { asciiSlug } from "@zendev-lab/navia-system";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { ensureCurrentOwnerSession } from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";

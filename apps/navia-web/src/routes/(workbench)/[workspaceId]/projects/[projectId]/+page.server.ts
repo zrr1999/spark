@@ -1,4 +1,4 @@
-import { createId } from "@navia-dev/protocol";
+import { createId } from "@zendev-lab/navia-protocol";
 import { error, fail } from "@sveltejs/kit";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { hashSecret } from "$lib/server/auth";

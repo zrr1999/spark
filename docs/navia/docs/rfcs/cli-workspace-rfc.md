@@ -717,7 +717,7 @@ attached at all.
 
 This RFC introduces runner-local tables. They live in a separate
 SQLite database from the server's database, but reuse
-`@navia-dev/db`'s migration framework. Naming convention prefixes
+`@zendev-lab/navia-db`'s migration framework. Naming convention prefixes
 runner-local tables with `runner_` to avoid conflict if a future
 deployment merges schemas.
 

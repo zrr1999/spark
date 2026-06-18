@@ -48,7 +48,7 @@ dependencies. Two hosts implement supersets of these types:
 3. **No runtime imports.** This package must remain importable in any
    workspace as a types-only dependency.
 4. **Keep slices narrow.** If a feature is only needed by the native Spark CLI
-   host, put it behind host-only helpers in `packages/spark-cli/src/host/`
+   host, put it behind host-only helpers in `apps/spark/src/host/`
    rather than widening this contract. If an extension package needs it on
    both hosts, add the smallest optional method here and test both hosts.
 

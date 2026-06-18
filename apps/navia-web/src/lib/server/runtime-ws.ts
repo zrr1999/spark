@@ -14,8 +14,8 @@ import {
   runtimeReconcileReportEnvelopeSchema,
   taskGraphSnapshotEnvelopeSchema,
   workspaceSnapshotEnvelopeSchema,
-} from "@navia-dev/protocol";
-import { bearerTokenFromAuthorization } from "@navia-dev/system";
+} from "@zendev-lab/navia-protocol";
+import { bearerTokenFromAuthorization } from "@zendev-lab/navia-system";
 import { hashSecret } from "./auth";
 import {
   appendEvent,

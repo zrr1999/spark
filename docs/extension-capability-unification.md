@@ -1,6 +1,6 @@
 # Extension capability unification migration record
 
-This historical migration record documents the implemented contract for making the Pi/Spark extension suite conceptually unified while keeping implementations decoupled. It is intentionally **extension-first**: it does not refactor `packages/spark-cli/src/host/*` or native Spark CLI session internals.
+This historical migration record documents the implemented contract for making the Pi/Spark extension suite conceptually unified while keeping implementations decoupled. It is intentionally **extension-first**: it does not refactor `apps/spark/src/host/*` or native Spark CLI session internals.
 
 ## Status (2026-06-05)
 

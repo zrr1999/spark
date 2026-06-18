@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { migrate, openMemoryDatabase } from "@navia-dev/db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/navia-db";
 import { appendEvent } from "./projection-services";
 import { cursorFromEvent, encodeSseMessage, loadEventBatch, serializeEventRow } from "./events";
 

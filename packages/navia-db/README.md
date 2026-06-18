@@ -1,4 +1,4 @@
-# @navia-dev/db
+# @zendev-lab/navia-db
 
 SQLite migrations, database open helpers, Kysely dialect integration, and database types for Navia.
 

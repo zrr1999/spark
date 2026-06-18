@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { createId } from "@navia-dev/protocol";
+import { createId } from "@zendev-lab/navia-protocol";
 import type { Cookies } from "@sveltejs/kit";
 import type { DatabaseSync } from "node:sqlite";
 

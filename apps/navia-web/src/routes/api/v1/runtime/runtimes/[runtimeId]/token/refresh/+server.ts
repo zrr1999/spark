@@ -1,7 +1,7 @@
 import {
   runtimeTokenRefreshRequestSchema,
   runtimeTokenRefreshResponseSchema,
-} from "@navia-dev/protocol";
+} from "@zendev-lab/navia-protocol";
 import { json, type RequestHandler } from "@sveltejs/kit";
 import { getDatabase } from "$lib/server/db";
 import { errorJson } from "$lib/server/json";

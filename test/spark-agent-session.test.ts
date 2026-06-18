@@ -14,7 +14,7 @@ import {
   waitForSparkDaemonActiveTasks,
   type SparkCliHostServicesOptions,
   type SparkConfig,
-} from "../packages/spark-cli/src/host/index.ts";
+} from "../apps/spark/src/host/index.ts";
 
 type AssistantMessage = any;
 

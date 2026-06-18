@@ -4,8 +4,8 @@ import {
   runtimeProtocolVersion,
   type RuntimeRegistrationRequest,
   type RuntimeWorkspaceRegistrationRequest,
-} from "@navia-dev/protocol";
-import { asciiSlug } from "@navia-dev/system";
+} from "@zendev-lab/navia-protocol";
+import { asciiSlug } from "@zendev-lab/navia-system";
 import { hashSecret } from "./auth";
 import type { DatabaseSync } from "node:sqlite";
 

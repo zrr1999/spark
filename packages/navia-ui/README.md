@@ -1,4 +1,4 @@
-# @navia-dev/ui
+# @zendev-lab/navia-ui
 
 Shared UI package for Navia Svelte surfaces.
 

@@ -18,7 +18,7 @@ Spark repo: apps/navia-web SvelteKit frontend + TypeScript server routes/API
                                                   SQLite projections, events/audit,
                                                   web fanout, lazy artifact cache/proxy
 
-packages/navia-runner local service <-------> Navia SvelteKit server/API
+apps/navia-runner local service <-------> Navia SvelteKit server/API
         |
         +-> Spark runtime bridge:
             task graph/run/artifact truth in Spark stores,
@@ -32,7 +32,7 @@ packages/navia-runner local service <-------> Navia SvelteKit server/API
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | SvelteKit frontend      | Workspace/project dashboard UI, web ask inbox UI, evidence board, task graph projection/run views, connection diagnostics, client-side transient state.                                                           | Direct local checkout management, runner as primary product navigation, direct browser-to-runner default traffic.                          |
 | SvelteKit server routes | Communication/projection plane: APIs, auth, sessions/tokens, workspace bindings, command/human-response routing and delivery records, SQLite projections, event/audit log, web fanout, lazy artifact cache/proxy. | Provider CLI execution strategy, runner-local scheduling, workdir/resource locking, canonical local artifacts, task graph execution truth. |
-| `packages/navia-runner` process | Workspace registration, runtime protocol session, Spark runtime bridge invocation, local policy, command ack/reject/execution projection, logs/checkpoints/projection delivery.                           | Web UX decisions, direct server internals, browser/product traffic, direct writes to Spark `.spark` stores outside Spark APIs.             |
+| `apps/navia-runner` process | Workspace registration, runtime protocol session, Spark runtime bridge invocation, local policy, command ack/reject/execution projection, logs/checkpoints/projection delivery.                           | Web UX decisions, direct server internals, browser/product traffic, direct writes to Spark `.spark` stores outside Spark APIs.             |
 
 This supersedes the earlier pure local filesystem-watch/narrow-backend-only plan, the earlier thin-runner/server-scheduler framing, and the earlier Hono/PostgreSQL-first server baseline. Elm-style architecture remains useful inside the frontend, but UI should be workspace/project-first while runner details are mostly connection/provenance diagnostics.
 
@@ -51,7 +51,7 @@ Adopt standards at least as strong as Loom, sixbones.dev, and the useful parts o
 - Kysely with a thin native `node:sqlite` adapter/dialect for SQL-shaped type-safe queries.
 - Explicit SQL migrations checked into the repo.
 - SSE first for frontend project/activity streams; WebSocket where bidirectional protocol channels are required.
-- Runner implementation lives in this monorepo under `packages/navia-runner`, but remains a separate process connected through the runner/server protocol. It is a daemon CLI that routes task execution through Spark runtime primitives, not a direct Pi SDK execution authority.
+- Runner implementation lives in this monorepo under `apps/navia-runner`, but remains a separate process connected through the runner/server protocol. It is a daemon CLI that routes task execution through Spark runtime primitives, not a direct Pi SDK execution authority.
 - Shared XDG path resolution lives in `packages/system`. Defaults are `${XDG_DATA_HOME:-~/.local/share}/navia/{server,runner}`, `${XDG_CACHE_HOME:-~/.cache}/navia/{server,runner}`, `${XDG_STATE_HOME:-~/.local/state}/navia/{server,runner}`, and `${XDG_CONFIG_HOME:-~/.config}/navia/{server,runner}.toml`.
 - UI starts lightweight: custom Navia components plus direct Bits UI headless primitives where needed; use lucide-style icons/minimal helpers as needed, but do not adopt a shadcn-svelte generated component tree.
 - No Astro.
@@ -68,7 +68,7 @@ Use `docs/rfcs/backend-server-rfc.md`, `docs/rfcs/implementation-options-rfc.md`
 - **Query layer:** prefer Kysely with a thin `node:sqlite` adapter/dialect for SQL-shaped type-safe queries and future PostgreSQL portability; choose Drizzle only if schema-as-code becomes more valuable.
 - **Realtime:** SSE first for frontend event streams; WebSocket for runner control/session.
 - **Jobs/scheduling:** start in-process for reminders/sweeps/lazy-cache cleanup only if safe; move to a separate worker when reliability or scale requires it. Lazy artifact cache cleanup should evict previews first, then unpinned LRU/TTL blobs over the soft cap, and never delete canonical external artifacts.
-- **Repo layout:** `apps/navia-web` is the SvelteKit app (`@navia-dev/web`) and `packages/navia-runner` is the local service daemon/CLI (`@navia-dev/runner`). Use high-cohesion packages `@navia-dev/protocol`, `@navia-dev/db`, `@navia-dev/domain`, `@navia-dev/system`, and `@navia-dev/ui`.
+- **Repo layout:** `apps/navia-web` is the SvelteKit app (`@zendev-lab/navia-web`) and `apps/navia-runner` is the local service daemon/CLI (`@zendev-lab/navia-runner`). Use high-cohesion packages `@zendev-lab/navia-protocol`, `@zendev-lab/navia-db`, `@zendev-lab/navia-domain`, `@zendev-lab/navia-system`, and `@zendev-lab/navia-ui`.
 
 ## Stage 0 — Architecture/RFC reset
 
@@ -88,7 +88,7 @@ Success criteria:
 
 - Responsibilities between SvelteKit UI/server and runner process are explicit.
 - SvelteKit server routes are the communication/projection owner, not the owner of runner core capabilities.
-- Runner implementation is in `packages/navia-runner`, but task graph/execution truth stays Spark-side and communicates with the Navia server through protocol projections only.
+- Runner implementation is in `apps/navia-runner`, but task graph/execution truth stays Spark-side and communicates with the Navia server through protocol projections only.
 - Navia keeps its own vocabulary: workspace/project, task graph projections, web ask inbox, artifacts, reviews, and runner connections.
 - Workspace-level resources, agent specs, and workspace artifacts are allowed before any project.
 - Freeform/user-submitted request intake is defined as pre-project idea/brief triage and deferred unless a focused RFC is created.
@@ -104,10 +104,10 @@ Goal: create the smallest runnable Navia codebase that proves tooling, protocol 
 Tasks:
 
 1. Create root `package.json`, `pnpm-workspace.yaml`, `.node-version`, `prek.toml`, and initial check/test scripts under `navia/`. — done.
-2. Create `packages/protocol` (`@navia-dev/protocol`) with Zod schemas for refs, error envelope, runtime envelope, registration, hello, heartbeat, workspace binding snapshot, and fixtures. — done for registration/hello/heartbeat baseline.
-3. Create `packages/db` (`@navia-dev/db`) with native `node:sqlite` client, Kysely adapter/dialect shell, pragmas, migration runner, and `0001_initial.sql` based on `data-model-rfc.md`. — done for initial schema subset plus repo-owned `NodeSqliteDialect`.
-4. Create `packages/domain` (`@navia-dev/domain`) and `packages/ui` (`@navia-dev/ui`) as thin high-cohesion boundaries for services and shared Svelte primitives. — done as minimal packages.
-5. Create `apps/navia-web` (`@navia-dev/web`) SvelteKit app with `@sveltejs/adapter-node`, strict TypeScript, Svelte check, and a custom Node server placeholder for runner WebSocket attachment. — done; WS placeholder replaced by hello/heartbeat handler.
+2. Create `packages/protocol` (`@zendev-lab/navia-protocol`) with Zod schemas for refs, error envelope, runtime envelope, registration, hello, heartbeat, workspace binding snapshot, and fixtures. — done for registration/hello/heartbeat baseline.
+3. Create `packages/db` (`@zendev-lab/navia-db`) with native `node:sqlite` client, Kysely adapter/dialect shell, pragmas, migration runner, and `0001_initial.sql` based on `data-model-rfc.md`. — done for initial schema subset plus repo-owned `NodeSqliteDialect`.
+4. Create `packages/domain` (`@zendev-lab/navia-domain`) and `packages/ui` (`@zendev-lab/navia-ui`) as thin high-cohesion boundaries for services and shared Svelte primitives. — done as minimal packages.
+5. Create `apps/navia-web` (`@zendev-lab/navia-web`) SvelteKit app with `@sveltejs/adapter-node`, strict TypeScript, Svelte check, and a custom Node server placeholder for runner WebSocket attachment. — done; WS placeholder replaced by hello/heartbeat handler.
 6. Implement local owner setup/session tables and minimal setup route. — done for owner bootstrap and session cookie creation.
 7. Implement runner enrollment/register endpoint and hashed runner token storage under `/api/v1/runtime/*`. — done for registration endpoint.
 8. Implement runner WebSocket hello/heartbeat with a protocol test client/fixture. — done with fake WS unit test; full real client smoke still pending.
@@ -203,7 +203,7 @@ Tests:
 
 ## Stage 3 — Runner protocol boundary
 
-Goal: define the communication protocol used by the deployable `packages/navia-runner` process while keeping server and runner implementation separated by process/protocol boundaries.
+Goal: define the communication protocol used by the deployable `apps/navia-runner` process while keeping server and runner implementation separated by process/protocol boundaries.
 
 This Navia repo owns:
 
@@ -220,7 +220,7 @@ This Navia repo owns:
 - lazy artifact cache/proxy request API backed by the XDG server artifact cache;
 - connection diagnostics UI.
 
-`packages/navia-runner` owns:
+`apps/navia-runner` owns:
 
 - authentication/config UX;
 - daemon lifecycle, packaging, updates, service install, status, and logs;
@@ -245,7 +245,7 @@ Tests:
 - Human requests appear in web inbox and responses are delivered back through the owning binding.
 - Runner restart reconciliation does not strand active invocations or pending human responses silently.
 - Task graph snapshots reconcile without server claiming execution truth.
-- Protocol fixtures remain the only server-runner wire contract; `apps/navia-web` must not import `@navia-dev/runner`.
+- Protocol fixtures remain the only server-runner wire contract; `apps/navia-web` must not import `@zendev-lab/navia-runner`.
 
 ## Stage 4 — Web ask inbox
 
@@ -327,7 +327,7 @@ Surfaces in this repo:
 - Diagnostics for connection status, logs, stale mirrored invocations, and lazy artifact cache state.
 - Direct runner diagnostic/pairing channel is a design placeholder only in v0.1; diagnostic commands must not become normal browser-to-runner product traffic.
 
-Surfaces in `packages/navia-runner`:
+Surfaces in `apps/navia-runner`:
 
 - `navia-runner` daemon CLI commands for install/login/enroll/start/stop/status/logs/doctor.
 - Workspace commands such as add/list/bind/reconcile.
@@ -342,7 +342,7 @@ Tests:
 
 ## Spark bridge backlog and usable MVP plan
 
-The completed backlog below is now classified as a repo-local **runner-backed development build**, not a complete usable MVP. It proves this repository's SvelteKit frontend/server, `packages/navia-runner` daemon skeleton, SQLite projection stores, protocol contracts, connection diagnostics, cockpit/inbox/task/artifact UI, and runner smoke fixture. The merged Spark slice now covers UI-generated enrollment tokens plus browser-queued `task.start.request` commands through the Spark runtime bridge with status/log/artifact projection. Remaining usable MVP work is the hardened runner lifecycle, human ask bridge depth, artifact content bridge, resource/spec dispatch, and retry/cancel/error UX; see [`docs/plans/release-roadmap.md`](./docs/plans/release-roadmap.md).
+The completed backlog below is now classified as a repo-local **runner-backed development build**, not a complete usable MVP. It proves this repository's SvelteKit frontend/server, `apps/navia-runner` daemon skeleton, SQLite projection stores, protocol contracts, connection diagnostics, cockpit/inbox/task/artifact UI, and runner smoke fixture. The merged Spark slice now covers UI-generated enrollment tokens plus browser-queued `task.start.request` commands through the Spark runtime bridge with status/log/artifact projection. Remaining usable MVP work is the hardened runner lifecycle, human ask bridge depth, artifact content bridge, resource/spec dispatch, and retry/cancel/error UX; see [`docs/plans/release-roadmap.md`](./docs/plans/release-roadmap.md).
 
 | Order | Workstream                        | Depends on                                  | MVP outcome                                                                                                                                                                                          |
 | ----: | --------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -356,7 +356,7 @@ The completed backlog below is now classified as a repo-local **runner-backed de
 |     8 | Task graph projection UI          | Spark bridge ingestion + projects           | Done: render Spark-owned DAG snapshots, task dependencies, status summaries, and invocation links in the project cockpit without server-side execution truth.                                        |
 |     9 | Evidence/artifact board           | Runner ingestion + projects                 | Done: `/artifacts` lists workspace/project evidence, detail pages show provenance/content pointers/links, and preview cache metadata/API is lazy under the XDG server artifact cache.                |
 |    10 | Resources and agent specs         | Workspace/project flows                     | Done: `/repos` and `/agents` support projectless workspace resources plus reusable agent specs with create, archive/restore, and enable/disable state.                                               |
-|    11 | Runner smoke fixture              | Runner ingestion                            | Done: runner tests register a fake runner, open WS, send hello/heartbeat plus sample projections, and verify SQLite + web/API paths alongside the real `packages/navia-runner` scaffold.             |
+|    11 | Runner smoke fixture              | Runner ingestion                            | Done: runner tests register a fake runner, open WS, send hello/heartbeat plus sample projections, and verify SQLite + web/API paths alongside the real `apps/navia-runner` scaffold.             |
 |    12 | UI polish/unlock                  | Inbox + graph + artifacts + resources/specs | Done: implemented nav is enabled, post-MVP actions remain disabled + Coming soon, no-workspace initialization uses a full-screen setup shell, and small-screen shell spacing/brand labels are clean. |
 |    13 | Validation/release gate           | Smoke + UI polish                           | Done: `pnpm check`, `pnpm test`, `pnpm build`, `pnpm exec vp fmt --check .`, migration tests, and isolated runner smoke are green under Node 26.                                                     |
 |    14 | Docs/handoff                      | Validation gate                             | Done: README, implementation plan, progress, known limitations, validation evidence, and next post-MVP/git-root decision notes are current.                                                          |

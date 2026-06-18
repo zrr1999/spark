@@ -6,7 +6,7 @@ import {
   SparkHostRuntime,
   type SparkAgentLoopEvent,
   type SparkAgentStreamFunction,
-} from "../packages/spark-cli/src/host/index.ts";
+} from "../apps/spark/src/host/index.ts";
 
 type AssistantMessage = any;
 type AssistantMessageEvent = any;

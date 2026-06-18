@@ -1,1 +1,1 @@
-export const naviaUiPackage = "@navia-dev/ui";
+export const naviaUiPackage = "@zendev-lab/navia-ui";

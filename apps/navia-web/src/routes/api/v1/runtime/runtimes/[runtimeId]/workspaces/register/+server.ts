@@ -1,8 +1,8 @@
 import {
   runtimeWorkspaceRegistrationRequestSchema,
   runtimeWorkspaceRegistrationResponseSchema,
-} from "@navia-dev/protocol";
-import { bearerTokenFromAuthorization } from "@navia-dev/system";
+} from "@zendev-lab/navia-protocol";
+import { bearerTokenFromAuthorization } from "@zendev-lab/navia-system";
 import { json, type RequestHandler } from "@sveltejs/kit";
 import { getDatabase } from "$lib/server/db";
 import { errorJson } from "$lib/server/json";

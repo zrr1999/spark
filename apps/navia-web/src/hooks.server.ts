@@ -1,4 +1,4 @@
-import { createId } from "@navia-dev/protocol";
+import { createId } from "@zendev-lab/navia-protocol";
 import type { Handle } from "@sveltejs/kit";
 import { sessionCookieName } from "$lib/server/auth";
 

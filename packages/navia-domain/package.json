@@ -1,5 +1,5 @@
 {
-  "name": "@navia-dev/domain",
+  "name": "@zendev-lab/navia-domain",
   "version": "0.1.0",
   "description": "Navia shared domain utilities.",
   "files": [
@@ -20,11 +20,11 @@
     "test": "vp test run --passWithNoTests"
   },
   "dependencies": {
-    "@navia-dev/db": "workspace:*",
-    "@navia-dev/protocol": "workspace:*"
+    "@zendev-lab/navia-db": "workspace:*",
+    "@zendev-lab/navia-protocol": "workspace:*"
   },
   "devDependencies": {
-    "typescript": "^5.9.2",
+    "typescript": "^6.0.3",
     "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
   },
   "engines": {

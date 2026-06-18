@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
-import { createId, runtimeProtocolVersion } from "@navia-dev/protocol";
-import { migrate, openMemoryDatabase } from "@navia-dev/db";
+import { createId, runtimeProtocolVersion } from "@zendev-lab/navia-protocol";
+import { migrate, openMemoryDatabase } from "@zendev-lab/navia-db";
 import {
   createWorkspaceWithOwnerBinding,
   queueCommandForWorkspaceOwner,

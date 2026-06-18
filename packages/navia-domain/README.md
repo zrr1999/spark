@@ -1,4 +1,4 @@
-# @navia-dev/domain
+# @zendev-lab/navia-domain
 
 Shared domain utilities for Navia.
 

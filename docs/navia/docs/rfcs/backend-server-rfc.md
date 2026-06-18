@@ -5,7 +5,7 @@ Date: 2026-05-21
 
 ## Summary
 
-Inside the merged Spark monorepo, Navia owns a SvelteKit web cockpit with TypeScript server routes and a separate `packages/navia-runner` process. The server side is a lightweight communication/projection plane backed by SQLite. Runner implementation is same-monorepo but remains isolated behind protocol/contracts and invokes Spark runtime primitives for execution.
+Inside the merged Spark monorepo, Navia owns a SvelteKit web cockpit with TypeScript server routes and a separate `apps/navia-runner` process. The server side is a lightweight communication/projection plane backed by SQLite. Runner implementation is same-monorepo but remains isolated behind protocol/contracts and invokes Spark runtime primitives for execution.
 
 Recommended first stack:
 
@@ -21,7 +21,7 @@ This replaces the earlier Hono/PostgreSQL-first baseline. Hono/Fastify and Postg
 - Keep this repo focused on frontend/server UI, the separate runner process, protocol/contracts, projections, lazy artifact cache/proxy, and tests.
 - Keep server and runner implementation separated by process/protocol boundaries while preserving a first-class runner projection model.
 - Establish API/schema/database/realtime defaults before implementation.
-- Make contracts consumable by `packages/navia-runner` and by any future external runner without importing server internals.
+- Make contracts consumable by `apps/navia-runner` and by any future external runner without importing server internals.
 - Support the full v0.1 web surfaces: cockpit, evidence board, inbox, task graph projection, and run/status views.
 
 ## Non-goals
@@ -40,22 +40,22 @@ Recommended repo shape:
 ```text
 spark/
 ├── apps/
-│   └── navia-web/              # @navia-dev/web; SvelteKit frontend + server routes + custom Node entry
+│   └── navia-web/              # @zendev-lab/navia-web; SvelteKit frontend + server routes + custom Node entry
 ├── packages/
-│   ├── navia-runner/           # @navia-dev/runner; navia-runner daemon/CLI with Spark runtime bridge
-│   ├── navia-protocol/         # @navia-dev/protocol; Zod schemas, event envelopes, fixtures
-│   ├── navia-db/               # @navia-dev/db; node:sqlite, Kysely adapter/dialect, migrations
-│   ├── navia-domain/           # @navia-dev/domain; headless workspace/project/inbox/artifact services
-│   ├── navia-system/           # @navia-dev/system; XDG paths, private dirs/files, runner state paths
-│   └── navia-ui/               # @navia-dev/ui; shared Svelte primitives and design tokens
+│   ├── navia-runner/           # @zendev-lab/navia-runner; navia-runner daemon/CLI with Spark runtime bridge
+│   ├── navia-protocol/         # @zendev-lab/navia-protocol; Zod schemas, event envelopes, fixtures
+│   ├── navia-db/               # @zendev-lab/navia-db; node:sqlite, Kysely adapter/dialect, migrations
+│   ├── navia-domain/           # @zendev-lab/navia-domain; headless workspace/project/inbox/artifact services
+│   ├── navia-system/           # @zendev-lab/navia-system; XDG paths, private dirs/files, runner state paths
+│   └── navia-ui/               # @zendev-lab/navia-ui; shared Svelte primitives and design tokens
 ├── docs/navia/
 ├── pnpm-workspace.yaml
 └── package.json
 ```
 
-SvelteKit owns both UI routes and server/API routes initially. Do not create `apps/server` for v0.1; if runner WebSocket support needs a custom Node process, keep the entry in `apps/navia-web/server/index.ts`. `packages/navia-runner` is a separate process boundary, not a second web server.
+SvelteKit owns both UI routes and server/API routes initially. Do not create `apps/server` for v0.1; if runner WebSocket support needs a custom Node process, keep the entry in `apps/navia-web/server/index.ts`. `apps/navia-runner` is a separate process boundary, not a second web server.
 
-`apps/navia-web` must not import `@navia-dev/runner` internals. Server-runner interaction goes through protocol schemas, API contracts, fixtures, and WebSocket/HTTP surfaces.
+`apps/navia-web` must not import `@zendev-lab/navia-runner` internals. Server-runner interaction goes through protocol schemas, API contracts, fixtures, and WebSocket/HTTP surfaces.
 
 ## Architecture
 

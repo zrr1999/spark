@@ -1,4 +1,4 @@
-# @navia-dev/protocol
+# @zendev-lab/navia-protocol
 
 Runner/server protocol schemas, message envelopes, feature names, and typed identifiers for Navia.
 

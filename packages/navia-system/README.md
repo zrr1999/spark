@@ -1,4 +1,4 @@
-# @navia-dev/system
+# @zendev-lab/navia-system
 
 Filesystem path, private-file permission, and local runtime helpers shared by Navia packages.
 

@@ -1,4 +1,4 @@
-import { migrate, openDatabase } from "@navia-dev/db";
+import { migrate, openDatabase } from "@zendev-lab/navia-db";
 
 let database: ReturnType<typeof openDatabase> | undefined;
 

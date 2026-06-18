@@ -5,7 +5,7 @@ import {
   SparkHostRuntime,
   SparkProviderRegistry,
   loadPlugins,
-} from "../packages/spark-cli/src/host/index.ts";
+} from "../apps/spark/src/host/index.ts";
 
 void test("loadPlugins invokes extension default factory with the host runtime", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-plugin-loader-test" });

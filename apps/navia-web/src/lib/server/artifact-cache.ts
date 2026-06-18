@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { createId } from "@navia-dev/protocol";
-import { resolveNaviaPaths } from "@navia-dev/system";
+import { createId } from "@zendev-lab/navia-protocol";
+import { resolveNaviaPaths } from "@zendev-lab/navia-system";
 
 /**
  * Maximum body size the server is willing to materialize as an inline preview

@@ -16,9 +16,9 @@ The standalone `spark` command is published by `@zendev-lab/spark-cli` and built
 Spark now has two supported host targets:
 
 - **Pi extension host**: `packages/spark/src/extension/` is loaded by `@earendil-works/pi-coding-agent` through Pi's normal extension/package discovery. This remains the canonical Spark command and tool surface inside Pi, centered on ordinary default research behavior plus `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow`.
-- **Spark CLI native host**: `packages/spark-cli` starts `SparkHostRuntime` directly on `@earendil-works/pi-tui`, loads retained builtin extensions through explicit factories (`@zendev-lab/pi-ask`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-graft`, `@zendev-lab/spark`), registers providers such as `baidu-oneapi`, discovers Spark skills from builtin/workspace/user layers, and runs turns through `@earendil-works/pi-ai`.
+- **Spark CLI native host**: `apps/spark` starts `SparkHostRuntime` directly on `@earendil-works/pi-tui`, loads retained builtin extensions through explicit factories (`@zendev-lab/pi-ask`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-graft`, `@zendev-lab/spark`), registers providers such as `baidu-oneapi`, discovers Spark skills from builtin/workspace/user layers, and runs turns through `@earendil-works/pi-ai`.
 
-The extension packages depend on the shared `@zendev-lab/pi-extension-api` contract, not on Pi's concrete SDK package. Host-specific code belongs under `packages/spark-cli/src/host/` and TUI wrappers under `packages/spark-cli/src/tui/`; the Pi extension implementation should stay usable by Pi without importing spark-cli.
+The extension packages depend on the shared `@zendev-lab/pi-extension-api` contract, not on Pi's concrete SDK package. Host-specific code belongs under `apps/spark/src/host/` and TUI wrappers under `apps/spark/src/tui/`; the Pi extension implementation should stay usable by Pi without importing spark-cli.
 
 ### Research workflow
 
@@ -90,15 +90,15 @@ Manage settings through the canonical role tool actions: `role({ action: "model_
 
 Navia is integrated as Spark's local web cockpit/projection product line while retaining separate package boundaries:
 
-- `@navia-dev/web` — private SvelteKit local cockpit app under `apps/navia-web`; it renders Spark-owned task/run/artifact state from Navia SQLite projections and caches.
-- `@navia-dev/runner` — Navia CLI/local service package under `packages/navia-runner`; task execution is routed through the Spark runtime bridge, while workspace registration and protocol delivery stay in the Navia boundary.
-- `@navia-dev/protocol`, `@navia-dev/db`, `@navia-dev/domain`, `@navia-dev/system`, and `@navia-dev/ui` — Navia protocol, SQLite projection, domain, path, and UI packages under `packages/navia-*`.
+- `@zendev-lab/navia-web` — private SvelteKit local cockpit app under `apps/navia-web`; it renders Spark-owned task/run/artifact state from Navia SQLite projections and caches.
+- `@zendev-lab/navia-runner` — Navia CLI/local service package under `apps/navia-runner`; task execution is routed through the Spark runtime bridge, while workspace registration and protocol delivery stay in the Navia boundary.
+- `@zendev-lab/navia-protocol`, `@zendev-lab/navia-db`, `@zendev-lab/navia-domain`, `@zendev-lab/navia-system`, and `@zendev-lab/navia-ui` — Navia protocol, SQLite projection, domain, path, and UI packages under `packages/navia-*`.
 
 Typical merged-repo Navia development commands:
 
 ```text
 pnpm run navia:web                              # start the SvelteKit cockpit
-pnpm --filter @navia-dev/runner run cli -- --help
+pnpm --filter @zendev-lab/navia-runner run cli -- --help
 pnpm run verify:navia                           # Navia check/test/build
 ```
 
@@ -112,8 +112,8 @@ Pi package loading is manifest-first: the root `pi` manifest explicitly lists ea
 pnpm install
 pnpm run verify          # Spark package checks/tests
 pnpm run verify:navia    # Navia check/test/build
-packages/spark-cli/bin/spark --help
-packages/spark-cli/bin/spark daemon --help
+apps/spark/bin/spark --help
+apps/spark/bin/spark daemon --help
 ```
 
 Use Node `>=26.0.0 <27` and pnpm `>=11 <12`; root `engines` plus `.npmrc` `engine-strict=true` make Node 26 mandatory for installs and scripts.

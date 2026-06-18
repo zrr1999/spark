@@ -7,7 +7,7 @@
 **Status.** Early `0.1.x` Spark-monorepo product line. The current merged build
 supports local owner setup, token-based workspace registration, local workspace
 connections, workspace and project cockpit surfaces, command delivery, and
-Spark-runtime-backed task execution through `@navia-dev/runner`. Remaining work
+Spark-runtime-backed task execution through `@zendev-lab/navia-runner`. Remaining work
 is tracked in [docs/plans/release-roadmap.md](./docs/plans/release-roadmap.md).
 
 ## Contents
@@ -61,18 +61,18 @@ spark/
 └─ packages/spark-runtime/, packages/pi-*  # Spark execution/source-of-truth packages
 ```
 
-Published surface (npm, scoped `@navia-dev/*`):
+Published surface (npm, scoped `@zendev-lab/navia-*`):
 
 | Package               | Role                                                   |
 | --------------------- | ------------------------------------------------------ |
-| `@navia-dev/runner`   | `navia` CLI and local service daemon; routes task execution through Spark runtime |
-| `@navia-dev/protocol` | Runner/server protocol schemas, envelopes, identifiers |
-| `@navia-dev/db`       | SQLite migrations and database helpers                 |
-| `@navia-dev/domain`   | Shared domain utilities                                |
-| `@navia-dev/system`   | Local path and private-file helpers                    |
-| `@navia-dev/ui`       | Shared UI surface                                      |
+| `@zendev-lab/navia-runner`   | `navia` CLI and local service daemon; routes task execution through Spark runtime |
+| `@zendev-lab/navia-protocol` | Runner/server protocol schemas, envelopes, identifiers |
+| `@zendev-lab/navia-db`       | SQLite migrations and database helpers                 |
+| `@zendev-lab/navia-domain`   | Shared domain utilities                                |
+| `@zendev-lab/navia-system`   | Local path and private-file helpers                    |
+| `@zendev-lab/navia-ui`       | Shared UI surface                                      |
 
-`@navia-dev/web` is intentionally private until the packaged server
+`@zendev-lab/navia-web` is intentionally private until the packaged server
 distribution is finalized; the root package is private because it is a
 workspace aggregator.
 
@@ -83,7 +83,7 @@ Navia distinguishes the product flow from the wire protocol:
 - **Workspace registration** is the product setup flow. Users run
   `navia ws register` against a local directory; Navia then
   surfaces a server-visible workspace backed by that directory.
-- **Runner** names the internal `@navia-dev/runner` package boundary behind
+- **Runner** names the internal `@zendev-lab/navia-runner` package boundary behind
   workspace registration and Spark runtime bridging. The user-facing binary is
   `navia`.
 - **Runtime** is reserved for protocol, API route, database, and
@@ -106,11 +106,11 @@ identifier.
 ```bash
 pnpm install
 pnpm run navia:web
-pnpm --filter @navia-dev/runner run cli -- --help
+pnpm --filter @zendev-lab/navia-runner run cli -- --help
 ```
 
 `pnpm run navia:web` starts the local SvelteKit cockpit from the Spark root.
-The runner CLI can be inspected with `pnpm --filter @navia-dev/runner run cli -- --help` and can
+The runner CLI can be inspected with `pnpm --filter @zendev-lab/navia-runner run cli -- --help` and can
 register workspace directories once the server shows a registration command.
 
 The production-style data layout uses XDG locations such as
@@ -173,8 +173,8 @@ see [docs/release/troubleshooting.md](./docs/release/troubleshooting.md).
 
 ## npm publishing
 
-The publish surface is the `@navia-dev/*` runner and shared packages
-listed above. The root and `@navia-dev/web` are private by design.
+The publish surface is the `@zendev-lab/navia-*` runner and shared packages
+listed above. The root and `@zendev-lab/navia-web` are private by design.
 
 The full publishing checklist — versioning, provenance, dist-tags, smoke
 gates, and pre-release prerequisites — lives in
@@ -188,7 +188,7 @@ Before a first public release the project still needs to:
 - publish the GitHub remote and add `repository` and `homepage` metadata
   to each publishable `package.json`,
 - finalize the packaged server distribution before unprivating
-  `@navia-dev/web`.
+  `@zendev-lab/navia-web`.
 
 These are tracked items, not optional polish; do not publish without
 them.

@@ -2,14 +2,14 @@
 
 Navia's current npm publish surface is the runner and shared packages. The recommended staged policy and rename/collapse trade-off analysis live in [package-naming-publishing-decision.md](./package-naming-publishing-decision.md).
 
-- `@navia-dev/runner`
-- `@navia-dev/protocol`
-- `@navia-dev/system`
-- `@navia-dev/db`
-- `@navia-dev/domain`
-- `@navia-dev/ui`
+- `@zendev-lab/navia-runner`
+- `@zendev-lab/navia-protocol`
+- `@zendev-lab/navia-system`
+- `@zendev-lab/navia-db`
+- `@zendev-lab/navia-domain`
+- `@zendev-lab/navia-ui`
 
-The repository root remains `private` because it is a pnpm workspace aggregator, not a package. `@navia-dev/web` also remains private until the server distribution is finalized.
+The repository root remains `private` because it is a pnpm workspace aggregator, not a package. `@zendev-lab/navia-web` also remains private until the server distribution is finalized.
 
 ## Checks
 
@@ -22,11 +22,11 @@ Use `pnpm release:smoke` before a release candidate when the runner smoke should
 
 ## Publish
 
-Confirm the npm account owns the `@navia-dev` scope before publishing.
+Confirm the npm account owns the `@zendev-lab` scope before publishing.
 
 ```bash
 pnpm login
-pnpm -r --filter @navia-dev/protocol --filter @navia-dev/system --filter @navia-dev/db --filter @navia-dev/domain --filter @navia-dev/ui --filter @navia-dev/runner publish --access public
+pnpm -r --filter @zendev-lab/navia-protocol --filter @zendev-lab/navia-system --filter @zendev-lab/navia-db --filter @zendev-lab/navia-domain --filter @zendev-lab/navia-ui --filter @zendev-lab/navia-runner publish --access public
 ```
 
 ## Release decisions still required

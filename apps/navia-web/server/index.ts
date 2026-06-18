@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { getDatabase } from "../src/lib/server/db.js";
 import { attachRuntimeWebSocket, authenticateRuntimeToken } from "../src/lib/server/runtime-ws.js";
 import { WebSocketServer } from "ws";
@@ -7,7 +7,9 @@ const host = process.env.HOST ?? "127.0.0.1";
 const port = Number(process.env.PORT ?? "5173");
 process.env.ORIGIN ??= `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}`;
 
-const { handler } = await import("../build/handler.js");
+type SvelteKitHandler = (request: IncomingMessage, response: ServerResponse) => void;
+const buildHandlerUrl = new URL("../build/handler.js", import.meta.url);
+const { handler } = (await import(buildHandlerUrl.href)) as { handler: SvelteKitHandler };
 
 const server = createServer((request, response) => {
   handler(request, response);

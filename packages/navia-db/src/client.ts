@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { resolveNaviaPaths } from "@navia-dev/system";
+import { resolveNaviaPaths } from "@zendev-lab/navia-system";
 
 export interface OpenDatabaseOptions {
   path?: string;

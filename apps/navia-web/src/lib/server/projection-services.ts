@@ -11,7 +11,7 @@ import {
   type RuntimeCommandRejectPayload,
   type ServerCommandPayload,
   type TaskGraphSnapshotPayload,
-} from "@navia-dev/protocol";
+} from "@zendev-lab/navia-protocol";
 
 function nowIso() {
   return new Date().toISOString();

@@ -9,7 +9,7 @@ import {
   formatSparkSkillsForPrompt,
   loadMatchingSparkSkillsForPrompt,
   parseSkillFrontmatter,
-} from "../packages/spark-cli/src/host/index.ts";
+} from "../apps/spark/src/host/index.ts";
 import {
   loadBuiltinSkills,
   renderBuiltinSkillsForPrompt,

@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { migrate, openMemoryDatabase } from "@navia-dev/db";
-import { runtimeProtocolVersion, type RuntimeRegistrationRequest } from "@navia-dev/protocol";
+import { migrate, openMemoryDatabase } from "@zendev-lab/navia-db";
+import {
+  runtimeProtocolVersion,
+  type RuntimeRegistrationRequest,
+} from "@zendev-lab/navia-protocol";
 import {
   createRuntimeEnrollmentToken,
   listRuntimeEnrollmentTokens,

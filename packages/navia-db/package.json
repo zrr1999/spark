@@ -1,5 +1,5 @@
 {
-  "name": "@navia-dev/db",
+  "name": "@zendev-lab/navia-db",
   "version": "0.1.0",
   "description": "Navia SQLite migrations, database client, and Node SQLite dialect.",
   "files": [
@@ -20,11 +20,11 @@
     "test": "vp test run"
   },
   "dependencies": {
-    "@navia-dev/system": "workspace:*",
+    "@zendev-lab/navia-system": "workspace:*",
     "kysely": "^0.28.7"
   },
   "devDependencies": {
-    "typescript": "^5.9.2",
+    "typescript": "^6.0.3",
     "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
   },
   "engines": {

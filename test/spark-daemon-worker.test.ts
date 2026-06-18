@@ -12,7 +12,7 @@ import {
   processSparkDaemonQueueBatch,
   runSparkDaemonWorkerIteration,
   type SparkDaemonTaskExecutor,
-} from "../packages/spark-cli/src/host/index.ts";
+} from "../apps/spark/src/host/index.ts";
 
 void test("processSparkDaemonQueueBatch launches at most one active task per session", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-worker-dedupe-"));

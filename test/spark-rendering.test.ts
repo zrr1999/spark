@@ -3,14 +3,14 @@ import test from "node:test";
 
 import type { Component, TUI } from "@earendil-works/pi-tui";
 
-import { SparkKeybindings } from "../packages/spark-cli/src/host/keybindings.ts";
-import { SparkHostRuntime } from "../packages/spark-cli/src/host/runtime.ts";
-import type { SparkHostMessageRenderer } from "../packages/spark-cli/src/host/types.ts";
+import { SparkKeybindings } from "../apps/spark/src/host/keybindings.ts";
+import { SparkHostRuntime } from "../apps/spark/src/host/runtime.ts";
+import type { SparkHostMessageRenderer } from "../apps/spark/src/host/types.ts";
 import {
   createSparkNativeUiTransport,
   SparkNativeSession,
   SparkNativeTuiApp,
-} from "../packages/spark-cli/src/native-tui.ts";
+} from "../apps/spark/src/native-tui.ts";
 
 function fakeTui(): TUI {
   return {

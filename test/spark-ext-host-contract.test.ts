@@ -11,12 +11,12 @@ import type {
   ToolInfo,
 } from "@zendev-lab/pi-extension-api";
 
-import { SparkHostRuntime } from "../packages/spark-cli/src/host/runtime.ts";
+import { SparkHostRuntime } from "../apps/spark/src/host/runtime.ts";
 import type {
   OutboxEnvelope,
   RegisteredCommand,
   RegisteredTool,
-} from "../packages/spark-cli/src/host/types.ts";
+} from "../apps/spark/src/host/types.ts";
 
 interface ContractObservation {
   registeredTools: string[];

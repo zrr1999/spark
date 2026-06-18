@@ -3,8 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { migrate, openMemoryDatabase } from "@navia-dev/db";
-import { createId, runtimeProtocolVersion } from "@navia-dev/protocol";
+import { migrate, openMemoryDatabase } from "@zendev-lab/navia-db";
+import { createId, runtimeProtocolVersion } from "@zendev-lab/navia-protocol";
+import { gitCommand } from "@zendev-lab/navia-system";
 import { createWorkspaceWithOwnerBinding } from "./projection-services";
 import {
   builtinFreshWorkspaceProfile,
@@ -391,14 +392,15 @@ canPush = false
 owner = "PaddlePaddle"
 `,
   );
-  execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
-  execFileSync("git", ["remote", "add", "origin", "git@example.test:paddle/profile.git"], {
+  const git = gitCommand();
+  execFileSync(git, ["init"], { cwd: dir, stdio: "ignore" });
+  execFileSync(git, ["remote", "add", "origin", "git@example.test:paddle/profile.git"], {
     cwd: dir,
     stdio: "ignore",
   });
-  execFileSync("git", ["add", "."], { cwd: dir, stdio: "ignore" });
+  execFileSync(git, ["add", "."], { cwd: dir, stdio: "ignore" });
   execFileSync(
-    "git",
+    git,
     [
       "-c",
       "commit.gpgsign=false",

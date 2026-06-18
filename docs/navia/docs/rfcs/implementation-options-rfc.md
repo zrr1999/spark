@@ -51,7 +51,7 @@ No further product decisions are required before starting the first code slice. 
 | I36 | Testing                   | Vitest for unit/integration, Svelte check for type/template validation, protocol fixture validation, migration tests from empty DB, Playwright smoke tests after app shell exists.                                                                                                                                                                                              |
 | I37 | Formatting/lint           | Prettier for Markdown/Svelte/JSON, ESLint/Svelte checks where useful, strict TypeScript, `svelte-check`; wire recurring checks through `prek`.                                                                                                                                                                                                                                  |
 | I38 | OpenAPI                   | Generate OpenAPI only for stable HTTP surfaces after initial route schemas settle. JSON fixtures are the first external contract.                                                                                                                                                                                                                                               |
-| I39 | Runner implementation     | Product runner lives in `packages/navia-runner` as a separate process using the Spark runtime bridge. The runner smoke remains a test fixture and must not replace the product runner.                                                                                                                                                                                          |
+| I39 | Runner implementation     | Product runner lives in `apps/navia-runner` as a separate process using the Spark runtime bridge. The runner smoke remains a test fixture and must not replace the product runner.                                                                                                                                                                                          |
 | I40 | Direct diagnostic/pairing | Design placeholder only; no v0.1 implementation, no browser-to-runner product traffic.                                                                                                                                                                                                                                                                                          |
 
 ## Repository layout
@@ -61,7 +61,7 @@ Initial code layout:
 ```text
 .
 ├── apps/
-│   └── navia-web/                 # @navia-dev/web
+│   └── navia-web/                 # @zendev-lab/navia-web
 │       ├── src/
 │       │   ├── lib/
 │       │   └── routes/
@@ -72,20 +72,20 @@ Initial code layout:
 │       │   └── index.ts
 │       └── package.json
 ├── packages/
-│   ├── navia-runner/              # @navia-dev/runner
-│   ├── navia-protocol/            # @navia-dev/protocol
+│   ├── navia-runner/              # @zendev-lab/navia-runner
+│   ├── navia-protocol/            # @zendev-lab/navia-protocol
 │   │   ├── src/
 │   │   │   ├── schemas/
 │   │   │   ├── runtime-v1/
 │   │   │   ├── fixtures/
 │   │   │   └── index.ts
 │   │   └── package.json
-│   ├── navia-db/                  # @navia-dev/db
+│   ├── navia-db/                  # @zendev-lab/navia-db
 │   │   ├── src/migrations/
 │   │   └── package.json
-│   ├── navia-domain/              # @navia-dev/domain
+│   ├── navia-domain/              # @zendev-lab/navia-domain
 │   │   └── package.json
-│   └── navia-ui/                  # @navia-dev/ui
+│   └── navia-ui/                  # @zendev-lab/navia-ui
 │       └── package.json
 ├── pnpm-workspace.yaml
 ├── package.json
@@ -98,7 +98,7 @@ Delay these until needed:
 - `apps/server` — do not create initially; SvelteKit does not need a separate server app for v0.1.
 - `apps/workbench` / `apps/admin` — only if workbench and management become separate deployment/app boundaries.
 - `packages/sdk` — only after an external TS client is needed beyond protocol fixtures.
-- Multi-provider runner abstraction — v0.1 uses the Spark runtime bridge in `packages/navia-runner`; no separate runner repo by default.
+- Multi-provider runner abstraction — v0.1 uses the Spark runtime bridge in `apps/navia-runner`; no separate runner repo by default.
 
 ## Auth and local setup
 
