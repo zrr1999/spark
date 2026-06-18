@@ -11,8 +11,8 @@ import {
   PI_GRAFT_PATCHER_ALLOWED_TOOLS,
   PI_GRAFT_PATCHER_ROLE_REF,
   registerPiGraftExtension,
+  registerPiGraftSandboxExtension,
   type PiGraftExtensionApi,
-  type PiGraftSessionContext,
   type PiGraftToolContext,
   type PiGraftToolDefinition,
   type PiGraftToolResult,
@@ -32,7 +32,7 @@ async function binaryAvailable(path: string): Promise<boolean> {
   }
 }
 
-type SessionStartHandler = (event: unknown, ctx: PiGraftSessionContext) => unknown;
+type ExtensionHandler = (event: unknown, ctx: unknown) => unknown;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -62,10 +62,10 @@ async function executeTool(
 function createFakePi() {
   const tools = new Map<string, PiGraftToolDefinition>();
   const entries: unknown[] = [];
-  const handlers = new Map<"session_start", SessionStartHandler[]>();
+  const handlers = new Map<string, ExtensionHandler[]>();
   const pi: PiGraftExtensionApi = {
     on(event, handler) {
-      handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+      handlers.set(event, [...(handlers.get(event) ?? []), handler as ExtensionHandler]);
     },
     registerTool(tool) {
       tools.set(tool.name, tool);
@@ -525,6 +525,431 @@ esac`,
     else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
     if (previousStdinDir === undefined) delete process.env.PI_GRAFT_MOCK_STDIN_DIR;
     else process.env.PI_GRAFT_MOCK_STDIN_DIR = previousStdinDir;
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+envTest(
+  "graft sandbox read/write/edit overrides route file operations through graft scratch",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-graft-sandbox-tools-"));
+    const project = join(dir, "project");
+    const workspace = join(dir, "workspace");
+    const argvFile = join(dir, "argv.txt");
+    const stdinFile = join(dir, "stdin.txt");
+    const previousGraftBin = process.env.GRAFT_BIN;
+    const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
+    const previousStdinFile = process.env.PI_GRAFT_MOCK_STDIN;
+    await mkdir(project, { recursive: true });
+    process.env.PI_GRAFT_MOCK_ARGV = argvFile;
+    process.env.PI_GRAFT_MOCK_STDIN = stdinFile;
+    process.env.GRAFT_BIN = await writeMockGraft(
+      dir,
+      `printf '%s\\n' "$*" >> "$PI_GRAFT_MOCK_ARGV"
+case "$*" in
+  *"scratch read"*) printf '%s\\n' '{"status":"ok","result":{"content":"alpha old\\nbeta\\n","scratch":"scratch:read"}}' ;;
+  *"scratch write"*) cat > "$PI_GRAFT_MOCK_STDIN"; printf '%s\\n' '{"status":"ok","result":{"changed_paths":["src/example.ts"],"scratch":"scratch:write"}}' ;;
+  *"init"*) printf '%s\\n' '{"status":"ok","workspace_id":"ws:sandbox-test"}' ;;
+  *"repo add"*) printf '%s\\n' '{"status":"ok"}' ;;
+  *"repo lock"*) printf '%s\\n' '{"status":"ok"}' ;;
+  *) echo "unexpected argv: $*" >&2; exit 2 ;;
+esac`,
+    );
+
+    try {
+      const { pi, tools, entries, handlers } = createFakePi();
+      registerPiGraftSandboxExtension(pi);
+      for (const handler of handlers.get("session_start") ?? []) {
+        await handler(
+          { reason: "startup" },
+          { cwd: project, sessionManager: { getEntries: () => entries } },
+        );
+      }
+
+      const entered = await executeTool(
+        tools.get("graft_sandbox_enter"),
+        "graft_sandbox_enter",
+        { repo: project, workspace, base: "main" },
+        { cwd: project },
+      );
+      assert.match(entered.content[0].text, /GRAFT SANDBOX ACTIVE/);
+      assert.match(entered.content[0].text, /writes: Graft scratch only/);
+
+      const read = await executeTool(
+        tools.get("read"),
+        "read",
+        { path: "src/example.ts", offset: 2, limit: 1 },
+        { cwd: project },
+      );
+      assert.equal(read.content[0].text, "beta");
+      assert.equal(read.details?.sandbox, true);
+      assert.equal(read.details?.operation, "read");
+
+      const write = await executeTool(
+        tools.get("write"),
+        "write",
+        { path: "src/example.ts", content: "alpha old\nbeta\n" },
+        { cwd: project },
+      );
+      assert.match(write.content[0].text, /Graft sandbox scratch scratch:write/);
+      assert.equal(write.details?.sandbox, true);
+      assert.equal(write.details?.operation, "write");
+
+      const edit = await executeTool(
+        tools.get("edit"),
+        "edit",
+        { path: "src/example.ts", edits: [{ oldText: "old", newText: "new" }] },
+        { cwd: project },
+      );
+      assert.match(edit.content[0].text, /Edited src\/example\.ts in Graft sandbox scratch/);
+      assert.equal(edit.details?.sandbox, true);
+      assert.equal(edit.details?.operation, "edit");
+      assert.match(String(edit.details?.diff), /--- a\/src\/example\.ts/);
+      assert.match(String(edit.details?.patch), /\+\+\+ b\/src\/example\.ts/);
+      assert.equal(edit.details?.firstChangedLine, 1);
+      assert.equal(await readFile(stdinFile, "utf8"), "alpha new\nbeta\n");
+
+      assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
+        `--cwd ${workspace} --json init`,
+        `--cwd ${workspace} --json repo add --default-branch main sandbox ${project}`,
+        `--cwd ${workspace} --json repo lock sandbox`,
+        `--cwd ${workspace} --json scratch read --base repo:sandbox@main src/example.ts --mode text`,
+        `--cwd ${workspace} --json scratch write --from scratch:read src/example.ts --content-stdin`,
+        `--cwd ${workspace} --json scratch read --from scratch:write src/example.ts --mode text`,
+        `--cwd ${workspace} --json scratch write --from scratch:read src/example.ts --content-stdin`,
+      ]);
+    } finally {
+      if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+      else process.env.GRAFT_BIN = previousGraftBin;
+      if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
+      else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
+      if (previousStdinFile === undefined) delete process.env.PI_GRAFT_MOCK_STDIN;
+      else process.env.PI_GRAFT_MOCK_STDIN = previousStdinFile;
+      await rm(dir, { force: true, recursive: true });
+    }
+  },
+);
+
+envTest("graft sandbox grep/find/ls adapters use tracked changed scratch paths", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graft-sandbox-nav-"));
+  const workspace = join(dir, "workspace");
+  const previousGraftBin = process.env.GRAFT_BIN;
+  await mkdir(workspace, { recursive: true });
+  process.env.GRAFT_BIN = await writeMockGraft(
+    dir,
+    `case "$*" in
+  *"src/example.ts"*) printf '%s\\n' '{"status":"ok","result":{"content":"alpha\\nneedle\\n","scratch":"scratch:nav"}}' ;;
+  *"docs/readme.md"*) printf '%s\\n' '{"status":"ok","result":{"content":"docs\\n","scratch":"scratch:nav"}}' ;;
+  *) echo "unexpected argv: $*" >&2; exit 2 ;;
+esac`,
+  );
+
+  try {
+    const restoredState = {
+      active: true,
+      repoRoot: "/repo",
+      repoId: "sandbox",
+      workspace,
+      base: "repo:sandbox@main",
+      lastScratch: "scratch:nav",
+      changedPaths: ["src/example.ts", "docs/readme.md"],
+      guardrails: { blockShellFileIo: true, allowValidationCommands: true },
+      createdAt: "2026-06-18T00:00:00.000Z",
+      updatedAt: "2026-06-18T00:01:00.000Z",
+    };
+    const { pi, tools, entries, handlers } = createFakePi();
+    entries.push({
+      type: "custom",
+      customType: "pi-graft-sandbox-state",
+      data: { state: restoredState },
+    });
+    registerPiGraftSandboxExtension(pi);
+    for (const handler of handlers.get("session_start") ?? []) {
+      await handler(
+        { reason: "startup" },
+        { cwd: "/repo", sessionManager: { getEntries: () => entries } },
+      );
+    }
+
+    const found = await executeTool(
+      tools.get("find"),
+      "find",
+      { pattern: "*.ts" },
+      { cwd: "/repo" },
+    );
+    assert.equal(found.content[0].text, "src/example.ts");
+
+    const listed = await executeTool(tools.get("ls"), "ls", { path: "src" }, { cwd: "/repo" });
+    assert.equal(listed.content[0].text, "example.ts");
+
+    const rootListed = await executeTool(tools.get("ls"), "ls", { path: "" }, { cwd: "/repo" });
+    assert.equal(rootListed.content[0].text, "docs/\nsrc/");
+
+    const grepped = await executeTool(
+      tools.get("grep"),
+      "grep",
+      { pattern: "needle", path: "src/example.ts" },
+      { cwd: "/repo" },
+    );
+    assert.equal(grepped.content[0].text, "src/example.ts:2:needle");
+  } finally {
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+envTest("graft sandbox edit rejects ambiguous and overlapping exact replacements", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graft-sandbox-edit-errors-"));
+  const project = join(dir, "project");
+  const workspace = join(dir, "workspace");
+  const argvFile = join(dir, "argv.txt");
+  const previousGraftBin = process.env.GRAFT_BIN;
+  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
+  await mkdir(project, { recursive: true });
+  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
+  process.env.GRAFT_BIN = await writeMockGraft(
+    dir,
+    `printf '%s\\n' "$*" >> "$PI_GRAFT_MOCK_ARGV"
+case "$*" in
+  *"scratch write"*) echo "sandbox edit error test must not write" >&2; exit 3 ;;
+  *"scratch read"*) printf '%s\\n' '{"status":"ok","result":{"content":"abcdbc\\n","scratch":"scratch:read"}}' ;;
+  *"init"*) printf '%s\\n' '{"status":"ok","workspace_id":"ws:sandbox-errors"}' ;;
+  *"repo add"*) printf '%s\\n' '{"status":"ok"}' ;;
+  *"repo lock"*) printf '%s\\n' '{"status":"ok"}' ;;
+  *) echo "unexpected argv: $*" >&2; exit 2 ;;
+esac`,
+  );
+
+  try {
+    const { pi, tools, entries, handlers } = createFakePi();
+    registerPiGraftSandboxExtension(pi);
+    for (const handler of handlers.get("session_start") ?? []) {
+      await handler(
+        { reason: "startup" },
+        { cwd: project, sessionManager: { getEntries: () => entries } },
+      );
+    }
+    await executeTool(
+      tools.get("graft_sandbox_enter"),
+      "graft_sandbox_enter",
+      { repo: project, workspace, base: "main" },
+      { cwd: project },
+    );
+
+    await assert.rejects(
+      () =>
+        executeTool(
+          tools.get("edit"),
+          "edit",
+          { path: "src/example.ts", edits: [{ oldText: "zzz", newText: "x" }] },
+          { cwd: project },
+        ),
+      /oldText was not found/,
+    );
+    await assert.rejects(
+      () =>
+        executeTool(
+          tools.get("edit"),
+          "edit",
+          { path: "src/example.ts", edits: [{ oldText: "bc", newText: "x" }] },
+          { cwd: project },
+        ),
+      /oldText must match exactly one location/,
+    );
+    await assert.rejects(
+      () =>
+        executeTool(
+          tools.get("edit"),
+          "edit",
+          {
+            path: "src/example.ts",
+            edits: [
+              { oldText: "abc", newText: "x" },
+              { oldText: "bcd", newText: "y" },
+            ],
+          },
+          { cwd: project },
+        ),
+      /overlaps/,
+    );
+
+    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
+      `--cwd ${workspace} --json init`,
+      `--cwd ${workspace} --json repo add --default-branch main sandbox ${project}`,
+      `--cwd ${workspace} --json repo lock sandbox`,
+      `--cwd ${workspace} --json scratch read --base repo:sandbox@main src/example.ts --mode text`,
+      `--cwd ${workspace} --json scratch read --base repo:sandbox@main src/example.ts --mode text`,
+      `--cwd ${workspace} --json scratch read --base repo:sandbox@main src/example.ts --mode text`,
+    ]);
+  } finally {
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
+    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
+    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+envTest("graft sandbox read reports unsupported non-text content clearly", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graft-sandbox-binary-"));
+  const project = join(dir, "project");
+  const workspace = join(dir, "workspace");
+  const previousGraftBin = process.env.GRAFT_BIN;
+  await mkdir(project, { recursive: true });
+  process.env.GRAFT_BIN = await writeMockGraft(
+    dir,
+    `case "$*" in
+  *"scratch read"*) printf '%s\\n' '{"status":"ok","result":{"bytes":42,"scratch":"scratch:binary","binary":true}}' ;;
+  *) printf '%s\\n' '{"status":"ok"}' ;;
+esac`,
+  );
+
+  try {
+    const { pi, tools, entries, handlers } = createFakePi();
+    registerPiGraftSandboxExtension(pi);
+    for (const handler of handlers.get("session_start") ?? []) {
+      await handler(
+        { reason: "startup" },
+        { cwd: project, sessionManager: { getEntries: () => entries } },
+      );
+    }
+    await executeTool(
+      tools.get("graft_sandbox_enter"),
+      "graft_sandbox_enter",
+      { repo: project, workspace, base: "main" },
+      { cwd: project },
+    );
+
+    await assert.rejects(
+      () => executeTool(tools.get("read"), "read", { path: "asset.bin" }, { cwd: project }),
+      /UTF-8 text files only/,
+    );
+  } finally {
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+envTest("graft sandbox lifecycle checkpoints, materializes, and promotes explicitly", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graft-sandbox-lifecycle-"));
+  const workspace = join(dir, "workspace");
+  const argvFile = join(dir, "argv.txt");
+  const previousGraftBin = process.env.GRAFT_BIN;
+  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
+  await mkdir(workspace, { recursive: true });
+  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
+  process.env.GRAFT_BIN = await writeMockGraft(
+    dir,
+    `printf '%s\\n' "$*" >> "$PI_GRAFT_MOCK_ARGV"
+case "$*" in
+  *"candidate from-scratch"*) printf '%s\\n' '{"status":"ok","result":{"scratch":"scratch:write","candidate":"candidate:abc","changed_paths":["src/example.ts"]}}' ;;
+  *"validate candidate:abc"*) printf '%s\\n' '{"status":"ok","message":"validated candidate:abc"}' ;;
+  *"admit candidate:abc"*) printf '%s\\n' '{"status":"ok","message":"admitted candidate:abc","patch_id":"patch:def"}' ;;
+  *"materialize patch:def --dry-run"*) printf '%s\\n' '{"status":"ok","message":"materialization dry-run for patch:def: resolved tree:123; would write state into /tmp/graft-dry"}' ;;
+  *"materialize patch:def"*) printf '%s\\n' '{"status":"ok","message":"materialized patch:def: resolved tree:123 into /tmp/graft-real"}' ;;
+  *"patch promote patch:def --to feature --yes"*) printf '%s\\n' '{"status":"ok","message":"promoted patch:def to refs/heads/feature at deadbeef","patch_id":"patch:def","promotions":[{"id":"promotion:ghi","patch_id":"patch:def","target":"feature","dry_run":false,"status":"updated refs/heads/feature to deadbeef","promoted_at":"now"}]}' ;;
+  *"patch promote patch:def --to feature"*) printf '%s\\n' '{"status":"ok","message":"promotion dry-run for patch:def to branch feature; required evidence: tests_pass (source: explicit)","patch_id":"patch:def"}' ;;
+  *) echo "unexpected argv: $*" >&2; exit 2 ;;
+esac`,
+  );
+
+  try {
+    const restoredState = {
+      active: true,
+      repoRoot: "/repo",
+      repoId: "sandbox",
+      workspace,
+      base: "repo:sandbox@main",
+      lastScratch: "scratch:write",
+      changedPaths: ["src/example.ts"],
+      guardrails: { blockShellFileIo: true, allowValidationCommands: true },
+      createdAt: "2026-06-18T00:00:00.000Z",
+      updatedAt: "2026-06-18T00:01:00.000Z",
+    };
+    const { pi, tools, entries, handlers } = createFakePi();
+    entries.push({
+      type: "custom",
+      customType: "pi-graft-sandbox-state",
+      data: { state: restoredState },
+    });
+    registerPiGraftSandboxExtension(pi);
+    for (const handler of handlers.get("session_start") ?? []) {
+      await handler(
+        { reason: "startup" },
+        { cwd: "/repo", sessionManager: { getEntries: () => entries } },
+      );
+    }
+
+    const checkpoint = await executeTool(
+      tools.get("graft_sandbox_checkpoint"),
+      "graft_sandbox_checkpoint",
+      { expected: ["tests_pass"], admit: true },
+      { cwd: "/repo" },
+    );
+    assert.match(checkpoint.content[0].text, /candidate candidate:abc/);
+    assert.match(checkpoint.content[0].text, /Admitted patch: patch:def/);
+
+    const dryMaterialize = await executeTool(
+      tools.get("graft_sandbox_materialize"),
+      "graft_sandbox_materialize",
+      {},
+      { cwd: "/repo" },
+    );
+    assert.match(dryMaterialize.content[0].text, /DRY RUN: no directory was created/);
+    assert.equal(dryMaterialize.details?.plannedPath, "/tmp/graft-dry");
+
+    const realMaterialize = await executeTool(
+      tools.get("graft_sandbox_materialize"),
+      "graft_sandbox_materialize",
+      { dryRun: false },
+      { cwd: "/repo" },
+    );
+    assert.match(
+      realMaterialize.content[0].text,
+      /Materialized inspection directory: \/tmp\/graft-real/,
+    );
+    assert.equal(
+      (realMaterialize.details?.state as { lastMaterializedPath?: string } | undefined)
+        ?.lastMaterializedPath,
+      "/tmp/graft-real",
+    );
+
+    const dryPromote = await executeTool(
+      tools.get("graft_sandbox_promote"),
+      "graft_sandbox_promote",
+      { to: "feature", required: ["tests_pass"] },
+      { cwd: "/repo" },
+    );
+    assert.match(dryPromote.content[0].text, /DRY RUN: no Git refs were updated/);
+
+    const appliedPromote = await executeTool(
+      tools.get("graft_sandbox_promote"),
+      "graft_sandbox_promote",
+      { to: "feature", apply: true },
+      { cwd: "/repo" },
+    );
+    assert.match(appliedPromote.content[0].text, /Promotion applied explicitly/);
+    assert.deepEqual(
+      (appliedPromote.details?.state as { lastPromotion?: unknown } | undefined)?.lastPromotion,
+      { branch: "feature", commit: "deadbeef", promotion: "promotion:ghi" },
+    );
+
+    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
+      `--cwd ${workspace} --json candidate from-scratch scratch:write --expect tests_pass --producer @zendev-lab/pi-graft-sandbox`,
+      `--cwd ${workspace} --json validate candidate:abc --expect tests_pass`,
+      `--cwd ${workspace} --json admit candidate:abc --require tests_pass`,
+      `--cwd ${workspace} --json materialize patch:def --dry-run`,
+      `--cwd ${workspace} --json materialize patch:def`,
+      `--cwd ${workspace} --json patch promote patch:def --to feature --require tests_pass`,
+      `--cwd ${workspace} --json patch promote patch:def --to feature --yes`,
+    ]);
+  } finally {
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
+    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
+    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
     await rm(dir, { force: true, recursive: true });
   }
 });

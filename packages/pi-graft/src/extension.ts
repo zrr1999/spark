@@ -93,7 +93,13 @@ export interface PiGraftToolDefinition {
   name: string;
   label: string;
   description: string;
+  /** One-line tool summary for Pi's Available tools system-prompt section. */
+  promptSnippet?: string;
+  /** Tool-specific guideline bullets for Pi's default system prompt. */
+  promptGuidelines?: string[];
   parameters: unknown;
+  /** Per-tool execution mode hint understood by Pi; stateful sandbox tools use sequential. */
+  executionMode?: "sequential" | "parallel";
   renderCall?: (
     args: Record<string, unknown>,
     theme: PiGraftToolRenderTheme,
@@ -135,6 +141,7 @@ export interface PiGraftExtensionApi {
     event: "session_start",
     handler: (event: unknown, ctx: PiGraftSessionContext) => unknown,
   ): void;
+  on(event: string, handler: (event: unknown, ctx: unknown) => unknown): void;
   registerTool(definition: PiGraftToolDefinition): void;
   appendEntry?: (customType: string, data?: unknown) => void;
 }

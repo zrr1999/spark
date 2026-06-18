@@ -17,6 +17,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./extension": "./src/extension.ts",
+    "./sandbox": "./src/sandbox-entry.ts",
     "./graft-client": "./src/graft-client.ts"
   },
   "publishConfig": {

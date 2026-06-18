@@ -29,6 +29,43 @@ pi-graft also registers the explicit extension role `role:extension-patcher` (`i
 
 ## Tools
 
+### Normal mode vs sandbox replacement mode
+
+The default pi-graft entrypoint (`@zendev-lab/pi-graft/extension`) is ordinary explicit graft tooling: it registers `graft_*` tools and does **not** override Pi's built-in `read`, `write`, `edit`, `grep`, `find`, or `ls` tools.
+
+The opt-in sandbox entrypoint (`@zendev-lab/pi-graft/sandbox`, or this repo's `packages/pi-graft/src/sandbox-entry.ts` during local development) is the file-tool replacement profile. Load it only when you want file operations to enter the Graft lifecycle. It registers sandbox lifecycle helpers plus tools named exactly `read`, `write`, `edit`, `grep`, `find`, and `ls`; with `--no-builtin-tools`, those names still work because they come from the sandbox extension rather than Pi built-ins.
+
+Typical non-interactive local-development invocation:
+
+```bash
+GRAFT_BIN=/path/to/graft \
+pi -p --no-extensions --no-builtin-tools \
+  -e ./packages/pi-graft/src/sandbox-entry.ts \
+  --tools graft_sandbox_enter,read,write,edit,grep,find,ls,graft_sandbox_checkpoint,graft_sandbox_materialize \
+  "enter sandbox, edit files, checkpoint, and materialize"
+```
+
+Sandbox workflow:
+
+```text
+graft_sandbox_enter { repo: ".", workspace: "/tmp/my-graft-ws", base: "HEAD" }
+read/edit/write/grep/find/ls                         # all operate on sandbox scratch state
+graft_sandbox_checkpoint { admit: true, message: "ready" }
+graft_sandbox_materialize {}                         # dry-run by default; no directory is created
+graft_sandbox_materialize { dryRun: false }          # creates isolated .worktrees/... inspection output
+graft_sandbox_promote { to: "branch", apply: true } # explicit --yes side-effect boundary
+```
+
+Safety boundaries:
+
+- sandbox `read`/`write`/`edit` never write the Git working tree; they read/write Graft scratch state and update sandbox `lastScratch`;
+- `graft_sandbox_checkpoint` creates candidate/patch state only when called;
+- `graft_sandbox_materialize` defaults to dry-run and says no directory was created;
+- `graft_sandbox_promote` defaults to dry-run and requires `apply:true` to add Graft's `--yes` gate;
+- sandbox `grep`/`find`/`ls` are v1 navigation helpers over known changed paths (or explicit grep path) and do not claim full base-tree traversal;
+- the sandbox `tool_call` guardrail blocks obvious shell/cue/script file-I/O bypasses such as `cat`, `sed`, redirection writes, `rm`, `cp`, and direct script file APIs, while allowing validation commands that do not directly access files;
+- `graft_sandbox_exit` clears sandbox state, but V1 cannot restore original built-ins inside the same loaded sandbox profile; reload without the sandbox entrypoint for ordinary file tools.
+
 ### Scratch file tools
 
 These tools do not override Pi built-ins. Each scratch tool accepts either `base` (first operation) or `from` (continue a returned scratch), matching CLI `graft scratch ... --base/--from`. Treat them as mutually exclusive source selectors: do not include `base` once you have a `scratch:*` id to pass as `from`.

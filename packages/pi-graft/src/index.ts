@@ -7,6 +7,8 @@ export {
   registerPiGraftExtension,
 } from "./extension.ts";
 export { GraftCliError, formatDirectOutput, runDirectGraft, runGraftJson } from "./graft-client.ts";
+export { default as piGraftSandboxExtension, registerPiGraftSandboxExtension } from "./sandbox.ts";
+export type { PiGraftSandboxState } from "./sandbox.ts";
 export type {
   DirectGraftExecution,
   GraftJsonExecution,
