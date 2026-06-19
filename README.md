@@ -9,7 +9,7 @@ spark
 spark <initial goal>
 ```
 
-The standalone `spark` command is published by `@zendev-lab/spark-cli` and built directly on `@earendil-works/pi-tui`. It owns the terminal loop, editor, transcript, follow-up queue, host runtime, provider registry, model selection, session store, and explicit Spark extension loading instead of embedding Pi SDK `InteractiveMode`. It also now has a local-only `spark daemon ...` surface for file-queued detached `session.run` work. The daemon is intentionally not a gateway: no HTTP server, bearer token, remote job API, service installer, or Pi RPC wrapper. Child/background role-runs still use the existing `pi --print --mode json` runner, so `pi` must remain installed and authenticated for workflow execution until Spark gets its own non-TUI role executor.
+The standalone `spark` command is published by `@zendev-lab/spark-cli` and built directly on `@earendil-works/pi-tui`. It owns the terminal loop, editor, transcript, follow-up queue, host runtime, provider registry, model selection, session store, and explicit Spark extension loading instead of embedding Pi SDK `InteractiveMode`. `spark --print`, `spark daemon submit`, and cockpit-triggered background role-runs now route through the single Spark daemon/client boundary. The daemon injects Spark's native headless role executor into `@zendev-lab/spark-runtime`, so daemon-owned background work no longer depends on spawning `pi --print --mode json`.
 
 ## Spark CLI native host vs Pi extension
 

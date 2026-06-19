@@ -327,12 +327,13 @@ Streamed event rendering, cancellation, answers, and steering still need follow-
 
 ### Native headless role execution is part of completion
 
-Current Spark runtime role execution still defaults to spawning `pi` for child
-role runs. That creates another hidden runtime owner. The hard-cut target must
-provide a daemon-native non-TUI executor before the goal can be considered
-complete. Pi extension host support remains valid when Spark is loaded inside
-Pi, but Spark daemon should not depend on `pi --print --mode json` as its
-default background executor.
+Spark runtime now accepts a host-provided `SparkRoleInstructionExecutor`, and
+`@zendev-lab/spark-cli/headless-role-executor` provides the daemon-native
+non-TUI implementation. The Spark daemon injects that executor for cockpit
+`task.start.request` work, so daemon-owned background role execution runs inside
+the Spark agent loop instead of spawning `pi --print --mode json`. Pi extension
+host support remains valid when Spark is loaded inside Pi, and the legacy Pi
+child launcher remains only as a compatibility fallback for non-daemon hosts.
 
 ### Human wait bridge is required
 

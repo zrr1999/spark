@@ -134,7 +134,7 @@ function forbiddenSpecifierReason(specifier, boundary) {
       return "Spark core/runtime packages must not depend on Navia packages";
   }
   if (boundary === "navia") {
-    if (isSparkCliHostSpecifier(specifier)) {
+    if (isSparkCliHostInternalSpecifier(specifier)) {
       return "Navia packages must not import Spark CLI host internals";
     }
   }
@@ -149,13 +149,14 @@ function isNaviaSpecifier(specifier) {
   return specifier.startsWith("@zendev-lab/navia-") || specifier.startsWith("navia-");
 }
 
-function isSparkCliHostSpecifier(specifier) {
+function isSparkCliHostInternalSpecifier(specifier) {
   return (
-    specifier === "@zendev-lab/spark-cli" ||
-    specifier.startsWith("@zendev-lab/spark-cli/") ||
+    specifier === "@zendev-lab/spark-cli/host" ||
+    specifier.startsWith("@zendev-lab/spark-cli/host/") ||
+    specifier.includes("/apps/spark/src/host/") ||
     specifier.includes("/apps/spark/") ||
-    specifier.includes("../spark/") ||
-    specifier.includes("../../spark/")
+    specifier.includes("../spark/src/host/") ||
+    specifier.includes("../../spark/src/host/")
   );
 }
 

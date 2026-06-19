@@ -26,6 +26,8 @@ directory re-attaches it.
 
 The Spark daemon connects to a Navia server over the daemon/server protocol,
 routes task execution through Spark runtime primitives, and reports workspace,
-task, invocation, ask, and artifact projections back to the web cockpit. Navia
-SQLite stores projections/cache; Spark stores remain the execution source of
-truth.
+task, invocation, ask, and artifact projections back to the web cockpit. Daemon
+background role execution injects Spark's native headless role executor into
+`@zendev-lab/spark-runtime`; it does not spawn `pi --print --mode json` for
+cockpit task starts. Navia SQLite stores projections/cache; Spark stores remain
+the execution source of truth.

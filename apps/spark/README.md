@@ -102,11 +102,8 @@ Authentication:
 
 Spark CLI does not alias `oneapi` credentials or `OPENAI_API_KEY` into `baidu-oneapi`.
 
-## Child role-run policy
+## Headless role execution
 
-For now, child role-runs launched by existing Spark task/workflow packages continue to use the existing Pi JSON runner policy from `@zendev-lab/spark-runtime` / `@zendev-lab/pi-roles`:
+Spark CLI now exposes `@zendev-lab/spark-cli/headless-role-executor` for daemon-native role execution. The Spark daemon injects that executor into `@zendev-lab/spark-runtime`, so cockpit-triggered background tasks run through the same in-process Spark agent loop instead of spawning `pi --print --mode json`.
 
-- `@zendev-lab/spark-runtime` defaults role execution to `piCommand: "pi"`.
-- `@zendev-lab/pi-roles` builds child role-run args as `pi --print --mode json ...`.
-
-That policy is separate from the `spark` TUI host. A future native Spark executor can replace it once Spark CLI has a non-TUI child execution backend.
+`@zendev-lab/pi-roles` remains available as a legacy generic launcher for hosts that do not inject a native executor, but it is no longer the Spark daemon execution path.

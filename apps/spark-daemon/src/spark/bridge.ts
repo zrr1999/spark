@@ -16,6 +16,12 @@ type TaskRun = {
 
 type SparkTaskRunOptionsLike = Record<string, unknown>;
 type ExecuteSparkTaskFn = (input: SparkTaskRunOptionsLike) => Promise<TaskRun>;
+type SparkRoleInstructionExecutorLike = (
+  input: Record<string, unknown>,
+) => Promise<Record<string, unknown>>;
+type CreateSparkHeadlessRoleExecutorFn = (options?: {
+  sparkHome?: string;
+}) => SparkRoleInstructionExecutorLike;
 
 type TaskGraphStoreLike = {
   update<T>(
@@ -60,6 +66,7 @@ type SparkRuntimeModules = {
   killActiveSparkRoleRunProcesses(
     input: Record<string, unknown>,
   ): Promise<Array<{ signalSent?: boolean; closed?: boolean }>>;
+  createSparkHeadlessRoleExecutor: CreateSparkHeadlessRoleExecutorFn;
 };
 import {
   createId,
@@ -134,7 +141,7 @@ async function dynamicImport<T>(specifier: string): Promise<T> {
 }
 
 async function loadSparkRuntimeModules(): Promise<SparkRuntimeModules> {
-  const [artifacts, roles, tasks, runtime] = await Promise.all([
+  const [artifacts, roles, tasks, runtime, headless] = await Promise.all([
     dynamicImport<{ defaultArtifactStore: SparkRuntimeModules["defaultArtifactStore"] }>(
       "@zendev-lab/pi-artifacts",
     ),
@@ -150,6 +157,9 @@ async function loadSparkRuntimeModules(): Promise<SparkRuntimeModules> {
       runSparkTask: SparkRuntimeModules["runSparkTask"];
       killActiveSparkRoleRunProcesses: SparkRuntimeModules["killActiveSparkRoleRunProcesses"];
     }>("@zendev-lab/spark-runtime"),
+    dynamicImport<{
+      createSparkHeadlessRoleExecutor: SparkRuntimeModules["createSparkHeadlessRoleExecutor"];
+    }>("@zendev-lab/spark-cli/headless-role-executor"),
   ]);
   return {
     defaultArtifactStore: artifacts.defaultArtifactStore,
@@ -159,6 +169,7 @@ async function loadSparkRuntimeModules(): Promise<SparkRuntimeModules> {
     defaultTaskGraphStore: tasks.defaultTaskGraphStore,
     runSparkTask: runtime.runSparkTask,
     killActiveSparkRoleRunProcesses: runtime.killActiveSparkRoleRunProcesses,
+    createSparkHeadlessRoleExecutor: headless.createSparkHeadlessRoleExecutor,
   };
 }
 
@@ -245,6 +256,7 @@ export async function runSparkCommandBridge(
       dryRun: false,
       timeoutMs: DEFAULT_SPARK_TIMEOUT_MS,
       signal: input.signal,
+      ...(spark ? { roleExecutor: spark.createSparkHeadlessRoleExecutor() } : {}),
       claim: {
         kind: "role-run",
         sessionId: `spark-daemon:${input.route.runtimeId}`,

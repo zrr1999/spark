@@ -41,6 +41,9 @@
       "@zendev-lab/pi-workflows": ["./packages/pi-workflows/src/index.ts"],
       "@zendev-lab/pi-workflows/extension": ["./packages/pi-workflows/src/extension.ts"],
       "@zendev-lab/spark-cli/baidu-oneapi-provider": ["./apps/spark/src/baidu-oneapi-provider.ts"],
+      "@zendev-lab/spark-cli/headless-role-executor": [
+        "./apps/spark/src/headless-role-executor.ts"
+      ],
       "@zendev-lab/spark-runtime": ["./packages/spark-runtime/src/index.ts"],
       "@zendev-lab/spark/extension": ["./packages/spark/src/extension/index.ts"]
     },

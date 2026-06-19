@@ -159,7 +159,7 @@ apps/spark/src/cli/shared.ts       args/output helpers
 apps/spark/src/native-tui.ts       terminal renderer; input goes through an injected daemon responder
 ```
 
-Current Spark CLI preserves default TUI behavior, adds `spark --print <prompt>` for headless submit, and routes `spark daemon ...` through the daemon local IPC socket rather than owning queue execution.
+Current Spark CLI preserves default TUI behavior, adds `spark --print <prompt>` for headless submit, and routes `spark daemon ...` through the daemon local IPC socket rather than owning queue execution. Cockpit `task.start.request` work uses the daemon-injected native headless role executor instead of a Pi CLI child process.
 
 ### Compound command normalization
 

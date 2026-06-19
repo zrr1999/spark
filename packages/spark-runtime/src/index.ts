@@ -29,7 +29,7 @@ import {
   type TaskRunCompletionSummary,
   type TaskTodo,
 } from "@zendev-lab/pi-extension-api";
-import type { RoleInstruction, RoleRunRecord, RoleRunStatus } from "@zendev-lab/pi-roles";
+import type { RoleInstruction, RoleRunRecord, RoleRunStatus, RoleSpec } from "@zendev-lab/pi-roles";
 import {
   taskCompletionReadiness,
   type TaskGraph,
@@ -71,6 +71,29 @@ export interface SparkRoleRunResult {
   stderr: string;
   jsonEvents: unknown[];
 }
+
+export interface SparkRoleInstructionExecutorInput {
+  role: Pick<RoleSpec, "ref" | "id" | "systemPrompt" | "allowedTools">;
+  instruction: RoleInstruction;
+  record: SparkRoleRunResult["record"];
+  cwd: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  sessionDir?: string;
+  runName?: string;
+  launch?: RoleLaunchMode;
+  forkFromSession?: string;
+  model?: string;
+}
+
+/**
+ * Host-provided role execution hook. Spark daemon uses this to run headless
+ * roles in-process instead of spawning `pi --print --mode json`. Packages that
+ * do not provide it keep the legacy Pi child process launcher.
+ */
+export type SparkRoleInstructionExecutor = (
+  input: SparkRoleInstructionExecutorInput,
+) => Promise<SparkRoleRunResult>;
 
 export { type RoleLaunchMode } from "@zendev-lab/pi-roles";
 
@@ -457,6 +480,7 @@ export interface RoleRunnerOptions {
   launch?: RoleLaunchMode;
   forkFromSession?: string;
   sessionModel?: string;
+  roleExecutor?: SparkRoleInstructionExecutor;
 }
 
 export interface SparkTaskRunOptions {
@@ -477,6 +501,7 @@ export interface SparkTaskRunOptions {
   launch?: RoleLaunchMode;
   forkFromSession?: string;
   sessionModel?: string;
+  roleExecutor?: SparkRoleInstructionExecutor;
   heartbeatIntervalMs?: number;
   onHeartbeat?: (graph: TaskGraph) => void | Promise<void>;
   claim?: {
@@ -616,6 +641,7 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
         launch: input.launch,
         forkFromSession: input.forkFromSession,
         sessionModel: input.sessionModel,
+        roleExecutor: input.roleExecutor,
       },
       runRef,
     );
@@ -1096,26 +1122,107 @@ export async function runRoleInstructionOnly(
     };
   }
 
-  return runPiJsonRole(
-    role,
-    instruction,
-    {
-      cwd: options.cwd ?? process.cwd(),
-      piCommand: options.piCommand ?? "pi",
-      timeoutMs: options.timeoutMs ?? 600_000,
-      signal: options.signal,
-      sessionDir: options.sessionDir,
-      runName: baseRecord.runName,
-      launch: options.launch,
-      forkFromSession: options.forkFromSession,
-      sessionModel: options.sessionModel,
-    },
-    baseRecord.ref,
-  );
+  const roleOptions = {
+    cwd: options.cwd ?? process.cwd(),
+    piCommand: options.piCommand ?? "pi",
+    timeoutMs: options.timeoutMs ?? 600_000,
+    signal: options.signal,
+    sessionDir: options.sessionDir,
+    runName: baseRecord.runName,
+    launch: options.launch,
+    forkFromSession: options.forkFromSession,
+    sessionModel: options.sessionModel,
+  };
+
+  if (options.roleExecutor) {
+    return runWithInjectedRoleExecutor(
+      role,
+      instruction,
+      { ...roleOptions, roleExecutor: options.roleExecutor },
+      baseRecord,
+    );
+  }
+
+  return runPiJsonRole(role, instruction, roleOptions, baseRecord.ref);
 }
 
 export function parseJsonlEvents(text: string): unknown[] {
   return parsePiJsonlEvents(text);
+}
+
+async function runWithInjectedRoleExecutor(
+  role: RoleSpec,
+  instruction: RoleInstruction,
+  options: Required<Pick<RoleRunnerOptions, "cwd" | "piCommand" | "timeoutMs" | "roleExecutor">> &
+    Pick<
+      RoleRunnerOptions,
+      "signal" | "sessionDir" | "runName" | "launch" | "forkFromSession" | "sessionModel"
+    >,
+  baseRecord: SparkRoleRunResult["record"],
+): Promise<SparkRoleRunResult> {
+  const roleModel = await resolveRoleModelSetting({
+    roleRef: role.ref,
+    roleId: role.id,
+    roleName: role.id,
+    projectStore: defaultProjectRoleModelSettingsStore(options.cwd),
+    userStore: defaultUserRoleModelSettingsStore(),
+  });
+  const model = roleModel?.model ?? (options.sessionModel?.trim() || undefined);
+  const timeoutAbort = new AbortController();
+  const signal = combineAbortSignals([options.signal, timeoutAbort.signal]);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    timeoutAbort.abort(new Error(`role run timed out after ${options.timeoutMs}ms`));
+  }, options.timeoutMs);
+  timer.unref?.();
+
+  try {
+    const result = await options.roleExecutor({
+      role: {
+        ref: role.ref,
+        id: role.id,
+        systemPrompt: role.systemPrompt,
+        allowedTools: role.allowedTools,
+      },
+      instruction,
+      record: {
+        ...baseRecord,
+        launch: options.launch,
+        model,
+        sessionDir: options.sessionDir,
+        forkFromSession: options.forkFromSession,
+      },
+      cwd: options.cwd,
+      timeoutMs: options.timeoutMs,
+      signal,
+      sessionDir: options.sessionDir,
+      runName: options.runName,
+      launch: options.launch,
+      forkFromSession: options.forkFromSession,
+      model,
+    });
+    if (timedOut) throw new RoleRunTimeoutError(options.timeoutMs);
+    return {
+      record: {
+        ...baseRecord,
+        ...result.record,
+        ref: baseRecord.ref,
+        roleRef: role.ref,
+        runName: result.record.runName ?? options.runName,
+        instruction: instruction.instruction,
+        model: result.record.model ?? model,
+      },
+      stdout: result.stdout ?? "",
+      stderr: result.stderr ?? "",
+      jsonEvents: result.jsonEvents ?? [],
+    };
+  } catch (error) {
+    if (timedOut) throw new RoleRunTimeoutError(options.timeoutMs);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function runPiJsonRole(

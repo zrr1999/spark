@@ -67,9 +67,12 @@ void test("boundary checker treats spark-daemon as the daemon/cockpit adapter", 
     name: "@zendev-lab/spark-daemon",
     dependencies: {
       "@zendev-lab/navia-protocol": "workspace:*",
+      "@zendev-lab/spark-cli": "workspace:^",
       "@zendev-lab/spark-runtime": "workspace:^",
     },
-    source: 'import { runtimeMessageSchema } from "@zendev-lab/navia-protocol";\n',
+    source:
+      'import { runtimeMessageSchema } from "@zendev-lab/navia-protocol";\n' +
+      'import { createSparkHeadlessRoleExecutor } from "@zendev-lab/spark-cli/headless-role-executor";\n',
   });
 
   const result = runBoundaryCheck(root);

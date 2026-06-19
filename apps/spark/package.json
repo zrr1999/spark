@@ -14,7 +14,8 @@
   ],
   "type": "module",
   "exports": {
-    "./baidu-oneapi-provider": "./src/baidu-oneapi-provider.ts"
+    "./baidu-oneapi-provider": "./src/baidu-oneapi-provider.ts",
+    "./headless-role-executor": "./src/headless-role-executor.ts"
   },
   "publishConfig": {
     "access": "public"
