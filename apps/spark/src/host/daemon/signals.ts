@@ -1,28 +1,7 @@
-/** Signal helper for graceful Spark daemon shutdown. */
+/** Compatibility barrel for Spark daemon core.
+ *
+ * The daemon implementation now lives in apps/spark-daemon/src/core so there is
+ * one core used by the service daemon and the temporary Spark CLI adapter.
+ */
 
-export interface SparkDaemonSignals {
-  readonly stopped: boolean;
-  stop(): void;
-  dispose(): void;
-}
-
-export function createSparkDaemonSignals(
-  signalNames: NodeJS.Signals[] = ["SIGINT", "SIGTERM"],
-): SparkDaemonSignals {
-  let stopped = false;
-  const onSignal = () => {
-    stopped = true;
-  };
-  for (const signal of signalNames) process.once(signal, onSignal);
-  return {
-    get stopped() {
-      return stopped;
-    },
-    stop() {
-      stopped = true;
-    },
-    dispose() {
-      for (const signal of signalNames) process.off(signal, onSignal);
-    },
-  };
-}
+export * from "../../../../spark-daemon/src/core/signals.ts";

@@ -7,29 +7,25 @@ Standalone Spark-first TUI host built directly on `@earendil-works/pi-tui`.
 ```sh
 spark
 spark "initial Spark goal"
+spark --print "headless Spark prompt"
 spark daemon status --json
-spark daemon enqueue --session <id> --prompt "follow-up work"
+spark daemon start
+spark daemon submit --session <id> --prompt "follow-up work"
 spark daemon queue --state inbox
-spark daemon run --once
 spark --help
 ```
 
-`spark` launches a Spark-owned terminal UI by default. `spark daemon ...` is a local-only daemon/queue surface for detached session-run work. It does not embed the Pi coding-agent runtime, Pi SDK `InteractiveMode`, Pi's package discovery runtime, or any gateway/HTTP/service manager.
+`spark` launches a Spark-owned terminal UI by default, but user prompts are submitted to the single Spark daemon over local IPC. `spark --print` and `spark daemon submit` use the same headless `turn.submit` path. The CLI no longer owns a separate queue worker/runtime and does not embed the Pi coding-agent runtime, Pi SDK `InteractiveMode`, Pi's package discovery runtime, or any gateway/HTTP service manager.
 
 ## Native host wiring
 
-The CLI boot path constructs Spark-owned host services before opening the TUI:
+The CLI boot path now separates presentation from execution:
 
-- `SparkHostRuntime` for the shared `@zendev-lab/pi-extension-api` surface.
-- `SparkExtensionLoader` for explicit builtin extension factories: `@zendev-lab/pi-ask`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-graft`, and `@zendev-lab/spark`.
-- `SparkProviderRegistry` plus provider plugins from `~/.spark/config.json#providers[]`.
-- `SparkModelSelector` and `SparkKeybindings` for active model persistence and shortcuts.
-- `SparkSessionStore` for Pi-compatible JSONL sessions under `~/.spark/sessions/<workspaceHash>/`.
-- `SparkSkillResolver` for builtin/workspace/user skill discovery.
-- `SparkAgentLoop` and `SparkAgentSession` for `@earendil-works/pi-ai` turns, session resume, and Spark tool dispatch.
-- `host/daemon/*` for local daemon lock, JSON file queue, worker loop, and queued `session.run` execution.
-
-The terminal loop/editor/transcript are owned by `@earendil-works/pi-tui` primitives (`ProcessTerminal`, `TUI`, `Editor`). Input is queued inside Spark CLI while a response is processing, so follow-up submissions do not hit Pi's old `Agent is already processing` runtime path.
+- `apps/spark/src/cli.ts` parses the root command and submits TUI/headless prompts through the daemon client.
+- `apps/spark/src/cli/daemon.ts` starts/wakes the Spark daemon and calls local IPC methods (`daemon.status`, `daemon.queue`, `turn.submit`).
+- `apps/spark/src/native-tui.ts` owns only terminal rendering/input buffering through `@earendil-works/pi-tui` primitives (`ProcessTerminal`, `TUI`, `Editor`).
+- `apps/spark-daemon/src/core/*` owns daemon lock, JSON file queue, worker loop, and queued `session.run` execution.
+- `apps/spark/src/host/*` still contains native host/session helpers used by daemon session execution and tests, but ordinary CLI/TUI entrypoints do not construct them directly.
 
 ## Configuration
 
@@ -63,21 +59,23 @@ Keybindings live at `~/.spark/agent/keybindings.json` and override host defaults
 The daemon surface is intentionally local and file-backed:
 
 ```sh
+spark daemon start [--json]
 spark daemon status [--json]
-spark daemon enqueue --session <id> --prompt <text> [--json]
+spark daemon submit --session <id> --prompt <text> [--reset] [--json]
 spark daemon queue [--state inbox|processed|failed|all] [--json]
-spark daemon run [--once] [--cwd <dir>]
+spark --print <prompt>
 ```
 
-State lives under `~/.spark` by default:
+Daemon state follows the Spark daemon XDG paths (`$SPARK_DAEMON_*`, then `$XDG_*`, then `~/.local/state|share|cache/spark/daemon`):
 
-- `runtime/daemon.lock` — exclusive daemon PID/start record with stale-lock recovery.
+- `daemon.lock` — exclusive daemon PID/start record with stale-lock recovery.
+- `daemon.sock` — local IPC socket for status/queue/submit.
 - `daemon/inbox/*.json` — queued `session.run` tasks.
 - `daemon/processed/*.json` — successfully executed tasks.
 - `daemon/failed/*.json` — failed tasks with persisted error text.
 - `sessions/<workspaceHash>/*.jsonl` — resumed/created Spark session records.
 
-`session.run` tasks are de-duplicated by active session id inside one daemon process so the same JSONL session is not appended concurrently. This slice does not implement gateway HTTP, bearer tokens, remote job APIs, systemd/launchd installation, or Pi RPC wrapping.
+`session.run` tasks are de-duplicated by active session id inside one daemon process so the same JSONL session is not appended concurrently. This slice does not expose a second Spark CLI worker, gateway HTTP, bearer tokens, remote job APIs, or Pi RPC wrapping.
 
 ## Host-only features
 
@@ -87,7 +85,7 @@ These features are native Spark CLI responsibilities and should not be added to 
 - Local transcript rendering and queued follow-up handling.
 - Model picker/cycling UI and active provider/model persistence.
 - Native JSONL session file storage/resume helpers.
-- Local daemon lock/queue/worker loop and queued session-run execution.
+- Terminal daemon client presentation, prompt submission, and local transcript rendering.
 - Spark CLI skill discovery rooted at builtin/workspace/user `skills` directories.
 - Explicit builtin extension loading for the native host.
 

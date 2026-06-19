@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { SparkDaemonQueue } from "../apps/spark/src/host/index.ts";
+import { SparkDaemonQueue } from "../apps/spark-daemon/src/core/index.ts";
 
 void test("SparkDaemonQueue enqueues, reads, and marks processed session.run tasks", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-queue-"));

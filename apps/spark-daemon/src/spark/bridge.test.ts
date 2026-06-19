@@ -10,10 +10,10 @@ import {
 import { resolveNaviaPaths } from "@zendev-lab/navia-system";
 import { openSparkDaemonDatabase } from "../store/schema.js";
 import { addWorkspace } from "../store/workspaces.js";
-import { runNaviaCommandThroughSpark } from "./bridge.js";
+import { runSparkCommandBridge } from "./bridge.js";
 
 function setup() {
-  const root = mkdtempSync(join(tmpdir(), "navia-spark-bridge-"));
+  const root = mkdtempSync(join(tmpdir(), "spark-daemon-spark-bridge-"));
   const paths = resolveNaviaPaths({
     app: "daemon",
     env: { HOME: root },
@@ -60,7 +60,7 @@ function command(
   });
 }
 
-describe("Navia Spark bridge", () => {
+describe("Spark daemon bridge", () => {
   it("executes through the injected Spark task executor and projects Spark artifacts", async () => {
     const h = setup();
     try {
@@ -88,7 +88,7 @@ describe("Navia Spark bridge", () => {
         },
       };
 
-      const result = await runNaviaCommandThroughSpark({
+      const result = await runSparkCommandBridge({
         command: command(h.workspace.id),
         workspace: h.workspace,
         route: {
@@ -161,7 +161,7 @@ describe("Navia Spark bridge", () => {
       };
 
       const retryOfInvocationId = "inv_retryorigin000000000000000000000";
-      const result = await runNaviaCommandThroughSpark({
+      const result = await runSparkCommandBridge({
         command: command(h.workspace.id, { prompt: "Retry through Spark", retryOfInvocationId }),
         workspace: h.workspace,
         route: {

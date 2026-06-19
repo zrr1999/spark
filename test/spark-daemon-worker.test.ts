@@ -12,7 +12,7 @@ import {
   processSparkDaemonQueueBatch,
   runSparkDaemonWorkerIteration,
   type SparkDaemonTaskExecutor,
-} from "../apps/spark/src/host/index.ts";
+} from "../apps/spark-daemon/src/core/index.ts";
 
 void test("processSparkDaemonQueueBatch launches at most one active task per session", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-worker-dedupe-"));
@@ -48,6 +48,8 @@ void test("processSparkDaemonQueueBatch launches at most one active task per ses
     assert.equal(active.files.has(second.fileName), false);
     assert.equal(active.sessions.has("same"), true);
     assert.equal(active.sessions.has("other"), true);
+    assert.equal(active.invocations.hasActiveSession("same"), true);
+    assert.equal(active.invocations.hasActiveSession("other"), true);
 
     release.resolve();
     await waitFor(async () => (await queue.list("processed")).length === 2);

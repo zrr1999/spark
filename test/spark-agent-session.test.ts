@@ -6,15 +6,17 @@ import test from "node:test";
 
 import {
   SparkAgentSession,
-  SparkDaemonQueue,
   createSparkCliHostServices,
   createSparkDaemonSessionRunExecutor,
-  createSparkDaemonWorkerContext,
-  processSparkDaemonQueueBatch,
-  waitForSparkDaemonActiveTasks,
   type SparkCliHostServicesOptions,
   type SparkConfig,
 } from "../apps/spark/src/host/index.ts";
+import {
+  SparkDaemonQueue,
+  createSparkDaemonWorkerContext,
+  processSparkDaemonQueueBatch,
+  waitForSparkDaemonActiveTasks,
+} from "../apps/spark-daemon/src/core/index.ts";
 
 type AssistantMessage = any;
 

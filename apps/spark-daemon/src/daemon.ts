@@ -13,6 +13,15 @@ import {
 } from "@zendev-lab/navia-protocol";
 import { writePrivateFile, type NaviaPaths } from "@zendev-lab/navia-system";
 import { readSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
+import {
+  createSparkDaemonWorkerContext,
+  runSparkDaemonWorkerIteration,
+  SparkDaemonInvocationRegistry,
+  SparkDaemonQueue,
+  SparkDaemonWorkerLoop,
+  waitForSparkDaemonActiveTasks,
+  type SparkDaemonTaskExecutor,
+} from "./core/index.ts";
 import { decideCommandPolicy } from "./policy.js";
 import {
   commandAck,
@@ -35,8 +44,8 @@ import {
 } from "./store/workspaces.js";
 import {
   commandRejectForUnknownInvocation,
-  runNaviaCommandThroughSpark,
-  cancelNaviaSparkInvocation,
+  runSparkCommandBridge,
+  cancelSparkBridgeInvocation,
   type RunSparkCommandFn,
   type CancelSparkInvocationFn,
 } from "./spark/bridge.js";
@@ -84,14 +93,55 @@ export interface StartSparkDaemonOptions {
    */
   runSparkCommand?: RunSparkCommandFn;
   cancelSparkInvocation?: CancelSparkInvocationFn;
+  queue?: SparkDaemonQueue;
+  executeQueueTask?: SparkDaemonTaskExecutor;
+  runQueue?: boolean;
+  queuePollIntervalMs?: number;
+  queueConcurrency?: number;
+  invocationRegistry?: SparkDaemonInvocationRegistry;
 }
 
 export async function startSparkDaemon(options: StartSparkDaemonOptions): Promise<void> {
   writePrivateFile(options.paths.pidFile, `${process.pid}\n`);
+  const invocationRegistry = options.invocationRegistry ?? new SparkDaemonInvocationRegistry();
+  const queueContext =
+    options.runQueue === false
+      ? null
+      : createSparkDaemonWorkerContext({
+          queue: options.queue ?? new SparkDaemonQueue({ paths: options.paths }),
+          active: { files: new Set(), sessions: new Set(), invocations: invocationRegistry },
+          executeTask: options.executeQueueTask,
+        });
+  const queueLoop = queueContext
+    ? new SparkDaemonWorkerLoop({
+        context: queueContext,
+        label: "spark-daemon",
+        pollIntervalMs: options.queuePollIntervalMs,
+        concurrency: options.queueConcurrency,
+      })
+    : null;
+  const stopQueueLoop = () => {
+    void queueLoop?.stop().catch((error: unknown) => {
+      sendErrorLog(options.db, options.config.runtimeId ?? "unknown", error);
+    });
+  };
+  if (queueLoop && !options.once) {
+    await queueLoop.start();
+  }
+  options.signal?.addEventListener("abort", stopQueueLoop, { once: true });
+
   try {
     if (options.once) {
+      if (queueContext) {
+        await runSparkDaemonWorkerIteration({
+          context: queueContext,
+          label: "spark-daemon",
+          concurrency: options.queueConcurrency,
+        });
+        await waitForSparkDaemonActiveTasks(queueContext.active);
+      }
       if (!options.signal?.aborted && canAttemptServerConnection(options.config)) {
-        await runSparkDaemonServerConnection(options);
+        await runSparkDaemonServerConnection({ ...options, invocationRegistry });
       }
       return;
     }
@@ -104,13 +154,18 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
       }
 
       try {
-        await runSparkDaemonServerConnection({ ...options, config });
+        await runSparkDaemonServerConnection({ ...options, config, invocationRegistry });
       } catch (error) {
         sendErrorLog(options.db, config.runtimeId ?? "unknown", error);
         await delayUnlessAborted(1_000, options.signal);
       }
     }
   } finally {
+    options.signal?.removeEventListener("abort", stopQueueLoop);
+    await queueLoop?.stop();
+    if (queueContext) {
+      await waitForSparkDaemonActiveTasks(queueContext.active);
+    }
     if (existsSync(options.paths.pidFile)) {
       rmSync(options.paths.pidFile, { force: true });
     }
@@ -243,8 +298,9 @@ async function runSparkDaemonServerConnection(options: StartSparkDaemonOptions):
         config,
         db: options.db,
         runtimeId,
-        runSparkCommand: options.runSparkCommand ?? runNaviaCommandThroughSpark,
-        cancelSparkInvocation: options.cancelSparkInvocation ?? cancelNaviaSparkInvocation,
+        runSparkCommand: options.runSparkCommand ?? runSparkCommandBridge,
+        cancelSparkInvocation: options.cancelSparkInvocation ?? cancelSparkBridgeInvocation,
+        invocationRegistry: options.invocationRegistry,
         get runtimeSessionId() {
           return runtimeSessionId;
         },
@@ -329,6 +385,7 @@ export interface MessageContext {
   ensureHeartbeat(intervalMs: number): void;
   runSparkCommand: RunSparkCommandFn;
   cancelSparkInvocation: CancelSparkInvocationFn;
+  invocationRegistry?: SparkDaemonInvocationRegistry;
 }
 
 export async function handleServerMessage(
@@ -509,11 +566,14 @@ export async function handleCommand(
       sendJson(ws, commandRejectForUnknownInvocation(route, command.messageId));
       return;
     }
+    const cancelReason = "Spark daemon invocation cancellation requested by server command.";
+    const registryCancelled =
+      context.invocationRegistry?.cancel(invocationId, cancelReason) ?? false;
     const result = await context.cancelSparkInvocation({
       invocationId,
-      reason: "Navia invocation cancellation requested by server command.",
+      reason: cancelReason,
     });
-    if (!result.cancelled) {
+    if (!result.cancelled && !registryCancelled) {
       sendJson(ws, commandRejectForUnknownInvocation(route, command.messageId));
       return;
     }
@@ -525,7 +585,7 @@ export async function handleCommand(
           runtimeInvocationId: invocationId,
           status: "cancelled",
           completedAt: new Date().toISOString(),
-          terminalReason: result.message,
+          terminalReason: result.cancelled ? result.message : cancelReason,
           payload: { commandKind: command.payload.kind },
         },
         { ...route, invocationId },
@@ -567,16 +627,25 @@ export async function handleCommand(
     return;
   }
 
-  await context.runSparkCommand({
-    command,
-    workspace,
-    route,
-    paths: context.paths,
-    db: context.db,
-    emit(message) {
-      sendJson(ws, message);
-    },
+  const invocation = context.invocationRegistry?.start({
+    invocationId: createId("inv"),
+    kind: command.payload.kind,
   });
+  try {
+    await context.runSparkCommand({
+      command,
+      workspace,
+      route: invocation ? { ...route, invocationId: invocation.invocationId } : route,
+      paths: context.paths,
+      db: context.db,
+      ...(invocation ? { invocationId: invocation.invocationId, signal: invocation.signal } : {}),
+      emit(message) {
+        sendJson(ws, message);
+      },
+    });
+  } finally {
+    invocation?.finish();
+  }
 }
 
 function runtimeInvocationIdForCancel(payload: Record<string, unknown> | undefined): string | null {

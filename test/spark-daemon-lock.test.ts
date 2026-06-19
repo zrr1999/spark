@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { acquireSparkDaemonLock, readSparkDaemonLock } from "../apps/spark/src/host/index.ts";
+import {
+  acquireSparkDaemonLock,
+  readSparkDaemonLock,
+} from "../apps/spark-daemon/src/core/index.ts";
 
 void test("Spark daemon lock acquires, rejects duplicate live lock, and releases owner lock", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-lock-"));

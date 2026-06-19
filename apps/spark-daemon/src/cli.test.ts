@@ -1936,6 +1936,7 @@ describe("Spark daemon CLI", () => {
             wsConnected: false,
           },
         ],
+        queue: { inbox: 0, processed: 0, failed: 0 },
       }));
 
       const jsonCapture = createCliIo({ daemonStatusFromService });
@@ -2000,6 +2001,7 @@ describe("Spark daemon CLI", () => {
             wsConnected: true,
           },
         ],
+        queue: { inbox: 0, processed: 0, failed: 0 },
       }));
 
       const capture = createCliIo({ daemonStatusFromService });
@@ -2036,6 +2038,7 @@ describe("Spark daemon CLI", () => {
           { url: "https://navia.example.com/", workspaceCount: 2, wsConnected: true },
           { url: "http://127.0.0.1:5173/", workspaceCount: 1, wsConnected: false },
         ],
+        queue: { inbox: 0, processed: 0, failed: 0 },
       }));
 
       const capture = createCliIo({ daemonStatusFromService });

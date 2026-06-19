@@ -193,6 +193,86 @@ describe("Spark daemon local RPC", () => {
     }
   });
 
+  it("handles daemon-local turn queue submit/list/status over local RPC", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
+    const paths = resolveNaviaPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+
+    try {
+      const submitted = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "turn_submit",
+          method: "turn.submit",
+          params: { sessionId: "session-a", prompt: "continue work" },
+        }),
+        paths,
+        db,
+        undefined,
+      );
+      expect(submitted).toMatchObject({
+        id: "turn_submit",
+        ok: true,
+        result: {
+          task: {
+            type: "session.run",
+            sessionId: "session-a",
+            prompt: "continue work",
+            actor: "spark-daemon-local-rpc",
+          },
+        },
+      });
+
+      const status = await handleLocalRpcLine(
+        JSON.stringify({ id: "daemon_status", method: "daemon.status" }),
+        paths,
+        db,
+        undefined,
+      );
+      expect(status).toMatchObject({
+        id: "daemon_status",
+        ok: true,
+        result: { queue: { inbox: 1, processed: 0, failed: 0 } },
+      });
+
+      const listed = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "queue_list",
+          method: "daemon.queue",
+          params: { state: "inbox" },
+        }),
+        paths,
+        db,
+        undefined,
+      );
+      expect(listed).toMatchObject({
+        id: "queue_list",
+        ok: true,
+        result: {
+          state: "inbox",
+          entries: [
+            {
+              payload: {
+                task: { type: "session.run", sessionId: "session-a", prompt: "continue work" },
+              },
+            },
+          ],
+        },
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("requests daemon shutdown over the local socket", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
     const paths = resolveNaviaPaths({

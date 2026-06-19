@@ -5,6 +5,12 @@ import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { NaviaPaths } from "@zendev-lab/navia-system";
 import {
+  SparkDaemonQueue,
+  type SparkDaemonQueueEntry,
+  type SparkDaemonQueueState,
+  type SparkDaemonTask,
+} from "./core/index.ts";
+import {
   attachWorkspace,
   listWorkspaces,
   planWorkspaceRegistration,
@@ -39,6 +45,21 @@ export interface LocalDaemonStatusResult {
     lastHeartbeatAt?: string;
     lastDisconnectReason?: string;
   }>;
+  queue: Record<SparkDaemonQueueState, number>;
+  observedAt: string;
+}
+
+export interface LocalDaemonQueueResult {
+  state: SparkDaemonQueueState | "all";
+  entries?: SparkDaemonQueueEntry[];
+  byState?: Partial<Record<SparkDaemonQueueState, SparkDaemonQueueEntry[]>>;
+  observedAt: string;
+}
+
+export interface LocalTurnSubmitResult {
+  fileName: string;
+  filePath: string;
+  task: SparkDaemonTask;
   observedAt: string;
 }
 
@@ -59,6 +80,8 @@ interface LocalRpcHandlerOptions {
 type LocalRpcRequest =
   | { id: string; method: "daemon.status" }
   | { id: string; method: "daemon.stop" }
+  | { id: string; method: "daemon.queue"; params: LocalDaemonQueueParams }
+  | { id: string; method: "turn.submit"; params: LocalTurnSubmitParams }
   | { id: string; method: "workspace.list" }
   | { id: string; method: "workspace.register"; params: LocalWorkspaceRegisterParams }
   | { id: string; method: "workspace.attach" | "workspace.stop"; params: { id: string } };
@@ -132,6 +155,32 @@ export async function requestDaemonStatus(paths: NaviaPaths): Promise<LocalDaemo
 
 export async function requestDaemonStop(paths: NaviaPaths): Promise<LocalDaemonStopResult> {
   return localRpcRequest(paths, { id: localRequestId(), method: "daemon.stop" }, daemonStop);
+}
+
+export async function requestDaemonQueue(
+  paths: NaviaPaths,
+  params: Partial<LocalDaemonQueueParams> = {},
+): Promise<LocalDaemonQueueResult> {
+  return localRpcRequest(
+    paths,
+    {
+      id: localRequestId(),
+      method: "daemon.queue",
+      params: localDaemonQueueParams(params),
+    },
+    daemonQueue,
+  );
+}
+
+export async function requestTurnSubmit(
+  paths: NaviaPaths,
+  params: LocalTurnSubmitParams,
+): Promise<LocalTurnSubmitResult> {
+  return localRpcRequest(
+    paths,
+    { id: localRequestId(), method: "turn.submit", params: localTurnSubmitParams(params) },
+    turnSubmit,
+  );
 }
 
 export async function requestWorkspaceRegister(
@@ -253,15 +302,18 @@ export async function handleLocalRpcLine(
     const request = parseLocalRpcRequest(line);
     requestId = request.id;
     switch (request.method) {
-      case "daemon.status":
+      case "daemon.status": {
+        const queue = new SparkDaemonQueue({ paths });
         return {
           id: request.id,
           ok: true,
           result: {
             servers: sparkDaemonServerStatusSummaries(db),
+            queue: await queueCounts(queue),
             observedAt: new Date().toISOString(),
           },
         };
+      }
       case "daemon.stop":
         setTimeout(() => {
           void onStop?.();
@@ -274,6 +326,31 @@ export async function handleLocalRpcLine(
             observedAt: new Date().toISOString(),
           },
         };
+      case "daemon.queue": {
+        const queue = new SparkDaemonQueue({ paths });
+        const result = await queueList(queue, request.params);
+        return { id: request.id, ok: true, result };
+      }
+      case "turn.submit": {
+        const queue = new SparkDaemonQueue({ paths });
+        const entry = await queue.enqueue({
+          type: "session.run",
+          sessionId: request.params.sessionId,
+          prompt: request.params.prompt,
+          ...(request.params.reset !== undefined ? { reset: request.params.reset } : {}),
+          actor: "spark-daemon-local-rpc",
+        });
+        return {
+          id: request.id,
+          ok: true,
+          result: {
+            fileName: entry.fileName,
+            filePath: entry.filePath,
+            task: entry.payload.task,
+            observedAt: new Date().toISOString(),
+          },
+        };
+      }
       case "workspace.list":
         return {
           id: request.id,
@@ -378,6 +455,16 @@ function parseLocalRpcRequest(line: string): LocalRpcRequest {
   if (value.method === "daemon.stop") {
     return { id: value.id, method: value.method };
   }
+  if (value.method === "daemon.queue") {
+    return {
+      id: value.id,
+      method: value.method,
+      params: parseLocalDaemonQueueParams(value.params),
+    };
+  }
+  if (value.method === "turn.submit") {
+    return { id: value.id, method: value.method, params: parseLocalTurnSubmitParams(value.params) };
+  }
   if (value.method === "workspace.list") {
     return { id: value.id, method: value.method };
   }
@@ -400,6 +487,17 @@ function parseLocalRpcRequest(line: string): LocalRpcRequest {
   throw new Error(`Unknown local RPC method: ${value.method}`);
 }
 
+type LocalDaemonQueueParams = {
+  state: SparkDaemonQueueState | "all";
+  limit?: number;
+};
+
+type LocalTurnSubmitParams = {
+  sessionId: string;
+  prompt: string;
+  reset?: boolean;
+};
+
 type LocalWorkspaceRegisterParams = {
   serverUrl: string;
   localPath: string;
@@ -408,6 +506,23 @@ type LocalWorkspaceRegisterParams = {
   displayName?: string;
   profile?: NonNullable<SparkDaemonWorkspace["profile"]>;
 };
+
+function localDaemonQueueParams(
+  params: Partial<LocalDaemonQueueParams> = {},
+): LocalDaemonQueueParams {
+  return {
+    state: params.state ?? "inbox",
+    ...(params.limit !== undefined ? { limit: params.limit } : {}),
+  };
+}
+
+function localTurnSubmitParams(params: LocalTurnSubmitParams): LocalTurnSubmitParams {
+  return {
+    sessionId: params.sessionId,
+    prompt: params.prompt,
+    ...(params.reset !== undefined ? { reset: params.reset } : {}),
+  };
+}
 
 function localWorkspaceRegisterParams(
   params: LocalWorkspaceRegisterRequest,
@@ -419,6 +534,44 @@ function localWorkspaceRegisterParams(
     ...(params.localWorkspaceKey ? { localWorkspaceKey: params.localWorkspaceKey } : {}),
     ...(params.displayName ? { displayName: params.displayName } : {}),
     ...(params.profile ? { profile: params.profile } : {}),
+  };
+}
+
+function parseLocalDaemonQueueParams(value: unknown): LocalDaemonQueueParams {
+  if (value === undefined) {
+    return { state: "inbox" };
+  }
+  if (!isRecord(value)) {
+    throw new Error("Invalid local RPC daemon queue params.");
+  }
+  const rawState = typeof value.state === "string" ? value.state : "inbox";
+  if (
+    rawState !== "inbox" &&
+    rawState !== "processed" &&
+    rawState !== "failed" &&
+    rawState !== "all"
+  ) {
+    throw new Error(`Invalid daemon queue state: ${rawState}`);
+  }
+  const params: LocalDaemonQueueParams = { state: rawState };
+  if (typeof value.limit === "number" && Number.isFinite(value.limit)) {
+    params.limit = Math.max(0, Math.floor(value.limit));
+  }
+  return params;
+}
+
+function parseLocalTurnSubmitParams(value: unknown): LocalTurnSubmitParams {
+  if (!isRecord(value) || typeof value.sessionId !== "string" || typeof value.prompt !== "string") {
+    throw new Error("Invalid local RPC turn submit params.");
+  }
+  const sessionId = value.sessionId.trim();
+  const prompt = value.prompt.trim();
+  if (!sessionId) throw new Error("turn.submit requires sessionId.");
+  if (!prompt) throw new Error("turn.submit requires prompt.");
+  return {
+    sessionId,
+    prompt: value.prompt,
+    ...(typeof value.reset === "boolean" ? { reset: value.reset } : {}),
   };
 }
 
@@ -501,6 +654,37 @@ function daemonStatus(value: unknown): LocalDaemonStatusResult {
   }
   return {
     servers: value.servers.map(daemonServerSummary),
+    queue: queueCountsResult(value.queue),
+    observedAt: typeof value.observedAt === "string" ? value.observedAt : new Date().toISOString(),
+  };
+}
+
+function daemonQueue(value: unknown): LocalDaemonQueueResult {
+  if (!isRecord(value) || !isDaemonQueueState(value.state)) {
+    throw new Error("Invalid local RPC daemon queue result.");
+  }
+  return {
+    state: value.state,
+    ...(Array.isArray(value.entries)
+      ? { entries: value.entries.map((entry) => queueEntry(entry)) }
+      : {}),
+    ...(isRecord(value.byState) ? { byState: queueEntriesByState(value.byState) } : {}),
+    observedAt: typeof value.observedAt === "string" ? value.observedAt : new Date().toISOString(),
+  };
+}
+
+function turnSubmit(value: unknown): LocalTurnSubmitResult {
+  if (
+    !isRecord(value) ||
+    typeof value.fileName !== "string" ||
+    typeof value.filePath !== "string"
+  ) {
+    throw new Error("Invalid local RPC turn submit result.");
+  }
+  return {
+    fileName: value.fileName,
+    filePath: value.filePath,
+    task: validateTurnSubmitTask(value.task),
     observedAt: typeof value.observedAt === "string" ? value.observedAt : new Date().toISOString(),
   };
 }
@@ -513,6 +697,108 @@ function daemonStop(value: unknown): LocalDaemonStopResult {
     stopping: true,
     observedAt: typeof value.observedAt === "string" ? value.observedAt : new Date().toISOString(),
   };
+}
+
+async function queueCounts(
+  queue: SparkDaemonQueue,
+): Promise<Record<SparkDaemonQueueState, number>> {
+  return {
+    inbox: (await queue.list("inbox")).length,
+    processed: (await queue.list("processed")).length,
+    failed: (await queue.list("failed")).length,
+  };
+}
+
+async function queueList(
+  queue: SparkDaemonQueue,
+  params: LocalDaemonQueueParams,
+): Promise<LocalDaemonQueueResult> {
+  const observedAt = new Date().toISOString();
+  if (params.state === "all") {
+    return {
+      state: "all",
+      byState: {
+        inbox: limitEntries(await queue.listEntries("inbox"), params.limit),
+        processed: limitEntries(await queue.listEntries("processed"), params.limit),
+        failed: limitEntries(await queue.listEntries("failed"), params.limit),
+      },
+      observedAt,
+    };
+  }
+  return {
+    state: params.state,
+    entries: limitEntries(await queue.listEntries(params.state), params.limit),
+    observedAt,
+  };
+}
+
+function limitEntries<T>(entries: T[], limit: number | undefined): T[] {
+  if (limit === undefined) return entries;
+  return entries.slice(0, Math.max(0, Math.floor(limit)));
+}
+
+function queueCountsResult(value: unknown): Record<SparkDaemonQueueState, number> {
+  if (!isRecord(value)) return { inbox: 0, processed: 0, failed: 0 };
+  return {
+    inbox: typeof value.inbox === "number" ? value.inbox : 0,
+    processed: typeof value.processed === "number" ? value.processed : 0,
+    failed: typeof value.failed === "number" ? value.failed : 0,
+  };
+}
+
+function queueEntriesByState(
+  value: Record<string, unknown>,
+): Partial<Record<SparkDaemonQueueState, SparkDaemonQueueEntry[]>> {
+  const byState: Partial<Record<SparkDaemonQueueState, SparkDaemonQueueEntry[]>> = {};
+  if (Array.isArray(value.inbox)) byState.inbox = value.inbox.map((entry) => queueEntry(entry));
+  if (Array.isArray(value.processed)) {
+    byState.processed = value.processed.map((entry) => queueEntry(entry));
+  }
+  if (Array.isArray(value.failed)) byState.failed = value.failed.map((entry) => queueEntry(entry));
+  return byState;
+}
+
+function queueEntry(value: unknown): SparkDaemonQueueEntry {
+  if (
+    !isRecord(value) ||
+    typeof value.fileName !== "string" ||
+    typeof value.filePath !== "string"
+  ) {
+    throw new Error("Invalid local RPC daemon queue entry.");
+  }
+  if (!isRecord(value.payload) || typeof value.payload.enqueuedAt !== "string") {
+    throw new Error("Invalid local RPC daemon queue payload.");
+  }
+  return {
+    fileName: value.fileName,
+    filePath: value.filePath,
+    payload: {
+      enqueuedAt: value.payload.enqueuedAt,
+      task: validateTurnSubmitTask(value.payload.task),
+    },
+  };
+}
+
+function validateTurnSubmitTask(value: unknown): SparkDaemonTask {
+  if (!isRecord(value) || value.type !== "session.run") {
+    throw new Error("Invalid local RPC daemon task.");
+  }
+  if (typeof value.sessionId !== "string" || typeof value.prompt !== "string") {
+    throw new Error("Invalid local RPC daemon session task.");
+  }
+  return {
+    type: "session.run",
+    sessionId: value.sessionId,
+    prompt: value.prompt,
+    ...(typeof value.reset === "boolean" ? { reset: value.reset } : {}),
+    ...(typeof value.actor === "string" ? { actor: value.actor } : {}),
+    ...(typeof value.note === "string" ? { note: value.note } : {}),
+    ...(typeof value.input === "string" ? { input: value.input } : {}),
+  };
+}
+
+function isDaemonQueueState(value: unknown): value is SparkDaemonQueueState | "all" {
+  return value === "inbox" || value === "processed" || value === "failed" || value === "all";
 }
 
 function daemonServerSummary(value: unknown): LocalDaemonStatusResult["servers"][number] {

@@ -314,15 +314,16 @@ identity. The hard cut should rename it rather than wrapping it:
 
 ### Make Spark CLI a daemon client
 
-Spark CLI should no longer construct an independent execution host for ordinary
-turns once the daemon is available. It should:
+Spark CLI no longer constructs an independent execution host for ordinary
+turns. The hard-cut client behavior is:
 
-1. resolve/start the daemon;
-2. open local IPC;
-3. submit turn/session requests;
-4. render streamed events;
-5. send cancellation/answers/steering through daemon IPC;
-6. never append durable session records concurrently with daemon execution.
+1. `spark` TUI uses an injected daemon responder instead of `createSparkCliHostServices()`;
+2. `spark --print <prompt>` submits a headless `turn.submit` request;
+3. `spark daemon start/status/submit/queue` starts/wakes and talks to the daemon local IPC socket;
+4. `spark daemon enqueue/run` are retired in favor of `submit/start`;
+5. durable session appends remain daemon-owned, with the TUI acting as presentation/input only.
+
+Streamed event rendering, cancellation, answers, and steering still need follow-up IPC methods beyond the initial submit/status/queue client path.
 
 ### Native headless role execution is part of completion
 

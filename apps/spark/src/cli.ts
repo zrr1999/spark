@@ -1,9 +1,10 @@
 import {
+  createSparkDaemonNativeResponder,
+  handleSparkDaemonCliCommand,
   parseSparkDaemonCliArgs,
   runSparkDaemonCliCommand,
   type SparkDaemonCliCommand,
 } from "./cli/daemon.ts";
-import { createSparkCliHostServices } from "./host/bootstrap.ts";
 import { runNativeSparkTui } from "./native-tui.ts";
 
 export interface SparkCliArgs {
@@ -13,6 +14,7 @@ export interface SparkCliArgs {
 
 export type SparkCliCommand =
   | { kind: "help" }
+  | { kind: "print"; prompt: string }
   | { kind: "tui"; initialMessage?: string }
   | { kind: "daemon"; command: SparkDaemonCliCommand };
 
@@ -29,6 +31,11 @@ export function parseSparkCliCommand(argv: string[]): SparkCliCommand {
   }
   if (argv[0] === "daemon")
     return { kind: "daemon", command: parseSparkDaemonCliArgs(argv.slice(1)) };
+  if (argv[0] === "-p" || argv[0] === "--print") {
+    const prompt = argv.slice(1).join(" ").trim();
+    if (!prompt) throw new Error("spark --print requires a prompt");
+    return { kind: "print", prompt };
+  }
   const initialMessage = argv.join(" ").trim();
   return { kind: "tui", initialMessage: initialMessage || undefined };
 }
@@ -42,9 +49,21 @@ export async function runSparkCli(argv: string[] = process.argv.slice(2)): Promi
     case "daemon":
       await runSparkDaemonCliCommand(command.command);
       return;
+    case "print": {
+      const result = await handleSparkDaemonCliCommand({
+        action: "submit",
+        json: true,
+        sessionId: `spark-print-${Date.now().toString(36)}`,
+        prompt: command.prompt,
+      });
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
     case "tui": {
-      const services = await createSparkCliHostServices({ cwd: process.cwd(), hasUI: true });
-      await runNativeSparkTui({ initialMessage: command.initialMessage, services });
+      await runNativeSparkTui({
+        initialMessage: command.initialMessage,
+        responder: createSparkDaemonNativeResponder(),
+      });
       return;
     }
   }
@@ -52,7 +71,7 @@ export async function runSparkCli(argv: string[] = process.argv.slice(2)): Promi
 
 function printHelp(): void {
   console.log(
-    `spark - Spark-first native TUI host\n\nUsage:\n  spark [initial message]\n  spark daemon status [--json]\n  spark daemon enqueue --session <id> --prompt <text> [--json]\n  spark daemon queue [--state inbox|processed|failed|all] [--json]\n  spark daemon run [--once]\n  spark --help\n\nRuns a Spark-owned terminal UI by default. Daemon commands are local-only: no gateway/HTTP/service surface is provided.`,
+    `spark - Spark daemon client\n\nUsage:\n  spark [initial message]\n  spark --print <prompt>\n  spark daemon status [--json]\n  spark daemon start [--json]\n  spark daemon submit --session <id> --prompt <text> [--json]\n  spark daemon queue [--state inbox|processed|failed|all] [--json]\n  spark --help\n\nRuns terminal UI rendering by default, but all prompts are submitted to the Spark daemon over local IPC.`,
   );
 }
 

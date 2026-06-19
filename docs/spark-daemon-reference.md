@@ -1,13 +1,13 @@
-# Spark daemon-only reference study
+# Spark daemon core reference study
 
-This note captures the nyakore daemon/CLI patterns that Spark CLI should reuse, and the gateway pieces we intentionally exclude for the current daemon-only direction.
+This note captures the nyakore daemon/CLI patterns that Spark reuses for the single Spark daemon core.
 
 ## Scope decision
 
-Spark should implement a **local daemon**, not a gateway:
+Spark implements one **Spark daemon** runtime core:
 
-- daemon: local lock + file queue + worker loop + detached session-run executor.
-- not gateway: no HTTP server, no bearer token, no `/jobs/*` API, no systemd/launchd service install in this slice.
+- daemon core: local lock + local IPC + file queue + worker loop + service lifecycle.
+- cockpit adapter: server WebSocket protocol, workspace registration, command routing, cancellation, and projection emission.
 - not Pi RPC: do not wrap `pi --mode rpc`; Spark already owns `SparkHostRuntime`, `SparkAgentLoop`, providers, sessions, skills, and extension loading.
 
 ## nyakore daemon mechanics to reuse
@@ -28,7 +28,7 @@ Spark mapping:
 
 ```text
 SPARK_HOME/runtime/daemon.lock
-apps/spark/src/host/daemon/lock.ts
+apps/spark-daemon/src/core/lock.ts
 ```
 
 Keep the same JSON payload shape plus a `cwd`/`workspaceHash` field if useful for status output.
@@ -57,7 +57,7 @@ Spark should start smaller:
 Spark mapping:
 
 ```text
-apps/spark/src/host/daemon/runtime-worker.ts
+apps/spark-daemon/src/core/runtime-worker.ts
 createSparkDaemonWorkerContext({ sparkHome, cwd? })
 runSparkDaemonWorkerLoop({ context, isStopped, label })
 ```
@@ -80,7 +80,7 @@ Spark mapping:
 SPARK_HOME/daemon/inbox/*.json
 SPARK_HOME/daemon/processed/*.json
 SPARK_HOME/daemon/failed/*.json
-apps/spark/src/host/daemon/queue.ts
+apps/spark-daemon/src/core/queue.ts
 ```
 
 Initial Spark task schema should be only:
@@ -113,7 +113,7 @@ It refuses to launch two queue items for the same session concurrently. That is 
 Spark mapping:
 
 ```text
-apps/spark/src/host/daemon/queue-worker.ts
+apps/spark-daemon/src/core/queue-worker.ts
 createSparkDaemonActiveTasks(): { files: Set<string>; sessions: Set<string> }
 ```
 
@@ -131,7 +131,7 @@ nyakore uses a small `createSignals()` helper from [`src/app/signals.ts`](https:
 Spark mapping:
 
 ```text
-apps/spark/src/host/daemon/signals.ts
+apps/spark-daemon/src/core/signals.ts
 createSparkDaemonSignals(): { stopped, stop(), dispose() }
 ```
 
@@ -150,31 +150,31 @@ registerQueueCommands(cli)
 registerGatewayCommands(cli)
 ```
 
-Spark should not necessarily add `cac` now, but should adopt the same separation:
+Spark should not necessarily add `cac` now, but should keep this separation around the hard-cut daemon client surface:
 
 ```text
-apps/spark/src/cli.ts              thin root
-apps/spark/src/cli/commands.ts     command router/registration
-apps/spark/src/cli/daemon.ts       daemon command handlers
+apps/spark/src/cli.ts              thin root; TUI/headless prompts submit to daemon IPC
+apps/spark/src/cli/daemon.ts       Spark CLI client for `spark daemon ...`
 apps/spark/src/cli/shared.ts       args/output helpers
+apps/spark/src/native-tui.ts       terminal renderer; input goes through an injected daemon responder
 ```
 
-Current Spark CLI (`apps/spark/src/cli.ts`) only parses `--help` and treats everything else as initial TUI message. That is now too small for daemon work. We should preserve default TUI behavior but add explicit subcommands.
+Current Spark CLI preserves default TUI behavior, adds `spark --print <prompt>` for headless submit, and routes `spark daemon ...` through the daemon local IPC socket rather than owning queue execution.
 
 ### Compound command normalization
 
 nyakore's [`src/cli/command-argv.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/cli/command-argv.ts) rewrites multi-word commands like `gateway service install` into one command token for `cac`.
 
-Spark can use a smaller version:
+Spark uses a smaller hard-cut version:
 
 ```text
-spark daemon run
+spark daemon start
 spark daemon status
-spark daemon enqueue
+spark daemon submit
 spark daemon queue
 ```
 
-If Spark does not adopt `cac`, a hand-written parser can still normalize the first two or three words into `{ command: "daemon.run" }`.
+`run` and `enqueue` are retired public verbs; `submit` is the machine-readable turn ingress and `start` wakes the single Spark daemon service.
 
 ### Shared output helpers
 
@@ -206,31 +206,32 @@ nyakore's [`src/cli/queue.ts`](https://github.com/ShigureLab/nyakore/blob/main/s
 Spark mapping:
 
 ```text
-apps/spark/src/cli/daemon.ts       register/parse daemon commands
-apps/spark/src/cli/daemon-ops.ts   handleDaemonRun/Status/Enqueue/Queue
+apps/spark/src/cli/daemon.ts       parse daemon commands, start/wake daemon, call local IPC
+apps/spark-daemon/src/local-rpc.ts single daemon IPC schema (`daemon.status`, `daemon.queue`, `turn.submit`)
 ```
 
-Recommended commands:
+Current commands:
 
 ```text
-spark daemon run [--spark-home <dir>] [--cwd <dir>]
+spark daemon start [--json]
 spark daemon status [--json]
-spark daemon enqueue --session <id> -p <prompt> [--json]
+spark daemon submit --session <id> -p <prompt> [--reset] [--json]
 spark daemon queue [--state inbox|processed|failed|all] [--limit <n>] [--json]
+spark --print <prompt>            # headless `turn.submit` path
 ```
 
 ### Runtime commands
 
-nyakore's [`src/cli/runtime.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/cli/runtime.ts) contains the worker-only `daemon` command and many operator commands. Spark should avoid copying the broad runtime command surface. Keep the daemon group narrow and leave interactive/session commands under existing `/sessions` and TUI flows until there is evidence they need CLI equivalents.
+nyakore's [`src/cli/runtime.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/cli/runtime.ts) contains the worker-only `daemon` command and many operator commands. Spark should avoid copying the broad runtime command surface. Keep the daemon group narrow and route interactive/session commands through the single daemon service as concrete requirements land.
 
 ## nyakore gateway pieces to exclude
 
-These are useful references but should not be implemented in the current Spark daemon slice:
+These are useful references but should not become a second runtime concept:
 
-- [`src/app/gateway.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/app/gateway.ts): combines HTTP gateway, job runner, channels, and worker loop. Spark is explicitly not doing gateway now.
+- [`src/app/gateway.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/app/gateway.ts): combines HTTP gateway, job runner, channels, and worker loop. Spark folds local service ownership into the daemon; cockpit projection remains an adapter, not execution truth.
 - [`src/gateway/server.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/gateway/server.ts): `GET /health`, `POST /jobs/exec`, `GET /jobs/:id`, `GET /jobs/:id/wait`; exclude HTTP routes and bearer-token auth.
 - [`src/gateway/job-store.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/gateway/job-store.ts): job records for HTTP API. Spark daemon can use queue task files instead; no separate gateway job abstraction yet.
-- [`src/gateway/service.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/gateway/service.ts): systemd/launchd service installation; exclude from this phase.
+- [`src/gateway/service.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/gateway/service.ts): systemd/launchd service installation; Spark uses `spark-daemon` service lifecycle rather than a second gateway service.
 - [`src/cli/gateway.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/cli/gateway.ts): client commands for remote gateway health/exec/job/wait/service; exclude, except as a warning about command sprawl.
 
 ## Spark implementation sketch
@@ -238,7 +239,8 @@ These are useful references but should not be implemented in the current Spark d
 ### Proposed files
 
 ```text
-apps/spark/src/host/daemon/
+apps/spark-daemon/src/core/
+├── index.ts
 ├── lock.ts
 ├── queue.ts
 ├── queue-worker.ts
@@ -247,12 +249,13 @@ apps/spark/src/host/daemon/
 ├── signals.ts
 └── types.ts
 
-apps/spark/src/cli/
-├── args.ts
-├── commands.ts
+apps/spark-daemon/src/
+├── cli.ts
 ├── daemon.ts
-├── daemon-ops.ts
-└── shared.ts
+├── local-rpc.ts
+└── service.ts
+
+apps/spark/src/cli/daemon.ts       # Spark CLI daemon IPC client; no local queue worker
 ```
 
 ### Daemon worker context
@@ -273,11 +276,11 @@ Use `createSparkCliHostServices()` from `apps/spark/src/host/bootstrap.ts` for h
 
 ```text
 runSparkDaemonWorkerLoop
-  acquire daemon lock
+  single spark-daemon service process owns daemon.lock
   while not stopped:
     didQueueWork = processSparkDaemonQueueBatch()
     if no work: sleep(250ms)
-  release daemon lock
+  stop queue loop and release daemon.lock
 ```
 
 Future hooks can insert schedule/wake sweeps before queue processing, but the first version should stay queue-only.
@@ -305,13 +308,13 @@ A future `SparkAgentSession` facade should sit between daemon and raw `SparkAgen
 - `test/spark-daemon-lock.test.ts`: lock acquire/release, duplicate lock fails, stale lock recovery.
 - `test/spark-daemon-queue.test.ts`: enqueue/list/read/processed/failed paths under temp `SPARK_HOME`.
 - `test/spark-daemon-worker.test.ts`: queue batch launches at most one task per session and moves failures to failed.
-- `test/spark-cli-daemon.test.ts`: parser and handler coverage for `spark daemon run/status/enqueue/queue`.
+- `test/spark-daemon-cli.test.ts`: parser and handler coverage for `spark daemon start/status/submit/queue`, `spark --print`, and daemon-backed TUI responders.
 - later integration: fake provider queued `session.run` produces a saved JSONL assistant message.
 
 ## Open implementation choices
 
 No user decision is needed for the next task, but these should be kept visible:
 
-- Use `SPARK_HOME/daemon/*` instead of `.spark/daemon/*` by default so one daemon can work across workspaces if passed explicit cwd/session. Tests can override `sparkHome`.
+- Use the Spark daemon data directory for service-owned queue files; tests can still override `sparkHome`/`daemonRoot` for isolated queue checks.
 - Keep queue files append-only/rename-based; do not introduce SQLite or HTTP job IDs until a concrete remote-control requirement appears.
 - Keep daemon command names under `spark daemon ...`; avoid `gateway` naming entirely.

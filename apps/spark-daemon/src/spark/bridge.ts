@@ -81,20 +81,21 @@ import {
 
 export type ServerCommandEnvelope = ReturnType<typeof serverCommandEnvelopeSchema.parse>;
 
-export interface NaviaSparkBridgeInput {
+export interface SparkDaemonBridgeInput {
   command: ServerCommandEnvelope;
   workspace: SparkDaemonWorkspace;
   route: RouteContext;
   paths: NaviaPaths;
   db: DatabaseSync;
   emit(message: unknown): void;
+  invocationId?: string;
   signal?: AbortSignal;
   taskGraphStore?: TaskGraphStoreLike;
   artifactStore?: ArtifactStoreLike;
   executeSparkTask?: ExecuteSparkTaskFn;
 }
 
-export interface NaviaSparkBridgeResult {
+export interface SparkDaemonBridgeResult {
   invocationId: string;
   taskRuntimeId: string;
   status: "succeeded" | "failed" | "cancelled" | "timed_out";
@@ -104,21 +105,21 @@ export interface NaviaSparkBridgeResult {
   outputArtifactIds: string[];
 }
 
-export interface CancelNaviaSparkInvocationInput {
+export interface CancelSparkBridgeInvocationInput {
   invocationId: string;
   reason?: string;
 }
 
-export interface CancelNaviaSparkInvocationResult {
+export interface CancelSparkBridgeInvocationResult {
   invocationId: string;
   cancelled: boolean;
   message: string;
 }
 
-export type RunSparkCommandFn = (input: NaviaSparkBridgeInput) => Promise<NaviaSparkBridgeResult>;
+export type RunSparkCommandFn = (input: SparkDaemonBridgeInput) => Promise<SparkDaemonBridgeResult>;
 export type CancelSparkInvocationFn = (
-  input: CancelNaviaSparkInvocationInput,
-) => Promise<CancelNaviaSparkInvocationResult>;
+  input: CancelSparkBridgeInvocationInput,
+) => Promise<CancelSparkBridgeInvocationResult>;
 
 interface SparkTaskBinding {
   graph: TaskGraphLike;
@@ -161,10 +162,10 @@ async function loadSparkRuntimeModules(): Promise<SparkRuntimeModules> {
   };
 }
 
-export async function runNaviaCommandThroughSpark(
-  input: NaviaSparkBridgeInput,
-): Promise<NaviaSparkBridgeResult> {
-  const invocationId = createId("inv");
+export async function runSparkCommandBridge(
+  input: SparkDaemonBridgeInput,
+): Promise<SparkDaemonBridgeResult> {
+  const invocationId = input.invocationId ?? createId("inv");
   const command = input.command.payload;
   const taskRuntimeId = taskRuntimeIdForCommand(command, invocationId);
   const startedAt = new Date().toISOString();
@@ -247,7 +248,7 @@ export async function runNaviaCommandThroughSpark(
       claim: {
         kind: "role-run",
         sessionId: `spark-daemon:${input.route.runtimeId}`,
-        runName: `navia-${invocationId}`,
+        runName: `spark-daemon-${invocationId}`,
         leaseMs: DEFAULT_SPARK_TIMEOUT_MS,
       },
       onHeartbeat: async (graph: TaskGraphLike) => {
@@ -342,20 +343,20 @@ export async function runNaviaCommandThroughSpark(
   }
 }
 
-export async function cancelNaviaSparkInvocation(
-  input: CancelNaviaSparkInvocationInput,
-): Promise<CancelNaviaSparkInvocationResult> {
+export async function cancelSparkBridgeInvocation(
+  input: CancelSparkBridgeInvocationInput,
+): Promise<CancelSparkBridgeInvocationResult> {
   const spark = await loadSparkRuntimeModules();
   const killed = await spark.killActiveSparkRoleRunProcesses({
-    runName: `navia-${input.invocationId}`,
-    reason: input.reason ?? "Navia invocation cancellation requested.",
+    runName: `spark-daemon-${input.invocationId}`,
+    reason: input.reason ?? "Spark daemon invocation cancellation requested.",
   });
   return {
     invocationId: input.invocationId,
     cancelled: killed.some((result) => result.signalSent || result.closed),
     message:
       killed.length === 0
-        ? "No active Spark role-run process matched the Navia invocation."
+        ? "No active Spark role-run process matched the Spark daemon invocation."
         : `Cancellation signalled for ${killed.length} Spark role-run process(es).`,
   };
 }
@@ -368,15 +369,15 @@ async function ensureSparkTaskBinding(input: {
   prompt: string;
 }): Promise<SparkTaskBinding> {
   const result = await input.store.update((graph) => {
-    const projectKey = input.projectId ?? "navia-local-project";
+    const projectKey = input.projectId ?? "spark-daemon-local-project";
     const project =
       graph
         .projects()
-        .find((candidate) => candidate.description.includes(`naviaProjectId=${projectKey}`)) ??
+        .find((candidate) => candidate.description.includes(`cockpitProjectId=${projectKey}`)) ??
       graph.createProject({
         title: `Navia project ${projectKey}`,
-        description: `Navia-projected Spark project. naviaProjectId=${projectKey}`,
-        purpose: "Execute Navia dashboard tasks through Spark runtime primitives.",
+        description: `Spark daemon projected Spark project. cockpitProjectId=${projectKey}`,
+        purpose: "Execute cockpit-requested tasks through Spark runtime primitives.",
       });
     const taskName = stableTaskName(input.taskRuntimeId);
     const existing = graph.tasks(project.ref).find((task) => task.name === taskName);
@@ -393,12 +394,12 @@ async function ensureSparkTaskBinding(input: {
         plan: {
           objective: input.prompt,
           contextRefs: [],
-          constraints: ["Execute from Spark daemon bridge; preserve Navia protocol projections."],
-          nonGoals: ["Do not write Navia SQLite as Spark source of truth."],
+          constraints: ["Execute from Spark daemon bridge; preserve cockpit protocol projections."],
+          nonGoals: ["Do not write cockpit SQLite as Spark source of truth."],
           successCriteria: [
-            "Spark role-run reaches a terminal status and emits Navia projections.",
+            "Spark role-run reaches a terminal status and emits cockpit projections.",
           ],
-          evidenceRequired: ["Spark role-run artifact and Navia invocation projection."],
+          evidenceRequired: ["Spark role-run artifact and Spark daemon invocation projection."],
           items: [
             { title: "Run the requested task through Spark runtime." },
             { title: "Report terminal status and evidence." },
@@ -583,7 +584,7 @@ function stableTaskName(taskRuntimeId: string): string {
     .toLowerCase()
     .replaceAll(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
-  return normalized ? `navia-${normalized}` : "navia-task";
+  return normalized ? `spark-daemon-${normalized}` : "spark-daemon-task";
 }
 
 function mimeForArtifactFormat(format: string): string {

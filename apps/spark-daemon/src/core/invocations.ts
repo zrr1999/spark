@@ -1,0 +1,104 @@
+/** Active invocation registry shared by daemon queue and command routing. */
+
+export interface SparkDaemonInvocationRecord {
+  invocationId: string;
+  kind: string;
+  startedAt: string;
+  sessionId?: string;
+  reason?: string;
+}
+
+export interface SparkDaemonInvocationHandle extends SparkDaemonInvocationRecord {
+  readonly signal: AbortSignal;
+  finish(): void;
+  cancel(reason?: string): boolean;
+}
+
+interface TrackedInvocation extends SparkDaemonInvocationRecord {
+  controller: AbortController;
+}
+
+export class SparkDaemonInvocationRegistry {
+  private readonly active = new Map<string, TrackedInvocation>();
+  private readonly activeSessions = new Map<string, Set<string>>();
+
+  start(input: {
+    invocationId: string;
+    kind: string;
+    sessionId?: string | null;
+  }): SparkDaemonInvocationHandle {
+    if (this.active.has(input.invocationId)) {
+      throw new Error(`Spark daemon invocation already active: ${input.invocationId}`);
+    }
+    const record: TrackedInvocation = {
+      invocationId: input.invocationId,
+      kind: input.kind,
+      startedAt: new Date().toISOString(),
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      controller: new AbortController(),
+    };
+    this.active.set(record.invocationId, record);
+    if (record.sessionId) {
+      const sessions = this.activeSessions.get(record.sessionId) ?? new Set<string>();
+      sessions.add(record.invocationId);
+      this.activeSessions.set(record.sessionId, sessions);
+    }
+    return this.handleFor(record);
+  }
+
+  cancel(invocationId: string, reason?: string): boolean {
+    const record = this.active.get(invocationId);
+    if (!record) return false;
+    record.reason = reason;
+    record.controller.abort(reason);
+    return true;
+  }
+
+  has(invocationId: string): boolean {
+    return this.active.has(invocationId);
+  }
+
+  hasActiveSession(sessionId: string): boolean {
+    return (this.activeSessions.get(sessionId)?.size ?? 0) > 0;
+  }
+
+  snapshot(): SparkDaemonInvocationRecord[] {
+    return [...this.active.values()].map((record) => ({
+      invocationId: record.invocationId,
+      kind: record.kind,
+      startedAt: record.startedAt,
+      ...(record.sessionId ? { sessionId: record.sessionId } : {}),
+      ...(record.reason ? { reason: record.reason } : {}),
+    }));
+  }
+
+  private finish(invocationId: string): void {
+    const record = this.active.get(invocationId);
+    if (!record) return;
+    this.active.delete(invocationId);
+    if (!record.sessionId) return;
+    const sessions = this.activeSessions.get(record.sessionId);
+    if (!sessions) return;
+    sessions.delete(invocationId);
+    if (sessions.size === 0) this.activeSessions.delete(record.sessionId);
+  }
+
+  private handleFor(record: TrackedInvocation): SparkDaemonInvocationHandle {
+    let finished = false;
+    return {
+      invocationId: record.invocationId,
+      kind: record.kind,
+      startedAt: record.startedAt,
+      ...(record.sessionId ? { sessionId: record.sessionId } : {}),
+      get signal() {
+        return record.controller.signal;
+      },
+      finish: () => {
+        if (finished) return;
+        finished = true;
+        this.finish(record.invocationId);
+      },
+      cancel: (reason?: string) => this.cancel(record.invocationId, reason),
+    };
+  }
+}

@@ -114,7 +114,7 @@ export function formatSparkCliHuman(value: unknown): string {
   return lines.join("\n");
 }
 
-const BOOLEAN_OPTIONS = new Set(["help", "json", "once"]);
+const BOOLEAN_OPTIONS = new Set(["help", "json", "once", "reset"]);
 
 function normalizeOptionName(name: string): string {
   switch (name) {

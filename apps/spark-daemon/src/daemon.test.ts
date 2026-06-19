@@ -15,6 +15,7 @@ import {
   type MessageContext,
   type ServerSocket,
 } from "./daemon.js";
+import { SparkDaemonInvocationRegistry, SparkDaemonQueue } from "./core/index.ts";
 import type { CancelSparkInvocationFn, RunSparkCommandFn } from "./spark/bridge.js";
 import { openSparkDaemonDatabase } from "./store/schema.js";
 import { addWorkspace, stopWorkspace } from "./store/workspaces.js";
@@ -292,6 +293,39 @@ describe("Spark daemon handleCommand task.start.request", () => {
     }
   });
 
+  it("runs the daemon-owned queue loop inside the service process", async () => {
+    const harness = makeHarness();
+    try {
+      const queue = new SparkDaemonQueue({ paths: harness.paths });
+      await queue.enqueue({ type: "session.run", sessionId: "queued-session", prompt: "hello" });
+      const shutdown = new AbortController();
+      const executed: string[] = [];
+      const running = startSparkDaemon({
+        paths: harness.paths,
+        db: harness.db,
+        config: {
+          installationId: "install-test",
+          displayName: "Test daemon",
+        },
+        signal: shutdown.signal,
+        queue,
+        executeQueueTask: async (task) => {
+          executed.push(`${task.sessionId}:${task.prompt}`);
+          shutdown.abort();
+        },
+        queuePollIntervalMs: 5,
+      });
+
+      await running;
+
+      expect(executed).toEqual(["queued-session:hello"]);
+      expect(await queue.list("processed")).toHaveLength(1);
+      expect(existsSync(harness.paths.pidFile)).toBe(false);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("streams ack, running, log chunks, and succeeded updates from the Spark bridge", async () => {
     const harness = makeHarness();
     try {
@@ -521,7 +555,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
         async (input) => {
           expect(input).toMatchObject({
             invocationId,
-            reason: "Navia invocation cancellation requested by server command.",
+            reason: "Spark daemon invocation cancellation requested by server command.",
           });
           return {
             invocationId,
@@ -544,6 +578,75 @@ describe("Spark daemon handleCommand task.start.request", () => {
           terminalReason: "Cancellation signalled for 1 Spark role-run process(es).",
         },
       });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("uses the shared invocation registry to cancel an active task.start command", async () => {
+    const harness = makeHarness();
+    try {
+      const ws = new CapturingSocket();
+      const invocationRegistry = new SparkDaemonInvocationRegistry();
+      const started = deferred<void>();
+      let invocationId = "";
+      let observedAbort = false;
+      const context: MessageContext = {
+        ...makeContext(
+          harness,
+          async (input) => {
+            invocationId = input.invocationId ?? "";
+            started.resolve();
+            await new Promise<void>((resolve) => {
+              input.signal?.addEventListener(
+                "abort",
+                () => {
+                  observedAbort = true;
+                  resolve();
+                },
+                { once: true },
+              );
+            });
+            return {
+              invocationId,
+              taskRuntimeId: `task-${invocationId}`,
+              status: "cancelled",
+              outputArtifactIds: [],
+            };
+          },
+          async (input) => ({
+            invocationId: input.invocationId,
+            cancelled: false,
+            message: "no process matched; registry cancellation owns this invocation",
+          }),
+        ),
+        invocationRegistry,
+      };
+
+      const startPromise = handleCommand(ws, buildTaskStartEnvelope(harness.workspace.id), context);
+      await started.promise;
+      expect(invocationRegistry.has(invocationId)).toBe(true);
+
+      await handleCommand(ws, buildCancelEnvelope(harness.workspace.id, invocationId), context);
+      await startPromise;
+
+      expect(observedAbort).toBe(true);
+      expect(invocationRegistry.has(invocationId)).toBe(false);
+      expect(ws.sent).toContainEqual(
+        expect.objectContaining({
+          type: "runtime.command.ack",
+          payload: expect.objectContaining({ accepted: true, invocationId }),
+        }),
+      );
+      expect(ws.sent).toContainEqual(
+        expect.objectContaining({
+          type: "invocation.updated",
+          payload: expect.objectContaining({
+            status: "cancelled",
+            runtimeInvocationId: invocationId,
+          }),
+        }),
+      );
     } finally {
       harness.cleanup();
     }
@@ -638,3 +741,11 @@ describe("Spark daemon handleCommand task.start.request", () => {
     }
   });
 });
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+}

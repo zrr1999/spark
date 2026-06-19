@@ -20,11 +20,14 @@ import {
   writeSparkDaemonConfig,
 } from "./config.js";
 import { sparkDaemonVersion, startSparkDaemon } from "./daemon.js";
+import { acquireSparkDaemonLock } from "./core/index.ts";
 import {
   LocalRpcUnavailableError,
   localRpcSocketPath,
+  requestDaemonQueue,
   requestDaemonStop,
   requestDaemonStatus,
+  requestTurnSubmit,
   requestWorkspaceAttach,
   requestWorkspaceList,
   requestWorkspaceRegister,
@@ -55,6 +58,8 @@ export interface CliIo {
   startService?: typeof startSparkDaemonService;
   daemonStatusFromService?: typeof requestDaemonStatus;
   daemonStopFromService?: typeof requestDaemonStop;
+  daemonQueueFromService?: typeof requestDaemonQueue;
+  turnSubmitToService?: typeof requestTurnSubmit;
   listWorkspacesFromService?: typeof requestWorkspaceList;
   registerWorkspaceInService?: typeof requestWorkspaceRegister;
   attachWorkspaceInService?: typeof requestWorkspaceAttach;
@@ -197,6 +202,7 @@ async function status(paths: ReturnType<typeof resolveNaviaPaths>, io: CliIo): P
         refreshTokenExpiresAt: config.refreshTokenExpiresAt,
         workspaceCount,
         daemonRunning: daemon.running,
+        queue: daemon.running ? daemon.queue : undefined,
         pidFile: paths.pidFile,
       },
       null,
@@ -208,6 +214,7 @@ async function status(paths: ReturnType<typeof resolveNaviaPaths>, io: CliIo): P
 
 async function start(paths: ReturnType<typeof resolveNaviaPaths>): Promise<number> {
   ensureNaviaPathDirs(paths);
+  const lock = await acquireSparkDaemonLock({ runtimeDir: paths.runtimeDir, cwd: process.cwd() });
   const db = openSparkDaemonDatabase(paths);
   const shutdown = new AbortController();
   const onShutdownSignal = () => {
@@ -233,6 +240,7 @@ async function start(paths: ReturnType<typeof resolveNaviaPaths>): Promise<numbe
     process.off("SIGTERM", onShutdownSignal);
     await localRpc.close();
     db.close();
+    await lock.release();
   }
 }
 
@@ -306,8 +314,12 @@ async function daemon(
     }
     case "logs":
       return await logs(paths, args, io);
+    case "queue":
+      return await daemonQueue(paths, args, io);
+    case "submit":
+      return await daemonSubmit(paths, args, io);
     default:
-      throw new Error("Usage: spark-daemon daemon <status|start|stop|restart|logs>");
+      throw new Error("Usage: spark-daemon daemon <status|start|stop|restart|logs|queue|submit>");
   }
 }
 
@@ -353,7 +365,8 @@ async function daemonStatus(
       `  socket           ${status.socketPath}\n` +
       `  state db         ${status.stateDbPath}\n` +
       `  started          ${status.startedAt}\n` +
-      `  registered       ${workspaceCount} workspaces across ${status.servers.length} servers\n`,
+      `  registered       ${workspaceCount} workspaces across ${status.servers.length} servers\n` +
+      `  queue            ${status.queue.inbox} inbox · ${status.queue.processed} processed · ${status.queue.failed} failed\n`,
   );
   for (const server of status.servers) {
     io.stdout.write(
@@ -361,6 +374,62 @@ async function daemonStatus(
     );
   }
   return 0;
+}
+
+async function daemonQueue(
+  paths: ReturnType<typeof resolveNaviaPaths>,
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  ensureNaviaPathDirs(paths);
+  const flags = parseFlags(args);
+  const state = readDaemonQueueState(flags.state ?? "inbox");
+  const limit = flags.limit ? Number(flags.limit) : undefined;
+  const result = await (io.daemonQueueFromService ?? requestDaemonQueue)(paths, { state, limit });
+  if (flags.json === "true") {
+    io.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return 0;
+  }
+  if (result.state === "all") {
+    for (const queueState of ["inbox", "processed", "failed"] as const) {
+      io.stdout.write(`${queueState}:\n`);
+      for (const entry of result.byState?.[queueState] ?? []) {
+        io.stdout.write(`  ${entry.fileName} ${entry.payload.task.type}\n`);
+      }
+    }
+    return 0;
+  }
+  for (const entry of result.entries ?? []) {
+    io.stdout.write(`${entry.fileName} ${entry.payload.task.type}\n`);
+  }
+  return 0;
+}
+
+async function daemonSubmit(
+  paths: ReturnType<typeof resolveNaviaPaths>,
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  ensureNaviaPathDirs(paths);
+  const flags = parseFlags(args);
+  const sessionId = flags.session?.trim();
+  const prompt = (flags.prompt ?? positionalArgs(args).join(" ")).trim();
+  if (!sessionId) throw new Error("spark-daemon daemon submit requires --session <id>");
+  if (!prompt) throw new Error("spark-daemon daemon submit requires --prompt <text>");
+  const result = await (io.turnSubmitToService ?? requestTurnSubmit)(paths, { sessionId, prompt });
+  if (flags.json === "true") {
+    io.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return 0;
+  }
+  io.stdout.write(`queued ${result.fileName}\n`);
+  return 0;
+}
+
+function readDaemonQueueState(value: string): "inbox" | "processed" | "failed" | "all" {
+  if (value === "inbox" || value === "processed" || value === "failed" || value === "all") {
+    return value;
+  }
+  throw new Error(`invalid daemon queue state: ${value}`);
 }
 
 function daemonServerConnectionLabel(server: {
@@ -402,6 +471,7 @@ type DaemonStatus =
         lastHeartbeatAt?: string;
         lastDisconnectReason?: string;
       }>;
+      queue: { inbox: number; processed: number; failed: number };
     };
 
 async function buildDaemonStatus(
@@ -423,6 +493,7 @@ async function buildDaemonStatus(
       stateDbPath: paths.databasePath,
       startedAt: statSync(paths.pidFile).mtime.toISOString(),
       servers: status.servers,
+      queue: status.queue,
     };
   } catch (error) {
     return {
@@ -1469,6 +1540,8 @@ Commands:
   stop
   restart
   logs [--follow] [--lines <n>]
+  queue [--state inbox|processed|failed|all] [--limit <n>] [--json]
+  submit --session <id> --prompt <text> [--json]
 
 Example:
   spark-daemon daemon status --json

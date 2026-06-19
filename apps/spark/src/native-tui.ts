@@ -13,7 +13,6 @@ import {
   type SelectListTheme,
 } from "@earendil-works/pi-tui";
 
-import { submitToSparkAgent, type SparkCliHostServices } from "./host/bootstrap.ts";
 import type { SparkKeybindingContext, SparkKeybindings } from "./host/keybindings.ts";
 import type {
   SparkHostCustomMessage,
@@ -21,11 +20,7 @@ import type {
   SparkHostRenderTheme,
   SparkHostUiTransport,
 } from "./host/types.ts";
-import {
-  createSparkModelPickerFromCustomUi,
-  type SparkModelSelectorTheme,
-  type SparkModelSelectorTuiLike,
-} from "./tui/model-selector.ts";
+import type { SparkModelSelectorTheme, SparkModelSelectorTuiLike } from "./tui/model-selector.ts";
 
 export type SparkNativeMessageRole =
   | "system"
@@ -625,16 +620,14 @@ export function createSparkNativeUiTransport(
 
 export interface RunNativeSparkTuiOptions {
   initialMessage?: string;
-  services?: SparkCliHostServices;
+  responder?: SparkNativeResponder;
 }
 
 export async function runNativeSparkTui(input?: string | RunNativeSparkTuiOptions): Promise<void> {
   const options = typeof input === "string" ? { initialMessage: input } : (input ?? {});
   const terminal = new ProcessTerminal();
   const tui = new TUI(terminal, true);
-  const session = new SparkNativeSession(
-    options.services ? (message) => submitToSparkAgent(options.services!, message) : undefined,
-  );
+  const session = new SparkNativeSession(options.responder);
 
   let resolveDone: (() => void) | undefined;
   const done = new Promise<void>((resolve) => {
@@ -642,28 +635,7 @@ export async function runNativeSparkTui(input?: string | RunNativeSparkTuiOption
   });
   const stop = () => resolveDone?.();
 
-  for (const diagnostic of options.services?.diagnostics ?? []) {
-    session.addCustomMessage({
-      customType: "diagnostic",
-      content: `${diagnostic.type}: ${diagnostic.message}`,
-      display: true,
-    });
-  }
-
-  const app = new SparkNativeTuiApp(tui, session, stop, {
-    keybindings: options.services?.keybindings,
-    messageRenderers: options.services
-      ? new Map(
-          options.services.runtime
-            .listMessageRenderers()
-            .map(({ customType, renderer }) => [customType, renderer]),
-        )
-      : undefined,
-  });
-  if (options.services) {
-    options.services.runtime.setUiTransport(createSparkNativeUiTransport(app, session));
-    options.services.modelSelector.setPicker(createSparkModelPickerFromCustomUi(app));
-  }
+  const app = new SparkNativeTuiApp(tui, session, stop);
   tui.addChild(app);
   tui.setFocus(app);
   terminal.setTitle("Spark");
