@@ -342,7 +342,7 @@ function buildEnrollCommand(
   setup: PendingWorkspaceSetup,
 ) {
   return [
-    "navia ws register",
+    "spark-daemon workspace register",
     `--server-url ${shellQuote(serverOrigin)}`,
     `--token ${shellQuote(refreshToken)}`,
     `--name ${shellQuote(setup.name)}`,

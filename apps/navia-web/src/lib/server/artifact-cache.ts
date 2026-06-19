@@ -69,7 +69,7 @@ export function defaultArtifactCacheRoot() {
 
 /**
  * Ensure a preview-cache record exists for the artifact. Lazily materializes
- * inline content from the runner-supplied `contentRef` when feasible, and
+ * inline content from the Spark-daemon-supplied `contentRef` when feasible, and
  * marks explicit `too_large`, `unsupported_binary`, or `error` states when
  * inline materialization is not possible.
  */

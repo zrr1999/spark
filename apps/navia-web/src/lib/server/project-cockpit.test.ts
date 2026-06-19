@@ -131,7 +131,7 @@ describe("project cockpit projection", () => {
     db.close();
   });
 
-  it("includes owner binding, recent commands, delivery outcomes, and runner log chunks", () => {
+  it("includes owner binding, recent commands, delivery outcomes, and Spark daemon log chunks", () => {
     const { db, now, runtimeWorkspaceBindingId, workspace, project } = setupProject();
     const pendingCommand = queueCommandForWorkspaceOwner(db, {
       workspaceId: workspace.id,

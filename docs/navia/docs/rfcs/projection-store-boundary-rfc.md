@@ -18,7 +18,7 @@ route runtime protocol messages, reconnect safely, and cache artifact previews.
 | Workspaces, local owner bindings, runtime registrations, auth sessions | Navia server/runtime registration flow | Authoritative local setup and routing state | `workspaces.slug`, `runtime_workspace_bindings(runtime_id, local_workspace_key)`, active owner binding unique index |
 | Navia cockpit projects | Navia server UI/product flow | Authoritative dashboard grouping and command-routing records in `projects`; these rows are **not** Spark task graph projects. Spark project refs may appear only as metadata/projection links. | `projects(workspace_id, slug)` plus `metadata_json.sourceOfTruth = "navia-cockpit-routing"` for user-created rows |
 | Workspace resources and profile inventory | Navia workspace profile/import flow | Authoritative local setup/catalog state in `resources`, `project_resources`, `agent_specs`, `workspace_profile_sources`, and `workspace_profile_git_access` | Workspace/profile uniqueness and import upserts |
-| Command queue and delivery attempts | Navia server runtime protocol broker | Authoritative delivery bookkeeping in `commands` and `command_deliveries`; command execution state remains Spark-owned after runner ack/start | `commands(workspace_id, idempotency_key)` and delivery id |
+| Command queue and delivery attempts | Navia server runtime protocol broker | Authoritative delivery bookkeeping in `commands` and `command_deliveries`; command execution state remains Spark-owned after Spark daemon ack/start | `commands(workspace_id, idempotency_key)` and delivery id |
 | Spark tasks/TODOs/plans/runs | Spark task graph APIs and `.spark/projects.json` / run stores | Projection only: `task_graph_snapshots`, `task_graph_clusters`, `task_graph_tasks`, `task_graph_dependencies` | Runtime message receipt plus `task_graph_snapshots(runtime_workspace_binding_id, runtime_snapshot_id)` |
 | Invocations / role-run status | Spark runtime/role-run state | Projection only: `mirrored_invocations`, `invocation_events`, `invocation_log_chunks` | Runtime message receipt plus `mirrored_invocations(runtime_workspace_binding_id, runtime_invocation_id)` and `invocation_log_chunks(invocation_id, stream, sequence)` |
 | Artifacts / evidence body | Spark artifact store (`@zendev-lab/pi-artifacts`) | Projection/cache metadata: `artifacts`, `artifact_links`, optional `artifact_cache_blobs` preview/body cache | Runtime message receipt plus artifact id upsert and link replacement |
@@ -48,7 +48,7 @@ route runtime protocol messages, reconnect safely, and cache artifact previews.
 
 ## Implementation hooks
 
-- `apps/navia-runner/src/spark/bridge.ts` emits Spark-backed Navia protocol
+- `apps/spark-daemon/src/spark/bridge.ts` emits Spark-backed Navia protocol
   envelopes with Spark refs in payload/content refs.
 - `apps/navia-web/src/lib/server/runtime-ws.ts` records runtime message receipts
   before acknowledging projection ingestion, and skips already-seen messages on

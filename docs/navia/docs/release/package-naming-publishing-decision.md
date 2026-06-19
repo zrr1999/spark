@@ -10,10 +10,10 @@ Navia packages use the shared `@zendev-lab/*` npm scope with explicit
 | Package | Release classification | Rationale |
 | --- | --- | --- |
 | `@zendev-lab/spark-daemon` | Public daemon package when release gates pass | Owns the `spark-daemon` service binary used by Spark daemon integration. |
-| `@zendev-lab/navia-protocol` | Public or semi-public integration contract | Protocol schemas and typed identifiers are the safest shared API for external runners, tests, and fixtures. |
+| `@zendev-lab/navia-protocol` | Public or semi-public integration contract | Protocol schemas and typed identifiers are the safest shared API for external Spark daemons, tests, and fixtures. |
 | `@zendev-lab/navia-db` | Public only if downstream server embedders need migrations; otherwise internal initially | SQLite projection/cache implementation detail. Publishing creates migration-support obligations. |
 | `@zendev-lab/navia-domain` | Internal initially | Shared domain utility boundary; no standalone user install story yet. |
-| `@zendev-lab/navia-system` | Internal initially unless runner/web split requires it | Local path/private-file helpers for monorepo packages. |
+| `@zendev-lab/navia-system` | Internal initially unless Spark daemon/web split requires it | Local path/private-file helpers for monorepo packages. |
 | `@zendev-lab/navia-ui` | Internal/private initially | Svelte UI primitives tied to the Navia cockpit design contract. |
 | `@zendev-lab/navia-web` | Private | SvelteKit app; keep private until packaged server distribution is finalized. |
 | root `spark` workspace | Private | pnpm workspace aggregator, not an npm package. |
@@ -46,7 +46,7 @@ under the Spark monorepo.
 
 Deferred. A single package may simplify installation later, but it would blur the
 current high-cohesion boundaries between protocol, projection DB, domain helpers,
-system helpers, UI, runner, and web app. Revisit after the packaged server
+system helpers, UI, Spark daemon, and web app. Revisit after the packaged server
 story is clear.
 
 ## Required follow-up before public npm release

@@ -8,11 +8,11 @@
     "online": "online",
     "unknown": "unknown",
     "unknownSize": "unknown size",
-    "boundToRunner": "bound to a local service",
-    "reportedByConnectedRunners": "Reported by connected local services.",
-    "reportedByRunnerHello": "Reported by local service hello snapshots.",
+    "boundToRunner": "bound to the Spark daemon",
+    "reportedByConnectedRunners": "Reported by connected Spark daemons.",
+    "reportedByRunnerHello": "Reported by Spark daemon hello snapshots.",
     "fallback": {
-      "runner": "local service",
+      "runner": "Spark daemon",
       "server": "server",
       "workspaceScope": "Workspace scope",
       "workspaceEvidence": "Workspace evidence",
@@ -167,7 +167,7 @@
       "pendingInbox": "Pending inbox",
       "pendingInboxHint": "Awaiting operator responses",
       "workspaces": "Workspaces",
-      "runnerConnections": "Local connections",
+      "runnerConnections": "Spark daemon connections",
       "workspaceBindings": "Workspace directories"
     },
     "panels": {
@@ -175,8 +175,8 @@
       "workspaces": "Workspaces",
       "sqliteBacked": "Projection cache",
       "settingsConnections": "Settings · Connections",
-      "runnerHealth": "Local service health",
-      "runnerOwnedTruth": "Spark owns execution truth",
+      "runnerHealth": "Spark daemon health",
+      "runnerOwnedTruth": "Spark daemon owns execution truth",
       "workspaceBindings": "Workspace bindings",
       "appendOnlyAudit": "Append-only audit log",
       "recentEvents": "Recent events"
@@ -247,7 +247,7 @@
     },
     "runners": {
       "eyebrow": "Workspace registration",
-      "title": "Local registrations",
+      "title": "Spark daemon registrations",
       "createToken": "Create registration token",
       "tokenCreatedAria": "Created workspace registration token",
       "tokenCreatedTitle": "Registration token created",
@@ -256,13 +256,13 @@
       "summaryAria": "Workspace registration summary",
       "metrics": {
         "online": "Online connections",
-        "registered": "Registered services",
+        "registered": "Registered daemons",
         "registeredHint": "Known local installations",
         "bindings": "Local workspace directories"
       },
-      "registeredTitle": "Registered local services",
-      "emptyTitle": "No local services registered yet",
-      "emptyBody": "Generate a registration command, then run navia ws register on the target machine.",
+      "registeredTitle": "Registered Spark daemons",
+      "emptyTitle": "No Spark daemons registered yet",
+      "emptyBody": "Generate a registration command, then run spark-daemon workspace register on the target machine.",
       "installationMissing": "installation id not reported",
       "tokensTitle": "Registration tokens",
       "noTokensTitle": "No registration tokens yet",
@@ -272,8 +272,8 @@
       "revoke": "Revoke"
     },
     "runnerEmpty": {
-      "title": "No local services registered yet",
-      "body": "Waiting for a local service to register through",
+      "title": "No Spark daemons registered yet",
+      "body": "Waiting for a Spark daemon to register through",
       "code": "/api/v1/runtime/*"
     },
     "bindingsEmpty": "No workspace directories reported yet.",
@@ -354,11 +354,11 @@
       "done": "Done"
     },
     "command": {
-      "noRunnerOwner": "No local service owner",
+      "noRunnerOwner": "No Spark daemon owner",
       "workspaceUnavailable": "Workspace unavailable",
       "queueTask": "Queue task",
       "ownerPrefix": "Owner:",
-      "offlinePending": "offline commands stay pending until the local service reconnects to the Spark bridge",
+      "offlinePending": "offline commands stay pending until the Spark daemon reconnects",
       "metaLabel": "Spark command",
       "title": "Start a task",
       "noOwner": "No owner",
@@ -371,11 +371,11 @@
       "shownSuffix": "shown",
       "empty": "No task start command queued for this project yet.",
       "delivery": {
-        "pendingOnline": "Pending — sending to local service",
-        "pendingOffline": "Pending — waiting for local service to reconnect",
+        "pendingOnline": "Pending — sending to Spark daemon",
+        "pendingOffline": "Pending — waiting for Spark daemon to reconnect",
         "sent": "Delivered — waiting for ack or reject",
-        "acked": "Acknowledged by runner bridge",
-        "rejected": "Rejected by runner bridge",
+        "acked": "Acknowledged by Spark daemon bridge",
+        "rejected": "Rejected by Spark daemon bridge",
         "failed": "Delivery failed",
         "cancelled": "Delivery cancelled",
         "none": "No delivery record",
@@ -425,7 +425,7 @@
     },
     "formMessages": {
       "taskRequired": "Enter a task title and prompt.",
-      "queued": "Task queued for the owning local service.",
+      "queued": "Task queued for the owning Spark daemon.",
       "queueFailed": "Could not queue the task."
     }
   },
@@ -481,8 +481,8 @@
       "archive": "Archive",
       "recordedTitle": "Response recorded",
       "statusPrefix": "Status:",
-      "runnerAcked": "local service acked",
-      "waitingAck": "waiting for local service ack",
+      "runnerAcked": "Spark daemon acked",
+      "waitingAck": "waiting for Spark daemon ack",
       "closedTitle": "Request closed",
       "closedBody": "This inbox item is no longer pending."
     },
@@ -639,7 +639,7 @@
       "aria": "Artifact metadata",
       "source": "Source",
       "size": "Size",
-      "runner": "Local service",
+      "runner": "Spark daemon",
       "previewCache": "Preview cache"
     },
     "provenance": {
@@ -791,7 +791,7 @@
       "offlineHint": "Stale-connection sweep is not enabled yet"
     },
     "table": {
-      "runner": "Local service",
+      "runner": "Spark daemon",
       "installation": "Installation",
       "status": "Status",
       "lastSeen": "Last seen",
@@ -799,14 +799,14 @@
       "updated": "Updated"
     },
     "runner": {
-      "kicker": "Local service protocol",
-      "title": "Registered local services",
+      "kicker": "Spark daemon protocol",
+      "title": "Registered Spark daemons",
       "badge": "/api/v1/runtime/*",
-      "emptyTitle": "No local services registered yet",
-      "emptyBody": "Generate a registration command from this page, then run navia ws register against",
+      "emptyTitle": "No Spark daemons registered yet",
+      "emptyBody": "Generate a registration command from this page, then run spark-daemon workspace register against",
       "installationMissing": "installation id not reported",
       "protocolPending": "protocol pending",
-      "routesLabel": "Local service protocol routes"
+      "routesLabel": "Spark daemon protocol routes"
     },
     "setup": {
       "kicker": "Registration setup",
@@ -814,17 +814,17 @@
       "steps": [
         {
           "title": "Create a workspace registration token",
-          "description": "Mint a one-time workspace registration token from the local owner session and exchange it for local service credentials.",
+          "description": "Mint a one-time workspace registration token from the local owner session and exchange it for Spark daemon credentials.",
           "status": "ready"
         },
         {
           "title": "Start the Spark daemon",
-          "description": "The local service owns the server WebSocket and workspace registry, then invokes Spark runtime primitives for task, artifact, and ask/review projections.",
+          "description": "The Spark daemon owns the server WebSocket and workspace registry, then invokes Spark runtime primitives for task, artifact, and ask/review projections.",
           "status": "planned"
         },
         {
           "title": "Connect thin agent plugins",
-          "description": "Pi, Codex, Claude Code, and future adapters talk to the local service over local IPC; they do not connect to Navia directly.",
+          "description": "Pi, Codex, Claude Code, and future adapters talk to the Spark daemon over local IPC; they do not connect to Navia directly.",
           "status": "planned"
         }
       ]
@@ -851,7 +851,7 @@
     "introAria": "Navia setup intro",
     "eyebrow": "Spark local cockpit",
     "title": "Bring your local workspaces into a single precise cockpit.",
-    "lede": "The browser only talks to the local Navia server. Spark runtime state owns execution, artifacts, and task graphs; Navia renders projections.",
+    "lede": "The browser only talks to the local Navia server. Spark daemon owns execution, artifacts, and task graphs; Navia renders projections.",
     "features": {
       "workspaceOverview": "Workspace-first overview",
       "humanDecisions": "Human decisions without timeouts",

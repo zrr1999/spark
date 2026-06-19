@@ -5,7 +5,7 @@ Date: 2026-05-21
 
 ## Summary
 
-Navia v0.1 stores communication, projections, audit, sessions, and artifact-cache metadata in SQLite. Spark-owned truth remains outside the server in `.spark` stores and `@zendev-lab/pi-artifacts`; `apps/navia-runner` bridges task execution into Spark runtime primitives while Navia's SQLite projection cache mirrors task graphs, invocations, asks/reviews, and artifacts for the cockpit.
+Navia v0.1 stores communication, projections, audit, sessions, and artifact-cache metadata in SQLite. Spark-owned truth remains outside the server in `.spark` stores and `@zendev-lab/pi-artifacts`; `apps/spark-daemon` bridges task execution into Spark runtime primitives while Navia's SQLite projection cache mirrors task graphs, invocations, asks/reviews, and artifacts for the cockpit.
 
 This RFC freezes the first concrete SQLite schema shape so development can start with explicit migrations instead of ad-hoc tables.
 
@@ -30,7 +30,7 @@ This RFC freezes the first concrete SQLite schema shape so development can start
 | Migrations/config          | `schema_migrations`, `app_settings`                                                                                   |
 | Local auth                 | `users`, `sessions`                                                                                                   |
 | Workspace/project          | `workspaces`, `projects`, `resources`, `project_resources`, `agent_specs`                                             |
-| Runner connection/protocol | `runtime_connections`, `runtime_tokens`, `runtime_sessions`, `runtime_workspace_bindings`, `workspace_owner_bindings` |
+| Spark daemon connection/protocol | `runtime_connections`, `runtime_tokens`, `runtime_sessions`, `runtime_workspace_bindings`, `workspace_owner_bindings` |
 | Commands/delivery          | `commands`, `command_deliveries`                                                                                      |
 | Human interaction          | `human_requests`, `human_responses`, `inbox_items`, `asks`, `reviews`                                                 |
 | Task graph projections     | `task_graph_snapshots`, `task_graph_clusters`, `task_graph_tasks`, `task_graph_dependencies`                          |
@@ -156,7 +156,7 @@ CREATE TABLE agent_specs (
 
 Workspace resources, agent specs, and workspace artifacts can exist before any project.
 
-### Runner connection/protocol
+### Spark daemon connection/protocol
 
 ```sql
 CREATE TABLE runtime_connections (
@@ -268,7 +268,7 @@ CREATE TABLE command_deliveries (
 );
 ```
 
-Command lifecycle is communication state. Runner invocation lifecycle is mirrored separately.
+Command lifecycle is communication state. Spark daemon invocation lifecycle is mirrored separately.
 
 ### Human interaction
 
@@ -504,7 +504,7 @@ CREATE INDEX artifact_cache_blobs_eviction_idx
   ON artifact_cache_blobs(is_preview, pin_reason, last_accessed_at, expires_at, size_bytes);
 ```
 
-`artifact_cache_blobs.cache_path` must stay under the XDG server artifact cache, normally `${XDG_CACHE_HOME:-~/.cache}/navia/server/artifacts`. Cleanup may remove cached files and mark rows `evicted`; it never deletes canonical runner content.
+`artifact_cache_blobs.cache_path` must stay under the XDG server artifact cache, normally `${XDG_CACHE_HOME:-~/.cache}/navia/server/artifacts`. Cleanup may remove cached files and mark rows `evicted`; it never deletes canonical Spark daemon content.
 
 ### Audit/events
 
@@ -552,7 +552,7 @@ CREATE INDEX artifacts_project_kind_idx ON artifacts(project_id, kind, created_a
 ## Transaction rules
 
 - Workspace creation + owner binding selection is one transaction.
-- Runner registration with an existing installation id converges in one transaction.
+- Spark daemon registration with an existing installation id converges in one transaction.
 - Human response creation + inbox resolution + response delivery state update is one transaction.
 - Task graph snapshot ingestion + normalized projection replacement + event append is one transaction.
 - Invocation terminal update + event/log/artifact linkage is one transaction where practical.

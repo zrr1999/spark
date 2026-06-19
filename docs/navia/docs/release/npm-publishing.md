@@ -1,8 +1,8 @@
 # npm publishing
 
-Navia's current npm publish surface is the runner and shared packages. The recommended staged policy and rename/collapse trade-off analysis live in [package-naming-publishing-decision.md](./package-naming-publishing-decision.md).
+Navia's current npm publish surface is the Spark daemon and shared packages. The recommended staged policy and rename/collapse trade-off analysis live in [package-naming-publishing-decision.md](./package-naming-publishing-decision.md).
 
-- `@zendev-lab/navia-runner`
+- `@zendev-lab/spark-daemon`
 - `@zendev-lab/navia-protocol`
 - `@zendev-lab/navia-system`
 - `@zendev-lab/navia-db`
@@ -18,7 +18,7 @@ pnpm release:check
 pnpm pack:check
 ```
 
-Use `pnpm release:smoke` before a release candidate when the runner smoke should also run.
+Use `pnpm release:smoke` before a release candidate when the Spark daemon smoke should also run.
 
 ## Publish
 
@@ -26,7 +26,7 @@ Confirm the npm account owns the `@zendev-lab` scope before publishing.
 
 ```bash
 pnpm login
-pnpm -r --filter @zendev-lab/navia-protocol --filter @zendev-lab/navia-system --filter @zendev-lab/navia-db --filter @zendev-lab/navia-domain --filter @zendev-lab/navia-ui --filter @zendev-lab/navia-runner publish --access public
+pnpm -r --filter @zendev-lab/navia-protocol --filter @zendev-lab/navia-system --filter @zendev-lab/navia-db --filter @zendev-lab/navia-domain --filter @zendev-lab/navia-ui --filter @zendev-lab/spark-daemon publish --access public
 ```
 
 ## Release decisions still required

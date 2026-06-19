@@ -257,7 +257,7 @@ export const artifactProjectionPayloadSchema = z.object({
       hash: z.string().optional(),
       mime: z.string().min(1).optional(),
       sizeBytes: z.number().int().nonnegative().optional(),
-      runnerAvailable: z.boolean().default(true),
+      daemonAvailable: z.boolean().default(true),
       serverCacheUploadUrl: z.string().min(1).optional(),
       serverProxyUrl: z.string().min(1).optional(),
     })

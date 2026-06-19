@@ -452,7 +452,7 @@ async function projectSparkArtifacts(input: {
         hash: artifact.hash,
         mime: mimeForArtifactFormat(artifact.format),
         sizeBytes: Buffer.byteLength(serializedPreview, "utf8"),
-        runnerAvailable: true,
+        daemonAvailable: true,
       },
       provenance: {
         runtimeInvocationId: input.invocationId,

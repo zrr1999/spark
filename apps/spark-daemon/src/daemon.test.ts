@@ -153,7 +153,7 @@ function emitFakeSparkLifecycle(
             ? `# ✅ Task succeeded\n\n${outputText}`
             : `# ⚠️ Task failed\n\n${options.errorMessage}`,
       },
-      contentAvailability: { runnerAvailable: true, sizeBytes: 1, mime: "text/markdown" },
+      contentAvailability: { daemonAvailable: true, sizeBytes: 1, mime: "text/markdown" },
       provenance: {
         runtimeInvocationId: invocationId,
         status: options.status,
@@ -408,7 +408,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
           format: string;
           source: string;
           contentRef: { inlineMarkdown?: string; runtimePathRef?: string };
-          contentAvailability?: { runnerAvailable: boolean; sizeBytes?: number; mime?: string };
+          contentAvailability?: { daemonAvailable: boolean; sizeBytes?: number; mime?: string };
           provenance: Record<string, unknown>;
           links: { targetKind: string; targetId: string; relation: string }[];
         };
@@ -422,7 +422,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
       expect(projection.payload.contentRef.runtimePathRef).toMatch(/^file:\/\//);
       expect(projection.payload.contentRef.inlineMarkdown).toContain("Task succeeded");
       expect(projection.payload.contentRef.inlineMarkdown).toContain("Hello world");
-      expect(projection.payload.contentAvailability?.runnerAvailable).toBe(true);
+      expect(projection.payload.contentAvailability?.daemonAvailable).toBe(true);
       expect(projection.payload.provenance).toMatchObject({
         runtimeInvocationId: invocationId,
         status: "succeeded",

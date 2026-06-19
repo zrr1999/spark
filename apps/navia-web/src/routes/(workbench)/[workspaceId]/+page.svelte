@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
-  import { runnerDisplayStatus, type RunnerDisplayStatus } from "$lib/runner-status";
+  import { daemonDisplayStatus, type DaemonDisplayStatus } from "$lib/daemon-status";
   import { workspacePath } from "$lib/workspace-routes";
 
   let { data } = $props();
@@ -17,7 +17,7 @@
         binding.status === "available" && binding.runtimeStatus === "online",
     ),
   );
-  const runnerStatusOrder: RunnerDisplayStatus[] = [
+  const runnerStatusOrder: DaemonDisplayStatus[] = [
     "online",
     "registered",
     "offline",
@@ -26,7 +26,7 @@
   ];
 
   function countRunners(status: (typeof runnerStatusOrder)[number]) {
-    return data.runnerConnections.filter((runner) => runnerDisplayStatus(runner) === status)
+    return data.runnerConnections.filter((runner) => daemonDisplayStatus(runner) === status)
       .length;
   }
 
@@ -212,7 +212,7 @@
     {:else}
       <div class="connection-list">
         {#each data.runnerConnections as runner}
-          {@const displayStatus = runnerDisplayStatus(runner)}
+          {@const displayStatus = daemonDisplayStatus(runner)}
           <article class="connection-row {displayStatus}">
             <div class="connection-dot" aria-hidden="true"></div>
             <div>

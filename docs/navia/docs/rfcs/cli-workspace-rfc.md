@@ -10,29 +10,29 @@ local workspace CLI: how a user registers a workspace with a Navia server,
 inspects local workspace state, pauses an attached workspace, and manages
 the local Navia service when troubleshooting.
 
-The CLI lives entirely on the local-service side of the
-`runner-protocol-rfc.md:1` boundary. It does not authenticate against
+The CLI lives entirely on the Spark daemon side of the
+`spark-daemon-protocol-rfc.md:1` boundary. It does not authenticate against
 servers as an owner and does not write to server-owned tables. Instead,
 `ws register` presents a user-facing workspace registration token to the
-local service. The token carries a server-side grant to create or link
-one server-visible workspace and bind it to this local service. For v0.1
+Spark daemon. The token carries a server-side grant to create or link
+one server-visible workspace and bind it to this Spark daemon. For v0.1
 this registration is treated as permanent, with no removal command.
 
 The CLI is almost stateless. It does not persist a `default workspace`,
 does not maintain user preferences in v0.1, and resolves the workspace
 to act on from `--workspace` flag or `cwd` only. Persistent state lives
-in the local runner daemon's SQLite database and in the daemon's
+in the local Spark daemon daemon's SQLite database and in the daemon's
 outbound WebSocket sessions to servers.
 
 This RFC depends on:
 
 - `architecture-sketch.md` for the workspace/project ownership model and
   the workspace profile shape.
-- `runner-protocol-rfc.md` for runner-server enrollment, outbound WS
+- `spark-daemon-protocol-rfc.md` for Spark daemon-server enrollment, outbound WS
   semantics, capability summary, and the v0.1 single-owner-binding rule.
 - `data-model-rfc.md` for server-side table layout. The CLI does not
   touch server-side tables; this dependency is referenced only to
-  contrast with the new runner-local schema.
+  contrast with the new daemon-local schema.
 
 It does not cover the `session`, `auth`, `models`, `bench`, or
 `--mode rpc` command groups. Those will be defined in companion RFCs.
@@ -44,16 +44,16 @@ It does not cover the `session`, `auth`, `models`, `bench`, or
 - Keep the user-facing command surface to a small, learnable set:
   register, list, show, stop; plus a `daemon` subgroup for explicit
   process management.
-- Define a runner-local SQLite schema for workspace registrations,
+- Define a daemon-local SQLite schema for workspace registrations,
   workspace registration grants, server-scoped runtime credentials, and
   server bindings, separate from the server schema.
 - Define a workspace status state machine that distinguishes "user
   paused", "server unreachable", and "daemon not running" without
   blurring them into a single `offline`.
-- Keep wire/protocol vocabulary (`runtime`, `binding`, `runner`)
+- Keep wire/protocol vocabulary (`runtime`, `binding`, `Spark daemon`)
   out of the user-facing workspace CLI. Those terms remain valid in
   protocol/database sections of this RFC and companion RFCs, but the
-  CLI presents them as workspace, local service, and connection.
+  CLI presents them as workspace, Spark daemon, and connection.
 
 ## Non-goals
 
@@ -68,7 +68,7 @@ It does not cover the `session`, `auth`, `models`, `bench`, or
 - Daemon process lifecycle internals (idle exit timing, supervised
   service install, lockfile format). The CLI surface for daemon is
   defined here; internals are deferred to a `daemon-lifecycle-rfc.md`.
-- Remote runner attach (CLI on machine A talking to daemon on machine
+- Remote Spark daemon attach (CLI on machine A talking to daemon on machine
   B). v0.1 only supports a local daemon over the local unix socket.
 - A CLI configuration file. v0.1 does not introduce
   `~/.config/navia/cli.toml`; the CLI is stateless. Future RFCs may
@@ -80,7 +80,7 @@ It does not cover the `session`, `auth`, `models`, `bench`, or
 ## Product boundary
 
 The product term in CLI output and help text is **workspace**. The
-terms `runner`, `binding`, and `runtime` do not appear in the
+terms `Spark daemon`, `binding`, and `runtime` do not appear in the
 user-facing `ws` command surface. When the CLI needs to expose the
 implementation boundary, it says **local Navia service** and
 **connection**. The `daemon` subgroup is explicit troubleshooting
@@ -91,10 +91,10 @@ RFC:
 
 - CLI: presents a command surface, talks to the local daemon over a
   unix socket. No persistent state of its own in v0.1.
-- Daemon: a single local process per host. Owns the runner-local
+- Daemon: a single local process per host. Owns the daemon-local
   SQLite database and one outbound WebSocket session per server it has
   registered workspaces with. Stable across CLI invocations.
-- Server: implements `runner-protocol-rfc.md`. Server-side owner
+- Server: implements `spark-daemon-protocol-rfc.md`. Server-side owner
   authentication, generic workspace lifecycle, and projection for the
   web UI are out of scope for this RFC. The server does consume the
   workspace registration grant, create or link the server-visible
@@ -102,15 +102,15 @@ RFC:
   credentials; the daemon stores only server-scoped runtime credentials
   and workspace grant metadata needed for reconnect/reconciliation.
 
-The unit of registration is the **workspace**, not the runner.
-`runner-protocol-rfc.md:21` allows one runner to manage multiple
+The unit of registration is the **workspace**, not the Spark daemon.
+`spark-daemon-protocol-rfc.md:21` allows one Spark daemon to manage multiple
 workspaces; v0.1 presents that as "register a workspace" every time.
 Internally, the first workspace registered with a server may also
 establish or refresh a daemon-level runtime credential for that server.
 Subsequent workspaces on the same server reuse that runtime credential
 and consume only a workspace registration grant. There is no
 user-visible "register the service globally first, then add workspaces"
-two-step flow. A local service with no registered workspaces is simply
+two-step flow. A Spark daemon with no registered workspaces is simply
 idle.
 
 ## Workspace permanence
@@ -118,7 +118,7 @@ idle.
 Successful `ws register` is permanent for v0.1.
 
 - The CLI has no `ws rm` or equivalent.
-- The runner-local schema has no `archived_at` / `removed_at`
+- The daemon-local schema has no `archived_at` / `removed_at`
   columns.
 - A registered workspace can be `stop`-ed (paused, see `ws stop`)
   but the row, the path, the profile reference, and the local token
@@ -127,7 +127,7 @@ Successful `ws register` is permanent for v0.1.
   daemon does not need to handle a "workspace removed by server"
   event. When v0.1's server learns to delete workspaces, the
   protocol addition (`workspace.removed` event plus reconnect-time
-  reconciliation) and the corresponding runner-side cleanup will be
+  reconciliation) and the corresponding Spark daemon-side cleanup will be
   defined in a follow-up RFC.
 
 The success message of `ws register` should make permanence visible
@@ -163,7 +163,7 @@ the candidates with their `<name>@<server>` form.
 ## Command surface
 
 ```text
-navia workspace register
+spark-daemon workspace register
    [path]
    --server-url <url>
    --token <workspace-registration-token>
@@ -171,29 +171,29 @@ navia workspace register
    [--profile <path-or-git-url>]
    [--yes]
 
-navia workspace                                 # alias for `ls`
-navia workspace ls    [--json] [--all] [--full]
-navia workspace show  [name[@server]] [--json]
-navia workspace stop  <name[@server]>  [--yes]
+spark-daemon workspace                                 # alias for `ls`
+spark-daemon workspace ls    [--json] [--all] [--full]
+spark-daemon workspace show  [name[@server]] [--json]
+spark-daemon workspace stop  <name[@server]>  [--yes]
 
-navia daemon                                    # help
-navia daemon status   [--json]
-navia daemon start
-navia daemon stop     [--yes]
-navia daemon restart
-navia daemon logs     [--follow] [--lines <n>]
+spark daemon                                    # help
+spark daemon status   [--json]
+spark-daemon daemon start
+spark daemon stop     [--yes]
+spark daemon restart
+spark daemon logs     [--follow] [--lines <n>]
 
-navia ws                                        # alias of `navia workspace`
+spark-daemon workspace                                        # alias of `spark-daemon workspace`
 ```
 
 Deferred:
 
-- `navia ws rm` (removed entirely from v0.1; see `Workspace
+- `spark-daemon workspace rm` (removed entirely from v0.1; see `Workspace
 permanence`).
-- `navia ws use` (no default workspace concept in v0.1).
-- `navia ws add` (subsumed by `ws register` because v0.1 has no
-  global runner-server registration).
-- `navia ws rename`, `navia ws sync-profile`, remote attach
+- `spark-daemon workspace use` (no default workspace concept in v0.1).
+- `spark-daemon workspace add` (subsumed by `ws register` because v0.1 has no
+  global Spark daemon-server registration).
+- `spark-daemon workspace rename`, `spark-daemon workspace sync-profile`, remote attach
   commands.
 
 ### Common conventions
@@ -221,7 +221,7 @@ permanence`).
      refused the workspace registration grant).
    - `4` confirmation declined.
 
-## `navia workspace register`
+## `spark-daemon workspace register`
 
 The only v0.1 user-facing command that registers a workspace. Internally,
 successful registration creates or links the server-visible workspace and
@@ -231,7 +231,7 @@ Form 1, scripted (the form most users will see, since workspace
 registration tokens are pasted from the server UI):
 
 ```text
-$ navia ws register . \
+$ spark-daemon workspace register . \
     --server-url http://127.0.0.1:5173 \
     --token navia_wsreg_hjrypmwfkQmw8H5tAPENRejC977q-RA_LBObrFfwgQw \
     --name navia
@@ -242,11 +242,11 @@ $ navia ws register . \
    note     v0.1 has no removal command; this registration is permanent.
 ```
 
-Form 2, interactive (the user typed `navia ws register` with
+Form 2, interactive (the user typed `spark-daemon workspace register` with
 nothing else; the CLI prompts):
 
 ```text
-$ navia ws register
+$ spark-daemon workspace register
   path [./]: _
   server URL: http://127.0.0.1:5173
   workspace registration token: navia_wsreg_…  # echoed masked
@@ -269,7 +269,7 @@ parameter, `register` refuses and prints guidance to pass
 paste a URL copied from a browser address bar.
 
 The token is a **workspace registration grant**, not a user-visible
-runner/runtime credential. Internally, the server may exchange the
+Spark daemon/runtime credential. Internally, the server may exchange the
 first grant used by a daemon for a server-scoped runtime credential;
 that credential is reused for later workspace registrations on the
 same server.
@@ -285,7 +285,7 @@ Defaults and inference:
   `./.navia/profile.toml` under the registered path. If found, the
   interactive form asks once whether to import; the scripted form
   imports only if `--profile <ref>` is given.
-- Profile import is one-shot at registration. The runner records
+- Profile import is one-shot at registration. The Spark daemon records
   the source ref and resolved git commit; subsequent profile
   changes do not affect this workspace until a future
   `sync-profile` command lands.
@@ -307,7 +307,7 @@ Constraints (rejected with exit 3):
 - The server URL must be reachable, and the daemon must be able to
   open an outbound WebSocket session and complete workspace
   registration with the supplied token. If registration fails, the
-  runner-local row
+  daemon-local row
   is rolled back so a failed registration leaves no trace.
 
 Side effects:
@@ -325,12 +325,12 @@ Side effects:
    server-visible `workspaces` row, creates the owner binding for
    this local workspace, and returns the server workspace id,
    binding ref, and initial binding status. Mechanics live in
-   `runner-protocol-rfc.md`; this RFC only defines the local command
+   `spark-daemon-protocol-rfc.md`; this RFC only defines the local command
    surface and the local persistence that observes that protocol.
-4. Daemon writes runner-local rows in a single transaction:
-   `runner_servers` (or reuses an existing row),
-   `runner_server_credentials` (server-scoped runtime credential
-   metadata), `runner_workspaces`, and `runner_workspace_grants`.
+4. Daemon writes daemon-local rows in a single transaction:
+   `daemon_servers` (or reuses an existing row),
+   `daemon_server_credentials` (server-scoped runtime credential
+   metadata), `daemon_workspaces`, and `daemon_workspace_grants`.
    Raw tokens are discarded after successful exchange/consume; only
    hashes and server-issued ids are persisted.
 5. Daemon acks back to the CLI with the new workspace's identity
@@ -349,14 +349,14 @@ has no removal command; this registration is permanent.`). It
 does not appear on every subsequent command. The CLI does not
 require the user to type "I understand" or similar.
 
-## `navia workspace` / `navia workspace ls`
+## `spark-daemon workspace` / `spark-daemon workspace ls`
 
-Bare `navia workspace` is sugar for `navia workspace ls`.
+Bare `spark-daemon workspace` is sugar for `spark-daemon workspace ls`.
 
 Default tabular output:
 
 ```text
-$ navia ws
+$ spark-daemon workspace
 NAME      SERVER                       STATUS                   PATH                                  PROJECTS  INBOX  LAST SESSION
 navia     http://127.0.0.1:5173        online                   ~/workspace/navia-dev/navia           1         0      2 h ago
 paddle    http://127.0.0.1:5173        degraded                 ~/code/paddle                         3         2      12 min ago
@@ -387,7 +387,7 @@ Behavior:
 - Reads from the daemon over the local socket. If the daemon is
   not running, lazy-spawns it; if lazy-spawn fails (lock held by
   another non-running pid, write permission denied on socket
-  path), the command exits 2 with a `navia daemon status` hint.
+  path), the command exits 2 with a `spark daemon status` hint.
 - `--all` includes workspaces that have been `stop`-ed. Without
   `--all`, those are still shown but with status
   `offline · detached`. v0.1 has no archived state, so `--all`
@@ -396,16 +396,16 @@ Behavior:
 - Empty registry prints:
    ```text
    no workspaces registered.
-     navia ws register . --server-url <url> --token <tok> --name <ws>
+     spark-daemon workspace register . --server-url <url> --token <tok> --name <ws>
    ```
 - `--json` emits the schema below.
 
-## `navia workspace show [name[@server]]`
+## `spark-daemon workspace show [name[@server]]`
 
 Detailed view of a single workspace.
 
 ```text
-$ navia ws show paddle
+$ spark-daemon workspace show paddle
 paddle
   status         online
   server         http://127.0.0.1:5173
@@ -431,7 +431,7 @@ Behavior:
 
 - Without a `name`, `show` requires `cwd` to resolve to exactly one
   workspace. Otherwise it asks for `--workspace`.
-- `connection` line is diagnostic; it shows the local service's
+- `connection` line is diagnostic; it shows the Spark daemon's
   workspace connection id without exposing protocol vocabulary.
 - When `status` is `degraded`, a `why` block and `remediation`
   block appear (see `Degraded reasons`).
@@ -441,7 +441,7 @@ Behavior:
 ago)` if the daemon has been disconnected for over a minute.
 - `--json` emits the schema below.
 
-## `navia workspace stop <name[@server]>`
+## `spark-daemon workspace stop <name[@server]>`
 
 Pauses an attached workspace. The daemon keeps any server-level
 outbound WS open, but marks this workspace binding as paused/detached
@@ -450,7 +450,7 @@ workspaces on the same daemon process and the same server are
 unaffected.
 
 ```text
-$ navia ws stop paddle
+$ spark-daemon workspace stop paddle
 ✓ paused 'paddle'
    server         http://127.0.0.1:5173
    path           ~/code/paddle (untouched)
@@ -463,13 +463,13 @@ Behavior:
 
 - Requires the daemon reachable. The daemon performs a graceful
   detach (drains in-flight tool calls with a 30 s soft timeout,
-  then forces detach). Exits 2 with `navia daemon status` hint
+  then forces detach). Exits 2 with `spark daemon status` hint
   if the daemon is unreachable.
 - The server must stop routing new commands to the paused workspace
   binding once it observes the detach/paused state. This is an
   internal protocol effect; the user-facing action remains "pause
   workspace".
-- The runner-local row remains. `status` becomes
+- The daemon-local row remains. `status` becomes
   `offline · detached`. Re-attach happens automatically the next
   time a CLI command targets this workspace.
 - `stop` has no effect on the daemon process. The daemon may exit
@@ -478,16 +478,16 @@ Behavior:
   `ws stop`.
 - `--yes` skips the confirmation prompt.
 
-## `navia daemon` subgroup
+## `spark daemon` subgroup
 
 The `daemon` subgroup is the explicit, observable surface for the
-local runner daemon process. It is **not** required for normal use:
+local Spark daemon daemon process. It is **not** required for normal use:
 any `ws` command that needs the daemon will lazy-spawn it. The
 subgroup exists for observability, scripted service supervision,
 and recovery from edge cases.
 
 ```text
-$ navia daemon status
+$ spark daemon status
 running
   pid              42137
   socket           ~/.local/state/navia/daemon.sock
@@ -498,11 +498,11 @@ running
 ```
 
 ```text
-$ navia daemon status                    # when not running
+$ spark daemon status                    # when not running
 not running
    socket           ~/.local/state/navia/daemon.sock (absent)
-   start            navia daemon start          # foreground, stay attached
-                    or run any 'navia ws' command to lazy-spawn
+   start            spark-daemon daemon start          # foreground, stay attached
+                    or run any 'spark-daemon workspace' command to lazy-spawn
 ```
 
 Subcommands:
@@ -524,7 +524,7 @@ Subcommands:
   `--lines <n>` shows last n lines (default 100).
 
 The user-facing default is still that no one ever needs to type
-`navia daemon` for routine work. The subgroup exists, named after
+`spark daemon` for routine work. The subgroup exists, named after
 what it actually is, because hiding it harms the user the moment
 something goes wrong.
 
@@ -536,7 +536,7 @@ with no workspaces registered:
 ```text
 $ navia
 no workspaces registered.
-  navia ws register . --server-url <url> --token <tok> --name <ws>
+  spark-daemon workspace register . --server-url <url> --token <tok> --name <ws>
 or pass --workspace <name> after registering one elsewhere.
 ```
 
@@ -546,7 +546,7 @@ registered workspace's path, but at least one workspace exists:
 ```text
 $ navia
 /Users/zrr/somewhere is not under a registered workspace.
-  navia ws register .  --server-url <url> --token <tok> --name <ws>
+  spark-daemon workspace register .  --server-url <url> --token <tok> --name <ws>
 or cd into a registered workspace, or pass --workspace <name>.
 existing workspaces:
   navia    http://127.0.0.1:5173
@@ -654,7 +654,7 @@ States, exhaustively:
   to this workspace's server is not connected (server down,
   network broken, runtime credential rejected). Re-attach is automatic
   once the WS recovers.
-- **offline · service stopped**: local service process is not running. Common
+- **offline · service stopped**: Spark daemon process is not running. Common
   before the first `ws` command of a CLI session. Resolves on
   lazy-spawn or `daemon start`.
 
@@ -694,9 +694,9 @@ and a remediation hint. v0.1 set:
 | `profile.invalid`              | Imported profile fails schema validation or refers to missing files. | no         |
 | `profile.missing-agents`       | Profile references agent ids whose definition files are missing.     | no         |
 | `runtime.subprocess-unhealthy` | Pi SDK or other subsystem subprocess has been failing health checks. | yes        |
-| `lease.stale`                  | Stale runner lease found from a prior crash; needs cleanup.          | yes        |
+| `lease.stale`                  | Stale Spark daemon lease found from a prior crash; needs cleanup.          | yes        |
 | `storage.full`                 | XDG cache/state/data partition is full.                              | yes        |
-| `storage.io-error`             | Repeated I/O errors on runner-local SQLite or cache directory.       | no         |
+| `storage.io-error`             | Repeated I/O errors on daemon-local SQLite or cache directory.       | no         |
 
 Server-related faults that earlier drafts considered listing under
 `degraded` are instead reported as `offline · disconnected` with
@@ -713,19 +713,19 @@ The split exists because `degraded` means "attached but
 partially broken" and a workspace whose WS is down is not
 attached at all.
 
-## Runner-side schema sketch
+## Spark daemon-side schema sketch
 
-This RFC introduces runner-local tables. They live in a separate
+This RFC introduces daemon-local tables. They live in a separate
 SQLite database from the server's database, but reuse
 `@zendev-lab/navia-db`'s migration framework. Naming convention prefixes
-runner-local tables with `runner_` to avoid conflict if a future
+daemon-local tables with `daemon_` to avoid conflict if a future
 deployment merges schemas.
 
 The schema is a sketch; final column lists land via migration in
 `packages/db`. The intent is what is normative.
 
 ```text
-runner_servers
+daemon_servers
    id                  TEXT PK
    server_url          TEXT NOT NULL UNIQUE
    first_registered_at TEXT NOT NULL
@@ -733,9 +733,9 @@ runner_servers
    last_disconnect_reason TEXT
    protocol_version    TEXT
 
-runner_server_credentials
+daemon_server_credentials
    id                    TEXT PK
-   server_id             TEXT NOT NULL UNIQUE REFERENCES runner_servers(id)
+   server_id             TEXT NOT NULL UNIQUE REFERENCES daemon_servers(id)
    runtime_id            TEXT NOT NULL
    runtime_token_hash    TEXT NOT NULL
    refresh_token_hash    TEXT
@@ -744,9 +744,9 @@ runner_server_credentials
    created_at            TEXT NOT NULL
    updated_at            TEXT NOT NULL
 
-runner_workspaces
+daemon_workspaces
    id                          TEXT PK
-   server_id                   TEXT NOT NULL REFERENCES runner_servers(id)
+   server_id                   TEXT NOT NULL REFERENCES daemon_servers(id)
    server_workspace_id         TEXT
    server_binding_id           TEXT
    name                        TEXT NOT NULL
@@ -762,9 +762,9 @@ runner_workspaces
    UNIQUE (server_id, local_path)
    UNIQUE (server_id, slug)
 
-runner_workspace_grants
+daemon_workspace_grants
    id                    TEXT PK
-   runner_workspace_id   TEXT NOT NULL REFERENCES runner_workspaces(id)
+   daemon_workspace_id   TEXT NOT NULL REFERENCES daemon_workspaces(id)
    grant_token_hash      TEXT
    server_grant_id       TEXT
    created_at            TEXT NOT NULL
@@ -779,11 +779,11 @@ Notes on the sketch:
 - `server_workspace_id` is filled after the first successful
   workspace registration ack; nullable until then to make
   registration's internal transaction atomic.
-- `runner_server_credentials` is server-scoped, not workspace-scoped.
+- `daemon_server_credentials` is server-scoped, not workspace-scoped.
   Registering an additional workspace on the same server must not
   revoke or replace the daemon's existing runtime credential unless
   the server explicitly rotates it.
-- `runner_workspace_grants` records that a user-visible workspace
+- `daemon_workspace_grants` records that a user-visible workspace
   registration grant was consumed for this workspace. It does not
   store runtime credentials.
 - Token hashes only; raw tokens are never persisted.
@@ -803,7 +803,7 @@ acceptance.
 ## JSON output schema
 
 ```ts
-// navia ws ls --json
+// spark-daemon workspace ls --json
 type WorkspaceListItem = {
    slug: string;
    name: string;
@@ -822,7 +822,7 @@ type WorkspaceListItem = {
    lastStatusChangedAt: string; // ISO 8601
 };
 
-// navia ws show --json
+// spark-daemon workspace show --json
 type WorkspaceDetail = WorkspaceListItem & {
    connection: ConnectionDetail | null; // null until first attach
    projects: Array<{
@@ -844,7 +844,7 @@ type WorkspaceDetail = WorkspaceListItem & {
 };
 
 type ConnectionDetail = {
-   ref: string; // local service connection identifier
+   ref: string; // Spark daemon connection identifier
    attachedAt?: string;
    capabilities: Array<{
       id: string;
@@ -875,7 +875,7 @@ type DegradedReasonCode =
    | "storage.full"
    | "storage.io-error";
 
-// navia daemon status --json
+// spark daemon status --json
 type DaemonStatus =
    | { running: false; socketPath: string }
    | {
@@ -933,13 +933,13 @@ Examples:
 ```text
 ✗ cannot pause workspace
   why     local navia service is not running and cannot be reached
-  fix     navia daemon status        check service state
+  fix     spark daemon status        check service state
 ```
 
 ```text
 ✗ workspace 'paddle' is degraded
   why     workspace path not reachable: ENOENT at ~/code/paddle (filesystem.unreachable)
-  fix     reconnect the volume, or run 'navia ws stop paddle'
+  fix     reconnect the volume, or run 'spark-daemon workspace stop paddle'
 ```
 
 ```text
@@ -951,7 +951,7 @@ Examples:
 
 User-facing copy uses `workspace`, `local navia service` (for
 process management when context demands), `connection`, and `server`.
-The terms `runner`, `binding`, and `runtime` are reserved for
+The terms `Spark daemon`, `binding`, and `runtime` are reserved for
 protocol/database documentation and are not exposed by `ws` output.
 
 ## Compatibility with existing protocol/database vocabulary
@@ -959,7 +959,7 @@ protocol/database documentation and are not exposed by `ws` output.
 This RFC keeps wire/protocol vocabulary unchanged. Server-side API
 routes remain `/api/v1/runtime/*`, server tables remain
 `runtime_workspace_bindings`, and the binding capability summary
-in `runner-protocol-rfc.md` continues to use `available |
+in `spark-daemon-protocol-rfc.md` continues to use `available |
 indexing | degraded | unavailable`.
 
 The CLI presents a smaller user-facing status set
@@ -982,22 +982,22 @@ where the binding capability summary is the source:
 The `terminology` section in `README.md` should be updated
 alongside the first implementation patch to record that the CLI
 uses `workspace` as user-facing primary, while `runtime`,
-`runner`, and `binding` are wire/database identifiers preserved
+`Spark daemon`, and `binding` are wire/database identifiers preserved
 in protocol RFCs rather than CLI output.
 
 ## Out of scope
 
 Explicit deferrals:
 
-- **Workspace removal**, both runner-side and server-side.
-  Future RFC will define the `workspace.removed` server-to-runner
+- **Workspace removal**, both Spark daemon-side and server-side.
+  Future RFC will define the `workspace.removed` server-to-Spark daemon
   event, the reconnect-time reconciliation, and any user-facing
-  surface (`navia ws rm` or owner-only deletion via web UI). v0.1
+  surface (`spark-daemon workspace rm` or owner-only deletion via web UI). v0.1
   registrations are permanent.
 - **Daemon process lifecycle internals**: idle exit, lockfile
   format, socket trust details, supervised service install.
   `daemon-lifecycle-rfc.md`.
-- **Remote runner attach**: a CLI on machine A talking to a
+- **Remote Spark daemon attach**: a CLI on machine A talking to a
   daemon on machine B. v0.1 is local-socket only.
 - **Workspace rename and profile sync**.
 - **CLI configuration file**: `~/.config/navia/cli.toml` is not
@@ -1012,37 +1012,37 @@ Explicit deferrals:
 
 A v0.1 implementation of this RFC is acceptable when:
 
-- `navia ws register` registers a fresh checkout with a local
+- `spark-daemon workspace register` registers a fresh checkout with a local
   Navia server using a paste-token flow and produces a workspace
-  visible to both the runner-local schema and the server-side
+  visible to both the daemon-local schema and the server-side
   workspace/binding tables.
-- `navia ws register` enforces all path constraints: same path on
+- `spark-daemon workspace register` enforces all path constraints: same path on
   same server rejected, same path on different server accepted,
   nested across servers rejected.
-- `navia ws register` rolls back the runner-local transaction on
+- `spark-daemon workspace register` rolls back the daemon-local transaction on
   workspace registration failure, leaving no trace.
-- `navia ws ls` produces the documented columns, distinguishes
+- `spark-daemon workspace ls` produces the documented columns, distinguishes
   the three offline sub-statuses, and matches the JSON schema.
-- `navia ws show` renders `degraded` with reason codes and
+- `spark-daemon workspace show` renders `degraded` with reason codes and
   remediation lines; renders `offline · disconnected` and
   `offline · service stopped` with their own structured offline
   reasons.
-- `navia ws stop` pauses one workspace cleanly without affecting
+- `spark-daemon workspace stop` pauses one workspace cleanly without affecting
   others on the same daemon, sets state to
   `offline · detached`, and re-attaches automatically on next
   command.
-- `navia daemon status`, `start`, `stop`, `restart`, `logs` work
+- `spark daemon status`, `start`, `stop`, `restart`, `logs` work
   as documented; lazy-spawn from a `ws` command produces a daemon
   indistinguishable from one started by `daemon start`.
 - The CLI shows no `ws rm`, `ws use`, `ws add`, or any other
   removal/default command in `--help` output.
-- The CLI shows no `runner`, `enroll`, or
+- The CLI shows no `Spark daemon`, `enroll`, or
   `binding` term in `ws` success messages or in the primary
   workspace command surface. Diagnostic `ws show` output uses
   `connection`, not protocol vocabulary.
 - Cross-server workspace name collisions are resolvable via the
   `<name>@<server>` identifier syntax with prefix matching.
-- The CLI does not open the runner-local SQLite database
+- The CLI does not open the daemon-local SQLite database
   directly; all reads and writes go through the daemon's unix
   socket.
 - The CLI does not create or read `~/.config/navia/cli.toml`.

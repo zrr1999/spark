@@ -79,7 +79,7 @@ export function buildTaskSummaryArtifact(input: TaskSummaryInput): TaskSummaryAr
       hash,
       mime: "text/markdown; charset=utf-8",
       sizeBytes,
-      runnerAvailable: true,
+      daemonAvailable: true,
     },
     provenance: {
       runtimeInvocationId: input.invocationId,

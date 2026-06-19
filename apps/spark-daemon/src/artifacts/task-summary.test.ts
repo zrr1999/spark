@@ -57,7 +57,7 @@ describe("task summary artifact", () => {
       expect(result.payload.contentRef.runtimePathRef).toMatch(/^file:\/\//);
       expect(result.payload.contentRef.inlineMarkdown).toBe(onDisk);
       expect(result.payload.contentAvailability).toMatchObject({
-        runnerAvailable: true,
+        daemonAvailable: true,
         sizeBytes: result.payload.sizeBytes,
         mime: "text/markdown; charset=utf-8",
       });

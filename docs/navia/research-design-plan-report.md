@@ -25,7 +25,7 @@ Within the product model, keep the workspace/project/runtime split:
 - **Project execution/collaboration plane** — inbox/web ask, task graph projections/snapshots, runs/invocations, reviews, project artifacts/evidence, current conclusion.
 - **Runtime capability plane** — task graph execution truth, local orchestration, workdir safety, logs/checkpoints, canonical runtime artifacts.
 
-This moves Navia away from the earlier pure local filesystem-watch/narrow-backend-only direction, the thin-runner/server-scheduler framing, and the earlier Hono/PostgreSQL-first backend baseline. Files remain important as evidence/artifact/workspace surfaces, but SvelteKit + SQLite own the lightweight communication/projection state for the web app.
+This moves Navia away from the earlier pure local filesystem-watch/narrow-backend-only direction, the thin-Spark daemon/server-scheduler framing, and the earlier Hono/PostgreSQL-first backend baseline. Files remain important as evidence/artifact/workspace surfaces, but SvelteKit + SQLite own the lightweight communication/projection state for the web app.
 
 Default user traffic should be server-mediated: browser/user actions go through Navia's SvelteKit server. Direct user/browser-to-runtime connection is not a v0.1 product path because it bypasses auth, audit, inbox delivery, artifact cache, and projection consistency. Keep only a design placeholder for a privileged direct diagnostic/pairing channel; do not implement it in v0.1 unless explicitly re-scoped.
 
@@ -320,8 +320,8 @@ Confirmed product/technical decisions after review:
 - D12 Repo/resource trust: server routes; runtime enforces local safety.
 - D13 Inbox semantics: runtime-originated web ask inbox.
 - D14 Human decision timing: `wait-indefinitely-with-reminders`.
-- D15 Artifact model: `runner-owned-artifacts-with-lazy-server-cache`.
-- D16 Cluster/task model: `runner-owned-task-graph-projections`.
+- D15 Artifact model: `Spark-daemon-owned-artifacts-with-lazy-server-cache`.
+- D16 Cluster/task model: `Spark-daemon-owned-task-graph-projections`.
 - D17 Ask/review model: runtime-originated inbox-linked asks/reviews.
 - D18 Events/audit log: append-only communication/product events.
 - D19 Quality gates: `vp-prek-ci`.

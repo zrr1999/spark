@@ -19,7 +19,7 @@ import {
 
 const registrationRequest = {
   installationId: "install-test",
-  displayName: "Test runner",
+  displayName: "Test Spark daemon",
   runtimeVersion: "0.1.0-test",
   supportedFeatures: ["ws-control-v1", "command-routing-v1"],
   labels: { test: "true" },
@@ -144,7 +144,7 @@ describe("runtime registration", () => {
     }>;
 
     expect(runtime).toEqual({
-      name: "Test runner",
+      name: "Test Spark daemon",
       protocolVersion: runtimeProtocolVersion,
     });
     expect(token.usedAt).toBeTruthy();

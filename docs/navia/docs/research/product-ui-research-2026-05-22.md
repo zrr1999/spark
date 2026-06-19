@@ -11,7 +11,7 @@ Primary repos inspected:
 - [multica-ai/multica](https://github.com/multica-ai/multica)
 - [builderz-labs/mission-control](https://github.com/builderz-labs/mission-control)
 - [stoneforge-ai/stoneforge](https://github.com/stoneforge-ai/stoneforge)
-- [kcosr/agent-runner](https://github.com/kcosr/agent-runner)
+- [kcosr/agent-Spark daemon](https://github.com/kcosr/agent-Spark daemon)
 - [dubinc/dub](https://github.com/dubinc/dub)
 - [triggerdotdev/trigger.dev](https://github.com/triggerdotdev/trigger.dev)
 - [langfuse/langfuse](https://github.com/langfuse/langfuse)
@@ -95,9 +95,9 @@ Do not copy:
 
 - Stoneforge is built for highly parallel local agent operation and includes terminal-heavy workflows. Navia should expose runtime detail, but not become a terminal multiplexer by default.
 
-### Agent Runner
+### Agent Spark daemon
 
-Agent Runner is less polished visually, but strong on durable run semantics.
+Agent Spark daemon is less polished visually, but strong on durable run semantics.
 
 Useful patterns:
 
@@ -261,7 +261,7 @@ Content pattern:
 - Compact page header with one sentence and actions.
 - Status strip: online runtimes, workspace bindings, stalled/offline runtimes.
 - Tables first, cards only for repeated items or empty states.
-- Empty states should include concrete protocol endpoints or runner commands.
+- Empty states should include concrete protocol endpoints or Spark daemon commands.
 
 Runtime row fields:
 
@@ -360,7 +360,7 @@ Borrow from Trigger.dev and Langfuse:
 3. Mission Control: bottom context switcher, live connection semantics, operational density.
 4. Trigger.dev: run metadata, heartbeat/stalled semantics, replay actions.
 5. Langfuse: command menu grouping, settings page arrays, saved views, evidence table ergonomics.
-6. Agent Runner: durable run manifest, audit timeline, daemon API/SSE shape.
+6. Agent Spark daemon: durable run manifest, audit timeline, daemon API/SSE shape.
 7. Stoneforge: route vocabulary and command grouping for agent dashboards.
 8. Plane: later project/task views.
 9. BoneHub/Sixbones: Chinese-first i18n shape and local aesthetic preferences.
@@ -371,7 +371,7 @@ Borrow from Trigger.dev and Langfuse:
 - [Mission Control repository](https://github.com/builderz-labs/mission-control)
 - [Dub repository](https://github.com/dubinc/dub)
 - [Stoneforge repository](https://github.com/stoneforge-ai/stoneforge)
-- [Agent Runner repository](https://github.com/kcosr/agent-runner)
+- [Agent Spark daemon repository](https://github.com/kcosr/agent-Spark daemon)
 - [Trigger.dev repository](https://github.com/triggerdotdev/trigger.dev)
 - [Langfuse repository](https://github.com/langfuse/langfuse)
 - [Plane repository](https://github.com/makeplane/plane)

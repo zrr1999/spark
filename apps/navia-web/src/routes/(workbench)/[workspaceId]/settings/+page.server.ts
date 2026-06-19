@@ -236,7 +236,7 @@ function loadWorkspaceSettings(db: ReturnType<typeof getDatabase>, workspaceId: 
 
 function buildEnrollCommand(serverOrigin: string, refreshToken: string, workspaceName: string) {
   return [
-    "navia ws register",
+    "spark-daemon workspace register",
     `--server-url ${shellQuote(serverOrigin)}`,
     `--token ${shellQuote(refreshToken)}`,
     `--name ${shellQuote(workspaceName)}`,

@@ -200,7 +200,7 @@ describe("runtime WebSocket handling", () => {
     db.close();
   });
 
-  it("preserves workspace binding identity when a runner reconnects with the same local key", () => {
+  it("preserves workspace binding identity when a Spark daemon reconnects with the same local key", () => {
     const { db, ws, now, runtimeId, workspaceBindingId } = setupRuntime();
     const workspace = createWorkspace(db, workspaceBindingId, now);
     ws.close(1000, "reconnect");

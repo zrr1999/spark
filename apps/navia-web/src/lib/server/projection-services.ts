@@ -124,7 +124,7 @@ export function createWorkspaceWithOwnerBinding(
 
     if (!binding) {
       throw new Error(
-        `Runner workspace binding is not available: ${input.runtimeWorkspaceBindingId}`,
+        `Spark daemon workspace binding is not available: ${input.runtimeWorkspaceBindingId}`,
       );
     }
 

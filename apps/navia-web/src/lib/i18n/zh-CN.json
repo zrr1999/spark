@@ -8,11 +8,11 @@
     "online": "在线",
     "unknown": "未知",
     "unknownSize": "大小未知",
-    "boundToRunner": "已绑定到本地服务",
-    "reportedByConnectedRunners": "由已连接的本地服务上报。",
-    "reportedByRunnerHello": "由本地服务 hello 快照上报。",
+    "boundToRunner": "已绑定到 Spark daemon",
+    "reportedByConnectedRunners": "由已连接的 Spark daemon 上报。",
+    "reportedByRunnerHello": "由 Spark daemon hello 快照上报。",
     "fallback": {
-      "runner": "本地服务",
+      "runner": "Spark daemon",
       "server": "服务端",
       "workspaceScope": "工作空间范围",
       "workspaceEvidence": "工作空间证据",
@@ -167,7 +167,7 @@
       "pendingInbox": "待处理收件箱",
       "pendingInboxHint": "等待操作员响应",
       "workspaces": "工作空间",
-      "runnerConnections": "本地连接",
+      "runnerConnections": "Spark daemon 连接",
       "workspaceBindings": "工作空间目录"
     },
     "panels": {
@@ -175,8 +175,8 @@
       "workspaces": "工作空间",
       "sqliteBacked": "投影缓存",
       "settingsConnections": "设置 · 连接",
-      "runnerHealth": "本地服务健康",
-      "runnerOwnedTruth": "执行真相由 Spark 拥有",
+      "runnerHealth": "Spark daemon 健康",
+      "runnerOwnedTruth": "执行真相由 Spark daemon 拥有",
       "workspaceBindings": "工作空间绑定",
       "appendOnlyAudit": "追加式审计日志",
       "recentEvents": "最近事件"
@@ -247,7 +247,7 @@
     },
     "runners": {
       "eyebrow": "工作空间注册",
-      "title": "本地注册",
+      "title": "Spark daemon 注册",
       "createToken": "创建注册 token",
       "tokenCreatedAria": "已创建工作空间注册 token",
       "tokenCreatedTitle": "注册 token 已创建",
@@ -256,13 +256,13 @@
       "summaryAria": "工作空间注册状态摘要",
       "metrics": {
         "online": "在线连接",
-        "registered": "已注册本地服务",
+        "registered": "已注册 Spark daemon",
         "registeredHint": "已知本地安装",
         "bindings": "本地工作空间目录"
       },
-      "registeredTitle": "已注册的本地服务",
-      "emptyTitle": "还没有本地服务注册",
-      "emptyBody": "先生成一条注册命令，再在目标主机上运行 navia ws register。",
+      "registeredTitle": "已注册的 Spark daemon",
+      "emptyTitle": "还没有 Spark daemon 注册",
+      "emptyBody": "先生成一条注册命令，再在目标主机上运行 spark-daemon workspace register。",
       "installationMissing": "未上报 installation id",
       "tokensTitle": "注册 token",
       "noTokensTitle": "还没有注册 token",
@@ -272,8 +272,8 @@
       "revoke": "撤销"
     },
     "runnerEmpty": {
-      "title": "还没有本地服务注册",
-      "body": "正在等待本地服务通过以下路径注册：",
+      "title": "还没有 Spark daemon 注册",
+      "body": "正在等待 Spark daemon 通过以下路径注册：",
       "code": "/api/v1/runtime/*"
     },
     "bindingsEmpty": "还没有上报工作空间目录。",
@@ -354,11 +354,11 @@
       "done": "完成"
     },
     "command": {
-      "noRunnerOwner": "没有本地服务 owner",
+      "noRunnerOwner": "没有 Spark daemon owner",
       "workspaceUnavailable": "工作空间不可用",
       "queueTask": "排队任务",
       "ownerPrefix": "Owner:",
-      "offlinePending": "离线命令会在本地服务重连到 Spark 桥接后继续投递",
+      "offlinePending": "离线命令会在 Spark daemon 重连后继续投递",
       "metaLabel": "Spark 命令",
       "title": "启动任务",
       "noOwner": "无 owner",
@@ -371,8 +371,8 @@
       "shownSuffix": "条",
       "empty": "这个项目还没有排队过任务启动命令。",
       "delivery": {
-        "pendingOnline": "待发送 — 正在发往本地服务",
-        "pendingOffline": "待发送 — 等待本地服务重连",
+        "pendingOnline": "待发送 — 正在发往 Spark daemon",
+        "pendingOffline": "待发送 — 等待 Spark daemon 重连",
         "sent": "已投递 — 等待确认或拒绝",
         "acked": "运行桥接已确认",
         "rejected": "运行桥接已拒绝",
@@ -425,7 +425,7 @@
     },
     "formMessages": {
       "taskRequired": "请填写任务标题和提示词。",
-      "queued": "任务已加入本地服务队列。",
+      "queued": "任务已加入 Spark daemon 队列。",
       "queueFailed": "任务入队失败。"
     }
   },
@@ -481,7 +481,7 @@
       "archive": "归档",
       "recordedTitle": "响应已记录",
       "statusPrefix": "状态：",
-      "runnerAcked": "Spark 桥接已确认",
+      "runnerAcked": "Spark daemon 已确认",
       "waitingAck": "等待 Spark 桥接确认",
       "closedTitle": "请求已关闭",
       "closedBody": "这个收件箱条目已不再待处理。"
@@ -556,7 +556,7 @@
     "hero": {
       "eyebrow": "智能体规格",
       "title": "智能体",
-      "lede": "可复用的工作空间级智能体规格。执行仍发生在本地服务内；这些规格描述推荐角色、指令以及启用状态。"
+      "lede": "可复用的工作空间级智能体规格。执行仍发生在 Spark daemon 内；这些规格描述推荐角色、指令以及启用状态。"
     },
     "metrics": {
       "aria": "智能体规格状态",
@@ -639,7 +639,7 @@
       "aria": "产物元数据",
       "source": "来源",
       "size": "大小",
-      "runner": "本地服务",
+      "runner": "Spark daemon",
       "previewCache": "预览缓存"
     },
     "provenance": {
@@ -791,7 +791,7 @@
       "offlineHint": "陈旧连接清理尚未启用"
     },
     "table": {
-      "runner": "本地服务",
+      "runner": "Spark daemon",
       "installation": "安装标识",
       "status": "状态",
       "lastSeen": "最近上报",
@@ -799,14 +799,14 @@
       "updated": "更新时间"
     },
     "runner": {
-      "kicker": "本地服务协议",
-      "title": "已注册的本地服务",
+      "kicker": "Spark daemon 协议",
+      "title": "已注册的 Spark daemon",
       "badge": "/api/v1/runtime/*",
-      "emptyTitle": "还没有本地服务注册",
-      "emptyBody": "在本页生成注册命令，然后运行 navia ws register 连接到",
+      "emptyTitle": "还没有 Spark daemon 注册",
+      "emptyBody": "在本页生成注册命令，然后运行 spark-daemon workspace register 连接到",
       "installationMissing": "未上报 installation id",
       "protocolPending": "协议待上报",
-      "routesLabel": "本地服务协议路由"
+      "routesLabel": "Spark daemon 协议路由"
     },
     "setup": {
       "kicker": "注册设置",
@@ -814,17 +814,17 @@
       "steps": [
         {
           "title": "创建工作空间注册 token",
-          "description": "由本地所有者会话生成一次性工作空间注册 token，并交换为本地服务凭证。",
+          "description": "由本地所有者会话生成一次性工作空间注册 token，并交换为 Spark daemon 凭证。",
           "status": "ready"
         },
         {
           "title": "启动本地 Navia 服务",
-          "description": "本地服务负责服务端 WebSocket 和工作空间注册表，并通过 Spark 运行时原语投影任务图、产物以及 ask/review。",
+          "description": "Spark daemon 负责服务端 WebSocket 和工作空间注册表，并通过 Spark 运行时原语投影任务图、产物以及 ask/review。",
           "status": "planned"
         },
         {
           "title": "接入 Spark 运行桥接",
-          "description": "Pi、Codex、Claude Code 以及未来适配器通过本地 IPC 与本地服务通信，不直接连接 Navia 服务端。",
+          "description": "Pi、Codex、Claude Code 以及未来适配器通过本地 IPC 与 Spark daemon 通信，不直接连接 Navia 服务端。",
           "status": "planned"
         }
       ]

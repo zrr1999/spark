@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
-  import { runnerDisplayStatus, type RunnerDisplayStatus } from "$lib/runner-status";
+  import { daemonDisplayStatus, type DaemonDisplayStatus } from "$lib/daemon-status";
 
   let { data, form } = $props();
 
@@ -36,8 +36,8 @@
     return getStatusLabel(status, common);
   }
 
-  function countRunners(status: RunnerDisplayStatus) {
-    return data.runnerConnections.filter((runner) => runnerDisplayStatus(runner) === status)
+  function countRunners(status: DaemonDisplayStatus) {
+    return data.runnerConnections.filter((runner) => daemonDisplayStatus(runner) === status)
       .length;
   }
 
@@ -238,7 +238,7 @@
       {:else}
         <div class="runner-list">
           {#each data.runnerConnections as runner}
-            {@const displayStatus = runnerDisplayStatus(runner)}
+            {@const displayStatus = daemonDisplayStatus(runner)}
             <div class="runner-row">
               <span class="status-dot {displayStatus}" aria-hidden="true"></span>
               <div>
