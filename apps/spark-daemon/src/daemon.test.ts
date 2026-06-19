@@ -9,13 +9,18 @@ import {
 } from "@zendev-lab/navia-protocol";
 import { resolveNaviaPaths } from "@zendev-lab/navia-system";
 import {
+  createDaemonHumanWait,
   handleCommand,
   handleServerMessage,
   startSparkDaemon,
   type MessageContext,
   type ServerSocket,
 } from "./daemon.js";
-import { SparkDaemonInvocationRegistry, SparkDaemonQueue } from "./core/index.ts";
+import {
+  SparkDaemonHumanWaitRegistry,
+  SparkDaemonInvocationRegistry,
+  SparkDaemonQueue,
+} from "./core/index.ts";
 import type { CancelSparkInvocationFn, RunSparkCommandFn } from "./spark/bridge.js";
 import { openSparkDaemonDatabase } from "./store/schema.js";
 import { addWorkspace, stopWorkspace } from "./store/workspaces.js";
@@ -209,6 +214,7 @@ function makeContext(
     ensureHeartbeat() {},
     runSparkCommand,
     cancelSparkInvocation,
+    humanWaits: new SparkDaemonHumanWaitRegistry(harness.db),
   };
 }
 
@@ -652,7 +658,84 @@ describe("Spark daemon handleCommand task.start.request", () => {
     }
   });
 
-  it("acknowledges human ask/resume responses without re-entering direct Pi execution", async () => {
+  it("returns human responses to daemon-owned waits", async () => {
+    const harness = makeHarness();
+    try {
+      const ws = new CapturingSocket();
+      const context = makeContext(harness, async () => {
+        throw new Error("task bridge must not be invoked for human response delivery");
+      });
+      const registration = createDaemonHumanWait(ws, context, {
+        invocationId: "inv_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        workspaceBindingId: harness.workspace.id,
+        workspaceId: "ws_22222222222222222222222222222222",
+        projectId: "proj_33333333333333333333333333333333",
+        kind: "ask_user",
+        title: "Need decision",
+        prompt: "Continue?",
+        questions: [
+          {
+            id: "decision",
+            type: "single",
+            prompt: "Continue?",
+            required: true,
+            options: [{ id: "yes", label: "Yes" }],
+          },
+        ],
+      });
+      expect(ws.sent[0]).toMatchObject({
+        type: "human.request.created",
+        humanRequestId: registration.wait.humanRequestId,
+        payload: { kind: "ask_user", title: "Need decision" },
+      });
+
+      const response = {
+        protocolVersion: runtimeProtocolVersion,
+        messageId: createId("msg"),
+        type: "human.response.deliver",
+        sentAt: new Date().toISOString(),
+        runtimeId: "rt_11111111111111111111111111111111",
+        workspaceBindingId: harness.workspace.id,
+        workspaceId: "ws_22222222222222222222222222222222",
+        projectId: "proj_33333333333333333333333333333333",
+        humanRequestId: registration.wait.humanRequestId,
+        payload: {
+          status: "answered",
+          answers: { decision: { values: ["yes"], labels: ["Yes"] } },
+          responseArtifactRefs: [],
+        },
+      };
+
+      await handleServerMessage(ws, JSON.stringify(response), context);
+      const delivered = await registration.response;
+
+      expect(delivered).toMatchObject({
+        humanRequestId: registration.wait.humanRequestId,
+        status: "answered",
+        answers: { decision: { values: ["yes"], labels: ["Yes"] } },
+      });
+      expect(ws.sent[1]).toMatchObject({
+        type: "human.response.ack",
+        humanRequestId: registration.wait.humanRequestId,
+        invocationId: "inv_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        payload: {
+          returnedToTool: true,
+          message: "Returned human response to the daemon-owned wait.",
+        },
+      });
+      const row = harness.db
+        .prepare(
+          "SELECT status, response_json AS responseJson FROM daemon_human_waits WHERE human_request_id = ?",
+        )
+        .get(registration.wait.humanRequestId) as { status: string; responseJson: string };
+      expect(row.status).toBe("answered");
+      expect(JSON.parse(row.responseJson)).toMatchObject({ status: "answered" });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("acknowledges unmatched human responses without auto-answering", async () => {
     const harness = makeHarness();
     try {
       const ws = new CapturingSocket();
@@ -665,6 +748,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
         workspaceBindingId: harness.workspace.id,
         workspaceId: "ws_22222222222222222222222222222222",
         projectId: "proj_33333333333333333333333333333333",
+        humanRequestId: "hreq_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         payload: {
           status: "answered",
           answers: { decision: "continue" },
@@ -682,7 +766,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
         type: "human.response.ack",
         payload: {
           returnedToTool: false,
-          message: "No active Pi tool wait is attached in this Spark daemon slice.",
+          message: "No daemon-owned human wait matched this response.",
         },
       });
     } finally {

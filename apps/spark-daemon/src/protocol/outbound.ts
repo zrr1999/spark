@@ -17,6 +17,8 @@ export interface RouteContext {
   workspaceId?: string | undefined;
   projectId?: string | undefined;
   commandId?: string | undefined;
+  humanRequestId?: string | undefined;
+  humanResponseId?: string | undefined;
   invocationId?: string | undefined;
   ackOf?: string | undefined;
 }
@@ -32,6 +34,8 @@ export function runtimeEnvelope(type: string, payload: unknown, route: RouteCont
     workspaceId: route.workspaceId,
     projectId: route.projectId,
     commandId: route.commandId,
+    humanRequestId: route.humanRequestId,
+    humanResponseId: route.humanResponseId,
     invocationId: route.invocationId,
     ackOf: route.ackOf,
     payload,

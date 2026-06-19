@@ -36,8 +36,24 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS daemon_human_waits (
+      human_request_id TEXT PRIMARY KEY,
+      invocation_id TEXT,
+      workspace_binding_id TEXT,
+      workspace_id TEXT,
+      project_id TEXT,
+      tool_call_id TEXT,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      request_json TEXT NOT NULL,
+      response_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS invocations_status_idx ON invocations(status);
     CREATE INDEX IF NOT EXISTS outbox_status_idx ON outbox(status, created_at);
+    CREATE INDEX IF NOT EXISTS daemon_human_waits_status_idx ON daemon_human_waits(status, created_at);
   `);
   migrateWorkspacesTable(db);
   db.exec("CREATE INDEX IF NOT EXISTS workspaces_status_idx ON workspaces(status)");

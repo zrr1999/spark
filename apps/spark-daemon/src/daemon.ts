@@ -16,10 +16,13 @@ import { readSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
 import {
   createSparkDaemonWorkerContext,
   runSparkDaemonWorkerIteration,
+  SparkDaemonHumanWaitRegistry,
   SparkDaemonInvocationRegistry,
   SparkDaemonQueue,
   SparkDaemonWorkerLoop,
   waitForSparkDaemonActiveTasks,
+  type SparkDaemonHumanWaitInput,
+  type SparkDaemonHumanWaitRegistration,
   type SparkDaemonTaskExecutor,
 } from "./core/index.ts";
 import { decideCommandPolicy } from "./policy.js";
@@ -99,11 +102,13 @@ export interface StartSparkDaemonOptions {
   queuePollIntervalMs?: number;
   queueConcurrency?: number;
   invocationRegistry?: SparkDaemonInvocationRegistry;
+  humanWaits?: SparkDaemonHumanWaitRegistry;
 }
 
 export async function startSparkDaemon(options: StartSparkDaemonOptions): Promise<void> {
   writePrivateFile(options.paths.pidFile, `${process.pid}\n`);
   const invocationRegistry = options.invocationRegistry ?? new SparkDaemonInvocationRegistry();
+  const humanWaits = options.humanWaits ?? new SparkDaemonHumanWaitRegistry(options.db);
   const queueContext =
     options.runQueue === false
       ? null
@@ -141,7 +146,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
         await waitForSparkDaemonActiveTasks(queueContext.active);
       }
       if (!options.signal?.aborted && canAttemptServerConnection(options.config)) {
-        await runSparkDaemonServerConnection({ ...options, invocationRegistry });
+        await runSparkDaemonServerConnection({ ...options, invocationRegistry, humanWaits });
       }
       return;
     }
@@ -154,7 +159,12 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
       }
 
       try {
-        await runSparkDaemonServerConnection({ ...options, config, invocationRegistry });
+        await runSparkDaemonServerConnection({
+          ...options,
+          config,
+          invocationRegistry,
+          humanWaits,
+        });
       } catch (error) {
         sendErrorLog(options.db, config.runtimeId ?? "unknown", error);
         await delayUnlessAborted(1_000, options.signal);
@@ -301,6 +311,7 @@ async function runSparkDaemonServerConnection(options: StartSparkDaemonOptions):
         runSparkCommand: options.runSparkCommand ?? runSparkCommandBridge,
         cancelSparkInvocation: options.cancelSparkInvocation ?? cancelSparkBridgeInvocation,
         invocationRegistry: options.invocationRegistry,
+        humanWaits: options.humanWaits,
         get runtimeSessionId() {
           return runtimeSessionId;
         },
@@ -386,6 +397,42 @@ export interface MessageContext {
   runSparkCommand: RunSparkCommandFn;
   cancelSparkInvocation: CancelSparkInvocationFn;
   invocationRegistry?: SparkDaemonInvocationRegistry;
+  humanWaits?: SparkDaemonHumanWaitRegistry;
+}
+
+export function createDaemonHumanWait(
+  ws: ServerSocket,
+  context: MessageContext,
+  input: SparkDaemonHumanWaitInput,
+): SparkDaemonHumanWaitRegistration {
+  if (!context.humanWaits) {
+    throw new Error("Spark daemon human wait registry is not attached.");
+  }
+  const registration = context.humanWaits.register(input);
+  sendJson(
+    ws,
+    runtimeEnvelope(
+      "human.request.created",
+      {
+        kind: registration.wait.kind,
+        toolCallId: registration.wait.toolCallId || undefined,
+        title: registration.wait.title,
+        prompt: registration.wait.prompt,
+        questions: registration.wait.questions,
+        context: registration.wait.context,
+        contextArtifactRefs: registration.wait.contextArtifactRefs,
+      },
+      {
+        runtimeId: context.runtimeId,
+        workspaceBindingId: registration.wait.workspaceBindingId || undefined,
+        workspaceId: registration.wait.workspaceId || undefined,
+        projectId: registration.wait.projectId || undefined,
+        humanRequestId: registration.wait.humanRequestId,
+        invocationId: registration.wait.invocationId || undefined,
+      },
+    ),
+  );
+  return registration;
 }
 
 export async function handleServerMessage(
@@ -410,20 +457,32 @@ export async function handleServerMessage(
 
   const humanResponse = humanResponseDeliverEnvelopeSchema.safeParse(value);
   if (humanResponse.success) {
+    const delivery = context.humanWaits?.deliver({
+      humanRequestId: humanResponse.data.humanRequestId,
+      status: humanResponse.data.payload.status,
+      answers: humanResponse.data.payload.answers,
+      responseArtifactRefs: humanResponse.data.payload.responseArtifactRefs,
+    }) ?? {
+      returnedToTool: false,
+      message: "No daemon-owned human wait registry is attached in this Spark daemon slice.",
+    };
     sendJson(
       ws,
       runtimeEnvelope(
         "human.response.ack",
         {
-          returnedToTool: false,
-          message: "No active Pi tool wait is attached in this Spark daemon slice.",
+          returnedToTool: delivery.returnedToTool,
+          message: delivery.message,
         },
         {
           runtimeId: context.runtimeId,
           workspaceBindingId: humanResponse.data.workspaceBindingId,
           workspaceId: humanResponse.data.workspaceId,
           projectId: humanResponse.data.projectId,
+          humanRequestId: humanResponse.data.humanRequestId,
+          humanResponseId: humanResponse.data.humanResponseId,
           ackOf: humanResponse.data.messageId,
+          invocationId: delivery.wait?.invocationId || humanResponse.data.invocationId,
         },
       ),
     );

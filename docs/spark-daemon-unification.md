@@ -336,11 +336,13 @@ default background executor.
 
 ### Human wait bridge is required
 
-The former runner currently acknowledges delivered human responses without
-returning to an active tool wait. The target daemon must own wait records for
-ask/review/tool calls, project those waits to the cockpit inbox, and resume or
-fail the exact blocked invocation when an answer arrives. No elapsed-time or
-liveness rule may auto-answer human decisions.
+The former runner acknowledged delivered human responses without returning to an
+active tool wait. The Spark daemon now has a daemon-owned human wait registry
+that persists pending waits, emits `human.request.created` for cockpit inbox
+projection, resolves the exact active wait on `human.response.deliver`, and
+acknowledges unmatched/stale responses without auto-answering. Follow-up work can
+wire more Spark ask/review call sites into this registry, but cockpit remains a
+projection/response surface rather than execution truth.
 
 ## Validation policy
 
