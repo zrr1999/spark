@@ -8,7 +8,7 @@ Date: 2026-05-25
 Navia ships a single user-facing binary, `navia`. This RFC defines the
 local workspace CLI: how a user registers a workspace with a Navia server,
 inspects local workspace state, pauses an attached workspace, and manages
-the local Navia service when troubleshooting.
+the Spark daemon when troubleshooting.
 
 The CLI lives entirely on the Spark daemon side of the
 `spark-daemon-protocol-rfc.md:1` boundary. It does not authenticate against
@@ -21,7 +21,7 @@ this registration is treated as permanent, with no removal command.
 The CLI is almost stateless. It does not persist a `default workspace`,
 does not maintain user preferences in v0.1, and resolves the workspace
 to act on from `--workspace` flag or `cwd` only. Persistent state lives
-in the local Spark daemon daemon's SQLite database and in the daemon's
+in the local Spark daemon's SQLite database and in the daemon's
 outbound WebSocket sessions to servers.
 
 This RFC depends on:
@@ -82,7 +82,7 @@ It does not cover the `session`, `auth`, `models`, `bench`, or
 The product term in CLI output and help text is **workspace**. The
 terms `Spark daemon`, `binding`, and `runtime` do not appear in the
 user-facing `ws` command surface. When the CLI needs to expose the
-implementation boundary, it says **local Navia service** and
+implementation boundary, it says **Spark daemon** and
 **connection**. The `daemon` subgroup is explicit troubleshooting
 territory and may use the term `daemon` for process management.
 
