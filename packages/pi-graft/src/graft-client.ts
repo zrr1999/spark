@@ -56,6 +56,9 @@ export interface RunDirectGraftOptions {
   stdin?: string;
 }
 
+const GRAFT_WRITER_LOCK_RETRY_ATTEMPTS = 6;
+const GRAFT_WRITER_LOCK_RETRY_BASE_MS = 50;
+
 export interface GraftJsonExecution {
   envelope: JsonRecord;
   result?: JsonRecord;
@@ -80,64 +83,87 @@ export async function runDirectGraft(
   let lastError = "no graft candidate tried";
   for (const graft of graftCandidates()) {
     const actualArgv = ["--cwd", cwd, ...argv];
-    const result = await new Promise<{
-      code: number | null;
-      stdout: string;
-      stderr: string;
-      error?: Error;
-    }>((resolve) => {
-      const child = spawn(graft, actualArgv, { cwd, stdio: ["pipe", "pipe", "pipe"] });
-      const stdout: Buffer[] = [];
-      const stderr: Buffer[] = [];
-      child.stdout?.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
-      child.stderr?.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
-      child.once("error", (error) => {
-        resolve({
-          code: null,
-          stdout: Buffer.concat(stdout).toString(),
-          stderr: Buffer.concat(stderr).toString(),
-          error,
-        });
-      });
-      child.once("exit", (code) => {
-        resolve({
-          code,
-          stdout: Buffer.concat(stdout).toString(),
-          stderr: Buffer.concat(stderr).toString(),
-        });
-      });
-      if (options.stdin !== undefined) child.stdin?.end(options.stdin);
-      else child.stdin?.end();
-    });
+    for (let attempt = 1; attempt <= GRAFT_WRITER_LOCK_RETRY_ATTEMPTS; attempt += 1) {
+      const result = await spawnGraft(graft, actualArgv, cwd, options);
 
-    if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
-      lastError = `${graft} not found`;
-      continue;
-    }
-    if (result.error) {
-      throw new Error(`could not run graft CLI with ${graft}: ${result.error.message}`);
-    }
-    if (result.code !== 0) {
-      throw new GraftCliError({
+      if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
+        lastError = `${graft} not found`;
+        break;
+      }
+      if (result.error) {
+        throw new Error(`could not run graft CLI with ${graft}: ${result.error.message}`);
+      }
+      if (result.code !== 0) {
+        if (isGraftWriterLockFailure(result.stderr) && attempt < GRAFT_WRITER_LOCK_RETRY_ATTEMPTS) {
+          await sleep(GRAFT_WRITER_LOCK_RETRY_BASE_MS * 2 ** (attempt - 1));
+          continue;
+        }
+        throw new GraftCliError({
+          program: graft,
+          argv: actualArgv,
+          cwd,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: result.code,
+        });
+      }
+      return {
+        mode: "direct",
         program: graft,
-        argv: actualArgv,
         cwd,
+        argv: actualArgv,
         stdout: result.stdout,
         stderr: result.stderr,
         exitCode: result.code,
-      });
+      };
     }
-    return {
-      mode: "direct",
-      program: graft,
-      cwd,
-      argv: actualArgv,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.code,
-    };
   }
   throw new Error(`${lastError}; set GRAFT_BIN or put graft on PATH`);
+}
+
+async function spawnGraft(
+  graft: string,
+  actualArgv: string[],
+  cwd: string,
+  options: RunDirectGraftOptions,
+): Promise<{
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  error?: Error;
+}> {
+  return new Promise((resolve) => {
+    const child = spawn(graft, actualArgv, { cwd, stdio: ["pipe", "pipe", "pipe"] });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout?.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
+    child.stderr?.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+    child.once("error", (error) => {
+      resolve({
+        code: null,
+        stdout: Buffer.concat(stdout).toString(),
+        stderr: Buffer.concat(stderr).toString(),
+        error,
+      });
+    });
+    child.once("exit", (code) => {
+      resolve({
+        code,
+        stdout: Buffer.concat(stdout).toString(),
+        stderr: Buffer.concat(stderr).toString(),
+      });
+    });
+    if (options.stdin !== undefined) child.stdin?.end(options.stdin);
+    else child.stdin?.end();
+  });
+}
+
+function isGraftWriterLockFailure(stderr: string): boolean {
+  return /another graft writer holds the lock|\.registry\.lock/u.test(stderr);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function formatDirectOutput(execution: DirectGraftExecution): string {

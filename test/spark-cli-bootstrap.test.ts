@@ -5,13 +5,13 @@ import { basename, join } from "node:path";
 import test from "node:test";
 
 import { stableId } from "../packages/pi-extension-api/src/index.ts";
-import { parseSparkCliArgs } from "../apps/spark/src/cli.ts";
+import { parseSparkCliArgs } from "../apps/spark-tui/src/cli.ts";
 import {
   createProviderRegistryWorkflowModelRunner,
   createSparkCliHostServices,
   submitToSparkAgent,
   type SparkConfig,
-} from "../apps/spark/src/host/index.ts";
+} from "../apps/spark-tui/src/host/index.ts";
 
 function assistant(text: string): Record<string, unknown> {
   return {
@@ -154,7 +154,7 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
 
     const response = await submitToSparkAgent(services, "hello");
     assert.equal(response, "boot ok:1");
-    assert.match(captured.systemPrompt ?? "", /native spark-cli host/);
+    assert.match(captured.systemPrompt ?? "", /native spark-tui host/);
     assert.doesNotMatch(captured.systemPrompt ?? "", /You are Spark,/);
     assert.match(captured.systemPrompt ?? "", /Spark default research lens\./);
     assert.match(captured.systemPrompt ?? "", /Tools: task_read, task_write, assign/);
@@ -269,8 +269,8 @@ void test("provider registry workflow model runner rejects unknown provider and 
   }
 });
 
-void test("spark-cli package keeps pi-coding-agent out of runtime dependencies", async () => {
-  const pkg = JSON.parse(await readFile("apps/spark/package.json", "utf8")) as {
+void test("spark-tui-app package keeps pi-coding-agent out of runtime dependencies", async () => {
+  const pkg = JSON.parse(await readFile("apps/spark-tui/package.json", "utf8")) as {
     dependencies?: Record<string, string>;
   };
   assert.equal(pkg.dependencies?.["@earendil-works/pi-coding-agent"], undefined);

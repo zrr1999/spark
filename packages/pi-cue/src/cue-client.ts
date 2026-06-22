@@ -553,7 +553,9 @@ function stableHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
-function normalizeSessionEnv(input: Record<string, string | undefined> | undefined): Record<string, string> {
+function normalizeSessionEnv(
+  input: Record<string, string | undefined> | undefined,
+): Record<string, string> {
   const source = input ?? process.env;
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(source)) {
@@ -562,16 +564,15 @@ function normalizeSessionEnv(input: Record<string, string | undefined> | undefin
   return result;
 }
 
-function normalizeCueSessionOptions(options: CueSessionOptions | undefined): Required<CueSessionOptions> {
+function normalizeCueSessionOptions(
+  options: CueSessionOptions | undefined,
+): Required<CueSessionOptions> {
   const cwd = options?.cwd?.trim() || process.cwd();
   const sessionId = options?.sessionId?.trim() || `${PROCESS_SESSION_ID}:${stableHash(cwd)}`;
   return { sessionId, cwd, env: normalizeSessionEnv(options?.env) };
 }
 
-async function connectUnixCueClient(
-  path: string,
-  session?: CueSessionOptions,
-): Promise<CueClient> {
+async function connectUnixCueClient(path: string, session?: CueSessionOptions): Promise<CueClient> {
   const client = await new Promise<CueClient>((resolve, reject) => {
     const socket = createConnection({ path }, () => {
       resolve(new CueClient(socket));
@@ -855,7 +856,9 @@ export class CueClient {
     const pong = (ok as { Pong: PongPayload }).Pong;
     const version = pong?.version;
     if (typeof version !== "string" || version.length === 0) {
-      throw unsupportedProtocolError("cue-shell daemon Pong is missing version; upgrade/restart cued");
+      throw unsupportedProtocolError(
+        "cue-shell daemon Pong is missing version; upgrade/restart cued",
+      );
     }
     const protocolVersion = pong.protocol_version;
     if (typeof protocolVersion !== "number" || protocolVersion < REQUIRED_IPC_PROTOCOL_VERSION) {

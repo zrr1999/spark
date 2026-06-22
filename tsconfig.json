@@ -1,5 +1,10 @@
 {
   "extends": "./tsconfig.base.json",
-  "include": ["packages/**/*.ts", "apps/spark/**/*.ts", "test/**/*.ts"],
-  "exclude": ["packages/navia-*/**", "apps/navia-*/**"]
+  "include": [
+    "packages/**/*.ts",
+    "apps/spark-cli/**/*.ts",
+    "apps/spark-tui/**/*.ts",
+    "test/**/*.ts"
+  ],
+  "exclude": ["packages/navia-*/**", "apps/spark-cockpit/**"]
 }

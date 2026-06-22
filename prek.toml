@@ -49,7 +49,7 @@ hooks = [
   {
     id = "pi-boundary-check",
     name = "pi package boundary check",
-    entry = "pnpm run check:boundaries",
+    entry = "node scripts/check-pi-boundaries.mjs",
     language = "system",
     pass_filenames = true,
     stages = ["pre-commit"]
@@ -57,7 +57,7 @@ hooks = [
   {
     id = "vp-check",
     name = "vp check --fix",
-    entry = "pnpm run check:fix",
+    entry = "bash -c 'pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && pnpm exec vp check --fix'",
     language = "system",
     pass_filenames = false,
     stages = ["pre-commit"]

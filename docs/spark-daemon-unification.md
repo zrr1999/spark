@@ -21,6 +21,8 @@ Spark-owned name), not a separate Navia runtime identity.
 
 ## Decision
 
+Workspace client, borrowed-workspace, executor-client, connection-state, and snapshot-only control contracts are now captured in [Spark daemon workspace client contracts](./spark-daemon-workspace-clients.md). That document is the implementation contract for the daemon-owned workspace-client unification slice.
+
 1. **One user-facing runtime name: `spark daemon`.**
    - Remove active `navia-runner`, `navia daemon`, and "local Navia service"
      runtime vocabulary.
@@ -54,7 +56,7 @@ Spark-owned name), not a separate Navia runtime identity.
 The repo currently has two daemon concepts:
 
 - Spark CLI has a local-only file queue daemon documented as intentionally not a
-  gateway/service surface in `apps/spark/README.md` and
+  gateway/service surface in `apps/spark-tui/README.md` and
   `docs/spark-daemon-reference.md`.
 - Navia runner is a separate daemon/local service that already bridges web
   commands into Spark runtime primitives under `apps/navia-runner/`.
@@ -244,8 +246,8 @@ inside this repo's tests/docs as a normal path.
 | --- | --- | --- |
 | `apps/navia-runner` | `apps/spark-daemon` | Rename; becomes daemon implementation base. |
 | `@zendev-lab/navia-runner` | `@zendev-lab/spark-daemon` | Rename package; publish as daemon package if public. |
-| `apps/navia-web` | `apps/spark-cockpit` | Rename for no-dual-product concept, or document as temporary legacy source path until renamed. |
-| `@zendev-lab/navia-web` | `@zendev-lab/spark-cockpit` | Rename with cockpit package. |
+| former web cockpit app path | `apps/spark-cockpit` | Renamed; keep old path out of active repo references. |
+| former web cockpit package | `@zendev-lab/spark-cockpit` | Renamed with cockpit package. |
 | `@zendev-lab/navia-protocol` | `@zendev-lab/spark-cockpit-protocol` or `@zendev-lab/spark-daemon-protocol` | Rename if public schemas expose runtime identity. |
 | `@zendev-lab/navia-db` | `@zendev-lab/spark-cockpit-db` | Rename if package remains public/internal. |
 | `@zendev-lab/navia-domain` | `@zendev-lab/spark-cockpit-domain` | Rename or fold into cockpit app. |
@@ -258,7 +260,7 @@ inside this repo's tests/docs as a normal path.
 | Current | Target | Action |
 | --- | --- | --- |
 | `navia` binary for daemon/workspace ops | `spark workspace ...` / `spark daemon ...` | Remove as active repo path; optional external shim only. |
-| `scripts/link-navia-runner.mjs` | `scripts/link-spark-daemon.mjs` | Rename/update. |
+| `scripts/link-navia-runner.mjs` | _deleted_ | Root `spark` bin is the single public command; no separate daemon-link script. |
 | root scripts `navia:runner`, `navia:install`, `navia:e2e`, `navia:build` | `daemon:*` / `cockpit:*` / `spark-cockpit:*` | Rename to Spark-owned groups. |
 | launchd label `dev.navia.runner` | `dev.spark.daemon` | Rename and migrate/bootout old label. |
 | socket `runner.sock` | `daemon.sock` | Rename with one-time cleanup/migration. |
@@ -271,15 +273,15 @@ Initial grep evidence found active old runtime references in these categories:
 
 - Root metadata/docs: `README.md`, `AGENTS.md`, `package.json`,
   `scripts/link-navia-runner.mjs`.
-- Spark CLI daemon docs/code: `apps/spark/README.md`,
-  `apps/spark/src/cli.ts`, `apps/spark/src/cli/daemon.ts`,
+- Spark CLI daemon docs/code: `apps/spark-tui/README.md`,
+  `apps/spark-tui/src/cli.ts`, `apps/spark-tui/src/cli/daemon.ts`,
   former Spark CLI host daemon slice, `test/spark-daemon-*.test.ts`.
 - Former runner app: `apps/navia-runner/package.json`, `README.md`,
   `src/cli.ts`, `src/config.ts`, `src/daemon.ts`, `src/local-rpc.ts`,
   `src/service.ts`, `src/spark/bridge.ts`, and their `*.test.ts` files.
 - Cockpit/server docs and code: `docs/navia/**`,
-  `apps/navia-web/src/lib/i18n/en.json`,
-  `apps/navia-web/src/lib/server/package-boundaries.test.ts`.
+  `apps/spark-cockpit/src/lib/i18n/en.json`,
+  `apps/spark-cockpit/src/lib/server/package-boundaries.test.ts`.
 - Release docs: `docs/navia/docs/release/*`,
   `docs/navia/docs/plans/release-roadmap.md`.
 - Boundary checks: `scripts/check-pi-boundaries.mjs` and
@@ -296,7 +298,7 @@ remaining active references.
 
 The old Spark CLI host daemon slice has been removed. Queue, worker, lock,
 signal, invocation, and session-run execution now live under the Spark daemon
-package. `apps/spark/src/cli/daemon.ts` remains only as a client for the daemon
+package. `apps/spark-tui/src/cli/daemon.ts` remains only as a client for the daemon
 local IPC surface; it does not own a queue worker or session executor.
 
 ### Replace the former Navia runner identity
@@ -327,7 +329,7 @@ Streamed event rendering, cancellation, answers, and steering still need follow-
 ### Native headless role execution is part of completion
 
 Spark runtime now accepts a host-provided `SparkRoleInstructionExecutor`, and
-`@zendev-lab/spark-cli/headless-role-executor` provides the daemon-native
+`@zendev-lab/spark-tui-app/headless-role-executor` provides the daemon-native
 non-TUI implementation. The Spark daemon injects that executor for cockpit
 `task.start.request` work, so daemon-owned background role execution runs inside
 the Spark agent loop instead of spawning `pi --print --mode json`. Pi extension
@@ -362,11 +364,8 @@ Every implementation slice should include both targeted tests and vocabulary
 checks. The final validation task must include:
 
 ```text
-pnpm run check:boundaries
-pnpm run check:tsc
-pnpm test
-pnpm run verify:navia          # or renamed cockpit/daemon equivalent
-pnpm run verify:merged
+pnpm run check
+pnpm run build
 ```
 
 Plus grep/classification checks for:

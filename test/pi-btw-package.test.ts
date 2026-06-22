@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { DEFAULT_SPARK_CONFIG } from "../apps/spark/src/host/config.ts";
+import { DEFAULT_SPARK_CONFIG } from "../apps/spark-tui/src/host/config.ts";
 
 interface PackageJson {
   dependencies?: Record<string, string>;
@@ -36,7 +36,8 @@ void test("pi-btw package keeps upstream extension, skill, and host-specific dep
   const piVersion = pkg.dependencies?.["@earendil-works/pi-coding-agent"];
   assert.match(piVersion ?? "", /^\d+\.\d+\.\d+$/u);
   assert.equal(pkg.dependencies?.["@earendil-works/pi-ai"], piVersion);
-  assert.equal(pkg.dependencies?.["@earendil-works/pi-tui"], piVersion);
+  assert.equal(pkg.dependencies?.["@zendev-lab/spark-tui"], "workspace:^");
+  assert.equal(pkg.dependencies?.["@earendil-works/pi-tui"], undefined);
 });
 
 void test("pi-cue package ships prompt text without registering it as a skill", async () => {

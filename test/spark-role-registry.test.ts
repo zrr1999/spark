@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { builtinRoleIds, createBuiltinRoles } from "@zendev-lab/pi-roles";
 import { PI_GRAFT_PATCHER_ROLE_REF, registerPiGraftExtension } from "@zendev-lab/pi-graft";
-import { createSparkRoleRegistry } from "../packages/spark/src/extension/spark-role-registry.ts";
+import { createSparkRoleRegistry } from "../packages/spark-extension/src/extension/spark-role-registry.ts";
 
 interface MinimalPiGraftApi {
   on(event: "session_start", handler: (event: unknown, ctx: { cwd?: string }) => unknown): void;

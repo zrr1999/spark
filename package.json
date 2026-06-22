@@ -11,6 +11,9 @@
   ],
   "license": "MIT",
   "author": "zrr1999",
+  "bin": {
+    "spark": "./apps/spark-cli/bin/spark"
+  },
   "workspaces": {
     "packages": [
       "apps/*",
@@ -19,33 +22,10 @@
   },
   "type": "module",
   "scripts": {
-    "check": "pnpm run svelte:sync && vp check",
-    "check:fix": "pnpm run svelte:sync && vp check --fix",
-    "check:boundaries": "node scripts/check-pi-boundaries.mjs",
-    "check:tsc": "tsc -p tsconfig.json --noEmit",
-    "check:packages": "pnpm -r --filter './packages/*' --filter './apps/*' run check",
-    "format": "vp fmt . --write",
-    "format:check": "vp fmt . --check",
-    "lint": "vp lint . --fix",
-    "lint:check": "vp lint .",
-    "test": "node --experimental-strip-types --test \"test/*.test.ts\"",
-    "test:file": "node --experimental-strip-types --test",
-    "verify": "pnpm run check && pnpm test",
-    "prepare": "pnpx @j178/prek install --hook-type commit-msg --hook-type pre-commit",
-    "svelte:sync": "pnpm --filter @zendev-lab/navia-web exec svelte-kit sync",
-    "spark-daemon:check": "pnpm --filter @zendev-lab/spark-daemon run check",
-    "spark-daemon:test": "pnpm --filter @zendev-lab/spark-daemon run test",
-    "spark-daemon:e2e": "pnpm --filter @zendev-lab/spark-daemon exec vp test run src/daemon.test.ts -t 'streams ack, running, log chunks, and succeeded updates from the Spark bridge'",
-    "spark-daemon:build": "pnpm --filter @zendev-lab/spark-daemon run build",
-    "spark-daemon:cli": "pnpm --filter @zendev-lab/spark-daemon run cli",
-    "spark-daemon:install": "pnpm run spark-daemon:build && node scripts/link-spark-daemon.mjs",
-    "cockpit:check": "pnpm --filter '@zendev-lab/navia-*' run check",
-    "cockpit:test": "pnpm --filter '@zendev-lab/navia-*' run test",
-    "cockpit:build": "pnpm --filter @zendev-lab/navia-web run build",
-    "cockpit:web": "pnpm --filter @zendev-lab/navia-web run dev",
-    "verify:spark-daemon": "pnpm run spark-daemon:check && pnpm run spark-daemon:test && pnpm run spark-daemon:build",
-    "verify:cockpit": "pnpm run cockpit:check && pnpm run cockpit:test && pnpm run cockpit:build",
-    "verify:merged": "pnpm run check:boundaries && pnpm run check:tsc && pnpm test && pnpm run verify:spark-daemon && pnpm run verify:cockpit"
+    "check": "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && node scripts/check-pi-boundaries.mjs && vp check && node --experimental-strip-types --test \"test/*.test.ts\" && pnpm -r --filter './packages/*' --filter './apps/*' run check && pnpm --filter @zendev-lab/spark-cockpit run test && pnpm --filter @zendev-lab/spark-daemon run test && pnpm --filter '@zendev-lab/navia-*' run test",
+    "build": "pnpm --filter @zendev-lab/spark-daemon run build && pnpm --filter @zendev-lab/spark-cockpit run build",
+    "preview": "pnpm --filter @zendev-lab/spark-cockpit run dev",
+    "publish": "pnpm run check && pnpm run build && pnpm -r --filter @zendev-lab/navia-protocol --filter @zendev-lab/navia-system --filter @zendev-lab/navia-db --filter @zendev-lab/navia-domain --filter @zendev-lab/navia-ui --filter @zendev-lab/spark-daemon publish --access public"
   },
   "dependencies": {
     "@zendev-lab/pi-artifacts": "workspace:^",
@@ -61,11 +41,12 @@
     "@zendev-lab/pi-roles": "workspace:^",
     "@zendev-lab/pi-tasks": "workspace:^",
     "@zendev-lab/pi-workflows": "workspace:^",
+    "@zendev-lab/spark-protocol": "workspace:^",
     "@zendev-lab/spark-runtime": "workspace:^",
+    "@zendev-lab/spark-tui": "workspace:^",
     "typebox": "^1.2.13"
   },
   "devDependencies": {
-    "@earendil-works/pi-tui": "0.79.4",
     "@types/node": "^25.9.3",
     "@zendev-lab/navia-protocol": "workspace:*",
     "@zendev-lab/navia-system": "workspace:*",
@@ -91,8 +72,8 @@
       "./packages/pi-recall/src/extension-entry.ts",
       "./packages/pi-workflows/src/extension-entry.ts",
       "./packages/pi-graft/src/extension-entry.ts",
-      "./apps/spark/src/baidu-oneapi-provider.ts",
-      "./packages/spark/src/extension/index.ts"
+      "./apps/spark-tui/src/baidu-oneapi-provider.ts",
+      "./packages/spark-extension/src/extension/index.ts"
     ],
     "skills": [
       "./packages/pi-btw/skills"

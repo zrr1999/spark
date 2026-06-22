@@ -12,11 +12,11 @@ What works:
 - Repo-local Spark daemon smoke fixture that can register a fake Spark daemon, send projection fixtures, and validate web/API paths.
 - Full static validation and Spark daemon smoke pass under Node 26.
 - Settings can create one-time workspace registration tokens, show the registration command once, list/revoke unused tokens, and require a bearer registration token during local daemon registration.
-- Project cockpit can enqueue a `task.start.request`; `spark-daemon` accepts it, routes execution through the Spark runtime bridge, and streams invocation logs/status plus task graph and artifact projections.
+- Project cockpit can enqueue a `task.start.request`; the Spark daemon accepts it, routes execution through the Spark runtime bridge, and streams invocation logs/status plus task graph and artifact projections.
 - Spark daemon-originated human asks can be bridged into Inbox and resumed by answer delivery.
 - Spark daemon-produced task-summary artifacts have canonical content refs, a lazy server content/cache path, and artifact-detail rendering.
 - Resource and agent selections are carried through task start into Spark daemon execution metadata.
-- `pnpm run spark-daemon:e2e`, `pnpm run verify:cockpit`, and `pnpm run verify:merged` provide repeatable Spark-root gates for the cockpit and Spark daemon bridge. Historical standalone release gates remain documented for compatibility.
+- `pnpm run check` and `pnpm run build` provide repeatable Spark-root gates for the cockpit and Spark daemon bridge. Historical standalone release gates remain documented for compatibility.
 
 What does **not** yet work as a product:
 
@@ -32,7 +32,7 @@ A usable MVP is achieved when a local owner can complete this happy path on a cl
 1. Install dependencies and start Navia with one documented command path.
 2. Create/enter the local owner session.
 3. Generate a workspace registration command.
-4. Copy and run `spark-daemon workspace register` against a local directory.
+4. Copy and run `spark daemon workspace register` against a local directory.
 5. See a real Spark daemon workspace binding appear online.
 6. Create a server-visible workspace from that binding.
 7. Create a project and start a real task.
@@ -55,7 +55,7 @@ Non-goals for this MVP:
 
 ### P0 — Truth, bootstrap, and resetability
 
-P0 is implemented. In the merged Spark repo, use `pnpm run cockpit:web`, `pnpm run spark-daemon:e2e`, `pnpm run verify:cockpit`, and `pnpm run verify:merged` from the Spark root. Historical standalone helpers (`pnpm local:start`, `pnpm local:reset`, release gates) remain compatibility references.
+P0 is implemented. In the merged Spark repo, use `pnpm run preview`, `pnpm run check`, and `pnpm run build` from the Spark root. Historical standalone helpers (`pnpm local:start`, `pnpm local:reset`, release gates) remain compatibility references.
 
 | ID   | Workstream                  | Depends on            | Outcome                                                                                                  | Acceptance evidence                           |
 | ---- | --------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
@@ -70,7 +70,7 @@ P0 is implemented. In the merged Spark repo, use `pnpm run cockpit:web`, `pnpm r
 | ---- | ----------------------------------- | ---------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | P1.1 | Workspace registration token API/UI | P0.2       | UI can mint, display once, copy, revoke, and list one-time workspace registration tokens. | Browser creates token; DB stores hash only.                    |
 | P1.2 | Local service config/doctor         | P0.2       | `spark daemon status/logs` and diagnostics are reliable and JSON/scriptable where needed. | CLI tests and manual doctor output.                            |
-| P1.3 | Workspace register/start/stop       | P1.1, P1.2 | `spark-daemon workspace register` exchanges the token, stores credentials, opens WS, and stops cleanly. | Local workspace directory appears online.                      |
+| P1.3 | Workspace register/start/stop       | P1.1, P1.2 | `spark daemon workspace register` exchanges the token, stores credentials, opens WS, and stops cleanly. | Local workspace directory appears online.                      |
 | P1.4 | Workspace registry/reconcile        | P1.3       | Spark daemon list/reconcile workspace commands report bindings and survive reconnect.           | Workspace binding can create server workspace after reconnect. |
 
 ### P1 — Real task execution happy path
@@ -82,7 +82,7 @@ P0 is implemented. In the merged Spark repo, use `pnpm run cockpit:web`, `pnpm r
 | P1.7 | Invocation lifecycle hardening  | P1.6       | Running/succeeded/failed/cancelled/retry states are persisted and rendered clearly.  | Forced failure and cancel smoke pass.                |
 | P1.8 | Minimal task result projection  | P1.6       | Spark daemon reports task completion and updates latest task graph snapshot/projection.    | Cockpit status changes without manual smoke fixture. |
 
-Progress note, 2026-06-17: P1.1, P1.5, P1.6, and P1.8 have a merged Spark implementation. The Spark daemon bridge drives `task.start.request` through Spark runtime primitives and projects task graph, invocation, and artifact state back to Navia. `pnpm run spark-daemon:e2e` covers the stubbed happy path from the Spark root; see [../release/e2e-gate.md](../release/e2e-gate.md) for the historical standalone gate contract.
+Progress note, 2026-06-17: P1.1, P1.5, P1.6, and P1.8 have a merged Spark implementation. The Spark daemon bridge drives `task.start.request` through Spark runtime primitives and projects task graph, invocation, and artifact state back to Navia. Root `pnpm run check` covers the default validation path; see [../release/e2e-gate.md](../release/e2e-gate.md) for the historical standalone gate contract.
 
 Progress note, 2026-05-25: P1.9 through P1.15 now have first usable implementations for Inbox answer delivery, artifact content/cache retrieval, and task-level resource/agent binding. Remaining work is primarily hardening, public-release readiness, and real-Pi operator validation.
 
@@ -132,8 +132,8 @@ Progress note, 2026-05-25: P1.9 through P1.15 now have first usable implementati
 
 ### Gate A — Real Spark daemon online
 
-- `spark-daemon workspace register` succeeds with UI-generated token.
-- The command opens WS, or `spark-daemon daemon start` reopens it later.
+- `spark daemon workspace register` succeeds with UI-generated token.
+- The command opens WS, or `spark daemon start` reopens it later.
 - Settings shows online workspace binding.
 - Reconnect does not duplicate or lose binding state.
 

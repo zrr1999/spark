@@ -4,6 +4,8 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { SparkDaemonQueue } from "./queue.ts";
 import {
+  DEFAULT_SPARK_DAEMON_QUEUE_CONCURRENCY,
+  DEFAULT_SPARK_DAEMON_QUEUE_LAUNCH_LIMIT,
   createSparkDaemonActiveTasks,
   defaultSparkDaemonTaskExecutor,
   processSparkDaemonQueueBatch,
@@ -71,8 +73,8 @@ export class SparkDaemonWorkerLoop {
   constructor(options: SparkDaemonWorkerLoopOptions) {
     this.context = options.context;
     this.label = options.label ?? "spark-daemon";
-    this.limit = options.limit ?? 1;
-    this.concurrency = options.concurrency ?? 1;
+    this.limit = options.limit ?? DEFAULT_SPARK_DAEMON_QUEUE_LAUNCH_LIMIT;
+    this.concurrency = options.concurrency ?? DEFAULT_SPARK_DAEMON_QUEUE_CONCURRENCY;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_IDLE_POLL_INTERVAL_MS;
     this.isStopped = options.isStopped;
   }

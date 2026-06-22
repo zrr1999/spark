@@ -1,0 +1,29 @@
+{
+  "name": "@zendev-lab/spark-cli",
+  "version": "0.1.0",
+  "description": "Thin dispatcher for the root spark command; routes spark <name> to spark-<name> executables.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "bin": {
+    "spark": "./bin/spark"
+  },
+  "files": [
+    "bin/**/*",
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@zendev-lab/spark-daemon": "workspace:^",
+    "@zendev-lab/spark-tui-app": "workspace:^"
+  },
+  "engines": {
+    "node": ">=26.0.0 <27"
+  }
+}

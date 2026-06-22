@@ -2,12 +2,12 @@
 
 Shared **types-only** TypeScript contract for Pi-style extensions consumed by
 both [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-and the spark-cli native pi-tui host.
+and the Spark TUI native pi-tui host.
 
 ## Why this package exists
 
 Before this package, every extension package (`@zendev-lab/pi-ask`, `@zendev-lab/pi-cue`,
-`@zendev-lab/pi-graft`, `@zendev-lab/pi-roles`, `@zendev-lab/spark`) maintained its own `pi-types.d.ts` shim
+`@zendev-lab/pi-graft`, `@zendev-lab/pi-roles`, `@zendev-lab/spark-extension`) maintained its own `pi-types.d.ts` shim
 that re-declared a slice of `ExtensionAPI` via `declare module
 "@earendil-works/pi-coding-agent"`. That meant:
 
@@ -33,8 +33,8 @@ dependencies. Two hosts implement supersets of these types:
 - pi-coding-agent runtime — full Pi semantics (commands, tools, events,
   widgets, sessions). Declares this surface as a subset of its private
   `ExtensionAPI`.
-- spark-cli native pi-tui host — `SparkHostRuntime` implements the retained
-  surface needed by `@zendev-lab/pi-ask`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-graft`, and `@zendev-lab/spark`,
+- spark-tui-app native pi-tui host — `SparkHostRuntime` implements the retained
+  surface needed by `@zendev-lab/pi-ask`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-graft`, and `@zendev-lab/spark-extension`,
   plus host-only helpers for keybindings, message renderers, provider/model
   selection, and the native TUI bridge.
 
@@ -47,8 +47,8 @@ dependencies. Two hosts implement supersets of these types:
    change set.
 3. **No runtime imports.** This package must remain importable in any
    workspace as a types-only dependency.
-4. **Keep slices narrow.** If a feature is only needed by the native Spark CLI
-   host, put it behind host-only helpers in `apps/spark/src/host/`
+4. **Keep slices narrow.** If a feature is only needed by the native Spark TUI
+   host, put it behind host-only helpers in `apps/spark-tui/src/host/`
    rather than widening this contract. If an extension package needs it on
    both hosts, add the smallest optional method here and test both hosts.
 
@@ -57,15 +57,15 @@ dependencies. Two hosts implement supersets of these types:
 | Host                                      | Status                                                                         |
 | ----------------------------------------- | ------------------------------------------------------------------------------ |
 | `@earendil-works/pi-coding-agent` runtime | Subset implemented (registerCommand, registerTool, on, sendUserMessage, ui.\*) |
-| `@zendev-lab/spark-cli` SparkHostRuntime              | Retained extension surface implemented for native Spark CLI boot               |
+| `@zendev-lab/spark-tui-app` SparkHostRuntime          | Retained extension surface implemented for native Spark TUI boot               |
 
 ## Adding a new capability
 
 1. Decide whether the capability is shared extension contract or host-only
-   Spark CLI behavior. Host-only behavior should stay out of this package.
+   Spark TUI behavior. Host-only behavior should stay out of this package.
 2. Add shared methods/types to `src/index.ts` with `optional` semantics.
 3. Update the contract test (`test/spark-ext-host-contract.test.ts`) to
    exercise both hosts via the new shape.
 4. Implement on both hosts; only land the change once both pass.
-5. If the change touches native Spark CLI boot/loading, also run the relevant
-   `@zendev-lab/spark-cli` host tests (extension loader, runtime contract, and bootstrap).
+5. If the change touches native Spark TUI boot/loading, also run the relevant
+   `@zendev-lab/spark-tui-app` host tests (extension loader, runtime contract, and bootstrap).

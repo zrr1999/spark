@@ -343,7 +343,7 @@ function rowToSessionTodo(row: unknown, filePath: string): SessionTodoEntry {
   if (item.owner_kind !== "session" || item.task_ref !== null) {
     throw new TaskTodoStoreFormatError(
       filePath,
-      "session TODO row must have owner_kind=session and no task_ref",
+      "session-owned row must have owner_kind=session and no task_ref",
     );
   }
   const notes = parseStringArrayJson(item.notes_json, filePath, `${item.id}.notes_json`);

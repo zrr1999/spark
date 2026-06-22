@@ -9,8 +9,8 @@ import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
 import type { WorkflowRunStatusSummary } from "@zendev-lab/pi-workflows";
 import type { ActiveSparkRoleRunProcess } from "@zendev-lab/spark-runtime";
 import { TaskGraph } from "@zendev-lab/pi-tasks";
-import { evaluateSparkTaskClaimRecovery } from "../packages/spark/src/extension/task-claim-recovery.ts";
-import { sessionDirectoryNameForKey } from "../packages/spark/src/extension/session-directory-store.ts";
+import { evaluateSparkTaskClaimRecovery } from "../packages/spark-extension/src/extension/task-claim-recovery.ts";
+import { sessionDirectoryNameForKey } from "../packages/spark-extension/src/extension/session-directory-store.ts";
 
 const IDLE_WORKFLOW_STATUS: WorkflowRunStatusSummary = {
   manager: { status: "idle", updatedAt: "2026-06-17T00:00:00.000Z" },

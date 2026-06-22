@@ -13,6 +13,44 @@ export const runtimeWorkspaceBindingStatusSchema = z.enum([
   "archived",
 ]);
 
+export const runtimeConnectionProjectionStatusSchema = z.enum(["connected", "disconnected"]);
+
+export const runtimeConnectionProjectionSchema = z.object({
+  status: runtimeConnectionProjectionStatusSchema,
+  lastSeenAt: isoDateTimeSchema.optional(),
+  reason: z.string().min(1).optional(),
+});
+
+export const workspaceClientKindSchema = z.enum(["interactive", "headless", "executor"]);
+export const workspaceClientStatusSchema = z.enum(["connected", "disconnected"]);
+
+export const workspaceClientProjectionSchema = z.object({
+  clientId: z.string().min(1),
+  kind: workspaceClientKindSchema,
+  status: workspaceClientStatusSchema,
+  displayName: z.string().min(1).optional(),
+  attachedAt: isoDateTimeSchema.optional(),
+  lastSeenAt: isoDateTimeSchema.optional(),
+});
+
+export const workspaceBorrowedStateSchema = z.object({
+  borrowed: z.boolean(),
+  interactiveClientCount: z.number().int().nonnegative().default(0),
+  borrowedByClientIds: z.array(z.string().min(1)).default([]),
+  since: isoDateTimeSchema.optional(),
+});
+
+export const executorClientStateSchema = z.enum(["none", "starting", "online", "unhealthy"]);
+
+export const executorClientProjectionSchema = z.object({
+  state: executorClientStateSchema,
+  clientId: z.string().min(1).optional(),
+  activeInvocationCount: z.number().int().nonnegative().default(0),
+  activeAgentCount: z.number().int().nonnegative().default(0),
+  lastSeenAt: isoDateTimeSchema.optional(),
+  unhealthyReason: z.string().min(1).optional(),
+});
+
 export const runtimeWorkspaceBindingSummarySchema = z.object({
   bindingId: prefixedIdSchema("rtwb"),
   localWorkspaceKey: z.string().min(1),
@@ -20,6 +58,10 @@ export const runtimeWorkspaceBindingSummarySchema = z.object({
   status: runtimeWorkspaceBindingStatusSchema,
   capabilities: jsonObjectSchema.default({}),
   diagnostics: jsonObjectSchema.default({}),
+  connection: runtimeConnectionProjectionSchema.optional(),
+  borrowed: workspaceBorrowedStateSchema.optional(),
+  workspaceClients: z.array(workspaceClientProjectionSchema).optional(),
+  executor: executorClientProjectionSchema.optional(),
 });
 
 export const runtimeHelloPayloadSchema = z.object({
@@ -63,6 +105,8 @@ export const runtimeReconcileReportPayloadSchema = z.object({
   workspaceBindings: z.array(runtimeWorkspaceBindingSummarySchema).default([]),
   pendingOutboxCount: z.number().int().nonnegative().default(0),
   activeInvocationCount: z.number().int().nonnegative().default(0),
+  activeAgentCount: z.number().int().nonnegative().default(0),
+  executor: executorClientProjectionSchema.optional(),
   artifacts: z
     .object({
       availableCount: z.number().int().nonnegative().default(0),
@@ -98,6 +142,18 @@ export const workspaceSnapshotPayloadSchema = z.object({
   projects: z.array(workspaceSnapshotProjectSchema).default([]),
   unresolvedInboxCount: z.number().int().nonnegative().default(0),
   activeInvocationCount: z.number().int().nonnegative().default(0),
+  activeAgentCount: z.number().int().nonnegative().default(0),
+  connection: runtimeConnectionProjectionSchema.optional(),
+  borrowed: workspaceBorrowedStateSchema.optional(),
+  workspaceClients: z.array(workspaceClientProjectionSchema).optional(),
+  executor: executorClientProjectionSchema.optional(),
+  control: z
+    .object({
+      mode: z.enum(["full", "snapshot_only"]),
+      reason: z.string().min(1).optional(),
+      serverMutationAllowed: z.boolean(),
+    })
+    .optional(),
   latestArtifactIds: z.array(artifactRefSchema).default([]),
   resources: z.array(jsonObjectSchema).default([]),
 });
@@ -385,6 +441,16 @@ export const runtimeMessageEnvelopeSchema = z.discriminatedUnion("type", [
   artifactProjectionEnvelopeSchema,
 ]);
 
+export type RuntimeConnectionProjectionStatus = z.infer<
+  typeof runtimeConnectionProjectionStatusSchema
+>;
+export type RuntimeConnectionProjection = z.infer<typeof runtimeConnectionProjectionSchema>;
+export type WorkspaceClientKind = z.infer<typeof workspaceClientKindSchema>;
+export type WorkspaceClientStatus = z.infer<typeof workspaceClientStatusSchema>;
+export type WorkspaceClientProjection = z.infer<typeof workspaceClientProjectionSchema>;
+export type WorkspaceBorrowedState = z.infer<typeof workspaceBorrowedStateSchema>;
+export type ExecutorClientState = z.infer<typeof executorClientStateSchema>;
+export type ExecutorClientProjection = z.infer<typeof executorClientProjectionSchema>;
 export type RuntimeHelloPayload = z.infer<typeof runtimeHelloPayloadSchema>;
 export type RuntimeHeartbeatPayload = z.infer<typeof runtimeHeartbeatPayloadSchema>;
 export type RuntimeWorkspaceBindingSummary = z.infer<typeof runtimeWorkspaceBindingSummarySchema>;

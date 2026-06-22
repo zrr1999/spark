@@ -273,6 +273,160 @@ describe("Spark daemon local RPC", () => {
     }
   });
 
+  it("attaches, heartbeats, and releases workspace clients over local RPC", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
+    const paths = resolveNaviaPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+
+    try {
+      const workspacePath = join(root, "workspace");
+      mkdirSync(workspacePath);
+      db.prepare(
+        `INSERT INTO workspaces
+          (id, server_url, local_workspace_key, display_name, local_path, status, capabilities_json, diagnostics_json, created_at, updated_at)
+         VALUES ('rtwb_test', '', 'workspace', 'Workspace', ?, 'available', '{}', '{}', ?, ?)`,
+      ).run(workspacePath, "2026-05-26T00:00:00.000Z", "2026-05-26T00:00:00.000Z");
+
+      const attached = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "client_attach",
+          method: "workspace.client.attach",
+          params: {
+            workspaceId: "rtwb_test",
+            clientId: "wcl-rpc-tui",
+            kind: "interactive",
+            displayName: "Spark TUI",
+            leaseTtlMs: 60_000,
+          },
+        }),
+        paths,
+        db,
+        undefined,
+      );
+      expect(attached).toMatchObject({
+        id: "client_attach",
+        ok: true,
+        result: {
+          client: { id: "wcl-rpc-tui", kind: "interactive", status: "connected" },
+          workspace: {
+            id: "rtwb_test",
+            borrowed: { borrowed: true, interactiveClientCount: 1 },
+          },
+        },
+      });
+
+      const heartbeat = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "client_heartbeat",
+          method: "workspace.client.heartbeat",
+          params: { clientId: "wcl-rpc-tui", leaseTtlMs: 60_000 },
+        }),
+        paths,
+        db,
+        undefined,
+      );
+      expect(heartbeat).toMatchObject({ ok: true, result: { client: { status: "connected" } } });
+
+      const released = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "client_release",
+          method: "workspace.client.release",
+          params: { clientId: "wcl-rpc-tui" },
+        }),
+        paths,
+        db,
+        undefined,
+      );
+      expect(released).toMatchObject({
+        ok: true,
+        result: {
+          client: { status: "disconnected" },
+          workspace: { borrowed: { borrowed: false, interactiveClientCount: 0 } },
+        },
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ensures and reuses an executor client over local RPC", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
+    const paths = resolveNaviaPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+
+    try {
+      const workspacePath = join(root, "workspace");
+      mkdirSync(workspacePath);
+      db.prepare(
+        `INSERT INTO workspaces
+          (id, server_url, local_workspace_key, display_name, local_path, status, capabilities_json, diagnostics_json, created_at, updated_at)
+         VALUES ('rtwb_executor', '', 'workspace', 'Workspace', ?, 'available', '{}', '{}', ?, ?)`,
+      ).run(workspacePath, "2026-05-26T00:00:00.000Z", "2026-05-26T00:00:00.000Z");
+
+      const first = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "executor_ensure_1",
+          method: "workspace.executor.ensure",
+          params: {
+            workspaceId: "rtwb_executor",
+            clientId: "exec-rpc-1",
+            metadata: { activeAgentCount: 4 },
+          },
+        }),
+        paths,
+        db,
+        undefined,
+      );
+      const second = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "executor_ensure_2",
+          method: "workspace.executor.ensure",
+          params: { workspaceId: "rtwb_executor", clientId: "exec-rpc-2" },
+        }),
+        paths,
+        db,
+        undefined,
+      );
+
+      expect(first).toMatchObject({
+        ok: true,
+        result: {
+          client: { id: "exec-rpc-1", kind: "executor", status: "connected" },
+          workspace: { executor: { state: "online", clientId: "exec-rpc-1" } },
+        },
+      });
+      expect(second).toMatchObject({
+        ok: true,
+        result: {
+          client: { id: "exec-rpc-1", kind: "executor", status: "connected" },
+          workspace: { executor: { state: "online", clientId: "exec-rpc-1" } },
+        },
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("requests daemon shutdown over the local socket", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
     const paths = resolveNaviaPaths({

@@ -5,20 +5,20 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { TaskGraph, defaultTaskGraphStore, defaultTaskTodoStore } from "@zendev-lab/pi-tasks";
-import sparkExtension from "../packages/spark/src/extension/index.ts";
+import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
 import {
   renderActiveSparkContextSummary,
   renderSparkActiveSystemPrompt,
-} from "../packages/spark/src/extension/spark-active-injection.ts";
-import { saveIndependentTodos } from "../packages/spark/src/extension/session-todos.ts";
+} from "../packages/spark-extension/src/extension/spark-active-injection.ts";
+import { saveIndependentTodos } from "../packages/spark-extension/src/extension/session-todos.ts";
 import {
   hasNonSparkProjectFiles,
   shouldMaterializeSparkMd,
-} from "../packages/spark/src/extension/spark-activation.ts";
+} from "../packages/spark-extension/src/extension/spark-activation.ts";
 import {
   initializeSparkIdea,
   shouldClarifyBeforeInit,
-} from "../packages/spark/src/extension/spark-initialization.ts";
+} from "../packages/spark-extension/src/extension/spark-initialization.ts";
 
 type SparkExtensionApiForTest = Parameters<typeof sparkExtension>[0];
 type SparkToolConfig = Parameters<NonNullable<SparkExtensionApiForTest["registerTool"]>>[0];
@@ -314,12 +314,7 @@ void test("active Spark context omits finished history and finished TODOs", asyn
     assert.match(summary, /My claimed task: \[running\] @compact-context: Compact active context/);
     assert.match(summary, /Keep active TODO/);
     assert.match(summary, /Blocked child TODO/);
-    assert.match(summary, /Independent TODOs \(session priority\): 1 active/);
-    assert.match(summary, /Independent active TODO/);
-    assert.ok(
-      summary.indexOf("Independent active TODO") < summary.indexOf("My claimed task"),
-      "session TODOs should precede claimed task context so execute mode sees them first",
-    );
+    assert.doesNotMatch(summary, /Independent active TODO/);
     assert.doesNotMatch(summary, /Finished task history/);
     assert.doesNotMatch(summary, /Finished child TODO/);
     assert.doesNotMatch(summary, /Finished history TODO/);

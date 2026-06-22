@@ -30,7 +30,7 @@ import {
   type KeybindingsManager,
   type OverlayHandle,
   type TUI,
-} from "@earendil-works/pi-tui";
+} from "@zendev-lab/spark-tui/pi-tui";
 
 const BTW_MESSAGE_TYPE = "btw-note";
 const BTW_ENTRY_TYPE = "btw-thread-entry";

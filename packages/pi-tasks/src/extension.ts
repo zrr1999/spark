@@ -161,7 +161,7 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
         description:
           "project_use | project_rename | project_metadata_update | claim | plan | finish | recover | todo_update | cache_cleanup",
       }),
-      scope: Type.Optional(Type.String({ description: "For todo_update: session | task." })),
+      scope: Type.Optional(Type.String({ description: "For todo_update: task plan items only." })),
       project: Type.Optional(Type.String({ description: "Project selector/ref/title." })),
       projectRef: Type.Optional(Type.String({ description: "Project ref filter or selector." })),
       task: Type.Optional(Type.String({ description: "Task selector/ref/name/title." })),
@@ -195,7 +195,7 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
         Type.Array(
           Type.String({
             description:
-              "Low-level initial task plan items for task-creation handlers that explicitly support them; plan-aware handlers may also derive plan items from task.plan.",
+              "Initial task plan items for task-creation handlers that explicitly support them; plan-aware handlers may also derive plan items from task.plan.",
           }),
         ),
       ),

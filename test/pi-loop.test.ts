@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  LOOP_COMPLETION_BOUNDARY_GUIDANCE,
   LOOP_CUSTOM_ENTRY_TYPE,
   blockLoop,
   clearLoopEntry,
@@ -72,19 +71,15 @@ void test("pi-loop tick continues, waits, blocks, and never emits goal completio
   assert.match(blocked.message, /needs user decision/);
 });
 
-void test("pi-loop prompts mark loop continuation without claiming completion authority", () => {
+void test("pi-loop prompts preserve continuation markers", () => {
   const loop = createLoop("Ship a layered primitive", 100);
   const compact = compactLoopPrompt(loop);
   const full = loopContinuationPrompt(loop);
 
   assert.equal(continuationLoopIdFromPrompt(compact), loop.loopId);
-  assert.match(compact, /not a completion authority/);
-  assert.match(full, /Do not call goal completion tools/);
-  assert.equal(
-    LOOP_COMPLETION_BOUNDARY_GUIDANCE.includes("must not decide that a goal is complete"),
-    true,
-  );
-  assert.doesNotMatch(full, /reviewer-gated completion/iu);
+  assert.equal(continuationLoopIdFromPrompt(full), loop.loopId);
+  assert.match(full, /<pi_loop_continuation loop_id=/);
+  assert.match(full, /<\/pi_loop_continuation>/);
 });
 
 void test("pi-loop result helpers reject empty objectives and concurrent loops", () => {

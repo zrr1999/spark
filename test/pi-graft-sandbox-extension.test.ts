@@ -171,7 +171,18 @@ void test("sandbox entrypoint layers sandbox state tools over normal pi-graft", 
   assert.match(status.content[0].text, /repo: \/repo/);
   assert.match(status.content[0].text, /base: repo:sandbox@HEAD/);
   assert.match(status.content[0].text, /scratch: scratch:abc/);
+  assert.match(
+    status.content[0].text,
+    /file-tool names read\/write\/edit\/grep\/find\/ls remain sandbox overrides/,
+  );
   assert.deepEqual(status.details?.state, restoredState);
+  assert.deepEqual(status.details?.profile, {
+    treeBackendPreference: "auto",
+    sandboxOverridesRemainRegistered: true,
+    restoreBuiltInsBy: "reload_without_sandbox_entrypoint",
+    reloadGuidance:
+      "Reload or restart Pi without @zendev-lab/pi-graft/sandbox, and do not use --no-builtin-tools if ordinary Pi built-ins should be available.",
+  });
 
   const exit = await executeTool(
     tools.get("graft_sandbox_exit"),
@@ -179,13 +190,27 @@ void test("sandbox entrypoint layers sandbox state tools over normal pi-graft", 
     {},
     { cwd: "/repo" },
   );
-  assert.match(exit.content[0].text, /Exited Graft sandbox/);
+  assert.match(exit.content[0].text, /Exited Graft sandbox and cleared sandbox state/);
+  assert.match(exit.content[0].text, /remain sandbox overrides in this loaded profile/);
+  assert.match(exit.content[0].text, /do not use --no-builtin-tools/);
   assert.equal(exit.details?.sandbox, false);
+  assert.deepEqual(exit.details?.profile, status.details?.profile);
   assert.deepEqual(entries.at(-1), {
     type: "custom",
     customType: SANDBOX_STATE_ENTRY,
     data: { state: null },
   });
+
+  const inactiveStatus = await executeTool(
+    tools.get("graft_sandbox_status"),
+    "graft_sandbox_status",
+    {},
+    { cwd: "/repo" },
+  );
+  assert.match(inactiveStatus.content[0].text, /GRAFT SANDBOX INACTIVE/);
+  assert.match(inactiveStatus.content[0].text, /still owns file-tool override names/);
+  assert.equal(inactiveStatus.details?.sandbox, false);
+  assert.deepEqual(inactiveStatus.details?.profile, status.details?.profile);
 });
 
 void test("sandbox tool-call guardrails block obvious shell file I/O bypasses", async () => {

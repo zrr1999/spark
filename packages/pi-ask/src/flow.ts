@@ -1,4 +1,4 @@
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@zendev-lab/spark-tui/text";
 import { Type } from "typebox";
 
 import { PiAskFlowController } from "./ui/controller.ts";

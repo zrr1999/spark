@@ -50,10 +50,10 @@ route runtime protocol messages, reconnect safely, and cache artifact previews.
 
 - `apps/spark-daemon/src/spark/bridge.ts` emits Spark-backed Navia protocol
   envelopes with Spark refs in payload/content refs.
-- `apps/navia-web/src/lib/server/runtime-ws.ts` records runtime message receipts
+- `apps/spark-cockpit/src/lib/server/runtime-ws.ts` records runtime message receipts
   before acknowledging projection ingestion, and skips already-seen messages on
   reconnect replay.
-- `apps/navia-web/src/lib/server/projection-services.ts` keeps direct projection
+- `apps/spark-cockpit/src/lib/server/projection-services.ts` keeps direct projection
   writes idempotent through upsert/delete-and-replace patterns.
 - `packages/navia-db/src/migrations/0007_runtime_message_receipts.sql` adds the
   replay guard table used by the runtime WebSocket ingestion layer.
@@ -62,8 +62,8 @@ route runtime protocol messages, reconnect safely, and cache artifact previews.
 
 The boundary is covered by:
 
-- `apps/navia-web/src/lib/server/projection-services.test.ts` for direct replay
+- `apps/spark-cockpit/src/lib/server/projection-services.test.ts` for direct replay
   of task graph snapshots and artifact projections.
-- `apps/navia-web/src/lib/server/runtime-ws.test.ts` for reconnect replay of a
+- `apps/spark-cockpit/src/lib/server/runtime-ws.test.ts` for reconnect replay of a
   runtime projection message by message id.
 - `scripts/check-pi-boundaries.mjs` for forbidden dependency/import directions.

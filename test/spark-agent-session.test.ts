@@ -9,8 +9,8 @@ import {
   createSparkCliHostServices,
   type SparkCliHostServicesOptions,
   type SparkConfig,
-} from "../apps/spark/src/host/index.ts";
-import { createSparkHeadlessSessionExecutor } from "../apps/spark/src/headless-role-executor.ts";
+} from "../apps/spark-tui/src/host/index.ts";
+import { createSparkHeadlessSessionExecutor } from "../apps/spark-tui/src/headless-role-executor.ts";
 import {
   SparkDaemonQueue,
   createSparkDaemonWorkerContext,

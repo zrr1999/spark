@@ -9,16 +9,16 @@ Navia's current npm publish surface is the Spark daemon and shared packages. The
 - `@zendev-lab/navia-domain`
 - `@zendev-lab/navia-ui`
 
-The repository root remains `private` because it is a pnpm workspace aggregator, not a package. `@zendev-lab/navia-web` also remains private until the server distribution is finalized.
+The repository root remains `private` because it is a pnpm workspace aggregator, not a package. `@zendev-lab/spark-cockpit` also remains private until the server distribution is finalized.
 
 ## Checks
 
 ```bash
-pnpm release:check
-pnpm pack:check
+pnpm run check
+pnpm run build
 ```
 
-Use `pnpm release:smoke` before a release candidate when the Spark daemon smoke should also run.
+Use focused package tests before a release candidate when the Spark daemon/server projection path should also be checked.
 
 ## Publish
 
@@ -26,7 +26,7 @@ Confirm the npm account owns the `@zendev-lab` scope before publishing.
 
 ```bash
 pnpm login
-pnpm -r --filter @zendev-lab/navia-protocol --filter @zendev-lab/navia-system --filter @zendev-lab/navia-db --filter @zendev-lab/navia-domain --filter @zendev-lab/navia-ui --filter @zendev-lab/spark-daemon publish --access public
+pnpm run publish
 ```
 
 ## Release decisions still required

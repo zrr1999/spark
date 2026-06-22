@@ -31,6 +31,9 @@ export const runtimeFeatureSchema = z.enum([
   "artifact-cache-upload-v1",
   "cancellation-v1",
   "reconcile-v1",
+  "workspace-clients-v1",
+  "executor-client-v1",
+  "snapshot-control-v1",
 ]);
 
 export type RuntimeFeature = z.infer<typeof runtimeFeatureSchema>;

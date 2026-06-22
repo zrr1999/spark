@@ -4,7 +4,7 @@ import test from "node:test";
 import piAskExtension from "../packages/pi-ask/src/extension.ts";
 import piCueExtension from "../packages/pi-cue/src/index.ts";
 import piGraftExtension from "../packages/pi-graft/src/extension.ts";
-import { SparkHostRuntime } from "../apps/spark/src/host/runtime.ts";
+import { SparkHostRuntime } from "../apps/spark-tui/src/host/runtime.ts";
 
 void test("SparkHostRuntime accepts piCueExtension(pi) without throwing", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-cross" });

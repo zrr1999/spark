@@ -508,6 +508,7 @@ interface ScratchSourceSelection {
   params: JsonRecord;
   base?: string;
   from?: string;
+  envBase?: string;
   usedLastScratch: boolean;
 }
 
@@ -528,6 +529,14 @@ function toolCwd(
   return cwd;
 }
 
+function graftBaseRefFromEnv(): string | undefined {
+  const value = process.env.GRAFT_BASE_REF;
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error("GRAFT_BASE_REF is set but empty; pass base/from or set it.");
+  return trimmed;
+}
+
 function scratchSourceSelection(
   params: Record<string, unknown>,
   state: ActiveGraftScratchState | undefined,
@@ -540,8 +549,10 @@ function scratchSourceSelection(
   if (state?.lastScratch) {
     return { params: { from: state.lastScratch }, from: state.lastScratch, usedLastScratch: true };
   }
+  const envBase = graftBaseRefFromEnv();
+  if (envBase) return { params: {}, envBase, usedLastScratch: false };
   throw new Error(
-    "scratch operation requires base or from; pass base for the first operation or from to continue a returned scratch.",
+    "scratch operation requires base or from; pass base for the first operation, from to continue a returned scratch, or set GRAFT_BASE_REF.",
   );
 }
 
@@ -572,12 +583,14 @@ function sourceBaseUpdate(
   previous: ActiveGraftScratchState | undefined,
 ): string | null | undefined {
   if (source.base) return source.base;
+  if (source.envBase) return source.envBase;
   if (source.usedLastScratch || source.from === previous?.lastScratch) return undefined;
   return null;
 }
 
 function sourceDescription(source: ScratchSourceSelection): string {
   if (source.base) return `base ${source.base}`;
+  if (source.envBase) return `env ${source.envBase}`;
   if (source.usedLastScratch) return `last scratch ${source.from}`;
   return `scratch ${source.from}`;
 }
@@ -585,7 +598,8 @@ function sourceDescription(source: ScratchSourceSelection): string {
 function scratchSourceArgv(source: ScratchSourceSelection): string[] {
   if (source.base) return ["--base", source.base];
   if (source.from) return ["--from", source.from];
-  throw new Error("scratch source is missing base/from.");
+  if (source.envBase) return [];
+  throw new Error("scratch source is missing base/from/envBase.");
 }
 
 function scratchSourceSchema(): Record<string, unknown> {
@@ -593,7 +607,7 @@ function scratchSourceSchema(): Record<string, unknown> {
     base: Type.Optional(
       Type.String({
         description:
-          "Base ref for the first scratch operation: graft:empty, tree:<id>, candidate:<id>, or patch:<id>. Mutually exclusive with from; omit from when base is set.",
+          "Base ref for the first scratch operation: graft:empty, tree:<id>, candidate:<id>, patch:<id>, or treeish. Mutually exclusive with from; omit to use GRAFT_BASE_REF when no scratch is being continued.",
       }),
     ),
     from: Type.Optional(
@@ -800,9 +814,12 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     label: "Graft Scratch Open",
     description: "Open a base ref as a daemon scratch and remember it as lastScratch.",
     parameters: Type.Object({
-      base: Type.String({
-        description: "Base ref to open: graft:empty, tree:<id>, candidate:<id>, or patch:<id>.",
-      }),
+      base: Type.Optional(
+        Type.String({
+          description:
+            "Base ref to open: graft:empty, tree:<id>, candidate:<id>, patch:<id>, or treeish. Omit to use GRAFT_BASE_REF.",
+        }),
+      ),
     }),
     async execute(
       _toolCallId: string,
@@ -813,16 +830,20 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const base = optionalStringParam(params, "base");
-      if (!base) throw new Error("graft_scratch_open requires base.");
-      const { result } = await graftJsonResult(
-        cwd,
-        ["scratch", "open", "--base", base],
-        "scratch open",
-      );
+      const envBase = base ? undefined : graftBaseRefFromEnv();
+      if (!base && !envBase) throw new Error("graft_scratch_open requires base or GRAFT_BASE_REF.");
+      const argv = base ? ["scratch", "open", "--base", base] : ["scratch", "open"];
+      const { result } = await graftJsonResult(cwd, argv, "scratch open");
       const scratch = requireResultString(result, "scratch_open", "scratch");
-      const nextState = rememberState(cwd, { base, lastScratch: scratch });
+      const rememberedBase = base ?? envBase;
+      const nextState = rememberState(cwd, { base: rememberedBase, lastScratch: scratch });
       return {
-        content: [{ type: "text", text: `Opened ${base} as graft scratch ${scratch}.` }],
+        content: [
+          {
+            type: "text",
+            text: `Opened ${rememberedBase ?? "GRAFT_BASE_REF"} as graft scratch ${scratch}.`,
+          },
+        ],
         details: { result, state: nextState },
       };
     },

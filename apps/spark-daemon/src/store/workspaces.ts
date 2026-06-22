@@ -2,7 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { createId, type RuntimeWorkspaceBindingSummary } from "@zendev-lab/navia-protocol";
+import {
+  createId,
+  type ExecutorClientProjection,
+  type RuntimeWorkspaceBindingSummary,
+  type WorkspaceBorrowedState,
+  type WorkspaceClientKind,
+  type WorkspaceClientProjection,
+} from "@zendev-lab/navia-protocol";
 import { asciiSlug } from "@zendev-lab/navia-system";
 
 export interface WorkspaceProfileRegistration {
@@ -22,10 +29,56 @@ export interface SparkDaemonWorkspace {
   capabilities: Record<string, unknown>;
   diagnostics: Record<string, unknown>;
   profile?: WorkspaceProfileRegistration;
+  borrowed?: WorkspaceBorrowedState;
+  workspaceClients?: WorkspaceClientProjection[];
+  executor?: ExecutorClientProjection;
   sessionCount?: number;
   lastSessionAt?: string;
   recentSessions?: SparkDaemonWorkspaceRecentSession[];
   updatedAt: string;
+}
+
+export interface SparkDaemonWorkspaceClient {
+  id: string;
+  workspaceId: string;
+  kind: WorkspaceClientKind;
+  displayName?: string;
+  status: "connected" | "disconnected";
+  attachedAt: string;
+  lastSeenAt: string;
+  leaseExpiresAt?: string;
+  releasedAt?: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface AttachWorkspaceClientOptions {
+  workspaceId: string;
+  clientId?: string;
+  kind: WorkspaceClientKind;
+  displayName?: string;
+  metadata?: Record<string, unknown>;
+  leaseTtlMs?: number;
+  now?: string;
+}
+
+export interface HeartbeatWorkspaceClientOptions {
+  clientId: string;
+  leaseTtlMs?: number;
+  now?: string;
+}
+
+export interface ReleaseWorkspaceClientOptions {
+  clientId: string;
+  now?: string;
+}
+
+export interface EnsureWorkspaceExecutorClientOptions {
+  workspaceId: string;
+  clientId?: string;
+  displayName?: string;
+  metadata?: Record<string, unknown>;
+  leaseTtlMs?: number;
+  now?: string;
 }
 
 export interface SparkDaemonWorkspaceRecentSession {
@@ -673,12 +726,182 @@ export function attachWorkspace(
   ).run(now, workspace.id);
   updateSparkDaemonWorkspaceStatus(db, workspace.id, "available", {}, now);
 
-  return {
-    ...workspace,
-    status: "available",
-    diagnostics: {},
-    updatedAt: now,
-  };
+  return (
+    getWorkspaceById(db, workspace.id) ?? {
+      ...workspace,
+      status: "available",
+      diagnostics: {},
+      updatedAt: now,
+    }
+  );
+}
+
+export function attachWorkspaceClient(
+  db: DatabaseSync,
+  options: AttachWorkspaceClientOptions,
+): SparkDaemonWorkspaceClient {
+  const workspace = getWorkspaceById(db, options.workspaceId);
+  if (!workspace) {
+    throw new Error(`Unknown workspace connection: ${options.workspaceId}`);
+  }
+
+  const now = options.now ?? new Date().toISOString();
+  const clientId = options.clientId ?? createSparkDaemonWorkspaceClientId();
+  const leaseExpiresAt = leaseExpiresAtFor(now, options.leaseTtlMs);
+  const existing = db
+    .prepare(
+      "SELECT workspace_id AS workspaceId, attached_at AS attachedAt FROM daemon_workspace_clients WHERE id = ? LIMIT 1",
+    )
+    .get(clientId) as { workspaceId: string; attachedAt: string } | undefined;
+  if (existing && existing.workspaceId !== workspace.id) {
+    throw new Error(
+      `Workspace client ${clientId} is already bound to workspace ${existing.workspaceId}.`,
+    );
+  }
+
+  db.prepare(
+    `INSERT INTO daemon_workspace_clients
+      (id, workspace_id, kind, display_name, status, attached_at, last_seen_at, lease_expires_at, released_at, metadata_json)
+     VALUES (?, ?, ?, ?, 'connected', ?, ?, ?, NULL, ?)
+     ON CONFLICT(id) DO UPDATE SET
+      workspace_id = excluded.workspace_id,
+      kind = excluded.kind,
+      display_name = excluded.display_name,
+      status = 'connected',
+      last_seen_at = excluded.last_seen_at,
+      lease_expires_at = excluded.lease_expires_at,
+      released_at = NULL,
+      metadata_json = excluded.metadata_json`,
+  ).run(
+    clientId,
+    workspace.id,
+    options.kind,
+    options.displayName ?? null,
+    existing?.attachedAt ?? now,
+    now,
+    leaseExpiresAt ?? null,
+    JSON.stringify(options.metadata ?? {}),
+  );
+
+  return requireWorkspaceClient(db, clientId);
+}
+
+export function heartbeatWorkspaceClient(
+  db: DatabaseSync,
+  options: HeartbeatWorkspaceClientOptions,
+): SparkDaemonWorkspaceClient {
+  const client = getWorkspaceClientById(db, options.clientId);
+  if (!client) {
+    throw new Error(`Unknown workspace client: ${options.clientId}`);
+  }
+  const now = options.now ?? new Date().toISOString();
+  db.prepare(
+    `UPDATE daemon_workspace_clients
+     SET status = 'connected',
+         last_seen_at = ?,
+         lease_expires_at = ?,
+         released_at = NULL
+     WHERE id = ?`,
+  ).run(
+    now,
+    leaseExpiresAtFor(now, options.leaseTtlMs) ?? client.leaseExpiresAt ?? null,
+    client.id,
+  );
+  return requireWorkspaceClient(db, client.id);
+}
+
+export function releaseWorkspaceClient(
+  db: DatabaseSync,
+  options: ReleaseWorkspaceClientOptions,
+): SparkDaemonWorkspaceClient {
+  const client = getWorkspaceClientById(db, options.clientId);
+  if (!client) {
+    throw new Error(`Unknown workspace client: ${options.clientId}`);
+  }
+  const now = options.now ?? new Date().toISOString();
+  db.prepare(
+    `UPDATE daemon_workspace_clients
+     SET status = 'disconnected',
+         last_seen_at = ?,
+         lease_expires_at = NULL,
+         released_at = ?
+     WHERE id = ?`,
+  ).run(now, now, client.id);
+  return requireWorkspaceClient(db, client.id);
+}
+
+export function ensureWorkspaceExecutorClient(
+  db: DatabaseSync,
+  options: EnsureWorkspaceExecutorClientOptions,
+): SparkDaemonWorkspaceClient {
+  const now = options.now ?? new Date().toISOString();
+  const existing = listWorkspaceClients(db, options.workspaceId, now).find(
+    (client) => client.kind === "executor" && client.status === "connected",
+  );
+  if (existing) {
+    return heartbeatWorkspaceClient(db, {
+      clientId: existing.id,
+      ...(options.leaseTtlMs !== undefined ? { leaseTtlMs: options.leaseTtlMs } : {}),
+      now,
+    });
+  }
+
+  return attachWorkspaceClient(db, {
+    workspaceId: options.workspaceId,
+    ...(options.clientId ? { clientId: options.clientId } : {}),
+    kind: "executor",
+    displayName: options.displayName ?? "Background executor",
+    ...(options.metadata ? { metadata: options.metadata } : {}),
+    ...(options.leaseTtlMs !== undefined ? { leaseTtlMs: options.leaseTtlMs } : {}),
+    now,
+  });
+}
+
+export function expireWorkspaceClientLeases(
+  db: DatabaseSync,
+  now = new Date().toISOString(),
+): number {
+  const result = db
+    .prepare(
+      `UPDATE daemon_workspace_clients
+     SET status = 'disconnected', released_at = COALESCE(released_at, lease_expires_at), last_seen_at = ?
+     WHERE status = 'connected'
+       AND lease_expires_at IS NOT NULL
+       AND lease_expires_at <= ?`,
+    )
+    .run(now, now);
+  return Number(result.changes ?? 0);
+}
+
+export function listWorkspaceClients(
+  db: DatabaseSync,
+  workspaceId?: string,
+  now = new Date().toISOString(),
+): SparkDaemonWorkspaceClient[] {
+  expireWorkspaceClientLeases(db, now);
+  const sql = `SELECT id,
+                      workspace_id AS workspaceId,
+                      kind,
+                      display_name AS displayName,
+                      status,
+                      attached_at AS attachedAt,
+                      last_seen_at AS lastSeenAt,
+                      lease_expires_at AS leaseExpiresAt,
+                      released_at AS releasedAt,
+                      metadata_json AS metadataJson
+               FROM daemon_workspace_clients
+               ${workspaceId ? "WHERE workspace_id = ?" : ""}
+               ORDER BY last_seen_at DESC, attached_at DESC`;
+  const rows = workspaceId ? db.prepare(sql).all(workspaceId) : db.prepare(sql).all();
+  return (rows as unknown as WorkspaceClientRow[]).map(mapWorkspaceClientRow);
+}
+
+export function isBorrowedWorkspace(
+  db: DatabaseSync,
+  workspaceId: string,
+  now = new Date().toISOString(),
+): boolean {
+  return workspaceBorrowedState(db, workspaceId, now).borrowed;
 }
 
 export function isUserDetachedWorkspace(workspace: SparkDaemonWorkspace): boolean {
@@ -723,6 +946,9 @@ export function workspaceSummaries(db: DatabaseSync): RuntimeWorkspaceBindingSum
     status: workspace.status,
     capabilities: workspace.capabilities,
     diagnostics: workspace.diagnostics,
+    ...(workspace.borrowed ? { borrowed: workspace.borrowed } : {}),
+    ...(workspace.workspaceClients ? { workspaceClients: workspace.workspaceClients } : {}),
+    ...(workspace.executor ? { executor: workspace.executor } : {}),
   }));
 }
 
@@ -744,6 +970,7 @@ interface WorkspaceRow {
 
 function mapWorkspaceRow(row: WorkspaceRow, db?: DatabaseSync): SparkDaemonWorkspace {
   const projection = db ? workspaceInvocationProjection(db, row.id) : {};
+  const clientProjection = db ? workspaceClientStateProjection(db, row.id) : {};
   return {
     id: row.id,
     serverUrl: row.serverUrl,
@@ -755,6 +982,7 @@ function mapWorkspaceRow(row: WorkspaceRow, db?: DatabaseSync): SparkDaemonWorks
     diagnostics: parseObject(row.diagnosticsJson),
     ...profileFromRow(row),
     ...projection,
+    ...clientProjection,
     updatedAt: row.updatedAt,
   };
 }
@@ -799,6 +1027,171 @@ function workspaceInvocationProjection(
       state: row.status,
     })),
   };
+}
+
+function workspaceClientStateProjection(
+  db: DatabaseSync,
+  workspaceId: string,
+): Pick<SparkDaemonWorkspace, "borrowed" | "workspaceClients" | "executor"> {
+  const allClients = listWorkspaceClients(db, workspaceId);
+  const clients = allClients.filter((client) => client.status === "connected");
+  const activeInvocations = activeInvocationCount(db, workspaceId);
+  if (allClients.length === 0 && activeInvocations === 0) {
+    return {};
+  }
+
+  const borrowed = borrowedStateFromClients(clients);
+  const executorClient = clients.find((client) => client.kind === "executor");
+  return {
+    borrowed,
+    workspaceClients: clients.map(workspaceClientProjection),
+    executor: executorClient
+      ? executorProjectionForClient(executorClient, activeInvocations)
+      : {
+          state: activeInvocations > 0 ? "starting" : "none",
+          activeInvocationCount: activeInvocations,
+          activeAgentCount: 0,
+        },
+  };
+}
+
+function workspaceBorrowedState(
+  db: DatabaseSync,
+  workspaceId: string,
+  now = new Date().toISOString(),
+): WorkspaceBorrowedState {
+  return borrowedStateFromClients(
+    listWorkspaceClients(db, workspaceId, now).filter((client) => client.status === "connected"),
+  );
+}
+
+function borrowedStateFromClients(clients: SparkDaemonWorkspaceClient[]): WorkspaceBorrowedState {
+  const interactiveClients = clients.filter((client) => client.kind === "interactive");
+  const since = interactiveClients
+    .map((client) => client.attachedAt)
+    .sort((a, b) => a.localeCompare(b))[0];
+  return {
+    borrowed: interactiveClients.length > 0,
+    interactiveClientCount: interactiveClients.length,
+    borrowedByClientIds: interactiveClients.map((client) => client.id),
+    ...(since ? { since } : {}),
+  };
+}
+
+function workspaceClientProjection(client: SparkDaemonWorkspaceClient): WorkspaceClientProjection {
+  return {
+    clientId: client.id,
+    kind: client.kind,
+    status: client.status,
+    ...(client.displayName ? { displayName: client.displayName } : {}),
+    attachedAt: client.attachedAt,
+    lastSeenAt: client.lastSeenAt,
+  };
+}
+
+function executorProjectionForClient(
+  client: SparkDaemonWorkspaceClient,
+  activeInvocations: number,
+): ExecutorClientProjection {
+  const metadataState = client.metadata.state;
+  const state =
+    metadataState === "starting" || metadataState === "online" || metadataState === "unhealthy"
+      ? metadataState
+      : "online";
+  const metadataActiveAgentCount = client.metadata.activeAgentCount;
+  return {
+    state,
+    clientId: client.id,
+    activeInvocationCount: activeInvocations,
+    activeAgentCount:
+      typeof metadataActiveAgentCount === "number" && metadataActiveAgentCount >= 0
+        ? Math.floor(metadataActiveAgentCount)
+        : activeInvocations,
+    lastSeenAt: client.lastSeenAt,
+    ...(typeof client.metadata.unhealthyReason === "string"
+      ? { unhealthyReason: client.metadata.unhealthyReason }
+      : {}),
+  };
+}
+
+function activeInvocationCount(db: DatabaseSync, workspaceId: string): number {
+  const row = db
+    .prepare(
+      "SELECT COUNT(*) AS count FROM invocations WHERE workspace_binding_id = ? AND status IN ('queued', 'running')",
+    )
+    .get(workspaceId) as { count: number };
+  return row.count;
+}
+
+function getWorkspaceClientById(
+  db: DatabaseSync,
+  clientId: string,
+): SparkDaemonWorkspaceClient | null {
+  const row = db
+    .prepare(
+      `SELECT id,
+              workspace_id AS workspaceId,
+              kind,
+              display_name AS displayName,
+              status,
+              attached_at AS attachedAt,
+              last_seen_at AS lastSeenAt,
+              lease_expires_at AS leaseExpiresAt,
+              released_at AS releasedAt,
+              metadata_json AS metadataJson
+       FROM daemon_workspace_clients
+       WHERE id = ?
+       LIMIT 1`,
+    )
+    .get(clientId) as WorkspaceClientRow | undefined;
+  return row ? mapWorkspaceClientRow(row) : null;
+}
+
+function requireWorkspaceClient(db: DatabaseSync, clientId: string): SparkDaemonWorkspaceClient {
+  const client = getWorkspaceClientById(db, clientId);
+  if (!client) {
+    throw new Error(`Unknown workspace client: ${clientId}`);
+  }
+  return client;
+}
+
+interface WorkspaceClientRow {
+  id: string;
+  workspaceId: string;
+  kind: WorkspaceClientKind;
+  displayName: string | null;
+  status: "connected" | "disconnected";
+  attachedAt: string;
+  lastSeenAt: string;
+  leaseExpiresAt: string | null;
+  releasedAt: string | null;
+  metadataJson: string;
+}
+
+function mapWorkspaceClientRow(row: WorkspaceClientRow): SparkDaemonWorkspaceClient {
+  return {
+    id: row.id,
+    workspaceId: row.workspaceId,
+    kind: row.kind,
+    ...(row.displayName ? { displayName: row.displayName } : {}),
+    status: row.status,
+    attachedAt: row.attachedAt,
+    lastSeenAt: row.lastSeenAt,
+    ...(row.leaseExpiresAt ? { leaseExpiresAt: row.leaseExpiresAt } : {}),
+    ...(row.releasedAt ? { releasedAt: row.releasedAt } : {}),
+    metadata: parseObject(row.metadataJson),
+  };
+}
+
+function leaseExpiresAtFor(now: string, leaseTtlMs: number | undefined): string | undefined {
+  if (!leaseTtlMs || leaseTtlMs <= 0) {
+    return undefined;
+  }
+  return new Date(new Date(now).getTime() + leaseTtlMs).toISOString();
+}
+
+function createSparkDaemonWorkspaceClientId(): string {
+  return `wcl_${randomUUID().replaceAll("-", "")}`;
 }
 
 function profileFromRow(row: WorkspaceRow): { profile?: WorkspaceProfileRegistration } {

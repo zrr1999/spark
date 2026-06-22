@@ -34,15 +34,15 @@ import {
 } from "@zendev-lab/pi-tasks";
 import { registerPiArtifactTool } from "@zendev-lab/pi-artifacts/extension";
 import piAskExtension from "../packages/pi-ask/src/extension.ts";
-import sparkExtension from "../packages/spark/src/extension/index.ts";
-import { JsonStoreFormatError } from "../packages/spark/src/extension/json-store.ts";
-import type { SparkToolContext } from "../packages/spark/src/extension/spark-tool-registration.ts";
+import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
+import { JsonStoreFormatError } from "../packages/spark-extension/src/extension/json-store.ts";
+import type { SparkToolContext } from "../packages/spark-extension/src/extension/spark-tool-registration.ts";
 import {
   loadCurrentProjectState,
   loadHiddenRoleRunInboxState,
   loadSparkMode,
   saveCurrentProjectRef,
-} from "../packages/spark/src/extension/session-state.ts";
+} from "../packages/spark-extension/src/extension/session-state.ts";
 import {
   assignTodoDisplayNumber,
   importLegacyIndependentTodos,
@@ -50,13 +50,13 @@ import {
   loadTodoDisplayNumberState,
   saveIndependentTodos,
   saveTodoDisplayNumberState,
-} from "../packages/spark/src/extension/session-todos.ts";
+} from "../packages/spark-extension/src/extension/session-todos.ts";
 import {
   normalizeSparkStatusFormat,
   normalizeSparkStatusLimit,
   normalizeSparkStatusShowFinished,
   normalizeSparkStatusView,
-} from "../packages/spark/src/extension/spark-status.ts";
+} from "../packages/spark-extension/src/extension/spark-status.ts";
 import {
   normalizeForceAfterMs,
   normalizeKillSignal,
@@ -64,27 +64,27 @@ import {
   normalizeOptionalRunRef,
   normalizeSparkBackgroundAction,
   normalizeSparkBackgroundBoolean,
-} from "../packages/spark/src/extension/background-runs.ts";
+} from "../packages/spark-extension/src/extension/background-runs.ts";
 import {
   normalizeSparkRunReadyTasksBoolean,
   normalizeSparkRunReadyTasksPositiveInteger,
-} from "../packages/spark/src/extension/spark-run-ready-tasks-tool-registration.ts";
-import { normalizeSparkPlanTaskInputs } from "../packages/spark/src/extension/spark-plan-tasks-tool-registration.ts";
-import { normalizeSparkClaimTaskInput } from "../packages/spark/src/extension/spark-claim-task-tool-registration.ts";
-import { normalizeSparkFinishTaskInput } from "../packages/spark/src/extension/spark-finish-task-tool-registration.ts";
+} from "../packages/spark-extension/src/extension/spark-run-ready-tasks-tool-registration.ts";
+import { normalizeSparkPlanTaskInputs } from "../packages/spark-extension/src/extension/spark-plan-tasks-tool-registration.ts";
+import { normalizeSparkClaimTaskInput } from "../packages/spark-extension/src/extension/spark-claim-task-tool-registration.ts";
+import { normalizeSparkFinishTaskInput } from "../packages/spark-extension/src/extension/spark-finish-task-tool-registration.ts";
 import {
   goalReviewDirectory,
   rebuildWorkspaceReviewIndex,
   subjectReviewRecordPath,
   taskReviewDirectory,
-} from "../packages/spark/src/extension/subject-review-store.ts";
-import { normalizeSparkTodoOps } from "../packages/spark/src/extension/spark-todo-tool-registration.ts";
+} from "../packages/spark-extension/src/extension/subject-review-store.ts";
+import { normalizeSparkTodoOps } from "../packages/spark-extension/src/extension/spark-todo-tool-registration.ts";
 import {
   normalizeArtifactBoolean,
   normalizeArtifactLimit,
   normalizeArtifactRef,
   normalizePositiveInteger,
-} from "../packages/spark/src/extension/artifact-tools.ts";
+} from "../packages/spark-extension/src/extension/artifact-tools.ts";
 import {
   normalizeLearningBoolean,
   normalizeLearningCategory,
@@ -93,43 +93,44 @@ import {
   normalizeLearningLocation,
   normalizeLearningStatusFilter,
   normalizeStringArray,
-} from "../packages/spark/src/extension/learning-tools.ts";
+} from "../packages/spark-extension/src/extension/learning-tools.ts";
 import {
   normalizeSparkWorkflowRunsAction,
   normalizeSparkWorkflowRunsBoolean,
   normalizeSparkWorkflowRunsNonNegativeInteger,
   normalizeSparkWorkflowRunsRunRef,
-} from "../packages/spark/src/extension/spark-workflow-runs-tool-registration.ts";
+} from "../packages/spark-extension/src/extension/spark-workflow-runs-tool-registration.ts";
+import { defaultSparkDynamicWorkflowRunStore } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-run-store.ts";
 import {
   normalizeSparkNewProjectInput,
   normalizeSparkProjectOptionalString,
   normalizeSparkProjectOutputLanguage,
   normalizeSparkProjectPatch,
-} from "../packages/spark/src/extension/spark-project-tools.ts";
+} from "../packages/spark-extension/src/extension/spark-project-tools.ts";
 import {
   normalizeSparkStateAction,
   normalizeSparkStateOptionalString,
-} from "../packages/spark/src/extension/spark-state-tool-registration.ts";
+} from "../packages/spark-extension/src/extension/spark-state-tool-registration.ts";
 import {
   normalizeTaskKind,
   normalizeTaskStatus,
-} from "../packages/spark/src/extension/task-plan-tool.ts";
-import { normalizeSparkAskReplayArtifactRef } from "../packages/spark/src/extension/spark-ask-tool-registration.ts";
+} from "../packages/spark-extension/src/extension/task-plan-tool.ts";
+import { normalizeSparkAskReplayArtifactRef } from "../packages/spark-extension/src/extension/spark-ask-tool-registration.ts";
 import {
   inferSessionGoalObjective,
   loadSessionGoal,
   setSessionGoal,
   updateSessionGoalStatus,
-} from "../packages/spark/src/extension/spark-session-goals.ts";
+} from "../packages/spark-extension/src/extension/spark-session-goals.ts";
 import {
   loadSessionLoop,
   setSessionLoop,
-} from "../packages/spark/src/extension/spark-session-loops.ts";
+} from "../packages/spark-extension/src/extension/spark-session-loops.ts";
 import type {
   ReviewInput,
   ReviewerRunResult,
   ReviewerRunner,
-} from "../packages/spark/src/extension/reviewer-runner.ts";
+} from "../packages/spark-extension/src/extension/reviewer-runner.ts";
 
 type SparkExtensionApiForTest = Parameters<typeof sparkExtension>[0];
 type SparkToolConfig = Parameters<NonNullable<SparkExtensionApiForTest["registerTool"]>>[0];
@@ -168,7 +169,7 @@ function runNormalizerGroup(
 }
 
 const workflowRunActionError =
-  /action must be status, list, inspect, kill, reply, steer, reconcile, ack, prune, clear_inactive, or kill_active/;
+  /action must be status, list, inspect, pause, resume, stop, restart, save, kill, reply, steer, reconcile, ack, prune, clear_inactive, or kill_active/;
 
 void test("Spark tool normalizer groups reject invalid explicit parameters instead of using defaults", () => {
   runNormalizerGroup(
@@ -196,6 +197,7 @@ void test("Spark tool normalizer groups reject invalid explicit parameters inste
     [
       [() => normalizeSparkBackgroundAction(undefined), "status"],
       [() => normalizeSparkBackgroundAction("kill"), "kill"],
+      [() => normalizeSparkBackgroundAction("pause"), "pause"],
       [() => normalizeOptionalRunRef(" run:child "), "run:child"],
       [() => normalizeOptionalProjectRef(" proj:main "), "proj:main"],
       [() => normalizeKillSignal("sigkill"), "SIGKILL"],
@@ -203,7 +205,7 @@ void test("Spark tool normalizer groups reject invalid explicit parameters inste
       [() => normalizeSparkBackgroundBoolean(undefined, false, "field"), false],
     ],
     [
-      [() => normalizeSparkBackgroundAction("stop"), workflowRunActionError],
+      [() => normalizeSparkBackgroundAction("cancel"), workflowRunActionError],
       [() => normalizeOptionalRunRef("child"), /runRef must be a run ref/],
       [() => normalizeOptionalRunRef(123), /runRef must be a string/],
       [() => normalizeOptionalProjectRef("project"), /projectRef must be a project ref/],
@@ -250,6 +252,8 @@ void test("Spark tool normalizer groups reject invalid explicit parameters inste
     [
       [() => normalizeSparkWorkflowRunsAction(undefined), "status"],
       [() => normalizeSparkWorkflowRunsAction("prune"), "prune"],
+      [() => normalizeSparkWorkflowRunsAction("restart"), "restart"],
+      [() => normalizeSparkWorkflowRunsAction("save"), "save"],
       [() => normalizeSparkWorkflowRunsRunRef(undefined), undefined],
       [() => normalizeSparkWorkflowRunsRunRef("run:one"), "run:one"],
       [() => normalizeSparkWorkflowRunsBoolean(undefined, true, "dryRun"), true],
@@ -504,7 +508,7 @@ void test("Spark tool normalizer groups reject invalid explicit parameters inste
             evidence: {
               title: " Evidence title ",
               notes: " Notes ",
-              changedFiles: [" packages/spark/src/file.ts "],
+              changedFiles: [" packages/spark-extension/src/file.ts "],
               sourceRefs: [" test/file.test.ts:10 "],
               validationCommands: [" pnpm test — pass "],
             },
@@ -517,7 +521,7 @@ void test("Spark tool normalizer groups reject invalid explicit parameters inste
           evidence: {
             title: "Evidence title",
             notes: "Notes",
-            changedFiles: ["packages/spark/src/file.ts"],
+            changedFiles: ["packages/spark-extension/src/file.ts"],
             sourceRefs: ["test/file.test.ts:10"],
             validationCommands: ["pnpm test — pass"],
           },
@@ -682,6 +686,31 @@ type TestSparkContext = {
 void test("Spark command surface does not expose the legacy /spark compatibility entry", () => {
   const run = registerSparkToolsForTest();
   assert.equal(run.commands.has("spark"), false);
+});
+
+void test("/ultracode enters opt-in high-effort workflow generation mode", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-ultracode-command-"));
+  try {
+    const ctx = testSparkContext(dir, "main");
+    const run = registerSparkToolsForTest();
+    const ultracode = run.commands.get("ultracode");
+    assert.ok(ultracode, "missing /ultracode command");
+
+    await ultracode.handler("design and validate a workflow parity suite", ctx);
+
+    const message = run.customMessages.at(-1);
+    assert.equal(message?.customType, "spark-mode-request");
+    assert.match(customMessageVisible(message), /Spark ultracode workflow requested/);
+    const prompt = message?.content ?? "";
+    assert.match(prompt, /Ultracode high-effort workflow generation is explicitly requested/);
+    assert.match(prompt, /workflow_run\(\{ script, args, concurrency, maxAgents, tokenBudget \}\)/);
+    assert.match(prompt, /concurrency <= 4, maxAgents <= 12/);
+    assert.match(prompt, /workflow_run approval/);
+    assert.match(prompt, /metadata-first JavaScript workflow script/);
+    assert.match(prompt, /workflow output standalone/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 void test("/plan, /implement, /goal, and /workflow selector commands enter Spark modes directly", async () => {
@@ -939,7 +968,11 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
     assert.doesNotMatch(researchColonPrompt, /Select a current project/);
     assert.doesNotMatch(researchColonPrompt, /## Workflow driver mode requirements/);
 
-    initializedCtx.ui.select = async () => initializedCtx.selected;
+    let workflowNavigatorOptions: string[] = [];
+    initializedCtx.ui.select = async (_title, options) => {
+      workflowNavigatorOptions = options;
+      return initializedCtx.selected;
+    };
     initializedCtx.selected = "builtin:review";
     initializedCtx.inputValue = "Review the workflow UI direction";
     await workflowCommand.handler("", initializedCtx);
@@ -963,6 +996,32 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
     const workflowsPrompt = initializedRun.customMessages.at(-1)?.content ?? "";
     assert.match(workflowsPrompt, /Workflow selector: workspace:triage/);
     assert.match(workflowsPrompt, /Navigator supplied focus/);
+
+    const navigatorStore = defaultSparkDynamicWorkflowRunStore(initializedDir);
+    const navigatorRun = await navigatorStore.start({
+      source: { kind: "inline", label: "navigator control workflow" },
+      script:
+        "export const meta = { name: 'Navigator Control', description: 'Navigator control workflow' }\nreturn 'ok'",
+      meta: { name: "Navigator Control", description: "Navigator control workflow" },
+      options: {},
+    });
+    initializedCtx.selected = `dynamic:save:${navigatorRun.ref} running navigator control workflow`;
+    await workflowsCommand.handler("", initializedCtx);
+    assert.ok(
+      workflowNavigatorOptions.some((option) =>
+        option.startsWith(`dynamic:save:${navigatorRun.ref}`),
+      ),
+      "expected /workflows navigator to expose dynamic workflow run save action",
+    );
+    assert.match(initializedCtx.notifications.at(-1)?.message ?? "", /Dynamic workflow save:/);
+    assert.match(
+      initializedCtx.notifications.at(-1)?.message ?? "",
+      /workspace:navigator-control-/,
+    );
+    assert.match(
+      (await navigatorStore.get(navigatorRun.ref))?.savedWorkflow?.selector ?? "",
+      /^workspace:navigator-control-/,
+    );
     initializedCtx.ui.select = async () =>
       assert.fail("non-empty /workflow focus should not ask for a selector before prompting");
 
@@ -1370,6 +1429,8 @@ void test("impl_plan_tasks blocks mixed readiness without saving", async () => {
         }
       | undefined;
     assert.match(toolText(planned), /Task plan not ready: @blocked-plan/);
+    assert.match(toolText(planned), /missing_success_criteria\(blocking\)/);
+    assert.match(toolText(planned), /Add at least one observable entry to plan\.successCriteria/);
     assert.equal(details?.dryRun, undefined);
     assert.equal(details?.error, "task_plan_not_ready");
     assert.equal(details?.result?.created?.length, 2);
@@ -1377,6 +1438,44 @@ void test("impl_plan_tasks blocks mixed readiness without saving", async () => {
     assert.equal(details?.planDecisions?.[1]?.blocked, true);
     assert.equal(await taskGraphSnapshotText(dir), before);
     assert.equal((await defaultTaskGraphStore(dir).load())?.tasks().length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("impl_plan_tasks accepts warning-only openQuestions plans", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-plan-open-questions-warning-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+    await useOnlySparkProject(tools, ctx);
+
+    const planned = await executeSparkTool(tools, "impl_plan_tasks", ctx, {
+      tasks: [
+        {
+          name: "question-notes",
+          title: "Task with scratch questions",
+          description: "A task whose open questions are non-blocking planning notes.",
+          kind: "implement",
+          status: "pending",
+          plan: {
+            ...executionReadyPlan("Run with scratch questions"),
+            openQuestions: ["Can we simplify later?"],
+          },
+        },
+      ],
+    });
+
+    assert.match(toolText(planned), /Planned tasks: created=1/);
+    const graph = await defaultTaskGraphStore(dir).load();
+    const task = graph?.tasks().find((candidate) => candidate.name === "question-notes");
+    assert.ok(task);
+    assert.equal(graph?.taskPlanReadiness(task.ref).ready, true);
+    assert.deepEqual(
+      graph?.taskPlanReadiness(task.ref).issues.map((issue) => [issue.kind, issue.severity]),
+      [["open_questions", "warning"]],
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -1414,6 +1513,7 @@ void test("impl_plan_tasks reports all-rejected readiness without saving", async
     });
 
     assert.match(toolText(planned), /Task plan not ready: @blocked-one/);
+    assert.match(toolText(planned), /missing_success_criteria\(blocking\)/);
     const details = planned.details as
       | {
           dryRun?: unknown;
@@ -3041,266 +3141,6 @@ void test("/goal foreground loop records unmet reviewer verdict before continuat
   }
 });
 
-void test("/goal foreground loop uses session TODO evidence for TODO disposition goals", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-session-todo-evidence-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    const projectEvidence = await defaultArtifactStore(dir).put({
-      kind: "record",
-      title: "Completed project evidence that must not satisfy session TODO goal",
-      format: "markdown",
-      body: "Project-only evidence.",
-      provenance: { producer: "task" },
-    });
-    await defaultTaskGraphStore(dir).update(async (graph) => {
-      const project = graph.projects()[0];
-      assert.ok(project);
-      const task = graph.createTask({
-        projectRef: project.ref,
-        name: "old-project-evidence-task",
-        title: "Old project evidence task",
-        description: "Old project evidence must not be used for session TODO goal.",
-        status: "done",
-        plan: executionReadyPlan("Old project evidence task"),
-      });
-      graph.attachOutputArtifact(task.ref, projectEvidence.ref);
-    });
-    await saveIndependentTodos(dir, ctx, [
-      { id: "todo-1", content: "Already completed", status: "done" },
-      {
-        id: "todo-2",
-        content: "External approval",
-        status: "cancelled",
-        blockedBy: ["user approval"],
-        notes: ["Cancelled for this session; waiting on user approval."],
-      },
-    ]);
-    let reviewerInput: ReviewInput | undefined;
-    const run = registerSparkToolsForTest({
-      reviewerRunner: {
-        async review(input: ReviewInput): Promise<ReviewerRunResult> {
-          reviewerInput = input;
-          return createApprovingReviewerRunner().review(input);
-        },
-      },
-    });
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective:
-        "处理当前 active session TODO：逐项完成、取消、删除或明确等待条件，直到没有 active session TODO 阻塞 goal completion review。",
-    });
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    timers[0]?.callback();
-    await flushAsyncWork();
-
-    assert.equal(reviewerInput?.targetKind, "goal");
-    assert.equal(reviewerInput?.projectRef, undefined);
-    assert.notDeepEqual(reviewerInput?.evidenceRefs, [projectEvidence.ref]);
-    assert.equal(reviewerInput?.evidenceRefs.length, 1);
-    const evidence = await defaultArtifactStore(dir).get(reviewerInput!.evidenceRefs[0]!);
-    assert.match(evidence.title, /Session TODO disposition snapshot/);
-    assert.equal(evidence.provenance.producer, "task");
-    const body = evidence.body as {
-      unresolvedBlockerCount?: number;
-      todos?: Array<{ status: string }>;
-    };
-    assert.equal(body.unresolvedBlockerCount, 0);
-    assert.deepEqual(
-      body.todos?.map((todo) => todo.status),
-      ["done", "cancelled"],
-    );
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-void test("/goal foreground loop blocks completion while session TODOs are active", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-session-todo-blocker-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    await saveIndependentTodos(dir, ctx, [
-      { id: "todo-1", content: "Resolve session blocker", status: "pending" },
-    ]);
-    let reviewerCalls = 0;
-    const run = registerSparkToolsForTest({
-      reviewerRunner: {
-        async review(input: ReviewInput): Promise<ReviewerRunResult> {
-          reviewerCalls += 1;
-          return createApprovingReviewerRunner().review(input);
-        },
-      },
-    });
-    await useOnlySparkProject(run.tools, ctx);
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective: "Finish only after session TODOs clear",
-    });
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    const messagesBefore = run.customMessages.length;
-    timers[0]?.callback();
-    await flushAsyncWork();
-
-    assert.equal(reviewerCalls, 0);
-    assert.ok(run.customMessages.length > messagesBefore);
-    assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
-    const goal = await loadSessionGoal(dir, ctx);
-    assert.equal(goal?.status, "active");
-    assert.ok(goal?.lastReviewedAt);
-    assert.equal(goal?.lastReviewArtifactRef, undefined);
-    assert.equal((await defaultArtifactStore(dir).list({ kind: "record" })).length, 0);
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-void test("/goal foreground loop allows blocked session TODOs with wait conditions", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-session-todo-waiting-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    await saveIndependentTodos(dir, ctx, [
-      {
-        id: "todo-1",
-        content: "Wait for external approval",
-        status: "blocked",
-        blockedBy: ["user approval"],
-      },
-    ]);
-    let reviewerCalls = 0;
-    const run = registerSparkToolsForTest({
-      reviewerRunner: {
-        async review(input: ReviewInput): Promise<ReviewerRunResult> {
-          reviewerCalls += 1;
-          return createApprovingReviewerRunner().review(input);
-        },
-      },
-    });
-    await useOnlySparkProject(run.tools, ctx);
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective: "Complete once TODOs are dispositioned",
-    });
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    timers[0]?.callback();
-    await flushAsyncWork();
-
-    assert.equal(reviewerCalls, 1);
-    const goal = await loadSessionGoal(dir, ctx);
-    assert.equal(goal?.status, "complete");
-    assert.ok(goal?.lastReviewArtifactRef);
-    assert.equal((await defaultArtifactStore(dir).list({ kind: "record" })).length, 1);
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
 void test("/goal foreground loop defers while task finish review is running", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-defers-task-review-"));
   const originalSetTimeout = globalThis.setTimeout;
@@ -4047,6 +3887,94 @@ void test("/goal foreground loop waits for idle and stops after pause", async ()
     assert.equal(run.customMessages.length, messageCountAfterComplete);
     assert.equal(idleWaits, 2);
     assert.equal(timers.length, 7);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("/goal foreground loop defers ticks while compaction is active", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-goal-compaction-gate-"));
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  type FakeTimer = {
+    callback: () => void;
+    delay: number | undefined;
+    cleared: boolean;
+    unref: () => FakeTimer;
+  };
+  const timers: FakeTimer[] = [];
+  globalThis.setTimeout = ((
+    callback: Parameters<typeof setTimeout>[0],
+    delay?: number,
+    ...args: unknown[]
+  ) => {
+    const timer: FakeTimer = {
+      callback: () => {
+        if (typeof callback === "function") callback(...args);
+      },
+      delay,
+      cleared: false,
+      unref: () => timer,
+    };
+    timers.push(timer);
+    return timer as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
+    const fake = timer as unknown as FakeTimer | undefined;
+    if (fake) fake.cleared = true;
+  }) as typeof clearTimeout;
+
+  async function flushAsyncWork(): Promise<void> {
+    for (let index = 0; index < 20; index += 1) {
+      await new Promise((resolve) => originalSetTimeout(resolve, 0));
+    }
+  }
+
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const run = registerSparkToolsForTest();
+    await useOnlySparkProject(run.tools, ctx);
+    const goalCommand = run.commands.get("goal");
+    assert.ok(goalCommand, "missing /goal command");
+    await goalCommand.handler("avoid compaction overlap", ctx);
+    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
+      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    }
+    assert.equal(timers.length, 1);
+
+    const messageCountBeforeCompactionTick = run.customMessages.length;
+    const compactionAbort = new AbortController();
+    for (const handler of run.eventHandlers.get("session_before_compact") ?? []) {
+      await handler({ signal: compactionAbort.signal }, ctx);
+    }
+
+    timers[0]?.callback();
+    await flushAsyncWork();
+
+    assert.equal(
+      run.customMessages.length,
+      messageCountBeforeCompactionTick,
+      "goal tick must not dispatch while session compaction is active",
+    );
+    assert.equal(timers.length, 2);
+    assert.equal(timers[1]?.delay, 30_000);
+
+    for (const handler of run.eventHandlers.get("session_compact") ?? []) {
+      await handler({ compactionEntry: { id: "entry:compact" } }, ctx);
+    }
+    assert.equal(timers[1]?.cleared, true);
+    assert.equal(timers.length, 3);
+
+    timers[2]?.callback();
+    await flushAsyncWork();
+
+    assert.ok(run.customMessages.length > messageCountBeforeCompactionTick);
+    assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
+    assert.equal(run.customMessages.at(-1)?.display, false);
+    assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
@@ -5652,7 +5580,9 @@ void test("impl_finish_task can create bounded task evidence artifact before rev
       evidence: {
         title: "Generated finish evidence",
         notes: "Bounded evidence notes.",
-        changedFiles: ["packages/spark/src/extension/spark-finish-task-tool-registration.ts"],
+        changedFiles: [
+          "packages/spark-extension/src/extension/spark-finish-task-tool-registration.ts",
+        ],
         sourceRefs: ["test/spark-tools.test.ts:generated-evidence"],
         validationCommands: ["pnpm run test:file test/spark-tools.test.ts — pass"],
       },
@@ -6254,6 +6184,82 @@ void test("split task tools dispatch read, write, and assign actions", async () 
       budgetChars: 1_000,
     });
     assert.match(toolText(contextPreview), /Spark context/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("task_read project_status hides unclaimed task plan-item details", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "task-tool-claim-gated-status-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const store = defaultTaskGraphStore(dir);
+    const graph = await store.load();
+    assert.ok(graph);
+    const [project] = graph.projects();
+    assert.ok(project);
+    const unclaimed = graph.createTask({
+      projectRef: project.ref,
+      name: "unclaimed-details",
+      title: "Unclaimed task with plan items",
+      description: "Plan-item content must not leak before claim.",
+      status: "ready",
+      plan: executionReadyPlan("Keep unclaimed plan-item content compact"),
+      todos: [{ content: "Hidden unclaimed plan item", status: "pending" }],
+    });
+    const claimed = graph.createTask({
+      projectRef: project.ref,
+      name: "claimed-details",
+      title: "Claimed task with plan items",
+      description: "Claimed plan-item content should remain visible.",
+      status: "ready",
+      plan: executionReadyPlan("Show claimed plan-item content"),
+      todos: [{ content: "Visible claimed plan item", status: "pending" }],
+    });
+    const sessionKey = ctxSessionKey(ctx);
+    graph.claimTask(claimed.ref, {
+      kind: "main",
+      claimedBy: sessionKey,
+      sessionId: sessionKey,
+      leaseMs: 60_000,
+    });
+    await store.save(graph);
+    await saveCurrentProjectRef(dir, ctx, project.ref);
+
+    const { tools } = registerSparkToolsForTest();
+    const status = await executeSparkTool(tools, "task_read", ctx, {
+      action: "project_status",
+      projectRef: project.ref,
+      view: "full",
+    });
+    const text = toolText(status);
+    assert.match(text, /Unclaimed task with plan items/);
+    assert.doesNotMatch(text, /Hidden unclaimed plan item/);
+    assert.match(text, /Visible claimed plan item/);
+
+    const detailsStatus = await executeSparkTool(tools, "task_read", ctx, {
+      action: "project_status",
+      projectRef: project.ref,
+      view: "full",
+      format: "json",
+      includeDetails: true,
+    });
+    const details = JSON.parse(toolText(detailsStatus)) as {
+      selectedProject?: {
+        tasks?: Array<{
+          ref?: string;
+          todos?: { total?: number; items?: Array<{ content?: string }> };
+        }>;
+      };
+    };
+    const taskDetails = details.selectedProject?.tasks ?? [];
+    const unclaimedDetails = taskDetails.find((task) => task.ref === unclaimed.ref);
+    const claimedDetails = taskDetails.find((task) => task.ref === claimed.ref);
+    assert.equal(unclaimedDetails?.todos?.total, 0);
+    assert.deepEqual(unclaimedDetails?.todos?.items, []);
+    assert.equal(claimedDetails?.todos?.total, 1);
+    assert.equal(claimedDetails?.todos?.items?.[0]?.content, "Visible claimed plan item");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -6954,8 +6960,8 @@ void test("spark_goal foreground loop asks agent to bootstrap a project when non
   }
 });
 
-void test("spark_goal start infers session TODO goals and rejects empty generic fallback", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-tool-session-goal-infer-todos-"));
+void test("spark_goal start ignores legacy session-scoped TODO snapshots when inferring goals", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-session-goal-ignore-legacy-todos-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
     await defaultTaskGraphStore(dir).save(new TaskGraph());
@@ -6975,10 +6981,13 @@ void test("spark_goal start infers session TODO goals and rejects empty generic 
       { id: "todo-1", content: "Resolve session blocker", status: "pending" },
     ]);
     const todoStart = await executeSparkTool(tools, "goal", ctx, { action: "start" });
-    assert.match(toolText(todoStart), /Spark session goal active/);
-    const inferredGoal = await loadSessionGoal(dir, ctx);
-    assert.match(inferredGoal?.objective ?? "", /处理当前 active session TODO/);
-    assert.equal(inferredGoal?.source, "inferred");
+    assert.match(toolText(todoStart), /No Spark project\/task state is available to infer/);
+    assert.equal((todoStart.details as { found?: boolean; error?: string }).found, false);
+    assert.equal(
+      (todoStart.details as { found?: boolean; error?: string }).error,
+      "no_inferable_goal",
+    );
+    assert.equal(await loadSessionGoal(dir, ctx), undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -8210,6 +8219,192 @@ void test("impl_workflow_runs kill_active only targets current workspace role-ru
   }
 });
 
+void test("impl_workflow_runs renders and controls dynamic workflow_run records", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-dynamic-workflow-runs-"));
+  try {
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Dynamic workflows", description: "demo" });
+    await defaultTaskGraphStore(dir).save(graph);
+    await executeSparkTool(tools, "impl_use_project", ctx, { project: project.ref });
+    const dynamicStore = defaultSparkDynamicWorkflowRunStore(dir);
+    const script =
+      "export const meta = { name: 'control', description: 'control workflow' }\nreturn 'ok'";
+    const meta = { name: "control", description: "control workflow" };
+
+    const failedRun = await dynamicStore.start({
+      source: { kind: "inline", label: "failed control workflow" },
+      script,
+      meta,
+      options: {},
+    });
+    await dynamicStore.recordJournal(failedRun.ref, {
+      index: 0,
+      hash: "failedabc123",
+      result: "partial child output",
+    });
+    await dynamicStore.fail(failedRun.ref, new Error("agent boom"));
+
+    const staleRun = await dynamicStore.start({
+      source: { kind: "inline", label: "stale control workflow" },
+      script,
+      meta,
+      options: {},
+      now: "2000-01-01T00:00:00.000Z",
+    });
+    await dynamicStore.reconcileStale({ now: "2000-01-01T01:00:00.000Z", staleAfterMs: 1_000 });
+
+    const completedRun = await dynamicStore.start({
+      source: { kind: "inline", label: "completed control workflow" },
+      script,
+      meta,
+      options: {},
+    });
+    await dynamicStore.finish(completedRun.ref, {
+      meta,
+      result: { report: "delivered" },
+      phases: [
+        {
+          title: "Synthesis",
+          status: "success",
+          startedAt: "2026-06-22T00:00:00.000Z",
+          finishedAt: "2026-06-22T00:00:02.000Z",
+        },
+      ],
+      agentCount: 1,
+      journal: [{ index: 0, hash: "doneabc12345", result: "compact child output" }],
+    });
+
+    const pausedRun = await dynamicStore.start({
+      source: { kind: "inline", label: "paused control workflow" },
+      script,
+      meta,
+      options: {},
+    });
+    await dynamicStore.pause(pausedRun.ref);
+
+    const run = await dynamicStore.start({
+      source: { kind: "inline", label: "running control workflow" },
+      script,
+      meta,
+      options: { concurrency: 2 },
+      base: {
+        baseRef: "graft:test",
+        baseState: "state:test",
+        baseTree: "tree:test",
+        capturedAt: "2026-06-22T00:00:00.000Z",
+      },
+    });
+    await dynamicStore.recordPhase(run.ref, {
+      title: "Plan",
+      status: "success",
+      startedAt: "2026-06-22T00:00:00.000Z",
+      finishedAt: "2026-06-22T00:00:01.000Z",
+    });
+    await dynamicStore.recordJournal(run.ref, { index: 0, hash: "abc123def456", result: "ok" });
+
+    const status = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
+      action: "status",
+      includeHistory: true,
+      includeDetails: true,
+    });
+    const statusText = toolText(status);
+    assert.match(
+      statusText,
+      /Dynamic workflow runs: runs=5 running=1 paused=1 failed=1 stale=1 stopped=0 succeeded=1 acknowledged=0/,
+    );
+    assert.match(statusText, /running control workflow/);
+    assert.match(statusText, /failed control workflow/);
+    assert.match(statusText, /stale control workflow/);
+    assert.match(statusText, /paused control workflow/);
+    assert.match(statusText, /completed control workflow/);
+    assert.match(statusText, /Plan: success/);
+    assert.match(statusText, /Base: ref=graft:test state=state:test tree=tree:test/);
+    assert.match(statusText, /Error: agent boom/);
+    assert.match(statusText, /Result: \{"report":"delivered"\}/);
+    assert.match(statusText, /result=compact child output/);
+
+    const paused = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
+      action: "pause",
+      runRef: run.ref,
+    });
+    assert.match(toolText(paused), new RegExp(`Dynamic workflow pause: ${run.ref} -> paused`));
+    assert.equal((await dynamicStore.get(run.ref))?.status, "paused");
+
+    const resumed = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
+      action: "resume",
+      runRef: run.ref,
+    });
+    assert.match(toolText(resumed), new RegExp(`Dynamic workflow resume: ${run.ref} -> running`));
+    assert.equal((await dynamicStore.get(run.ref))?.status, "running");
+
+    const stopped = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
+      action: "stop",
+      runRef: run.ref,
+    });
+    assert.match(toolText(stopped), new RegExp(`Dynamic workflow stop: ${run.ref} -> stopped`));
+    assert.equal((await dynamicStore.get(run.ref))?.status, "stopped");
+
+    const restarted = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
+      action: "restart",
+      runRef: run.ref,
+    });
+    assert.match(toolText(restarted), /workflow_run\(\{ runRef:/);
+    const restartedRecord = await dynamicStore.get(run.ref);
+    assert.equal(restartedRecord?.status, "running");
+    assert.equal(restartedRecord?.journal.length, 0);
+    assert.equal(restartedRecord?.phases.length, 0);
+
+    const failedRestart = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
+      action: "restart",
+      runRef: failedRun.ref,
+    });
+    assert.match(
+      toolText(failedRestart),
+      new RegExp(`Dynamic workflow restart: ${failedRun.ref} -> running`),
+    );
+    assert.equal((await dynamicStore.get(failedRun.ref))?.status, "running");
+
+    const staleResume = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
+      action: "resume",
+      runRef: staleRun.ref,
+    });
+    assert.match(
+      toolText(staleResume),
+      new RegExp(`Dynamic workflow resume: ${staleRun.ref} -> running`),
+    );
+    assert.equal((await dynamicStore.get(staleRun.ref))?.status, "running");
+
+    const saved = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
+      action: "save",
+      runRef: completedRun.ref,
+      workflowId: "completed-control",
+    });
+    assert.match(toolText(saved), /Dynamic workflow save:/);
+    assert.match(toolText(saved), /workspace:completed-control/);
+    assert.equal(existsSync(join(dir, ".spark", "workflows", "completed-control.js")), true);
+    assert.equal(
+      (await dynamicStore.get(completedRun.ref))?.savedWorkflow?.selector,
+      "workspace:completed-control",
+    );
+
+    const acknowledged = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
+      action: "ack",
+      runRef: completedRun.ref,
+    });
+    assert.match(toolText(acknowledged), /Dynamic workflow ack: acknowledged=1/);
+    assert.ok((await dynamicStore.get(completedRun.ref))?.acknowledgedAt);
+
+    const compactStatus = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
+      action: "status",
+    });
+    assert.doesNotMatch(toolText(compactStatus), new RegExp(completedRun.ref));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("impl_workflow_runs rejects invalid explicit control parameters", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-runs-invalid-params-"));
   try {
@@ -8219,7 +8414,7 @@ void test("impl_workflow_runs rejects invalid explicit control parameters", asyn
 
     await assert.rejects(
       () => executeSparkTool(tools, "impl_workflow_runs", ctx, { action: "acknowledge" }),
-      /task_read run_status action must be status, list, inspect, kill, reply, steer, reconcile, ack, prune, clear_inactive, or kill_active/,
+      /task_read run_status action must be status, list, inspect, pause, resume, stop, restart, save, kill, reply, steer, reconcile, ack, prune, clear_inactive, or kill_active/,
     );
     await assert.rejects(
       () =>
@@ -9830,7 +10025,6 @@ void test("impl_status defaults to active view, supports full history, summary, 
         taskCounts: { total: number; claimedByCurrentSession: number };
         tasks?: unknown[];
       }>;
-      independentTodos: { total: number; todos: unknown[] };
       projects?: unknown[];
       workflowRunStatus?: { recentRuns?: unknown[] };
       hints?: string[];
@@ -9853,7 +10047,6 @@ void test("impl_status defaults to active view, supports full history, summary, 
     assert.equal(jsonStatus.projects, undefined);
     assert.equal(jsonStatus.workflowRunStatus?.recentRuns, undefined);
     assert.match(jsonStatus.hints?.join("\n") ?? "", /includeDetails=true/);
-    assert.equal(jsonStatus.independentTodos.total, 0);
     assert.equal(json.details?.format, "json");
 
     const detailedJson = await executeSparkTool(tools, "impl_status", ctx, {
@@ -10333,7 +10526,7 @@ void test("impl_state store_v2_migrate previews, backs up, applies legacy graph 
       join(dir, ".spark", "session-todos", "legacy-owner.json"),
       `${JSON.stringify({
         version: 1,
-        todos: [{ id: "todo-session-legacy", content: "Imported session TODO", status: "pending" }],
+        todos: [{ id: "todo-session-legacy", content: "Imported legacy item", status: "pending" }],
       })}\n`,
       "utf8",
     );
@@ -10825,7 +11018,7 @@ void test("impl_plan_tasks keeps large plan output bounded", async () => {
   }
 });
 
-void test("impl_update_todos persists independent session TODOs across reload", async () => {
+void test("impl_update_todos keeps legacy session-scoped snapshots internal across reload", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-session-todos-"));
   try {
     await writeEmptySparkProject(dir);
@@ -10853,12 +11046,21 @@ void test("impl_update_todos persists independent session TODOs across reload", 
     assert.doesNotMatch(await taskGraphSnapshotText(dir), /Coordinate review/);
 
     const reloaded = registerSparkToolsForTest();
+    assert.deepEqual(
+      (await loadIndependentTodos(dir, ctx)).map((todo) => [
+        todo.content,
+        todo.status,
+        todo.notes ?? [],
+      ]),
+      [
+        ["Coordinate review", "done", []],
+        ["Summarize result", "in_progress", ["Visible after reload"]],
+        ["Archive notes", "pending", []],
+      ],
+    );
     const status = await executeSparkTool(reloaded.tools, "impl_status", ctx, {});
     const statusText = toolText(status);
-    assert.match(statusText, /Independent session TODOs: 3/);
-    assert.match(statusText, /\[done\].*Coordinate review/);
-    assert.match(statusText, /\[in_progress\].*Summarize result/);
-    assert.match(statusText, /\[pending\].*Archive notes/);
+    assert.doesNotMatch(statusText, /Coordinate review|Summarize result|Archive notes/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -10904,7 +11106,7 @@ void test("spark todo tools reject invalid explicit ops without saving", async (
   }
 });
 
-void test("legacy independent session TODO import rejects malformed persisted snapshots", async () => {
+void test("legacy session-scoped snapshot import rejects malformed persisted snapshots", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-session-todos-invalid-"));
   try {
     const ctx = testSparkContext(dir, "main");
@@ -11086,7 +11288,7 @@ void test("hidden role-run inbox store rejects malformed persisted snapshots", a
   }
 });
 
-void test("impl_update_todos can restore deleted independent TODOs after reload", async () => {
+void test("impl_update_todos can restore deleted legacy items after reload", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-session-todos-restore-"));
   try {
     await writeEmptySparkProject(dir);
@@ -11112,7 +11314,6 @@ void test("impl_update_todos can restore deleted independent TODOs after reload"
     assert.deepEqual(deletedEntry?.blockedBy, ["Approval gate"]);
     assert.equal(typeof deletedEntry?.deletedAt, "string");
     const hiddenStatus = await executeSparkTool(tools, "impl_status", ctx, {});
-    assert.match(toolText(hiddenStatus), /Independent session TODOs: 1 active/);
     assert.doesNotMatch(toolText(hiddenStatus), /Wait for approval/);
 
     const reloaded = registerSparkToolsForTest();
@@ -11126,8 +11327,7 @@ void test("impl_update_todos can restore deleted independent TODOs after reload"
     assert.equal(restoredEntry?.deletedAt, undefined);
     assert.deepEqual(restoredEntry?.blockedBy, ["Approval gate"]);
     const restoredStatus = await executeSparkTool(reloaded.tools, "impl_status", ctx, {});
-    assert.match(toolText(restoredStatus), /Independent session TODOs: 2 active/);
-    assert.match(toolText(restoredStatus), /\[pending\].*Wait for approval/);
+    assert.doesNotMatch(toolText(restoredStatus), /Wait for approval/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

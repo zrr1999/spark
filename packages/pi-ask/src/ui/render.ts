@@ -1,4 +1,4 @@
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@zendev-lab/spark-tui/text";
 
 import type { AskState, ExtendedOption } from "../state/state.ts";
 import { isSubmitTab } from "../state/state.ts";

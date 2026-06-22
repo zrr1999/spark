@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import { SPARK_PROTOCOL_VERSION } from "@zendev-lab/spark-protocol";
 
-import { SparkKeybindings } from "../apps/spark/src/host/keybindings.ts";
-import { SparkHostRuntime } from "../apps/spark/src/host/runtime.ts";
-import type { SparkHostMessageRenderer } from "../apps/spark/src/host/types.ts";
+import type { Component, TUI } from "../apps/spark-tui/src/tui/pi-tui-adapter.ts";
+
+import { SparkKeybindings } from "../apps/spark-tui/src/host/keybindings.ts";
+import { SparkHostRuntime } from "../apps/spark-tui/src/host/runtime.ts";
+import type { SparkHostMessageRenderer } from "../apps/spark-tui/src/host/types.ts";
+import { createSparkDaemonNativeCommands } from "../apps/spark-tui/src/cli/daemon.ts";
 import {
   createSparkNativeUiTransport,
   SparkNativeSession,
   SparkNativeTuiApp,
-} from "../apps/spark/src/native-tui.ts";
+} from "../apps/spark-tui/src/native-tui.ts";
 
 function fakeTui(): TUI {
   return {
@@ -190,7 +193,7 @@ void test("SparkNativeTuiApp uses a bounded fallback for component widget factor
 
   assert.match(
     app.render(100).join("\n"),
-    /widget:spark-status component factory is not supported by native spark-cli yet/,
+    /widget:spark-status component factory is not supported by native spark-tui yet/,
   );
 });
 
@@ -223,4 +226,328 @@ void test("SparkNativeTuiApp installs Ctrl+O/Ctrl+T toggle handlers into SparkKe
   assert.equal(await keybindings.executeKey("ctrl+t", {}), true);
   assert.equal(app.areToolsExpanded(), true);
   assert.equal(app.isThinkingExpanded(), true);
+});
+
+void test("SparkNativeTuiApp handles local slash commands without submitting to responder", async () => {
+  let responderCalls = 0;
+  const session = new SparkNativeSession(() => {
+    responderCalls += 1;
+    return "unexpected";
+  });
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined, {
+    slashCommands: {
+      status: {
+        description: "show daemon status",
+        handler: () => "daemon: running",
+      },
+    },
+  });
+
+  assert.equal(await app.submitInput("/help"), "command");
+  assert.equal(await app.submitInput("/status"), "command");
+
+  const rendered = app.render(100).join("\n");
+  assert.equal(responderCalls, 0);
+  assert.match(rendered, /\/status — show daemon status/);
+  assert.match(rendered, /daemon: running/);
+});
+
+void test("SparkNativeTuiApp /clear keeps the welcome banner and removes old transcript", async () => {
+  const session = new SparkNativeSession();
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
+
+  session.addToolMessage({ toolName: "read", text: "old output" });
+  assert.match(app.render(100).join("\n"), /tool:read/);
+
+  assert.equal(await app.submitInput("/clear"), "command");
+  const rendered = app.render(100).join("\n");
+  assert.doesNotMatch(rendered, /tool:read/);
+  assert.doesNotMatch(rendered, /old output/);
+  assert.match(rendered, /Transcript cleared/);
+  assert.match(rendered, /Spark native TUI is running/);
+});
+
+void test("SparkNativeTuiApp /stop aborts the active turn and discards late responses", async () => {
+  let resolveResponse: ((value: string) => void) | undefined;
+  let sawAbort = false;
+  const session = new SparkNativeSession((_input, context) => {
+    context.signal?.addEventListener("abort", () => {
+      sawAbort = true;
+    });
+    return new Promise<string>((resolve) => {
+      resolveResponse = resolve;
+    });
+  });
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
+
+  assert.equal(await app.submitInput("long turn"), "started");
+  assert.equal(session.isProcessing, true);
+  assert.equal(await app.submitInput("queued follow-up"), "queued");
+  assert.equal(session.queuedCount, 1);
+
+  assert.equal(await app.submitInput("/stop dogfood test"), "command");
+  assert.equal(session.isProcessing, false);
+  assert.equal(session.queuedCount, 0);
+  assert.equal(sawAbort, true);
+
+  resolveResponse?.("late assistant response");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const rendered = app.render(100).join("\n");
+  assert.match(rendered, /Stopped current Spark turn \(dogfood test\)/);
+  assert.doesNotMatch(rendered, /late assistant response/);
+});
+
+void test("SparkNativeSession maps transcript to and from Spark session view models", () => {
+  const session = new SparkNativeSession();
+  session.addToolMessage({ toolName: "read", text: "ok", status: "success" });
+  session.appendAssistantChunk("streaming");
+
+  const view = session.toSessionView("session-view");
+  assert.equal(view.version, SPARK_PROTOCOL_VERSION);
+  assert.equal(view.sessionId, "session-view");
+  assert.equal(view.messages.at(-1)?.status, "streaming");
+  assert.equal(
+    view.messages.some((message) => message.role === "tool" && message.toolName === "read"),
+    true,
+  );
+
+  const restored = new SparkNativeSession();
+  restored.applySessionView({
+    version: SPARK_PROTOCOL_VERSION,
+    sessionId: "restored",
+    status: "idle",
+    messages: [
+      {
+        version: SPARK_PROTOCOL_VERSION,
+        id: "m1",
+        role: "assistant",
+        text: "from view",
+        status: "done",
+        metadata: {},
+      },
+    ],
+    tools: [],
+    runs: [],
+    tasks: [],
+    artifacts: [],
+    metadata: {},
+  });
+
+  assert.equal(restored.messages.length, 1);
+  assert.equal(restored.messages[0]?.role, "assistant");
+  assert.equal(restored.messages[0]?.text, "from view");
+});
+
+void test("SparkHostRuntime and native UI transport round-trip interaction protocol", async () => {
+  const session = new SparkNativeSession();
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined, {
+    interactionHandler: (request) => {
+      if (request.kind === "askFlow") {
+        return {
+          version: SPARK_PROTOCOL_VERSION,
+          kind: "askFlow",
+          requestId: request.requestId,
+          status: "answered",
+          answers: { plan: { values: ["a"] } },
+          nextAction: "resume",
+          metadata: {},
+        };
+      }
+      if (request.kind === "modelSelect") {
+        return {
+          version: SPARK_PROTOCOL_VERSION,
+          kind: "modelSelect",
+          requestId: request.requestId,
+          status: "answered",
+          selection: { providerName: "baidu-oneapi", modelId: "claude-opus-4.8" },
+          metadata: {},
+        };
+      }
+      return {
+        version: SPARK_PROTOCOL_VERSION,
+        kind: request.kind,
+        requestId: request.requestId,
+        status: "answered",
+        approved: true,
+        metadata: {},
+      };
+    },
+  });
+  const runtime = new SparkHostRuntime({ cwd: "/tmp/spark-interaction", hasUI: true });
+  runtime.setUiTransport(createSparkNativeUiTransport(app, session));
+
+  const ask = await runtime.requestInteraction({
+    version: SPARK_PROTOCOL_VERSION,
+    requestId: "req-ask",
+    kind: "askFlow",
+    title: "Choose plan",
+    mode: "decision",
+    questions: [
+      {
+        id: "plan",
+        prompt: "Which plan?",
+        type: "single",
+        required: true,
+        defaultValues: [],
+        options: [{ value: "a", label: "Plan A" }],
+      },
+    ],
+    metadata: {},
+  });
+  const model = await runtime.requestInteraction({
+    version: SPARK_PROTOCOL_VERSION,
+    requestId: "req-model",
+    kind: "modelSelect",
+    title: "Select model",
+    options: [
+      {
+        value: "baidu-oneapi/claude-opus-4.8",
+        providerName: "baidu-oneapi",
+        modelId: "claude-opus-4.8",
+        active: true,
+        metadata: {},
+      },
+    ],
+    metadata: {},
+  });
+  const approval = await runtime.requestInteraction({
+    version: SPARK_PROTOCOL_VERSION,
+    requestId: "req-tool",
+    kind: "toolApproval",
+    title: "Run edit?",
+    toolName: "edit",
+    approveLabel: "Approve",
+    rejectLabel: "Reject",
+    metadata: {},
+  });
+
+  assert.equal(ask.kind, "askFlow");
+  assert.equal(ask.status, "answered");
+  assert.equal(model.kind, "modelSelect");
+  assert.equal(model.status, "answered");
+  assert.equal(approval.kind, "toolApproval");
+  assert.equal(approval.status, "answered");
+  assert.equal("approved" in approval ? approval.approved : false, true);
+});
+
+void test("native UI transport consumes view model events without concrete TUI protocol types", () => {
+  const session = new SparkNativeSession();
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
+  const ui = createSparkNativeUiTransport(app, session);
+
+  ui.publishView?.({
+    version: SPARK_PROTOCOL_VERSION,
+    type: "session.message",
+    sessionId: "native-session",
+    message: {
+      version: SPARK_PROTOCOL_VERSION,
+      id: "message-1",
+      role: "assistant",
+      text: "hello from event",
+      status: "done",
+      metadata: {},
+    },
+  });
+  ui.publishView?.({
+    version: SPARK_PROTOCOL_VERSION,
+    type: "run.update",
+    run: {
+      version: SPARK_PROTOCOL_VERSION,
+      id: "run:1",
+      kind: "daemon",
+      status: "running",
+      summary: "processing",
+      artifactRefs: [],
+      metadata: {},
+    },
+  });
+
+  const rendered = app.render(100).join("\n");
+  assert.match(rendered, /spark> hello from event/);
+  assert.match(rendered, /custom:run-view> daemon:run:1 \[running\] processing/);
+});
+
+void test("native UI transport returns blocked protocol responses without handler", async () => {
+  const session = new SparkNativeSession();
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
+  const ui = createSparkNativeUiTransport(app, session);
+
+  const response = await ui.interaction?.({
+    version: SPARK_PROTOCOL_VERSION,
+    requestId: "req-tool",
+    kind: "toolApproval",
+    title: "Run edit?",
+    toolName: "edit",
+    approveLabel: "Approve",
+    rejectLabel: "Reject",
+    metadata: {},
+  });
+
+  assert.equal(response?.status, "blocked");
+  assert.equal(response?.kind, "toolApproval");
+  assert.equal(response && "approved" in response ? response.approved : undefined, false);
+  assert.match(app.render(100).join("\n"), /custom:interaction-request> toolApproval: Run edit\?/);
+});
+
+void test("SparkNativeTuiApp /retry resubmits the previous user prompt", async () => {
+  const prompts: string[] = [];
+  const session = new SparkNativeSession((input) => {
+    prompts.push(input);
+    return `ack:${input}`;
+  });
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
+
+  assert.equal(await app.submitInput("first prompt"), "started");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(await app.submitInput("/retry"), "command");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(prompts, ["first prompt", "first prompt"]);
+  assert.match(app.render(100).join("\n"), /Retrying: first prompt/);
+});
+
+void test("Spark daemon native slash commands render status, start, and queue summaries", async () => {
+  let started = false;
+  const session = new SparkNativeSession();
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined, {
+    slashCommands: createSparkDaemonNativeCommands({
+      startService: () => {
+        started = true;
+      },
+      daemonStatus: async () => ({
+        observedAt: "2026-06-22T00:00:00.000Z",
+        servers: [{ url: "ws://local", workspaceCount: 2, wsConnected: true }],
+        queue: { inbox: 1, processed: 2, failed: 3 },
+      }),
+      daemonQueue: async (_paths, params) => ({
+        state: params.state ?? "inbox",
+        entries: [
+          {
+            fileName: "task.json",
+            filePath: "/tmp/task.json",
+            payload: {
+              enqueuedAt: "2026-06-22T00:00:00.000Z",
+              task: { type: "session.run", sessionId: "session-1", prompt: "hello" },
+              processedAt: "2026-06-22T00:00:01.000Z",
+              result: { text: "done" },
+            },
+          },
+        ],
+        observedAt: "2026-06-22T00:00:00.000Z",
+      }),
+    }),
+  });
+
+  assert.equal(await app.submitInput("/start"), "command");
+  assert.equal(await app.submitInput("/status"), "command");
+  assert.equal(await app.submitInput("/queue failed"), "command");
+
+  const rendered = app.render(100).join("\n");
+  assert.equal(started, true);
+  assert.match(rendered, /daemon: running/);
+  assert.match(rendered, /queue: inbox=1 processed=2 failed=3/);
+  assert.match(rendered, /server: ws:\/\/local workspaces=2 ws=connected/);
+  assert.match(rendered, /queue:failed entries=1/);
+  assert.match(rendered, /task\.json • session-1 • hello • result=\{"text":"done"\}/);
 });

@@ -1,11 +1,10 @@
 # Spark daemon end-to-end gate
 
 Historical standalone `pnpm release:e2e` (and the umbrella `pnpm release:gate`)
-drives the **real `spark-daemon` daemon** end-to-end against an isolated,
-project-local Navia server. In the merged Spark repo, prefer the Spark-root
-`pnpm run spark-daemon:e2e`, `pnpm run verify:cockpit`, and `pnpm run verify:merged`
-gates; this document remains the contract for the Spark daemon/server happy path in
-[release-roadmap.md](../plans/release-roadmap.md).
+drove the **real Spark daemon** end-to-end against an isolated,
+project-local Navia server. In the merged Spark repo, prefer the small root
+`pnpm run check` and `pnpm run build` gates; this document remains the contract
+for the Spark daemon/server happy path in [release-roadmap.md](../plans/release-roadmap.md).
 
 This is different from `pnpm release:smoke` (alias `pnpm smoke:spark-daemon`), which
 exercises the **simulator** path: a fake Spark daemon sending pre-baked workspace,
@@ -20,7 +19,7 @@ The gate covers Gate B "Real task happy path":
    randomly allocated port.
 2. Mint a workspace registration token via the same `createRuntimeEnrollmentToken`
    helper Settings uses.
-3. Register a real `spark-daemon` daemon **in-process** against the server,
+3. Register a real Spark daemon **in-process** against the server,
    using the runtime registration API and the enrollment token.
 4. Register a local workspace directory under a temp root and let the daemon
    open the runtime WebSocket, send `runtime.hello`, and start its heartbeat.
@@ -57,13 +56,11 @@ end-to-end rather than re-validating an upstream provider SDK on every change.
 ## Commands
 
 ```bash
-pnpm run spark-daemon:e2e       # Spark-root stubbed Spark daemon happy path
-pnpm run verify:cockpit    # Navia check + test + build
-pnpm run verify:merged   # Spark boundaries/tsc/tests plus Navia verify
+pnpm run check
+pnpm run build
 
-# Historical standalone compatibility commands:
-pnpm release:e2e
-pnpm release:gate
+# Focused stubbed Spark daemon happy path, when needed:
+pnpm --filter @zendev-lab/spark-daemon exec vp test run src/daemon.test.ts -t 'streams ack, running, log chunks, and succeeded updates from the Spark bridge'
 ```
 
 Useful flags:
@@ -92,14 +89,14 @@ A minimal CI job that wants to gate merges should run:
 
 ```yaml
 - run: pnpm install --frozen-lockfile
-- run: pnpm release:gate
+- run: pnpm run check
+- run: pnpm run build
 ```
 
-`verify:merged` and the retained release gates are intentionally hermetic: they
-do not depend on the host's Navia install, provider credentials, network access
-(beyond loopback), or any project-local `.navia/` data. The simulator smoke and
-stubbed Spark daemon E2E together exercise the full server projection schema and the
-real Spark daemon command-handling path.
+The merged-root gates are intentionally hermetic: they do not depend on the host's
+Navia install, provider credentials, network access (beyond loopback), or any
+project-local `.navia/` data. Focused package commands can still be run directly
+when a release branch needs extra daemon/server projection coverage.
 
 For occasional release-branch runs, follow up with a provider-authenticated
 operator smoke when provider behavior itself must be validated.
@@ -110,8 +107,8 @@ operator smoke when provider behavior itself must be validated.
   is still pending" caveat with a green pre-release check.
 - **P1.6 / P1.8** — confirms Spark-runtime-backed execution and minimal task
   result projection are wired together.
-- **Gate B / Gate D** — `release:gate` is the boring, repeatable command line
-  of those gates.
+- **Gate B / Gate D** — the root `check` + `build` gates are the boring,
+  repeatable command line for those checks.
 
 When Gate C work lands (HITL ask bridge and artifact content bridge), this
 gate should grow assertions for human request projections and Spark daemon-served

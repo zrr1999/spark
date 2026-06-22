@@ -11,14 +11,14 @@ This plan originated in the standalone Navia workspace. In the merged Spark mono
 Adopt a lightweight SvelteKit cockpit app plus a separate Spark daemon process inside the Spark TypeScript monorepo:
 
 ```text
-Spark repo: apps/navia-web SvelteKit frontend + TypeScript server routes/API
+Spark repo: apps/spark-cockpit SvelteKit frontend + TypeScript server routes/API
                                               |
                                               +-> communication/projection plane:
                                                   auth, sessions, routing,
                                                   SQLite projections, events/audit,
                                                   web fanout, lazy artifact cache/proxy
 
-apps/spark-daemon Spark daemon <-------> Navia SvelteKit server/API
+apps/spark-daemon Spark daemon <-------> Spark Cockpit SvelteKit server/API
         |
         +-> Spark runtime bridge:
             task graph/run/artifact truth in Spark stores,
@@ -43,7 +43,7 @@ Default user traffic is server-mediated: browser/user actions go through Navia's
 Adopt standards at least as strong as Loom, sixbones.dev, and the useful parts of Multica:
 
 - pnpm workspace with pinned `packageManager`.
-- SvelteKit app under `apps/navia-web` for frontend + server routes.
+- SvelteKit app under `apps/spark-cockpit` for frontend + server routes.
 - Vite+ (`vp`) where practical for format/lint/check entrypoints.
 - `prek` hooks for recurring local validation.
 - Strict TypeScript and Zod at TypeScript/API/protocol boundaries.
@@ -51,7 +51,7 @@ Adopt standards at least as strong as Loom, sixbones.dev, and the useful parts o
 - Kysely with a thin native `node:sqlite` adapter/dialect for SQL-shaped type-safe queries.
 - Explicit SQL migrations checked into the repo.
 - SSE first for frontend project/activity streams; WebSocket where bidirectional protocol channels are required.
-- Spark daemon implementation lives in this monorepo under `apps/spark-daemon`, but remains a separate process connected through the Spark daemon/server protocol. It is a daemon CLI that routes task execution through Spark runtime primitives, not a direct Pi SDK execution authority.
+- Spark daemon implementation lives in this monorepo under `apps/spark-daemon`, but remains a separate process connected through the Spark daemon/server protocol. It is controlled through `spark daemon` and routes task execution through Spark runtime primitives, not a direct Pi SDK execution authority.
 - Shared XDG path resolution lives in `packages/system`. Defaults are `${XDG_DATA_HOME:-~/.local/share}/navia/server` and `${XDG_DATA_HOME:-~/.local/share}/spark/daemon`, `${XDG_CACHE_HOME:-~/.cache}/navia/server` and `${XDG_CACHE_HOME:-~/.cache}/spark/daemon`, `${XDG_STATE_HOME:-~/.local/state}/navia/server` and `${XDG_STATE_HOME:-~/.local/state}/spark/daemon`, and `${XDG_CONFIG_HOME:-~/.config}/navia/server.toml` and `${XDG_CONFIG_HOME:-~/.config}/spark/daemon.toml`.
 - UI starts lightweight: custom Navia components plus direct Bits UI headless primitives where needed; use lucide-style icons/minimal helpers as needed, but do not adopt a shadcn-svelte generated component tree.
 - No Astro.
@@ -68,7 +68,7 @@ Use `docs/rfcs/backend-server-rfc.md`, `docs/rfcs/implementation-options-rfc.md`
 - **Query layer:** prefer Kysely with a thin `node:sqlite` adapter/dialect for SQL-shaped type-safe queries and future PostgreSQL portability; choose Drizzle only if schema-as-code becomes more valuable.
 - **Realtime:** SSE first for frontend event streams; WebSocket for Spark daemon control/session.
 - **Jobs/scheduling:** start in-process for reminders/sweeps/lazy-cache cleanup only if safe; move to a separate worker when reliability or scale requires it. Lazy artifact cache cleanup should evict previews first, then unpinned LRU/TTL blobs over the soft cap, and never delete canonical external artifacts.
-- **Repo layout:** `apps/navia-web` is the SvelteKit app (`@zendev-lab/navia-web`) and `apps/spark-daemon` is the Spark daemon CLI (`@zendev-lab/spark-daemon`). Use high-cohesion packages `@zendev-lab/navia-protocol`, `@zendev-lab/navia-db`, `@zendev-lab/navia-domain`, `@zendev-lab/navia-system`, and `@zendev-lab/navia-ui`.
+- **Repo layout:** `apps/spark-cockpit` is the SvelteKit app (`@zendev-lab/spark-cockpit`) and `apps/spark-daemon` is the Spark daemon service package (`@zendev-lab/spark-daemon`). Use high-cohesion packages `@zendev-lab/navia-protocol`, `@zendev-lab/navia-db`, `@zendev-lab/navia-domain`, `@zendev-lab/navia-system`, and `@zendev-lab/navia-ui`.
 
 ## Stage 0 — Architecture/RFC reset
 
@@ -107,7 +107,7 @@ Tasks:
 2. Create `packages/protocol` (`@zendev-lab/navia-protocol`) with Zod schemas for refs, error envelope, runtime envelope, registration, hello, heartbeat, workspace binding snapshot, and fixtures. — done for registration/hello/heartbeat baseline.
 3. Create `packages/db` (`@zendev-lab/navia-db`) with native `node:sqlite` client, Kysely adapter/dialect shell, pragmas, migration runner, and `0001_initial.sql` based on `data-model-rfc.md`. — done for initial schema subset plus repo-owned `NodeSqliteDialect`.
 4. Create `packages/domain` (`@zendev-lab/navia-domain`) and `packages/ui` (`@zendev-lab/navia-ui`) as thin high-cohesion boundaries for services and shared Svelte primitives. — done as minimal packages.
-5. Create `apps/navia-web` (`@zendev-lab/navia-web`) SvelteKit app with `@sveltejs/adapter-node`, strict TypeScript, Svelte check, and a custom Node server placeholder for Spark daemon WebSocket attachment. — done; WS placeholder replaced by hello/heartbeat handler.
+5. Create `apps/spark-cockpit` (`@zendev-lab/spark-cockpit`) SvelteKit app with `@sveltejs/adapter-node`, strict TypeScript, Svelte check, and a custom Node server placeholder for Spark daemon WebSocket attachment. — done; WS placeholder replaced by hello/heartbeat handler.
 6. Implement local owner setup/session tables and minimal setup route. — done for owner bootstrap and session cookie creation.
 7. Implement Spark daemon enrollment/register endpoint and hashed Spark daemon token storage under `/api/v1/runtime/*`. — done for registration endpoint.
 8. Implement Spark daemon WebSocket hello/heartbeat with a protocol test client/fixture. — done with fake WS unit test; full real client smoke still pending.
@@ -245,7 +245,7 @@ Tests:
 - Human requests appear in web inbox and responses are delivered back through the owning binding.
 - Spark daemon restart reconciliation does not strand active invocations or pending human responses silently.
 - Task graph snapshots reconcile without server claiming execution truth.
-- Protocol fixtures remain the only server-Spark daemon wire contract; `apps/navia-web` must not import `@zendev-lab/spark-daemon`.
+- Protocol fixtures remain the only server-Spark daemon wire contract; `apps/spark-cockpit` must not import `@zendev-lab/spark-daemon`.
 
 ## Stage 4 — Web ask inbox
 
@@ -261,7 +261,7 @@ Behavior:
 - Pending decisions wait indefinitely.
 - Recurring reminders/visible badges surface stale pending decisions.
 - No automatic timeout/approval/rejection/cancellation from elapsed time.
-- Future Pi plugin/integration can bridge Pi ask and Navia web inbox.
+- Future Pi plugin/integration can bridge Pi ask and Spark Cockpit inbox.
 - User-submitted pre-project request intake is deferred; if added later, it should be a separate intake flow, not confused with Spark-daemon-originated asks/reviews.
 
 Tests:
@@ -329,7 +329,7 @@ Surfaces in this repo:
 
 Surfaces in `apps/spark-daemon`:
 
-- `spark-daemon` daemon CLI commands for install/login/enroll/start/stop/status/logs/doctor.
+- `spark daemon` commands for install/login/workspace registration/start/stop/status/logs/doctor.
 - Workspace commands such as add/list/bind/reconcile.
 - Spark-runtime-backed execution, local workspace registry, WebSocket session, and projection delivery for Spark-owned artifact state.
 

@@ -5,7 +5,7 @@ Date: 2026-05-21
 
 ## Summary
 
-Navia's Spark daemon should be treated as a larger Spark daemon/capability concept, not only as a thin task executor. In the merged Spark monorepo the v0.1 Spark daemon is `apps/spark-daemon` / `spark-daemon`: a separate process that may manage multiple workspaces, owns local registration/protocol safety, and routes task execution through Spark runtime primitives while reporting projections back to the web cockpit.
+Navia's Spark daemon should be treated as a larger Spark daemon/capability concept, not only as a thin task executor. In the merged Spark monorepo the v0.1 Spark daemon lives under `apps/spark-daemon` and is controlled through `spark daemon`: a separate process that may manage multiple workspaces, owns local registration/protocol safety, and routes task execution through Spark runtime primitives while reporting projections back to the web cockpit.
 
 In v0.1, each server-visible workspace is created under exactly one owning Spark daemon workspace binding. A Spark daemon can own/manage many workspaces, but a workspace is managed by one Spark daemon binding at a time. Other Spark daemons cannot route commands into or manage that workspace unless an explicit future rebinding/migration flow changes ownership.
 
@@ -195,7 +195,7 @@ Rules:
 
 | Decision                | Selected default                                                                                                                                                   |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Spark daemon concept          | Spark daemon is a larger workspace/capability hub, implemented as `apps/spark-daemon` daemon CLI with a Spark runtime bridge, not a thin executor or extension.      |
+| Spark daemon concept          | Spark daemon is a larger workspace/capability hub, implemented under `apps/spark-daemon` and controlled by `spark daemon` with a Spark runtime bridge, not a thin executor or extension.      |
 | Server role             | Server is primarily the communication plane: auth, sessions, routing, delivery, projections, audit.                                                                |
 | Workspace scope         | One Spark daemon can manage multiple workspace bindings; each server-visible workspace is fixed to one owning Spark daemon binding at creation in v0.1.                        |
 | Frontend emphasis       | Frontend is workspace/project first and should downplay Spark daemon as a primary concept.                                                                               |

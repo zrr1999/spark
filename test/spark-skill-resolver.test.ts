@@ -9,11 +9,11 @@ import {
   formatSparkSkillsForPrompt,
   loadMatchingSparkSkillsForPrompt,
   parseSkillFrontmatter,
-} from "../apps/spark/src/host/index.ts";
+} from "../apps/spark-tui/src/host/index.ts";
 import {
   loadBuiltinSkills,
   renderBuiltinSkillsForPrompt,
-} from "../packages/spark/src/extension/spark-builtin-skills.ts";
+} from "../packages/spark-extension/src/extension/spark-builtin-skills.ts";
 
 async function writeSkill(
   root: string,

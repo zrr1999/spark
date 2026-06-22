@@ -25,7 +25,7 @@
 
 import type { ExtensionAPI } from "@zendev-lab/pi-extension-api";
 import * as nodePath from "node:path";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@zendev-lab/spark-tui/text";
 import { Type } from "typebox";
 
 export interface PiCueExtensionApi {
@@ -228,7 +228,9 @@ async function autoStartDaemon(socketPath: string): Promise<void> {
     child.stdout?.on("data", (chunk: Buffer) => appendBoundedBuffer(stdout, chunk));
     child.stderr?.on("data", (chunk: Buffer) => appendBoundedBuffer(stderr, chunk));
     child.on("error", (error) => {
-      reject(new Error(renderCuedStartFailure({ command, args, socketPath, error, stdout, stderr })));
+      reject(
+        new Error(renderCuedStartFailure({ command, args, socketPath, error, stdout, stderr })),
+      );
     });
     child.on("close", (code, signal) => {
       if (code === 0 || code === null) {
@@ -236,7 +238,9 @@ async function autoStartDaemon(socketPath: string): Promise<void> {
         setTimeout(resolve, 500);
       } else {
         reject(
-          new Error(renderCuedStartFailure({ command, args, socketPath, code, signal, stdout, stderr })),
+          new Error(
+            renderCuedStartFailure({ command, args, socketPath, code, signal, stdout, stderr }),
+          ),
         );
       }
     });
@@ -298,7 +302,8 @@ function renderCuedStartFailure(input: {
 }
 
 function cueConfigDirHint(): string {
-  if (process.env.XDG_CONFIG_HOME?.trim()) return nodePath.join(process.env.XDG_CONFIG_HOME, "cue-shell");
+  if (process.env.XDG_CONFIG_HOME?.trim())
+    return nodePath.join(process.env.XDG_CONFIG_HOME, "cue-shell");
   if (process.env.HOME?.trim()) return nodePath.join(process.env.HOME, ".config", "cue-shell");
   return "<unknown: HOME unset>";
 }
@@ -361,7 +366,15 @@ const CUE_SCHEDULE_STATUS_FILTERS = [
   "expired",
   "active",
 ] as const;
-const CUE_SCOPE_ACTIONS = ["list", "env", "config", "env_set", "path_prepend", "cd", "status"] as const;
+const CUE_SCOPE_ACTIONS = [
+  "list",
+  "env",
+  "config",
+  "env_set",
+  "path_prepend",
+  "cd",
+  "status",
+] as const;
 const SCRIPT_LANGUAGES = ["cue-shell", "python"] as const;
 
 function isFileOp(command: string): boolean {
@@ -826,7 +839,9 @@ function normalizeCueEnvKey(value: unknown, field: string): string {
 function normalizeCueEnvValue(value: unknown, field: string): string {
   if (typeof value !== "string") throw new Error(`${field} must be a string`);
   if (/\s/u.test(value)) {
-    throw new Error(`${field} cannot contain whitespace because cue-shell :env set uses KEY=VALUE words`);
+    throw new Error(
+      `${field} cannot contain whitespace because cue-shell :env set uses KEY=VALUE words`,
+    );
   }
   return value;
 }
@@ -834,7 +849,9 @@ function normalizeCueEnvValue(value: unknown, field: string): string {
 function normalizeCueSessionPath(value: unknown, field: string): string {
   const path = normalizeRequiredCueString(value, field);
   if (/\s/u.test(path)) {
-    throw new Error(`${field} cannot contain whitespace because cue-shell session commands use word tokens`);
+    throw new Error(
+      `${field} cannot contain whitespace because cue-shell session commands use word tokens`,
+    );
   }
   return path;
 }
@@ -2318,7 +2335,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         const pathValue = parseCueEnvValue(envText, "PATH") ?? "";
         const pathPreview = tailStr(pathValue, Math.min(tailBytes, DEFAULT_CUE_TAIL_BYTES));
         const lines = [cwdLine, `PATH=${pathPreview.text}`];
-        if (pathPreview.truncated) lines.push("[PATH truncated — use action=env tail_bytes=0 for full env]");
+        if (pathPreview.truncated)
+          lines.push("[PATH truncated — use action=env tail_bytes=0 for full env]");
         return {
           content: [{ type: "text" as const, text: lines.join("\n") }],
           details: {

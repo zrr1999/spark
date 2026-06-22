@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import {
@@ -15,8 +17,19 @@ import {
   researchWorkflowScript,
   reviewWorkflowScript,
 } from "../packages/pi-workflows/src/builtins.ts";
-import { createSparkWorkflowRoleRunAdapter } from "../packages/spark-runtime/src/index.ts";
-import { registerSparkWorkflowRunTool } from "../packages/spark/src/extension/spark-workflow-run-tool-registration.ts";
+import {
+  createSparkWorkflowRoleRunAdapter,
+  SPARK_WORKFLOW_GRAFT_ISOLATION_TOOLS,
+  type SparkRoleRunResult,
+  type SparkWorkflowGraftAgentResult,
+  type SparkWorkflowRoleRunRequest,
+} from "../packages/spark-runtime/src/index.ts";
+import {
+  registerSparkWorkflowRunTool,
+  workflowAgentTelemetryFromRoleRun,
+} from "../packages/spark-extension/src/extension/spark-workflow-run-tool-registration.ts";
+import { defaultSparkDynamicWorkflowRunStore } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-run-store.ts";
+import { formatSparkDynamicWorkflowRunLine } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-run-rendering.ts";
 
 void test("pi-workflows package stays isolated from runtime execution packages", async () => {
   const pkg = JSON.parse(await readFile("packages/pi-workflows/package.json", "utf8")) as {
@@ -39,7 +52,7 @@ void test("pi-workflows package stays isolated from runtime execution packages",
 });
 
 void test("Spark production code uses generic pi-workflows imports instead of compatibility aliases", async () => {
-  const sourceFiles = await listTypeScriptFiles("packages/spark/src");
+  const sourceFiles = await listTypeScriptFiles("packages/spark-extension/src");
   const deprecatedPiWorkflowImports =
     /import\s+(?:type\s+)?\{[^}]*\b(?:defaultSparkDagRunStore|defaultWorkflowRunStore|workspaceWorkflowDir|SparkDag\w*|SparkWorkflow\w*|sparkDagRunNextSteps|runReadySparkTasks)\b[^}]*\}\s+from\s+["'](?:@zendev-lab\/)?pi-workflows["']/su;
   for (const file of sourceFiles) {
@@ -160,7 +173,7 @@ void test("pi-workflows lists and reads builtin workflows without frontmatter mo
   assert.equal(descriptor.source, "builtin");
   assert.equal(descriptor.mode, "research");
   assert.equal(descriptor.path, "builtin:research");
-  assert.deepEqual(descriptor.phases, ["Plan", "Explore", "Verify", "Report"]);
+  assert.deepEqual(descriptor.phases, ["Plan", "Search", "Fetch", "Verify", "Report"]);
   assert.match(script, /export const meta/);
   const parsed = parseWorkflowScript(script);
   assert.equal(parsed.meta.name, "research");
@@ -184,7 +197,7 @@ void test("pi-workflows research builtin fans out with collected errors and repo
   });
   assert.equal(descriptor.source, "builtin");
   assert.equal(descriptor.mode, "research");
-  assert.deepEqual(descriptor.phases, ["Plan", "Explore", "Verify", "Report"]);
+  assert.deepEqual(descriptor.phases, ["Plan", "Search", "Fetch", "Verify", "Report"]);
 
   const parsed = parseWorkflowScript(script);
   assert.equal(parsed.meta.name, "research");
@@ -209,19 +222,24 @@ void test("pi-workflows research builtin fans out with collected errors and repo
         agentType: options.agentType,
       });
       if (options.label === "blocked") throw new Error("MODEL_BLOCKED");
-      if (options.label === "write report") return "final synthesis";
+      if (options.label === "write cited report") return "final synthesis";
       return "panel answer from " + options.label;
     },
+    webSearch: (request) => ({
+      answer: "search answer for " + (request.query ?? ""),
+      results: [{ title: "source", url: "https://example.test/source" }],
+    }),
+    fetchContent: (request) => ({ url: request.url, text: "source facts" }),
   });
 
   assert.equal(run.agentCount, 5);
   assert.deepEqual(
     run.phases.map((phase) => phase.title),
-    ["Plan", "Explore", "Verify", "Report"],
+    ["Plan", "Search", "Fetch", "Verify", "Report"],
   );
   assert.deepEqual(
     agentCalls.map((call) => call.label),
-    ["research plan", "fast", "blocked", "cross-check", "write report"],
+    ["research plan", "fast", "blocked", "cross-check sources", "write cited report"],
   );
   assert.deepEqual(
     agentCalls.map((call) => call.agentType),
@@ -229,9 +247,9 @@ void test("pi-workflows research builtin fans out with collected errors and repo
   );
   assert.equal(agentCalls[1]?.model, "provider/fast");
   assert.equal(agentCalls[4]?.model, "provider/judge");
-  assert.match(agentCalls[1]?.prompt ?? "", /one contributor in a Spark research workflow/);
-  assert.match(agentCalls[3]?.prompt ?? "", /ERROR: MODEL_BLOCKED/);
-  assert.match(agentCalls[4]?.prompt ?? "", /Write the final user-facing research answer/);
+  assert.match(agentCalls[1]?.prompt ?? "", /Assess the source evidence/);
+  assert.match(agentCalls[3]?.prompt ?? "", /MODEL_BLOCKED/);
+  assert.match(agentCalls[4]?.prompt ?? "", /final user-facing deep research report/);
   assert.equal((run.result as { report?: unknown }).report, "final synthesis");
 });
 
@@ -240,14 +258,14 @@ void test("pi-workflows exposes and runs workflow script factories", async () =>
   assert.equal(research.meta.name, "research");
   assert.deepEqual(
     research.meta.phases?.map((phase) => phase.title),
-    ["Plan", "Explore", "Verify", "Report"],
+    ["Plan", "Search", "Fetch", "Verify", "Report"],
   );
 
   const review = parseWorkflowScript(reviewWorkflowScript());
   assert.equal(review.meta.name, "review");
   assert.deepEqual(
     review.meta.phases?.map((phase) => phase.title),
-    ["Investigate", "Refute", "Consensus"],
+    ["Investigate", "Critique", "Rebut", "Verdict"],
   );
 
   const fanOut = parseWorkflowScript(fanOutWithBriefWorkflowScript());
@@ -261,20 +279,20 @@ void test("pi-workflows exposes and runs workflow script factories", async () =>
     args: { question: "workflow smoke" },
     agent: async (_prompt, options) => options.label ?? "agent",
   });
-  assert.equal(researchRun.agentCount, 6);
+  assert.equal(researchRun.agentCount, 5);
   assert.deepEqual(
     researchRun.phases.map((phase) => phase.title),
-    ["Plan", "Explore", "Verify", "Report"],
+    ["Plan", "Search", "Fetch", "Verify", "Report"],
   );
 
   const reviewRun = await runWorkflowScript(reviewWorkflowScript(), {
     args: { task: "workflow smoke" },
     agent: async (_prompt, options) => options.label ?? "agent",
   });
-  assert.equal(reviewRun.agentCount, 4);
+  assert.equal(reviewRun.agentCount, 5);
   assert.deepEqual(
     reviewRun.phases.map((phase) => phase.title),
-    ["Investigate", "Refute", "Consensus"],
+    ["Investigate", "Critique", "Rebut", "Verdict"],
   );
 });
 
@@ -404,6 +422,87 @@ void test("pi-workflows role-run adapter sends model agents through model runner
   assert.equal(request.metadata.artifactRef, "artifact:brief-456");
 });
 
+void test("pi-workflows role-run adapter forwards child usage telemetry", async () => {
+  const reported: unknown[] = [];
+  const agent = createSparkWorkflowRoleRunAdapter({
+    roleRef: "role:builtin-worker",
+    async runRoleInstruction() {
+      return {
+        text: "role result",
+        telemetry: {
+          runRef: "run:child-telemetry",
+          usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15, costUsd: 0.004 },
+        },
+      };
+    },
+  });
+
+  const result = await agent("Inspect usage", {
+    index: 0,
+    reportTelemetry: (telemetry) => reported.push(telemetry),
+  });
+
+  assert.equal(result, "role result");
+  assert.deepEqual(reported, [
+    {
+      runRef: "run:child-telemetry",
+      usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15, costUsd: 0.004 },
+    },
+  ]);
+});
+
+void test("Spark workflow_run extracts provider usage from role-run JSON events", () => {
+  const roleResult: SparkRoleRunResult = {
+    record: {
+      ref: "run:child-json" as `run:${string}`,
+      roleRef: "role:builtin-worker" as `role:${string}`,
+      runName: "usage child",
+      instruction: "report usage",
+      status: "succeeded",
+      startedAt: "2026-06-22T00:00:00.000Z",
+      finishedAt: "2026-06-22T00:00:05.000Z",
+      model: "fallback-model",
+    },
+    stdout: "",
+    stderr: "",
+    jsonEvents: [
+      {
+        type: "done",
+        message: {
+          role: "assistant",
+          model: "provider/model",
+          provider: "provider",
+          timestamp: 1_782_086_400_000,
+          usage: {
+            input: 100,
+            output: 40,
+            cacheRead: 10,
+            cacheWrite: 5,
+            totalTokens: 155,
+            cost: { total: 0.0123 },
+          },
+        },
+      },
+    ],
+  };
+
+  assert.deepEqual(workflowAgentTelemetryFromRoleRun(roleResult), {
+    runRef: "run:child-json",
+    lastActivityAt: "2026-06-22T00:00:00.000Z",
+    metadata: { runRef: "run:child-json", roleStatus: "succeeded" },
+    usage: {
+      inputTokens: 100,
+      outputTokens: 40,
+      cacheReadTokens: 10,
+      cacheWriteTokens: 5,
+      totalTokens: 155,
+      costUsd: 0.0123,
+      model: "provider/model",
+      provider: "provider",
+    },
+  });
+});
+
 void test("pi-workflows role-run adapter fails model agents when model hook is missing", async () => {
   const agent = createSparkWorkflowRoleRunAdapter({
     roleRef: "role:builtin-worker",
@@ -426,44 +525,55 @@ void test("pi-workflows role-run adapter maps workflow agents to Spark dependenc
   const requests: unknown[] = [];
   const agent = createSparkWorkflowRoleRunAdapter({
     roleRef: "role:builtin-worker",
+    graftBaseRef: "tree:isolated",
     async runRoleInstruction(request) {
       requests.push(request);
-      return { text: "adapter result" };
+      return { text: "adapter result with scratch:abc candidate:def patch:ghi" };
     },
   });
 
-  const result = await agent("Inspect auth routes", {
+  const result = (await agent("Inspect auth routes", {
     index: 2,
     label: "auth reviewer",
     phase: "Review",
     model: "provider/model",
     agentType: "reviewer",
-    isolation: "worktree",
+    isolation: "graft",
     timeoutMs: 123,
     artifactRef: "artifact:brief-123",
-  });
+  })) as SparkWorkflowGraftAgentResult;
 
-  assert.equal(result, "adapter result");
+  assert.equal(result.text, "adapter result with scratch:abc candidate:def patch:ghi");
+  assert.deepEqual(result.graftRefs, {
+    scratchRefs: ["scratch:abc"],
+    candidateRefs: ["candidate:def"],
+    patchRefs: ["patch:ghi"],
+  });
   assert.equal(requests.length, 1);
-  const request = requests[0] as {
-    instruction: string;
-    label: string;
-    phase?: string;
-    model?: string;
-    metadata: Record<string, unknown>;
-  };
+  const request = requests[0] as SparkWorkflowRoleRunRequest;
   assert.equal(request.label, "auth reviewer");
   assert.equal(request.phase, "Review");
   assert.equal(request.model, "provider/model");
   assert.equal(request.metadata.workflowAgent, true);
   assert.equal(request.metadata.index, 2);
-  assert.equal(request.metadata.isolation, "worktree");
+  assert.equal(request.metadata.isolation, "graft");
   assert.equal(request.metadata.artifactRef, "artifact:brief-123");
+  assert.deepEqual(request.metadata.envKeys, ["GRAFT_BASE_REF"]);
+  assert.deepEqual(request.metadata.allowedTools, SPARK_WORKFLOW_GRAFT_ISOLATION_TOOLS);
+  assert.equal(request.env?.GRAFT_BASE_REF, "tree:isolated");
+  assert.deepEqual(request.allowedTools, SPARK_WORKFLOW_GRAFT_ISOLATION_TOOLS);
+  assert.equal(request.allowedTools?.includes("read"), false);
+  assert.equal(request.allowedTools?.includes("write"), false);
+  assert.equal(request.allowedTools?.includes("edit"), false);
   assert.match(request.instruction, /Spark workflow child run/);
   assert.match(request.instruction, /Inspect auth routes/);
   assert.match(request.instruction, /Phase: Review/);
-  assert.match(request.instruction, /Isolation: worktree/);
+  assert.match(request.instruction, /Isolation: graft/);
   assert.match(request.instruction, /Briefing artifact: artifact:brief-123/);
+  assert.match(request.instruction, /Environment keys: GRAFT_BASE_REF/);
+  assert.match(request.instruction, /Allowed tools: graft_help,graft_status/);
+  assert.match(request.instruction, /Graft isolation is active/);
+  assert.match(request.instruction, /graft_candidate_from_scratch/);
 });
 
 void test("pi-workflows fan_out_with_brief records one brief and fans out with artifactRef", async () => {
@@ -527,16 +637,74 @@ void test("pi-workflows fan_out_with_brief requires artifact recorder", async ()
   );
 });
 
-void test("pi-workflows rejects unsupported workflow agent isolation", async () => {
-  const script = `export const meta = { name: 'isolation', description: 'isolation test' }
-await agent('check isolation', { isolation: 'container' })`;
+void test("Spark workflow role-run adapter refuses graft isolation without a base", async () => {
+  const agent = createSparkWorkflowRoleRunAdapter({
+    roleRef: "role:builtin-worker",
+    async runRoleInstruction() {
+      return { text: "should not run" };
+    },
+  });
 
   await assert.rejects(
-    () =>
-      runWorkflowScript(script, {
-        agent: async () => "should not run",
-      }),
-    /workflow agent isolation must be 'worktree'/,
+    () => agent("edit files", { index: 0, isolation: "graft" }),
+    /workflow graft isolation requires persisted workflow base metadata/,
+  );
+});
+
+void test("pi-workflows rejects unsupported workflow agent isolation", async () => {
+  for (const isolation of ["container", "worktree"]) {
+    const script = `export const meta = { name: 'isolation', description: 'isolation test' }
+await agent('check isolation', { isolation: '${isolation}' })`;
+
+    await assert.rejects(
+      () =>
+        runWorkflowScript(script, {
+          agent: async () => "should not run",
+        }),
+      /workflow agent isolation must be 'graft'/,
+    );
+  }
+});
+
+void test("pi-workflows graft isolation smoke keeps parallel same-path edits in separate refs", async () => {
+  const requests: SparkWorkflowRoleRunRequest[] = [];
+  const agent = createSparkWorkflowRoleRunAdapter({
+    roleRef: "role:builtin-worker",
+    graftBaseRef: "tree:base-smoke",
+    async runRoleInstruction(request) {
+      requests.push(request);
+      const suffix = request.label.endsWith("A") ? "a" : "b";
+      return {
+        text: `edited shared.txt through scratch:${suffix} candidate:${suffix}`,
+      };
+    },
+  });
+  const script = `export const meta = { name: 'graft isolation smoke', description: 'parallel isolated edit smoke' }
+return await parallel([
+  () => agent('edit shared.txt to say A', { label: 'worker A', isolation: 'graft' }),
+  () => agent('edit shared.txt to say B', { label: 'worker B', isolation: 'graft' }),
+], { concurrency: 2 })`;
+
+  const run = await runWorkflowScript(script, { agent });
+
+  assert.equal(requests.length, 2);
+  assert.deepEqual(
+    requests.map((request) => request.env?.GRAFT_BASE_REF),
+    ["tree:base-smoke", "tree:base-smoke"],
+  );
+  for (const request of requests) {
+    assert.deepEqual(request.allowedTools, SPARK_WORKFLOW_GRAFT_ISOLATION_TOOLS);
+    assert.match(request.instruction, /Graft isolation is active/);
+    assert.match(request.instruction, /shared\.txt/);
+  }
+  const results = run.result as SparkWorkflowGraftAgentResult[];
+  assert.deepEqual(
+    results.map((result) => result.graftRefs.candidateRefs[0]),
+    ["candidate:a", "candidate:b"],
+  );
+  assert.deepEqual(
+    results.map((result) => result.graftRefs.scratchRefs[0]),
+    ["scratch:a", "scratch:b"],
   );
 });
 
@@ -765,6 +933,66 @@ await agent('second', { label: 'second' })`;
   );
 });
 
+void test("pi-workflows records real agent telemetry and uses it for token budgets", async () => {
+  const script = `export const meta = { name: 'real usage', description: 'real usage budget' }
+await agent('first', { label: 'first' })
+await agent('second', { label: 'second' })`;
+  const tokenEvents: Array<{ tokens: number; spent: number; source: string; costUsd?: number }> =
+    [];
+  const telemetryStatuses: string[] = [];
+
+  await assert.rejects(
+    () =>
+      runWorkflowScript(script, {
+        tokenBudget: 2,
+        agent: async (_prompt, options) => {
+          options.reportTelemetry?.({
+            runRef: `run:child-${options.index}`,
+            lastActivityAt: "2026-06-22T00:00:01.000Z",
+            usage: {
+              inputTokens: 1,
+              outputTokens: 1,
+              totalTokens: 2,
+              costUsd: 0.01,
+              model: "fake-model",
+            },
+          });
+          return "this output is intentionally much longer than two estimated tokens";
+        },
+        onTokenUsage: (usage) => {
+          tokenEvents.push({
+            tokens: usage.tokens,
+            spent: usage.spent,
+            source: usage.usage.source,
+            costUsd: usage.usage.costUsd,
+          });
+        },
+        onAgentTelemetry: (telemetry) => {
+          telemetryStatuses.push(`${telemetry.index}:${telemetry.status}`);
+        },
+      }),
+    /workflow token budget exhausted/,
+  );
+
+  assert.deepEqual(tokenEvents, [{ tokens: 2, spent: 2, source: "actual", costUsd: 0.01 }]);
+  assert.deepEqual(telemetryStatuses, ["0:running", "0:succeeded"]);
+});
+
+void test("pi-workflows marks usage as estimated when agents do not report real usage", async () => {
+  const script = `export const meta = { name: 'estimated usage', description: 'estimated usage fallback' }
+return await agent('short', { label: 'short' })`;
+  const tokenSources: string[] = [];
+
+  await runWorkflowScript(script, {
+    agent: async () => "fallback output",
+    onTokenUsage: (usage) => {
+      tokenSources.push(usage.usage.source);
+    },
+  });
+
+  assert.deepEqual(tokenSources, ["estimated"]);
+});
+
 void test("pi-workflows composes one-level nested workflows through a controlled resolver", async () => {
   const parent = `export const meta = { name: 'parent', description: 'parent workflow' }
 const child = await workflow('child', { value: 'ok' })
@@ -785,82 +1013,612 @@ return await agent('child ' + args.value, { label: 'child agent' })`;
   assert.deepEqual(JSON.parse(JSON.stringify(run.result)), { child: "result:child ok" });
 });
 
-void test("Spark workflow_run tool executes inline and saved workflow scripts through injected runtime", async () => {
-  type TestWorkflowRunTool = {
-    execute: (
-      toolCallId: string,
-      params: Record<string, unknown>,
-      signal: AbortSignal,
-      onUpdate: () => void,
-      ctx: { cwd: string },
-    ) => Promise<{
-      content: Array<{ type: "text"; text: string }>;
-      details: Record<string, unknown>;
-    }>;
-  };
-  const tools = new Map<string, TestWorkflowRunTool>();
-  const seen: Array<{ script: string; args: unknown; tokenBudget?: number; concurrency?: number }> =
-    [];
-  registerSparkWorkflowRunTool(
-    (config) => tools.set(config.name, config as unknown as TestWorkflowRunTool),
-    {
-      createAgentRunner: () => async () => "agent output",
-      resolveScript: async ({ selector }) => ({
-        label: selector,
-        script: `export const meta = { name: 'saved', description: 'saved workflow' }
-return 'saved-result'`,
-      }),
-      async runWorkflow<T = unknown>(
-        script: string,
-        options: WorkflowRunOptions,
-      ): Promise<WorkflowRunResult<T>> {
-        seen.push({
-          script,
-          args: options.args,
-          tokenBudget: options.tokenBudget ?? undefined,
-          concurrency: options.concurrency,
-        });
-        return {
-          meta: parseWorkflowScript(script).meta,
-          result: { ok: true, args: options.args } as T,
-          phases: [{ title: "Done", startedAt: "2026-06-18T00:00:00.000Z", status: "success" }],
-          agentCount: 2,
-          journal: [],
-        };
+void test("Spark dynamic workflow run store reconciles stale running records", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dynamic-workflow-stale-"));
+  try {
+    const store = defaultSparkDynamicWorkflowRunStore(dir);
+    const script = `export const meta = { name: 'stale', description: 'stale workflow' }
+return 'stale'`;
+    const run = await store.start({
+      source: { kind: "inline", label: "inline workflow" },
+      script,
+      meta: parseWorkflowScript(script).meta,
+      options: {},
+      now: "2026-06-22T00:00:00.000Z",
+    });
+    assert.equal(run.status, "running");
+
+    const reconciled = await store.reconcileStale({
+      now: "2026-06-22T00:00:05.000Z",
+      staleAfterMs: 1_000,
+    });
+    assert.equal(reconciled.runs[0]?.status, "stale");
+    assert.match(reconciled.runs[0]?.errorMessage ?? "", /became stale/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark workflow_run tool persists, resumes, and keeps original base metadata", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dynamic-workflow-run-"));
+  try {
+    type TestWorkflowRunTool = {
+      execute: (
+        toolCallId: string,
+        params: Record<string, unknown>,
+        signal: AbortSignal,
+        onUpdate: () => void,
+        ctx: { cwd: string },
+      ) => Promise<{
+        content: Array<{ type: "text"; text: string }>;
+        details: Record<string, unknown>;
+      }>;
+    };
+    const tools = new Map<string, TestWorkflowRunTool>();
+    const agentPrompts: string[] = [];
+    const agentRunnerBases: Array<string | undefined> = [];
+    let baseCaptures = 0;
+    registerSparkWorkflowRunTool(
+      (config) => tools.set(config.name, config as unknown as TestWorkflowRunTool),
+      {
+        createAgentRunner: (input) => {
+          agentRunnerBases.push(input.base?.baseTree);
+          return async (prompt) => {
+            agentPrompts.push(prompt);
+            return `result:${prompt}`;
+          };
+        },
+        captureBase: () => {
+          baseCaptures += 1;
+          return {
+            baseRef: "graft:test-base",
+            baseState: `state-${baseCaptures}`,
+            baseTree: `tree-${baseCaptures}`,
+            capturedAt: "2026-06-22T00:00:00.000Z",
+          };
+        },
       },
-    },
-  );
-  const tool = tools.get("workflow_run");
-  assert.ok(tool, "missing workflow_run tool");
+    );
+    const tool = tools.get("workflow_run");
+    assert.ok(tool, "missing workflow_run tool");
 
-  const inline = await tool.execute(
-    "tool-call",
-    {
-      script: `export const meta = { name: 'inline', description: 'inline workflow' }
+    const script = `export const meta = { name: 'persistent inline', description: 'persistent inline workflow' }
+return await agent('hello ' + args.suffix, { label: 'hello' })`;
+    const first = await tool.execute(
+      "tool-call",
+      { script, args: { suffix: "one" } },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+    const firstDetails = first.details as {
+      workflow: {
+        runRef: string;
+        status: string;
+        journalEntries: number;
+        base?: { baseState?: string };
+      };
+    };
+    assert.equal(firstDetails.workflow.status, "succeeded");
+    assert.equal(firstDetails.workflow.journalEntries, 1);
+    assert.equal(firstDetails.workflow.base?.baseState, "state-1");
+    assert.deepEqual(agentPrompts, ["hello one"]);
+
+    const store = defaultSparkDynamicWorkflowRunStore(dir);
+    const stored = await store.get(firstDetails.workflow.runRef as `run:${string}`);
+    assert.ok(stored);
+    assert.equal(stored.script, script);
+    assert.equal(stored.status, "succeeded");
+    assert.equal(stored.journal.length, 1);
+    assert.equal(stored.result, "result:hello one");
+    assert.equal(stored.base?.baseState, "state-1");
+    assert.deepEqual(agentRunnerBases, ["tree-1"]);
+
+    agentPrompts.length = 0;
+    const resumed = await tool.execute(
+      "tool-call",
+      { runRef: firstDetails.workflow.runRef },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+    const resumedDetails = resumed.details as {
+      workflow: {
+        runRef: string;
+        status: string;
+        journalEntries: number;
+        base?: { baseState?: string };
+      };
+    };
+    assert.equal(resumedDetails.workflow.runRef, firstDetails.workflow.runRef);
+    assert.equal(resumedDetails.workflow.status, "succeeded");
+    assert.equal(resumedDetails.workflow.journalEntries, 1);
+    assert.equal(resumedDetails.workflow.base?.baseState, "state-1");
+    assert.deepEqual(agentPrompts, []);
+    assert.deepEqual(agentRunnerBases, ["tree-1", "tree-1"]);
+    assert.equal(baseCaptures, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark workflow_run persists and renders real workflow agent telemetry", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-workflow-telemetry-"));
+  try {
+    type TestWorkflowRunTool = {
+      execute: (
+        toolCallId: string,
+        params: Record<string, unknown>,
+        signal: AbortSignal,
+        onUpdate: () => void,
+        ctx: { cwd: string },
+      ) => Promise<{
+        content: Array<{ type: "text"; text: string }>;
+        details: Record<string, unknown>;
+      }>;
+    };
+    const tools = new Map<string, TestWorkflowRunTool>();
+    registerSparkWorkflowRunTool(
+      (config) => tools.set(config.name, config as unknown as TestWorkflowRunTool),
+      {
+        createAgentRunner: () => async (_prompt, options) => {
+          options.reportTelemetry?.({
+            runRef: "run:child-usage",
+            lastActivityAt: "2026-06-22T00:00:02.000Z",
+            usage: {
+              inputTokens: 10,
+              outputTokens: 5,
+              totalTokens: 15,
+              costUsd: 0.025,
+              model: "fake-model",
+              provider: "fake-provider",
+            },
+          });
+          return "telemetry result";
+        },
+        now: () => "2026-06-22T00:00:00.000Z",
+      },
+    );
+    const tool = tools.get("workflow_run");
+    assert.ok(tool, "missing workflow_run tool");
+
+    const script = `export const meta = { name: 'telemetry', description: 'telemetry workflow' }
+return await agent('collect usage', { label: 'usage-agent' })`;
+    const result = await tool.execute(
+      "tool-call",
+      { script },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+    const runRef = (result.details as { workflow: { runRef: string } }).workflow.runRef;
+    const stored = await defaultSparkDynamicWorkflowRunStore(dir).get(runRef as `run:${string}`);
+    assert.ok(stored);
+    assert.deepEqual(stored.usageTotals, {
+      actualTokens: 15,
+      estimatedTokens: 0,
+      totalTokens: 15,
+      inputTokens: 10,
+      outputTokens: 5,
+      costUsd: 0.025,
+    });
+    assert.equal(stored.spentTokens, 15);
+    assert.equal(stored.agentTelemetry?.[0]?.label, "usage-agent");
+    assert.equal(stored.agentTelemetry?.[0]?.usage?.source, "actual");
+    assert.equal(stored.agentTelemetry?.[0]?.runRef, "run:child-usage");
+    assert.match(formatSparkDynamicWorkflowRunLine(stored), /tokens=15 cost=\$0\.0250/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark workflow_run tool executes inline and saved workflow scripts through injected runtime", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-workflow-run-tool-"));
+  try {
+    type TestWorkflowRunTool = {
+      execute: (
+        toolCallId: string,
+        params: Record<string, unknown>,
+        signal: AbortSignal,
+        onUpdate: () => void,
+        ctx: { cwd: string },
+      ) => Promise<{
+        content: Array<{ type: "text"; text: string }>;
+        details: Record<string, unknown>;
+      }>;
+    };
+    const tools = new Map<string, TestWorkflowRunTool>();
+    const seen: Array<{
+      script: string;
+      args: unknown;
+      tokenBudget?: number;
+      concurrency?: number;
+      hasWebSearch: boolean;
+      hasFetchContent: boolean;
+      hasLoadWorkflowScript: boolean;
+    }> = [];
+    registerSparkWorkflowRunTool(
+      (config) => tools.set(config.name, config as unknown as TestWorkflowRunTool),
+      {
+        createAgentRunner: () => async () => "agent output",
+        resolveScript: async ({ selector }) => ({
+          label: selector,
+          script: `export const meta = { name: 'saved', description: 'saved workflow' }
+return 'saved-result'`,
+        }),
+        async runWorkflow<T = unknown>(
+          script: string,
+          options: WorkflowRunOptions,
+        ): Promise<WorkflowRunResult<T>> {
+          seen.push({
+            script,
+            args: options.args,
+            tokenBudget: options.tokenBudget ?? undefined,
+            concurrency: options.concurrency,
+            hasWebSearch: typeof options.webSearch === "function",
+            hasFetchContent: typeof options.fetchContent === "function",
+            hasLoadWorkflowScript: typeof options.loadWorkflowScript === "function",
+          });
+          return {
+            meta: parseWorkflowScript(script).meta,
+            result: { ok: true, args: options.args } as T,
+            phases: [{ title: "Done", startedAt: "2026-06-18T00:00:00.000Z", status: "success" }],
+            agentCount: 2,
+            journal: [],
+          };
+        },
+      },
+    );
+    const tool = tools.get("workflow_run");
+    assert.ok(tool, "missing workflow_run tool");
+
+    const inline = await tool.execute(
+      "tool-call",
+      {
+        script: `export const meta = { name: 'inline', description: 'inline workflow' }
 return 'inline-result'`,
-      args: { focus: "demo" },
-      tokenBudget: 50,
-      concurrency: 3,
-    },
-    new AbortController().signal,
-    () => undefined,
-    { cwd: "/tmp/workflow-test" },
-  );
-  assert.match(inline.content[0].text, /Workflow run completed: inline workflow/);
-  const inlineDetails = inline.details as { workflow: { agentCount: number } };
-  assert.equal(inlineDetails.workflow.agentCount, 2);
-  assert.equal(seen[0]?.tokenBudget, 50);
-  assert.equal(seen[0]?.concurrency, 3);
+        args: { focus: "demo" },
+        tokenBudget: 50,
+        concurrency: 3,
+      },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+    assert.match(inline.content[0].text, /Workflow run completed: inline workflow/);
+    const inlineDetails = inline.details as { workflow: { agentCount: number } };
+    assert.equal(inlineDetails.workflow.agentCount, 2);
+    assert.equal(seen[0]?.tokenBudget, 50);
+    assert.equal(seen[0]?.concurrency, 3);
+    assert.equal(seen[0]?.hasWebSearch, true);
+    assert.equal(seen[0]?.hasFetchContent, true);
+    assert.equal(seen[0]?.hasLoadWorkflowScript, true);
 
-  await tool.execute(
-    "tool-call",
-    { selector: "builtin:research", args: { question: "demo" } },
-    new AbortController().signal,
-    () => undefined,
-    { cwd: "/tmp/workflow-test" },
-  );
-  assert.match(seen[1]?.script ?? "", /name: 'saved'/);
-  assert.deepEqual(seen[1]?.args, { question: "demo" });
+    await tool.execute(
+      "tool-call",
+      { selector: "builtin:research", args: { question: "demo" } },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+    assert.match(seen[1]?.script ?? "", /name: 'saved'/);
+    assert.deepEqual(seen[1]?.args, { question: "demo" });
+    const persisted = await defaultSparkDynamicWorkflowRunStore(dir).load();
+    assert.deepEqual(
+      persisted.runs.map((run) => run.source.kind),
+      ["inline", "selector"],
+    );
+    assert.equal(persisted.runs[1]?.source.selector, "builtin:research");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark workflow_run blocks risky workflows until approved", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-workflow-approval-deny-"));
+  try {
+    type TestWorkflowRunTool = {
+      execute: (
+        toolCallId: string,
+        params: Record<string, unknown>,
+        signal: AbortSignal,
+        onUpdate: () => void,
+        ctx: { cwd: string },
+      ) => Promise<{
+        content: Array<{ type: "text"; text: string }>;
+        details: Record<string, unknown>;
+      }>;
+    };
+    const tools = new Map<string, TestWorkflowRunTool>();
+    let createdAgent = false;
+    let ranWorkflow = false;
+    let approvalRiskFlags: string[] = [];
+    registerSparkWorkflowRunTool(
+      (config) => tools.set(config.name, config as unknown as TestWorkflowRunTool),
+      {
+        approveRun: ({ summary }) => {
+          approvalRiskFlags = summary.riskFlags;
+          return { approved: false, reason: "test denied" };
+        },
+        createAgentRunner: () => {
+          createdAgent = true;
+          return async () => "agent output";
+        },
+        async runWorkflow<T = unknown>(): Promise<WorkflowRunResult<T>> {
+          ranWorkflow = true;
+          throw new Error("should not execute");
+        },
+      },
+    );
+    const tool = tools.get("workflow_run");
+    assert.ok(tool, "missing workflow_run tool");
+
+    const script = `export const meta = { name: 'needs approval', description: 'web workflow' }
+return await webSearch({ query: 'approval smoke' })`;
+    await assert.rejects(
+      () =>
+        tool.execute("tool-call", { script }, new AbortController().signal, () => undefined, {
+          cwd: dir,
+        }),
+      /workflow_run approval denied: test denied/,
+    );
+    assert.deepEqual(approvalRiskFlags, ["web_or_fetch"]);
+    assert.equal(createdAgent, false);
+    assert.equal(ranWorkflow, false);
+    const persisted = await defaultSparkDynamicWorkflowRunStore(dir).load();
+    assert.equal(persisted.runs.length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark workflow_run records scoped approval provenance for risky workflows", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-workflow-approval-allow-"));
+  try {
+    type TestWorkflowRunTool = {
+      execute: (
+        toolCallId: string,
+        params: Record<string, unknown>,
+        signal: AbortSignal,
+        onUpdate: () => void,
+        ctx: { cwd: string },
+      ) => Promise<{
+        content: Array<{ type: "text"; text: string }>;
+        details: Record<string, unknown>;
+      }>;
+    };
+    const tools = new Map<string, TestWorkflowRunTool>();
+    let approvalSource = "";
+    registerSparkWorkflowRunTool(
+      (config) => tools.set(config.name, config as unknown as TestWorkflowRunTool),
+      {
+        approveRun: ({ summary }) => {
+          approvalSource = summary.source;
+          assert.deepEqual(summary.riskFlags, ["web_or_fetch"]);
+          assert.equal(summary.resources.phaseCount, 0);
+          return { approved: true, method: "reviewer", reason: "safe bounded web lookup" };
+        },
+        createAgentRunner: () => async () => "agent output",
+        webSearch: ({ request }) => ({ searched: request.query, url: "https://example.test" }),
+        now: () => "2026-06-22T12:00:00.000Z",
+      },
+    );
+    const tool = tools.get("workflow_run");
+    assert.ok(tool, "missing workflow_run tool");
+
+    const result = await tool.execute(
+      "tool-call",
+      {
+        script: `export const meta = { name: 'approved web', description: 'web workflow' }
+return await webSearch({ query: args.query })`,
+        args: { query: "approval smoke" },
+      },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+
+    assert.equal(approvalSource, "inline workflow");
+    const runRef = (result.details as { workflow: { runRef: string } }).workflow.runRef;
+    const stored = await defaultSparkDynamicWorkflowRunStore(dir).get(runRef as `run:${string}`);
+    assert.ok(stored);
+    assert.equal(stored.approval?.status, "approved");
+    assert.equal(stored.approval?.method, "reviewer");
+    assert.equal(stored.approval?.reason, "safe bounded web lookup");
+    assert.deepEqual(stored.approval?.summary.riskFlags, ["web_or_fetch"]);
+    assert.match(formatSparkDynamicWorkflowRunLine(stored), /approval=reviewer:web_or_fetch/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark workflow_run executes an ultracode-style generated workflow script", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-workflow-ultracode-smoke-"));
+  try {
+    type TestWorkflowRunTool = {
+      execute: (
+        toolCallId: string,
+        params: Record<string, unknown>,
+        signal: AbortSignal,
+        onUpdate: () => void,
+        ctx: { cwd: string },
+      ) => Promise<{
+        content: Array<{ type: "text"; text: string }>;
+        details: Record<string, unknown>;
+      }>;
+    };
+    const tools = new Map<string, TestWorkflowRunTool>();
+    let approvedRiskFlags: string[] = [];
+    registerSparkWorkflowRunTool(
+      (config) => tools.set(config.name, config as unknown as TestWorkflowRunTool),
+      {
+        approveRun: ({ summary }) => {
+          approvedRiskFlags = summary.riskFlags;
+          return { approved: true, method: "reviewer", reason: "bounded ultracode smoke" };
+        },
+        createAgentRunner: () => async (_prompt, options) => {
+          if (options.label === "planner") return "draft execution plan";
+          if (options.label?.startsWith("verify ")) return { real: true };
+          if (options.label === "completeness critic") return { complete: true };
+          return "agent output";
+        },
+      },
+    );
+    const tool = tools.get("workflow_run");
+    assert.ok(tool, "missing workflow_run tool");
+
+    const result = await tool.execute(
+      "tool-call",
+      {
+        script: `export const meta = { name: 'ultracode smoke', description: 'bounded generated workflow', phases: [{ title: 'Plan' }, { title: 'Verify' }, { title: 'Synthesize' }] }
+phase('Plan')
+const draft = await agent('Draft a short execution plan for ' + args.focus, { label: 'planner' })
+phase('Verify')
+const verdict = await verify(draft, { reviewers: 2, threshold: 0.5 })
+const complete = await completenessCheck(args, { draft, verdict })
+phase('Synthesize', { status: 'success' })
+return { draft, verdict, complete }`,
+        args: { focus: "workflow parity" },
+        concurrency: 2,
+        maxAgents: 6,
+        tokenBudget: 1000,
+      },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+
+    assert.deepEqual(approvedRiskFlags, ["fan_out"]);
+    const details = result.details as {
+      workflow: {
+        status: string;
+        result: { draft: string; verdict: { real: boolean }; complete: { complete: boolean } };
+      };
+    };
+    assert.equal(details.workflow.status, "succeeded");
+    assert.equal(details.workflow.result.draft, "draft execution plan");
+    assert.equal(details.workflow.result.verdict.real, true);
+    assert.equal(details.workflow.result.complete.complete, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("dynamic workflow save uses collision-safe workspace selectors that rerun", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-workflow-save-reuse-"));
+  try {
+    const script = `export const meta = { name: 'Reusable Flow', description: 'saved reusable workflow' }
+return { reused: true, args }
+`;
+    const parsed = parseWorkflowScript(script);
+    const store = defaultSparkDynamicWorkflowRunStore(dir);
+    const run = await store.start({
+      source: { kind: "inline", label: "generated reusable workflow" },
+      script,
+      args: { first: true },
+      meta: parsed.meta,
+      options: {},
+    });
+    const first = await store.saveAsWorkflow({ cwd: dir, runRef: run.ref, workflowId: "reuse" });
+    const second = await store.saveAsWorkflow({ cwd: dir, runRef: run.ref, workflowId: "reuse" });
+    assert.equal(first?.selector, "workspace:reuse");
+    assert.equal(second?.selector, "workspace:reuse-2");
+
+    const listed = await listSavedWorkflows(dir, { includeUser: false });
+    assert.deepEqual(
+      listed.workflows
+        .map((workflow) => workflow.selector)
+        .filter((selector) => selector.startsWith("workspace:reuse"))
+        .sort(),
+      ["workspace:reuse", "workspace:reuse-2"],
+    );
+    const saved = await readSavedWorkflow({ cwd: dir, selector: second?.selector ?? "" });
+    assert.equal(saved.script, script);
+
+    type TestWorkflowRunTool = {
+      execute: (
+        toolCallId: string,
+        params: Record<string, unknown>,
+        signal: AbortSignal,
+        onUpdate: () => void,
+        ctx: { cwd: string },
+      ) => Promise<{
+        content: Array<{ type: "text"; text: string }>;
+        details: Record<string, unknown>;
+      }>;
+    };
+    const tools = new Map<string, TestWorkflowRunTool>();
+    registerSparkWorkflowRunTool(
+      (config) => tools.set(config.name, config as unknown as TestWorkflowRunTool),
+      { createAgentRunner: () => async () => "agent output" },
+    );
+    const tool = tools.get("workflow_run");
+    assert.ok(tool, "missing workflow_run tool");
+    const result = await tool.execute(
+      "tool-call",
+      { selector: second?.selector, args: { rerun: true } },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+    const details = result.details as { workflow: { result: { reused: boolean; args: unknown } } };
+    assert.equal(details.workflow.result.reused, true);
+    assert.deepEqual(details.workflow.result.args, { rerun: true });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark workflow_run tool resolves controlled nested saved workflows", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-workflow-run-nested-"));
+  try {
+    type TestWorkflowRunTool = {
+      execute: (
+        toolCallId: string,
+        params: Record<string, unknown>,
+        signal: AbortSignal,
+        onUpdate: () => void,
+        ctx: { cwd: string },
+      ) => Promise<{
+        content: Array<{ type: "text"; text: string }>;
+        details: Record<string, unknown>;
+      }>;
+    };
+    await mkdir(join(dir, ".spark", "workflows"), { recursive: true });
+    await writeFile(
+      join(dir, ".spark", "workflows", "child.js"),
+      `export const meta = { name: 'child', description: 'saved child workflow' }
+return { marker: 'saved-child', args }
+`,
+      "utf8",
+    );
+    const tools = new Map<string, TestWorkflowRunTool>();
+    registerSparkWorkflowRunTool(
+      (config) => tools.set(config.name, config as unknown as TestWorkflowRunTool),
+      { createAgentRunner: () => async () => "agent output" },
+    );
+    const tool = tools.get("workflow_run");
+    assert.ok(tool, "missing workflow_run tool");
+
+    const result = await tool.execute(
+      "tool-call",
+      {
+        script: `export const meta = { name: 'parent', description: 'parent workflow' }
+return await workflow('workspace:child', { focus: args.focus })`,
+        args: { focus: "nested-demo" },
+      },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+
+    assert.match(result.content[0].text, /Workflow run completed: inline workflow/);
+    const details = result.details as { workflow: { result: { marker: string; args: unknown } } };
+    assert.equal(details.workflow.result.marker, "saved-child");
+    assert.deepEqual(details.workflow.result.args, { focus: "nested-demo" });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 async function listTypeScriptFiles(dir: string): Promise<string[]> {

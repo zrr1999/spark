@@ -4,13 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { parseSparkCliCommand } from "../apps/spark/src/cli.ts";
+import { parseSparkCliCommand } from "../apps/spark-tui/src/cli.ts";
 import {
   createSparkDaemonNativeResponder,
   handleSparkDaemonCliCommand,
   parseSparkDaemonCliArgs,
   runSparkDaemonCliCommand,
-} from "../apps/spark/src/cli/daemon.ts";
+} from "../apps/spark-tui/src/cli/daemon.ts";
 
 void test("parseSparkCliCommand routes daemon and print commands without changing default TUI parsing", () => {
   assert.deepEqual(parseSparkCliCommand(["build", "this"]), {
@@ -26,10 +26,15 @@ void test("parseSparkCliCommand routes daemon and print commands without changin
     kind: "daemon",
     command: { action: "status", json: true },
   });
+  assert.deepEqual(parseSparkCliCommand(["daemon", "workspace", "ls", "--json"]), {
+    kind: "daemon",
+    command: { action: "service", argv: ["workspace", "ls", "--json"] },
+  });
 });
 
 void test("parseSparkDaemonCliArgs parses daemon IPC commands", () => {
-  assert.deepEqual(parseSparkDaemonCliArgs([]), { action: "help" });
+  assert.deepEqual(parseSparkDaemonCliArgs([]), { action: "service", argv: [] });
+  assert.deepEqual(parseSparkDaemonCliArgs(["--help"]), { action: "help" });
   assert.deepEqual(parseSparkDaemonCliArgs(["submit", "--session", "s1", "-p", "hello"]), {
     action: "submit",
     json: false,
@@ -56,6 +61,14 @@ void test("parseSparkDaemonCliArgs parses daemon IPC commands", () => {
   assert.deepEqual(parseSparkDaemonCliArgs(["start", "--json"]), {
     action: "start",
     json: true,
+  });
+  assert.deepEqual(parseSparkDaemonCliArgs(["stop", "--yes"]), {
+    action: "service",
+    argv: ["stop", "--yes"],
+  });
+  assert.deepEqual(parseSparkDaemonCliArgs(["restart", "--yes"]), {
+    action: "service",
+    argv: ["daemon", "restart", "--yes"],
   });
 });
 
@@ -121,6 +134,23 @@ void test("daemon CLI handlers use Spark daemon local IPC instead of direct queu
   }
 });
 
+void test("runSparkDaemonCliCommand delegates service commands", async () => {
+  const calls: string[][] = [];
+  const code = await runSparkDaemonCliCommand(
+    { action: "service", argv: ["workspace", "ls", "--json"] },
+    { write: () => undefined },
+    {
+      serviceCommand: async (argv) => {
+        calls.push(argv);
+        return 7;
+      },
+    },
+  );
+
+  assert.equal(code, 7);
+  assert.deepEqual(calls, [["workspace", "ls", "--json"]]);
+});
+
 void test("runSparkDaemonCliCommand prints JSON when requested", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-cli-output-"));
   try {
@@ -154,26 +184,34 @@ function testDaemonPaths(root: string) {
 
 void test("Spark native responder submits prompts through daemon IPC", async () => {
   const calls: Array<{ sessionId: string; prompt: string }> = [];
-  const responder = createSparkDaemonNativeResponder({
-    startService: () => ({ kind: "detached" as const, alreadyRunning: false, detail: "started" }),
-    daemonStatus: async () => ({
-      observedAt: "2026-06-19T00:00:00.000Z",
-      servers: [],
-      queue: { inbox: 0, processed: 0, failed: 0 },
-    }),
-    turnSubmit: async (_paths, input) => {
-      calls.push({ sessionId: input.sessionId, prompt: input.prompt });
-      return {
+  const responder = createSparkDaemonNativeResponder(
+    {
+      startService: () => ({ kind: "detached" as const, alreadyRunning: false, detail: "started" }),
+      daemonStatus: async () => ({
         observedAt: "2026-06-19T00:00:00.000Z",
-        fileName: "turn.json",
-        filePath: "/tmp/turn.json",
-        task: { type: "session.run" as const, sessionId: input.sessionId, prompt: input.prompt },
-      };
+        servers: [],
+        queue: { inbox: 0, processed: 0, failed: 0 },
+      }),
+      turnSubmit: async (_paths, input) => {
+        calls.push({ sessionId: input.sessionId, prompt: input.prompt });
+        return {
+          observedAt: "2026-06-19T00:00:00.000Z",
+          fileName: "turn.json",
+          filePath: "/tmp/turn.json",
+          task: { type: "session.run" as const, sessionId: input.sessionId, prompt: input.prompt },
+        };
+      },
+      sleep: async () => undefined,
     },
-    sleep: async () => undefined,
-  });
+    { sessionId: "native-session" },
+  );
 
-  const output = await responder("hello through daemon");
-  assert.match(output, /queued for Spark daemon: turn\.json/);
-  assert.equal(calls[0]?.prompt, "hello through daemon");
+  const firstOutput = await responder("hello through daemon");
+  const secondOutput = await responder("follow-up through daemon");
+  assert.match(firstOutput, /queued for Spark daemon session native-session: turn\.json/);
+  assert.match(secondOutput, /queued for Spark daemon session native-session: turn\.json/);
+  assert.deepEqual(calls, [
+    { sessionId: "native-session", prompt: "hello through daemon" },
+    { sessionId: "native-session", prompt: "follow-up through daemon" },
+  ]);
 });

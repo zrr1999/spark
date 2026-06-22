@@ -20,7 +20,7 @@ import { SparkDaemonInvocationRegistry, SparkDaemonQueue } from "./core/index.ts
 import { SparkDaemonHumanWaitRegistry } from "./core/human-waits.ts";
 import type { CancelSparkInvocationFn, RunSparkCommandFn } from "./spark/bridge.js";
 import { openSparkDaemonDatabase } from "./store/schema.js";
-import { addWorkspace, stopWorkspace } from "./store/workspaces.js";
+import { addWorkspace, attachWorkspaceClient, stopWorkspace } from "./store/workspaces.js";
 import type { SparkDaemonConfig } from "./config.js";
 
 type BridgeInput = Parameters<RunSparkCommandFn>[0];
@@ -315,6 +315,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
         executeQueueTask: async (task) => {
           executed.push(`${task.sessionId}:${task.prompt}`);
           shutdown.abort();
+          return { text: "done" };
         },
         queuePollIntervalMs: 5,
       });
@@ -322,7 +323,11 @@ describe("Spark daemon handleCommand task.start.request", () => {
       await running;
 
       expect(executed).toEqual(["queued-session:hello"]);
-      expect(await queue.list("processed")).toHaveLength(1);
+      const processed = await queue.list("processed");
+      expect(processed).toHaveLength(1);
+      const processedEntry = await queue.readEntry(processed[0]!, "processed");
+      expect(processedEntry.payload.processedAt).toEqual(expect.any(String));
+      expect(processedEntry.payload.result).toEqual({ text: "done" });
       expect(existsSync(harness.paths.pidFile)).toBe(false);
     } finally {
       harness.cleanup();
@@ -789,6 +794,79 @@ describe("Spark daemon handleCommand task.start.request", () => {
       };
       expect(reject.type).toBe("runtime.command.reject");
       expect(reject.payload.reasonCode).toBe("UNKNOWN_WORKSPACE_BINDING");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("rejects mutating routed commands for a borrowed workspace", async () => {
+    const harness = makeHarness();
+    try {
+      attachWorkspaceClient(harness.db, {
+        workspaceId: harness.workspace.id,
+        clientId: "wcl-borrowed-tui",
+        kind: "interactive",
+        displayName: "Spark TUI",
+        now: "2026-05-26T00:00:00.000Z",
+      });
+      const ws = new CapturingSocket();
+      const command = buildTaskStartEnvelope(harness.workspace.id);
+      const context = makeContext(harness, async () => {
+        throw new Error("must not be invoked");
+      });
+
+      await handleCommand(ws, command, context);
+
+      expect(ws.sent).toHaveLength(1);
+      expect(ws.sent[0]).toMatchObject({
+        type: "runtime.command.reject",
+        payload: {
+          reasonCode: "WORKSPACE_BORROWED",
+          retryable: true,
+        },
+      });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("allows borrowed workspaces to return snapshots", async () => {
+    const harness = makeHarness();
+    try {
+      attachWorkspaceClient(harness.db, {
+        workspaceId: harness.workspace.id,
+        clientId: "wcl-borrowed-tui",
+        kind: "interactive",
+        displayName: "Spark TUI",
+        now: "2026-05-26T00:00:00.000Z",
+      });
+      const ws = new CapturingSocket();
+      const command = serverCommandEnvelopeSchema.parse({
+        protocolVersion: runtimeProtocolVersion,
+        messageId: createId("msg"),
+        type: "server.command",
+        sentAt: new Date().toISOString(),
+        runtimeId: "rt_11111111111111111111111111111111",
+        workspaceBindingId: harness.workspace.id,
+        workspaceId: "ws_22222222222222222222222222222222",
+        commandId: createId("cmd"),
+        payload: { kind: "workspace.snapshot.request" },
+      });
+      const context = makeContext(harness, async () => {
+        throw new Error("snapshot should not invoke task bridge");
+      });
+
+      await handleCommand(ws, command, context);
+
+      expect(ws.sent).toHaveLength(2);
+      expect(ws.sent[0]).toMatchObject({ type: "runtime.command.ack" });
+      expect(ws.sent[1]).toMatchObject({
+        type: "workspace.snapshot",
+        payload: {
+          borrowed: { borrowed: true, interactiveClientCount: 1 },
+          control: { mode: "snapshot_only", reason: "borrowed", serverMutationAllowed: false },
+        },
+      });
     } finally {
       harness.cleanup();
     }

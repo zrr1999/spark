@@ -15,7 +15,7 @@ Reusable, Spark-independent pieces live in `pi-roles`; Spark keeps task/workflow
 - `packages/spark-runtime/src/index.ts` owns single-task Spark adaptation: resolving an assigned/task/default `roleRef` through a `RoleRegistry`, creating `role-run` claims, calling `runRole()`, writing artifacts through `pi-artifacts`, updating task/run state, and tracking active background child processes.
 - `packages/pi-workflows/src/orchestrator/index.ts` owns graph-level ready-task scheduling: dispatch-time executor role assignment, workflow-run state, and stale run reconciliation.
 - `packages/pi-roles/src/extension.ts` exposes the canonical public/default `role({ action })` tool for role-spec management and one-off direct role calls; historical fragmented implementations are internal dispatch targets only.
-- `packages/spark/src/extension/index.ts` exposes Spark commands, canonical tool handlers, and Spark-owned function/workflow presets; Spark task execution uses role refs through `assign({ dryRun: true })`, not direct role wrapper tools.
+- `packages/spark-extension/src/extension/index.ts` exposes Spark commands, canonical tool handlers, and Spark-owned function/workflow presets; Spark task execution uses role refs through `assign({ dryRun: true })`, not direct role wrapper tools.
 
 ## Spec/run separation invariant
 

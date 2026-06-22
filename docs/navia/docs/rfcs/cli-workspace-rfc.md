@@ -163,7 +163,7 @@ the candidates with their `<name>@<server>` form.
 ## Command surface
 
 ```text
-spark-daemon workspace register
+spark daemon workspace register
    [path]
    --server-url <url>
    --token <workspace-registration-token>
@@ -171,29 +171,29 @@ spark-daemon workspace register
    [--profile <path-or-git-url>]
    [--yes]
 
-spark-daemon workspace                                 # alias for `ls`
-spark-daemon workspace ls    [--json] [--all] [--full]
-spark-daemon workspace show  [name[@server]] [--json]
-spark-daemon workspace stop  <name[@server]>  [--yes]
+spark daemon workspace                                 # alias for `ls`
+spark daemon workspace ls    [--json] [--all] [--full]
+spark daemon workspace show  [name[@server]] [--json]
+spark daemon workspace stop  <name[@server]>  [--yes]
 
 spark daemon                                    # help
 spark daemon status   [--json]
-spark-daemon daemon start
+spark daemon start
 spark daemon stop     [--yes]
 spark daemon restart
 spark daemon logs     [--follow] [--lines <n>]
 
-spark-daemon workspace                                        # alias of `spark-daemon workspace`
+spark daemon workspace                                        # alias of `spark daemon workspace`
 ```
 
 Deferred:
 
-- `spark-daemon workspace rm` (removed entirely from v0.1; see `Workspace
+- `spark daemon workspace rm` (removed entirely from v0.1; see `Workspace
 permanence`).
-- `spark-daemon workspace use` (no default workspace concept in v0.1).
-- `spark-daemon workspace add` (subsumed by `ws register` because v0.1 has no
+- `spark daemon workspace use` (no default workspace concept in v0.1).
+- `spark daemon workspace add` (subsumed by `ws register` because v0.1 has no
   global Spark daemon-server registration).
-- `spark-daemon workspace rename`, `spark-daemon workspace sync-profile`, remote attach
+- `spark daemon workspace rename`, `spark daemon workspace sync-profile`, remote attach
   commands.
 
 ### Common conventions
@@ -221,7 +221,7 @@ permanence`).
      refused the workspace registration grant).
    - `4` confirmation declined.
 
-## `spark-daemon workspace register`
+## `spark daemon workspace register`
 
 The only v0.1 user-facing command that registers a workspace. Internally,
 successful registration creates or links the server-visible workspace and
@@ -231,7 +231,7 @@ Form 1, scripted (the form most users will see, since workspace
 registration tokens are pasted from the server UI):
 
 ```text
-$ spark-daemon workspace register . \
+$ spark daemon workspace register . \
     --server-url http://127.0.0.1:5173 \
     --token navia_wsreg_hjrypmwfkQmw8H5tAPENRejC977q-RA_LBObrFfwgQw \
     --name navia
@@ -242,11 +242,11 @@ $ spark-daemon workspace register . \
    note     v0.1 has no removal command; this registration is permanent.
 ```
 
-Form 2, interactive (the user typed `spark-daemon workspace register` with
+Form 2, interactive (the user typed `spark daemon workspace register` with
 nothing else; the CLI prompts):
 
 ```text
-$ spark-daemon workspace register
+$ spark daemon workspace register
   path [./]: _
   server URL: http://127.0.0.1:5173
   workspace registration token: navia_wsreg_…  # echoed masked
@@ -349,14 +349,14 @@ has no removal command; this registration is permanent.`). It
 does not appear on every subsequent command. The CLI does not
 require the user to type "I understand" or similar.
 
-## `spark-daemon workspace` / `spark-daemon workspace ls`
+## `spark daemon workspace` / `spark daemon workspace ls`
 
-Bare `spark-daemon workspace` is sugar for `spark-daemon workspace ls`.
+Bare `spark daemon workspace` is sugar for `spark daemon workspace ls`.
 
 Default tabular output:
 
 ```text
-$ spark-daemon workspace
+$ spark daemon workspace
 NAME      SERVER                       STATUS                   PATH                                  PROJECTS  INBOX  LAST SESSION
 navia     http://127.0.0.1:5173        online                   ~/workspace/navia-dev/navia           1         0      2 h ago
 paddle    http://127.0.0.1:5173        degraded                 ~/code/paddle                         3         2      12 min ago
@@ -396,16 +396,16 @@ Behavior:
 - Empty registry prints:
    ```text
    no workspaces registered.
-     spark-daemon workspace register . --server-url <url> --token <tok> --name <ws>
+     spark daemon workspace register . --server-url <url> --token <tok> --name <ws>
    ```
 - `--json` emits the schema below.
 
-## `spark-daemon workspace show [name[@server]]`
+## `spark daemon workspace show [name[@server]]`
 
 Detailed view of a single workspace.
 
 ```text
-$ spark-daemon workspace show paddle
+$ spark daemon workspace show paddle
 paddle
   status         online
   server         http://127.0.0.1:5173
@@ -441,7 +441,7 @@ Behavior:
 ago)` if the daemon has been disconnected for over a minute.
 - `--json` emits the schema below.
 
-## `spark-daemon workspace stop <name[@server]>`
+## `spark daemon workspace stop <name[@server]>`
 
 Pauses an attached workspace. The daemon keeps any server-level
 outbound WS open, but marks this workspace binding as paused/detached
@@ -450,7 +450,7 @@ workspaces on the same daemon process and the same server are
 unaffected.
 
 ```text
-$ spark-daemon workspace stop paddle
+$ spark daemon workspace stop paddle
 ✓ paused 'paddle'
    server         http://127.0.0.1:5173
    path           ~/code/paddle (untouched)
@@ -501,8 +501,8 @@ running
 $ spark daemon status                    # when not running
 not running
    socket           ~/.local/state/navia/daemon.sock (absent)
-   start            spark-daemon daemon start          # foreground, stay attached
-                    or run any 'spark-daemon workspace' command to lazy-spawn
+   start            spark daemon start          # foreground, stay attached
+                    or run any 'spark daemon workspace' command to lazy-spawn
 ```
 
 Subcommands:
@@ -536,7 +536,7 @@ with no workspaces registered:
 ```text
 $ navia
 no workspaces registered.
-  spark-daemon workspace register . --server-url <url> --token <tok> --name <ws>
+  spark daemon workspace register . --server-url <url> --token <tok> --name <ws>
 or pass --workspace <name> after registering one elsewhere.
 ```
 
@@ -546,7 +546,7 @@ registered workspace's path, but at least one workspace exists:
 ```text
 $ navia
 /Users/zrr/somewhere is not under a registered workspace.
-  spark-daemon workspace register .  --server-url <url> --token <tok> --name <ws>
+  spark daemon workspace register .  --server-url <url> --token <tok> --name <ws>
 or cd into a registered workspace, or pass --workspace <name>.
 existing workspaces:
   navia    http://127.0.0.1:5173
@@ -803,7 +803,7 @@ acceptance.
 ## JSON output schema
 
 ```ts
-// spark-daemon workspace ls --json
+// spark daemon workspace ls --json
 type WorkspaceListItem = {
    slug: string;
    name: string;
@@ -822,7 +822,7 @@ type WorkspaceListItem = {
    lastStatusChangedAt: string; // ISO 8601
 };
 
-// spark-daemon workspace show --json
+// spark daemon workspace show --json
 type WorkspaceDetail = WorkspaceListItem & {
    connection: ConnectionDetail | null; // null until first attach
    projects: Array<{
@@ -939,7 +939,7 @@ Examples:
 ```text
 ✗ workspace 'paddle' is degraded
   why     workspace path not reachable: ENOENT at ~/code/paddle (filesystem.unreachable)
-  fix     reconnect the volume, or run 'spark-daemon workspace stop paddle'
+  fix     reconnect the volume, or run 'spark daemon workspace stop paddle'
 ```
 
 ```text
@@ -992,7 +992,7 @@ Explicit deferrals:
 - **Workspace removal**, both Spark daemon-side and server-side.
   Future RFC will define the `workspace.removed` server-to-Spark daemon
   event, the reconnect-time reconciliation, and any user-facing
-  surface (`spark-daemon workspace rm` or owner-only deletion via web UI). v0.1
+  surface (`spark daemon workspace rm` or owner-only deletion via web UI). v0.1
   registrations are permanent.
 - **Daemon process lifecycle internals**: idle exit, lockfile
   format, socket trust details, supervised service install.
@@ -1012,22 +1012,22 @@ Explicit deferrals:
 
 A v0.1 implementation of this RFC is acceptable when:
 
-- `spark-daemon workspace register` registers a fresh checkout with a local
+- `spark daemon workspace register` registers a fresh checkout with a local
   Navia server using a paste-token flow and produces a workspace
   visible to both the daemon-local schema and the server-side
   workspace/binding tables.
-- `spark-daemon workspace register` enforces all path constraints: same path on
+- `spark daemon workspace register` enforces all path constraints: same path on
   same server rejected, same path on different server accepted,
   nested across servers rejected.
-- `spark-daemon workspace register` rolls back the daemon-local transaction on
+- `spark daemon workspace register` rolls back the daemon-local transaction on
   workspace registration failure, leaving no trace.
-- `spark-daemon workspace ls` produces the documented columns, distinguishes
+- `spark daemon workspace ls` produces the documented columns, distinguishes
   the three offline sub-statuses, and matches the JSON schema.
-- `spark-daemon workspace show` renders `degraded` with reason codes and
+- `spark daemon workspace show` renders `degraded` with reason codes and
   remediation lines; renders `offline · disconnected` and
   `offline · service stopped` with their own structured offline
   reasons.
-- `spark-daemon workspace stop` pauses one workspace cleanly without affecting
+- `spark daemon workspace stop` pauses one workspace cleanly without affecting
   others on the same daemon, sets state to
   `offline · detached`, and re-attaches automatically on next
   command.

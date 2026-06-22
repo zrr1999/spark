@@ -423,12 +423,12 @@ export const TASK_PLAN_READINESS_RULES: readonly TaskPlanReadinessRule[] = [
   },
   {
     kind: "open_questions",
-    severity: "blocking",
-    message: "Task plan has unresolved questions.",
+    severity: "warning",
+    message: "Task plan records unresolved questions.",
     remediation:
-      "Resolve material questions with ask, then move decisions into askRefs or the plan body.",
+      "Keep non-blocking scratch questions in plan.openQuestions; resolve material planning decisions with askRefs or plan updates before execution depends on them.",
     description:
-      "plan.openQuestions must be empty; resolve material questions through context-specific ask artifacts before planning.",
+      "plan.openQuestions is warning-only context for non-blocking scratch questions; material decisions should move into askRefs or the plan body.",
   },
 ];
 
@@ -473,7 +473,7 @@ export function taskPlanReadiness(task: Pick<Task, "plan" | "status">): TaskPlan
     issues.push(
       taskPlanIssue(
         "open_questions",
-        `Task plan has unresolved questions: ${plan.openQuestions.join("; ")}`,
+        `Task plan records unresolved questions: ${plan.openQuestions.join("; ")}`,
       ),
     );
   }
@@ -483,7 +483,8 @@ export function taskPlanReadiness(task: Pick<Task, "plan" | "status">): TaskPlan
 export function decideTaskPlanBeforeCreate(task: Task): TaskPlanDecisionResult {
   const readiness = taskPlanReadiness(task);
   const plan = task.plan;
-  if (readiness.ready) return { asked: false, accepted: true, blocked: false, plan, issues: [] };
+  if (readiness.ready)
+    return { asked: false, accepted: true, blocked: false, plan, issues: readiness.issues };
   return {
     asked: false,
     accepted: false,

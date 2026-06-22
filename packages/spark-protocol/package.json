@@ -1,0 +1,24 @@
+{
+  "name": "@zendev-lab/spark-protocol",
+  "version": "0.1.0",
+  "description": "Shared Spark JSON-friendly view models and interaction protocol for daemon, Web, and TUI hosts.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.1.5"
+  }
+}

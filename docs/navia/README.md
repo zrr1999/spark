@@ -49,8 +49,8 @@ This is a pnpm + Vite-Plus monorepo.
 ```
 spark/
 ├─ apps/
-│  ├─ navia-web/          # SvelteKit web cockpit (private; bundled inside the server)
-│  └─ spark-daemon/       # Spark daemon CLI/service entry
+│  ├─ spark-cockpit/          # SvelteKit web cockpit (private; bundled inside the server)
+│  └─ spark-daemon/       # Spark daemon service implementation
 ├─ packages/
 │  ├─ navia-protocol/     # daemon ↔ server protocol schemas, envelopes, identifiers
 │  ├─ navia-db/           # SQLite migrations and database helpers
@@ -65,14 +65,14 @@ Published surface (npm, scoped `@zendev-lab/navia-*`):
 
 | Package               | Role                                                   |
 | --------------------- | ------------------------------------------------------ |
-| `@zendev-lab/spark-daemon`   | Spark daemon CLI/service; routes task execution through Spark runtime |
+| `@zendev-lab/spark-daemon`   | Spark daemon service package; routes task execution through Spark runtime |
 | `@zendev-lab/navia-protocol` | Spark daemon/server protocol schemas, envelopes, identifiers |
 | `@zendev-lab/navia-db`       | SQLite migrations and database helpers                 |
 | `@zendev-lab/navia-domain`   | Shared domain utilities                                |
 | `@zendev-lab/navia-system`   | Local path and private-file helpers                    |
 | `@zendev-lab/navia-ui`       | Shared UI surface                                      |
 
-`@zendev-lab/navia-web` is intentionally private until the packaged server
+`@zendev-lab/spark-cockpit` is intentionally private until the packaged server
 distribution is finalized; the root package is private because it is a
 workspace aggregator.
 
@@ -81,11 +81,11 @@ workspace aggregator.
 Navia distinguishes the product flow from the wire protocol:
 
 - **Workspace registration** is the product setup flow. Users run
-  `spark-daemon workspace register` against a local directory; Navia then
+  `spark daemon workspace register` against a local directory; Navia then
   surfaces a server-visible workspace backed by that directory.
 - **Spark daemon** names the internal `@zendev-lab/spark-daemon` package boundary behind
-  workspace registration and Spark runtime bridging. The package binary is
-  `spark-daemon`; public Spark CLI integration will route through `spark daemon`.
+  workspace registration and Spark runtime bridging. Public operator commands route through
+  the unified `spark daemon` command group.
 - **Runtime** is reserved for protocol, API route, database, and
   wire-contract names: `/api/v1/runtime/*`, `runtime.hello`,
   `runtime_workspace_bindings`, and similar identifiers. Spark runtime remains
@@ -105,13 +105,14 @@ identifier.
 
 ```bash
 pnpm install
-pnpm run cockpit:web
-pnpm run spark-daemon:cli -- --help
+pnpm install -g .
+pnpm run preview
+spark daemon --help
 ```
 
-`pnpm run cockpit:web` starts the local SvelteKit cockpit from the Spark root.
-The Spark daemon CLI can be inspected with `pnpm run spark-daemon:cli -- --help` and can
-register workspace directories once the server shows a registration command.
+`pnpm run preview` starts the local SvelteKit cockpit from the Spark root.
+`pnpm install -g .` links the unified root `spark` CLI; `spark daemon` builds
+and invokes the local daemon CLI on first service-command use if needed.
 
 The production-style data layout uses XDG locations such as
 `${XDG_DATA_HOME:-~/.local/share}/navia/server`, unless one of
@@ -126,12 +127,12 @@ The production-style data layout uses XDG locations such as
 3. Run that command against the local directory you want Navia to manage:
 
    ```bash
-   spark-daemon workspace register /path/to/workspace \
+   spark daemon workspace register /path/to/workspace \
      --server-url http://127.0.0.1:5173 \
      --token <token>
    ```
 
-   If you omit the path from an interactive `spark-daemon workspace register`, `navia`
+   If you omit the path from an interactive `spark daemon workspace register`, `navia`
    prompts for it. Non-interactive registration should pass the path
    explicitly.
 
@@ -146,35 +147,23 @@ their hash; if you lose a token, generate a new one.
 The fast inner loop:
 
 ```bash
-pnpm run cockpit:check
-pnpm run cockpit:test
-pnpm run cockpit:build
-pnpm run verify:merged
+pnpm run check
+pnpm run build
 ```
 
 ## Release gates
 
-Layered gates, smallest first:
-
-| Command                    | What it adds                                                                          |
-| -------------------------- | ------------------------------------------------------------------------------------- |
-| `pnpm release:check`       | `check` + `test` + `build` + `format:check`.                                          |
-| `pnpm release:smoke`       | Above plus the simulator Spark daemon smoke (fake-Spark daemon projection fixtures).              |
-| `pnpm release:e2e`         | Above plus the real `navia` Spark daemon happy-path gate against an isolated server. |
-| `pnpm release:gate`        | All of the above in one command.                                                      |
-| `pnpm release:e2e:real-pi` | Legacy real-Pi compatibility gate; Spark runtime bridge coverage is preferred in the merged repo. |
-| `pnpm pack:check`          | Validates each publishable package's `npm pack` output.                               |
-
-`pnpm release:e2e` is retained for historical standalone release work. In the
-merged Spark repo, prefer `pnpm run spark-daemon:e2e`, `pnpm run verify:cockpit`, and
-`pnpm run verify:merged`. For the contract and trade-offs see
-[docs/release/e2e-gate.md](./docs/release/e2e-gate.md); for failure modes
-see [docs/release/troubleshooting.md](./docs/release/troubleshooting.md).
+The merged Spark root intentionally exposes a small command surface: use
+`pnpm run check` for validation, `pnpm run build` for production builds, and
+`pnpm run publish` for the selected public npm packages. Imported standalone
+Navia release-gate names are historical compatibility notes, not root scripts. For the contract and trade-offs see
+[docs/release/e2e-gate.md](./docs/release/e2e-gate.md); for failure modes see
+[docs/release/troubleshooting.md](./docs/release/troubleshooting.md).
 
 ## npm publishing
 
 The publish surface is the `@zendev-lab/navia-*` Spark daemon and shared packages
-listed above. The root and `@zendev-lab/navia-web` are private by design.
+listed above. The root and `@zendev-lab/spark-cockpit` are private by design.
 
 The full publishing checklist — versioning, provenance, dist-tags, smoke
 gates, and pre-release prerequisites — lives in
@@ -188,7 +177,7 @@ Before a first public release the project still needs to:
 - publish the GitHub remote and add `repository` and `homepage` metadata
   to each publishable `package.json`,
 - finalize the packaged server distribution before unprivating
-  `@zendev-lab/navia-web`.
+  `@zendev-lab/spark-cockpit`.
 
 These are tracked items, not optional polish; do not publish without
 them.

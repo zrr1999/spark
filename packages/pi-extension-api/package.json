@@ -1,7 +1,7 @@
 {
   "name": "@zendev-lab/pi-extension-api",
   "version": "0.1.0",
-  "description": "Shared TypeScript contract surface (types only) for Pi-style extensions consumed by both pi-coding-agent and the spark-cli native host.",
+  "description": "Shared TypeScript contract surface (types only) for Pi-style extensions consumed by both pi-coding-agent and the Spark TUI native host.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [

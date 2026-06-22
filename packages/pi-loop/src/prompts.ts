@@ -3,7 +3,7 @@ import type { LoopState } from "./types.ts";
 const CONTINUATION_MARKER_PREFIX = '<pi_loop_continuation loop_id="';
 
 export const LOOP_COMPLETION_BOUNDARY_GUIDANCE =
-  "A loop is a continuation primitive, not a completion authority. It may continue, wait, pause, retry, or report blockers, but it must not decide that a goal is complete or call goal completion tools.";
+  "Continue, wait, pause, retry, or report blockers according to the loop objective and current evidence. For reviewer-gated goal completion, use the goal driver instead of plain /loop.";
 
 export function continuationLoopIdFromPrompt(prompt: string): string | null {
   if (!prompt.startsWith(CONTINUATION_MARKER_PREFIX)) return null;
@@ -47,9 +47,8 @@ export function loopContinuationPrompt(loop: LoopState): string {
     "</untrusted_objective>",
     "",
     "Choose the next concrete low-risk action toward the objective.",
-    "If a blocker, wait condition, pause request, retry budget, missing dependency, or required decision prevents progress, report that state instead of inventing completion.",
+    "If a blocker, wait condition, pause request, retry budget, missing dependency, or required decision prevents progress, report that state instead of inventing closure.",
     LOOP_COMPLETION_BOUNDARY_GUIDANCE,
-    "Do not call goal completion tools from a loop continuation. Goal packages may layer completion policy on top of loop state separately.",
     "</pi_loop_continuation>",
   ].join("\n");
 }

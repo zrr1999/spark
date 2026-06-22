@@ -19,7 +19,7 @@ import {
   reviewerInputFingerprint,
   type GoalReviewInput,
   type TaskReviewInput,
-} from "../packages/spark/src/extension/reviewer-runner.ts";
+} from "../packages/spark-extension/src/extension/reviewer-runner.ts";
 
 function reviewTaskInput(): TaskReviewInput {
   const graph = new TaskGraph();

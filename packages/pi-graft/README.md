@@ -8,8 +8,8 @@
 
 ```text
 graft_help / graft_init / graft_doctor                                      -> workflow/bootstrap/diagnostics
-graft_scratch_open { base: "graft:empty" | "candidate:..." | ... }          -> scratch:a
-graft_write/read/edit/delete { base: "graft:empty" | "candidate:..." | ... } -> scratch:b
+graft_scratch_open { base?: "graft:empty" | "candidate:..." | ... }         -> scratch:a
+graft_write/read/edit/delete { base?: "graft:empty" | "candidate:..." | ... } -> scratch:b
 graft_write/read/edit/delete { from: "scratch:b" }                         -> scratch:c/d/...
 graft_scratch_diff/drop/pin/unpin                                           -> daemon scratch lifecycle
 graft_candidate_from_scratch { scratch: "scratch:d" }                      -> candidate:...
@@ -17,7 +17,7 @@ graft_validate / graft_admit / graft_show / graft_evidence / graft_materialize -
 graft_repo { action: "add" | "list" | "sync" | "lock" | "update" }          -> managed repo config/cache/lock workflow
 ```
 
-The extension keeps only convenience metadata (`base`, `lastScratch`, `lastCandidate`, and `lastPatch`) so later tool calls can omit `from`/`scratch` in the same workspace. That state is not the protocol entrance: every scratch tool accepts explicit `base` or `from`, and every result includes the returned scratch id in `details.result.scratch` for the next call. Pass `base` only for the first operation from a materialized ref; pass `from` only when continuing an existing scratch. Never pass both in one scratch tool call. Rename has no separate operation yet; express it as `graft_delete` for the old path followed by `graft_write` for the new path.
+The extension keeps only convenience metadata (`base`, `lastScratch`, `lastCandidate`, and `lastPatch`) so later tool calls can omit `from`/`scratch` in the same workspace. That state is not the protocol entrance: every scratch tool accepts explicit `base` or `from`, and every result includes the returned scratch id in `details.result.scratch` for the next call. Pass `base` only for the first operation from a materialized ref; pass `from` only when continuing an existing scratch. Never pass both in one scratch tool call. When a workflow agent sets `GRAFT_BASE_REF`, the first `graft_scratch_open`/`graft_read`/`graft_write`/`graft_edit`/`graft_delete` call may omit `base`; the CLI resolves the env ref exactly like `--base`, while explicit `base` wins and explicit `from` ignores the env ref. Rename has no separate operation yet; express it as `graft_delete` for the old path followed by `graft_write` for the new path.
 
 A scratch is daemon-instance-scoped. Use `graft_scratch_pin` when a scratch must survive cleanup pressure; release the lease with `graft_scratch_unpin`. If `graftd` restarts, pass a fresh `base` or a still-reachable `from` scratch id; unsupported or unknown scratch ids fail through graftd's wire errors. Graft v3 treats cwd as an attach/routing key, not as the workspace identity; cwd may be a Git worktree.
 
@@ -62,13 +62,15 @@ Safety boundaries:
 - `graft_sandbox_checkpoint` creates candidate/patch state only when called;
 - `graft_sandbox_materialize` defaults to dry-run and says no directory was created;
 - `graft_sandbox_promote` defaults to dry-run and requires `apply:true` to add Graft's `--yes` gate;
-- sandbox `grep`/`find`/`ls` are v1 navigation helpers over known changed paths (or explicit grep path) and do not claim full base-tree traversal;
+- sandbox `find`/`ls` prefer Graft's native `tree list` API when available and fall back to temporary Graft materialized-run state plus tracked scratch changes; sandbox `grep` uses native `tree grep` for literal, case-sensitive searches and otherwise uses the materialized fallback to preserve Pi grep semantics; set `PI_GRAFT_SANDBOX_TREE_BACKEND=materialized|native|auto` to force or inspect backend behavior; none of these paths traverse the Git working tree directly;
 - the sandbox `tool_call` guardrail blocks obvious shell/cue/script file-I/O bypasses such as `cat`, `sed`, redirection writes, `rm`, `cp`, and direct script file APIs, while allowing validation commands that do not directly access files;
-- `graft_sandbox_exit` clears sandbox state, but V1 cannot restore original built-ins inside the same loaded sandbox profile; reload without the sandbox entrypoint for ordinary file tools.
+- `graft_sandbox_exit` clears sandbox state only; the file-tool names `read`/`write`/`edit`/`grep`/`find`/`ls` remain sandbox overrides until Pi reloads without the sandbox entrypoint.
+
+Exit/reload behavior is profile-level, not per-tool-call. After `graft_sandbox_exit`, use `graft_sandbox_status` to confirm state is inactive. To use ordinary Pi built-in file tools again, start or reload Pi without `@zendev-lab/pi-graft/sandbox`; if the previous run used `--no-builtin-tools`, omit that flag too, because there are no built-ins to restore inside that profile.
 
 ### Scratch file tools
 
-These tools do not override Pi built-ins. Each scratch tool accepts either `base` (first operation) or `from` (continue a returned scratch), matching CLI `graft scratch ... --base/--from`. Treat them as mutually exclusive source selectors: do not include `base` once you have a `scratch:*` id to pass as `from`.
+These tools do not override Pi built-ins. Each scratch tool accepts either `base` (first operation) or `from` (continue a returned scratch), matching CLI `graft scratch ... --base/--from`. If neither is provided and there is no remembered `lastScratch`, `GRAFT_BASE_REF` is used as the implicit first-operation base; if it is absent or blank, the tool fails loudly. Treat selectors as mutually exclusive: do not include `base` once you have a `scratch:*` id to pass as `from`.
 
 - `graft_read` — read a UTF-8 text file and return `LINE#HASH:` anchors; `details.result.scratch` is the source scratch id.
 - `graft_write` — write complete UTF-8 text content and return a new scratch id.
@@ -84,7 +86,7 @@ These tools do not override Pi built-ins. Each scratch tool accepts either `base
 - `graft_status` — inspect pi-graft convenience state and graftd status.
 - `graft_ps` — show global daemon and registry status.
 - `graft_doctor` — diagnose or repair registry state.
-- `graft_scratch_open` — open a base ref as a daemon scratch and remember it as `lastScratch`.
+- `graft_scratch_open` — open a base ref (explicit `base`, or `GRAFT_BASE_REF` when omitted) as a daemon scratch and remember it as `lastScratch`.
 - `graft_scratch_diff` — compare two daemon scratch ids and return changed paths.
 - `graft_scratch_drop` — drop an unpinned daemon scratch.
 - `graft_scratch_pin` / `graft_scratch_unpin` — manage explicit scratch leases.
@@ -104,7 +106,8 @@ When several Graft lifecycle or inspection calls share one workspace/daemon stat
 ## Example
 
 ```text
-graft_write { base: "graft:empty", path: "note.txt", content: "alpha\nbeta\n" }
+# With GRAFT_BASE_REF set by the workflow/role-run environment, `base` may be omitted for the first operation.
+graft_write { path: "note.txt", content: "alpha\nbeta\n" }
 # -> details.result.scratch = scratch:...
 
 graft_read { from: "scratch:...", path: "note.txt" }
@@ -156,7 +159,7 @@ Final `pi -p` validation used an explicit graft-only tool allowlist and produced
 
 ## Runtime assumptions
 
-The extension shells `GRAFT_BIN` when set, otherwise `graft`, always passing `--cwd <cwd>`. Non-help paths use `graft --json ...`; help/explain paths keep plain text output. Large scratch payloads go over stdin with `--content-stdin` and `--edits-stdin` so argv stays small and literal `"-"` file content remains possible.
+The extension shells `GRAFT_BIN` when set, otherwise `graft`, always passing `--cwd <cwd>`. Non-help paths use `graft --json ...`; help/explain paths keep plain text output. `GRAFT_BASE_REF` is process-scoped environment, inherited by the `graft` subprocess, and is only an implicit first-operation base for scratch/open/read/write/edit/delete when explicit `base`/`--base` and `from`/`--from` are absent. Large scratch payloads go over stdin with `--content-stdin` and `--edits-stdin` so argv stays small and literal `"-"` file content remains possible.
 
 pi-graft never passes `--socket`, never resolves `$GRAFT_HOME/run/daemon.sock`, and never starts `graftd` itself. If the CLI needs a daemon, Rust `graft`/`crates/graft-client` owns socket discovery, stale-socket handling, auto-start, and the server↔client wire contract. Set `GRAFT_BIN` if `graft` is not on `PATH`; daemon binary discovery remains a graft CLI concern.
 
@@ -167,7 +170,7 @@ The current implementation is UTF-8-text first. Binary, image, and directory beh
 Verdict: **ready as the explicit UTF-8 text replacement path, with known caveats**.
 
 - P1 — future default tool replacement would change core Pi semantics. Current mitigation: scratch operations are explicit `graft_*` tools, while Pi built-ins remain available.
-- P1 — scratch state is not durable across daemon restart, and full multi-workspace scratch isolation depends on graftd's global-daemon workspace-state support. Mitigation: scratch ids are returned from each tool and pi-graft's convenience state is optional; lost scratch ids fail through graftd wire errors instead of hidden recovery.
+- P1 — scratch state is not durable across daemon restart. Mitigation: scratch ids are returned from each tool and pi-graft's convenience state is optional; lost scratch ids fail through graftd wire errors instead of hidden recovery. Multi-workspace scratch isolation is verified through graftd's normalized workspace-route engine map and `tests/workspace_daemon_isolation_smoke.sh`.
 - P1 — current graft property/admission behavior can still require project-specific policy tuning. Mitigation: `graft_candidate_from_scratch`, `graft_validate`, and `graft_admit` are explicit separate steps; graft_read/graft_write/graft_edit/graft_delete never auto-create candidates or auto-admit.
 - P2 — file kind support is text-first. Mitigation: no passthrough fallback is implemented, so unsupported file kinds fail loudly.
 - P2 — integration depends on Pi's tool registration surface staying stable. Mitigation: `@zendev-lab/pi-graft` exports a narrow boundary type and the registration test asserts that it installs no slash commands and the expected tools.

@@ -79,18 +79,32 @@ export class SparkDaemonQueue {
     const parsed = JSON.parse(raw) as Partial<SparkDaemonQueuePayload>;
     if (typeof parsed.enqueuedAt !== "string") throw new Error("queue entry missing enqueuedAt");
     const task = validateSparkDaemonTask(parsed.task);
+    const payload: SparkDaemonQueuePayload = { enqueuedAt: parsed.enqueuedAt, task };
+    if (typeof parsed.processedAt === "string") payload.processedAt = parsed.processedAt;
+    if (Object.hasOwn(parsed, "result")) payload.result = parsed.result;
+    if (typeof parsed.failedAt === "string") payload.failedAt = parsed.failedAt;
+    if (typeof parsed.error === "string") payload.error = parsed.error;
     return {
       fileName: normalizeQueueFileName(fileName),
       filePath,
-      payload: { enqueuedAt: parsed.enqueuedAt, task },
+      payload,
     };
   }
 
-  async markProcessed(fileName: string): Promise<string> {
+  async markProcessed(fileName: string, result?: unknown): Promise<string> {
     await this.init();
     const normalized = normalizeQueueFileName(fileName);
+    const inboxPath = join(this.inboxDir, normalized);
     const target = join(this.processedDir, normalized);
-    await rename(join(this.inboxDir, normalized), target);
+    const entry = await this.readEntry(normalized, "inbox");
+    const payload: SparkDaemonQueuePayload = {
+      ...entry.payload,
+      processedAt: new Date().toISOString(),
+    };
+    const serializedResult = serializeQueueResult(result);
+    if (serializedResult !== undefined) payload.result = serializedResult;
+    await writeFile(inboxPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    await rename(inboxPath, target);
     return target;
   }
 
@@ -134,6 +148,19 @@ export class SparkDaemonQueue {
 
 function compareStrings(left: string, right: string): number {
   return left.localeCompare(right);
+}
+
+function serializeQueueResult(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  try {
+    JSON.stringify(value);
+    return value;
+  } catch {
+    if (value instanceof Error) {
+      return { name: value.name, message: value.message, stack: value.stack };
+    }
+    return { unserializable: true, type: typeof value };
+  }
 }
 
 function normalizeQueueFileName(fileName: string): string {

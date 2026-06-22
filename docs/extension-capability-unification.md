@@ -1,6 +1,6 @@
 # Extension capability unification migration record
 
-This historical migration record documents the implemented contract for making the Pi/Spark extension suite conceptually unified while keeping implementations decoupled. It is intentionally **extension-first**: it does not refactor `apps/spark/src/host/*` or native Spark CLI session internals.
+This historical migration record documents the implemented contract for making the Pi/Spark extension suite conceptually unified while keeping implementations decoupled. It is intentionally **extension-first**: it does not refactor `apps/spark-tui/src/host/*` or native Spark TUI session internals.
 
 ## Status (2026-06-05)
 
@@ -9,7 +9,7 @@ This migration is implemented for package boundaries and the visible tool facade
 - `spark-core`, `spark-tasks`, `spark-learnings`, `spark-goal`, and `spark-workflows` have retired as workspaces.
 - Generic implementations now live in `pi-extension-api`, `pi-artifacts`, `pi-tasks`, `pi-learnings`, `pi-goal`, and `pi-workflows`.
 - Spark's visible tool surface uses canonical tools (`task_read`, `task_write`, `assign`, `learning`, `artifact`, `ask`, `context`, `workflow`, `role`, `recall`, `goal`). Legacy `spark_*` tool configs are retired rather than kept as internal dispatch wiring.
-- `pi-* -> spark-*` regressions are guarded by `pnpm run check:boundaries`, `prek`, and CI static checks.
+- `pi-* -> spark-*` regressions are guarded by the boundary checker inside `pnpm run check`, `prek`, and CI static checks.
 - On-disk schema roots remain stable: `.spark/`, `.spark/projects/`, `.spark/workflow-runs.json`, and historical goal marker strings are compatibility data, not package ownership; legacy `.spark/projects.json` is import-only.
 
 ## Goals
@@ -23,7 +23,7 @@ This migration is implemented for package boundaries and the visible tool facade
 ## Non-goals
 
 - No new generic `core`, `kit`, or shared dumping-ground package.
-- No Spark CLI native host refactor in this workstream.
+- No Spark TUI native host refactor in this workstream.
 - No migration of existing local `.learnings/` or memory stores unless explicitly requested.
 - No arbitrary workflow execution, arbitrary system-prompt injection, or arbitrary metadata patch surface.
 - No automatic promotion of side-thread/web/recall output into task evidence or durable learning.
@@ -99,13 +99,13 @@ The text summary stays compact. Full structured data lives in `details` or artif
 | Role specs/runs        | `packages/pi-roles/src/extension.ts`, `docs/role-boundaries.md`                                  | `pi-roles`                       | Generic reusable role ownership is correct; Spark role execution goes through task/run policy.                                           |
 | Ask UI                 | `packages/pi-ask/src/index.ts`, `packages/pi-ask/src/flow.ts`                                    | `pi-ask`                         | Generic ask UI/result semantics are exposed through canonical `ask`; focused/flow implementations are internal.                          |
 | Artifacts              | `packages/pi-artifacts/src/index.ts`, `packages/pi-artifacts/src/extension.ts`                   | `pi-artifacts`                   | Artifact store is generic evidence infrastructure, not Spark-specific.                                                                   |
-| Task graph/TODO/run    | `packages/pi-tasks/src/*`, `packages/spark/src/extension/index.ts` action handlers               | `pi-tasks` + Spark facade        | TODO belongs to task state; project/task/TODO/run are split into `task_read`, `task_write`, and explicit `assign` capability surfaces.      |
+| Task graph/TODO/run    | `packages/pi-tasks/src/*`, `packages/spark-extension/src/extension/index.ts` action handlers               | `pi-tasks` + Spark facade        | TODO belongs to task state; project/task/TODO/run are split into `task_read`, `task_write`, and explicit `assign` capability surfaces.      |
 | Learnings              | `packages/pi-learnings/src/*`                                                                    | `pi-learnings`                   | Evidence-backed learning is generic; plural `.learnings/` is retained.                                                                   |
-| Active context         | `packages/pi-context/src/extension.ts`, `packages/spark/src/extension/spark-active-context.ts`   | `pi-context` + Spark provider    | Spark registers a bounded `spark.active` provider.                                                                                       |
+| Active context         | `packages/pi-context/src/extension.ts`, `packages/spark-extension/src/extension/spark-active-context.ts`   | `pi-context` + Spark provider    | Spark registers a bounded `spark.active` provider.                                                                                       |
 | Recall/memory          | `packages/pi-recall/src/index.ts`                                                                | `pi-recall`                      | Lightweight explicit recall is separate from `pi-learnings`.                                                                             |
-| Workflow saved scripts | `packages/pi-workflows/src/*`, `packages/spark/src/extension/spark-workflow-registry.ts`         | `pi-workflows` + Spark facade    | Saved scripts and workflow-run state are reusable Pi workflow capability; Spark `/workflow` delegates policy.                            |
-| Spark state cleanup    | `packages/spark/src/extension/spark-state-tool-registration.ts`, `docs/spark-store-inventory.md` | Spark facade + individual stores | Split broad cleanup into owner-specific maintenance actions. Avoid one broad unrestricted state cleanup tool.                            |
-| Pi-only side thread    | `packages/pi-btw/`                                                                               | `pi-btw`                         | Keep Pi-host-only. Do not add to native Spark CLI defaults or auto-ingest hidden side threads into main context.                         |
+| Workflow saved scripts | `packages/pi-workflows/src/*`, `packages/spark-extension/src/extension/spark-workflow-registry.ts`         | `pi-workflows` + Spark facade    | Saved scripts and workflow-run state are reusable Pi workflow capability; Spark `/workflow` delegates policy.                            |
+| Spark state cleanup    | `packages/spark-extension/src/extension/spark-state-tool-registration.ts`, `docs/spark-store-inventory.md` | Spark facade + individual stores | Split broad cleanup into owner-specific maintenance actions. Avoid one broad unrestricted state cleanup tool.                            |
+| Pi-only side thread    | `packages/pi-btw/`                                                                               | `pi-btw`                         | Keep Pi-host-only. Do not add to native Spark TUI defaults or auto-ingest hidden side threads into main context.                         |
 | Cue/Graft              | `packages/pi-cue`, `packages/pi-graft`                                                           | `pi-cue`, `pi-graft`             | Domain-specific explicit tool families are not duplicated by Spark. Keep out of this pass except common envelope/rendering improvements. |
 
 ## Target packages
@@ -175,8 +175,8 @@ Actions:
 | `task_write.claim`            | stable task identity + plan metadata when creating/updating     | one unfinished claim per session                                   | `spark_claim_task`                                           |
 | `task_write.plan`             | concrete tasks with plan/readiness fields                       | blocks open questions and missing evidence/steps                   | `spark_plan_tasks`                                           |
 | `task_write.finish`           | claimed task + terminal status + summary                        | completion evidence check remains enforced                         | `spark_finish_task`                                          |
-| `task_write.todo_update`      | `scope: "session" \| "task"`, ops array, optional task selector | task scope updates TaskPlan.items for a current claimed task unless explicit owner | internal `impl_update_todos` / `impl_update_task_plan_items` helpers |
-| `task_write.cache_cleanup`    | `dryRun` default true, staleness options                        | only task-owned/session TODO caches; protected graph never deleted | safe subset of former state cache cleanup                         |
+| `task_write.todo_update`      | `scope: "task"`, ops array, optional task selector             | updates TaskPlan.items for a current claimed task                  | internal `impl_update_task_plan_items` helper                     |
+| `task_write.cache_cleanup`    | `dryRun` default true, staleness options                        | only task-owned caches; protected graph never deleted              | safe subset of former state cache cleanup                         |
 | `assign`                     | dryRun default true, concurrency/timeout                        | explicit ready-frontier scheduling/spawn surface                   | `spark_run_ready_tasks`, workflow runtime async UX           |
 
 TODO is not a separate package or tool. It is a sub-action of the canonical task-write capability.
@@ -321,7 +321,7 @@ Execution and workflow-run retention remain host/Spark policy rather than public
 
 ## Spark facade after cutover
 
-`packages/spark` should register Spark commands and Spark-specific providers/policy only:
+`packages/spark-extension` should register Spark commands and Spark-specific providers/policy only:
 
 - Spark default research behavior
 - `/plan`
@@ -346,11 +346,11 @@ It should not register duplicate canonical tools for task, artifact, ask, role, 
 | `spark_claim_task`                        | `task_write({ action: "claim" })`                                                                        | No                 | Preserve one-claim-per-session rule.                                    |
 | `spark_plan_tasks`                        | `task_write({ action: "plan" })`                                                                         | No                 | Preserve readiness blocking rules.                                      |
 | `spark_finish_task`                       | `task_write({ action: "finish" })`                                                                       | No                 | Preserve completion evidence requirement.                               |
-| Retired session TODO helper               | `task_write({ action: "todo_update", scope: "session" })`                                                | No                 | Session TODOs belong to task capability through internal `impl_update_todos`. |
+| Retired session-scoped helper             | internal compatibility `impl_update_todos`                                                             | Retired            | Kept only for legacy snapshot compatibility; public planning uses durable project tasks and task plan items. |
 | Retired task plan-item helper             | `task_write({ action: "todo_update", scope: "task" })`                                                   | No                 | Task scope updates TaskPlan.items through internal `impl_update_task_plan_items`. |
 | `spark_run_ready_tasks`                   | `assign({ dryRun: true })`                                                                    | No                 | Spark role scheduling remains an adapter behind task capability.        |
 | `spark_background_runs`                   | `task_read({ action: "run_status" })`                                                            | No                 | Read/reconcile status remains visible; public run_control is not default. |
-| `spark_dag_manager`                       | `task_read({ action: "run_status" })` / internal workflow-run maintenance                         | No                 | Low-level compatibility/debug surface is not canonical.                 |
+| `spark_dag_manager`                       | `task_read({ action: "run_status" })` / internal workflow-run maintenance                         | No                 | Compatibility/debug surface is not canonical.                           |
 | Retired broad state status/doctor actions | owner-specific state status and doctor actions | No | Avoid one broad state dumping ground. |
 | Retired broad state cache cleanup action | `task_write({ action: "cache_cleanup" })` plus owner-specific cleanup actions | No | Owner-scoped dry-run cleanup only. |
 | Retired workflow-run prune action | Spark workflow-run retention policy | No | Workflow-run store owner handles retention; not a public workflow tool action. |

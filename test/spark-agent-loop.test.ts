@@ -6,7 +6,7 @@ import {
   SparkHostRuntime,
   type SparkAgentLoopEvent,
   type SparkAgentStreamFunction,
-} from "../apps/spark/src/host/index.ts";
+} from "../apps/spark-tui/src/host/index.ts";
 
 type AssistantMessage = any;
 type AssistantMessageEvent = any;
@@ -344,6 +344,76 @@ void test("SparkAgentLoop drainOutboxIntoMessages turns sendUserMessage envelope
   assert.equal((messages[3] as AssistantMessage).content[0]!.type, "text");
 });
 
+void test("SparkAgentLoop triggerTurn queues hidden custom messages", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-trigger-turn-custom-test" });
+  const finalAssistant = buildAssistant([{ type: "text", text: "goal tick executed" }]);
+  let streamCalls = 0;
+  let contextMessages: Message[] = [];
+  const fake: SparkAgentStreamFunction = (_model, context) => {
+    streamCalls += 1;
+    contextMessages = [...context.messages];
+    return {
+      async *[Symbol.asyncIterator]() {
+        yield { type: "done", reason: "stop", message: finalAssistant };
+      },
+      result: async () => finalAssistant,
+    } as ReturnType<SparkAgentStreamFunction>;
+  };
+  const loop = new SparkAgentLoop({ host, streamFunction: fake, getModel: () => TEST_MODEL });
+  const completed = new Promise<void>((resolve) => {
+    loop.onEvent((event) => {
+      if (event.type === "turn_complete") resolve();
+    });
+  });
+
+  host.sendMessage(
+    { customType: "spark-goal-request", content: "Spark goal tick", display: false },
+    { deliverAs: "followUp", triggerTurn: true },
+  );
+
+  await completed;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(streamCalls, 1);
+  assert.equal(loop.getState(), "idle");
+  assert.equal(contextMessages.length, 1);
+  assert.equal(contextMessages[0]?.role, "user");
+  assert.match(String(contextMessages[0]?.content), /\[spark-goal-request\]/);
+  assert.match(String(contextMessages[0]?.content), /Spark goal tick/);
+  assert.match(JSON.stringify(loop.getMessages()), /spark-goal-request/);
+});
+
+void test("SparkAgentLoop triggerTurn uses queued user instruction without duplicate custom", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-trigger-turn-user-test" });
+  const finalAssistant = buildAssistant([{ type: "text", text: "goal tick executed" }]);
+  let contextMessages: Message[] = [];
+  const fake: SparkAgentStreamFunction = (_model, context) => {
+    contextMessages = [...context.messages];
+    return {
+      async *[Symbol.asyncIterator]() {
+        yield { type: "done", reason: "stop", message: finalAssistant };
+      },
+      result: async () => finalAssistant,
+    } as ReturnType<SparkAgentStreamFunction>;
+  };
+  const loop = new SparkAgentLoop({ host, streamFunction: fake, getModel: () => TEST_MODEL });
+  const completed = new Promise<void>((resolve) => {
+    loop.onEvent((event) => {
+      if (event.type === "turn_complete") resolve();
+    });
+  });
+
+  host.sendUserMessage("Spark goal tick", { deliverAs: "followUp" });
+  host.sendMessage(
+    { customType: "spark-goal-request", content: "Spark goal tick", display: false },
+    { deliverAs: "nextTurn", triggerTurn: true },
+  );
+
+  await completed;
+  assert.equal(contextMessages.length, 1);
+  assert.equal(contextMessages[0]?.content, "Spark goal tick");
+  assert.doesNotMatch(JSON.stringify(loop.getMessages()), /spark-goal-request/);
+});
+
 void test("SparkAgentLoop triggerTurn runs hidden before_agent_start context", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-trigger-turn-test" });
   const finalAssistant = buildAssistant([{ type: "text", text: "goal tick executed" }]);
@@ -375,7 +445,7 @@ void test("SparkAgentLoop triggerTurn runs hidden before_agent_start context", a
 
   host.sendMessage(
     { customType: "spark-goal-request", content: "Spark goal tick", display: false },
-    { deliverAs: "followUp", triggerTurn: true },
+    { deliverAs: "nextTurn", triggerTurn: true },
   );
 
   await completed;

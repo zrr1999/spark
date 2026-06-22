@@ -40,12 +40,21 @@
       "@zendev-lab/pi-tasks/extension": ["./packages/pi-tasks/src/extension.ts"],
       "@zendev-lab/pi-workflows": ["./packages/pi-workflows/src/index.ts"],
       "@zendev-lab/pi-workflows/extension": ["./packages/pi-workflows/src/extension.ts"],
-      "@zendev-lab/spark-cli/baidu-oneapi-provider": ["./apps/spark/src/baidu-oneapi-provider.ts"],
-      "@zendev-lab/spark-cli/headless-role-executor": [
-        "./apps/spark/src/headless-role-executor.ts"
+      "@zendev-lab/spark-tui-app/baidu-oneapi-provider": [
+        "./apps/spark-tui/src/baidu-oneapi-provider.ts"
       ],
+      "@zendev-lab/spark-tui-app/headless-role-executor": [
+        "./apps/spark-tui/src/headless-role-executor.ts"
+      ],
+      "@zendev-lab/spark-protocol": ["./packages/spark-protocol/src/index.ts"],
       "@zendev-lab/spark-runtime": ["./packages/spark-runtime/src/index.ts"],
-      "@zendev-lab/spark/extension": ["./packages/spark/src/extension/index.ts"]
+      "@zendev-lab/spark-extension/extension": [
+        "./packages/spark-extension/src/extension/index.ts"
+      ],
+      "@zendev-lab/spark-tui": ["./packages/spark-tui/src/index.ts"],
+      "@zendev-lab/spark-tui/input": ["./packages/spark-tui/src/input.ts"],
+      "@zendev-lab/spark-tui/pi-tui": ["./packages/spark-tui/src/pi-tui.ts"],
+      "@zendev-lab/spark-tui/text": ["./packages/spark-tui/src/text.ts"]
     },
     "lib": ["ES2024", "DOM", "DOM.Iterable"]
   }

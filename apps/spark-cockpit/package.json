@@ -1,0 +1,41 @@
+{
+  "name": "@zendev-lab/spark-cockpit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Spark Cockpit SvelteKit web application. Kept private until packaged server distribution is finalized.",
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev --host 127.0.0.1",
+    "build": "vp build",
+    "preview": "vp preview --host 127.0.0.1",
+    "start": "node build",
+    "start:custom": "tsx server/index.ts",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "@lucide/svelte": "^1.16.0",
+    "@sveltejs/adapter-node": "^5.3.1",
+    "@sveltejs/kit": "^2.28.0",
+    "@zendev-lab/navia-db": "workspace:*",
+    "@zendev-lab/navia-domain": "workspace:*",
+    "@zendev-lab/navia-protocol": "workspace:*",
+    "@zendev-lab/navia-system": "workspace:*",
+    "@zendev-lab/navia-ui": "workspace:*",
+    "smol-toml": "^1.6.1",
+    "svelte": "^5.38.8",
+    "vite": "npm:@voidzero-dev/vite-plus-core@latest",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "@types/ws": "^8.18.1",
+    "svelte-check": "^4.3.1",
+    "tsx": "^4.20.5",
+    "typescript": "^6.0.3",
+    "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+  },
+  "engines": {
+    "node": ">=26.0.0 <27"
+  }
+}

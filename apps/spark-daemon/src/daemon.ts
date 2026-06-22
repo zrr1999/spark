@@ -10,6 +10,7 @@ import {
   serverCommandEnvelopeSchema,
   serverHelloAckEnvelopeSchema,
   type RuntimeFeature,
+  type RuntimeWorkspaceBindingSummary,
 } from "@zendev-lab/navia-protocol";
 import { writePrivateFile, type NaviaPaths } from "@zendev-lab/navia-system";
 import { readSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
@@ -40,6 +41,7 @@ import {
 } from "./protocol/outbound.js";
 import {
   getWorkspaceById,
+  isBorrowedWorkspace,
   isUserDetachedWorkspace,
   listWorkspaces,
   markSparkDaemonServerConnected,
@@ -536,6 +538,34 @@ export async function handleCommand(
     );
     return;
   }
+  if (
+    commandWorkspace &&
+    isBorrowedWorkspace(context.db, commandWorkspace.id) &&
+    command.payload.kind !== "workspace.snapshot.request" &&
+    command.payload.kind !== "diagnostics.request" &&
+    command.payload.kind !== "invocation.cancel.request"
+  ) {
+    sendJson(
+      ws,
+      commandReject(
+        {
+          reasonCode: "WORKSPACE_BORROWED",
+          message:
+            "Workspace is borrowed by an interactive client and is snapshot-only for server mutations.",
+          retryable: true,
+        },
+        {
+          runtimeId: context.runtimeId,
+          workspaceBindingId: command.workspaceBindingId,
+          workspaceId: command.workspaceId,
+          projectId: command.projectId,
+          commandId: command.commandId,
+          ackOf: command.messageId,
+        },
+      ),
+    );
+    return;
+  }
   const policy = decideCommandPolicy({
     command: command.payload,
     workspaceBindingId: command.workspaceBindingId,
@@ -580,7 +610,16 @@ export async function handleCommand(
             status: workspace.status,
             projects: [],
             unresolvedInboxCount: 0,
-            activeInvocationCount: 0,
+            activeInvocationCount: workspace.executor?.activeInvocationCount ?? 0,
+            activeAgentCount: workspace.executor?.activeAgentCount ?? 0,
+            ...(workspace.borrowed ? { borrowed: workspace.borrowed } : {}),
+            workspaceClients: workspace.workspaceClients ?? [],
+            ...(workspace.executor ? { executor: workspace.executor } : {}),
+            control: {
+              mode: workspace.borrowed?.borrowed ? "snapshot_only" : "full",
+              ...(workspace.borrowed?.borrowed ? { reason: "borrowed" } : {}),
+              serverMutationAllowed: workspace.borrowed?.borrowed !== true,
+            },
             latestArtifactIds: [],
             resources: [],
           },
@@ -756,6 +795,7 @@ function buildReconcileReport(context: MessageContext) {
       workspaceBindings: reconcileWorkspaces(context.db).map(workspaceSummary),
       pendingOutboxCount: pendingOutboxCount.count,
       activeInvocationCount: activeInvocationCount.count,
+      activeAgentCount: activeInvocationCount.count,
       artifacts: { availableCount: 0, missingCount: 0 },
       diagnostics: {},
     },
@@ -763,7 +803,9 @@ function buildReconcileReport(context: MessageContext) {
   );
 }
 
-function workspaceSummary(workspace: ReturnType<typeof reconcileWorkspaces>[number]) {
+function workspaceSummary(
+  workspace: ReturnType<typeof reconcileWorkspaces>[number],
+): RuntimeWorkspaceBindingSummary {
   return {
     bindingId: workspace.id,
     localWorkspaceKey: workspace.localWorkspaceKey,
@@ -771,6 +813,9 @@ function workspaceSummary(workspace: ReturnType<typeof reconcileWorkspaces>[numb
     status: workspace.status,
     capabilities: workspace.capabilities,
     diagnostics: workspace.diagnostics,
+    ...(workspace.borrowed ? { borrowed: workspace.borrowed } : {}),
+    workspaceClients: workspace.workspaceClients ?? [],
+    ...(workspace.executor ? { executor: workspace.executor } : {}),
   };
 }
 
@@ -811,7 +856,7 @@ function toWebSocketUrl(value: string): string {
 function requireConfig(value: string | undefined, name: string): string {
   if (!value) {
     throw new Error(
-      `Spark daemon config is missing ${name}. Run spark-daemon workspace register first.`,
+      `Spark daemon config is missing ${name}. Run spark daemon workspace register first.`,
     );
   }
   return value;

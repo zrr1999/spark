@@ -12,6 +12,9 @@ import {
 
 export { createSparkDaemonActiveTasks };
 
+export const DEFAULT_SPARK_DAEMON_QUEUE_LAUNCH_LIMIT = Number.POSITIVE_INFINITY;
+export const DEFAULT_SPARK_DAEMON_QUEUE_CONCURRENCY = Number.POSITIVE_INFINITY;
+
 export interface ProcessSparkDaemonQueueBatchOptions {
   queue: SparkDaemonQueue;
   active: SparkDaemonActiveTasks;
@@ -29,8 +32,11 @@ export interface WaitForSparkDaemonActiveTasksOptions {
 export async function processSparkDaemonQueueBatch(
   options: ProcessSparkDaemonQueueBatchOptions,
 ): Promise<boolean> {
-  const limit = normalizePositiveInteger(options.limit, 1);
-  const concurrency = normalizePositiveInteger(options.concurrency, 1);
+  const limit = normalizePositiveInteger(options.limit, DEFAULT_SPARK_DAEMON_QUEUE_LAUNCH_LIMIT);
+  const concurrency = normalizePositiveInteger(
+    options.concurrency,
+    DEFAULT_SPARK_DAEMON_QUEUE_CONCURRENCY,
+  );
   const files = await options.queue.list("inbox");
   let launched = 0;
 
@@ -99,13 +105,13 @@ async function runQueueTask(
   },
 ): Promise<void> {
   try {
-    await options.executeTask(options.entry.payload.task, {
+    const result = await options.executeTask(options.entry.payload.task, {
       fileName: options.fileName,
       queueEntry: options.entry,
       invocationId: options.invocationId,
       signal: options.signal,
     });
-    await options.queue.markProcessed(options.fileName);
+    await options.queue.markProcessed(options.fileName, result);
   } catch (error) {
     await failQueueTask({ ...options, error });
   }

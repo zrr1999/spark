@@ -4,53 +4,57 @@ Spark monorepo: agent-oriented docs for contributors and automation. Product ove
 
 ## Layout
 
-- `packages/*` — TypeScript libraries wired into Pi and Spark (`spark`, `spark-runtime`, `pi-tasks`, `pi-workflows`, `pi-cue`, …) plus isolated Navia/cockpit packages (`navia-protocol`, `navia-db`, `navia-domain`, `navia-system`, `navia-ui`).
+Target package topology follows type-first names:
+
+- `apps/spark-cli` — thin `spark` dispatcher only; it resolves `spark <name>` to `spark-<name>` like cue-shell dispatch.
+- `apps/spark-tui` — executable native terminal host (`@zendev-lab/spark-tui-app`). Keep host/runtime/editor code here, not in the dispatcher.
 - `apps/spark-daemon` — Spark daemon service package that owns the former local runner/service implementation.
-- `apps/navia-web` — Navia SvelteKit local web cockpit/projection app. Keep SvelteKit/browser-specific checks isolated from the non-Svelte Spark package checks.
-- `docs/navia/` — Navia product, design, architecture, and release-readiness documentation imported from the standalone Navia repository.
+- `apps/spark-cockpit` — Spark Cockpit SvelteKit local web cockpit/projection app. Keep SvelteKit/browser-specific checks isolated from the non-Svelte Spark package checks.
+- `packages/pi-*` — host-neutral Pi-style capabilities and contracts (`pi-extension-api`, `pi-tasks`, `pi-workflows`, `pi-cue`, …). These must not depend on Spark product packages.
+- `packages/spark-extension` — Spark Pi-style extension facade. It owns Spark command/tool policy and depends on `pi-extension-api` instead of concrete host runtimes.
+- `packages/spark-runtime`, `packages/spark-protocol`, and `packages/spark-tui` — Spark shared runtime, protocol/schema, and reusable TUI boundary packages.
+- `packages/spark-cockpit-*` — target names for Cockpit-private implementation packages. The current `packages/navia-*` packages are legacy-named transition packages only.
+- `docs/navia/` — Historical cockpit product, design, architecture, and release-readiness documentation imported from the standalone Navia repository.
 
 ## Tooling
 
 - **pnpm** — `packageManager` is pinned in root `package.json`; workspaces live in `pnpm-workspace.yaml` (catalog + overrides align Vite / Vite+ / Vitest versions with [sixbones.dev](https://github.com/zrr1999/sixbones.dev)).
 - **Vite+** — Root [`vite.config.ts`](./vite.config.ts) drives `vp fmt`, `vp lint`, and `vp check` (format + lint + type-aware checks). Install the `vp` CLI (see [viteplus.dev](https://viteplus.dev)) for local use; CI installs it via [`voidzero-dev/setup-vp`](https://github.com/voidzero-dev/setup-vp).
-- **TypeScript** — `pnpm run check:tsc` runs `tsc` only; `pnpm run check` runs `vp check`.
-- **Tests** — `pnpm test` uses Node’s built-in runner (`node --test`) with `--experimental-strip-types` for the full `test/*.test.ts` suite. Use `pnpm run test:file -- test/name.test.ts` for a targeted file; passing a path to `pnpm test` appends to the full-suite script instead of replacing it.
-- **Git hooks** — Managed by [prek](https://github.com/j178/prek) from [`prek.toml`](./prek.toml). After clone, `pnpm install` runs `prepare` → `prek install`; run `prek install-hooks` once if hooks are missing.
+- **TypeScript / tests** — `pnpm run check` is the root validation gate: SvelteKit sync, Pi package boundary guard, `vp check`, root Node tests, workspace package checks, Spark daemon tests, and Navia tests.
+- **Focused tests** — Run `node --experimental-strip-types --test test/name.test.ts` for one root Node test file. Package-specific tests can still be run with `pnpm --filter <package> run test`.
+- **Git hooks** — Managed by [prek](https://github.com/j178/prek) from [`prek.toml`](./prek.toml). Run `pnpm exec prek install --hook-type commit-msg --hook-type pre-commit` once if hooks are missing.
 
 ## Useful commands
 
-| Command              | Purpose                                                          |
-| -------------------- | ---------------------------------------------------------------- |
-| `pnpm install`       | Install dependencies                                             |
-| `vp check`           | Format + lint + type check (same path CI expects via pre-commit) |
-| `pnpm run verify`    | Spark-only `vp check` then `pnpm test`                           |
-| `pnpm run check:tsc` | Spark-only TypeScript check (`tsc --noEmit`); Navia packages are checked by `pnpm run cockpit:check` |
-| `pnpm run cockpit:check` | Type-check Navia packages and the SvelteKit app from the Spark root |
-| `pnpm run cockpit:test` | Run Navia package/app tests through Vite+ (`vp test run`)        |
-| `pnpm run cockpit:build` | Build the Navia web cockpit app                                 |
-| `pnpm run verify:cockpit` | `cockpit:check` then `cockpit:test` then `cockpit:build`        |
-| `pnpm run verify:spark-daemon` | Spark daemon check/test/build                            |
-| `pnpm run verify:merged` | Combined gate: Spark boundaries, Spark tsc, Spark tests, daemon verify, then cockpit verify |
-| `pnpm run test:file -- test/foo.test.ts` | Run one Node test file without also running the full suite |
+| Command                    | Purpose                                                        |
+| -------------------------- | -------------------------------------------------------------- |
+| `pnpm install`             | Install dependencies                                           |
+| `pnpm run check`           | Run the root validation gate                                   |
+| `pnpm run build`           | Build the Spark daemon CLI and Spark Cockpit web app           |
+| `pnpm run preview`         | Start the local Navia/Spark cockpit dev server                 |
+| `pnpm install -g .`        | Link the unified root `spark` CLI                              |
+| `pnpm run publish`         | Validate, build, and publish the selected public npm packages  |
 
 ## CI
 
 - `.github/workflows/ci-static-checks.yml` — prek + `setup-vp` + full prek pass (matches sixbones pattern).
-- `.github/workflows/ci-verify.yml` — `pnpm install` + `pnpm run verify` (type-aware check + Node tests).
+- `.github/workflows/ci-verify.yml` — `pnpm install` + `pnpm run check`.
 - `.github/workflows/ci-pr-checks.yml` — PR title validation (zendev).
 - `.github/workflows/ci-typos.yml` — spellcheck with `_typos.toml`.
 
 ## Dual-host Spark extension boundary
 
-- `packages/spark/src/extension/` must remain loadable by Pi as a normal extension; do not import `apps/spark` or `@earendil-works/pi-coding-agent` concrete runtime code from shared extension packages.
-- Native Spark CLI host code belongs under `apps/spark/src/host/`; pi-tui-specific wrappers belong under `apps/spark/src/tui/`.
-- When adding or changing a host-touching extension capability, update the shared `pi-extension-api` contract only if both hosts need it, and add/adjust dual-host tests such as `test/spark-ext-host-contract.test.ts`, `test/spark-host-runtime-cross.test.ts`, and the relevant `spark-cli` host test.
-- Keep builtin extension loading explicit for `spark-cli`; do not reintroduce Pi SDK package discovery or `loadPiSdk` into `apps/spark`.
+- `pi-extension-api` is the host-neutral TypeScript contract for Pi-style extensions. Do not merge it into Spark product code; Spark extension packages depend on this contract instead.
+- `packages/spark-extension/src/extension/` is the Spark extension facade path. It must remain loadable by Pi as a normal extension.
+- Spark extension/shared packages must not import concrete app host internals from `apps/spark-cli`, `apps/spark-tui`, `@zendev-lab/spark-tui-app`, or `@earendil-works/pi-coding-agent` runtime code.
+- Native Spark host code belongs in executable app packages (`apps/spark-tui` for the terminal host); pi-tui-specific wrappers should stay behind the reusable `packages/spark-tui` boundary.
+- When adding or changing a host-touching extension capability, update `pi-extension-api` only if both hosts need the contract, and add/adjust dual-host tests such as `test/spark-ext-host-contract.test.ts`, `test/spark-host-runtime-cross.test.ts`, and the relevant Spark host test.
+- Keep builtin extension loading explicit for Spark native hosts; do not reintroduce Pi SDK package discovery or `loadPiSdk` into Spark apps.
 
 ## Notes for agents
 
 - Public/default repo-owned tools should use canonical `tool({ action })` surfaces when operations share one domain/state/permission/render/result contract; do not keep fragmented compatibility aliases public, and render action tools as `tool action=<value> ...`.
 - Prefer `vp fmt` / `vp check` before committing when touching TS/Markdown; pre-commit runs `vp check --fix`.
 - Do not commit secrets or `.env` files.
-- Navia local app/projection state lives under `.navia/`; Spark runtime state remains under `.spark/`; local learnings remain under `.learnings/`. Treat all three as ignored local state unless explicitly exported or documented.
-- Boundary checks should keep `pi-*` independent from Spark/Navia packages and keep Spark core/runtime independent from Navia UI/server packages. Navia may depend on approved generic/runtime contracts only after the runtime bridge contract documents that import direction.
+- Spark Cockpit local app/projection state currently lives under `.navia/`; Spark runtime state remains under `.spark/`; local learnings remain under `.learnings/`. Treat all three as ignored local state unless explicitly exported or documented.
+- Boundary checks should keep `pi-*` independent from Spark/Cockpit packages, keep Spark shared packages independent from Cockpit/daemon adapter packages, and treat legacy `navia-*` names in active docs as migration-only context until they are renamed or merged away.

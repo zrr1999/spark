@@ -28,8 +28,8 @@
     "@zendev-lab/pi-extension-api": "workspace:^",
     "@zendev-lab/pi-roles": "workspace:^",
     "@zendev-lab/pi-tasks": "workspace:^",
-    "@zendev-lab/spark-cli": "workspace:^",
     "@zendev-lab/spark-runtime": "workspace:^",
+    "@zendev-lab/spark-tui-app": "workspace:^",
     "ws": "^8.18.3"
   },
   "devDependencies": {

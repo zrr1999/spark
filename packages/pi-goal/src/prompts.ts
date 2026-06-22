@@ -1,7 +1,4 @@
-import {
-  LOOP_COMPLETION_BOUNDARY_GUIDANCE,
-  escapeXmlText as escapeLoopXmlText,
-} from "@zendev-lab/pi-loop";
+import { escapeXmlText as escapeLoopXmlText } from "@zendev-lab/pi-loop";
 
 import type { Goal } from "./types.ts";
 
@@ -62,8 +59,7 @@ export function compactContinuationPrompt(goal: Goal): string {
     "",
     "Avoid repeating work that is already done. Choose the next concrete action toward the objective.",
     "",
-    "This goal continuation is layered on the lower-level pi-loop primitive; loop itself is not the completion authority.",
-    LOOP_COMPLETION_BOUNDARY_GUIDANCE,
+    "Continue goal work using the current objective and fresh evidence.",
     "",
     `Before requesting reviewer-gated completion, audit progress against the objective and call ${goalToolReference("complete")} only when every requirement is verified.`,
     GOAL_TOOL_NAME_GUIDANCE,
@@ -84,8 +80,7 @@ export function continuationPrompt(goal: Goal): string {
     "",
     "Avoid repeating work that is already done. Choose the next concrete action toward the objective.",
     "",
-    "This goal continuation is layered on the lower-level pi-loop primitive; loop itself is not the completion authority. Goal completion is added here as a goal-level policy.",
-    LOOP_COMPLETION_BOUNDARY_GUIDANCE,
+    "Continue goal work using the current objective and fresh evidence.",
     "",
     "Before deciding that the goal is achieved, perform a completion audit against the actual current state:",
     "- Restate the objective as concrete deliverables or success criteria.",

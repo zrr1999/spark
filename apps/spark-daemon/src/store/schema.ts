@@ -192,10 +192,27 @@ function migrateSparkDaemonRegistrationTables(db: DatabaseSync): void {
       revoked_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS daemon_workspace_clients (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('interactive', 'headless', 'executor')),
+      display_name TEXT,
+      status TEXT NOT NULL CHECK (status IN ('connected', 'disconnected')),
+      attached_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      lease_expires_at TEXT,
+      released_at TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+
     CREATE INDEX IF NOT EXISTS daemon_workspaces_status_idx
       ON daemon_workspaces(last_known_status);
     CREATE INDEX IF NOT EXISTS daemon_workspace_grants_workspace_idx
       ON daemon_workspace_grants(daemon_workspace_id);
+    CREATE INDEX IF NOT EXISTS daemon_workspace_clients_workspace_status_idx
+      ON daemon_workspace_clients(workspace_id, status, kind);
+    CREATE INDEX IF NOT EXISTS daemon_workspace_clients_lease_idx
+      ON daemon_workspace_clients(status, lease_expires_at);
   `);
 }
 

@@ -159,7 +159,7 @@ async function loadSparkRuntimeModules(): Promise<SparkRuntimeModules> {
     }>("@zendev-lab/spark-runtime"),
     dynamicImport<{
       createSparkHeadlessRoleExecutor: SparkRuntimeModules["createSparkHeadlessRoleExecutor"];
-    }>("@zendev-lab/spark-cli/headless-role-executor"),
+    }>("@zendev-lab/spark-tui-app/headless-role-executor"),
   ]);
   return {
     defaultArtifactStore: artifacts.defaultArtifactStore,

@@ -14,14 +14,14 @@ export const builtinWorkflowDefinitions: readonly BuiltinWorkflowDefinition[] = 
     mode: "research",
     title: "research",
     description:
-      "Research workflow with planning, panel exploration, verification, and report synthesis",
+      "Deep research workflow with query planning, web search, source fetching, verification, and cited synthesis",
     scriptFactory: researchWorkflowScript,
   },
   {
     id: "review",
     mode: "research",
     title: "review",
-    description: "Findings cross-checked by skeptical reviewers",
+    description: "Adversarial review workflow with critique, rebuttal, and verdict synthesis",
     scriptFactory: reviewWorkflowScript,
   },
 ];
@@ -37,126 +37,322 @@ export function getBuiltinWorkflowDefinition(id: string): BuiltinWorkflowDefinit
 export function researchWorkflowScript(): string {
   return `export const meta = {
   name: 'research',
-  description: 'Research workflow with planning, panel exploration, verification, and report synthesis',
-  phases: [{ title: 'Plan' }, { title: 'Explore' }, { title: 'Verify' }, { title: 'Report' }],
+  description: 'Deep research workflow with query planning, web search, source fetching, verification, and cited synthesis',
+  phases: [
+    { title: 'Plan' },
+    { title: 'Search' },
+    { title: 'Fetch' },
+    { title: 'Verify' },
+    { title: 'Report' },
+  ],
 }
 
 const input = args || {}
-const question = String(input.question || input.prompt || input.task || '')
+const question = String(input.question || input.prompt || input.task || '').trim()
+const collectErrors = input.collectErrors !== false
+const maxQueries = boundedInt(input.maxQueries, 4, 1, 8)
+const searchResultsPerQuery = boundedInt(input.searchResultsPerQuery || input.numResults, 5, 1, 20)
+const fetchTopN = boundedInt(input.fetchTopN, 6, 0, 12)
 const configuredPanel = Array.isArray(input.panelModels)
   ? input.panelModels
   : (Array.isArray(input.models) ? input.models : [])
-const requestedPanelSize = Number(input.panelSize)
-const panelSize = Number.isFinite(requestedPanelSize)
-  ? Math.max(1, Math.min(8, Math.trunc(requestedPanelSize)))
-  : 3
+const panelSize = boundedInt(input.panelSize, configuredPanel.length || 2, 1, 8)
 const panel = configuredPanel.length > 0
   ? configuredPanel
-  : Array.from({ length: panelSize }, (_, index) => ({ label: 'researcher ' + (index + 1) }))
+  : Array.from({ length: panelSize }, (_, index) => ({ label: 'source analyst ' + (index + 1) }))
 
-function panelPrompt() {
+function boundedInt(value, fallback, min, max) {
+  const number = Number(value)
+  return Number.isFinite(number) ? Math.max(min, Math.min(max, Math.trunc(number))) : fallback
+}
+
+function defaultQueries(text) {
+  const base = text || 'research question'
   return [
-    'You are one contributor in a Spark research workflow.',
-    'Answer the user request independently. Be concise, evidence-oriented, and mention uncertainty or assumptions. Do not call tools.',
-    '',
-    'User request:',
-    question,
-  ].join('\\n')
+    base,
+    base + ' evidence sources',
+    base + ' counterarguments limitations',
+    base + ' implementation details examples',
+  ].slice(0, maxQueries)
+}
+
+const queries = (Array.isArray(input.queries) ? input.queries : defaultQueries(question))
+  .map((query) => String(query).trim())
+  .filter(Boolean)
+  .slice(0, maxQueries)
+
+function compact(value, max) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+  return text.length <= max ? text : text.slice(0, max - 1) + '…'
+}
+
+function errorText(error) {
+  return error && error.message ? error.message : String(error)
+}
+
+function normalizeParallel(results, labels) {
+  return results.map((item, index) => {
+    if (item && item.status === 'fulfilled') return item.value
+    if (item && item.status === 'rejected') return { label: labels[index], error: errorText(item.reason) }
+    return item
+  })
+}
+
+function collectUrls(value, out) {
+  if (!out) out = []
+  if (!value) return out
+  if (typeof value === 'string') {
+    for (const match of value.matchAll(/https?:\\/\\/[^\\s)\\]"'<>]+/g)) out.push(match[0])
+    return out
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectUrls(item, out)
+    return out
+  }
+  if (typeof value === 'object') {
+    for (const key of ['url', 'sourceUrl', 'link', 'href', 'citationUrl']) {
+      const candidate = value[key]
+      if (typeof candidate === 'string' && /^https?:\\/\\//.test(candidate)) out.push(candidate)
+    }
+    for (const item of Object.values(value)) collectUrls(item, out)
+  }
+  return out
+}
+
+function unique(values) {
+  return Array.from(new Set(values.filter(Boolean)))
 }
 
 phase('Plan')
-const plan = await agent('Plan a concise research approach for: ' + question, { label: 'research plan' })
+const plan = await agent([
+  'Plan a deep research approach.',
+  'Return concise bullets covering search angles, likely source types, and verification risks.',
+  '',
+  'Question:',
+  question,
+].join('\\n'), { label: 'research plan', model: input.plannerModel })
 
-phase('Explore')
+phase('Search')
+const rawSearches = await parallel(queries.map((query) => async () => ({
+  query,
+  result: await webSearch({
+    query,
+    numResults: searchResultsPerQuery,
+    includeContent: false,
+    recencyFilter: input.recencyFilter,
+    domainFilter: Array.isArray(input.domainFilter) ? input.domainFilter : undefined,
+  }),
+})), {
+  concurrency: input.concurrency,
+  retry: input.retry,
+  onError: collectErrors ? 'collect' : 'fail-fast',
+})
+const searches = normalizeParallel(rawSearches, queries)
+const urls = unique([
+  ...(Array.isArray(input.urls) ? input.urls.map(String) : []),
+  ...collectUrls(searches),
+]).slice(0, fetchTopN)
+
+phase('Fetch')
+const rawFetchedSources = urls.length === 0 ? [] : await parallel(urls.map((url) => async () => ({
+  url,
+  content: await fetchContent({
+    url,
+    prompt: 'Extract source facts relevant to: ' + question,
+  }),
+})), {
+  concurrency: input.fetchConcurrency || input.concurrency,
+  retry: input.retry,
+  onError: collectErrors ? 'collect' : 'fail-fast',
+})
+const fetchedSources = normalizeParallel(rawFetchedSources, urls)
+const sourceBrief = [
+  'Question: ' + question,
+  '',
+  'Planned approach:',
+  compact(plan, 2000),
+  '',
+  'Searches:',
+  compact(searches, 5000),
+  '',
+  'Fetched sources:',
+  compact(fetchedSources, 6000),
+].join('\\n')
+
+phase('Verify')
 const panelResults = await parallel(panel.map((item, index) => async () => {
   const model = typeof item === 'string'
     ? item
     : (item && item.model ? String(item.model) : undefined)
-  const provider = item && typeof item === 'object' && item.provider ? String(item.provider) : undefined
   const label = item && typeof item === 'object' && (item.label || item.name)
     ? String(item.label || item.name)
-    : (model || provider || ('researcher ' + (index + 1)))
+    : (model || ('source analyst ' + (index + 1)))
   return {
     label,
-    provider,
     model,
-    output: await agent(panelPrompt(), { label, model, agentType: 'model' }),
+    output: await agent([
+      'Assess the source evidence for this research question.',
+      'Cross-check claims, cite only URLs present in the source brief, and identify uncertainties.',
+      '',
+      sourceBrief,
+    ].join('\\n'), { label, model, agentType: model ? 'model' : undefined }),
   }
 }), {
-  concurrency: input.concurrency,
+  concurrency: input.panelConcurrency || input.concurrency,
   retry: input.retry,
-  onError: 'collect',
+  onError: collectErrors ? 'collect' : 'fail-fast',
 })
-
-function renderPanelResult(result, index) {
-  if (result && result.status === 'fulfilled') {
-    const value = result.value || {}
-    const label = value.provider && value.model
-      ? value.provider + '/' + value.model
-      : (value.label || value.model || ('researcher ' + (index + 1)))
-    return '## Contributor ' + (index + 1) + ': ' + label + '\\n' + (value.output || '(empty response)')
-  }
-  const reason = result && result.reason
-    ? (result.reason.message || String(result.reason))
-    : 'unknown error'
-  return '## Contributor ' + (index + 1) + '\\nERROR: ' + reason
-}
-
-const renderedResults = panelResults.map(renderPanelResult).join('\\n\\n')
-
-phase('Verify')
+const normalizedPanel = normalizeParallel(panelResults, panel.map((item, index) => item && item.label ? String(item.label) : 'source analyst ' + (index + 1)))
 const verified = await agent([
-  'Cross-check Spark research panel results.',
+  'Adversarially verify the research evidence.',
+  'Separate well-supported claims, weak claims, contradictions, and missing source coverage.',
+  'Every supported claim must cite a URL from the fetched/search sources. Do not invent citations.',
   '',
-  'Original user request:',
-  question,
+  sourceBrief,
   '',
-  'Research plan:',
-  plan,
-  '',
-  'Panel responses:',
-  renderedResults,
-].join('\\n'), { label: 'cross-check' })
+  'Source analyst notes:',
+  compact(normalizedPanel, 6000),
+].join('\\n'), { label: 'cross-check sources', model: input.verifierModel })
 
 phase('Report')
 const report = await agent([
-  'Write the final user-facing research answer.',
-  'Prefer verified consensus, call out contradictions only when useful, and do not invent unavailable evidence.',
+  'Write the final user-facing deep research report.',
+  'Requirements:',
+  '- Answer the question directly.',
+  '- Use inline citations with source URLs for factual claims.',
+  '- Include a Sources section listing cited URLs.',
+  '- Call out uncertainty, contradictions, and unverified areas.',
   '',
-  'Original user request:',
+  'Question:',
   question,
   '',
-  'Verified notes:',
-  verified,
+  'Verified evidence:',
+  compact(verified, 6000),
   '',
-  'Panel responses:',
-  renderedResults,
+  'Source analyst notes:',
+  compact(normalizedPanel, 6000),
 ].join('\\n'), {
-  label: 'write report',
-  model: input.judgeModel,
-  agentType: 'model',
+  label: 'write cited report',
+  model: input.judgeModel || input.reportModel,
+  agentType: input.judgeModel || input.reportModel ? 'model' : undefined,
 })
-return { question, plan, panelResults, verified, report }`;
+return { question, plan, queries, searches, fetchedSources, panelResults: normalizedPanel, verified, report }`;
 }
 
 export function reviewWorkflowScript(): string {
   return `export const meta = {
   name: 'review',
-  description: 'Findings cross-checked by skeptical reviewers',
-  phases: [{ title: 'Investigate' }, { title: 'Refute' }, { title: 'Consensus' }],
+  description: 'Adversarial review workflow with critique, rebuttal, and verdict synthesis',
+  phases: [{ title: 'Investigate' }, { title: 'Critique' }, { title: 'Rebut' }, { title: 'Verdict' }],
 }
 
-const task = (args && args.task) || ''
+const input = args || {}
+const task = String(input.task || input.prompt || input.question || '').trim()
+const collectErrors = input.collectErrors !== false
+const criticCount = boundedInt(input.critics, 2, 1, 6)
+
+function boundedInt(value, fallback, min, max) {
+  const number = Number(value)
+  return Number.isFinite(number) ? Math.max(min, Math.min(max, Math.trunc(number))) : fallback
+}
+
+function compact(value, max) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+  return text.length <= max ? text : text.slice(0, max - 1) + '…'
+}
+
+function errorText(error) {
+  return error && error.message ? error.message : String(error)
+}
+
+function normalizeParallel(results, labels) {
+  return results.map((item, index) => {
+    if (item && item.status === 'fulfilled') return item.value
+    if (item && item.status === 'rejected') return { label: labels[index], error: errorText(item.reason) }
+    return item
+  })
+}
+
 phase('Investigate')
-const findings = await agent('List concrete findings for: ' + task, { label: 'investigate' })
-phase('Refute')
-const refutations = await parallel([
-  () => agent('Try to refute these findings: ' + findings, { label: 'skeptic 1' }),
-  () => agent('Independently verify these findings: ' + findings, { label: 'skeptic 2' }),
-])
-phase('Consensus')
-const report = await agent('Write only findings that survived review: ' + JSON.stringify(refutations), { label: 'consensus' })
-return { task, findings, refutations, report }`;
+const search = input.skipSearch ? { skipped: true } : await webSearch({
+  query: task,
+  numResults: input.numResults || 5,
+  includeContent: false,
+})
+const findings = await agent([
+  'List concrete, reviewable findings for the target below.',
+  'Prefer claims that can be checked. Include likely evidence URLs from the search data when present.',
+  '',
+  'Target:',
+  task,
+  '',
+  'Search data:',
+  compact(search, 4000),
+].join('\\n'), { label: 'investigate findings', model: input.investigatorModel })
+
+phase('Critique')
+const criticLabels = Array.from({ length: criticCount }, (_, index) => 'skeptic ' + (index + 1))
+const rawCritiques = await parallel(criticLabels.map((label, index) => async () => ({
+  label,
+  critique: await agent([
+    'Adversarially review these findings.',
+    'Find false positives, unsupported claims, missing evidence, edge cases, and risk severity mistakes.',
+    'Return clear objections and what evidence would resolve each objection.',
+    '',
+    'Target:',
+    task,
+    '',
+    'Findings:',
+    compact(findings, 6000),
+  ].join('\\n'), {
+    label,
+    model: Array.isArray(input.criticModels) ? input.criticModels[index] : input.criticModel,
+    agentType: Array.isArray(input.criticModels) || input.criticModel ? 'model' : undefined,
+  }),
+})), {
+  concurrency: input.concurrency,
+  retry: input.retry,
+  onError: collectErrors ? 'collect' : 'fail-fast',
+})
+const critiques = normalizeParallel(rawCritiques, criticLabels)
+
+phase('Rebut')
+const rebuttal = await agent([
+  'Respond to the adversarial critiques without hand-waving.',
+  'Mark each finding as survives, revised, or rejected. Cite source URLs from search data when available.',
+  '',
+  'Target:',
+  task,
+  '',
+  'Findings:',
+  compact(findings, 6000),
+  '',
+  'Critiques:',
+  compact(critiques, 6000),
+].join('\\n'), { label: 'rebut critiques', model: input.rebuttalModel })
+
+phase('Verdict')
+const report = await agent([
+  'Write the final adversarial review verdict.',
+  'Include:',
+  '- Overall verdict: pass, pass-with-issues, or fail.',
+  '- Surviving findings with confidence and citations when available.',
+  '- Rejected or downgraded findings with reasons.',
+  '- Follow-up checks needed.',
+  '',
+  'Target:',
+  task,
+  '',
+  'Original findings:',
+  compact(findings, 6000),
+  '',
+  'Critiques:',
+  compact(critiques, 6000),
+  '',
+  'Rebuttal:',
+  compact(rebuttal, 6000),
+].join('\\n'), { label: 'adversarial verdict', model: input.verdictModel || input.judgeModel })
+return { task, search, findings, critiques, rebuttal, report }`;
 }
 
 /** @deprecated Use researchWorkflowScript; fusion is now an implementation strategy, not a public builtin workflow id. */

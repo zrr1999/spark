@@ -1,0 +1,32 @@
+{
+  "name": "@zendev-lab/spark-tui-app",
+  "version": "0.1.0",
+  "description": "Standalone Spark-first TUI app built through the Spark TUI boundary.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "bin": {
+    "spark-tui": "./bin/spark-tui"
+  },
+  "files": [
+    "bin/**/*",
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    "./baidu-oneapi-provider": "./src/baidu-oneapi-provider.ts",
+    "./headless-role-executor": "./src/headless-role-executor.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^0.79.4",
+    "@zendev-lab/pi-extension-api": "workspace:^",
+    "@zendev-lab/spark-protocol": "workspace:^",
+    "@zendev-lab/spark-tui": "workspace:^"
+  }
+}

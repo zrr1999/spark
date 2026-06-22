@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@zendev-lab/spark-tui/text";
 
 import {
   SparkHostRuntime,
@@ -16,8 +16,8 @@ import {
   switchSparkSessionLeaf,
   type SparkSessionEntry,
   type SparkSessionRecord,
-} from "../apps/spark/src/host/index.ts";
-import { createSparkSessionTreeComponent } from "../apps/spark/src/tui/session-tree.ts";
+} from "../apps/spark-tui/src/host/index.ts";
+import { createSparkSessionTreeComponent } from "../apps/spark-tui/src/tui/session-tree.ts";
 
 function makeBranchedRecord(store: SparkSessionStore): SparkSessionRecord {
   const record = store.createSession({ id: "nav", timestamp: "2026-06-03T04:00:00.000Z" });

@@ -26,11 +26,46 @@
           "displayName": "Local development workspace",
           "status": "available",
           "capabilities": {},
-          "diagnostics": {}
+          "diagnostics": {},
+          "connection": {
+            "status": "connected",
+            "lastSeenAt": "2026-05-21T00:00:12.000Z"
+          },
+          "borrowed": {
+            "borrowed": true,
+            "interactiveClientCount": 1,
+            "borrowedByClientIds": ["wcl-tui-1"],
+            "since": "2026-05-21T00:00:00.000Z"
+          },
+          "workspaceClients": [
+            {
+              "clientId": "wcl-tui-1",
+              "kind": "interactive",
+              "status": "connected",
+              "displayName": "Spark TUI",
+              "attachedAt": "2026-05-21T00:00:00.000Z",
+              "lastSeenAt": "2026-05-21T00:00:12.000Z"
+            }
+          ],
+          "executor": {
+            "state": "online",
+            "clientId": "exec-local-1",
+            "activeInvocationCount": 0,
+            "activeAgentCount": 0,
+            "lastSeenAt": "2026-05-21T00:00:12.000Z"
+          }
         }
       ],
       "pendingOutboxCount": 0,
       "activeInvocationCount": 0,
+      "activeAgentCount": 0,
+      "executor": {
+        "state": "online",
+        "clientId": "exec-local-1",
+        "activeInvocationCount": 0,
+        "activeAgentCount": 0,
+        "lastSeenAt": "2026-05-21T00:00:12.000Z"
+      },
       "artifacts": {
         "availableCount": 1,
         "missingCount": 0
@@ -58,6 +93,39 @@
       ],
       "unresolvedInboxCount": 1,
       "activeInvocationCount": 1,
+      "activeAgentCount": 2,
+      "connection": {
+        "status": "connected",
+        "lastSeenAt": "2026-05-21T00:00:16.000Z"
+      },
+      "borrowed": {
+        "borrowed": true,
+        "interactiveClientCount": 1,
+        "borrowedByClientIds": ["wcl-tui-1"],
+        "since": "2026-05-21T00:00:00.000Z"
+      },
+      "workspaceClients": [
+        {
+          "clientId": "wcl-tui-1",
+          "kind": "interactive",
+          "status": "connected",
+          "displayName": "Spark TUI",
+          "attachedAt": "2026-05-21T00:00:00.000Z",
+          "lastSeenAt": "2026-05-21T00:00:16.000Z"
+        }
+      ],
+      "executor": {
+        "state": "online",
+        "clientId": "exec-local-1",
+        "activeInvocationCount": 1,
+        "activeAgentCount": 2,
+        "lastSeenAt": "2026-05-21T00:00:16.000Z"
+      },
+      "control": {
+        "mode": "snapshot_only",
+        "reason": "borrowed",
+        "serverMutationAllowed": false
+      },
       "latestArtifactIds": ["art_99999999999949999999999999999999"]
     }
   },

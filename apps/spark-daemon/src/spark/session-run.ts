@@ -35,7 +35,7 @@ async function dynamicImport<T>(specifier: string): Promise<T> {
 
 async function loadSparkHeadlessSessionModule(): Promise<SparkHeadlessSessionModule> {
   return await dynamicImport<SparkHeadlessSessionModule>(
-    "@zendev-lab/spark-cli/headless-role-executor",
+    "@zendev-lab/spark-tui-app/headless-role-executor",
   );
 }
 

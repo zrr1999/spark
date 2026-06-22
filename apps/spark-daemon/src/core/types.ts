@@ -17,6 +17,17 @@ export interface SparkDaemonSessionRunTask {
 export interface SparkDaemonQueuePayload<TTask extends SparkDaemonTask = SparkDaemonTask> {
   enqueuedAt: string;
   task: TTask;
+  processedAt?: string;
+  result?: unknown;
+  failedAt?: string;
+  error?: string;
+}
+
+export interface SparkDaemonProcessedQueuePayload<
+  TTask extends SparkDaemonTask = SparkDaemonTask,
+> extends SparkDaemonQueuePayload<TTask> {
+  processedAt: string;
+  result?: unknown;
 }
 
 export interface SparkDaemonFailedQueuePayload<

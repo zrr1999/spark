@@ -28,5 +28,5 @@ Non-responsibilities:
 - does not make `pi-loop` a completion authority; loop can continue/wait/block/pause, while goal adds reviewer-gated completion policy
 - does not parse or run workflow scripts (`@zendev-lab/pi-workflows`)
 - does not schedule ready tasks or own workflow-run state (`@zendev-lab/pi-workflows`)
-- does not register Pi tools or slash commands (`@zendev-lab/spark` extension facade)
+- does not register Pi tools or slash commands (`@zendev-lab/spark-extension` extension facade)
 - does not expose a standalone `goal_complete` tool; Spark completion remains reviewer-gated through the canonical `goal({ action: "complete" })` request boundary

@@ -12,7 +12,12 @@ export default defineConfig({
     },
     overrides: [
       {
-        files: ["packages/**/*.ts", "apps/spark/**/*.ts", "test/**/*.ts"],
+        files: [
+          "packages/**/*.ts",
+          "apps/spark-cli/**/*.ts",
+          "apps/spark-tui/**/*.ts",
+          "test/**/*.ts",
+        ],
         env: { node: true },
       },
     ],

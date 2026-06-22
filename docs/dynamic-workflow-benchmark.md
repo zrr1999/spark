@@ -41,10 +41,30 @@ Spark workflow must keep the existing `pi-workflows`/`spark-runtime` boundary, b
 4. **Resource bounds**: default 16-way concurrency, 1000-agent cap, optional run/phase token budgets, optional `maxAgents` and `concurrency` controls.
 5. **Quality patterns**: first-class adversarial verification, best-of-N judging, dry-loop discovery, completeness checks, bounded retry, and feedback gates.
 6. **Saved/nested workflows**: controlled resolver only; no arbitrary path execution.
-7. **Next hardening still required before declaring total parity**: persistent background run manager for generated scripts, `/workflows` TUI/control parity for script runs, real provider token/cost accounting from child role sessions, worktree isolation enforcement, approval UX, ultracode trigger/effort mode, and deep-research/adversarial-review commands wired to real web tools.
+7. **Next hardening still required before declaring total parity**: plan-task diagnostics cleanup and final parity E2E.
+
+## Parity matrix
+
+| Baseline capability | Spark status | Evidence |
+| --- | --- | --- |
+| Metadata-first dynamic JavaScript workflows | Implemented, tested, documented | `parseWorkflowScript`, `runWorkflowScript`, `workflow_run`, `test/spark-workflows.test.ts` |
+| Subagent fan-out and bounded orchestration | Implemented, tested, documented | `agent`, `parallel`, `pipeline`, `maxAgents`, `concurrency`, ultracode smoke |
+| Deterministic resume/replay | Implemented, tested, documented | journal hash replay and `workflow_run({ runRef })` tests |
+| Background/control UI for dynamic runs | Implemented, tested, documented | `/workflows` and `task_read run_status` pause/resume/stop/restart/save/ack rendering |
+| Saved/nested workflows | Implemented, tested, documented | controlled `builtin:*`/`workspace:*`/`user:*` resolver, collision-safe save/list/read/rerun test |
+| Quality helpers | Implemented, tested, documented | `verify`, `judgePanel`, `loopUntilDry`, `completenessCheck`, `retry`, `gate` tests |
+| Deep research and adversarial review | Implemented, tested, documented | builtin `research`/`review`, webSearch/fetchContent adapters, collected-error tests |
+| Approval/script-review UX | Implemented, tested, documented | scoped approval summary/provenance tests and docs |
+| Token/cost/liveness telemetry | Implemented, tested, documented | role-run usage extraction and dynamic run rendering tests |
+| Graft-backed isolated agent execution | Implemented, tested, documented | `isolation: "graft"`, narrowed tool policy, real opt-in Graft E2E |
+| Ultracode/high-effort opt-in | Implemented, tested, documented | `/ultracode` command prompt test and generated-script workflow_run smoke |
 
 ## Implemented in this change
 
-- `pi-workflows` runtime now has deterministic metadata-first scripts, 16-concurrency default, token budget APIs, phase budgets, longest-unchanged-prefix resume, nested workflow composition, item pipelines, and the quality stdlib.
-- Spark now registers `workflow_run`, a visible execution surface for generated/saved workflow scripts that routes agents through Spark workflow role-run boundaries.
-- Focused tests cover runtime hardening, resume semantics, quality helpers, budget enforcement, nested workflows, and the new `workflow_run` tool execution path.
+- `pi-workflows` runtime now has deterministic metadata-first scripts, 16-concurrency default, token budget APIs, phase budgets, longest-unchanged-prefix resume, nested workflow composition, item pipelines, webSearch/fetchContent adapters for research workflows, and the quality stdlib.
+- Spark now registers `workflow_run`, a visible execution surface for generated/saved workflow scripts that routes agents through Spark workflow role-run boundaries and approval-gates risky runs before child agents or web/fetch adapters start. `/ultracode` is the explicit opt-in high-effort command that asks the agent to reuse a saved workflow or generate a bounded metadata-first script and run it through `workflow_run`.
+- `workflow_run` persists dynamic run records in `.spark/dynamic-workflow-runs.json` with script hash/body, args, metadata, phases, journal, result/error, captured base metadata, scoped approval provenance when required, per-agent telemetry, child run refs, actual/estimated token totals, optional cost, and liveness/rate signals; `workflow_run({ runRef })` resumes from the stored script, journal, original approval, and original base.
+- Graft scratch/capture supports process-scoped `GRAFT_BASE_REF` as the implicit first-operation base when explicit `--base`/tool `base` and `--from`/tool `from` are absent. Explicit base still wins, `from` continuation ignores env base, and missing/blank env base fails loudly. Spark workflow agents can request `isolation: "graft"`; Spark injects the persisted workflow base as `GRAFT_BASE_REF`, narrows the child role-run tools to Graft scratch/candidate/validation operations, and captures scratch/candidate/patch refs in isolated agent results.
+- `task_read({ action: "run_status" })` / the `/workflows` control surface now renders persisted dynamic `workflow_run` records with phase summaries, agent journal tail metadata/result snippets, completed results, base metadata, actual/estimated token totals, optional cost, agent liveness/rate telemetry, errors, saved workflow selectors, acknowledged state, and next actions. Dynamic controls `pause`, `resume`, `stop`, `restart`, `save`, and `ack` update `.spark/dynamic-workflow-runs.json` deterministically; `restart` resets phases/journal and points callers back to `workflow_run({ runRef })` for execution, `save` writes the script to controlled workspace or user workflow files with collision-safe suffixing, and `ack` hides delivered terminal runs from compact status.
+- Builtin `research` is now the deep-research product flow: query planning, multi-query web search, fetch/cross-checking, source analyst verification, collected error handling, and cited report synthesis. Builtin `review` is now the adversarial-review product flow: investigation/search, parallel critiques, rebuttal, and verdict synthesis.
+- Focused tests cover runtime hardening, resume semantics, quality helpers, real/fallback token budget enforcement, role-run usage extraction, nested workflows, deep-research/review builtin behavior with mocked web/fetch adapters, approval blocking/provenance for risky workflow_run scripts, `/ultracode` opt-in command prompting, persisted workflow_run resume/telemetry, collision-safe save/list/read/rerun workflow lifecycle, Graft env base scratch/capture behavior, dynamic workflow status/control rendering for running/paused/failed/stale/completed runs, `/workflows` dynamic-run navigation/save, graft-isolated parallel agent refs/tool policy, and the `workflow_run` tool execution path.

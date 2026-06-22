@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@zendev-lab/spark-tui/text";
+import { defaultTaskGraphStore, TaskGraph } from "@zendev-lab/pi-tasks";
 
 import {
   renderSparkWidgetLines,
@@ -12,10 +13,11 @@ import {
   type SparkWidgetState,
   type SparkWidgetTheme,
   type SparkWidgetTui,
-} from "../packages/spark/src/ui/spark-widget.ts";
-import { SparkWidgetController } from "../packages/spark/src/extension/spark-widget-controller.ts";
-import { setSessionGoal } from "../packages/spark/src/extension/spark-session-goals.ts";
-import { setSessionLoop } from "../packages/spark/src/extension/spark-session-loops.ts";
+} from "../packages/spark-extension/src/ui/spark-widget.ts";
+import { SparkWidgetController } from "../packages/spark-extension/src/extension/spark-widget-controller.ts";
+import { setSessionGoal } from "../packages/spark-extension/src/extension/spark-session-goals.ts";
+import { setSessionLoop } from "../packages/spark-extension/src/extension/spark-session-loops.ts";
+import { saveCurrentProjectRef } from "../packages/spark-extension/src/extension/session-state.ts";
 
 const theme: SparkWidgetTheme = {
   fg: (_color, text) => text,
@@ -111,19 +113,13 @@ void test("SparkWidget registers, invalidates renders, clears hidden state, and 
   assert.equal(registrations.length, 2);
 
   state = widgetState({
-    independentTodos: [{ content: "New visible TODO", status: "pending" }],
+    independentTodos: [{ content: "Legacy hidden item", status: "pending" }],
   });
   widget.update();
-  assert.equal(registrations.length, 3);
-  assert.equal(typeof registrations[2]?.cb, "function");
-  assert.match(
-    registrations[2]?.cb?.(widgetTui, theme).render().join("\n") ?? "",
-    /New visible TODO/,
-  );
+  assert.equal(registrations.length, 2);
 
   widget.dispose();
-  assert.equal(registrations.length, 4);
-  assert.deepEqual(registrations[3], { key: "spark-status", cb: undefined });
+  assert.equal(registrations.length, 2);
 
   widget.dispose();
   assert.equal(registrations.length, 4);
@@ -358,6 +354,60 @@ void test("spark widget controller lets active loop replace a completed goal in 
     const lines = component?.render() ?? [];
     assert.match(lines[0] ?? "", /◆ Loop\(●\): Active loop should be visible/);
     assert.doesNotMatch(lines.join("\n"), /Completed old goal/);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("spark widget controller hides unclaimed task plan items before rendering", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-widget-claim-gated-controller-"));
+  try {
+    await mkdir(join(dir, ".spark"), { recursive: true });
+    const graph = new TaskGraph();
+    const project = graph.createProject({
+      title: "Claim gated widget project",
+      description: "Exercise controller-side claim gating.",
+      outputLanguage: "en",
+    });
+    graph.createTask({
+      projectRef: project.ref,
+      name: "unclaimed-widget-details",
+      title: "Unclaimed widget task",
+      description: "Plan-item content must not enter widget state before claim.",
+      status: "ready",
+      todos: [{ content: "Hidden widget plan item", status: "pending" }],
+    });
+    const claimed = graph.createTask({
+      projectRef: project.ref,
+      name: "claimed-widget-details",
+      title: "Claimed widget task",
+      description: "Claimed plan-item content should render.",
+      status: "ready",
+      todos: [{ content: "Visible widget plan item", status: "pending" }],
+    });
+    graph.claimTask(claimed.ref, {
+      kind: "main",
+      claimedBy: "session:ephemeral",
+      sessionId: "session:ephemeral",
+      leaseMs: 60_000,
+    });
+    await defaultTaskGraphStore(dir).save(graph);
+    await saveCurrentProjectRef(dir, undefined, project.ref);
+
+    let component: ReturnType<NonNullable<SparkWidgetRegistration["cb"]>> | undefined;
+    const controller = new SparkWidgetController();
+    await controller.refresh(dir, {
+      ui: {
+        setWidget(_key: string, cb: SparkWidgetRegistration["cb"] | undefined) {
+          component = cb?.(tui, theme);
+        },
+      },
+    });
+
+    const text = component?.render().join("\n") ?? "";
+    assert.match(text, /Unclaimed widget task/);
+    assert.doesNotMatch(text, /Hidden widget plan item/);
+    assert.match(text, /Visible widget plan item/);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -849,7 +899,7 @@ void test("spark widget hides placeholder-only done plan item state", () => {
   assert.deepEqual(lines, []);
 });
 
-void test("spark widget renders session TODOs as their own top-level section", () => {
+void test("spark widget hides legacy independent items and renders project tasks", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
@@ -859,7 +909,7 @@ void test("spark widget renders session TODOs as their own top-level section", (
         { title: "Pending task", status: "pending", agentLabel: "unassigned", todos: [] },
         { title: "Running task", status: "running", agentLabel: "unassigned", todos: [] },
       ],
-      independentTodos: [{ displayNumber: 2, content: "Session follow-up", status: "pending" }],
+      independentTodos: [{ displayNumber: 2, content: "Legacy follow-up", status: "pending" }],
       taskCountTotal: 4,
       taskCountClaimed: 0,
       taskCountClaimedBySession: 0,
@@ -870,8 +920,7 @@ void test("spark widget renders session TODOs as their own top-level section", (
   );
 
   const text = lines.join("\n");
-  assert.ok(text.indexOf("Session TODOs(pending=1)") < text.indexOf("Spark UX redesign"));
-  assert.ok(text.indexOf("Session follow-up") < text.indexOf("Spark UX redesign"));
+  assert.doesNotMatch(text, /Legacy follow-up/);
   assert.ok(text.indexOf("Spark UX redesign") < text.indexOf("Running task"));
   assert.ok(text.indexOf("Running task") < text.indexOf("Pending task"));
   assert.ok(text.indexOf("Pending task") < text.indexOf("Done task"));

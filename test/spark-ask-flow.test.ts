@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@zendev-lab/spark-tui/text";
 import test from "node:test";
 
 import {

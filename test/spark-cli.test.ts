@@ -5,10 +5,10 @@ import registerBaiduOneApiProvider, {
   remapBaiduOneApiPayload,
   resolveBaiduOneApiKey,
   streamBaiduOneApi,
-} from "../apps/spark/src/baidu-oneapi-provider.ts";
-import { parseSparkCliArgs } from "../apps/spark/src/cli.ts";
-import { SparkNativeSession } from "../apps/spark/src/native-tui.ts";
-import sparkCliHostExtension from "../apps/spark/src/spark-host-extension.ts";
+} from "../apps/spark-tui/src/baidu-oneapi-provider.ts";
+import { parseSparkCliArgs } from "../apps/spark-tui/src/cli.ts";
+import { SparkNativeSession } from "../apps/spark-tui/src/native-tui.ts";
+import sparkCliHostExtension from "../apps/spark-tui/src/spark-host-extension.ts";
 
 void test("parseSparkCliArgs treats positional args as the initial message", () => {
   assert.deepEqual(parseSparkCliArgs(["hello", "spark"]), {

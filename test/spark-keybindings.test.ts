@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { SparkKeybindings, SparkHostRuntime } from "../apps/spark/src/host/index.ts";
+import { SparkKeybindings, SparkHostRuntime } from "../apps/spark-tui/src/host/index.ts";
 
 void test("SparkKeybindings exposes the default binding table snapshot", () => {
   const kb = new SparkKeybindings();

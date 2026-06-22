@@ -84,6 +84,7 @@ export interface SparkRoleInstructionExecutorInput {
   launch?: RoleLaunchMode;
   forkFromSession?: string;
   model?: string;
+  env?: NodeJS.ProcessEnv;
 }
 
 /**
@@ -161,6 +162,13 @@ function combineAbortSignals(signals: Array<AbortSignal | undefined>): AbortSign
   if (active.length === 0) return undefined;
   if (active.length === 1) return active[0];
   return AbortSignal.any(active);
+}
+
+function effectiveRoleRunEnv(
+  overrides: NodeJS.ProcessEnv | undefined,
+): NodeJS.ProcessEnv | undefined {
+  if (!overrides) return undefined;
+  return { ...process.env, ...overrides };
 }
 
 export function listActiveSparkRoleRunProcesses(): ActiveSparkRoleRunProcess[] {
@@ -480,6 +488,8 @@ export interface RoleRunnerOptions {
   launch?: RoleLaunchMode;
   forkFromSession?: string;
   sessionModel?: string;
+  env?: NodeJS.ProcessEnv;
+  allowedTools?: string[];
   roleExecutor?: SparkRoleInstructionExecutor;
 }
 
@@ -501,6 +511,8 @@ export interface SparkTaskRunOptions {
   launch?: RoleLaunchMode;
   forkFromSession?: string;
   sessionModel?: string;
+  env?: NodeJS.ProcessEnv;
+  allowedTools?: string[];
   roleExecutor?: SparkRoleInstructionExecutor;
   heartbeatIntervalMs?: number;
   onHeartbeat?: (graph: TaskGraph) => void | Promise<void>;
@@ -641,6 +653,8 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
         launch: input.launch,
         forkFromSession: input.forkFromSession,
         sessionModel: input.sessionModel,
+        env: input.env,
+        allowedTools: input.allowedTools,
         roleExecutor: input.roleExecutor,
       },
       runRef,
@@ -1152,6 +1166,8 @@ export async function runRoleInstructionOnly(
     launch: options.launch,
     forkFromSession: options.forkFromSession,
     sessionModel: options.sessionModel,
+    env: effectiveRoleRunEnv(options.env),
+    allowedTools: options.allowedTools,
   };
 
   if (options.roleExecutor) {
@@ -1176,7 +1192,14 @@ async function runWithInjectedRoleExecutor(
   options: Required<Pick<RoleRunnerOptions, "cwd" | "piCommand" | "timeoutMs" | "roleExecutor">> &
     Pick<
       RoleRunnerOptions,
-      "signal" | "sessionDir" | "runName" | "launch" | "forkFromSession" | "sessionModel"
+      | "signal"
+      | "sessionDir"
+      | "runName"
+      | "launch"
+      | "forkFromSession"
+      | "sessionModel"
+      | "env"
+      | "allowedTools"
     >,
   baseRecord: SparkRoleRunResult["record"],
 ): Promise<SparkRoleRunResult> {
@@ -1203,7 +1226,7 @@ async function runWithInjectedRoleExecutor(
         ref: role.ref,
         id: role.id,
         systemPrompt: role.systemPrompt,
-        allowedTools: role.allowedTools,
+        allowedTools: options.allowedTools ?? role.allowedTools,
       },
       instruction,
       record: {
@@ -1221,6 +1244,7 @@ async function runWithInjectedRoleExecutor(
       launch: options.launch,
       forkFromSession: options.forkFromSession,
       model,
+      env: options.env,
     });
     if (timedOut) throw new RoleRunTimeoutError(options.timeoutMs);
     return {
@@ -1246,12 +1270,19 @@ async function runWithInjectedRoleExecutor(
 }
 
 async function runPiJsonRole(
-  role: { ref: RoleRef; systemPrompt: string },
+  role: Pick<RoleSpec, "ref" | "systemPrompt" | "allowedTools">,
   instruction: RoleInstruction,
   options: Required<Pick<RoleRunnerOptions, "cwd" | "piCommand" | "timeoutMs">> &
     Pick<
       RoleRunnerOptions,
-      "signal" | "sessionDir" | "runName" | "launch" | "forkFromSession" | "sessionModel"
+      | "signal"
+      | "sessionDir"
+      | "runName"
+      | "launch"
+      | "forkFromSession"
+      | "sessionModel"
+      | "env"
+      | "allowedTools"
     >,
   runRef: RunRef,
 ): Promise<SparkRoleRunResult> {
@@ -1273,6 +1304,7 @@ async function runPiJsonRole(
       roleRef: role.ref as `role:${string}`,
       systemPrompt: role.systemPrompt,
       model,
+      allowedTools: options.allowedTools ?? role.allowedTools,
       instruction: instruction.instruction,
       runGuidance: sparkRoleRunGuidance(),
       sessionDir: options.sessionDir,
@@ -1281,6 +1313,7 @@ async function runPiJsonRole(
       piCommand: options.piCommand,
       cwd: options.cwd,
       timeoutMs: options.timeoutMs,
+      env: options.env,
       signal: options.signal,
       onChildProcess(child, startedAt) {
         tracked = trackSparkRoleRunProcess({

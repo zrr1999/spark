@@ -33,9 +33,9 @@ inspired_by:
 
 ## 当前包边界
 
-Spark 现在支持两个宿主目标：Pi 中的 `packages/spark/src/extension/` 是意图命令和门面策略的 Pi 扩展入口；`apps/spark` 是原生 `pi-tui` 宿主，负责构造 `SparkHostRuntime`、显式内置扩展加载器、提供方注册表、模型选择器、JSONL 会话存储、三层技能解析器和 `SparkAgentLoop`。共享扩展包通过 `pi-extension-api` 在两个宿主中运行，不应依赖具体的 Pi SDK 运行时。
+Spark 现在支持两个宿主目标：Pi 中的 `packages/spark-extension/src/extension/` 是意图命令和门面策略的 Pi 扩展入口；`apps/spark-tui` 是原生 `pi-tui` 宿主，负责构造 `SparkHostRuntime`、显式内置扩展加载器、提供方注册表、模型选择器、JSONL 会话存储、三层技能解析器和 `SparkAgentLoop`。`apps/spark-cli` 只发布根 `spark` dispatcher，把 `spark <name>` 转发给 `spark-<name>` 可执行 app。共享扩展包通过 `pi-extension-api` 在两个宿主中运行，不应依赖具体的 Pi SDK 运行时。
 
-- `packages/spark`：Pi 扩展门面、默认轻量 research 行为、`/plan`、`/implement`、`/goal`、`/loop`、`/workflow`、Spark 小组件、模式与策略、内置 Spark 角色以及活动上下文提供方。
+- `packages/spark-extension`：Pi 扩展门面、默认轻量 research 行为、`/plan`、`/implement`、`/goal`、`/loop`、`/workflow`、Spark 小组件、模式与策略、内置 Spark 角色以及活动上下文提供方。
 - `packages/spark-runtime`：单个 Spark 任务到角色执行的适配层，负责调用 `pi-roles` 并回写证据制品、运行记录和状态。
 - `packages/pi-extension-api`：共享扩展宿主与工具契约、引用、错误类型以及轻量 JSON、文件系统和时间辅助能力。
 - `packages/pi-artifacts`：证据制品元数据与二进制对象存储、来源、谱系，以及规范化 `artifact({ action })` 工具。
@@ -48,9 +48,10 @@ Spark 现在支持两个宿主目标：Pi 中的 `packages/spark/src/extension/`
 - `packages/pi-cue`：`cue-shell` IPC 与工具适配层；不依赖 Spark 状态。
 - `packages/pi-context`：有界注册上下文提供方。
 - `packages/pi-recall`：显式作用域的召回候选，与 `.learnings/` 在语义上相互独立。
-- `apps/spark`：以 Spark 为中心的原生 TUI 宿主；宿主专用代码位于 `src/host/`，`pi-tui` 包装位于 `src/tui/`，不嵌入 `@earendil-works/pi-coding-agent`。
+- `apps/spark-cli`：根 `spark` 薄 dispatcher；不拥有 TUI、daemon 或 host/runtime 逻辑。
+- `apps/spark-tui`：以 Spark 为中心的原生 TUI 宿主；宿主专用代码位于 `src/host/`，`pi-tui` 包装位于 `src/tui/`，不嵌入 `@earendil-works/pi-coding-agent`。
 
-已退场的工作区包包括 `spark-core`、`spark-tasks`、`spark-learnings`、`spark-goal` 和 `spark-workflows`。`pi-* -> spark-*` 反向依赖由 `pnpm run check:boundaries`、`prek` 和 CI 静态检查守门。`.spark/` 目录、`.spark/projects.json`、`.spark/workflow-runs.json` 和历史目标标记属于磁盘格式兼容数据，不因包名迁移而改名。
+已退场的工作区包包括 `spark-core`、`spark-tasks`、`spark-learnings`、`spark-goal` 和 `spark-workflows`。`pi-* -> spark-*` 反向依赖由 `pnpm run check` 内置的边界检查、`prek` 和 CI 静态检查守门。`.spark/` 目录、`.spark/projects.json`、`.spark/workflow-runs.json` 和历史目标标记属于磁盘格式兼容数据，不因包名迁移而改名。
 
 ## 非目标
 

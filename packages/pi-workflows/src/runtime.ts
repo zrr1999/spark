@@ -1,9 +1,13 @@
 import { createHash } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import vm from "node:vm";
 import { parseWorkflowScript } from "./metadata.ts";
 import type {
   WorkflowAgentDeliverySummary,
   WorkflowAgentOptions,
+  WorkflowAgentReportedTelemetry,
+  WorkflowAgentTelemetry,
+  WorkflowAgentTokenUsage,
   WorkflowArtifactRecordInput,
   WorkflowArtifactRecordResult,
   WorkflowJournalEntry,
@@ -12,8 +16,10 @@ import type {
   WorkflowPhaseOptions,
   WorkflowPhaseRun,
   WorkflowPhaseStatus,
+  WorkflowFetchContentInput,
   WorkflowRunOptions,
   WorkflowRunResult,
+  WorkflowWebSearchInput,
 } from "./types.ts";
 
 const DEFAULT_PARALLEL_CONCURRENCY = 16;
@@ -178,21 +184,75 @@ export async function runWorkflowScript<T = unknown>(
       prompt: effectivePrompt,
       model: effectiveAgentOptions.model,
     };
+    const startedAt = workflowTelemetryTimestamp();
+    const startedMs = performance.now();
+    let reportedTelemetry: WorkflowAgentReportedTelemetry | undefined;
     options.onAgentStart?.(event);
-    const result = await shared.limiter(() =>
-      options.agent(effectivePrompt, {
-        ...effectiveAgentOptions,
-        index,
-        phase: phaseName,
-      }),
-    );
+    await options.onAgentTelemetry?.({
+      ...agentTelemetryBase(event, startedAt),
+      status: "running",
+      lastActivityAt: startedAt,
+      metadata: undefined,
+    });
+    let result: unknown;
+    try {
+      result = await shared.limiter(() =>
+        options.agent(effectivePrompt, {
+          ...effectiveAgentOptions,
+          index,
+          phase: phaseName,
+          reportTelemetry: (telemetry) => {
+            reportedTelemetry = mergeWorkflowAgentReportedTelemetry(reportedTelemetry, telemetry);
+          },
+        }),
+      );
+    } catch (error) {
+      const finishedAt = workflowTelemetryTimestamp();
+      await options.onAgentTelemetry?.(
+        agentTelemetryFromRuntime({
+          event,
+          status: "failed",
+          startedAt,
+          finishedAt,
+          startedMs,
+          reportedTelemetry,
+          spentTokens: shared.spentTokens,
+        }),
+      );
+      throw error;
+    }
     assertWorkflowAgentDelivered(result, event.label);
-    const tokens = estimateWorkflowTokens(effectivePrompt) + estimateWorkflowTokens(result);
-    shared.spentTokens += tokens;
-    options.onTokenUsage?.({ spent: shared.spentTokens, tokens, index, phase: phaseName });
+    const estimatedTokens =
+      estimateWorkflowTokens(effectivePrompt) + estimateWorkflowTokens(result);
+    const usage = normalizeWorkflowAgentUsage(
+      reportedTelemetry?.usage,
+      estimatedTokens,
+      effectiveAgentOptions.model,
+    );
+    if (!usage) throw new Error("workflow agent usage unavailable");
+    shared.spentTokens += usage.totalTokens;
+    const finishedAt = workflowTelemetryTimestamp();
+    const telemetry = agentTelemetryFromRuntime({
+      event,
+      status: "succeeded",
+      startedAt,
+      finishedAt,
+      startedMs,
+      reportedTelemetry,
+      usage,
+      spentTokens: shared.spentTokens,
+    });
+    await options.onAgentTelemetry?.(telemetry);
+    await options.onTokenUsage?.({
+      spent: shared.spentTokens,
+      tokens: usage.totalTokens,
+      index,
+      phase: phaseName,
+      usage,
+    });
     const entry = { index, hash, result };
     journal.push(entry);
-    options.onAgentJournal?.(entry);
+    await options.onAgentJournal?.(entry);
     options.onAgentEnd?.({ ...event, result });
     return result;
   };
@@ -209,6 +269,30 @@ export async function runWorkflowScript<T = unknown>(
     return { ref: result.ref.trim() };
   };
 
+  const webSearch = async (input: WorkflowWebSearchInput): Promise<unknown> => {
+    const normalized = normalizeWorkflowWebSearchInput(input);
+    if (!options.webSearch) {
+      return {
+        unavailable: true,
+        reason: "workflow webSearch adapter is not configured",
+        input: normalized,
+      };
+    }
+    return options.webSearch(normalized);
+  };
+
+  const fetchContent = async (input: WorkflowFetchContentInput): Promise<unknown> => {
+    const normalized = normalizeWorkflowFetchContentInput(input);
+    if (!options.fetchContent) {
+      return {
+        unavailable: true,
+        reason: "workflow fetchContent adapter is not configured",
+        input: normalized,
+      };
+    }
+    return options.fetchContent(normalized);
+  };
+
   const parallel = async <T>(
     items: Array<() => Promise<T> | T>,
     parallelOptions: WorkflowParallelOptions = {},
@@ -221,10 +305,13 @@ export async function runWorkflowScript<T = unknown>(
   const workflow = async (nameOrScript: string, childArgs?: unknown): Promise<unknown> => {
     if (shared.depth >= 1) throw new Error("workflow() nesting is limited to one level");
     const requested = String(nameOrScript);
-    const childScript = options.loadWorkflowScript?.(requested) ?? requested;
     shared.depth += 1;
     try {
-      const child = await runWorkflowScript(childScript, {
+      const loaded = options.loadWorkflowScript
+        ? await options.loadWorkflowScript(requested)
+        : requested;
+      if (!loaded) throw new Error(`workflow not found: ${requested}`);
+      const child = await runWorkflowScript(loaded, {
         ...options,
         args: childArgs,
         resumeJournal: undefined,
@@ -397,6 +484,8 @@ export async function runWorkflowScript<T = unknown>(
     gate,
     judgePanel,
     log: (message: unknown) => options.onLog?.(String(message)),
+    webSearch,
+    fetchContent,
     loopUntilDry,
     parallel,
     pipeline,
@@ -417,8 +506,8 @@ function runTrustedWorkflowScriptInVm<T>(body: string, context: vm.Context): Pro
 }
 
 export function normalizeWorkflowAgentOptions(options: WorkflowAgentOptions): WorkflowAgentOptions {
-  if (options.isolation !== undefined && options.isolation !== "worktree") {
-    throw new Error("workflow agent isolation must be 'worktree' when provided");
+  if (options.isolation !== undefined && options.isolation !== "graft") {
+    throw new Error("workflow agent isolation must be 'graft' when provided");
   }
   if (options.artifactRef !== undefined) {
     const artifactRef = options.artifactRef.trim();
@@ -458,12 +547,203 @@ export function normalizeWorkflowArtifactRecordInput(
   return normalized;
 }
 
+export function normalizeWorkflowWebSearchInput(
+  input: WorkflowWebSearchInput,
+): WorkflowWebSearchInput {
+  if (!input || typeof input !== "object") {
+    throw new Error("workflow webSearch input must be an object");
+  }
+  const query = input.query?.trim();
+  const queries = Array.isArray(input.queries)
+    ? input.queries.map((item) => String(item).trim()).filter(Boolean)
+    : undefined;
+  if (!query && (!queries || queries.length === 0)) {
+    throw new Error("workflow webSearch requires query or queries");
+  }
+  return removeUndefinedFields({
+    query,
+    queries,
+    numResults: normalizeOptionalPositiveInteger(input.numResults, "webSearch.numResults"),
+    includeContent: input.includeContent,
+    recencyFilter: input.recencyFilter,
+    domainFilter: Array.isArray(input.domainFilter)
+      ? input.domainFilter.map((item) => String(item).trim()).filter(Boolean)
+      : undefined,
+  });
+}
+
+export function normalizeWorkflowFetchContentInput(
+  input: WorkflowFetchContentInput,
+): WorkflowFetchContentInput {
+  if (!input || typeof input !== "object") {
+    throw new Error("workflow fetchContent input must be an object");
+  }
+  return removeUndefinedFields({
+    url: normalizeNonEmptyWorkflowString(input.url, "fetchContent.url"),
+    prompt: input.prompt?.trim() || undefined,
+  });
+}
+
+function normalizeOptionalPositiveInteger(value: unknown, field: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`workflow ${field} must be a positive number`);
+  }
+  return Math.trunc(value);
+}
+
 export function normalizeWorkflowPhaseStatus(
   status: WorkflowPhaseOptions["status"],
 ): WorkflowPhaseStatus | undefined {
   if (status === undefined) return undefined;
   if (status === "success" || status === "fail" || status === "skip") return status;
   throw new Error("workflow phase status must be success, fail, or skip");
+}
+
+function workflowTelemetryTimestamp(): string {
+  return new Date().toISOString();
+}
+
+function agentTelemetryBase(
+  event: { index: number; label: string; phase?: string; model?: string },
+  startedAt: string,
+): Omit<WorkflowAgentTelemetry, "status"> {
+  return {
+    index: event.index,
+    label: event.label,
+    phase: event.phase,
+    model: event.model,
+    startedAt,
+  };
+}
+
+function agentTelemetryFromRuntime(input: {
+  event: { index: number; label: string; phase?: string; model?: string };
+  status: WorkflowAgentTelemetry["status"];
+  startedAt: string;
+  finishedAt: string;
+  startedMs: number;
+  reportedTelemetry?: WorkflowAgentReportedTelemetry;
+  usage?: WorkflowAgentTokenUsage;
+  spentTokens?: number;
+}): WorkflowAgentTelemetry {
+  const durationMs = Math.max(0, Math.round(performance.now() - input.startedMs));
+  const usage = input.usage ?? normalizeWorkflowAgentUsage(input.reportedTelemetry?.usage);
+  const telemetry: WorkflowAgentTelemetry = {
+    ...agentTelemetryBase(input.event, input.startedAt),
+    status: input.status,
+    finishedAt: input.finishedAt,
+    lastActivityAt: input.reportedTelemetry?.lastActivityAt ?? input.finishedAt,
+    durationMs,
+    runRef: input.reportedTelemetry?.runRef,
+    metadata: sanitizeWorkflowTelemetryMetadata(input.reportedTelemetry?.metadata),
+  };
+  if (usage) telemetry.usage = usage;
+  if (input.spentTokens !== undefined) telemetry.spentTokens = input.spentTokens;
+  if (usage && durationMs > 0) telemetry.tokensPerSecond = usage.totalTokens / (durationMs / 1000);
+  return telemetry;
+}
+
+function mergeWorkflowAgentReportedTelemetry(
+  previous: WorkflowAgentReportedTelemetry | undefined,
+  next: WorkflowAgentReportedTelemetry,
+): WorkflowAgentReportedTelemetry {
+  return {
+    ...previous,
+    ...next,
+    usage: mergeReportedUsage(previous?.usage, next.usage),
+    metadata: mergeTelemetryMetadata(previous?.metadata, next.metadata),
+  };
+}
+
+function mergeReportedUsage(
+  previous: WorkflowAgentReportedTelemetry["usage"],
+  next: WorkflowAgentReportedTelemetry["usage"],
+): WorkflowAgentReportedTelemetry["usage"] {
+  if (!previous) return next;
+  if (!next) return previous;
+  return { ...previous, ...next };
+}
+
+function mergeTelemetryMetadata(
+  previous: Record<string, unknown> | undefined,
+  next: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!previous) return next;
+  if (!next) return previous;
+  return { ...previous, ...next };
+}
+
+function normalizeWorkflowAgentUsage(
+  reported: WorkflowAgentReportedTelemetry["usage"],
+  estimatedTokens?: number,
+  fallbackModel?: string,
+): WorkflowAgentTokenUsage | undefined {
+  const inputTokens = nonNegativeInteger(reported?.inputTokens);
+  const outputTokens = nonNegativeInteger(reported?.outputTokens);
+  const cacheReadTokens = nonNegativeInteger(reported?.cacheReadTokens);
+  const cacheWriteTokens = nonNegativeInteger(reported?.cacheWriteTokens);
+  const reportedTotal = nonNegativeInteger(reported?.totalTokens);
+  const summedTotal = sumDefined([inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens]);
+  const actualTotal = reportedTotal ?? summedTotal;
+  if (actualTotal !== undefined) {
+    return removeUndefinedFields({
+      source: "actual" as const,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      totalTokens: actualTotal,
+      costUsd: nonNegativeFiniteNumber(reported?.costUsd),
+      model: reported?.model ?? fallbackModel,
+      provider: reported?.provider,
+    });
+  }
+  if (estimatedTokens === undefined) return undefined;
+  return removeUndefinedFields({
+    source: "estimated" as const,
+    totalTokens: Math.max(0, Math.trunc(estimatedTokens)),
+    costUsd: nonNegativeFiniteNumber(reported?.costUsd),
+    model: reported?.model ?? fallbackModel,
+    provider: reported?.provider,
+  });
+}
+
+function sanitizeWorkflowTelemetryMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!metadata) return undefined;
+  try {
+    const encoded = JSON.stringify(metadata);
+    if (encoded.length > 2_000) return { truncated: true, bytes: encoded.length };
+    return JSON.parse(encoded) as Record<string, unknown>;
+  } catch {
+    return { truncated: true };
+  }
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  const number = nonNegativeFiniteNumber(value);
+  return number === undefined ? undefined : Math.trunc(number);
+}
+
+function nonNegativeFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function sumDefined(values: Array<number | undefined>): number | undefined {
+  let total = 0;
+  let found = false;
+  for (const value of values) {
+    if (value === undefined) continue;
+    total += value;
+    found = true;
+  }
+  return found ? total : undefined;
+}
+
+function removeUndefinedFields<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter((entry) => entry[1] !== undefined)) as T;
 }
 
 export function renderWorkflowAgentPrompt(prompt: string, options: WorkflowAgentOptions): string {
@@ -484,7 +764,7 @@ export async function runWorkflowParallel<T>(
 ): Promise<T[] | Array<WorkflowParallelSettledResult<T>>> {
   const normalized = normalizeWorkflowParallelOptions(options);
   if (items.length === 0) return [];
-  const results = new Array<WorkflowParallelSettledResult<T>>(items.length);
+  const results = Array.from({ length: items.length }, () => missingWorkflowParallelResult<T>());
   let nextIndex = 0;
   let shouldStop = false;
   const workerCount = Math.min(normalized.concurrency, items.length);
@@ -529,6 +809,14 @@ export function normalizeWorkflowParallelOptions(options: WorkflowParallelOption
     throw new Error("workflow parallel onError must be 'fail-fast' or 'collect'");
   }
   return { concurrency, retry: { attempts, backoffMs }, onError };
+}
+
+function missingWorkflowParallelResult<T>(): WorkflowParallelSettledResult<T> {
+  return {
+    status: "rejected",
+    reason: new Error("workflow parallel result was not recorded"),
+    attempts: 0,
+  };
 }
 
 async function runWorkflowParallelItem<T>(

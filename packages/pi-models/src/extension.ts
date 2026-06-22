@@ -150,7 +150,7 @@ function requireModelRegistry(ctx: unknown): ModelRegistryLike {
   const registry = (ctx as { modelRegistry?: unknown } | undefined)?.modelRegistry;
   if (!isModelRegistryLike(registry)) {
     throw new Error(
-      "models requires ctx.modelRegistry from the pi-coding-agent host; spark-cli native host support is not wired yet.",
+      "models requires ctx.modelRegistry from the pi-coding-agent host; Spark TUI native host support is not wired yet.",
     );
   }
   return registry;

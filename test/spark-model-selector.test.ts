@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@zendev-lab/spark-tui/text";
+import type { Component } from "../apps/spark-tui/src/tui/pi-tui-adapter.ts";
 
 import {
   SparkKeybindings,
@@ -11,14 +12,14 @@ import {
   type ProviderConfig,
   type ProviderModelDefinition,
   type SparkConfig,
-} from "../apps/spark/src/host/index.ts";
+} from "../apps/spark-tui/src/host/index.ts";
 import {
   createSparkModelPickerFromCustomUi,
   createSparkModelSelectorComponent,
   type SparkModelSelectorCustomUi,
   type SparkModelSelectorTheme,
   type SparkModelSelectorTuiLike,
-} from "../apps/spark/src/tui/model-selector.ts";
+} from "../apps/spark-tui/src/tui/model-selector.ts";
 
 const fakeStream: ProviderConfig["streamSimple"] = () => ({}) as unknown;
 
@@ -46,7 +47,7 @@ function provider(name: string, models: ProviderModelDefinition[]): ProviderConf
 }
 
 function configSeed(): SparkConfig {
-  return { extensions: ["@zendev-lab/spark/extension"], providers: ["fake-provider"] };
+  return { extensions: ["@zendev-lab/spark-extension/extension"], providers: ["fake-provider"] };
 }
 
 function cloneConfig(config: SparkConfig): SparkConfig {
@@ -107,7 +108,7 @@ void test("SparkModelSelector select validates through registry and persists Spa
   assert.equal(config.activeModel, "model-z");
   assert.deepEqual(saved, [
     {
-      extensions: ["@zendev-lab/spark/extension"],
+      extensions: ["@zendev-lab/spark-extension/extension"],
       providers: ["fake-provider"],
       activeProvider: "other",
       activeModel: "model-z",

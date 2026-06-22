@@ -2,23 +2,25 @@
 
 `spark` is the Spark suite for Pi: a controlled agentic development system where intent-specific Pi commands and canonical tools compose lower-level `pi-*` extension capabilities through project/task orchestration policy.
 
-The repository also contains an MVP standalone Spark-first TUI host:
+The repository also contains standalone Spark entrypoints. The target topology mirrors cue-shell-style dispatch: `apps/spark-cli` publishes a thin `spark` dispatcher, and the dispatcher resolves subcommands to executable apps such as `spark-tui`, `spark-daemon`, and `spark-cockpit`.
 
 ```text
-spark
-spark <initial goal>
+spark tui
+spark daemon
+spark cockpit
+spark <extension-subcommand>
 ```
 
-The standalone `spark` command is published by `@zendev-lab/spark-cli` and built directly on `@earendil-works/pi-tui`. It owns the terminal loop, editor, transcript, follow-up queue, host runtime, provider registry, model selection, session store, and explicit Spark extension loading instead of embedding Pi SDK `InteractiveMode`. `spark --print`, `spark daemon submit`, and cockpit-triggered background role-runs now route through the single Spark daemon/client boundary. The daemon injects Spark's native headless role executor into `@zendev-lab/spark-runtime`, so daemon-owned background work no longer depends on spawning `pi --print --mode json`.
+The standalone `spark` command is published by `@zendev-lab/spark-cli` from `apps/spark-cli` and is only a dispatcher. The Spark-first native TUI host lives in `apps/spark-tui` as `@zendev-lab/spark-tui-app` / `spark-tui`, built through the Spark-owned `@zendev-lab/spark-tui` compatibility boundary backed by `@earendil-works/pi-tui`. It owns the terminal loop, editor, transcript, follow-up queue, host runtime, provider registry, model selection, session store, and explicit Spark extension loading instead of embedding Pi SDK `InteractiveMode`. `spark --print`, `spark daemon submit`, and cockpit-triggered background role-runs now route through the single Spark daemon/client boundary. The daemon injects Spark's native headless role executor into `@zendev-lab/spark-runtime`, so daemon-owned background work no longer depends on spawning `pi --print --mode json`.
 
-## Spark CLI native host vs Pi extension
+## Spark TUI native host vs Pi extension
 
 Spark now has two supported host targets:
 
-- **Pi extension host**: `packages/spark/src/extension/` is loaded by `@earendil-works/pi-coding-agent` through Pi's normal extension/package discovery. This remains the canonical Spark command and tool surface inside Pi, centered on ordinary default research behavior plus `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow`.
-- **Spark CLI native host**: `apps/spark` starts `SparkHostRuntime` directly on `@earendil-works/pi-tui`, loads retained builtin extensions through explicit factories (`@zendev-lab/pi-ask`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-graft`, `@zendev-lab/spark`), registers providers such as `baidu-oneapi`, discovers workspace/user skills, and runs turns through `@earendil-works/pi-ai`. Spark product defaults no longer bundle project-idea or SPARK.md creation prompts; those live in external skills such as `project-spark`.
+- **Pi extension host**: `packages/spark-extension/src/extension/` is loaded by `@earendil-works/pi-coding-agent` through Pi's normal extension/package discovery. This remains the canonical Spark command and tool surface inside Pi, centered on ordinary default research behavior plus `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow`.
+- **Spark TUI native host**: `apps/spark-tui` starts `SparkHostRuntime` with terminal presentation routed through `@zendev-lab/spark-tui` and the app-local `pi-tui` adapter, loads retained builtin extensions through explicit factories (`@zendev-lab/pi-ask`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-graft`, `@zendev-lab/spark-extension`), registers providers such as `baidu-oneapi`, discovers workspace/user skills, and runs turns through `@earendil-works/pi-ai`. Spark product defaults no longer bundle project-idea or SPARK.md creation prompts; those live in external skills such as `project-spark`.
 
-The extension packages depend on the shared `@zendev-lab/pi-extension-api` contract, not on Pi's concrete SDK package. Host-specific code belongs under `apps/spark/src/host/` and TUI wrappers under `apps/spark/src/tui/`; the Pi extension implementation should stay usable by Pi without importing spark-cli.
+The extension packages depend on the shared `@zendev-lab/pi-extension-api` contract, not on Pi's concrete SDK package. Host-specific code belongs under `apps/spark-tui/src/host/` and TUI wrappers under `apps/spark-tui/src/tui/`; the Pi extension implementation should stay usable by Pi without importing Spark app packages.
 
 ### Research workflow
 
@@ -32,7 +34,7 @@ workflow({ action: "read", selector: "builtin:research" });
 workflow_run({ selector: "builtin:research", args: { question: "..." } });
 ```
 
-Generated one-off scripts passed to `workflow_run({ script })` must be metadata-first JavaScript and run through Spark workflow role-run boundaries (`agent`, `parallel`, `pipeline`, `phase`, `workflow`, `verify`, `judgePanel`, `loopUntilDry`, `completenessCheck`, `retry`, `gate`, `budget`, and `artifactRecord`). The research workflow accepts `question`, `prompt`, or `task`, plus optional `panelModels`/`models`, `panelSize`, `concurrency`, `retry`, `plannerModel`, `verifierModel`, and `judgeModel`/`reportModel` arguments. `fusion` and `deep-research` are folded into this user-facing research workflow; fan-out remains an internal orchestration method. Spark CLI no longer registers the retired Fusion model-picker target, and `~/.spark/config.json#fusion` is ignored.
+Generated one-off scripts passed to `workflow_run({ script })` must be metadata-first JavaScript and run through Spark workflow role-run boundaries (`agent`, `parallel`, `pipeline`, `phase`, `workflow`, `verify`, `judgePanel`, `loopUntilDry`, `completenessCheck`, `retry`, `gate`, `budget`, and `artifactRecord`). Risky generated or saved runs are approval-gated before any child agents or web/fetch adapters start: Spark summarizes fan-out, web/fetch use, write/isolation/shell tool policy, long timeouts, token/resource bounds, script hash, and Graft base metadata, then records scoped approval provenance on the dynamic run. Each dynamic run is persisted in `.spark/dynamic-workflow-runs.json` with script hash, script body, args, metadata, phases, journal, result/error, captured base metadata, approval provenance when required, per-agent telemetry, usage totals, saved-workflow metadata, and acknowledgement state; resume with `workflow_run({ runRef })` to reuse the stored journal and original base. Workflow token budgets use provider/role-run token usage when available and mark fallback estimates explicitly; `/workflows` and run-status surfaces render actual/estimated tokens, optional cost, child run refs, liveness timestamps, and token rates. The `/workflows` navigator and run-status surface can inspect dynamic runs and apply safe state controls (`pause`, `resume`, `stop`, `restart`, `save`, and `ack`, depending on run state). Saving writes a metadata-first script to a controlled workspace workflow by default, can target user workflow scope with `workflowScope: "user"`, and chooses a numeric suffix instead of silently overwriting an existing workflow. For Graft-backed isolation, `agent(..., { isolation: "graft" })` injects the stored base as per-run `GRAFT_BASE_REF`, narrows child tools to Graft scratch/candidate/validation operations, and asks the child to return scratch/candidate/patch refs; Graft scratch/capture treats that env base as the implicit first-operation base when explicit base/from is absent, while direct working-tree writes stay outside the isolated path. The research workflow accepts `question`, `prompt`, or `task`, plus optional `queries`, `urls`, `maxQueries`, `searchResultsPerQuery`, `fetchTopN`, `collectErrors`, `panelModels`/`models`, `panelSize`, `concurrency`, `retry`, `plannerModel`, `verifierModel`, and `judgeModel`/`reportModel` arguments. It plans diverse searches, calls workflow `webSearch`/`fetchContent` adapters when configured, cross-checks fetched sources with source analysts, and writes a cited report that must not invent source URLs. The review workflow is an adversarial review loop with investigation/search, parallel critiques, rebuttal, and final verdict. `fusion` and `deep-research` are folded into this user-facing research workflow; fan-out remains an internal orchestration method. Spark CLI no longer registers the retired Fusion model-picker target, and `~/.spark/config.json#fusion` is ignored.
 
 ## User-facing commands
 
@@ -45,7 +47,8 @@ Spark command modes are intentionally split:
 - `/implement <focus>` works through ready project tasks until the next blocker. It claims and finishes one task at a time, continues after successful finishes, and blocks for human answers instead of auto-answering asks.
 - `/loop <focus>` starts or resumes a persistent foreground loop for open-ended continuous work such as monitoring fresh information, periodic repo checks, or ongoing observation until the user stops it. It may drive repeated concrete research/plan/implement steps, but it is not a `/goal` alias and must not request reviewer-gated completion. `/loop stop`, `/loop pause`, and Chinese pause aliases mark the loop `paused`; Spark shows it in the shared widget slot as `◆ Loop(...)`.
 - `/goal <focus>` runs autonomous verified foreground goal progress until complete or blocked. Spark builds this on loop primitives plus goal objective tracking, reviewer-backed auto-decision/auto-ask during goal work, and reviewer-gated completion at the end. A session can have either `/goal` or `/loop` as the active foreground driver, not both. If no focus is provided, Spark derives the goal from the current project/task state and asks when ambiguous.
-- `/workflow[:selector] <focus>` runs builtin or saved workflow scripts as an independent capability; it does not require initialized Spark project/task state or a selected project. Use `/workflow:research <question>` for the builtin research workflow, `/workflow:review <focus>` for skeptical review, `/workflow builtin:<id>` for other builtin workflows, `/workflow workspace:<name>` for `.spark/workflows/*.js`, and `/workflow user:<name>` for `~/.agents/workflows/*.js`. Empty `/workflow` (or `/workflows`) opens the blocking workflow navigator to choose a workflow or describe a one-off workflow request.
+- `/workflow[:selector] <focus>` runs builtin or saved workflow scripts as an independent capability; it does not require initialized Spark project/task state or a selected project. Use `/workflow:research <question>` for the builtin research workflow, `/workflow:review <focus>` for skeptical review, `/workflow builtin:<id>` for other builtin workflows, `/workflow workspace:<name>` for `.spark/workflows/*.js`, and `/workflow user:<name>` for `~/.agents/workflows/*.js`. Empty `/workflow` (or `/workflows`) opens the blocking workflow navigator to choose a saved workflow, describe a one-off workflow request, or inspect/control persisted dynamic `workflow_run` records.
+- `/ultracode <focus>` is the explicit opt-in high-effort path for complex prompts: Spark asks the agent to reuse a saved workflow or generate one metadata-first JavaScript workflow with bounded fan-out, quality helpers, `workflow_run` approval/persistence, and standalone synthesis. Ordinary prompts are not silently rewritten into ultracode workflows.
 
 Project-bound flows create local Spark state under `.spark/` when durable graph, review, artifact, or run state is needed:
 
@@ -74,10 +77,17 @@ Manage settings through the canonical role tool actions: `role({ action: "model_
 
 ## Packages
 
-- `@zendev-lab/spark` — high-level `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow[:selector]` command facade plus default lightweight research behavior that composes generic `pi-*` capabilities with Spark-owned orchestration policy, widget state, builtin Spark roles, and active-context provider registration.
-- `@zendev-lab/spark-cli` — standalone Spark-first native TUI host built directly on `@earendil-works/pi-tui`; starts the `spark` command, owns its local transcript/follow-up queue, and provides a local daemon queue for detached session-run tasks.
+Spark package names are type-first:
+
+- `@zendev-lab/spark-cli` — thin dispatcher package for the root `spark` binary under `apps/spark-cli`. It routes `spark <name>` to `spark-<name>` and does not own product runtime logic.
+- `@zendev-lab/spark-tui` — Spark-owned reusable TUI compatibility boundary over `@earendil-works/pi-tui`; centralizes text width/truncation/wrapping, key parsing, and current `pi-tui` component/runtime exports so future renderer swaps do not leak through extension packages.
+- `@zendev-lab/spark-tui-app` — executable Spark native TUI app under `apps/spark-tui`; publishes the `spark-tui` binary plus public provider/headless-executor surfaces used by the daemon.
+- `@zendev-lab/spark-daemon` — Spark daemon executable app package under `apps/spark-daemon`.
+- `@zendev-lab/spark-cockpit` — private Spark Cockpit SvelteKit executable app package under `apps/spark-cockpit`.
+- `@zendev-lab/spark-extension` — Spark Pi-style extension facade: high-level `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow[:selector]` command facade plus default lightweight research behavior that composes generic `pi-*` capabilities with Spark-owned orchestration policy, widget state, builtin Spark roles, and active-context provider registration.
 - `@zendev-lab/spark-runtime` — Spark single-task runtime adapter that executes one task through `@zendev-lab/pi-roles`, writes artifacts, and owns task/run/timeout mapping above `RoleRun`.
-- `@zendev-lab/pi-extension-api` — shared extension host/tool contract, refs, errors, and light JSON/fs/time helpers.
+- `@zendev-lab/spark-protocol` — single Spark shared protocol/schema package. It owns JSON-safe refs/errors plus runtime, cockpit, interaction, and view-model schemas; it is intentionally not named `spark-view-protocol` because non-view protocols live here too.
+- `@zendev-lab/pi-extension-api` — shared extension host/tool contract, refs, errors, and light JSON/fs/time helpers. It remains separate from `spark-extension` so Pi-style host contracts stay host-neutral.
 - `@zendev-lab/pi-artifacts` — reusable artifact/evidence store, durable artifact metadata/blobs, provenance/lineage contracts, and the canonical `artifact` action tool.
 - `@zendev-lab/pi-tasks` — generic project/task/TODO/run graph capability and canonical `task_read` / `task_write` / `assign` tools; owns readiness, claims, TODO stores, and `.spark/projects.json` graph state without depending on Spark packages.
 - `@zendev-lab/pi-learnings` — generic evidence-backed learning capability and canonical `learning({ action })` tool; owns `.learnings/` local/user learning stores.
@@ -89,32 +99,36 @@ Manage settings through the canonical role tool actions: `role({ action: "model_
 - `@zendev-lab/pi-ask` — canonical public/default `ask` action tool with shared focused/flow protocol, state, renderer, and direct custom input handling behind that surface.
 - `@zendev-lab/pi-roles` — canonical `role` action tool plus reusable `RoleSpec` definitions, builtin/extension/project/user role discovery, project/user Markdown stores, role model settings, and task-agnostic direct role calls. It owns fresh/forked CLI launch, timeout/cancel, stdout/stderr capture, model-setting resolution, and tolerant JSONL parsing; it does not own Spark task DAGs, asks, artifacts, review gates, or package-specific role semantics.
 
-Navia is integrated as Spark's local web cockpit/projection product line while retaining separate package boundaries:
+Spark Cockpit is the local web cockpit/projection product line while retaining separate implementation package boundaries:
 
-- `@zendev-lab/navia-web` — private SvelteKit local cockpit app under `apps/navia-web`; it renders Spark-owned task/run/artifact state from Navia SQLite projections and caches.
-- `@zendev-lab/spark-daemon` — Spark daemon package under `apps/spark-daemon`; task execution is routed through the Spark runtime bridge, while workspace registration and protocol delivery stay in the cockpit/protocol boundary.
-- `@zendev-lab/navia-protocol`, `@zendev-lab/navia-db`, `@zendev-lab/navia-domain`, `@zendev-lab/navia-system`, and `@zendev-lab/navia-ui` — Navia protocol, SQLite projection, domain, path, and UI packages under `packages/navia-*`.
+- `@zendev-lab/spark-cockpit-db`, `@zendev-lab/spark-cockpit-system`, and `@zendev-lab/spark-cockpit-ui` are the target names for Cockpit-private projection DB, local-system helper, and UI packages.
+- `@zendev-lab/navia-protocol`, `@zendev-lab/navia-db`, `@zendev-lab/navia-domain`, `@zendev-lab/navia-system`, and `@zendev-lab/navia-ui` are legacy-named transition packages under `packages/navia-*`. The intended hard cutover is to move protocol schemas into `@zendev-lab/spark-protocol`, rename DB/system/UI to `spark-cockpit-*`, and merge away `navia-domain` unless it gains a concrete stable responsibility.
 
-Typical merged-repo Navia development commands:
+Typical merged-repo development commands:
 
 ```text
-pnpm run cockpit:web                              # start the SvelteKit cockpit
-pnpm run spark-daemon:cli -- --help
-pnpm run verify:cockpit                           # Navia check/test/build
+pnpm run check                                    # full validation gate
+pnpm run build                                    # daemon + cockpit production builds
+pnpm run preview                                  # start the local cockpit dev server
+pnpm install -g .                                 # link the unified spark CLI
+pnpm run publish                                  # validate, build, publish public packages
 ```
 
 Retired migration packages (`spark-core`, `spark-tasks`, `spark-learnings`, `spark-goal`, and `spark-workflows`) are no longer workspaces. No compatibility packages, long-lived `spark_*` tool aliases, or dual public/default tool surfaces are planned. Public action tools render as `tool action=<value> ...`. `spark-github` is intentionally deferred.
 
-Pi package loading is manifest-first: the root `pi` manifest explicitly lists each user-visible extension entry (`@zendev-lab/pi-ask`, `@zendev-lab/pi-artifacts`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-recall`, `@zendev-lab/pi-workflows`, `@zendev-lab/pi-graft`, the Baidu OneAPI provider, and `@zendev-lab/spark`). Library-only packages stay as dependencies. `pi-* -> spark-*` regressions are guarded by `pnpm run check:boundaries`, a `prek` hook, and the CI static-check workflow.
+Pi package loading is manifest-first: the root `pi` manifest explicitly lists each user-visible extension entry (`@zendev-lab/pi-ask`, `@zendev-lab/pi-artifacts`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-recall`, `@zendev-lab/pi-workflows`, `@zendev-lab/pi-graft`, the Baidu OneAPI provider, and `@zendev-lab/spark-extension`). Library-only packages stay as dependencies. `pi-* -> spark-*` regressions are guarded by the boundary checker inside `pnpm run check`, a `prek` hook, and the CI static-check workflow.
 
 ## Development
 
 ```text
 pnpm install
-pnpm run verify          # Spark package checks/tests
-pnpm run verify:cockpit    # Navia check/test/build
-apps/spark/bin/spark --help
-apps/spark/bin/spark daemon --help
+pnpm run check
+pnpm run build
+pnpm run preview
+pnpm run publish
+apps/spark-cli/bin/spark --help
+apps/spark-cli/bin/spark tui --help
+apps/spark-cli/bin/spark daemon --help
 ```
 
 Use Node `>=26.0.0 <27` and pnpm `>=11 <12`; root `engines` plus `.npmrc` `engine-strict=true` make Node 26 mandatory for installs and scripts.

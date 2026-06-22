@@ -1,4 +1,4 @@
-# RFC: Navia SvelteKit backend/server
+# RFC: Spark Cockpit SvelteKit backend/server
 
 Status: draft
 Date: 2026-05-21
@@ -40,9 +40,9 @@ Recommended repo shape:
 ```text
 spark/
 ├── apps/
-│   └── navia-web/              # @zendev-lab/navia-web; SvelteKit frontend + server routes + custom Node entry
+│   └── spark-cockpit/              # @zendev-lab/spark-cockpit; SvelteKit frontend + server routes + custom Node entry
 ├── packages/
-│   ├── spark-daemon/           # @zendev-lab/spark-daemon; spark-daemon daemon/CLI with Spark runtime bridge
+│   ├── spark-daemon/           # @zendev-lab/spark-daemon; Spark daemon service controlled by `spark daemon`
 │   ├── navia-protocol/         # @zendev-lab/navia-protocol; Zod schemas, event envelopes, fixtures
 │   ├── navia-db/               # @zendev-lab/navia-db; node:sqlite, Kysely adapter/dialect, migrations
 │   ├── navia-domain/           # @zendev-lab/navia-domain; headless workspace/project/inbox/artifact services
@@ -53,14 +53,14 @@ spark/
 └── package.json
 ```
 
-SvelteKit owns both UI routes and server/API routes initially. Do not create `apps/server` for v0.1; if Spark daemon WebSocket support needs a custom Node process, keep the entry in `apps/navia-web/server/index.ts`. `apps/spark-daemon` is a separate process boundary, not a second web server.
+SvelteKit owns both UI routes and server/API routes initially. Do not create `apps/server` for v0.1; if Spark daemon WebSocket support needs a custom Node process, keep the entry in `apps/spark-cockpit/server/index.ts`. `apps/spark-daemon` is a separate process boundary, not a second web server.
 
-`apps/navia-web` must not import `@zendev-lab/spark-daemon` internals. Server-Spark daemon interaction goes through protocol schemas, API contracts, fixtures, and WebSocket/HTTP surfaces.
+`apps/spark-cockpit` must not import `@zendev-lab/spark-daemon` internals. Server-Spark daemon interaction goes through protocol schemas, API contracts, fixtures, and WebSocket/HTTP surfaces.
 
 ## Architecture
 
 ```text
-apps/navia-web (SvelteKit UI + server routes)
+apps/spark-cockpit (SvelteKit UI + server routes)
   |
   +-> SQLite communication/projection state
   +-> append-only events/audit
@@ -279,7 +279,7 @@ Use WebSocket for frontend only if the UI needs true browser-to-server bidirecti
 
 ## Core domains
 
-Initial SvelteKit server modules under `apps/navia-web/src/lib/server/`:
+Initial SvelteKit server modules under `apps/spark-cockpit/src/lib/server/`:
 
 ```text
 src/lib/server/
@@ -302,7 +302,7 @@ src/lib/server/
 └── realtime/
 ```
 
-SvelteKit routes under `apps/navia-web/src/routes/` should call these server modules rather than embedding domain logic directly in route files.
+SvelteKit routes under `apps/spark-cockpit/src/routes/` should call these server modules rather than embedding domain logic directly in route files.
 
 Domain ownership:
 
@@ -347,7 +347,7 @@ Freeform/user-submitted **request intake** means a user can submit an unstructur
 
 ## Protocol surface
 
-This repo owns protocol and server communication endpoints; `apps/navia-web` must not import Spark daemon internals.
+This repo owns protocol and server communication endpoints; `apps/spark-cockpit` must not import Spark daemon internals.
 
 Initial protocol-facing concepts:
 

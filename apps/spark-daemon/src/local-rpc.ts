@@ -12,13 +12,18 @@ import {
 } from "./core/index.ts";
 import {
   attachWorkspace,
+  attachWorkspaceClient,
+  ensureWorkspaceExecutorClient,
+  heartbeatWorkspaceClient,
   listWorkspaces,
   planWorkspaceRegistration,
   registerWorkspace,
   sparkDaemonServerStatusSummaries,
   type RegisterWorkspaceOptions,
+  releaseWorkspaceClient,
   stopWorkspace,
   type SparkDaemonWorkspace,
+  type SparkDaemonWorkspaceClient,
   WorkspacePathConflictError,
 } from "./store/workspaces.js";
 import {
@@ -72,6 +77,34 @@ export interface LocalWorkspaceRegisterRequest extends RegisterWorkspaceOptions 
   registrationToken?: string;
 }
 
+export interface LocalWorkspaceClientAttachRequest {
+  workspaceId: string;
+  clientId?: string;
+  kind: SparkDaemonWorkspaceClient["kind"];
+  displayName?: string;
+  leaseTtlMs?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface LocalWorkspaceClientHeartbeatRequest {
+  clientId: string;
+  leaseTtlMs?: number;
+}
+
+export interface LocalWorkspaceExecutorEnsureRequest {
+  workspaceId: string;
+  clientId?: string;
+  displayName?: string;
+  leaseTtlMs?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface LocalWorkspaceClientResult {
+  client: SparkDaemonWorkspaceClient;
+  workspace: SparkDaemonWorkspace;
+  observedAt: string;
+}
+
 interface LocalRpcHandlerOptions {
   ensureSparkDaemonRegistrationForWorkspace?: typeof ensureSparkDaemonRegistrationForWorkspace;
   verifySparkDaemonWorkspaceConnection?: typeof verifySparkDaemonWorkspaceConnection;
@@ -84,7 +117,15 @@ type LocalRpcRequest =
   | { id: string; method: "turn.submit"; params: LocalTurnSubmitParams }
   | { id: string; method: "workspace.list" }
   | { id: string; method: "workspace.register"; params: LocalWorkspaceRegisterParams }
-  | { id: string; method: "workspace.attach" | "workspace.stop"; params: { id: string } };
+  | { id: string; method: "workspace.attach" | "workspace.stop"; params: { id: string } }
+  | { id: string; method: "workspace.client.attach"; params: LocalWorkspaceClientAttachParams }
+  | {
+      id: string;
+      method: "workspace.client.heartbeat";
+      params: LocalWorkspaceClientHeartbeatParams;
+    }
+  | { id: string; method: "workspace.client.release"; params: { clientId: string } }
+  | { id: string; method: "workspace.executor.ensure"; params: LocalWorkspaceExecutorEnsureParams };
 
 type LocalRpcErrorPayload = {
   message: string;
@@ -217,6 +258,62 @@ export async function requestWorkspaceStop(
     paths,
     { id: localRequestId(), method: "workspace.stop", params: { id } },
     sparkDaemonWorkspace,
+  );
+}
+
+export async function requestWorkspaceClientAttach(
+  paths: NaviaPaths,
+  params: LocalWorkspaceClientAttachRequest,
+): Promise<LocalWorkspaceClientResult> {
+  return localRpcRequest(
+    paths,
+    {
+      id: localRequestId(),
+      method: "workspace.client.attach",
+      params: localWorkspaceClientAttachParams(params),
+    },
+    localWorkspaceClientResult,
+  );
+}
+
+export async function requestWorkspaceClientHeartbeat(
+  paths: NaviaPaths,
+  params: LocalWorkspaceClientHeartbeatRequest,
+): Promise<LocalWorkspaceClientResult> {
+  return localRpcRequest(
+    paths,
+    {
+      id: localRequestId(),
+      method: "workspace.client.heartbeat",
+      params: localWorkspaceClientHeartbeatParams(params),
+    },
+    localWorkspaceClientResult,
+  );
+}
+
+export async function requestWorkspaceClientRelease(
+  paths: NaviaPaths,
+  clientId: string,
+): Promise<LocalWorkspaceClientResult> {
+  return localRpcRequest(
+    paths,
+    { id: localRequestId(), method: "workspace.client.release", params: { clientId } },
+    localWorkspaceClientResult,
+  );
+}
+
+export async function requestWorkspaceExecutorEnsure(
+  paths: NaviaPaths,
+  params: LocalWorkspaceExecutorEnsureRequest,
+): Promise<LocalWorkspaceClientResult> {
+  return localRpcRequest(
+    paths,
+    {
+      id: localRequestId(),
+      method: "workspace.executor.ensure",
+      params: localWorkspaceExecutorEnsureParams(params),
+    },
+    localWorkspaceClientResult,
   );
 }
 
@@ -417,6 +514,22 @@ export async function handleLocalRpcLine(
         return { id: request.id, ok: true, result: attachWorkspace(db, { id: request.params.id }) };
       case "workspace.stop":
         return { id: request.id, ok: true, result: stopWorkspace(db, { id: request.params.id }) };
+      case "workspace.client.attach": {
+        const client = attachWorkspaceClient(db, request.params);
+        return { id: request.id, ok: true, result: workspaceClientResult(db, client) };
+      }
+      case "workspace.client.heartbeat": {
+        const client = heartbeatWorkspaceClient(db, request.params);
+        return { id: request.id, ok: true, result: workspaceClientResult(db, client) };
+      }
+      case "workspace.client.release": {
+        const client = releaseWorkspaceClient(db, request.params);
+        return { id: request.id, ok: true, result: workspaceClientResult(db, client) };
+      }
+      case "workspace.executor.ensure": {
+        const client = ensureWorkspaceExecutorClient(db, request.params);
+        return { id: request.id, ok: true, result: workspaceClientResult(db, client) };
+      }
     }
   } catch (error) {
     return {
@@ -425,6 +538,17 @@ export async function handleLocalRpcLine(
       error: localRpcError(error),
     };
   }
+}
+
+function workspaceClientResult(
+  db: DatabaseSync,
+  client: SparkDaemonWorkspaceClient,
+): LocalWorkspaceClientResult {
+  const workspace = listWorkspaces(db).find((candidate) => candidate.id === client.workspaceId);
+  if (!workspace) {
+    throw new Error(`Unknown workspace connection: ${client.workspaceId}`);
+  }
+  return { client, workspace, observedAt: new Date().toISOString() };
 }
 
 function localRpcError(error: unknown): LocalRpcErrorPayload {
@@ -481,6 +605,33 @@ function parseLocalRpcRequest(line: string): LocalRpcRequest {
     }
     return { id: value.id, method: value.method, params: { id: value.params.id } };
   }
+  if (value.method === "workspace.client.attach") {
+    return {
+      id: value.id,
+      method: value.method,
+      params: parseLocalWorkspaceClientAttachParams(value.params),
+    };
+  }
+  if (value.method === "workspace.client.heartbeat") {
+    return {
+      id: value.id,
+      method: value.method,
+      params: parseLocalWorkspaceClientHeartbeatParams(value.params),
+    };
+  }
+  if (value.method === "workspace.client.release") {
+    if (!isRecord(value.params) || typeof value.params.clientId !== "string") {
+      throw new Error("Missing workspace client id for local RPC release.");
+    }
+    return { id: value.id, method: value.method, params: { clientId: value.params.clientId } };
+  }
+  if (value.method === "workspace.executor.ensure") {
+    return {
+      id: value.id,
+      method: value.method,
+      params: parseLocalWorkspaceExecutorEnsureParams(value.params),
+    };
+  }
   if (typeof value.method !== "string") {
     throw new Error("Invalid local RPC request.");
   }
@@ -506,6 +657,10 @@ type LocalWorkspaceRegisterParams = {
   displayName?: string;
   profile?: NonNullable<SparkDaemonWorkspace["profile"]>;
 };
+
+type LocalWorkspaceClientAttachParams = LocalWorkspaceClientAttachRequest;
+type LocalWorkspaceClientHeartbeatParams = LocalWorkspaceClientHeartbeatRequest;
+type LocalWorkspaceExecutorEnsureParams = LocalWorkspaceExecutorEnsureRequest;
 
 function localDaemonQueueParams(
   params: Partial<LocalDaemonQueueParams> = {},
@@ -534,6 +689,40 @@ function localWorkspaceRegisterParams(
     ...(params.localWorkspaceKey ? { localWorkspaceKey: params.localWorkspaceKey } : {}),
     ...(params.displayName ? { displayName: params.displayName } : {}),
     ...(params.profile ? { profile: params.profile } : {}),
+  };
+}
+
+function localWorkspaceClientAttachParams(
+  params: LocalWorkspaceClientAttachRequest,
+): LocalWorkspaceClientAttachParams {
+  return {
+    workspaceId: params.workspaceId,
+    ...(params.clientId ? { clientId: params.clientId } : {}),
+    kind: params.kind,
+    ...(params.displayName ? { displayName: params.displayName } : {}),
+    ...(params.leaseTtlMs !== undefined ? { leaseTtlMs: params.leaseTtlMs } : {}),
+    ...(params.metadata ? { metadata: params.metadata } : {}),
+  };
+}
+
+function localWorkspaceClientHeartbeatParams(
+  params: LocalWorkspaceClientHeartbeatRequest,
+): LocalWorkspaceClientHeartbeatParams {
+  return {
+    clientId: params.clientId,
+    ...(params.leaseTtlMs !== undefined ? { leaseTtlMs: params.leaseTtlMs } : {}),
+  };
+}
+
+function localWorkspaceExecutorEnsureParams(
+  params: LocalWorkspaceExecutorEnsureRequest,
+): LocalWorkspaceExecutorEnsureParams {
+  return {
+    workspaceId: params.workspaceId,
+    ...(params.clientId ? { clientId: params.clientId } : {}),
+    ...(params.displayName ? { displayName: params.displayName } : {}),
+    ...(params.leaseTtlMs !== undefined ? { leaseTtlMs: params.leaseTtlMs } : {}),
+    ...(params.metadata ? { metadata: params.metadata } : {}),
   };
 }
 
@@ -602,6 +791,56 @@ function parseLocalWorkspaceRegisterParams(value: unknown): LocalWorkspaceRegist
     params.profile = profile;
   }
   return params;
+}
+
+function parseLocalWorkspaceClientAttachParams(value: unknown): LocalWorkspaceClientAttachParams {
+  if (!isRecord(value) || typeof value.workspaceId !== "string") {
+    throw new Error("Invalid local RPC workspace client attach params.");
+  }
+  if (value.kind !== "interactive" && value.kind !== "headless" && value.kind !== "executor") {
+    throw new Error("Invalid local RPC workspace client kind.");
+  }
+  return {
+    workspaceId: value.workspaceId,
+    ...(typeof value.clientId === "string" ? { clientId: value.clientId } : {}),
+    kind: value.kind,
+    ...(typeof value.displayName === "string" ? { displayName: value.displayName } : {}),
+    ...(typeof value.leaseTtlMs === "number" && Number.isFinite(value.leaseTtlMs)
+      ? { leaseTtlMs: Math.max(0, Math.floor(value.leaseTtlMs)) }
+      : {}),
+    ...(isRecord(value.metadata) ? { metadata: value.metadata } : {}),
+  };
+}
+
+function parseLocalWorkspaceClientHeartbeatParams(
+  value: unknown,
+): LocalWorkspaceClientHeartbeatParams {
+  if (!isRecord(value) || typeof value.clientId !== "string") {
+    throw new Error("Invalid local RPC workspace client heartbeat params.");
+  }
+  return {
+    clientId: value.clientId,
+    ...(typeof value.leaseTtlMs === "number" && Number.isFinite(value.leaseTtlMs)
+      ? { leaseTtlMs: Math.max(0, Math.floor(value.leaseTtlMs)) }
+      : {}),
+  };
+}
+
+function parseLocalWorkspaceExecutorEnsureParams(
+  value: unknown,
+): LocalWorkspaceExecutorEnsureParams {
+  if (!isRecord(value) || typeof value.workspaceId !== "string") {
+    throw new Error("Invalid local RPC workspace executor ensure params.");
+  }
+  return {
+    workspaceId: value.workspaceId,
+    ...(typeof value.clientId === "string" ? { clientId: value.clientId } : {}),
+    ...(typeof value.displayName === "string" ? { displayName: value.displayName } : {}),
+    ...(typeof value.leaseTtlMs === "number" && Number.isFinite(value.leaseTtlMs)
+      ? { leaseTtlMs: Math.max(0, Math.floor(value.leaseTtlMs)) }
+      : {}),
+    ...(isRecord(value.metadata) ? { metadata: value.metadata } : {}),
+  };
 }
 
 function parseLocalRpcResponse(line: string, expectedId: string): LocalRpcResponse {
@@ -699,6 +938,17 @@ function daemonStop(value: unknown): LocalDaemonStopResult {
   };
 }
 
+function localWorkspaceClientResult(value: unknown): LocalWorkspaceClientResult {
+  if (!isRecord(value) || !isRecord(value.client)) {
+    throw new Error("Invalid local RPC workspace client result.");
+  }
+  return {
+    client: sparkDaemonWorkspaceClient(value.client),
+    workspace: sparkDaemonWorkspace(value.workspace),
+    observedAt: typeof value.observedAt === "string" ? value.observedAt : new Date().toISOString(),
+  };
+}
+
 async function queueCounts(
   queue: SparkDaemonQueue,
 ): Promise<Record<SparkDaemonQueueState, number>> {
@@ -775,6 +1025,12 @@ function queueEntry(value: unknown): SparkDaemonQueueEntry {
     payload: {
       enqueuedAt: value.payload.enqueuedAt,
       task: validateTurnSubmitTask(value.payload.task),
+      ...(typeof value.payload.processedAt === "string"
+        ? { processedAt: value.payload.processedAt }
+        : {}),
+      ...(Object.hasOwn(value.payload, "result") ? { result: value.payload.result } : {}),
+      ...(typeof value.payload.failedAt === "string" ? { failedAt: value.payload.failedAt } : {}),
+      ...(typeof value.payload.error === "string" ? { error: value.payload.error } : {}),
     },
   };
 }
@@ -848,6 +1104,55 @@ function sparkDaemonWorkspace(value: unknown): SparkDaemonWorkspace {
     status: value.status,
     capabilities: value.capabilities,
     diagnostics: value.diagnostics,
+    ...(isRecord(value.borrowed)
+      ? {
+          borrowed: {
+            borrowed: value.borrowed.borrowed === true,
+            interactiveClientCount:
+              typeof value.borrowed.interactiveClientCount === "number"
+                ? value.borrowed.interactiveClientCount
+                : 0,
+            borrowedByClientIds: Array.isArray(value.borrowed.borrowedByClientIds)
+              ? value.borrowed.borrowedByClientIds.filter(
+                  (clientId): clientId is string => typeof clientId === "string",
+                )
+              : [],
+            ...(typeof value.borrowed.since === "string" ? { since: value.borrowed.since } : {}),
+          },
+        }
+      : {}),
+    ...(Array.isArray(value.workspaceClients)
+      ? { workspaceClients: value.workspaceClients.map(workspaceClientProjection) }
+      : {}),
+    ...(isRecord(value.executor)
+      ? {
+          executor: {
+            state:
+              value.executor.state === "starting" ||
+              value.executor.state === "online" ||
+              value.executor.state === "unhealthy"
+                ? value.executor.state
+                : "none",
+            ...(typeof value.executor.clientId === "string"
+              ? { clientId: value.executor.clientId }
+              : {}),
+            activeInvocationCount:
+              typeof value.executor.activeInvocationCount === "number"
+                ? value.executor.activeInvocationCount
+                : 0,
+            activeAgentCount:
+              typeof value.executor.activeAgentCount === "number"
+                ? value.executor.activeAgentCount
+                : 0,
+            ...(typeof value.executor.lastSeenAt === "string"
+              ? { lastSeenAt: value.executor.lastSeenAt }
+              : {}),
+            ...(typeof value.executor.unhealthyReason === "string"
+              ? { unhealthyReason: value.executor.unhealthyReason }
+              : {}),
+          },
+        }
+      : {}),
     ...(typeof value.sessionCount === "number" ? { sessionCount: value.sessionCount } : {}),
     ...(typeof value.lastSessionAt === "string" ? { lastSessionAt: value.lastSessionAt } : {}),
     ...(Array.isArray(value.recentSessions)
@@ -857,6 +1162,53 @@ function sparkDaemonWorkspace(value: unknown): SparkDaemonWorkspace {
   };
   const profile = workspaceProfile(value.profile);
   return profile ? { ...workspace, profile } : workspace;
+}
+
+function sparkDaemonWorkspaceClient(value: unknown): SparkDaemonWorkspaceClient {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    typeof value.workspaceId !== "string" ||
+    (value.kind !== "interactive" && value.kind !== "headless" && value.kind !== "executor") ||
+    (value.status !== "connected" && value.status !== "disconnected") ||
+    typeof value.attachedAt !== "string" ||
+    typeof value.lastSeenAt !== "string"
+  ) {
+    throw new Error("Invalid local RPC workspace client.");
+  }
+  return {
+    id: value.id,
+    workspaceId: value.workspaceId,
+    kind: value.kind,
+    ...(typeof value.displayName === "string" ? { displayName: value.displayName } : {}),
+    status: value.status,
+    attachedAt: value.attachedAt,
+    lastSeenAt: value.lastSeenAt,
+    ...(typeof value.leaseExpiresAt === "string" ? { leaseExpiresAt: value.leaseExpiresAt } : {}),
+    ...(typeof value.releasedAt === "string" ? { releasedAt: value.releasedAt } : {}),
+    metadata: isRecord(value.metadata) ? value.metadata : {},
+  };
+}
+
+function workspaceClientProjection(
+  value: unknown,
+): NonNullable<SparkDaemonWorkspace["workspaceClients"]>[number] {
+  if (
+    !isRecord(value) ||
+    typeof value.clientId !== "string" ||
+    (value.kind !== "interactive" && value.kind !== "headless" && value.kind !== "executor") ||
+    (value.status !== "connected" && value.status !== "disconnected")
+  ) {
+    throw new Error("Invalid local RPC workspace client projection.");
+  }
+  return {
+    clientId: value.clientId,
+    kind: value.kind,
+    status: value.status,
+    ...(typeof value.displayName === "string" ? { displayName: value.displayName } : {}),
+    ...(typeof value.attachedAt === "string" ? { attachedAt: value.attachedAt } : {}),
+    ...(typeof value.lastSeenAt === "string" ? { lastSeenAt: value.lastSeenAt } : {}),
+  };
 }
 
 function sparkDaemonWorkspaceRecentSession(

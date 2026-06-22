@@ -10,7 +10,7 @@ import {
   loadBuiltinExtensionFactories,
   loadPlugins,
   loadSparkExtensions,
-} from "../apps/spark/src/host/index.ts";
+} from "../apps/spark-tui/src/host/index.ts";
 
 void test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin extension set", () => {
   assert.deepEqual(
@@ -20,7 +20,7 @@ void test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin 
       "@zendev-lab/pi-cue/extension",
       "@zendev-lab/pi-roles/extension",
       "@zendev-lab/pi-graft/extension",
-      "@zendev-lab/spark/extension",
+      "@zendev-lab/spark-extension/extension",
     ],
   );
   assert.deepEqual(
@@ -30,7 +30,7 @@ void test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin 
       "@zendev-lab/pi-cue/extension",
       "@zendev-lab/pi-roles/extension",
       "@zendev-lab/pi-graft/extension",
-      "@zendev-lab/spark/extension",
+      "@zendev-lab/spark-extension/extension",
     ],
   );
 });
@@ -44,7 +44,7 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
       "@zendev-lab/pi-cue/extension",
       "@zendev-lab/pi-roles/extension",
       "@zendev-lab/pi-graft/extension",
-      "@zendev-lab/spark/extension",
+      "@zendev-lab/spark-extension/extension",
     ],
   }).load();
 

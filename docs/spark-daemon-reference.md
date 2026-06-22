@@ -153,10 +153,10 @@ registerGatewayCommands(cli)
 Spark should not necessarily add `cac` now, but should keep this separation around the hard-cut daemon client surface:
 
 ```text
-apps/spark/src/cli.ts              thin root; TUI/headless prompts submit to daemon IPC
-apps/spark/src/cli/daemon.ts       Spark CLI client for `spark daemon ...`
-apps/spark/src/cli/shared.ts       args/output helpers
-apps/spark/src/native-tui.ts       terminal renderer; input goes through an injected daemon responder
+apps/spark-tui/src/cli.ts              thin root; TUI/headless prompts submit to daemon IPC
+apps/spark-tui/src/cli/daemon.ts       Spark CLI client for `spark daemon ...`
+apps/spark-tui/src/cli/shared.ts       args/output helpers
+apps/spark-tui/src/native-tui.ts       terminal renderer; input goes through an injected daemon responder
 ```
 
 Current Spark CLI preserves default TUI behavior, adds `spark --print <prompt>` for headless submit, and routes `spark daemon ...` through the daemon local IPC socket rather than owning queue execution. Cockpit `task.start.request` work uses the daemon-injected native headless role executor instead of a Pi CLI child process.
@@ -189,7 +189,7 @@ spark daemon queue
 Spark should copy this idea, not the whole implementation:
 
 ```text
-apps/spark/src/cli/shared.ts
+apps/spark-tui/src/cli/shared.ts
 - printJson(value)
 - formatCliOutput(value)
 - shouldPrintJson(args)
@@ -206,7 +206,7 @@ nyakore's [`src/cli/queue.ts`](https://github.com/ShigureLab/nyakore/blob/main/s
 Spark mapping:
 
 ```text
-apps/spark/src/cli/daemon.ts       parse daemon commands, start/wake daemon, call local IPC
+apps/spark-tui/src/cli/daemon.ts       parse daemon commands, start/wake daemon, call local IPC
 apps/spark-daemon/src/local-rpc.ts single daemon IPC schema (`daemon.status`, `daemon.queue`, `turn.submit`)
 ```
 
@@ -231,7 +231,7 @@ These are useful references but should not become a second runtime concept:
 - [`src/app/gateway.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/app/gateway.ts): combines HTTP gateway, job runner, channels, and worker loop. Spark folds local service ownership into the daemon; cockpit projection remains an adapter, not execution truth.
 - [`src/gateway/server.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/gateway/server.ts): `GET /health`, `POST /jobs/exec`, `GET /jobs/:id`, `GET /jobs/:id/wait`; exclude HTTP routes and bearer-token auth.
 - [`src/gateway/job-store.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/gateway/job-store.ts): job records for HTTP API. Spark daemon can use queue task files instead; no separate gateway job abstraction yet.
-- [`src/gateway/service.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/gateway/service.ts): systemd/launchd service installation; Spark uses `spark-daemon` service lifecycle rather than a second gateway service.
+- [`src/gateway/service.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/gateway/service.ts): systemd/launchd service installation; Spark uses the unified `spark daemon` service lifecycle rather than a second gateway service.
 - [`src/cli/gateway.ts`](https://github.com/ShigureLab/nyakore/blob/main/src/cli/gateway.ts): client commands for remote gateway health/exec/job/wait/service; exclude, except as a warning about command sprawl.
 
 ## Spark implementation sketch
@@ -256,7 +256,7 @@ apps/spark-daemon/src/
 ├── service.ts
 └── spark/session-run.ts
 
-apps/spark/src/cli/daemon.ts       # Spark CLI daemon IPC client; no local queue worker
+apps/spark-tui/src/cli/daemon.ts       # Spark CLI daemon IPC client; no local queue worker
 ```
 
 ### Daemon worker context
@@ -269,13 +269,13 @@ export interface SparkDaemonWorkerContext {
 }
 ```
 
-The daemon queues are executed through `apps/spark-daemon/src/spark/session-run.ts`, which imports the public `@zendev-lab/spark-cli/headless-role-executor` surface. The daemon package must not import Spark CLI host internals directly.
+The daemon queues are executed through `apps/spark-daemon/src/spark/session-run.ts`, which imports the public `@zendev-lab/spark-tui-app/headless-role-executor` surface. The daemon package must not import Spark CLI host internals directly.
 
 ### Worker loop tick order
 
 ```text
 runSparkDaemonWorkerLoop
-  single spark-daemon service process owns daemon.lock
+  single Spark daemon service process owns daemon.lock
   while not stopped:
     didQueueWork = processSparkDaemonQueueBatch()
     if no work: sleep(250ms)

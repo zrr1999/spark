@@ -72,13 +72,13 @@ import {
 import {
   cleanupOwnedBackgroundSubroles,
   resumeOwnedBackgroundSubroles,
-} from "../packages/spark/src/extension/spark-background-subrole-lifecycle.ts";
-import { SparkWorkflowRunManagerController } from "../packages/spark/src/extension/spark-workflow-run-manager.ts";
-import { createSparkRuntimeReadyTaskRunner } from "../packages/spark/src/extension/spark-ready-task-runtime.ts";
+} from "../packages/spark-extension/src/extension/spark-background-subrole-lifecycle.ts";
+import { SparkWorkflowRunManagerController } from "../packages/spark-extension/src/extension/spark-workflow-run-manager.ts";
+import { createSparkRuntimeReadyTaskRunner } from "../packages/spark-extension/src/extension/spark-ready-task-runtime.ts";
 import {
   saveCurrentProjectRef,
   sparkSessionOwnerKey,
-} from "../packages/spark/src/extension/session-state.ts";
+} from "../packages/spark-extension/src/extension/session-state.ts";
 
 function executionReadyPlan(objective: string): TaskPlan {
   return {
@@ -483,7 +483,7 @@ void test("default task plan item store uses the canonical SQLite path regardles
   assert.equal(store.filePath, "/workspace/demo/.spark/todos/todos.sqlite");
 });
 
-void test("SQLite TODO store keeps session TODOs and imports legacy task plan items idempotently", async () => {
+void test("SQLite TODO store keeps session-scoped rows and imports legacy task plan items idempotently", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-task-todos-sqlite-"));
   try {
     const todoStore = new TaskTodoStore(join(dir, "todos.sqlite"));
@@ -541,7 +541,7 @@ void test("SQLite TODO store keeps session TODOs and imports legacy task plan it
   }
 });
 
-void test("independent session TODO reducer preserves one active live item", () => {
+void test("legacy independent reducer preserves one active live item", () => {
   let todos = applyIndependentTodoOps([], [{ op: "init", items: ["Read request", "Patch code"] }]);
   assertIndependentTodoStatuses(todos, ["in_progress", "pending"]);
 
@@ -735,13 +735,13 @@ void test("task plan readiness distinguishes minimal and execution-ready plans",
     ],
   );
 
-  const blocked = graph.createTask({
+  const warningOnly = graph.createTask({
     projectRef: project.ref,
-    title: "Blocked",
-    description: "blocked task",
+    title: "Warning-only questions",
+    description: "task with non-blocking questions",
     roleRef: builtinRoleRef("worker"),
     plan: {
-      objective: "Resolve blocked task",
+      objective: "Resolve task with scratch questions",
       contextRefs: [],
       constraints: [],
       nonGoals: [],
@@ -753,12 +753,15 @@ void test("task plan readiness distinguishes minimal and execution-ready plans",
       askRefs: [],
     },
   });
+  const warningReadiness = graph.taskPlanReadiness(warningOnly.ref);
+  assert.equal(warningReadiness.ready, true);
   assert.deepEqual(
-    graph.taskPlanReadiness(blocked.ref).issues.map((issue) => [issue.kind, issue.remediation]),
+    warningReadiness.issues.map((issue) => [issue.kind, issue.severity, issue.remediation]),
     [
       [
         "open_questions",
-        "Resolve material questions with ask, then move decisions into askRefs or the plan body.",
+        "warning",
+        "Keep non-blocking scratch questions in plan.openQuestions; resolve material planning decisions with askRefs or plan updates before execution depends on them.",
       ],
     ],
   );
@@ -968,7 +971,7 @@ void test("task plan readiness provides remediation for every issue kind", () =>
       ["missing_steps", "Add at least one concrete plan item to plan.items."],
       [
         "open_questions",
-        "Resolve material questions with ask, then move decisions into askRefs or the plan body.",
+        "Keep non-blocking scratch questions in plan.openQuestions; resolve material planning decisions with askRefs or plan updates before execution depends on them.",
       ],
     ],
   );
@@ -990,7 +993,7 @@ void test("task plan readiness rules render from the public spark-tasks contract
     "open_questions",
   ]);
   for (const rule of TASK_PLAN_READINESS_RULES) {
-    assert.equal(rule.severity, "blocking");
+    assert.equal(rule.severity, rule.kind === "open_questions" ? "warning" : "blocking");
     assert.ok(renderedRules.includes(`${rule.kind}:`));
     assert.ok(renderedRules.includes(rule.description));
   }

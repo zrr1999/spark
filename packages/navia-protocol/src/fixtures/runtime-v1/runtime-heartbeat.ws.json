@@ -7,6 +7,43 @@
     "runtimeId": "rt_11111111111141111111111111111111",
     "runtimeSessionId": "rtsn_11111111111141111111111111111111",
     "sequence": 1,
-    "observedAt": "2026-05-21T00:00:15.000Z"
+    "observedAt": "2026-05-21T00:00:15.000Z",
+    "workspaceBindings": [
+      {
+        "bindingId": "rtwb_11111111111141111111111111111111",
+        "localWorkspaceKey": "local-dev",
+        "displayName": "Local development workspace",
+        "status": "available",
+        "capabilities": {},
+        "diagnostics": {},
+        "connection": {
+          "status": "connected",
+          "lastSeenAt": "2026-05-21T00:00:15.000Z"
+        },
+        "borrowed": {
+          "borrowed": true,
+          "interactiveClientCount": 1,
+          "borrowedByClientIds": ["wcl-tui-1"],
+          "since": "2026-05-21T00:00:00.000Z"
+        },
+        "workspaceClients": [
+          {
+            "clientId": "wcl-tui-1",
+            "kind": "interactive",
+            "status": "connected",
+            "displayName": "Spark TUI",
+            "attachedAt": "2026-05-21T00:00:00.000Z",
+            "lastSeenAt": "2026-05-21T00:00:15.000Z"
+          }
+        ],
+        "executor": {
+          "state": "online",
+          "clientId": "exec-local-1",
+          "activeInvocationCount": 0,
+          "activeAgentCount": 0,
+          "lastSeenAt": "2026-05-21T00:00:15.000Z"
+        }
+      }
+    ]
   }
 }

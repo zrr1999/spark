@@ -9,7 +9,7 @@ import {
   loadSparkConfig,
   mergeSparkConfigWithDefault,
   saveSparkConfig,
-} from "../apps/spark/src/host/index.ts";
+} from "../apps/spark-tui/src/host/index.ts";
 
 void test("loadSparkConfig returns default config when file is missing", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-config-missing-"));
@@ -42,8 +42,8 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
     const path = join(dir, "config.json");
     await saveSparkConfig(
       {
-        extensions: ["@zendev-lab/spark/extension", "@zendev-lab/pi-cue", "my-extension"],
-        providers: ["spark-cli/baidu-oneapi-provider", "my-provider"],
+        extensions: ["@zendev-lab/spark-extension/extension", "@zendev-lab/pi-cue", "my-extension"],
+        providers: ["@zendev-lab/spark-tui-app/baidu-oneapi-provider", "my-provider"],
         activeProvider: "baidu-oneapi",
         activeModel: "claude-opus-4.7",
         activeThinkingLevel: "medium",
@@ -52,11 +52,14 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
     );
     const config = await loadSparkConfig(path);
     assert.deepEqual(config.extensions, [
-      "@zendev-lab/spark/extension",
+      "@zendev-lab/spark-extension/extension",
       "@zendev-lab/pi-cue",
       "my-extension",
     ]);
-    assert.deepEqual(config.providers, ["spark-cli/baidu-oneapi-provider", "my-provider"]);
+    assert.deepEqual(config.providers, [
+      "@zendev-lab/spark-tui-app/baidu-oneapi-provider",
+      "my-provider",
+    ]);
     assert.equal(config.activeProvider, "baidu-oneapi");
     assert.equal(config.activeModel, "claude-opus-4.7");
     assert.equal(config.activeThinkingLevel, "medium");

@@ -4,8 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import sparkExtension from "../packages/spark/src/extension/index.ts";
-import type { SparkWidgetTheme, SparkWidgetTui } from "../packages/spark/src/ui/spark-widget.ts";
+import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
+import type {
+  SparkWidgetTheme,
+  SparkWidgetTui,
+} from "../packages/spark-extension/src/ui/spark-widget.ts";
 import { RoleRegistry, builtinRoleRef } from "@zendev-lab/pi-roles";
 import { defaultWorkflowRunStore } from "../packages/pi-workflows/src/index.ts";
 import {
@@ -18,7 +21,7 @@ import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
 import {
   setSessionGoal,
   updateSessionGoalStatus,
-} from "../packages/spark/src/extension/spark-session-goals.ts";
+} from "../packages/spark-extension/src/extension/spark-session-goals.ts";
 
 type SparkPi = Parameters<typeof sparkExtension>[0];
 type SparkToolConfig = Parameters<NonNullable<SparkPi["registerTool"]>>[0];
@@ -506,23 +509,6 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     for (const handler of handlers.get("tool_execution_end") ?? [])
       await handler({ toolName: "task_write" }, ctx);
     assert.equal(renderRequests, 4);
-
-    await executeTool(
-      requireTool(tools, "task_write"),
-      {
-        action: "todo_update",
-        scope: "session",
-        ops: [{ op: "append", items: ["Independent session TODO"] }],
-      },
-      ctx,
-    );
-    assert.equal(widgetCalls.length, 1);
-    assert.equal(renderRequests, 5);
-    assert.match(widgetComponent.render().join("\n"), /Independent session TODO/);
-
-    for (const handler of handlers.get("tool_execution_end") ?? [])
-      await handler({ toolName: "task_write" }, ctx);
-    assert.equal(renderRequests, 6);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

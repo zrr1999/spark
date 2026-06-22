@@ -19,4 +19,4 @@ By default, `models` mirrors `pi --list-models`: it returns only models with con
 
 ## Host scope
 
-The first implementation targets the upstream `pi-coding-agent` host by reading `ctx.modelRegistry`. The portable `pi-extension-api` contract and Spark CLI native host do not expose model registry access yet; on those hosts the tool reports that model-registry support is not wired.
+The first implementation targets the upstream `pi-coding-agent` host by reading `ctx.modelRegistry`. The portable `pi-extension-api` contract and Spark TUI native host do not expose model registry access yet; on those hosts the tool reports that model-registry support is not wired.

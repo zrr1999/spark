@@ -462,6 +462,91 @@ esac`,
   }
 });
 
+envTest(
+  "graft scratch tools omit source args when GRAFT_BASE_REF supplies first base",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-graft-env-base-"));
+    const project = join(dir, "project");
+    const argvFile = join(dir, "argv.txt");
+    const previousGraftBin = process.env.GRAFT_BIN;
+    const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
+    const previousBaseRef = process.env.GRAFT_BASE_REF;
+    await mkdir(project, { recursive: true });
+    process.env.PI_GRAFT_MOCK_ARGV = argvFile;
+    process.env.GRAFT_BASE_REF = "candidate:env";
+    process.env.GRAFT_BIN = await writeMockGraft(
+      dir,
+      `printf '%s\\n' "$*" >> "$PI_GRAFT_MOCK_ARGV"
+case "$*" in
+  *"scratch open") printf '{"message":"open","result":{"scratch":"scratch:open"}}\\n' ;;
+  *"scratch write"*) cat >/dev/null; printf '{"message":"write","result":{"scratch":"scratch:write","path":"note.txt"}}\\n' ;;
+  *) echo "unexpected argv: $*" >&2; exit 2 ;;
+esac`,
+    );
+
+    try {
+      const { pi, tools } = createFakePi();
+      registerPiGraftExtension(pi);
+      const ctx = { cwd: project };
+
+      const written = await executeTool(
+        tools.get("graft_write"),
+        "graft_write",
+        { path: "note.txt", content: "env\n" },
+        ctx,
+      );
+      assert.match(written.content[0].text, /env candidate:env/);
+      assert.equal(
+        (written.details?.state as { base?: string } | undefined)?.base,
+        "candidate:env",
+      );
+
+      const opened = await executeTool(
+        tools.get("graft_scratch_open"),
+        "graft_scratch_open",
+        {},
+        ctx,
+      );
+      assert.match(opened.content[0].text, /candidate:env/);
+      assert.equal((opened.details?.state as { base?: string } | undefined)?.base, "candidate:env");
+
+      assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
+        `--cwd ${project} --json scratch write note.txt --content-stdin`,
+        `--cwd ${project} --json scratch open`,
+      ]);
+    } finally {
+      if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+      else process.env.GRAFT_BIN = previousGraftBin;
+      if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
+      else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
+      if (previousBaseRef === undefined) delete process.env.GRAFT_BASE_REF;
+      else process.env.GRAFT_BASE_REF = previousBaseRef;
+      await rm(dir, { force: true, recursive: true });
+    }
+  },
+);
+
+envTest("graft scratch tools require base, from, lastScratch, or GRAFT_BASE_REF", async () => {
+  const previousBaseRef = process.env.GRAFT_BASE_REF;
+  delete process.env.GRAFT_BASE_REF;
+  try {
+    const { pi, tools } = createFakePi();
+    registerPiGraftExtension(pi);
+    await assert.rejects(
+      executeTool(
+        tools.get("graft_write"),
+        "graft_write",
+        { path: "note.txt", content: "missing\n" },
+        { cwd: "/tmp/pi-graft-missing-env" },
+      ),
+      /GRAFT_BASE_REF/,
+    );
+  } finally {
+    if (previousBaseRef === undefined) delete process.env.GRAFT_BASE_REF;
+    else process.env.GRAFT_BASE_REF = previousBaseRef;
+  }
+});
+
 envTest("graft write/edit pass large payloads over stdin flags", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-graft-stdin-cli-"));
   const project = join(dir, "project");
@@ -630,16 +715,22 @@ esac`,
   },
 );
 
-envTest("graft sandbox grep/find/ls adapters use tracked changed scratch paths", async () => {
+envTest("graft sandbox grep/find/ls adapters overlay scratch paths on full base tree", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-graft-sandbox-nav-"));
   const workspace = join(dir, "workspace");
   const previousGraftBin = process.env.GRAFT_BIN;
+  const previousTreeBackend = process.env.PI_GRAFT_SANDBOX_TREE_BACKEND;
   await mkdir(workspace, { recursive: true });
+  process.env.PI_GRAFT_SANDBOX_TREE_BACKEND = "materialized";
   process.env.GRAFT_BIN = await writeMockGraft(
     dir,
     `case "$*" in
-  *"src/example.ts"*) printf '%s\\n' '{"status":"ok","result":{"content":"alpha\\nneedle\\n","scratch":"scratch:nav"}}' ;;
-  *"docs/readme.md"*) printf '%s\\n' '{"status":"ok","result":{"content":"docs\\n","scratch":"scratch:nav"}}' ;;
+  *"run --cwd . repo:sandbox@main -- find . -type f"*) printf '%s\\n' '{"status":"ok","view":{"type":"run","data":{"exit_code":0,"stdout":"./src/base.ts\\n./docs/readme.md\\n","stderr":""}}}' ;;
+  *"run --cwd . repo:sandbox@main -- cat ./src/base.ts"*) printf '%s\\n' '{"status":"ok","view":{"type":"run","data":{"exit_code":0,"stdout":"base needle\\n","stderr":""}}}' ;;
+  *"scratch write"*"src/after.ts"*) cat >/dev/null; printf '%s\\n' '{"status":"ok","result":{"changed_paths":["src/after.ts"],"scratch":"scratch:after"}}' ;;
+  *"scratch read"*"src/after.ts"*) printf '%s\\n' '{"status":"ok","result":{"content":"needle after\\n","scratch":"scratch:after"}}' ;;
+  *"scratch read"*"src/example.ts"*) printf '%s\\n' '{"status":"ok","result":{"content":"alpha\\nneedle\\n","scratch":"scratch:nav"}}' ;;
+  *"scratch read"*"docs/readme.md"*) printf '%s\\n' '{"status":"ok","result":{"content":"docs\\n","scratch":"scratch:nav"}}' ;;
   *) echo "unexpected argv: $*" >&2; exit 2 ;;
 esac`,
   );
@@ -651,6 +742,7 @@ esac`,
       repoId: "sandbox",
       workspace,
       base: "repo:sandbox@main",
+      resolvedBase: "tree:base",
       lastScratch: "scratch:nav",
       changedPaths: ["src/example.ts", "docs/readme.md"],
       guardrails: { blockShellFileIo: true, allowValidationCommands: true },
@@ -677,10 +769,15 @@ esac`,
       { pattern: "*.ts" },
       { cwd: "/repo" },
     );
-    assert.equal(found.content[0].text, "src/example.ts");
+    assert.equal(found.content[0].text, "src/base.ts\nsrc/example.ts");
+    assert.equal(found.details?.backend, "materialized_run_overlay");
+    assert.equal(found.details?.basePathCount, 2);
+    assert.equal(found.details?.changedPathCount, 2);
+    assert.equal(found.details?.cacheHit, false);
 
     const listed = await executeTool(tools.get("ls"), "ls", { path: "src" }, { cwd: "/repo" });
-    assert.equal(listed.content[0].text, "example.ts");
+    assert.equal(listed.content[0].text, "base.ts\nexample.ts");
+    assert.equal(listed.details?.cacheHit, true);
 
     const rootListed = await executeTool(tools.get("ls"), "ls", { path: "" }, { cwd: "/repo" });
     assert.equal(rootListed.content[0].text, "docs/\nsrc/");
@@ -688,16 +785,197 @@ esac`,
     const grepped = await executeTool(
       tools.get("grep"),
       "grep",
-      { pattern: "needle", path: "src/example.ts" },
+      { pattern: "needle" },
       { cwd: "/repo" },
     );
-    assert.equal(grepped.content[0].text, "src/example.ts:2:needle");
+    assert.equal(grepped.content[0].text, "src/base.ts:1:base needle\nsrc/example.ts:2:needle");
+    assert.equal(grepped.details?.backend, "materialized_run_overlay");
+    assert.deepEqual(grepped.details?.unreadablePaths, []);
+
+    await executeTool(
+      tools.get("write"),
+      "write",
+      { path: "src/after.ts", content: "needle after\n" },
+      { cwd: "/repo" },
+    );
+
+    const afterWriteFind = await executeTool(
+      tools.get("find"),
+      "find",
+      { pattern: "*.ts", limit: 2 },
+      { cwd: "/repo" },
+    );
+    assert.equal(afterWriteFind.content[0].text, "src/after.ts\nsrc/base.ts");
+    assert.equal(afterWriteFind.details?.cacheHit, false);
+    assert.equal(afterWriteFind.details?.totalMatches, 3);
+    assert.equal(afterWriteFind.details?.resultLimitReached, 2);
+
+    const limitedLs = await executeTool(
+      tools.get("ls"),
+      "ls",
+      { path: "src", limit: 1 },
+      { cwd: "/repo" },
+    );
+    assert.equal(limitedLs.content[0].text, "after.ts");
+    assert.equal(limitedLs.details?.entryLimitReached, 1);
+
+    const limitedGrep = await executeTool(
+      tools.get("grep"),
+      "grep",
+      { pattern: "needle", limit: 1 },
+      { cwd: "/repo" },
+    );
+    assert.equal(limitedGrep.content[0].text, "src/after.ts:1:needle after");
+    assert.equal(limitedGrep.details?.matchLimitReached, 1);
   } finally {
     if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
     else process.env.GRAFT_BIN = previousGraftBin;
+    if (previousTreeBackend === undefined) delete process.env.PI_GRAFT_SANDBOX_TREE_BACKEND;
+    else process.env.PI_GRAFT_SANDBOX_TREE_BACKEND = previousTreeBackend;
     await rm(dir, { force: true, recursive: true });
   }
 });
+
+envTest("graft sandbox grep/find/ls prefer native tree backend when available", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graft-sandbox-native-tree-"));
+  const workspace = join(dir, "workspace");
+  const previousGraftBin = process.env.GRAFT_BIN;
+  const previousTreeBackend = process.env.PI_GRAFT_SANDBOX_TREE_BACKEND;
+  await mkdir(workspace, { recursive: true });
+  delete process.env.PI_GRAFT_SANDBOX_TREE_BACKEND;
+  process.env.GRAFT_BIN = await writeMockGraft(
+    dir,
+    `case "$*" in
+  *"tree list"*"--from scratch:nav"*"--path src"*) printf '%s\\n' '{"status":"ok","result":{"source":{"kind":"scratch","scratch":"scratch:nav"},"operation":"list","entries":[{"path":"src/base.ts","hash":"blob:base","size":12},{"path":"src/example.ts","hash":"blob:example","size":13}],"total_matches":2,"truncated":false}}' ;;
+  *"tree list"*"--from scratch:nav"*) printf '%s\\n' '{"status":"ok","result":{"source":{"kind":"scratch","scratch":"scratch:nav"},"operation":"list","entries":[{"path":"docs/readme.md","hash":"blob:docs","size":5},{"path":"src/base.ts","hash":"blob:base","size":12},{"path":"src/example.ts","hash":"blob:example","size":13}],"total_matches":3,"truncated":false}}' ;;
+  *"tree grep"*"--from scratch:nav"*"needle"*) printf '%s\\n' '{"status":"ok","result":{"source":{"kind":"scratch","scratch":"scratch:nav"},"operation":"grep","matches":[{"path":"src/base.ts","line":1,"text":"base needle"},{"path":"src/example.ts","line":2,"text":"needle"}],"total_matches":2,"searched_paths":2,"skipped_binary_paths":[],"limit":100,"truncated":false}}' ;;
+  *) echo "unexpected argv: $*" >&2; exit 2 ;;
+esac`,
+  );
+
+  try {
+    const restoredState = {
+      active: true,
+      repoRoot: "/repo",
+      repoId: "sandbox",
+      workspace,
+      base: "repo:sandbox@main",
+      resolvedBase: "tree:base",
+      lastScratch: "scratch:nav",
+      changedPaths: ["src/example.ts"],
+      guardrails: { blockShellFileIo: true, allowValidationCommands: true },
+      createdAt: "2026-06-18T00:00:00.000Z",
+      updatedAt: "2026-06-18T00:01:00.000Z",
+    };
+    const { pi, tools, entries, handlers } = createFakePi();
+    entries.push({
+      type: "custom",
+      customType: "pi-graft-sandbox-state",
+      data: { state: restoredState },
+    });
+    registerPiGraftSandboxExtension(pi);
+    for (const handler of handlers.get("session_start") ?? []) {
+      await handler(
+        { reason: "startup" },
+        { cwd: "/repo", sessionManager: { getEntries: () => entries } },
+      );
+    }
+
+    const found = await executeTool(
+      tools.get("find"),
+      "find",
+      { pattern: "*.ts" },
+      { cwd: "/repo" },
+    );
+    assert.equal(found.content[0].text, "src/base.ts\nsrc/example.ts");
+    assert.equal(found.details?.backend, "native_tree");
+
+    const listed = await executeTool(tools.get("ls"), "ls", { path: "src" }, { cwd: "/repo" });
+    assert.equal(listed.content[0].text, "base.ts\nexample.ts");
+    assert.equal(listed.details?.backend, "native_tree");
+
+    const grepped = await executeTool(
+      tools.get("grep"),
+      "grep",
+      { pattern: "needle", literal: true },
+      { cwd: "/repo" },
+    );
+    assert.equal(grepped.content[0].text, "src/base.ts:1:base needle\nsrc/example.ts:2:needle");
+    assert.equal(grepped.details?.backend, "native_tree");
+    assert.equal(grepped.details?.totalMatches, 2);
+  } finally {
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
+    if (previousTreeBackend === undefined) delete process.env.PI_GRAFT_SANDBOX_TREE_BACKEND;
+    else process.env.PI_GRAFT_SANDBOX_TREE_BACKEND = previousTreeBackend;
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+envTest(
+  "graft sandbox tree backend falls back when native tree command is unavailable",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-graft-sandbox-native-fallback-"));
+    const workspace = join(dir, "workspace");
+    const previousGraftBin = process.env.GRAFT_BIN;
+    const previousTreeBackend = process.env.PI_GRAFT_SANDBOX_TREE_BACKEND;
+    await mkdir(workspace, { recursive: true });
+    delete process.env.PI_GRAFT_SANDBOX_TREE_BACKEND;
+    process.env.GRAFT_BIN = await writeMockGraft(
+      dir,
+      `case "$*" in
+  *"tree list"*) echo "error: unrecognized subcommand 'tree'" >&2; exit 2 ;;
+  *"run --cwd . repo:sandbox@main -- find . -type f"*) printf '%s\\n' '{"status":"ok","view":{"type":"run","data":{"exit_code":0,"stdout":"./src/base.ts\\n","stderr":""}}}' ;;
+  *) echo "unexpected argv: $*" >&2; exit 2 ;;
+esac`,
+    );
+
+    try {
+      const restoredState = {
+        active: true,
+        repoRoot: "/repo",
+        repoId: "sandbox",
+        workspace,
+        base: "repo:sandbox@main",
+        resolvedBase: "tree:base",
+        changedPaths: [],
+        guardrails: { blockShellFileIo: true, allowValidationCommands: true },
+        createdAt: "2026-06-18T00:00:00.000Z",
+        updatedAt: "2026-06-18T00:01:00.000Z",
+      };
+      const { pi, tools, entries, handlers } = createFakePi();
+      entries.push({
+        type: "custom",
+        customType: "pi-graft-sandbox-state",
+        data: { state: restoredState },
+      });
+      registerPiGraftSandboxExtension(pi);
+      for (const handler of handlers.get("session_start") ?? []) {
+        await handler(
+          { reason: "startup" },
+          { cwd: "/repo", sessionManager: { getEntries: () => entries } },
+        );
+      }
+
+      const found = await executeTool(
+        tools.get("find"),
+        "find",
+        { pattern: "*.ts" },
+        { cwd: "/repo" },
+      );
+      assert.equal(found.content[0].text, "src/base.ts");
+      assert.equal(found.details?.backend, "materialized_run_overlay");
+      assert.equal(found.details?.attemptedBackend, "native_tree");
+      assert.match(String(found.details?.fallbackReason), /unrecognized subcommand 'tree'/);
+    } finally {
+      if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+      else process.env.GRAFT_BIN = previousGraftBin;
+      if (previousTreeBackend === undefined) delete process.env.PI_GRAFT_SANDBOX_TREE_BACKEND;
+      else process.env.PI_GRAFT_SANDBOX_TREE_BACKEND = previousTreeBackend;
+      await rm(dir, { force: true, recursive: true });
+    }
+  },
+);
 
 envTest("graft sandbox edit rejects ambiguous and overlapping exact replacements", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-graft-sandbox-edit-errors-"));

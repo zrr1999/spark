@@ -107,7 +107,7 @@ function resolveServerUrl(config: SparkDaemonConfig): string {
 function requireConfig(value: string | undefined, name: string): string {
   if (!value) {
     throw new Error(
-      `Spark daemon config is missing ${name}. Run spark-daemon workspace register first.`,
+      `Spark daemon config is missing ${name}. Run spark daemon workspace register first.`,
     );
   }
 

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   rebuildSessionIndex,
   sessionDirectoryNameForKey,
-} from "../packages/spark/src/extension/session-directory-store.ts";
+} from "../packages/spark-extension/src/extension/session-directory-store.ts";
 
 type JsonObject = Record<string, unknown>;
 

@@ -76,7 +76,7 @@ class SparkDaemonUnavailableError extends Error {
         ? "Spark daemon could not be started"
         : "Spark daemon is running but cannot be reached";
     super(
-      `${prefix}: ${cause instanceof Error ? cause.message : String(cause)}. Run spark-daemon daemon status.`,
+      `${prefix}: ${cause instanceof Error ? cause.message : String(cause)}. Run spark daemon status.`,
     );
   }
 }
@@ -325,7 +325,7 @@ async function daemon(
     case "submit":
       return await daemonSubmit(paths, args, io);
     default:
-      throw new Error("Usage: spark-daemon daemon <status|start|stop|restart|logs|queue|submit>");
+      throw new Error("Usage: spark daemon <status|start|stop|restart|logs|queue|submit>");
   }
 }
 
@@ -351,15 +351,15 @@ async function daemonStatus(
           `  state db         ${status.stateDbPath}\n` +
           `  started          ${status.startedAt}\n` +
           `  error            ${status.error}\n` +
-          "  restart          spark-daemon daemon restart\n",
+          "  restart          spark daemon restart\n",
       );
       return 0;
     }
     io.stdout.write(
       "not running\n" +
         `  socket           ${status.socketPath} (absent)\n` +
-        "  start            spark-daemon daemon start\n" +
-        "                   or run any 'spark-daemon workspace' command to lazy-spawn\n",
+        "  start            spark daemon start\n" +
+        "                   or run any 'spark daemon workspace' command to lazy-spawn\n",
     );
     return 0;
   }
@@ -420,8 +420,8 @@ async function daemonSubmit(
   const flags = parseFlags(args);
   const sessionId = flags.session?.trim();
   const prompt = (flags.prompt ?? positionalArgs(args).join(" ")).trim();
-  if (!sessionId) throw new Error("spark-daemon daemon submit requires --session <id>");
-  if (!prompt) throw new Error("spark-daemon daemon submit requires --prompt <text>");
+  if (!sessionId) throw new Error("spark daemon submit requires --session <id>");
+  if (!prompt) throw new Error("spark daemon submit requires --prompt <text>");
   const result = await (io.turnSubmitToService ?? requestTurnSubmit)(paths, { sessionId, prompt });
   if (flags.json === "true") {
     io.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -554,7 +554,7 @@ async function workspace(
     return await registerWorkspaceCommand(paths, args, io);
   }
 
-  throw new Error("Usage: spark-daemon workspace <register|ls|show|stop>");
+  throw new Error("Usage: spark daemon workspace <register|ls|show|stop>");
 }
 
 async function registerWorkspaceCommand(
@@ -620,7 +620,7 @@ async function defaultWorkspace(
   const workspaces = await loadWorkspaceList(paths, io);
   if (workspaces.length === 0) {
     io.stdout.write(
-      "no workspaces registered.\n  spark-daemon workspace register . --server-url <url> --token <tok> --name <ws>\n",
+      "no workspaces registered.\n  spark daemon workspace register . --server-url <url> --token <tok> --name <ws>\n",
     );
     return 0;
   }
@@ -633,7 +633,7 @@ async function defaultWorkspace(
   if (!workspace) {
     io.stdout.write(
       `${cwd} is not under a registered workspace.\n` +
-        "  spark-daemon workspace register . --server-url <url> --token <tok> --name <ws>\n" +
+        "  spark daemon workspace register . --server-url <url> --token <tok> --name <ws>\n" +
         "or cd into a registered workspace, or pass --workspace <name>.\n",
     );
     return 2;
@@ -643,7 +643,7 @@ async function defaultWorkspace(
   const config = readSparkDaemonConfig(paths);
   if (!hasRunnableSparkDaemonCredentialsForServer(config, workspace.serverUrl)) {
     throw new Error(
-      `Workspace '${workspace.displayName}' is registered locally, but service credentials are missing. Run spark-daemon workspace register ${shellQuote(workspace.localPath)} --server-url <url> --token <tok>.`,
+      `Workspace '${workspace.displayName}' is registered locally, but service credentials are missing. Run spark daemon workspace register ${shellQuote(workspace.localPath)} --server-url <url> --token <tok>.`,
     );
   }
 
@@ -681,7 +681,7 @@ async function listWorkspaceCommand(
 
   if (workspaces.length === 0) {
     io.stdout.write(
-      "no workspaces registered.\n  spark-daemon workspace register . --server-url <url> --token <tok> --name <ws>\n",
+      "no workspaces registered.\n  spark daemon workspace register . --server-url <url> --token <tok> --name <ws>\n",
     );
     return 0;
   }
@@ -852,7 +852,7 @@ async function startWorkspaceShell(
   const prompt = createInterface({ input: stdin, output: process.stdout });
   try {
     while (true) {
-      const answer = (await prompt.question(`spark-daemon:${current.localWorkspaceKey}> `))
+      const answer = (await prompt.question(`spark daemon:${current.localWorkspaceKey}> `))
         .trim()
         .toLowerCase();
       if (answer === "" || answer === "status") {
@@ -931,7 +931,7 @@ function resolveWorkspaceForShow(
 
   if (workspaces.length === 0) {
     throw new Error(
-      "No workspace found. Run spark-daemon workspace register . --server-url <url> --token <tok>.",
+      "No workspace found. Run spark daemon workspace register . --server-url <url> --token <tok>.",
     );
   }
 
@@ -965,7 +965,7 @@ async function stopWorkspaceCommand(
       `  server   ${stopped.serverUrl}\n` +
       `  path     ${formatPathForDisplay(stopped.localPath)}\n` +
       `  status   ${workspaceStatusLabel(stopped)}\n` +
-      `  note     cd into ${formatPathForDisplay(stopped.localPath)} and run spark-daemon to re-attach it.\n`,
+      `  note     cd into ${formatPathForDisplay(stopped.localPath)} and run spark daemon to re-attach it.\n`,
   );
   return 0;
 }
@@ -980,7 +980,7 @@ function resolveWorkspace(
     }
     if (workspaces.length === 0) {
       throw new Error(
-        "No workspace found. Run spark-daemon workspace register . --server-url <url> --token <tok>.",
+        "No workspace found. Run spark daemon workspace register . --server-url <url> --token <tok>.",
       );
     }
     throw new Error("Multiple workspaces are registered. Pass a workspace name.");
@@ -1260,7 +1260,7 @@ function isUserDetached(workspace: {
 const offlineReasonText = {
   detached: {
     why: "workspace was paused by the user",
-    fix: "run spark-daemon from the workspace directory to re-attach it",
+    fix: "run spark daemon from the workspace directory to re-attach it",
   },
   disconnected: {
     why: "Spark daemon is running but the server connection is unavailable",
@@ -1268,7 +1268,7 @@ const offlineReasonText = {
   },
   "service-stopped": {
     why: "Spark daemon is not running",
-    fix: "run spark-daemon daemon start or retry the workspace command",
+    fix: "run spark daemon start or retry the workspace command",
   },
 };
 
@@ -1319,7 +1319,7 @@ function isDegradedReasonCode(value: string): value is DegradedReasonCode {
 
 function remediationFor(reason: DegradedReasonCode, workspace: SparkDaemonWorkspace): string {
   if (reason === "filesystem.unreachable") {
-    return `${degradedReasonText[reason].fix}, or run 'spark-daemon workspace stop ${shellQuote(workspace.localWorkspaceKey)}'`;
+    return `${degradedReasonText[reason].fix}, or run 'spark daemon workspace stop ${shellQuote(workspace.localWorkspaceKey)}'`;
   }
   return degradedReasonText[reason].fix;
 }
@@ -1398,7 +1398,7 @@ function syncSparkDaemonIfConfigured(paths: ReturnType<typeof resolveNaviaPaths>
   const config = readSparkDaemonConfig(paths);
   if (!config.serverUrl || !hasRunnableSparkDaemonCredentialsForServer(config, config.serverUrl)) {
     io.stdout.write(
-      "  sync     local only; run spark-daemon workspace register with a registration token to sync with Navia.\n",
+      "  sync     local only; run spark daemon workspace register with a registration token to sync with Navia.\n",
     );
     return;
   }
@@ -1502,29 +1502,29 @@ function shellQuote(value: string): string {
 }
 
 function printHelp(io: CliIo): void {
-  io.stdout.write(`Usage: spark-daemon <command>
+  io.stdout.write(`Usage: spark daemon <command>
 
 Commands:
-  spark-daemon
-  spark-daemon --workspace <name>
+  spark daemon
+  spark daemon --workspace <name>
   workspace register [path] --server-url <url> --token <workspace-registration-token|-> --name <name> [--profile <path-or-git-url>]
   workspace ls [--json] [--all] [--full]
   workspace show [name] [--workspace <name>] [--json]
   workspace stop <name> [--workspace <name>] [--yes]
   ws
-  daemon status
-  daemon start
-  daemon stop
-  daemon restart
-  daemon logs
+  status
+  start
+  stop
+  restart
+  logs
 
 Example:
-  spark-daemon workspace register . --server-url http://127.0.0.1:5173 --token <tok> --name <ws>
+  spark daemon workspace register . --server-url http://127.0.0.1:5173 --token <tok> --name <ws>
 `);
 }
 
 function printWorkspaceHelp(io: CliIo): void {
-  io.stdout.write(`Usage: spark-daemon workspace <command>
+  io.stdout.write(`Usage: spark daemon workspace <command>
 
 Commands:
   register [path] --server-url <url> --token <workspace-registration-token|-> --name <name> [--profile <path-or-git-url>]
@@ -1533,12 +1533,12 @@ Commands:
   stop <name> [--workspace <name>] [--yes]
 
 Example:
-  spark-daemon workspace ls --json
+  spark daemon workspace ls --json
 `);
 }
 
 function printDaemonHelp(io: CliIo): void {
-  io.stdout.write(`Usage: spark-daemon daemon <command>
+  io.stdout.write(`Usage: spark daemon <command>
 
 Commands:
   status [--json]
@@ -1550,7 +1550,7 @@ Commands:
   submit --session <id> --prompt <text> [--json]
 
 Example:
-  spark-daemon daemon status --json
+  spark daemon status --json
 `);
 }
 

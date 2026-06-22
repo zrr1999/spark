@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -321,6 +321,103 @@ void test("spark runtime role dispatch inherits session model when no role model
 
     assert.equal(result.record.status, "succeeded");
     assert.equal(result.record.model, "test/model");
+  } finally {
+    if (previousHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousHome;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark runtime role dispatch passes per-run env and tool policy to spawned Pi", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-runtime-env-tools-"));
+  const previousHome = process.env.PI_ROLES_HOME;
+  process.env.PI_ROLES_HOME = join(dir, "home");
+  try {
+    const capturePath = join(dir, "capture.json");
+    const fakePi = join(dir, "fake-pi.mjs");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "const { writeFileSync } = await import('node:fs');",
+        "const args = process.argv.slice(2);",
+        `writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ args, graftBase: process.env.GRAFT_BASE_REF }));`,
+        "process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'env tools ok' }] } }) + '\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+
+    const result = await runRoleInstructionOnly(
+      new RoleRegistry(),
+      { roleRef: "role:builtin-worker", instruction: "Run with env/tool policy." },
+      {
+        dryRun: false,
+        cwd: dir,
+        piCommand: fakePi,
+        timeoutMs: 5_000,
+        sessionModel: "test/model",
+        env: { GRAFT_BASE_REF: "tree:spawn-base" },
+        allowedTools: ["graft_read", "graft_write"],
+      },
+    );
+
+    const captured = JSON.parse(await readFile(capturePath, "utf8")) as {
+      args: string[];
+      graftBase?: string;
+    };
+    assert.equal(result.record.status, "succeeded");
+    assert.equal(captured.graftBase, "tree:spawn-base");
+    assert.equal(captured.args[captured.args.indexOf("--tools") + 1], "graft_read,graft_write");
+  } finally {
+    if (previousHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousHome;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark runtime role dispatch passes per-run env and tool policy to injected executor", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-roles-runtime-injected-env-tools-"));
+  const previousHome = process.env.PI_ROLES_HOME;
+  process.env.PI_ROLES_HOME = join(dir, "home");
+  try {
+    let seenEnv: NodeJS.ProcessEnv | undefined;
+    let seenAllowedTools: string[] | undefined;
+    const result = await runRoleInstructionOnly(
+      new RoleRegistry(),
+      { roleRef: "role:builtin-worker", instruction: "Run injected with env/tool policy." },
+      {
+        dryRun: false,
+        cwd: dir,
+        timeoutMs: 5_000,
+        sessionModel: "test/model",
+        env: { GRAFT_BASE_REF: "tree:injected-base" },
+        allowedTools: ["graft_read", "graft_candidate_from_scratch"],
+        roleExecutor: async (input) => {
+          seenEnv = input.env;
+          seenAllowedTools = input.role.allowedTools;
+          return {
+            record: {
+              ...input.record,
+              status: "succeeded",
+              finishedAt: "2026-06-22T00:00:00.000Z",
+            },
+            stdout: "injected ok",
+            stderr: "",
+            jsonEvents: [
+              {
+                type: "message_end",
+                message: { role: "assistant", content: [{ type: "text", text: "injected ok" }] },
+              },
+            ],
+          };
+        },
+      },
+    );
+
+    assert.equal(result.record.status, "succeeded");
+    assert.equal(seenEnv?.GRAFT_BASE_REF, "tree:injected-base");
+    assert.deepEqual(seenAllowedTools, ["graft_read", "graft_candidate_from_scratch"]);
   } finally {
     if (previousHome === undefined) delete process.env.PI_ROLES_HOME;
     else process.env.PI_ROLES_HOME = previousHome;

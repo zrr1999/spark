@@ -7,12 +7,19 @@ import { openSparkDaemonDatabase } from "./schema.js";
 import {
   addWorkspace,
   attachWorkspace,
+  attachWorkspaceClient,
+  ensureWorkspaceExecutorClient,
+  heartbeatWorkspaceClient,
+  getWorkspaceById,
+  isBorrowedWorkspace,
+  listWorkspaceClients,
   listWorkspaces,
   markSparkDaemonServerConnected,
   markServerWorkspacesDisconnected,
   planWorkspaceRegistration,
   reconcileWorkspaces,
   registerWorkspace,
+  releaseWorkspaceClient,
   sparkDaemonServerStatusSummaries,
   stopWorkspace,
   workspaceKeyForName,
@@ -190,6 +197,167 @@ describe("Spark daemon workspace store", () => {
         id: workspace.id,
         status: "available",
         diagnostics: {},
+      });
+    });
+  });
+
+  it("derives borrowed state from connected interactive workspace clients", () => {
+    withSparkDaemonWorkspaceStore(({ db, root }) => {
+      const workspace = registerWorkspace(db, {
+        localPath: root,
+        displayName: "Local default",
+      });
+
+      const first = attachWorkspaceClient(db, {
+        workspaceId: workspace.id,
+        clientId: "wcl-tui-1",
+        kind: "interactive",
+        displayName: "Spark TUI 1",
+        now: "2026-05-26T00:00:00.000Z",
+      });
+      attachWorkspaceClient(db, {
+        workspaceId: workspace.id,
+        clientId: "wcl-tui-2",
+        kind: "interactive",
+        displayName: "Spark TUI 2",
+        now: "2026-05-26T00:01:00.000Z",
+      });
+      attachWorkspaceClient(db, {
+        workspaceId: workspace.id,
+        clientId: "exec-local-1",
+        kind: "executor",
+        displayName: "Background executor",
+        now: "2026-05-26T00:01:30.000Z",
+      });
+
+      expect(first.status).toBe("connected");
+      expect(isBorrowedWorkspace(db, workspace.id)).toBe(true);
+      expect(listWorkspaceClients(db, workspace.id)).toHaveLength(3);
+      expect(getWorkspaceById(db, workspace.id)).toMatchObject({
+        borrowed: {
+          borrowed: true,
+          interactiveClientCount: 2,
+          borrowedByClientIds: expect.arrayContaining(["wcl-tui-1", "wcl-tui-2"]),
+        },
+        workspaceClients: expect.arrayContaining([
+          expect.objectContaining({ clientId: "wcl-tui-1", kind: "interactive" }),
+          expect.objectContaining({ clientId: "exec-local-1", kind: "executor" }),
+        ]),
+        executor: expect.objectContaining({ state: "online", clientId: "exec-local-1" }),
+      });
+
+      releaseWorkspaceClient(db, { clientId: "wcl-tui-1", now: "2026-05-26T00:02:00.000Z" });
+      expect(getWorkspaceById(db, workspace.id)?.borrowed).toMatchObject({
+        borrowed: true,
+        interactiveClientCount: 1,
+        borrowedByClientIds: ["wcl-tui-2"],
+      });
+
+      releaseWorkspaceClient(db, { clientId: "wcl-tui-2", now: "2026-05-26T00:03:00.000Z" });
+      expect(getWorkspaceById(db, workspace.id)?.borrowed).toMatchObject({
+        borrowed: false,
+        interactiveClientCount: 0,
+        borrowedByClientIds: [],
+      });
+    });
+  });
+
+  it("expires borrowed workspace clients by lease", () => {
+    withSparkDaemonWorkspaceStore(({ db, root }) => {
+      const workspace = registerWorkspace(db, {
+        localPath: root,
+        displayName: "Local default",
+      });
+
+      attachWorkspaceClient(db, {
+        workspaceId: workspace.id,
+        clientId: "wcl-tui-expiring",
+        kind: "interactive",
+        leaseTtlMs: 1_000,
+        now: "2026-05-26T00:00:00.000Z",
+      });
+      expect(isBorrowedWorkspace(db, workspace.id, "2026-05-26T00:00:00.500Z")).toBe(true);
+
+      heartbeatWorkspaceClient(db, {
+        clientId: "wcl-tui-expiring",
+        leaseTtlMs: 1_000,
+        now: "2026-05-26T00:00:01.000Z",
+      });
+      expect(isBorrowedWorkspace(db, workspace.id, "2026-05-26T00:00:01.500Z")).toBe(true);
+      expect(isBorrowedWorkspace(db, workspace.id, "2026-05-26T00:00:02.001Z")).toBe(false);
+    });
+  });
+
+  it("ensures and reuses one executor client per workspace without busy backpressure", () => {
+    withSparkDaemonWorkspaceStore(({ db, root }) => {
+      const workspace = registerWorkspace(db, {
+        localPath: root,
+        displayName: "Local default",
+      });
+      const first = ensureWorkspaceExecutorClient(db, {
+        workspaceId: workspace.id,
+        clientId: "exec-local-1",
+        now: "2026-05-26T00:00:00.000Z",
+      });
+      const reused = ensureWorkspaceExecutorClient(db, {
+        workspaceId: workspace.id,
+        clientId: "exec-local-2",
+        now: "2026-05-26T00:01:00.000Z",
+      });
+
+      expect(reused.id).toBe(first.id);
+      db.prepare(
+        `INSERT INTO invocations
+          (id, command_id, workspace_binding_id, status, prompt, created_at, updated_at)
+         VALUES
+          ('inv_running_1', NULL, ?, 'running', 'one', ?, ?),
+          ('inv_running_2', NULL, ?, 'queued', 'two', ?, ?)`,
+      ).run(
+        workspace.id,
+        "2026-05-26T00:02:00.000Z",
+        "2026-05-26T00:02:00.000Z",
+        workspace.id,
+        "2026-05-26T00:02:00.000Z",
+        "2026-05-26T00:02:00.000Z",
+      );
+
+      expect(getWorkspaceById(db, workspace.id)?.executor).toMatchObject({
+        state: "online",
+        clientId: "exec-local-1",
+        activeInvocationCount: 2,
+        activeAgentCount: 2,
+      });
+    });
+  });
+
+  it("keeps executor client ids bound to one workspace and projects unhealthy state", () => {
+    withSparkDaemonWorkspaceStore(({ db, root }) => {
+      const firstPath = join(root, "first");
+      const secondPath = join(root, "second");
+      mkdirSync(firstPath);
+      mkdirSync(secondPath);
+      const first = registerWorkspace(db, { localPath: firstPath, displayName: "First" });
+      const second = registerWorkspace(db, { localPath: secondPath, displayName: "Second" });
+
+      attachWorkspaceClient(db, {
+        workspaceId: first.id,
+        clientId: "exec-bound",
+        kind: "executor",
+        metadata: { state: "unhealthy", unhealthyReason: "heartbeat-missed", activeAgentCount: 3 },
+        now: "2026-05-26T00:00:00.000Z",
+      });
+
+      expect(() =>
+        attachWorkspaceClient(db, {
+          workspaceId: second.id,
+          clientId: "exec-bound",
+          kind: "executor",
+        }),
+      ).toThrow(/already bound to workspace/);
+      expect(getWorkspaceById(db, first.id)?.executor).toMatchObject({
+        state: "unhealthy",
+        unhealthyReason: "heartbeat-missed",
+        activeAgentCount: 3,
       });
     });
   });

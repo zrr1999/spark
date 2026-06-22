@@ -3,7 +3,7 @@ import test from "node:test";
 
 import type { ExtensionContext } from "@zendev-lab/pi-extension-api";
 
-import { SparkHostRuntime } from "../apps/spark/src/host/runtime.ts";
+import { SparkHostRuntime } from "../apps/spark-tui/src/host/runtime.ts";
 
 void test("SparkHostRuntime registers tools and reflects them in getAllTools", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });

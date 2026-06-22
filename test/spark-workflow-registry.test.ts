@@ -9,7 +9,7 @@ import {
   sparkWorkflowRef,
   userWorkflowDir,
   workspaceWorkflowDir,
-} from "../packages/spark/src/extension/spark-workflow-registry.ts";
+} from "../packages/spark-extension/src/extension/spark-workflow-registry.ts";
 
 void test("Spark workflow registry lists workspace and user workflows", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "spark-workflow-registry-"));

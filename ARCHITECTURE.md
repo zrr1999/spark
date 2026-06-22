@@ -27,8 +27,9 @@ pi-tasks               # generic project/task/TODO graph, readiness, claims, tas
 pi-workflows           # saved workflow discovery/runtime primitives and DAG run store
 
 spark-runtime          # Spark task-to-role-run adapter and role-run artifacts
-spark                  # Spark facade: modes, widget, commands, builtin Spark roles, policy
-spark-cli              # native Spark CLI host over the extension contract
+spark-extension        # Spark facade: modes, widget, commands, builtin Spark roles, policy
+spark-cli              # thin root spark dispatcher
+spark-tui-app          # native Spark TUI host over the extension contract
 ```
 
 Allowed high-level usage:
@@ -53,7 +54,7 @@ pi-tasks -> spark-runtime
 pi-tasks -> pi-workflows
 ```
 
-A local `prek` hook and CI static checks run `pnpm run check:boundaries`, which scans `packages/pi-*` manifests and source imports for `spark-*` regressions.
+The root `pnpm run check` gate, a local `prek` hook, and CI static checks run the boundary checker, which scans `packages/pi-*` manifests and source imports for `spark-*` regressions.
 
 ## Public mental model
 

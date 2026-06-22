@@ -59,7 +59,7 @@ The in-process Spark daemon registered against the server but never produced an
 available `runtime_workspace_bindings` row. Common causes:
 
 - The runtime WebSocket failed to upgrade. Check that the server printed
-  `Navia web server listening on …` before the gate starts driving forms; the
+  `Spark Cockpit server listening on …` before the gate starts driving forms; the
   gate already waits via `waitForServer`, so this usually points at a custom
   server crash.
 - Invalid or expired runtime token. Most often happens after editing
@@ -81,7 +81,7 @@ The daemon accepted the command but never produced a `succeeded`
   injected `runPiPrompt` did not return.
 - For `--real-pi`, raise `--task-timeout-ms` and confirm the Spark daemon data
   directory has Pi credentials. Run the daemon manually with
-  `SPARK_DAEMON_HOME=… pnpm run spark-daemon:cli -- daemon start` and inspect the logs.
+  `SPARK_DAEMON_HOME=… spark daemon start` after `pnpm install -g .` and inspect the logs.
 - For stubbed-Pi mode, check the daemon log under
   `<spark-daemon-state>/logs/daemon.jsonl` for `daemon.error` outbox rows.
 
@@ -100,12 +100,12 @@ server-side row id.
 
 ## Workspace registration prompts for a directory in CI
 
-Plain interactive `spark-daemon workspace register` prompts on TTY if no path is provided.
+Plain interactive `spark daemon workspace register` prompts on TTY if no path is provided.
 Scripted registration with `--server-url`, `--token`, or `--name` defaults to
 the current directory, but passing `.` explicitly can make CI logs clearer:
 
 ```bash
-spark-daemon workspace register . --server-url https://… --token …
+spark daemon workspace register . --server-url https://… --token …
 ```
 
 In CI also set `NAVIA_WORKSPACE_REGISTRATION_TOKEN` instead of `--token`

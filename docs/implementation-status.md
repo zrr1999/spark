@@ -13,7 +13,7 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
 - `pi-tasks`
    - generic project/task/TODO/run graph capability and canonical `task({ action })` tool
    - `TaskGraphStore` backed by the V2 `.spark/projects/` project/task file tree, content-aware owner-file writes, `.spark/projects/index.lock` plus `.spark/projects/locks/<project>.lock` lock directories, stale direct-save protection, dependency/readiness checks, task names/titles/descriptions, run state, unified claim/lease schema, heartbeat and stale-claim expiry
-   - task-scoped and session-scoped TODO state outside `.spark/projects/` in canonical `.spark/todos/todos.sqlite`; legacy TODO JSON files are import-only; stable session display numbers live under `.spark/sessions/<session>/todo-display-numbers.json`
+   - task plan item state outside `.spark/projects/` in canonical `.spark/todos/todos.sqlite`; legacy TODO JSON files and session-scoped snapshots are import-only
 - `pi-learnings`
    - generic evidence-backed `learning` / `learning-candidate` / `learning-export` records
    - canonical `learning({ action })` tool
@@ -63,7 +63,7 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
 
 - `pi-* -> spark-*` imports/dependencies are forbidden.
 - `scripts/check-pi-boundaries.mjs` scans `packages/pi-*` manifests and source imports for `spark-*` regressions.
-- `pnpm run check:boundaries` is wired into `prek.toml` as `pi-boundary-check`; CI static checks run `prek`, so the guard runs in CI.
+- `pnpm run check` runs the boundary checker, and `prek.toml` wires it directly as `pi-boundary-check`; CI static checks run `prek`, so the guard runs in CI.
 - The guard intentionally checks dependency/import boundaries, not arbitrary historical strings; on-disk/schema compatibility strings such as goal continuation markers remain allowed.
 
 ## Current public tool surface

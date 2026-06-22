@@ -52,9 +52,7 @@ function sendFrame(socket: Socket, message: CueFrame): void {
   socket.write(encodeFrame(message));
 }
 
-async function startCueServer(
-  handler: (message: CueFrame, socket: Socket) => void,
-): Promise<{
+async function startCueServer(handler: (message: CueFrame, socket: Socket) => void): Promise<{
   socketPath: string;
   requests: CueFrame[];
   handshakes: CueFrame[];
@@ -193,7 +191,11 @@ void test("CueClient.connect rejects daemons without required Pong protocol fiel
         const message = JSON.parse(body.toString("utf8")) as CueFrame;
         const payload = requestPayload(message);
         if ("Handshake" in payload) {
-          sendFrame(socket, { type: "response", id: message.id as number, payload: { Ok: { Ack: {} } } });
+          sendFrame(socket, {
+            type: "response",
+            id: message.id as number,
+            payload: { Ok: { Ack: {} } },
+          });
         }
         if ("Ping" in payload) {
           sendFrame(socket, {

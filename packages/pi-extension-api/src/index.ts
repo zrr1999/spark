@@ -6,7 +6,7 @@ import { basename, dirname, join } from "node:path";
  * pi-extension-api — shared contract and generic primitive surface.
  *
  * This package centralises the ExtensionAPI shape that Pi extensions in this
- * workspace speak to. Both the upstream pi-coding-agent runtime and the spark-cli native
+ * workspace speak to. Both the upstream pi-coding-agent runtime and the Spark TUI native
  * pi-tui host implement (a superset of) this surface; extensions stay
  * portable as long as they only depend on the names exported from here.
  *

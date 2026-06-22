@@ -3,13 +3,13 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@zendev-lab/spark-tui/text";
 
 import piAskExtension from "../packages/pi-ask/src/extension.ts";
 import { registerPiCueTools } from "../packages/pi-cue/src/index.ts";
 import piGraftExtension from "../packages/pi-graft/src/extension.ts";
 import { registerPiRolesTools } from "../packages/pi-roles/src/extension.ts";
-import sparkExtension from "../packages/spark/src/extension/index.ts";
+import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
 
 interface RenderTheme {
   fg: (_color: string, text: string) => string;
@@ -175,7 +175,7 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
     "cue_exec",
     {
       command:
-        "pnpm exec node -e \"import('@earendil-works/pi-tui').then(m=>console.log(m.visibleWidth('你好'))).catch(e=>{console.error(e);process.exit(1)})\"",
+        "pnpm exec node -e \"import('@zendev-lab/spark-tui/text').then(m=>console.log(m.visibleWidth('你好'))).catch(e=>{console.error(e);process.exit(1)})\"",
       cwd: "/Users/zhanrongrui/workspace/zrr1999/spark",
     },
     80,

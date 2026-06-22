@@ -10,7 +10,12 @@ import {
   type PiGraftSessionContext,
   type PiGraftToolContext,
 } from "./extension.ts";
-import { runGraftJson, type JsonRecord } from "./graft-client.ts";
+import {
+  GraftCliError,
+  runGraftJson,
+  type DirectGraftExecution,
+  type JsonRecord,
+} from "./graft-client.ts";
 
 const SANDBOX_STATE_ENTRY = "pi-graft-sandbox-state";
 const DEFAULT_REPO_ID = "sandbox";
@@ -18,7 +23,7 @@ const SANDBOX_FILE_PROMPT_GUIDELINES = [
   "Sandbox read/write/edit/grep/find/ls operate on the active Graft scratch/base, never directly on the working tree.",
   "Run graft_sandbox_enter before sandbox file access; use graft_sandbox_checkpoint/materialize/promote for lifecycle transitions.",
   "Do not bypass the sandbox with shell/script file I/O; validation commands without direct file access remain allowed.",
-  "Sandbox grep/find/ls v1 cover explicit sandbox paths or known changed paths only; materialize for full-tree inspection.",
+  "Sandbox grep/find/ls prefer the Graft-native tree backend when available and fall back to temporary materialized base state plus tracked scratch changes; they never read the Git working tree directly.",
 ];
 
 export interface PiGraftSandboxState {
@@ -177,12 +182,26 @@ function defaultSandboxWorkspace(cwd: string, name?: string): string {
   return resolve(tmpdir(), "pi-graft-sandbox", safeName || "workspace");
 }
 
+const SANDBOX_PROFILE_RELOAD_GUIDANCE =
+  "Sandbox profile caveat: file-tool names read/write/edit/grep/find/ls remain sandbox overrides until Pi reloads without @zendev-lab/pi-graft/sandbox; graft_sandbox_exit only clears sandbox state.";
+
+function sandboxProfileDetails(): Record<string, unknown> {
+  return {
+    treeBackendPreference: sandboxTreeBackendPreference(),
+    sandboxOverridesRemainRegistered: true,
+    restoreBuiltInsBy: "reload_without_sandbox_entrypoint",
+    reloadGuidance:
+      "Reload or restart Pi without @zendev-lab/pi-graft/sandbox, and do not use --no-builtin-tools if ordinary Pi built-ins should be available.",
+  };
+}
+
 function sandboxSummary(state: PiGraftSandboxState | undefined): string {
   if (!state) {
     return [
       "GRAFT SANDBOX INACTIVE",
-      "Normal pi-graft tools are available, but sandbox file-tool replacement has not been entered.",
-      "Run graft_sandbox_enter before using sandbox-backed file tools.",
+      "Sandbox state is inactive, but this loaded sandbox profile still owns file-tool override names.",
+      "Run graft_sandbox_enter before using sandbox-backed file tools in this profile.",
+      SANDBOX_PROFILE_RELOAD_GUIDANCE,
     ].join("\n");
   }
   return [
@@ -194,11 +213,13 @@ function sandboxSummary(state: PiGraftSandboxState | undefined): string {
     `resolvedBase: ${state.resolvedBase ?? "unknown"}`,
     `scratch: ${state.lastScratch ?? "none"}`,
     `changedPaths: ${state.changedPaths.length ? state.changedPaths.join(", ") : "none"}`,
+    `treeBackendPreference: ${sandboxTreeBackendPreference()}`,
     `candidate: ${state.lastCandidate ?? "none"}`,
     `patch: ${state.lastPatch ?? "none"}`,
     `materializedPath: ${state.lastMaterializedPath ?? "none"}`,
     `promotionCommit: ${state.lastPromotion?.commit ?? "none"}`,
     "writes: Graft scratch only; working tree is not modified",
+    SANDBOX_PROFILE_RELOAD_GUIDANCE,
   ].join("\n");
 }
 
@@ -465,14 +486,358 @@ function wildcardRegExp(pattern: string): RegExp {
   return new RegExp(`^${escapeRegExp(pattern).replaceAll("\\*", ".*")}$`);
 }
 
-function changedPathsFor(state: PiGraftSandboxState, path?: string): string[] {
-  if (path) {
-    const prefix = path.endsWith("/") ? path : `${path}/`;
-    return state.changedPaths.filter(
-      (changedPath) => changedPath === path || changedPath.startsWith(prefix),
+const NATIVE_TREE_BACKEND = "native_tree";
+const MATERIALIZED_TREE_BACKEND = "materialized_run_overlay";
+
+type SandboxTreeBackend = typeof NATIVE_TREE_BACKEND | typeof MATERIALIZED_TREE_BACKEND;
+type SandboxTreeBackendPreference = "auto" | "native" | "materialized";
+
+interface SandboxBasePathCache {
+  key: string;
+  paths: string[];
+  execution?: unknown;
+}
+
+interface SandboxVisiblePaths {
+  paths: string[];
+  backend: SandboxTreeBackend;
+  attemptedBackend?: SandboxTreeBackend;
+  fallbackReason?: string;
+  basePathCount?: number;
+  changedPathCount?: number;
+  cacheHit?: boolean;
+  execution?: unknown;
+}
+
+let sandboxBasePathCache: SandboxBasePathCache | undefined;
+
+function sandboxTreeBackendPreference(): SandboxTreeBackendPreference {
+  const raw = process.env.PI_GRAFT_SANDBOX_TREE_BACKEND?.trim().toLowerCase();
+  if (raw === "native" || raw === "materialized" || raw === "auto") return raw;
+  return "auto";
+}
+
+function sandboxTreeSourceArgv(state: PiGraftSandboxState): string[] {
+  return state.lastScratch ? ["--from", state.lastScratch] : ["--base", state.base];
+}
+
+function sandboxTreeCacheKey(state: PiGraftSandboxState): string {
+  return [
+    state.workspace,
+    state.workspaceId ?? "",
+    state.base,
+    state.resolvedBase ?? "",
+    state.lastScratch ?? "",
+    ...state.changedPaths,
+  ].join("\0");
+}
+
+function runViewData(envelope: JsonRecord): Record<string, unknown> | undefined {
+  const view = envelope.view;
+  if (!isRecord(view) || view.type !== "run" || !isRecord(view.data)) return undefined;
+  return view.data;
+}
+
+function runViewStdout(envelope: JsonRecord, context: string): string {
+  const view = runViewData(envelope);
+  if (!view) throw new Error(`${context} did not return a run view.`);
+  const exitCode = typeof view.exit_code === "number" ? view.exit_code : 0;
+  if (exitCode !== 0) {
+    const stderr = typeof view.stderr === "string" ? view.stderr.trim() : "";
+    throw new Error(`${context} exited ${exitCode}${stderr ? `: ${stderr}` : ""}`);
+  }
+  return typeof view.stdout === "string" ? view.stdout : "";
+}
+
+function parseFindPaths(stdout: string): string[] {
+  return uniqueStrings(
+    stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => line.replace(/^\.\//, ""))
+      .filter((line) => line.length > 0)
+      .map((line) => sandboxPath(line, "inspection path")),
+  ).sort((left, right) => left.localeCompare(right));
+}
+
+async function sandboxBasePaths(state: PiGraftSandboxState): Promise<{
+  paths: string[];
+  cacheHit: boolean;
+  execution?: unknown;
+}> {
+  const key = sandboxTreeCacheKey(state);
+  if (sandboxBasePathCache?.key === key) {
+    return {
+      paths: sandboxBasePathCache.paths,
+      cacheHit: true,
+      execution: sandboxBasePathCache.execution,
+    };
+  }
+  const run = await runGraftJson(state.workspace, [
+    "run",
+    "--cwd",
+    ".",
+    state.base,
+    "--",
+    "find",
+    ".",
+    "-type",
+    "f",
+  ]);
+  const paths = parseFindPaths(runViewStdout(run.envelope, "sandbox full-tree find"));
+  sandboxBasePathCache = { key, paths, execution: run.execution };
+  return { paths, cacheHit: false, execution: run.execution };
+}
+
+function pathMatchesSandboxQuery(path: string, basePath?: string, globRegex?: RegExp): boolean {
+  if (basePath) {
+    const prefix = basePath.endsWith("/") ? basePath : `${basePath}/`;
+    if (path !== basePath && !path.startsWith(prefix)) return false;
+  }
+  return !globRegex || globRegex.test(path) || globRegex.test(path.split("/").at(-1) ?? path);
+}
+
+function nativeTreeUnavailableReason(error: unknown): string | undefined {
+  if (!(error instanceof GraftCliError)) return undefined;
+  const text = `${error.stdout}\n${error.stderr}\n${error.message}`;
+  if (
+    /unrecognized subcommand|invalid subcommand|unknown command|no such subcommand/iu.test(text)
+  ) {
+    return (
+      text
+        .split("\n")
+        .find((line) => /tree|subcommand|command/iu.test(line))
+        ?.trim() || "native tree command is unavailable"
     );
   }
-  return state.changedPaths;
+  return undefined;
+}
+
+function treeEntryPaths(result: JsonRecord | undefined): string[] {
+  const entries = result?.entries;
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .map((entry) => stringField(entry, "path"))
+    .filter((path): path is string => Boolean(path))
+    .map((path) => sandboxPath(path, "tree entry path"));
+}
+
+async function sandboxNativeVisiblePaths(
+  state: PiGraftSandboxState,
+  options: { basePath?: string; globRegex?: RegExp } = {},
+): Promise<SandboxVisiblePaths> {
+  const argv = ["tree", "list", ...sandboxTreeSourceArgv(state)];
+  if (options.basePath) argv.push("--path", options.basePath);
+  const run = await runGraftJson(state.workspace, argv);
+  return {
+    paths: uniqueStrings(treeEntryPaths(run.result))
+      .filter((path) => pathMatchesSandboxQuery(path, options.basePath, options.globRegex))
+      .sort((left, right) => left.localeCompare(right)),
+    backend: NATIVE_TREE_BACKEND,
+    execution: run.execution,
+  };
+}
+
+async function sandboxMaterializedVisiblePaths(
+  state: PiGraftSandboxState,
+  options: { basePath?: string; globRegex?: RegExp } = {},
+  fallback?: { attemptedBackend: SandboxTreeBackend; fallbackReason: string },
+): Promise<SandboxVisiblePaths> {
+  const base = await sandboxBasePaths(state);
+  const changedPaths = state.changedPaths;
+  const visible = uniqueStrings([...base.paths, ...changedPaths])
+    .filter((path) => pathMatchesSandboxQuery(path, options.basePath, options.globRegex))
+    .sort((left, right) => left.localeCompare(right));
+  return {
+    paths: visible,
+    backend: MATERIALIZED_TREE_BACKEND,
+    attemptedBackend: fallback?.attemptedBackend,
+    fallbackReason: fallback?.fallbackReason,
+    basePathCount: base.paths.length,
+    changedPathCount: changedPaths.length,
+    cacheHit: base.cacheHit,
+    execution: base.execution,
+  };
+}
+
+async function sandboxVisiblePaths(
+  state: PiGraftSandboxState,
+  options: { basePath?: string; glob?: string; globRegex?: RegExp } = {},
+): Promise<SandboxVisiblePaths> {
+  const preference = sandboxTreeBackendPreference();
+  if (preference === "materialized") return sandboxMaterializedVisiblePaths(state, options);
+  try {
+    return await sandboxNativeVisiblePaths(state, options);
+  } catch (error) {
+    const fallbackReason = nativeTreeUnavailableReason(error);
+    if (preference === "native" || !fallbackReason) throw error;
+    return sandboxMaterializedVisiblePaths(state, options, {
+      attemptedBackend: NATIVE_TREE_BACKEND,
+      fallbackReason,
+    });
+  }
+}
+
+async function readSandboxBaseTextFile(state: PiGraftSandboxState, path: string): Promise<string> {
+  const run = await runGraftJson(state.workspace, [
+    "run",
+    "--cwd",
+    ".",
+    state.base,
+    "--",
+    "cat",
+    `./${path}`,
+  ]);
+  return runViewStdout(run.envelope, `sandbox base read ${path}`);
+}
+
+function numberField(value: unknown, field: string): number | undefined {
+  if (!isRecord(value)) return undefined;
+  const fieldValue = value[field];
+  return typeof fieldValue === "number" && Number.isFinite(fieldValue) ? fieldValue : undefined;
+}
+
+function booleanField(value: unknown, field: string): boolean | undefined {
+  if (!isRecord(value)) return undefined;
+  const fieldValue = value[field];
+  return typeof fieldValue === "boolean" ? fieldValue : undefined;
+}
+
+interface SandboxNativeGrepResult {
+  matches: string[];
+  searchedPaths: string[];
+  skippedBinaryPaths: string[];
+  totalMatches: number;
+  truncated: boolean;
+  execution: DirectGraftExecution;
+}
+
+function nativeGrepMatches(result: JsonRecord | undefined): string[] {
+  const matches = result?.matches;
+  if (!Array.isArray(matches)) return [];
+  return matches
+    .map((match) => {
+      const path = stringField(match, "path");
+      const line = numberField(match, "line");
+      const text = stringField(match, "text");
+      return path && line
+        ? `${sandboxPath(path, "tree match path")}:${line}:${text ?? ""}`
+        : undefined;
+    })
+    .filter((match): match is string => Boolean(match));
+}
+
+function nativeGrepSearchedPaths(result: JsonRecord | undefined): string[] {
+  const matches = result?.matches;
+  if (!Array.isArray(matches)) return [];
+  return uniqueStrings(
+    matches
+      .map((match) => stringField(match, "path"))
+      .filter((path): path is string => Boolean(path))
+      .map((path) => sandboxPath(path, "tree match path")),
+  );
+}
+
+function stringArrayField(value: unknown, field: string): string[] {
+  if (!isRecord(value)) return [];
+  const fieldValue = value[field];
+  if (!Array.isArray(fieldValue)) return [];
+  return fieldValue.filter((item): item is string => typeof item === "string");
+}
+
+async function sandboxNativeGrep(
+  state: PiGraftSandboxState,
+  options: { pattern: string; basePath?: string; glob?: string; limit: number },
+): Promise<SandboxNativeGrepResult> {
+  const argv = ["tree", "grep", ...sandboxTreeSourceArgv(state), options.pattern];
+  if (options.basePath) argv.push("--path", options.basePath);
+  if (options.glob) argv.push("--glob", options.glob);
+  argv.push("--limit", String(options.limit));
+  const run = await runGraftJson(state.workspace, argv);
+  const matches = nativeGrepMatches(run.result);
+  return {
+    matches,
+    searchedPaths: nativeGrepSearchedPaths(run.result),
+    skippedBinaryPaths: stringArrayField(run.result, "skipped_binary_paths"),
+    totalMatches: numberField(run.result, "total_matches") ?? matches.length,
+    truncated: booleanField(run.result, "truncated") ?? false,
+    execution: run.execution,
+  };
+}
+
+async function sandboxMaterializedGrep(
+  state: PiGraftSandboxState,
+  options: {
+    pattern: string;
+    basePath?: string;
+    glob?: string;
+    literal: boolean;
+    ignoreCase: boolean;
+    limit: number;
+    fallbackReason?: string;
+  },
+): Promise<{
+  content: { type: "text"; text: string }[];
+  details: Record<string, unknown>;
+}> {
+  const globRegex = options.glob ? wildcardRegExp(options.glob) : undefined;
+  const visible = await sandboxMaterializedVisiblePaths(
+    state,
+    { basePath: options.basePath, globRegex },
+    options.fallbackReason
+      ? { attemptedBackend: NATIVE_TREE_BACKEND, fallbackReason: options.fallbackReason }
+      : undefined,
+  );
+  const flags = options.ignoreCase ? "i" : "";
+  const regex = new RegExp(
+    options.literal ? escapeRegExp(options.pattern) : options.pattern,
+    flags,
+  );
+  const matches: string[] = [];
+  const searchedPaths: string[] = [];
+  const unreadablePaths: string[] = [];
+  const changedSet = new Set(state.changedPaths);
+  for (const path of visible.paths) {
+    if (matches.length >= options.limit) break;
+    searchedPaths.push(path);
+    let content: string;
+    try {
+      content = changedSet.has(path)
+        ? (await readSandboxFile(state, path)).content
+        : await readSandboxBaseTextFile(state, path);
+    } catch {
+      unreadablePaths.push(path);
+      continue;
+    }
+    const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
+    for (const [index, line] of lines.entries()) {
+      if (regex.test(line)) matches.push(`${path}:${index + 1}:${line}`);
+      if (matches.length >= options.limit) break;
+    }
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: matches.join("\n") || "No matches in sandbox base tree or tracked scratch changes.",
+      },
+    ],
+    details: {
+      sandbox: true,
+      backend: visible.backend,
+      attemptedBackend: visible.attemptedBackend,
+      fallbackReason: visible.fallbackReason,
+      searchedPaths,
+      unreadablePaths,
+      basePathCount: visible.basePathCount,
+      changedPathCount: visible.changedPathCount,
+      cacheHit: visible.cacheHit,
+      matchCount: matches.length,
+      matchLimitReached: matches.length >= options.limit ? options.limit : undefined,
+      linesTruncated: false,
+    },
+  };
 }
 
 function commandTextFromToolCall(event: unknown): { toolName?: string; text: string } {
@@ -698,9 +1063,9 @@ export function registerPiGraftSandboxExtension(pi: PiGraftExtensionApi): void {
     name: "grep",
     label: "Grep (Graft Sandbox)",
     description:
-      "Search UTF-8 text in active sandbox changed paths or an explicit sandbox path. V1 does not scan untouched base files.",
+      "Search UTF-8 text in the active sandbox base tree plus tracked scratch changes without reading the Git working tree.",
     promptSnippet:
-      "Search UTF-8 text in explicit sandbox paths or known changed sandbox paths; does not scan the working tree.",
+      "Search UTF-8 text with the native Graft tree backend when semantics allow, otherwise with the materialized sandbox fallback; does not scan the working tree.",
     promptGuidelines: SANDBOX_FILE_PROMPT_GUIDELINES,
     parameters: Type.Object({
       pattern: Type.String({ description: "Regex or literal pattern to search for." }),
@@ -719,59 +1084,55 @@ export function registerPiGraftSandboxExtension(pi: PiGraftExtensionApi): void {
       if (!pattern) throw new Error("grep requires pattern.");
       const basePath = optionalSandboxPath(params, "path");
       const glob = optionalStringParam(params, "glob");
-      const globRegex = glob ? wildcardRegExp(glob) : undefined;
-      const paths = (basePath ? [basePath] : changedPathsFor(state)).filter(
-        (path) =>
-          !globRegex || globRegex.test(path) || globRegex.test(path.split("/").at(-1) ?? path),
-      );
-      if (paths.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Sandbox grep v1 searches known changed paths only; no changed paths are currently tracked. Use read for a known path or checkpoint/materialize for broader inspection.",
-            },
-          ],
-          details: { sandbox: true, searchedPaths: [] },
-        };
-      }
-      const flags = optionalBooleanParam(params, "ignoreCase", false) ? "i" : "";
-      const regex = new RegExp(
-        optionalBooleanParam(params, "literal", false) ? escapeRegExp(pattern) : pattern,
-        flags,
-      );
+      const literal = optionalBooleanParam(params, "literal", false);
+      const ignoreCase = optionalBooleanParam(params, "ignoreCase", false);
       const max = positiveIntegerParam(params.limit, "limit") ?? 100;
-      const matches: string[] = [];
-      const searchedPaths: string[] = [];
-      for (const path of paths) {
-        if (matches.length >= max) break;
-        searchedPaths.push(path);
-        const read = await readSandboxFile(state, path);
-        const lines = read.content.endsWith("\n")
-          ? read.content.slice(0, -1).split("\n")
-          : read.content.split("\n");
-        for (const [index, line] of lines.entries()) {
-          if (regex.test(line)) matches.push(`${path}:${index + 1}:${line}`);
-          if (matches.length >= max) break;
+      if (literal && !ignoreCase && sandboxTreeBackendPreference() !== "materialized") {
+        try {
+          const native = await sandboxNativeGrep(state, { pattern, basePath, glob, limit: max });
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  native.matches.join("\n") ||
+                  "No matches in sandbox base tree or tracked scratch changes.",
+              },
+            ],
+            details: {
+              sandbox: true,
+              backend: NATIVE_TREE_BACKEND,
+              searchedPaths: native.searchedPaths,
+              skippedBinaryPaths: native.skippedBinaryPaths,
+              matchCount: native.matches.length,
+              totalMatches: native.totalMatches,
+              matchLimitReached: native.truncated ? max : undefined,
+              linesTruncated: false,
+              execution: native.execution,
+            },
+          };
+        } catch (error) {
+          const fallbackReason = nativeTreeUnavailableReason(error);
+          if (sandboxTreeBackendPreference() === "native" || !fallbackReason) throw error;
+          return sandboxMaterializedGrep(state, {
+            pattern,
+            basePath,
+            glob,
+            literal,
+            ignoreCase,
+            limit: max,
+            fallbackReason,
+          });
         }
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              matches.join("\n") ||
-              "No matches in sandbox changed paths. Note: grep v1 does not scan untouched base files.",
-          },
-        ],
-        details: {
-          sandbox: true,
-          searchedPaths,
-          matchCount: matches.length,
-          matchLimitReached: matches.length >= max ? max : undefined,
-          linesTruncated: false,
-        },
-      };
+      return sandboxMaterializedGrep(state, {
+        pattern,
+        basePath,
+        glob,
+        literal,
+        ignoreCase,
+        limit: max,
+      });
     },
   });
 
@@ -779,9 +1140,9 @@ export function registerPiGraftSandboxExtension(pi: PiGraftExtensionApi): void {
     name: "find",
     label: "Find (Graft Sandbox)",
     description:
-      "Find known changed sandbox paths. V1 lists changed paths tracked by sandbox write/edit rather than the entire base tree.",
+      "Find paths in the active sandbox base tree plus tracked scratch changes without traversing the Git working tree.",
     promptSnippet:
-      "Find known changed sandbox paths by wildcard; does not traverse the working tree or untouched base tree.",
+      "Find sandbox-visible paths with the native Graft tree backend when available, otherwise with the materialized sandbox fallback; does not traverse the working tree.",
     promptGuidelines: SANDBOX_FILE_PROMPT_GUIDELINES,
     parameters: Type.Object({
       pattern: Type.Optional(Type.String({ description: "Optional wildcard pattern, e.g. *.ts." })),
@@ -794,25 +1155,32 @@ export function registerPiGraftSandboxExtension(pi: PiGraftExtensionApi): void {
       const pattern = optionalStringParam(params, "pattern");
       const regex = pattern ? wildcardRegExp(pattern) : undefined;
       const max = positiveIntegerParam(params.limit, "limit") ?? 200;
-      const matchingPaths = changedPathsFor(state, basePath).filter(
-        (path) => !regex || regex.test(path) || regex.test(path.split("/").at(-1) ?? path),
-      );
-      const paths = matchingPaths.slice(0, max);
+      const visible = await sandboxVisiblePaths(state, {
+        basePath,
+        glob: pattern,
+        globRegex: regex,
+      });
+      const paths = visible.paths.slice(0, max);
       return {
         content: [
           {
             type: "text",
-            text:
-              paths.join("\n") ||
-              "No known changed paths. Sandbox find v1 lists changed paths only; use materialize for full-tree inspection.",
+            text: paths.join("\n") || "No sandbox-visible paths matched the query.",
           },
         ],
         details: {
           sandbox: true,
+          backend: visible.backend,
+          attemptedBackend: visible.attemptedBackend,
+          fallbackReason: visible.fallbackReason,
           path: basePath,
           pattern,
           count: paths.length,
-          resultLimitReached: matchingPaths.length > max ? max : undefined,
+          totalMatches: visible.paths.length,
+          basePathCount: visible.basePathCount,
+          changedPathCount: visible.changedPathCount,
+          cacheHit: visible.cacheHit,
+          resultLimitReached: visible.paths.length > max ? max : undefined,
         },
       };
     },
@@ -822,9 +1190,9 @@ export function registerPiGraftSandboxExtension(pi: PiGraftExtensionApi): void {
     name: "ls",
     label: "List (Graft Sandbox)",
     description:
-      "List known changed entries under a sandbox path. V1 does not list untouched base-tree entries.",
+      "List entries under a sandbox path from the active base tree plus tracked scratch changes without reading the Git working tree.",
     promptSnippet:
-      "List known changed sandbox entries under a path; does not list working-tree or untouched base-tree entries.",
+      "List sandbox-visible entries with the native Graft tree backend when available, otherwise with the materialized sandbox fallback; does not read the working tree.",
     promptGuidelines: SANDBOX_FILE_PROMPT_GUIDELINES,
     parameters: Type.Object({
       path: Type.Optional(
@@ -836,10 +1204,16 @@ export function registerPiGraftSandboxExtension(pi: PiGraftExtensionApi): void {
       const state = requireSandboxState(sandboxState);
       const basePath = optionalSandboxPath(params, "path");
       const prefix = basePath ? (basePath.endsWith("/") ? basePath : `${basePath}/`) : "";
+      const visible = await sandboxVisiblePaths(state, { basePath });
       const entries = new Set<string>();
-      for (const changedPath of changedPathsFor(state, basePath)) {
-        const rest = prefix ? changedPath.slice(prefix.length) : changedPath;
-        const [head, ...tail] = rest.split("/");
+      for (const visiblePath of visible.paths) {
+        const rest =
+          basePath && visiblePath === basePath
+            ? visiblePath.split("/").at(-1)
+            : prefix
+              ? visiblePath.slice(prefix.length)
+              : visiblePath;
+        const [head, ...tail] = (rest ?? "").split("/");
         if (head) entries.add(tail.length ? `${head}/` : head);
       }
       const max = positiveIntegerParam(params.limit, "limit") ?? 500;
@@ -849,15 +1223,20 @@ export function registerPiGraftSandboxExtension(pi: PiGraftExtensionApi): void {
         content: [
           {
             type: "text",
-            text:
-              rendered.join("\n") ||
-              "No known changed entries. Sandbox ls v1 lists changed paths only; use materialize for full-tree inspection.",
+            text: rendered.join("\n") || "No sandbox-visible entries matched the query.",
           },
         ],
         details: {
           sandbox: true,
+          backend: visible.backend,
+          attemptedBackend: visible.attemptedBackend,
+          fallbackReason: visible.fallbackReason,
           path: basePath,
           count: rendered.length,
+          totalEntries: allEntries.length,
+          basePathCount: visible.basePathCount,
+          changedPathCount: visible.changedPathCount,
+          cacheHit: visible.cacheHit,
           entryLimitReached: allEntries.length > max ? max : undefined,
         },
       };
@@ -955,7 +1334,11 @@ export function registerPiGraftSandboxExtension(pi: PiGraftExtensionApi): void {
     async execute() {
       return {
         content: [{ type: "text", text: sandboxSummary(sandboxState) }],
-        details: { sandbox: Boolean(sandboxState), state: sandboxState },
+        details: {
+          sandbox: Boolean(sandboxState),
+          state: sandboxState,
+          profile: sandboxProfileDetails(),
+        },
       };
     },
   });
@@ -976,11 +1359,11 @@ export function registerPiGraftSandboxExtension(pi: PiGraftExtensionApi): void {
           {
             type: "text",
             text: previous
-              ? `Exited Graft sandbox. Retained refs: scratch=${previous.lastScratch ?? "none"}, candidate=${previous.lastCandidate ?? "none"}, patch=${previous.lastPatch ?? "none"}. Restart or reload without the sandbox entrypoint for ordinary built-in file tools.`
-              : "Graft sandbox was already inactive.",
+              ? `Exited Graft sandbox and cleared sandbox state. Retained refs: scratch=${previous.lastScratch ?? "none"}, candidate=${previous.lastCandidate ?? "none"}, patch=${previous.lastPatch ?? "none"}. File-tool names read/write/edit/grep/find/ls remain sandbox overrides in this loaded profile; reload without @zendev-lab/pi-graft/sandbox, and do not use --no-builtin-tools if ordinary Pi built-ins should be available.`
+              : `Graft sandbox was already inactive. ${SANDBOX_PROFILE_RELOAD_GUIDANCE}`,
           },
         ],
-        details: { sandbox: false, previousState: previous },
+        details: { sandbox: false, previousState: previous, profile: sandboxProfileDetails() },
       };
     },
   });

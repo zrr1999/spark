@@ -139,7 +139,7 @@ describe("Spark daemon CLI", () => {
 
     await expect(main(["--", "help"], capture.io)).resolves.toBe(0);
 
-    expect(capture.stdout()).toContain("Usage: spark-daemon <command>");
+    expect(capture.stdout()).toContain("Usage: spark daemon <command>");
     expect(capture.stdout()).toContain("workspace register");
     expect(capture.stdout()).not.toMatch(legacyProtocolVocabularyPattern);
     expect(capture.stderr()).toBe("");
@@ -150,7 +150,7 @@ describe("Spark daemon CLI", () => {
 
     await expect(main(["--", "--help"], capture.io)).resolves.toBe(0);
 
-    expect(capture.stdout()).toContain("Usage: spark-daemon <command>");
+    expect(capture.stdout()).toContain("Usage: spark daemon <command>");
     expect(capture.stdout()).toContain("workspace register");
     expect(capture.stderr()).toBe("");
   });
@@ -160,7 +160,7 @@ describe("Spark daemon CLI", () => {
 
     await expect(main(["ws", "--help"], capture.io)).resolves.toBe(0);
 
-    expect(capture.stdout()).toContain("Usage: spark-daemon workspace <command>");
+    expect(capture.stdout()).toContain("Usage: spark daemon workspace <command>");
     expect(capture.stdout()).toContain("Example:");
     expect(capture.stdout()).not.toMatch(legacyProtocolVocabularyPattern);
     expect(capture.stderr()).toBe("");
@@ -345,11 +345,11 @@ describe("Spark daemon CLI", () => {
 
     expect(code).toBe(0);
     expect(capture.stdout()).toContain("no workspaces registered");
-    expect(capture.stdout()).toContain("spark-daemon workspace register");
+    expect(capture.stdout()).toContain("spark daemon workspace register");
     expect(capture.stderr()).toBe("");
   });
 
-  it("supports the spark-daemon workspace register and ls surface", async () => {
+  it("supports the spark daemon workspace register and ls surface", async () => {
     const capture = createCliIo();
 
     await withTempNaviaEnv(async (root) => {
@@ -482,7 +482,7 @@ describe("Spark daemon CLI", () => {
     });
   });
 
-  it("starts an interactive workspace shell from the default spark-daemon command on a TTY", async () => {
+  it("starts an interactive workspace shell from the default spark daemon command on a TTY", async () => {
     await withTempNaviaEnv(async (root) => {
       const paths = resolveNaviaPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
@@ -1808,7 +1808,7 @@ describe("Spark daemon CLI", () => {
       );
       expect(showCapture.stdout()).toContain("imported profile is invalid (profile.invalid)");
       expect(showCapture.stdout()).toContain("remediation");
-      expect(showCapture.stdout()).toContain("spark-daemon workspace stop workspace");
+      expect(showCapture.stdout()).toContain("spark daemon workspace stop workspace");
     });
   });
 
@@ -1903,7 +1903,7 @@ describe("Spark daemon CLI", () => {
     await withTempNaviaEnv(async () => {
       await expect(main(["daemon", "status"], capture.io)).resolves.toBe(0);
       expect(capture.stdout()).toContain("not running");
-      expect(capture.stdout()).toContain("spark-daemon daemon start");
+      expect(capture.stdout()).toContain("spark daemon start");
       expect(capture.stderr()).toBe("");
 
       const jsonCapture = createCliIo();
@@ -1982,7 +1982,7 @@ describe("Spark daemon CLI", () => {
       expect(daemonStatusFromService).toHaveBeenCalledOnce();
       expect(capture.stdout()).toContain("unreachable");
       expect(capture.stdout()).toContain("socket refused");
-      expect(capture.stdout()).toContain("spark-daemon daemon restart");
+      expect(capture.stdout()).toContain("spark daemon restart");
       expect(capture.stderr()).toBe("");
     });
   });
@@ -2058,7 +2058,7 @@ describe("Spark daemon CLI", () => {
 
     await withTempNaviaEnv(async () => {
       await expect(main(["ws", "reconcile"], capture.io)).resolves.toBe(1);
-      expect(capture.stderr()).toContain("Usage: spark-daemon workspace <register|ls|show|stop>");
+      expect(capture.stderr()).toContain("Usage: spark daemon workspace <register|ls|show|stop>");
     });
   });
 

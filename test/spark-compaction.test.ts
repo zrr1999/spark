@@ -16,7 +16,7 @@ import {
   shouldSparkCompact,
   type SparkCompactionSettings,
   type SparkSessionRecord,
-} from "../apps/spark/src/host/index.ts";
+} from "../apps/spark-tui/src/host/index.ts";
 
 function compactableRecord(store: SparkSessionStore): SparkSessionRecord {
   const record = store.createSession({ id: "compact", timestamp: "2026-06-03T06:00:00.000Z" });
