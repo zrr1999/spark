@@ -39,6 +39,12 @@ export type PiCueNotifyLevel = "info" | "warning" | "error" | "success";
 
 export interface PiCueToolContext {
   cwd?: string;
+  sessionId?: string;
+  sessionManager?: {
+    getSessionFile?: () => string | undefined;
+    getLeafId?: () => string | undefined;
+  };
+  env?: Record<string, string | undefined>;
   cueClient?: CueClient;
   ui?: { notify?: (msg: string, level: PiCueNotifyLevel) => void };
 }
@@ -89,6 +95,7 @@ class ToolCallText implements ToolCallComponent {
 export { CueClient, CueError, defaultSocketPath, resolveCueTransport } from "./cue-client.ts";
 export type {
   CueResolvedTransport,
+  CueSessionOptions,
   JobInfo,
   JobResult,
   JobStatus,
@@ -111,6 +118,7 @@ import {
   CueClient,
   CueError,
   type CueResolvedTransport,
+  type CueSessionOptions,
   type JobInfo,
   type JobStatus,
   type ResourceNeeds,
@@ -137,21 +145,47 @@ function cueTransportKey(transport: CueResolvedTransport): string {
   );
 }
 
-async function getClient(ctx?: {
-  cueClient?: CueClient;
-  ui?: { notify?: (msg: string, level: PiCueNotifyLevel) => void };
-}): Promise<CueClient> {
+function cueSessionOptionsFromContext(ctx?: PiCueToolContext): Required<CueSessionOptions> {
+  const cwd = resolveCueWorkingDirectory(undefined, ctx?.cwd);
+  const sessionId = cueSessionIdFromContext(ctx, cwd);
+  return { sessionId, cwd, env: ctx?.env ?? process.env };
+}
+
+function cueSessionIdFromContext(ctx: PiCueToolContext | undefined, cwd: string): string {
+  const direct = ctx?.sessionId?.trim();
+  if (direct) return direct;
+  const sessionFile = ctx?.sessionManager?.getSessionFile?.()?.trim();
+  if (sessionFile) return `session:${stableStringHash(sessionFile)}`;
+  const leafId = ctx?.sessionManager?.getLeafId?.()?.trim();
+  if (leafId) return `leaf:${leafId}`;
+  const envSession = process.env.PI_SESSION_ID?.trim() || process.env.SPARK_SESSION_ID?.trim();
+  if (envSession) return envSession;
+  return `pi-cue:${process.pid}:${stableStringHash(cwd)}`;
+}
+
+function stableStringHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+async function getClient(ctx?: PiCueToolContext): Promise<CueClient> {
   if (ctx?.cueClient) return ctx.cueClient;
   const transport = await resolveCueTransport();
-  const transportKey = cueTransportKey(transport);
+  const session = cueSessionOptionsFromContext(ctx);
+  const transportKey = `${cueTransportKey(transport)}|session:${session.sessionId}`;
   if (client && !client.isClosed && clientTransportKey === transportKey) return client;
   if (client && !client.isClosed) client.close();
   client = null;
   clientTransportKey = null;
   try {
-    client = await CueClient.connectResolved(transport);
+    client = await CueClient.connectResolved(transport, session);
     clientTransportKey = transportKey;
   } catch (error) {
+    if (error instanceof CueError && error.code === "UNSUPPORTED_PROTOCOL") throw error;
     if (transport.transport === "ssh") throw error;
     // Daemon not running — auto-start local/unix transports only.
     ctx?.ui?.notify?.("cue-shell: auto-starting daemon…", "info");
@@ -163,9 +197,10 @@ async function getClient(ctx?: {
     }
     // Retry connection after starting.
     try {
-      client = await CueClient.connectResolved(transport);
+      client = await CueClient.connectResolved(transport, session);
       clientTransportKey = transportKey;
     } catch (err) {
+      if (err instanceof CueError && err.code === "UNSUPPORTED_PROTOCOL") throw err;
       const msg = `cue-shell daemon started but still not reachable at ${transport.socket_path}: ${(err as Error).message}`;
       throw new CueError("DAEMON_UNREACHABLE", msg);
     }
@@ -181,23 +216,91 @@ async function getClient(ctx?: {
 /** Spawn `cued start` as a detached background process. */
 async function autoStartDaemon(socketPath: string): Promise<void> {
   const { spawn } = await import("node:child_process");
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  const command = "cued";
+  const args = ["start", "--socket", socketPath];
   return new Promise((resolve, reject) => {
-    const child = spawn("cued", ["start", "--socket", socketPath], {
+    const child = spawn(command, args, {
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    child.on("error", reject);
-    child.on("close", (code) => {
+    child.stdout?.on("data", (chunk: Buffer) => appendBoundedBuffer(stdout, chunk));
+    child.stderr?.on("data", (chunk: Buffer) => appendBoundedBuffer(stderr, chunk));
+    child.on("error", (error) => {
+      reject(new Error(renderCuedStartFailure({ command, args, socketPath, error, stdout, stderr })));
+    });
+    child.on("close", (code, signal) => {
       if (code === 0 || code === null) {
         // Give the daemon a moment to bind its socket.
         setTimeout(resolve, 500);
       } else {
-        reject(new Error(`cued start exited with code ${code}`));
+        reject(
+          new Error(renderCuedStartFailure({ command, args, socketPath, code, signal, stdout, stderr })),
+        );
       }
     });
     // Don't wait for the child — cued start backgrounds itself.
     child.unref();
   });
+}
+
+const CUED_START_OUTPUT_LIMIT = 32 * 1024;
+
+function appendBoundedBuffer(chunks: Buffer[], chunk: Buffer): void {
+  chunks.push(Buffer.from(chunk));
+  let total = chunks.reduce((sum, item) => sum + item.length, 0);
+  while (total > CUED_START_OUTPUT_LIMIT && chunks.length > 0) {
+    const first = chunks[0]!;
+    const extra = total - CUED_START_OUTPUT_LIMIT;
+    if (first.length <= extra) {
+      chunks.shift();
+      total -= first.length;
+    } else {
+      chunks[0] = first.subarray(extra);
+      total -= extra;
+    }
+  }
+}
+
+function renderCuedStartFailure(input: {
+  command: string;
+  args: string[];
+  socketPath: string;
+  code?: number | null;
+  signal?: NodeJS.Signals | null;
+  error?: Error;
+  stdout: Buffer[];
+  stderr: Buffer[];
+}): string {
+  const status = input.error
+    ? input.error.message
+    : input.signal
+      ? `cued start terminated by signal ${input.signal}`
+      : `cued start exited with code ${input.code}`;
+  const stdout = Buffer.concat(input.stdout).toString("utf8").trim();
+  const stderr = Buffer.concat(input.stderr).toString("utf8").trim();
+  const lines = [
+    status,
+    `Attempted: ${[input.command, ...input.args].join(" ")}`,
+    `Socket: ${input.socketPath}`,
+    `Socket directory: ${nodePath.dirname(input.socketPath)}`,
+    `XDG_RUNTIME_DIR=${process.env.XDG_RUNTIME_DIR ?? "<unset>"}`,
+    `TMPDIR=${process.env.TMPDIR ?? "<unset>"}`,
+    `Config directory: ${cueConfigDirHint()}`,
+  ];
+  lines.push(stderr ? `stderr:\n${stderr}` : "stderr: <empty>");
+  lines.push(stdout ? `stdout:\n${stdout}` : "stdout: <empty>");
+  lines.push(
+    `Recovery: run ${JSON.stringify(`cued start --fg --socket ${input.socketPath}`)} in a terminal for full daemon logs; check for a stale socket at ${input.socketPath}; after protocol upgrades, restart/reload the Pi host so its pi-cue client matches cued.`,
+  );
+  return lines.join("\n");
+}
+
+function cueConfigDirHint(): string {
+  if (process.env.XDG_CONFIG_HOME?.trim()) return nodePath.join(process.env.XDG_CONFIG_HOME, "cue-shell");
+  if (process.env.HOME?.trim()) return nodePath.join(process.env.HOME, ".config", "cue-shell");
+  return "<unknown: HOME unset>";
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -258,7 +361,7 @@ const CUE_SCHEDULE_STATUS_FILTERS = [
   "expired",
   "active",
 ] as const;
-const CUE_SCOPE_ACTIONS = ["list", "env", "config"] as const;
+const CUE_SCOPE_ACTIONS = ["list", "env", "config", "env_set", "path_prepend", "cd", "status"] as const;
 const SCRIPT_LANGUAGES = ["cue-shell", "python"] as const;
 
 function isFileOp(command: string): boolean {
@@ -708,6 +811,38 @@ function normalizeOptionalCueString(value: unknown, field: string): string | und
     throw new Error(`${field} must be a non-empty string`);
   }
   return value.trim();
+}
+
+const CUE_ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function normalizeCueEnvKey(value: unknown, field: string): string {
+  const key = normalizeRequiredCueString(value, field);
+  if (!CUE_ENV_KEY_PATTERN.test(key)) {
+    throw new Error(`${field} must be a valid environment variable name`);
+  }
+  return key;
+}
+
+function normalizeCueEnvValue(value: unknown, field: string): string {
+  if (typeof value !== "string") throw new Error(`${field} must be a string`);
+  if (/\s/u.test(value)) {
+    throw new Error(`${field} cannot contain whitespace because cue-shell :env set uses KEY=VALUE words`);
+  }
+  return value;
+}
+
+function normalizeCueSessionPath(value: unknown, field: string): string {
+  const path = normalizeRequiredCueString(value, field);
+  if (/\s/u.test(path)) {
+    throw new Error(`${field} cannot contain whitespace because cue-shell session commands use word tokens`);
+  }
+  return path;
+}
+
+function parseCueEnvValue(text: string, key: string): string | undefined {
+  const prefix = `${key}=`;
+  const line = text.split(/\r?\n/u).find((entry) => entry.startsWith(prefix));
+  return line?.slice(prefix.length);
 }
 
 export function normalizeCueResourceNeeds(
@@ -2072,10 +2207,13 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     name: "cue_scope",
     label: "Cue Scope",
     description:
-      "Inspect cue-shell scopes and environment state. action='list' lists scopes, action='env' shows HEAD env, and action='config' shows cue-shell config.",
+      "Inspect or mutate cue-shell session state. action='list' lists scopes, 'env' shows session env, 'config' shows config, 'env_set' sets KEY=VALUE, 'path_prepend' prepends PATH, 'cd' changes session cwd, and 'status' shows bounded cwd/PATH status.",
     parameters: Type.Object({
       action: Type.Optional(
-        Type.String({ description: "Action: list, env, config. Default: list." }),
+        Type.String({
+          description:
+            "Action: list, env, config, env_set, path_prepend, cd, or status. Default: list.",
+        }),
       ),
       limit: Type.Optional(
         Type.Number({ description: "Maximum scopes to show for action='list'. Default: 20." }),
@@ -2091,6 +2229,15 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             "For action='env' or action='config', limit output to the last N bytes. Default: 16384. Pass 0 for full output.",
         }),
       ),
+      key: Type.Optional(
+        Type.String({ description: "Environment variable name for action='env_set'." }),
+      ),
+      value: Type.Optional(
+        Type.String({ description: "Environment variable value for action='env_set'." }),
+      ),
+      path: Type.Optional(
+        Type.String({ description: "Path for action='path_prepend' or action='cd'." }),
+      ),
     }),
     renderCall(args, theme) {
       return renderToolCall(
@@ -2100,6 +2247,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           formatNumberArg(args.limit, { prefix: "limit=" }),
           args.includeEnv === true ? "include-env" : undefined,
           formatNumberArg(args.tail_bytes, { prefix: "tail=" }),
+          formatStringArg(args.key, { prefix: "key=" }),
+          formatStringArg(args.path, { prefix: "path=" }),
         ],
         theme,
       );
@@ -2121,6 +2270,66 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         "cue_scope tail_bytes",
       );
       const cued = await getClient(ctx);
+
+      if (action === "env_set") {
+        const key = normalizeCueEnvKey(params.key, "cue_scope key");
+        const value = normalizeCueEnvValue(params.value, "cue_scope value");
+        const scope = await cued.setEnv({ [key]: value });
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Set ${key} for this cue session.\n${scope.summary}`,
+            },
+          ],
+          details: { action, key, scope },
+        };
+      }
+
+      if (action === "path_prepend") {
+        const path = normalizeCueSessionPath(params.path, "cue_scope path");
+        const envText = await cued.showEnv();
+        const currentPath = parseCueEnvValue(envText, "PATH") ?? "";
+        const nextPath = currentPath ? `${path}:${currentPath}` : path;
+        const scope = await cued.setEnv({ PATH: nextPath });
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Prepended ${path} to PATH for this cue session.\n${scope.summary}`,
+            },
+          ],
+          details: { action, path, scope },
+        };
+      }
+
+      if (action === "cd") {
+        const path = normalizeCueSessionPath(params.path, "cue_scope path");
+        const scope = await cued.changeDirectory(path);
+        return {
+          content: [{ type: "text" as const, text: `Changed cue session cwd.\n${scope.summary}` }],
+          details: { action, path, scope },
+        };
+      }
+
+      if (action === "status") {
+        const envText = await cued.showEnv();
+        const cwdLine = envText.split(/\r?\n/u).find((line) => line.startsWith("cwd=")) ?? "cwd=?";
+        const pathValue = parseCueEnvValue(envText, "PATH") ?? "";
+        const pathPreview = tailStr(pathValue, Math.min(tailBytes, DEFAULT_CUE_TAIL_BYTES));
+        const lines = [cwdLine, `PATH=${pathPreview.text}`];
+        if (pathPreview.truncated) lines.push("[PATH truncated — use action=env tail_bytes=0 for full env]");
+        return {
+          content: [{ type: "text" as const, text: lines.join("\n") }],
+          details: {
+            action,
+            cwd: cwdLine.slice("cwd=".length),
+            pathChars: pathValue.length,
+            shownPathChars: pathPreview.text.length,
+            truncated: pathPreview.truncated,
+          },
+        };
+      }
 
       if (action === "env" || action === "config") {
         const raw = action === "env" ? await cued.showEnv() : await cued.showConfig();

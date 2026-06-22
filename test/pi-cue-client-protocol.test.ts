@@ -54,10 +54,16 @@ function sendFrame(socket: Socket, message: CueFrame): void {
 
 async function startCueServer(
   handler: (message: CueFrame, socket: Socket) => void,
-): Promise<{ socketPath: string; requests: CueFrame[]; close: () => Promise<void> }> {
+): Promise<{
+  socketPath: string;
+  requests: CueFrame[];
+  handshakes: CueFrame[];
+  close: () => Promise<void>;
+}> {
   const dir = await mkdtemp(join(tmpdir(), "pi-cue-protocol-"));
   const socketPath = join(dir, "cued.sock");
   const requests: CueFrame[] = [];
+  const handshakes: CueFrame[] = [];
   const server = net.createServer((socket) => {
     let buffer = Buffer.alloc(0);
     socket.on("data", (chunk: Buffer) => {
@@ -68,6 +74,32 @@ async function startCueServer(
         const body = buffer.subarray(4, 4 + len);
         buffer = buffer.subarray(4 + len);
         const message = JSON.parse(body.toString("utf8")) as CueFrame;
+        const payload = requestPayload(message);
+        if ("Handshake" in payload) {
+          handshakes.push(message);
+          sendFrame(socket, {
+            type: "response",
+            id: message.id as number,
+            payload: { Ok: { Ack: {} } },
+          });
+          continue;
+        }
+        if ("Ping" in payload) {
+          sendFrame(socket, {
+            type: "response",
+            id: message.id as number,
+            payload: {
+              Ok: {
+                Pong: {
+                  version: "9.9.9",
+                  protocol_version: 2,
+                  capabilities: ["session-handshake-required"],
+                },
+              },
+            },
+          });
+          continue;
+        }
         requests.push(message);
         handler(message, socket);
       }
@@ -80,6 +112,7 @@ async function startCueServer(
   return {
     socketPath,
     requests,
+    handshakes,
     close: async () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await rm(dir, { force: true, recursive: true });
@@ -89,12 +122,12 @@ async function startCueServer(
 
 async function withCueServer(
   handler: (message: CueFrame, socket: Socket) => void,
-  run: (client: CueClient, requests: CueFrame[]) => Promise<void>,
+  run: (client: CueClient, requests: CueFrame[], handshakes: CueFrame[]) => Promise<void>,
 ): Promise<void> {
   const server = await startCueServer(handler);
   const client = await CueClient.connect(server.socketPath);
   try {
-    await run(client, server.requests);
+    await run(client, server.requests, server.handshakes);
   } finally {
     client.close();
     await server.close();
@@ -123,6 +156,73 @@ function toolParameterProperties(tool: RegisteredPiCueTool | undefined): Record<
   assert.ok(parameters.properties, "expected object parameter schema");
   return parameters.properties;
 }
+
+void test("CueClient.connect sends session Handshake before protocol Ping", async () => {
+  const server = await startCueServer(() => undefined);
+  const client = await CueClient.connect(server.socketPath, {
+    sessionId: "test-session",
+    cwd: "/workspace/project",
+    env: { PATH: "/bin", EMPTY: undefined },
+  });
+  try {
+    assert.equal(server.handshakes.length, 1);
+    const handshake = requestPayload(server.handshakes[0]!);
+    assert.deepEqual(handshake.Handshake, {
+      session_id: "test-session",
+      cwd: "/workspace/project",
+      env: { PATH: "/bin" },
+    });
+  } finally {
+    client.close();
+    await server.close();
+  }
+});
+
+void test("CueClient.connect rejects daemons without required Pong protocol fields", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-cue-old-protocol-"));
+  const socketPath = join(dir, "cued.sock");
+  const server = net.createServer((socket) => {
+    let buffer = Buffer.alloc(0);
+    socket.on("data", (chunk: Buffer) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      while (buffer.length >= 4) {
+        const len = buffer.readUInt32BE(0);
+        if (buffer.length < 4 + len) break;
+        const body = buffer.subarray(4, 4 + len);
+        buffer = buffer.subarray(4 + len);
+        const message = JSON.parse(body.toString("utf8")) as CueFrame;
+        const payload = requestPayload(message);
+        if ("Handshake" in payload) {
+          sendFrame(socket, { type: "response", id: message.id as number, payload: { Ok: { Ack: {} } } });
+        }
+        if ("Ping" in payload) {
+          sendFrame(socket, {
+            type: "response",
+            id: message.id as number,
+            payload: { Ok: { Pong: { version: "0.1.0" } } },
+          });
+        }
+      }
+    });
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    await assert.rejects(
+      CueClient.connect(socketPath, { sessionId: "old-daemon", cwd: "/tmp" }),
+      (error) =>
+        error instanceof CueError &&
+        error.code === "UNSUPPORTED_PROTOCOL" &&
+        error.message.includes("protocol version") &&
+        error.message.includes("upgrade/restart cued"),
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(dir, { force: true, recursive: true });
+  }
+});
 
 function singleJobCueServer(label: string) {
   return (message: CueFrame, socket: Socket) => {
@@ -264,6 +364,44 @@ esac
   }
 });
 
+void test("pi-cue client cache is isolated by cue session id", async () => {
+  const server = await startCueServer(singleJobCueServer("session"));
+  try {
+    await withTempPath(
+      {
+        "cue-client": `#!/bin/sh\nprintf '%s\n' '{"schema_version":1,"profile_name":"local","transport":"unix","socket_path":"${server.socketPath}"}'\n`,
+      },
+      async () => {
+        const tools = registerCueToolsForProtocolTest();
+        const execTool = tools.get("cue_exec");
+        assert.ok(execTool);
+        await execTool.execute(
+          "first-session",
+          { command: "echo one", background: true },
+          new AbortController().signal,
+          () => undefined,
+          { cwd: "/work", sessionId: "session-one" },
+        );
+        await execTool.execute(
+          "second-session",
+          { command: "echo two", background: true },
+          new AbortController().signal,
+          () => undefined,
+          { cwd: "/work", sessionId: "session-two" },
+        );
+        const sessionIds = server.handshakes.map(
+          (handshake) =>
+            (requestPayload(handshake).Handshake as { session_id?: string }).session_id,
+        );
+        assert.deepEqual(sessionIds, ["session-one", "session-two"]);
+      },
+    );
+  } finally {
+    __resetPiCueClientForTests();
+    await server.close();
+  }
+});
+
 void test("implicit CueClient.connect supports ssh resolver profiles through gateway stdio", async () => {
   await withTempPath(
     {
@@ -285,11 +423,18 @@ process.stdin.on("data", (chunk) => {
     if (buffer.length < 4 + len) return;
     const message = JSON.parse(buffer.subarray(4, 4 + len).toString("utf8"));
     buffer = buffer.subarray(4 + len);
+    if (message.payload && message.payload.Handshake) {
+      process.stdout.write(frame({
+        type: "response",
+        id: message.id,
+        payload: { Ok: { Ack: {} } },
+      }));
+    }
     if (message.payload && message.payload.Ping) {
       process.stdout.write(frame({
         type: "response",
         id: message.id,
-        payload: { Ok: { Pong: { version: "9.9.9" } } },
+        payload: { Ok: { Pong: { version: "9.9.9", protocol_version: 2, capabilities: ["session-handshake-required"] } } },
       }));
     }
   }
@@ -363,6 +508,48 @@ process.stderr.write(
   );
 });
 
+void test("local cued auto-start failure reports command, socket, output, and recovery", async () => {
+  const socketPath = join(tmpdir(), `pi-cue-missing-${process.pid}.sock`);
+  await withTempPath(
+    {
+      "cue-client": `#!/bin/sh\nprintf '%s\n' '{"schema_version":1,"profile_name":"local","transport":"unix","socket_path":"${socketPath}"}'\n`,
+      cued: `#!/bin/sh
+echo daemon-start-stdout
+echo daemon-start-stderr >&2
+exit 1
+`,
+    },
+    async () => {
+      const tools = registerCueToolsForProtocolTest();
+      const execTool = tools.get("cue_exec");
+      assert.ok(execTool);
+      await assert.rejects(
+        execTool.execute(
+          "autostart-fail",
+          { command: "ls -la", background: true },
+          new AbortController().signal,
+          () => undefined,
+          { cwd: "/work" },
+        ),
+        (error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          return (
+            error instanceof CueError &&
+            error.code === "DAEMON_UNREACHABLE" &&
+            message.includes("cued start exited with code 1") &&
+            message.includes(`Attempted: cued start --socket ${socketPath}`) &&
+            message.includes(`Socket: ${socketPath}`) &&
+            message.includes("Config directory:") &&
+            message.includes("stderr:\ndaemon-start-stderr") &&
+            message.includes("stdout:\ndaemon-start-stdout") &&
+            message.includes("Recovery: run")
+          );
+        },
+      );
+    },
+  );
+});
+
 void test("cue RunScript request matches the current strict daemon schema", async () => {
   await withCueServer(
     (message, socket) => {
@@ -430,6 +617,94 @@ void test("pi-cue script tool schemas do not expose deprecated RunScript scope",
     const properties = toolParameterProperties(tools.get(name));
     assert.equal("scope" in properties, false, `${name} must not expose scope`);
   }
+});
+
+void test("cue_scope mutates session env, PATH, and cwd", async () => {
+  const evals: string[] = [];
+  let currentCwd = "/work";
+  let currentPath = "/usr/bin";
+  await withCueServer(
+    (message, socket) => {
+      const id = message.id as number;
+      const payload = requestPayload(message);
+      if ("ShowEnv" in payload) {
+        sendFrame(socket, {
+          type: "response",
+          id,
+          payload: { Ok: { EvalText: { text: `cwd=${currentCwd}\nPATH=${currentPath}\n` } } },
+        });
+        return;
+      }
+      if ("Eval" in payload) {
+        const input = (payload.Eval as { input: string }).input;
+        evals.push(input);
+        if (input.startsWith(":env set PATH=")) currentPath = input.slice(":env set PATH=".length);
+        if (input.startsWith(":cd ")) currentCwd = input.slice(":cd ".length);
+        sendFrame(socket, {
+          type: "response",
+          id,
+          payload: {
+            Ok: {
+              ScopeCreated: {
+                hash: "S@scope",
+                summary: `scope updated by ${input}`,
+              },
+            },
+          },
+        });
+      }
+    },
+    async (client) => {
+      const tools = registerCueToolsForProtocolTest();
+      const scopeTool = tools.get("cue_scope");
+      assert.ok(scopeTool);
+      const rendered = scopeTool
+        .renderCall?.({ action: "path_prepend", path: "/node26/bin" }, {}, {})
+        .render(120)
+        .join("\n");
+      assert.match(rendered ?? "", /action=path_prepend/);
+      assert.match(rendered ?? "", /path=\/node26\/bin/);
+      const ctx = { cwd: "/work", cueClient: client };
+      const envSet = await scopeTool.execute(
+        "env-set",
+        { action: "env_set", key: "FOO", value: "bar" },
+        new AbortController().signal,
+        () => undefined,
+        ctx,
+      );
+      await scopeTool.execute(
+        "path-prepend",
+        { action: "path_prepend", path: "/node26/bin" },
+        new AbortController().signal,
+        () => undefined,
+        ctx,
+      );
+      const cd = await scopeTool.execute(
+        "cd",
+        { action: "cd", path: "/tmp" },
+        new AbortController().signal,
+        () => undefined,
+        ctx,
+      );
+      const status = await scopeTool.execute(
+        "status",
+        { action: "status", tail_bytes: 80 },
+        new AbortController().signal,
+        () => undefined,
+        ctx,
+      );
+
+      assert.deepEqual(evals, [
+        ":env set FOO=bar",
+        ":env set PATH=/node26/bin:/usr/bin",
+        ":cd /tmp",
+      ]);
+      assert.match(envSet.content[0]?.text ?? "", /Set FOO/);
+      assert.match(cd.content[0]?.text ?? "", /Changed cue session cwd/);
+      assert.match(status.content[0]?.text ?? "", /cwd=\/tmp/);
+      assert.match(status.content[0]?.text ?? "", /PATH=\/node26\/bin:\/usr\/bin/);
+    },
+  );
 });
 
 void test("cue eval encodes resource needs as run mode params", async () => {

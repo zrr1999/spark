@@ -10,6 +10,7 @@
  * Max message size: 16 MiB.
  */
 
+import { createHash, randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createConnection } from "node:net";
@@ -208,6 +209,7 @@ export interface RequestEnvelope {
 export type RequestPayload =
   | { Eval: { input: string; mode: Mode } }
   | { RunScript: { path: string; input: string } }
+  | { Handshake: { session_id: string; cwd: string; env: Record<string, string> } }
   | { Subscribe: { channels: string[] } }
   | { Unsubscribe: { channels: string[] } }
   | { ListJobs: { limit?: number | null } }
@@ -245,6 +247,7 @@ export type OkPayload =
   | { ScopeInfo: ScopeInfo }
   | { ScopeList: ScopeInfo[] }
   | { ScopeListPage: { scopes: ScopeInfo[]; page: PageInfo } }
+  | { ScopeCreated: ScopeCreatedPayload }
   | { Pong: PongPayload }
   | { EvalText: { text: string } }
   | { TextOutput: { text: string; truncated: boolean } }
@@ -268,6 +271,19 @@ export type OkPayload =
  */
 export interface PongPayload {
   version?: string;
+  protocol_version?: number;
+  capabilities?: string[];
+}
+
+export interface ScopeCreatedPayload {
+  hash: string;
+  summary: string;
+}
+
+export interface CueSessionOptions {
+  sessionId?: string;
+  cwd?: string;
+  env?: Record<string, string | undefined>;
 }
 
 export interface JobCreatedPayload {
@@ -501,11 +517,21 @@ function textOutputFromOk(ok: Record<string, unknown>): string | null {
   return null;
 }
 
+function scopeCreatedFromOk(ok: Record<string, unknown>): ScopeCreatedPayload | null {
+  if (!("ScopeCreated" in ok)) return null;
+  const payload = (ok as { ScopeCreated: ScopeCreatedPayload }).ScopeCreated;
+  if (typeof payload.hash !== "string" || typeof payload.summary !== "string") return null;
+  return payload;
+}
+
 // ── Framing constants ──────────────────────────────────────────────────────
 
 const MAX_MESSAGE_SIZE = 16 * 1024 * 1024; // 16 MiB
 const MAX_OUTPUT_BUFFER = 4 * 1024 * 1024; // 4 MiB per stream, per job
 const MAX_SSH_STDERR_SNAPSHOT = 64 * 1024; // keep recent gateway diagnostics bounded
+const REQUIRED_IPC_PROTOCOL_VERSION = 2;
+const REQUIRED_IPC_CAPABILITY_SESSION_HANDSHAKE_REQUIRED = "session-handshake-required";
+const PROCESS_SESSION_ID = `pi-cue:process:${process.pid}:${Date.now().toString(36)}:${randomUUID().slice(0, 8)}`;
 
 // ── Connection state ───────────────────────────────────────────────────────
 
@@ -523,29 +549,66 @@ interface CueClientStream {
   destroy(error?: Error): void;
 }
 
-function connectUnixCueClient(path: string): Promise<CueClient> {
-  return new Promise((resolve, reject) => {
+function stableHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+function normalizeSessionEnv(input: Record<string, string | undefined> | undefined): Record<string, string> {
+  const source = input ?? process.env;
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (typeof value === "string") result[key] = value;
+  }
+  return result;
+}
+
+function normalizeCueSessionOptions(options: CueSessionOptions | undefined): Required<CueSessionOptions> {
+  const cwd = options?.cwd?.trim() || process.cwd();
+  const sessionId = options?.sessionId?.trim() || `${PROCESS_SESSION_ID}:${stableHash(cwd)}`;
+  return { sessionId, cwd, env: normalizeSessionEnv(options?.env) };
+}
+
+async function connectUnixCueClient(
+  path: string,
+  session?: CueSessionOptions,
+): Promise<CueClient> {
+  const client = await new Promise<CueClient>((resolve, reject) => {
     const socket = createConnection({ path }, () => {
       resolve(new CueClient(socket));
     });
     socket.on("error", reject);
   });
+  return initializeConnectedClient(client, session);
 }
 
 async function connectSshCueClient(
   transport: Extract<CueResolvedTransport, { transport: "ssh" }>,
+  session?: CueSessionOptions,
 ): Promise<CueClient> {
   const stream = SshCueClientStream.spawn(transport);
   const client = new CueClient(stream);
   try {
-    await client.pingForVersion();
-    return client;
+    return await initializeConnectedClient(client, session);
   } catch (error) {
     client.close();
     throw new CueError(
       "DAEMON_UNREACHABLE",
       sshConnectionErrorMessage(transport, stream.stderrSnapshot(), error),
     );
+  }
+}
+
+async function initializeConnectedClient(
+  client: CueClient,
+  session?: CueSessionOptions,
+): Promise<CueClient> {
+  try {
+    await client.handshake(session);
+    await client.pingForVersion();
+    return client;
+  } catch (error) {
+    client.close();
+    throw error;
   }
 }
 
@@ -673,15 +736,18 @@ export class CueClient {
    * `cue client target ...`) for the active client transport profile and then
    * connects either to a Unix socket or to an SSH gateway stream.
    */
-  static async connect(socketPath?: string): Promise<CueClient> {
-    if (socketPath) return connectUnixCueClient(socketPath);
-    return CueClient.connectResolved(await resolveConnectionTransport());
+  static async connect(socketPath?: string, session?: CueSessionOptions): Promise<CueClient> {
+    if (socketPath) return connectUnixCueClient(socketPath, session);
+    return CueClient.connectResolved(await resolveConnectionTransport(), session);
   }
 
   /** Connect to an already-resolved cue-shell client transport profile. */
-  static async connectResolved(transport: CueResolvedTransport): Promise<CueClient> {
-    if (transport.transport === "unix") return connectUnixCueClient(transport.socket_path);
-    return connectSshCueClient(transport);
+  static async connectResolved(
+    transport: CueResolvedTransport,
+    session?: CueSessionOptions,
+  ): Promise<CueClient> {
+    if (transport.transport === "unix") return connectUnixCueClient(transport.socket_path, session);
+    return connectSshCueClient(transport, session);
   }
 
   /** Resolved when the connection closes. */
@@ -742,13 +808,40 @@ export class CueClient {
     await this.#waitForResponse(id);
   }
 
-  /**
-   * Ping the daemon and return its self-reported version, if any.
-   *
-   * Returns `null` for daemons that predate Pong-version reporting. Throws
-   * if the IPC roundtrip itself fails, so callers can distinguish "old
-   * daemon" (`null`) from "unreachable daemon" (rejected promise).
-   */
+  /** Send and acknowledge the cue-shell session handshake. */
+  async handshake(options?: CueSessionOptions): Promise<void> {
+    const session = normalizeCueSessionOptions(options);
+    let response: ResponsePayload;
+    try {
+      const id = await this.#send({
+        Handshake: {
+          session_id: session.sessionId,
+          cwd: session.cwd,
+          env: normalizeSessionEnv(session.env),
+        },
+      });
+      response = await this.#waitForResponse(id);
+    } catch (error) {
+      throw unsupportedProtocolError(
+        "cue-shell daemon did not complete the required session Handshake; upgrade/restart cued",
+        error,
+      );
+    }
+
+    if ("Err" in response) {
+      throw unsupportedProtocolError(
+        `cue-shell daemon rejected the required session Handshake: ${response.Err.code}: ${response.Err.message}; upgrade/restart cued`,
+      );
+    }
+    const ok = (response as { Ok: Record<string, unknown> }).Ok;
+    if (!ok || !("Ack" in ok)) {
+      throw unsupportedProtocolError(
+        "cue-shell daemon returned an unexpected response to the required session Handshake; upgrade/restart cued",
+      );
+    }
+  }
+
+  /** Ping the daemon and return its self-reported version. */
   async pingForVersion(): Promise<string | null> {
     const id = await this.#send({ Ping: {} });
     const response = await this.#waitForResponse(id);
@@ -756,12 +849,27 @@ export class CueClient {
       throw new CueError(response.Err.code, response.Err.message);
     }
     const ok = (response as { Ok: Record<string, unknown> }).Ok;
-    if (ok && "Pong" in ok) {
-      const pong = (ok as { Pong: PongPayload }).Pong;
-      const version = pong?.version;
-      return typeof version === "string" && version.length > 0 ? version : null;
+    if (!ok || !("Pong" in ok)) {
+      throw unsupportedProtocolError("cue-shell daemon did not return Pong to Ping");
     }
-    return null;
+    const pong = (ok as { Pong: PongPayload }).Pong;
+    const version = pong?.version;
+    if (typeof version !== "string" || version.length === 0) {
+      throw unsupportedProtocolError("cue-shell daemon Pong is missing version; upgrade/restart cued");
+    }
+    const protocolVersion = pong.protocol_version;
+    if (typeof protocolVersion !== "number" || protocolVersion < REQUIRED_IPC_PROTOCOL_VERSION) {
+      throw unsupportedProtocolError(
+        `cue-shell daemon IPC protocol version ${String(protocolVersion)} is older than required ${REQUIRED_IPC_PROTOCOL_VERSION}; upgrade/restart cued`,
+      );
+    }
+    const capabilities = Array.isArray(pong.capabilities) ? pong.capabilities : [];
+    if (!capabilities.includes(REQUIRED_IPC_CAPABILITY_SESSION_HANDSHAKE_REQUIRED)) {
+      throw unsupportedProtocolError(
+        `cue-shell daemon is missing required IPC capability ${REQUIRED_IPC_CAPABILITY_SESSION_HANDSHAKE_REQUIRED}; upgrade/restart cued`,
+      );
+    }
+    return version;
   }
 
   /** Ping the daemon. */
@@ -1537,6 +1645,25 @@ export class CueClient {
     throw new CueError("UNEXPECTED_RESPONSE", "expected EvalText response");
   }
 
+  /** Mutate the current session environment with `:env set KEY=VALUE ...`. */
+  async setEnv(assignments: Record<string, string>): Promise<ScopeCreatedPayload> {
+    const parts = Object.entries(assignments).map(([key, value]) => `${key}=${value}`);
+    const response = await this.#rawEvalAndWait(`:env set ${parts.join(" ")}`);
+    const ok = okRecord(response);
+    const scope = scopeCreatedFromOk(ok);
+    if (scope) return scope;
+    throw new CueError("UNEXPECTED_RESPONSE", "expected ScopeCreated response");
+  }
+
+  /** Change the current cue session directory. */
+  async changeDirectory(path: string): Promise<ScopeCreatedPayload> {
+    const response = await this.#rawEvalAndWait(`:cd ${path}`);
+    const ok = okRecord(response);
+    const scope = scopeCreatedFromOk(ok);
+    if (scope) return scope;
+    throw new CueError("UNEXPECTED_RESPONSE", "expected ScopeCreated response");
+  }
+
   /** List all scopes. */
   async listScopes(limit?: number): Promise<ScopeInfo[]> {
     let response: ResponsePayload;
@@ -2140,4 +2267,9 @@ export class CueError extends Error {
     this.name = "CueError";
     this.code = code;
   }
+}
+
+function unsupportedProtocolError(message: string, cause?: unknown): CueError {
+  const detail = cause instanceof Error ? ` Detail: ${cause.message}` : "";
+  return new CueError("UNSUPPORTED_PROTOCOL", `${message}.${detail}`);
 }
