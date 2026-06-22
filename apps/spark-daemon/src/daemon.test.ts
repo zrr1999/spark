@@ -16,11 +16,8 @@ import {
   type MessageContext,
   type ServerSocket,
 } from "./daemon.js";
-import {
-  SparkDaemonHumanWaitRegistry,
-  SparkDaemonInvocationRegistry,
-  SparkDaemonQueue,
-} from "./core/index.ts";
+import { SparkDaemonInvocationRegistry, SparkDaemonQueue } from "./core/index.ts";
+import { SparkDaemonHumanWaitRegistry } from "./core/human-waits.ts";
 import type { CancelSparkInvocationFn, RunSparkCommandFn } from "./spark/bridge.js";
 import { openSparkDaemonDatabase } from "./store/schema.js";
 import { addWorkspace, stopWorkspace } from "./store/workspaces.js";

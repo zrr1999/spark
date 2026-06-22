@@ -10,6 +10,7 @@ export function openSparkDaemonDatabase(paths: NaviaPaths): DatabaseSync {
 }
 
 export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
+  renameLegacySparkDaemonTables(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS daemon_meta (
       key TEXT PRIMARY KEY,
@@ -59,6 +60,27 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
   db.exec("CREATE INDEX IF NOT EXISTS workspaces_status_idx ON workspaces(status)");
   migrateSparkDaemonRegistrationTables(db);
   backfillSparkDaemonRegistrationTables(db);
+}
+
+function renameLegacySparkDaemonTables(db: DatabaseSync): void {
+  for (const [legacy, current] of [
+    ["runner_meta", "daemon_meta"],
+    ["runner_human_waits", "daemon_human_waits"],
+    ["runner_servers", "daemon_servers"],
+    ["runner_server_credentials", "daemon_server_credentials"],
+    ["runner_workspaces", "daemon_workspaces"],
+    ["runner_workspace_grants", "daemon_workspace_grants"],
+  ] as const) {
+    if (tableExists(db, legacy) && !tableExists(db, current)) {
+      db.exec(`ALTER TABLE ${legacy} RENAME TO ${current}`);
+    }
+  }
+}
+
+function tableExists(db: DatabaseSync, table: string): boolean {
+  return Boolean(
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1").get(table),
+  );
 }
 
 function migrateWorkspacesTable(db: DatabaseSync): void {

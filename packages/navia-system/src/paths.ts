@@ -78,6 +78,7 @@ export function resolveNaviaPaths(options: ResolveNaviaPathsOptions): NaviaPaths
   );
   const runtimeDir = absoluteDir(
     overrides.runtimeDir ??
+      env[`${prefix}_RUNTIME_DIR`] ??
       (env.XDG_RUNTIME_DIR ? join(env.XDG_RUNTIME_DIR, namespace, app) : join(stateDir, "run")),
     cwd,
   );

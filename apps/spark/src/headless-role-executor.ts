@@ -61,6 +61,24 @@ export interface SparkHeadlessRoleInstructionResult {
   jsonEvents: unknown[];
 }
 
+export interface SparkHeadlessSessionRunInput {
+  cwd: string;
+  sessionId: string;
+  prompt: string;
+  reset?: boolean;
+  signal?: AbortSignal;
+  sparkHome?: string;
+}
+
+export interface SparkHeadlessSessionRunResult {
+  sessionId: string;
+  sessionPath: string;
+  newMessageCount: number;
+  assistantText: string;
+  stderr: string;
+  jsonEvents: unknown[];
+}
+
 export interface SparkHeadlessRoleExecutorOptions {
   sparkHome?: string;
   createServices?: typeof createSparkCliHostServices;
@@ -70,6 +88,52 @@ export function createSparkHeadlessRoleExecutor(
   options: SparkHeadlessRoleExecutorOptions = {},
 ): (input: SparkHeadlessRoleInstructionInput) => Promise<SparkHeadlessRoleInstructionResult> {
   return async (input) => runSparkHeadlessRoleInstruction(input, options);
+}
+
+export function createSparkHeadlessSessionExecutor(
+  options: SparkHeadlessRoleExecutorOptions = {},
+): (input: SparkHeadlessSessionRunInput) => Promise<SparkHeadlessSessionRunResult> {
+  return async (input) => runSparkHeadlessSession(input, options);
+}
+
+export async function runSparkHeadlessSession(
+  input: SparkHeadlessSessionRunInput,
+  options: SparkHeadlessRoleExecutorOptions = {},
+): Promise<SparkHeadlessSessionRunResult> {
+  const jsonEvents: unknown[] = [];
+  const createServices = options.createServices ?? createSparkCliHostServices;
+  const services = await createServices({
+    cwd: input.cwd,
+    sparkHome: options.sparkHome ?? input.sparkHome,
+    hasUI: false,
+  } satisfies SparkCliHostServicesOptions);
+
+  const unsubscribe = services.agentLoop.onEvent((event) => {
+    jsonEvents.push(serializeLoopEvent(event));
+  });
+  const abort = () => services.agentLoop.abort(abortReason(input.signal));
+  if (input.signal?.aborted) abort();
+  else input.signal?.addEventListener("abort", abort, { once: true });
+
+  try {
+    const session = new SparkAgentSession(services);
+    const result = await session.run({
+      sessionId: input.sessionId,
+      prompt: input.prompt,
+      reset: input.reset,
+    });
+    return {
+      sessionId: result.sessionId,
+      sessionPath: result.sessionPath,
+      newMessageCount: result.newMessageCount,
+      assistantText: result.assistantText,
+      stderr: renderDiagnostics(services.diagnostics),
+      jsonEvents,
+    };
+  } finally {
+    input.signal?.removeEventListener("abort", abort);
+    unsubscribe();
+  }
 }
 
 export async function runSparkHeadlessRoleInstruction(

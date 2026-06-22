@@ -52,6 +52,17 @@ describe("resolveNaviaPaths", () => {
     expect(paths.runtimeDir).toBe("/xdg/runtime/spark/daemon");
   });
 
+  it("honors the Spark daemon runtime directory environment override", () => {
+    const paths = resolveNaviaPaths({
+      app: "daemon",
+      env: { HOME: home, SPARK_DAEMON_RUNTIME_DIR: "/daemon-run" },
+      cwd: "/",
+    });
+
+    expect(paths.runtimeDir).toBe("/daemon-run");
+    expect(paths.pidFile).toBe("/daemon-run/daemon.pid");
+  });
+
   it("honors app-specific overrides before the deprecated NAVIA_DATA_DIR alias", () => {
     const paths = resolveNaviaPaths({
       app: "server",

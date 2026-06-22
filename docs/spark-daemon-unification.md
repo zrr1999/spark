@@ -251,7 +251,7 @@ inside this repo's tests/docs as a normal path.
 | `@zendev-lab/navia-domain` | `@zendev-lab/spark-cockpit-domain` | Rename or fold into cockpit app. |
 | `@zendev-lab/navia-system` | `@zendev-lab/spark-daemon-system` or fold into daemon | Rename helpers that resolve daemon paths/secrets. |
 | `@zendev-lab/navia-ui` | `@zendev-lab/spark-cockpit-ui` | Rename if retained. |
-| `apps/spark/src/host/daemon/*` | `apps/spark-daemon/src/...` or `packages/spark-daemon-core` | Fold into single daemon; delete duplicate old path when callers are migrated. |
+| former Spark CLI host daemon slice | `apps/spark-daemon/src/core/*` plus `apps/spark-daemon/src/spark/session-run.ts` | Folded into single daemon and deleted from the Spark CLI host tree. |
 
 ### Binaries, scripts, and service names
 
@@ -273,7 +273,7 @@ Initial grep evidence found active old runtime references in these categories:
   `scripts/link-navia-runner.mjs`.
 - Spark CLI daemon docs/code: `apps/spark/README.md`,
   `apps/spark/src/cli.ts`, `apps/spark/src/cli/daemon.ts`,
-  `apps/spark/src/host/daemon/*`, `test/spark-daemon-*.test.ts`.
+  former Spark CLI host daemon slice, `test/spark-daemon-*.test.ts`.
 - Former runner app: `apps/navia-runner/package.json`, `README.md`,
   `src/cli.ts`, `src/config.ts`, `src/daemon.ts`, `src/local-rpc.ts`,
   `src/service.ts`, `src/spark/bridge.ts`, and their `*.test.ts` files.
@@ -294,11 +294,10 @@ remaining active references.
 
 ### Replace the old Spark daemon slice
 
-The current `apps/spark/src/host/daemon/*` and `apps/spark/src/cli/daemon.ts`
-were intentionally scoped as a local queue-only slice. After this decision,
-those files are not the final daemon boundary. Their useful mechanics should be
-moved into the renamed Spark daemon package, then the old command surface should
-be deleted or converted to a thin client of the new daemon.
+The old Spark CLI host daemon slice has been removed. Queue, worker, lock,
+signal, invocation, and session-run execution now live under the Spark daemon
+package. `apps/spark/src/cli/daemon.ts` remains only as a client for the daemon
+local IPC surface; it does not own a queue worker or session executor.
 
 ### Replace the former Navia runner identity
 
@@ -334,6 +333,18 @@ non-TUI implementation. The Spark daemon injects that executor for cockpit
 the Spark agent loop instead of spawning `pi --print --mode json`. Pi extension
 host support remains valid when Spark is loaded inside Pi, and the legacy Pi
 child launcher remains only as a compatibility fallback for non-daemon hosts.
+
+### State migration and legacy runtime deletion
+
+The daemon now runs an idempotent one-time import before install/start/status and
+workspace operations. It copies old daemon config, database, artifact blobs, and
+Spark home state into the Spark daemon paths only when the new target is absent,
+rewrites the old installation-id/display-name prefix to Spark daemon vocabulary,
+renames legacy SQLite tables before applying the current schema, removes stale
+old runtime socket/pid/lock files when no old process is alive, and bootouts the
+old launchd label when starting the Spark daemon service. The former Spark CLI
+host daemon source tree has been deleted so there is no second in-repo runtime
+executor.
 
 ### Human wait bridge is required
 

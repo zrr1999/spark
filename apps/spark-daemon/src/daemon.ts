@@ -16,15 +16,17 @@ import { readSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
 import {
   createSparkDaemonWorkerContext,
   runSparkDaemonWorkerIteration,
-  SparkDaemonHumanWaitRegistry,
   SparkDaemonInvocationRegistry,
   SparkDaemonQueue,
   SparkDaemonWorkerLoop,
   waitForSparkDaemonActiveTasks,
-  type SparkDaemonHumanWaitInput,
-  type SparkDaemonHumanWaitRegistration,
   type SparkDaemonTaskExecutor,
 } from "./core/index.ts";
+import {
+  SparkDaemonHumanWaitRegistry,
+  type SparkDaemonHumanWaitInput,
+  type SparkDaemonHumanWaitRegistration,
+} from "./core/human-waits.ts";
 import { decideCommandPolicy } from "./policy.js";
 import {
   commandAck,
@@ -52,6 +54,7 @@ import {
   type RunSparkCommandFn,
   type CancelSparkInvocationFn,
 } from "./spark/bridge.js";
+import { createSparkDaemonQueueTaskExecutor } from "./spark/session-run.js";
 import {
   nextSparkDaemonTokenRefreshDelayMs,
   refreshSparkDaemonCredentials,
@@ -115,7 +118,9 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
       : createSparkDaemonWorkerContext({
           queue: options.queue ?? new SparkDaemonQueue({ paths: options.paths }),
           active: { files: new Set(), sessions: new Set(), invocations: invocationRegistry },
-          executeTask: options.executeQueueTask,
+          executeTask:
+            options.executeQueueTask ??
+            createSparkDaemonQueueTaskExecutor({ paths: options.paths, cwd: process.cwd() }),
         });
   const queueLoop = queueContext
     ? new SparkDaemonWorkerLoop({

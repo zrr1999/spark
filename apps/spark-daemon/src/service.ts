@@ -4,6 +4,7 @@ import {
   openSync,
   readFileSync,
   realpathSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -13,6 +14,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { launchctlCommand, type NaviaPaths } from "@zendev-lab/navia-system";
 
 const launchdLabel = "dev.spark.daemon";
+const legacyLaunchdLabel = "dev.navia.runner";
 
 export interface SparkDaemonServiceResult {
   kind: "launchd" | "detached";
@@ -31,6 +33,7 @@ export function startSparkDaemonService(paths: NaviaPaths): SparkDaemonServiceRe
 export function stopSparkDaemonService(paths: NaviaPaths): SparkDaemonServiceResult | null {
   if (process.platform === "darwin") {
     const uid = readCurrentUid();
+    cleanupLegacyLaunchdService(uid);
     const target = `gui/${uid}/${launchdLabel}`;
     const stopped = runLaunchctl(["bootout", target]);
     if (stopped.status === 0) {
@@ -47,6 +50,7 @@ export function stopSparkDaemonService(paths: NaviaPaths): SparkDaemonServiceRes
 
 function startLaunchdService(paths: NaviaPaths): SparkDaemonServiceResult {
   const uid = readCurrentUid();
+  cleanupLegacyLaunchdService(uid);
   const plistPath = writeLaunchdPlist(paths);
   const target = `gui/${uid}/${launchdLabel}`;
 
@@ -199,6 +203,7 @@ function serviceEnvironment(): Record<string, string> {
     "SPARK_DAEMON_DATA_DIR",
     "SPARK_DAEMON_CACHE_DIR",
     "SPARK_DAEMON_STATE_DIR",
+    "SPARK_DAEMON_RUNTIME_DIR",
   ];
   const env: Record<string, string> = {};
   for (const key of keys) {
@@ -208,6 +213,14 @@ function serviceEnvironment(): Record<string, string> {
     }
   }
   return env;
+}
+
+function cleanupLegacyLaunchdService(uid: number): void {
+  const home = process.env.HOME || homedir();
+  const legacyPlistPath = join(home, "Library", "LaunchAgents", `${legacyLaunchdLabel}.plist`);
+  runLaunchctl(["bootout", `gui/${uid}/${legacyLaunchdLabel}`]);
+  runLaunchctl(["bootout", `gui/${uid}`, legacyPlistPath]);
+  rmSync(legacyPlistPath, { force: true });
 }
 
 function runLaunchctl(args: string[]) {

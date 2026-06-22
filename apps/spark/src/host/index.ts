@@ -93,7 +93,6 @@ export {
   prepareSparkCompaction,
   shouldSparkCompact,
 } from "./compaction.ts";
-export * from "./daemon/index.ts";
 export {
   DEFAULT_SPARK_EXTENSION_SPECS,
   SparkExtensionLoader,

@@ -7,10 +7,10 @@ import test from "node:test";
 import {
   SparkAgentSession,
   createSparkCliHostServices,
-  createSparkDaemonSessionRunExecutor,
   type SparkCliHostServicesOptions,
   type SparkConfig,
 } from "../apps/spark/src/host/index.ts";
+import { createSparkHeadlessSessionExecutor } from "../apps/spark/src/headless-role-executor.ts";
 import {
   SparkDaemonQueue,
   createSparkDaemonWorkerContext,
@@ -64,11 +64,22 @@ void test("daemon session.run executor drains queue item into persisted Spark se
       prompt: "queued prompt",
     });
 
-    const executeTask = createSparkDaemonSessionRunExecutor({
-      cwd,
+    const executeSession = createSparkHeadlessSessionExecutor({
       sparkHome,
-      createServices: async (options) => await makeFakeServices(options),
+      createServices: async (options = {}) => await makeFakeServices(options),
     });
+    const executeTask = async (
+      task: { sessionId: string; prompt: string; reset?: boolean },
+      context: { signal: AbortSignal },
+    ) =>
+      await executeSession({
+        cwd,
+        sparkHome,
+        sessionId: task.sessionId,
+        prompt: task.prompt,
+        reset: task.reset,
+        signal: context.signal,
+      });
     const context = createSparkDaemonWorkerContext({ queue, executeTask });
 
     const didWork = await processSparkDaemonQueueBatch({

@@ -1,11 +1,3 @@
-export { SparkDaemonHumanWaitRegistry } from "./human-waits.ts";
-export type {
-  SparkDaemonHumanWaitDeliveryResult,
-  SparkDaemonHumanWaitInput,
-  SparkDaemonHumanWaitRecord,
-  SparkDaemonHumanWaitRegistration,
-  SparkDaemonHumanWaitResponse,
-} from "./human-waits.ts";
 export { SparkDaemonInvocationRegistry } from "./invocations.ts";
 export type { SparkDaemonInvocationHandle, SparkDaemonInvocationRecord } from "./invocations.ts";
 export { acquireSparkDaemonLock, readSparkDaemonLock } from "./lock.ts";

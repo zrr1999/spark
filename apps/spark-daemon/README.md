@@ -29,5 +29,11 @@ routes task execution through Spark runtime primitives, and reports workspace,
 task, invocation, ask, and artifact projections back to the web cockpit. Daemon
 background role execution injects Spark's native headless role executor into
 `@zendev-lab/spark-runtime`; it does not spawn `pi --print --mode json` for
-cockpit task starts. Navia SQLite stores projections/cache; Spark stores remain
-the execution source of truth.
+cockpit task starts. Queued `session.run` work is also executed in-process via
+Spark's public headless session executor. Navia SQLite stores projections/cache;
+Spark stores remain the execution source of truth.
+
+On install/start/status/workspace commands, the daemon performs a one-time
+idempotent import from pre-cutover local daemon paths when the new Spark daemon
+state is absent, then cleans stale old runtime socket/pid/lock files. It does
+not keep old command aliases or a second queue worker alive.

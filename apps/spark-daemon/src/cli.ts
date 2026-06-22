@@ -49,6 +49,7 @@ import {
   workspaceNameForPath,
   WorkspacePathConflictError,
 } from "./store/workspaces.js";
+import { migrateLegacySparkDaemonState } from "./migration.js";
 import { readRunningPid, startSparkDaemonService, stopSparkDaemonService } from "./service.js";
 
 export interface CliIo {
@@ -81,6 +82,11 @@ class SparkDaemonUnavailableError extends Error {
 }
 
 class WorkspacePathValidationError extends Error {}
+
+function prepareSparkDaemonState(paths: ReturnType<typeof resolveNaviaPaths>): void {
+  ensureNaviaPathDirs(paths);
+  migrateLegacySparkDaemonState(paths);
+}
 
 export async function main(argv = process.argv.slice(2), io: CliIo = defaultIo): Promise<number> {
   const args = argv[0] === "--" ? argv.slice(1) : argv;
@@ -145,7 +151,7 @@ export async function main(argv = process.argv.slice(2), io: CliIo = defaultIo):
 }
 
 function install(paths: ReturnType<typeof resolveNaviaPaths>, io: CliIo): number {
-  ensureNaviaPathDirs(paths);
+  prepareSparkDaemonState(paths);
   const config = existsSync(paths.configFile)
     ? readSparkDaemonConfig(paths)
     : defaultSparkDaemonConfig();
@@ -186,7 +192,7 @@ function doctor(paths: ReturnType<typeof resolveNaviaPaths>, io: CliIo): number 
 }
 
 async function status(paths: ReturnType<typeof resolveNaviaPaths>, io: CliIo): Promise<number> {
-  ensureNaviaPathDirs(paths);
+  prepareSparkDaemonState(paths);
   const config = readSparkDaemonConfig(paths);
   const daemon = await buildDaemonStatus(paths, io);
   const workspaceCount = daemon.running
@@ -213,7 +219,7 @@ async function status(paths: ReturnType<typeof resolveNaviaPaths>, io: CliIo): P
 }
 
 async function start(paths: ReturnType<typeof resolveNaviaPaths>): Promise<number> {
-  ensureNaviaPathDirs(paths);
+  prepareSparkDaemonState(paths);
   const lock = await acquireSparkDaemonLock({ runtimeDir: paths.runtimeDir, cwd: process.cwd() });
   const db = openSparkDaemonDatabase(paths);
   const shutdown = new AbortController();
@@ -328,7 +334,7 @@ async function daemonStatus(
   args: string[],
   io: CliIo,
 ): Promise<number> {
-  ensureNaviaPathDirs(paths);
+  prepareSparkDaemonState(paths);
   const flags = parseFlags(args);
   const status = await buildDaemonStatus(paths, io);
   if (flags.json === "true") {
@@ -381,7 +387,7 @@ async function daemonQueue(
   args: string[],
   io: CliIo,
 ): Promise<number> {
-  ensureNaviaPathDirs(paths);
+  prepareSparkDaemonState(paths);
   const flags = parseFlags(args);
   const state = readDaemonQueueState(flags.state ?? "inbox");
   const limit = flags.limit ? Number(flags.limit) : undefined;
@@ -410,7 +416,7 @@ async function daemonSubmit(
   args: string[],
   io: CliIo,
 ): Promise<number> {
-  ensureNaviaPathDirs(paths);
+  prepareSparkDaemonState(paths);
   const flags = parseFlags(args);
   const sessionId = flags.session?.trim();
   const prompt = (flags.prompt ?? positionalArgs(args).join(" ")).trim();
@@ -523,7 +529,7 @@ async function workspace(
     return 0;
   }
 
-  ensureNaviaPathDirs(paths);
+  prepareSparkDaemonState(paths);
   if (subcommand === undefined || subcommand === "ls" || subcommand === "list") {
     return await listWorkspaceCommand(paths, args, io);
   }
@@ -609,7 +615,7 @@ async function defaultWorkspace(
   args: string[],
   io: CliIo,
 ): Promise<number> {
-  ensureNaviaPathDirs(paths);
+  prepareSparkDaemonState(paths);
   const flags = parseFlags(args);
   const workspaces = await loadWorkspaceList(paths, io);
   if (workspaces.length === 0) {

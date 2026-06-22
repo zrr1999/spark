@@ -54,8 +54,11 @@ interface ActiveHumanWait {
 
 export class SparkDaemonHumanWaitRegistry {
   private readonly active = new Map<string, ActiveHumanWait>();
+  private readonly db: DatabaseSync;
 
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(db: DatabaseSync) {
+    this.db = db;
+  }
 
   register(input: SparkDaemonHumanWaitInput): SparkDaemonHumanWaitRegistration {
     const now = new Date().toISOString();

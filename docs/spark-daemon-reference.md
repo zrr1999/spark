@@ -245,7 +245,6 @@ apps/spark-daemon/src/core/
 ├── queue.ts
 ├── queue-worker.ts
 ├── runtime-worker.ts
-├── session-executor.ts
 ├── signals.ts
 └── types.ts
 
@@ -253,7 +252,9 @@ apps/spark-daemon/src/
 ├── cli.ts
 ├── daemon.ts
 ├── local-rpc.ts
-└── service.ts
+├── migration.ts
+├── service.ts
+└── spark/session-run.ts
 
 apps/spark/src/cli/daemon.ts       # Spark CLI daemon IPC client; no local queue worker
 ```
@@ -262,15 +263,13 @@ apps/spark/src/cli/daemon.ts       # Spark CLI daemon IPC client; no local queue
 
 ```ts
 export interface SparkDaemonWorkerContext {
-   sparkHome: string;
-   cwd: string;
    queue: SparkDaemonQueue;
    active: SparkDaemonActiveTasks;
-   createServices: () => Promise<SparkCliHostServices>;
+   executeTask: SparkDaemonTaskExecutor;
 }
 ```
 
-Use `createSparkCliHostServices()` from `apps/spark/src/host/bootstrap.ts` for host runtime construction. Do not duplicate provider/extension/session/skill initialization in daemon code.
+The daemon queues are executed through `apps/spark-daemon/src/spark/session-run.ts`, which imports the public `@zendev-lab/spark-cli/headless-role-executor` surface. The daemon package must not import Spark CLI host internals directly.
 
 ### Worker loop tick order
 
@@ -291,17 +290,17 @@ Future hooks can insert schedule/wake sweeps before queue processing, but the fi
 read queued session.run
   if active.sessions has sessionId: skip this tick
   mark active file/session
-  load/create Spark host services
-  load target JSONL session or fail unknown session
-  submit prompt through SparkAgentLoop or SparkAgentSession facade
-  persist new entries
+  call the public Spark headless session executor
+  load/create the target JSONL session
+  submit prompt through SparkAgentSession
+  persist new entries under the daemon Spark home
   rename inbox -> processed
 on error:
   write failed metadata or keep original payload plus error
   rename inbox -> failed
 ```
 
-A future `SparkAgentSession` facade should sit between daemon and raw `SparkAgentLoop`, because daemon, TUI, and future print mode all need the same submit/save/compact/branch behavior.
+`SparkAgentSession` is now shared by the TUI-facing host and the public headless executor; the daemon reaches it only through that public executor boundary.
 
 ## Tests to add next
 
