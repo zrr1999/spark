@@ -27,10 +27,10 @@ export function registerSparkRecoverTaskClaimTool(
   deps: SparkRecoverTaskClaimToolDependencies,
 ): void {
   registerSparkTool({
-    name: "spark_recover_task_claim",
+    name: "impl_recover_task_claim",
     label: "Spark Recover Task Claim",
     description:
-      'Compatibility surface for task_write({ action: "recover" }): safely release a stale other-session Spark task claim after evidence checks, leaving the task pending/ready and unclaimed. It never marks the task done and refuses active/recent owners or active background work.',
+      'Implementation for task_write({ action: "recover" }): safely release a stale other-session Spark task claim after evidence checks, leaving the task pending/ready and unclaimed. It never marks the task done and refuses active/recent owners or active background work.',
     parameters: Type.Object({
       project: Type.Optional(Type.String({ description: "Optional project selector/ref/title." })),
       projectRef: Type.Optional(

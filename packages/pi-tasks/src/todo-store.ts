@@ -64,7 +64,7 @@ export class TaskTodoStoreFormatError extends Error {
   readonly filePath: string;
 
   constructor(filePath: string, message: string) {
-    super(`invalid task TODO store: ${filePath}: ${message}`);
+    super(`invalid task plan-item compatibility store: ${filePath}: ${message}`);
     this.name = "TaskTodoStoreFormatError";
     this.filePath = filePath;
   }
@@ -78,9 +78,10 @@ export class TaskTodoStore {
   }
 
   async save(todos: TaskTodo[] | TaskGraph): Promise<void> {
-    const rows = Array.isArray(todos)
-      ? cloneTodos(todos).map((todo, index) => taskTodoRowInput(todo, { position: index }))
-      : taskTodoRowsFromGraph(todos);
+    if (!Array.isArray(todos)) return;
+    const rows = cloneTodos(todos).map((todo, index) =>
+      taskTodoRowInput(todo, { position: index }),
+    );
     const db = await this.openRequiredDatabase();
     try {
       writeTransaction(db, () => {
@@ -226,15 +227,6 @@ export function defaultTaskTodoStore(cwd: string, _scope?: string): TaskTodoStor
   return new TaskTodoStore(join(cwd, ".spark", "todos", "todos.sqlite"));
 }
 
-function taskTodoRowsFromGraph(graph: TaskGraph): TaskTodoRowInput[] {
-  const projectByTaskRef = new Map(graph.tasks().map((task) => [task.ref, task.projectRef]));
-  return graph
-    .todoSnapshot()
-    .map((todo, index) =>
-      taskTodoRowInput(todo, { projectRef: projectByTaskRef.get(todo.taskRef), position: index }),
-    );
-}
-
 function taskTodoRowInput(
   todo: TaskTodo,
   options: { projectRef?: ProjectRef; position?: number } = {},
@@ -330,7 +322,7 @@ function rowToTaskTodo(row: unknown, filePath: string): TaskTodo {
   if (item.owner_kind !== "task" || !item.task_ref) {
     throw new TaskTodoStoreFormatError(
       filePath,
-      "task TODO row must have owner_kind=task and task_ref",
+      "task plan-item row must have owner_kind=task and task_ref",
     );
   }
   return normalizeTodo({

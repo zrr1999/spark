@@ -49,7 +49,7 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
 - `spark`
    - Spark default research behavior plus `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow[:selector]` commands
    - Spark widget, role-run status/widget surfaces, mode state, active context provider, session-bound goal facade, review/init flow state, builtin Spark roles, and role/model binding policy
-   - canonical visible tool surface through `task_read`, `task_write`, `assign`, `learning`, `artifact`, `ask`, `context`, `workflow`, `role`, `recall`, and `goal`; legacy `spark_*` tool configs are internal implementation details only and are not registered as active tools
+   - canonical visible tool surface through `task_read`, `task_write`, `assign`, `learning`, `artifact`, `ask`, `context`, `workflow`, `role`, `recall`, and `goal`; retired `spark_*` tool configs are not kept as internal dispatch wiring
    - always-available research-default standing mode, with project-bound context appended only after a graph/current project exists
    - state initialization without generic project-idea intake templates; clarification/decision asks are grounded in inspected context, while SPARK.md idea-capture prompts live in external skills
    - root `SPARK.md` materialization only during compatibility initialization when `.git` exists in cwd; direct project-bound modes keep intent under `.spark` artifacts

@@ -6,7 +6,7 @@ export type { SessionTodoEntry, SessionTodoStatus } from "@zendev-lab/pi-tasks";
 
 /**
  * spark-widget.ts — Above-editor widget showing durable Spark project/task state plus
- * the current task's TODO working set.
+ * claimed task TODO working sets.
  *
  * Display model:
  *   ◆ Goal(●): active objective
@@ -15,8 +15,8 @@ export type { SessionTodoEntry, SessionTodoStatus } from "@zendev-lab/pi-tasks";
  *   └─ ○ #3 independent session TODO
  *   ◆ Project title · Tasks(running=2 pending=1 failed=1): @agent-a, @agent-b
  *   ├─ ◐ @me/worker role-run task title
- *   │  ├─ ✓ #7 task TODO
- *   │  └─ ○ #12 task TODO
+ *   │  ├─ ✓ #7 task plan item
+ *   │  └─ ○ #12 task plan item
  */
 
 export interface TaskEntry {
@@ -516,10 +516,16 @@ function flattenTaskRows(tasks: TaskEntry[]): WidgetRow[] {
 
 function appendTaskRows(rows: WidgetRow[], task: TaskEntry, todoIndex: number): number {
   rows.push({ kind: "task", task });
-  if (task.status === "done" || task.status === "cancelled") return todoIndex;
+  if (!shouldShowTaskTodos(task)) return todoIndex;
   for (const todo of sortTodosForVisibility(task.todos.filter(isVisibleTaskTodo)))
     rows.push({ kind: "task-todo", todo, fallbackNumber: todoIndex++ });
   return todoIndex;
+}
+
+function shouldShowTaskTodos(task: TaskEntry): boolean {
+  if (task.status === "done" || task.status === "cancelled") return false;
+  if (task.claim === "mine") return true;
+  return task.claim === "role-run" && task.backgroundOwner === "session";
 }
 
 function sortTasksForVisibility(tasks: TaskEntry[]): TaskEntry[] {

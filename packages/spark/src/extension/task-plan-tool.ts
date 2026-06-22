@@ -1,6 +1,12 @@
 import { Type } from "typebox";
 
-import type { Task, TaskKind, TaskPlan, TaskStatus } from "@zendev-lab/pi-extension-api";
+import type {
+  Task,
+  TaskKind,
+  TaskPlan,
+  TaskPlanItem,
+  TaskStatus,
+} from "@zendev-lab/pi-extension-api";
 import { type TaskPlanResult } from "@zendev-lab/pi-tasks";
 
 export function taskPlanSchema() {
@@ -17,7 +23,24 @@ export function taskPlanSchema() {
     evidenceRequired: Type.Optional(
       Type.Array(Type.String({ description: "Evidence required before completion." })),
     ),
-    steps: Type.Optional(Type.Array(Type.String({ description: "Concrete plan steps." }))),
+    items: Type.Optional(
+      Type.Array(
+        Type.Union([
+          Type.String({ description: "Plan item title." }),
+          Type.Object({
+            id: Type.Optional(Type.String({ description: "Stable plan item id." })),
+            title: Type.Optional(Type.String({ description: "Short plan item title." })),
+            description: Type.Optional(Type.String({ description: "Plan item detail/context." })),
+            status: Type.Optional(
+              Type.String({ description: "pending | in_progress | done | blocked | cancelled" }),
+            ),
+            notes: Type.Optional(Type.Array(Type.String())),
+            blockedBy: Type.Optional(Type.Array(Type.String())),
+            evidenceRefs: Type.Optional(Type.Array(Type.String())),
+          }),
+        ]),
+      ),
+    ),
     decompositionRationale: Type.Optional(
       Type.String({ description: "Why this is the right smallest task boundary." }),
     ),
@@ -72,6 +95,10 @@ export function normalizeTaskPlanPatch(
 ): Partial<TaskPlan> | undefined {
   if (value === undefined || value === null) return undefined;
   if (!isRecord(value)) throw new Error(`${path} must be an object`);
+  const items = normalizeTaskPlanItemInputArray(value.items, `${path}.items`);
+  const legacyStepItems = normalizeToolStringArray(value.steps, `${path}.steps`)?.map(
+    (title, index) => taskPlanItemInput({ title }, index),
+  );
   return {
     objective: normalizeOptionalToolString(value.objective, `${path}.objective`),
     contextRefs: normalizeToolStringArray(value.contextRefs, `${path}.contextRefs`),
@@ -79,7 +106,7 @@ export function normalizeTaskPlanPatch(
     nonGoals: normalizeToolStringArray(value.nonGoals, `${path}.nonGoals`),
     successCriteria: normalizeToolStringArray(value.successCriteria, `${path}.successCriteria`),
     evidenceRequired: normalizeToolStringArray(value.evidenceRequired, `${path}.evidenceRequired`),
-    steps: normalizeToolStringArray(value.steps, `${path}.steps`),
+    items: items ?? legacyStepItems,
     decompositionRationale: normalizeOptionalToolString(
       value.decompositionRationale,
       `${path}.decompositionRationale`,
@@ -88,6 +115,80 @@ export function normalizeTaskPlanPatch(
     openQuestions: normalizeToolStringArray(value.openQuestions, `${path}.openQuestions`),
     askRefs: normalizeToolStringArray(value.askRefs, `${path}.askRefs`) as TaskPlan["askRefs"],
   };
+}
+
+function normalizeTaskPlanItemInputArray(value: unknown, path: string): TaskPlanItem[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new Error(`${path} must be an array`);
+  const items = value
+    .map((item, index) => normalizeTaskPlanItemInput(item, `${path}[${index}]`, index))
+    .filter((item): item is TaskPlanItem => Boolean(item));
+  return items.length > 0 ? items : undefined;
+}
+
+function normalizeTaskPlanItemInput(
+  value: unknown,
+  path: string,
+  index: number,
+): TaskPlanItem | undefined {
+  if (typeof value === "string") {
+    const title = normalizeOptionalToolString(value, path);
+    return title ? taskPlanItemInput({ title }, index) : undefined;
+  }
+  if (!isRecord(value)) throw new Error(`${path} must be a string or object`);
+  const title = normalizeOptionalToolString(value.title, `${path}.title`);
+  const description = normalizeOptionalToolString(value.description, `${path}.description`);
+  const item = taskPlanItemInput(
+    {
+      id: normalizeOptionalToolString(value.id, `${path}.id`),
+      title: title ?? description,
+      description,
+      status: normalizeTaskPlanItemStatus(value.status, `${path}.status`),
+      notes: normalizeToolStringArray(value.notes, `${path}.notes`),
+      blockedBy: normalizeToolStringArray(value.blockedBy, `${path}.blockedBy`),
+      evidenceRefs: normalizeToolStringArray(value.evidenceRefs, `${path}.evidenceRefs`) as
+        | TaskPlanItem["evidenceRefs"]
+        | undefined,
+    },
+    index,
+  );
+  return item.title ? item : undefined;
+}
+
+function taskPlanItemInput(
+  input: Partial<TaskPlanItem> & { title?: string },
+  index: number,
+): TaskPlanItem {
+  const now = new Date().toISOString();
+  return {
+    id: input.id ?? `item-${index + 1}`,
+    title: input.title ?? input.description ?? `Plan item ${index + 1}`,
+    description: input.description,
+    status: input.status ?? "pending",
+    notes: input.notes,
+    blockedBy: input.blockedBy,
+    evidenceRefs: input.evidenceRefs,
+    createdAt: input.createdAt ?? now,
+    updatedAt: input.updatedAt ?? now,
+    deletedAt: input.deletedAt,
+  };
+}
+
+function normalizeTaskPlanItemStatus(
+  value: unknown,
+  path: string,
+): TaskPlanItem["status"] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (
+    value === "pending" ||
+    value === "in_progress" ||
+    value === "done" ||
+    value === "blocked" ||
+    value === "cancelled" ||
+    value === "deleted"
+  )
+    return value;
+  throw new Error(`${path} must be pending, in_progress, done, blocked, cancelled, or deleted`);
 }
 
 export function normalizeRequiredToolString(value: unknown, path: string): string {

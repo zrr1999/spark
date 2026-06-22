@@ -62,7 +62,7 @@ Storage policy:
 
 ## Spark package ownership
 
-- `pi-tasks` owns projects, tasks, dependencies, task TODOs, claim leases, readiness, and run history.
+- `pi-tasks` owns projects, tasks, dependencies, task plan items, compatibility TODO persistence/projection, claim leases, readiness, and run history.
 - `spark-runtime` maps one Spark task to one `pi-roles` `RoleRun` primitive and maps completion back to task status, task claims, and artifacts.
 - `pi-workflows` maps ready Spark task frontiers to scheduled `spark-runtime` runs and owns workflow-run scheduling/reconciliation state.
 - `spark` extension tools keep Spark workflow semantics. Patcher-style child runs belong to explicit extension roles such as `role:extension-patcher` so the child receives only the relevant domain tools and unclear patch instructions are escalated upward.

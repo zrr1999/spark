@@ -1,11 +1,11 @@
 /**
- * spark_ask tool runner.
+ * ask tool runner.
  *
  * Source content was previously routed through `spark-ask` (a thin facade over
  * `pi-ask`); now lives directly in `spark/extension` and consumes pi-ask
  * primitives by their original names. Spark-prefixed type names are kept
  * because these wrappers are spark-specific (artifact persistence + replay
- * through Spark artifact store + the `spark_ask` tool name).
+ * through Spark artifact store + the `ask` tool name).
  */
 
 import {
@@ -61,7 +61,7 @@ export type SparkAskToolUi = NonNullable<Parameters<typeof runPiAskFlow>[1]> & {
 export function createSparkAskToolRequest(params: SparkAskToolParams): PiAskFlowRequest {
   const questions = normalizeSparkAskToolQuestions(params);
   const title = normalizeSparkAskToolString(params.title, "title");
-  if (!title) throw new Error("spark_ask requires a context-specific title");
+  if (!title) throw new Error("ask requires a context-specific title");
   return createPiAskFlowRequest({
     flow: normalizeSparkAskToolString(params.flow, "flow") ?? "custom",
     mode: normalizeSparkAskMode(params.mode),
@@ -266,17 +266,17 @@ function isPiAskFlowResultLike(value: unknown): value is PiAskFlowResult {
 function normalizeSparkAskToolQuestions(params: SparkAskToolParams): PiAskFlowRequest["questions"] {
   const rawQuestions = (params as { questions?: unknown }).questions;
   if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
-    throw new Error("spark_ask requires a non-empty questions[] array");
+    throw new Error("ask requires a non-empty questions[] array");
   }
 
   return rawQuestions.map((rawQuestion, index) => {
     const position = index + 1;
-    if (!isRecord(rawQuestion)) throw new Error(`spark_ask question ${position} must be an object`);
+    if (!isRecord(rawQuestion)) throw new Error(`ask question ${position} must be an object`);
     const id = normalizeRequiredSparkAskToolString(rawQuestion.id, `question ${position} id`);
     const type = normalizeSparkAskQuestionType(rawQuestion.type, id);
     const rawOptions = rawQuestion.options;
     if (type === "freeform" && rawOptions !== undefined && rawOptions !== null) {
-      throw new Error(`spark_ask question ${id} freeform questions must not include options`);
+      throw new Error(`ask question ${id} freeform questions must not include options`);
     }
     return {
       id,
@@ -293,7 +293,7 @@ function normalizeSparkAskToolQuestions(params: SparkAskToolParams): PiAskFlowRe
 function normalizeDefaultValues(values: unknown, questionId: string): string[] | undefined {
   if (values === undefined || values === null) return undefined;
   if (!Array.isArray(values) || values.some((value) => typeof value !== "string")) {
-    throw new Error(`spark_ask question ${questionId} defaultValues must be a string array`);
+    throw new Error(`ask question ${questionId} defaultValues must be a string array`);
   }
   const normalized = values.map((value) => value.trim()).filter(Boolean);
   return normalized.length > 0 ? normalized : undefined;
@@ -304,16 +304,14 @@ function normalizeSparkAskToolOptions(
   questionId: string,
 ): PiAskFlowRequest["questions"][number]["options"] {
   if (!Array.isArray(rawOptions) || rawOptions.length < 2) {
-    throw new Error(
-      `spark_ask question ${questionId} requires at least two clear, detailed options`,
-    );
+    throw new Error(`ask question ${questionId} requires at least two clear, detailed options`);
   }
 
   const seenIds = new Set<string>();
   return rawOptions.map((option, index) => {
     const position = index + 1;
     if (!isRecord(option))
-      throw new Error(`spark_ask question ${questionId} option ${position} must be an object`);
+      throw new Error(`ask question ${questionId} option ${position} must be an object`);
     const id = normalizeRequiredSparkAskToolString(
       option.id,
       `question ${questionId} option ${position} id`,
@@ -327,15 +325,15 @@ function normalizeSparkAskToolOptions(
       `question ${questionId} option ${id} description`,
     );
     if (seenIds.has(id))
-      throw new Error(`spark_ask question ${questionId} option id is duplicated: ${id}`);
+      throw new Error(`ask question ${questionId} option id is duplicated: ${id}`);
     seenIds.add(id);
     if (description.length < MIN_SPARK_ASK_OPTION_DESCRIPTION_LENGTH) {
       throw new Error(
-        `spark_ask option ${id} needs a clearer description (at least ${MIN_SPARK_ASK_OPTION_DESCRIPTION_LENGTH} characters explaining what choosing it means)`,
+        `ask option ${id} needs a clearer description (at least ${MIN_SPARK_ASK_OPTION_DESCRIPTION_LENGTH} characters explaining what choosing it means)`,
       );
     }
     if (sameNormalizedText(description, id) || sameNormalizedText(description, label)) {
-      throw new Error(`spark_ask option ${id} description must explain more than the id/label`);
+      throw new Error(`ask option ${id} description must explain more than the id/label`);
     }
     const preview = normalizeSparkAskToolString(
       option.preview,
@@ -360,7 +358,7 @@ function normalizeSparkAskMode(
   if (mode === undefined || mode === null) return undefined;
   if (mode === "clarification" || mode === "decision" || mode === "approval" || mode === "unblock")
     return mode;
-  throw new Error("spark_ask mode must be clarification, decision, approval, or unblock");
+  throw new Error("ask mode must be clarification, decision, approval, or unblock");
 }
 
 function normalizeSparkAskQuestionType(
@@ -370,14 +368,12 @@ function normalizeSparkAskQuestionType(
   if (type === undefined || type === null) return undefined;
   if (type === "single" || type === "multi" || type === "preview" || type === "freeform")
     return type;
-  throw new Error(
-    `spark_ask question ${questionId} type must be single, multi, preview, or freeform`,
-  );
+  throw new Error(`ask question ${questionId} type must be single, multi, preview, or freeform`);
 }
 
 function normalizeSparkAskBehaviour(value: unknown): PiAskFlowBehaviour | undefined {
   if (value === undefined || value === null) return undefined;
-  if (!isRecord(value)) throw new Error("spark_ask behaviour must be an object");
+  if (!isRecord(value)) throw new Error("ask behaviour must be an object");
   return {
     allowElaborate: normalizeSparkAskToolBoolean(value.allowElaborate, "behaviour.allowElaborate"),
     allowReplay: normalizeSparkAskToolBoolean(value.allowReplay, "behaviour.allowReplay"),
@@ -390,20 +386,20 @@ function normalizeSparkAskBehaviour(value: unknown): PiAskFlowBehaviour | undefi
 
 function normalizeSparkAskToolBoolean(value: unknown, field: string): boolean | undefined {
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== "boolean") throw new Error(`spark_ask ${field} must be a boolean`);
+  if (typeof value !== "boolean") throw new Error(`ask ${field} must be a boolean`);
   return value;
 }
 
 function normalizeSparkAskToolString(value: unknown, field: string): string | undefined {
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== "string") throw new Error(`spark_ask ${field} must be a string`);
+  if (typeof value !== "string") throw new Error(`ask ${field} must be a string`);
   const trimmed = value.trim();
   return trimmed || undefined;
 }
 
 function normalizeRequiredSparkAskToolString(value: unknown, field: string): string {
   const normalized = normalizeSparkAskToolString(value, field);
-  if (!normalized) throw new Error(`spark_ask ${field} must be a non-empty string`);
+  if (!normalized) throw new Error(`ask ${field} must be a non-empty string`);
   return normalized;
 }
 

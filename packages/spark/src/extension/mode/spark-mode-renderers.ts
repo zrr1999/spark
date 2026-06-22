@@ -100,7 +100,7 @@ export function renderSparkImplementationModePrompt(
 ): string {
   const requirements = selectedProjectRef
     ? [
-        'Read the current project/task plan and inspect ready tasks with task_read({ action: "project_status" }). Claim one concrete ready task at a time with task_write({ action: "claim" }), execute it, verify the required evidence with artifact/learning/context as needed, then call task_write({ action: "finish" }). After each successful finish, inspect project_status again and continue with the next ready task until no ready task remains, validation fails, review/ask approval is pending, or a real blocker requires user input or external action. When all project tasks are terminal and the project itself should close, use task_write({ action: "project_finish" }); do not use project_status_update status=done or request goal completion from /implement.',
+        'Read the current project/task plan and inspect ready tasks with task_read({ action: "project_status" }). Claim one concrete ready task at a time with task_write({ action: "claim" }), execute it, verify the required evidence with artifact/learning/context as needed, then call task_write({ action: "finish" }). After each successful finish, inspect project_status again and continue with the next ready task until no ready task remains, validation fails, review/ask approval is pending, or a real blocker requires user input or external action. Projects are permanent records; do not use a Project finish/status lifecycle or request goal completion from /implement.',
         "Implementation mode is human-blocking: use canonical ask for material user decisions and wait for the answer; do not auto-answer asks, do not make goal-style autonomous policy decisions, and do not request reviewer-gated goal completion from /implement.",
         WORKFLOW_AND_SUBAGENT_ARE_TOOLS,
         PARALLEL_EXECUTION_WORKFLOW_STRATEGY,
@@ -150,11 +150,10 @@ function renderSparkProjectSummary(graph: TaskGraph, selectedProjectRef?: Projec
     ? projects.find((candidate) => candidate.ref === selectedProjectRef)
     : undefined;
   if (!project) {
-    const activeCount = projects.filter((candidate) => candidate.status !== "done").length;
     return [
       "## Spark project summary",
       "- Current project: none selected for this session",
-      `- Projects: ${projects.length} total / ${activeCount} active`,
+      `- Projects: ${projects.length} total`,
       '- Guidance: use task_write({ action: "project_use" }) to select or create a current project before project-bound planning or execution.',
     ].join("\n");
   }
@@ -164,7 +163,6 @@ function renderSparkProjectSummary(graph: TaskGraph, selectedProjectRef?: Projec
   return [
     "## Spark project summary",
     `- Current project: ${project.title} (${project.ref})`,
-    `- Status: ${project.status}`,
     `- Tasks: ${tasks.length} total / ${unfinished.length} unfinished`,
     ready.length > 0
       ? `- Ready frontier: ${ready

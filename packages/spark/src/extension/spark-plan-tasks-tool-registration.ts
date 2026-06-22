@@ -32,7 +32,7 @@ import {
   taskKindDescription,
   taskPlanSchema,
 } from "./task-plan-tool.ts";
-import { syncTaskTodosFromPlan } from "./task-plan-todos.ts";
+import { syncTaskPlanItemsFromPlan } from "./task-plan-items.ts";
 
 const DEFAULT_SPARK_PLAN_TASK_OUTPUT_LIMIT = 5;
 const SPARK_PLAN_TASKS_READINESS_RULES = [
@@ -64,10 +64,10 @@ export function registerSparkPlanTasksTool(
   deps: SparkPlanTasksToolDeps,
 ): void {
   registerSparkTool({
-    name: "spark_plan_tasks",
+    name: "impl_plan_tasks",
     label: "Spark Plan Tasks",
     description: [
-      'Compatibility surface for task_write({ action: "plan" }): create or update multiple durable Spark tasks in the active project from a concrete task plan. Tasks must be concrete executable/review/validation/research work, not standalone design/planning placeholders; design discussion belongs in conversation with the user and in each task.plan after decisions are clear. The tool writes directly once tasks have clear objectives, dependencies, success criteria, and evidence requirements, so clarify all planning-affecting questions before calling it and refine by calling it again with concrete updates.',
+      'Implementation for task_write({ action: "plan" }): create or update multiple durable Spark tasks in the current project from a concrete task plan. Tasks must be concrete executable/review/validation/research work, not standalone design/planning placeholders; design discussion belongs in conversation with the user and in each task.plan after decisions are clear. The tool writes directly once tasks have clear objectives, dependencies, success criteria, and evidence requirements, so clarify all planning-affecting questions before calling it and refine by calling it again with concrete updates.',
       "",
       SPARK_PLAN_TASKS_READINESS_RULES,
     ].join("\n"),
@@ -207,7 +207,7 @@ export function registerSparkPlanTasksTool(
       }
       const planTodoSync = [...result.created, ...result.updated].map((task) => ({
         taskRef: task.ref,
-        items: syncTaskTodosFromPlan(graph, task),
+        items: syncTaskPlanItemsFromPlan(graph, task),
       }));
       const changedRefs = [...result.created, ...result.updated].map((task) => task.ref);
       const updatedRoadmapItem = attachRoadmapPlanningRefs(

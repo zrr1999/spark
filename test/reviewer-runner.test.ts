@@ -232,7 +232,6 @@ void test("goal reviewer instruction does not treat missing current project as c
     projectStatus: {
       ref: "proj:completed-evidence",
       title: "Completed evidence project",
-      status: "done",
       taskCounts: { total: 1, unfinished: 0, claimed: 0, statusCounts: { done: 1 } },
       readyTasks: [],
       unfinishedTasks: [],

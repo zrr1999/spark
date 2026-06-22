@@ -8,7 +8,7 @@ import { SparkHostRuntime } from "../apps/spark/src/host/runtime.ts";
 void test("SparkHostRuntime registers tools and reflects them in getAllTools", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   host.registerTool({
-    name: "spark_status",
+    name: "impl_status",
     description: "Show Spark status",
     parameters: { type: "object" },
     async execute() {
@@ -16,7 +16,7 @@ void test("SparkHostRuntime registers tools and reflects them in getAllTools", (
     },
   });
   host.registerTool({
-    name: "spark_use_project",
+    name: "impl_use_project",
     description: "Select Spark project",
     parameters: { type: "object" },
     async execute() {
@@ -28,7 +28,7 @@ void test("SparkHostRuntime registers tools and reflects them in getAllTools", (
     .getAllTools()
     .map((tool) => tool.name)
     .sort();
-  assert.deepEqual(names, ["spark_status", "spark_use_project"]);
+  assert.deepEqual(names, ["impl_status", "impl_use_project"]);
 });
 
 void test("SparkHostRuntime setActiveTools toggles getAllTools view", () => {

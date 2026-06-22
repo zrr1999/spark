@@ -6,10 +6,6 @@ export function ensureSparkGraphInvariants(graph: TaskGraph): boolean {
   let changed = false;
   for (const project of graph.projects()) {
     const projectState = graph.getProject(project.ref);
-    if (!projectState.status) {
-      graph.updateProject(project.ref, { status: "active" });
-      changed = true;
-    }
     const betterTitle = fallbackProjectTitle(graph, projectState);
     if (betterTitle && betterTitle !== projectState.title) {
       graph.updateProject(project.ref, { title: betterTitle });

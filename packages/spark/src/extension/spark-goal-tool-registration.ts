@@ -676,7 +676,6 @@ interface GoalProjectRelationshipDetail {
   currentProject?: {
     ref: string;
     title: string;
-    status: string;
     unfinishedTaskCount: number;
     readyTaskCount: number;
   };
@@ -695,7 +694,6 @@ function describeGoalProjectRelationship(
       ? {
           ref: project.ref,
           title: project.title,
-          status: project.status,
           unfinishedTaskCount: graph
             .tasks(project.ref)
             .filter((task) => task.status !== "done" && task.status !== "cancelled").length,
@@ -723,12 +721,10 @@ function describeGoalProjectRelationship(
     currentProject,
     binding: "current_project",
     note: hasGoal
-      ? "Goal is session-scoped and is currently related to the selected project; project_finish does not complete the goal automatically."
+      ? "Goal is session-scoped; the selected project is context/evidence, not a completion authority or prerequisite."
       : "No durable goal exists; the selected project can seed a new session goal, but compact/historical summaries must not be treated as current goal state.",
     recommendedAction: hasGoal
-      ? currentProject.status === "done"
-        ? 'If the goal objective is achieved, request goal({ action: "complete" }) after reviewing project evidence.'
-        : 'Continue project work; when the project is done, use task_write({ action: "project_finish" }) and then goal({ action: "complete" }) if the goal is achieved.'
+      ? 'Continue goal work; when the objective is substantively achieved with evidence, request goal({ action: "complete" }).'
       : 'Use goal({ action: "start" }) to infer from the current project, or goal({ action: "set", objective }) for an explicit goal.',
   };
 }
@@ -741,7 +737,7 @@ function renderNoGoalStatus(relationship: GoalProjectRelationshipDetail): string
   if (relationship.currentProject) {
     const project = relationship.currentProject;
     lines.push(
-      `Current project: ${oneLine(project.title)} (${project.ref}) status=${project.status} unfinishedTasks=${project.unfinishedTaskCount} readyTasks=${project.readyTaskCount}.`,
+      `Current project: ${oneLine(project.title)} (${project.ref}) unfinishedTasks=${project.unfinishedTaskCount} readyTasks=${project.readyTaskCount}.`,
     );
   } else {
     lines.push("Current project: none selected; no recent project binding is available.");
@@ -771,7 +767,7 @@ function renderGoalStatus(
   if (relationship.currentProject) {
     const project = relationship.currentProject;
     lines.push(
-      `Current project: ${oneLine(project.title)} (${project.ref}) status=${project.status} unfinishedTasks=${project.unfinishedTaskCount} readyTasks=${project.readyTaskCount}.`,
+      `Current project: ${oneLine(project.title)} (${project.ref}) unfinishedTasks=${project.unfinishedTaskCount} readyTasks=${project.readyTaskCount}.`,
     );
   } else {
     lines.push("Current project: none selected for this session goal.");

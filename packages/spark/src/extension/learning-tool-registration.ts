@@ -24,7 +24,7 @@ import type { SparkToolRegistrar } from "./spark-tool-registration.ts";
 
 export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar): void {
   registerSparkTool({
-    name: "spark_learning_record",
+    name: "impl_learning_record",
     label: "Spark Learning Record",
     description:
       "Record one evidence-backed reusable learning under local .learnings/ or the user learning directory. Use export tools for sharing.",
@@ -82,7 +82,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
   });
 
   registerSparkTool({
-    name: "spark_learning_search",
+    name: "impl_learning_search",
     label: "Spark Learning Search",
     description:
       "Search local Spark learnings. Defaults to active learnings only; candidates are opt-in.",
@@ -139,7 +139,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
   });
 
   registerSparkTool({
-    name: "spark_learning_list",
+    name: "impl_learning_list",
     label: "Spark Learning List",
     description: "List local Spark learnings with compact metadata.",
     parameters: Type.Object({
@@ -203,7 +203,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
   });
 
   registerSparkTool({
-    name: "spark_learning_read",
+    name: "impl_learning_read",
     label: "Spark Learning Read",
     description: "Read one Spark learning by artifact ref or stable id.",
     parameters: Type.Object({
@@ -246,7 +246,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
   });
 
   registerSparkTool({
-    name: "spark_learning_mark_stale",
+    name: "impl_learning_mark_stale",
     label: "Spark Learning Mark Stale",
     description: "Mark one learning stale with an explicit reason.",
     parameters: Type.Object({
@@ -268,7 +268,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
   });
 
   registerSparkTool({
-    name: "spark_learning_supersede",
+    name: "impl_learning_supersede",
     label: "Spark Learning Supersede",
     description: "Mark a learning superseded by one or more replacement learning refs.",
     parameters: Type.Object({
@@ -294,7 +294,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
   });
 
   registerSparkTool({
-    name: "spark_learning_reject",
+    name: "impl_learning_reject",
     label: "Spark Learning Reject",
     description: "Reject one learning candidate while keeping a traceable rejected record.",
     parameters: Type.Object({

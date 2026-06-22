@@ -129,7 +129,7 @@ void test("SparkWidget registers, invalidates renders, clears hidden state, and 
   assert.equal(registrations.length, 4);
 });
 
-void test("spark widget hides deleted task TODOs but keeps done task TODOs visible", () => {
+void test("spark widget hides deleted task plan items but keeps done task plan items visible", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       tasks: [
@@ -410,6 +410,59 @@ void test("spark widget only shows missing plan marker on task rows", () => {
   assert.doesNotMatch(lines, /missing-success|missing-evidence/);
 });
 
+void test("spark widget hides task plan items until a task is claimed", () => {
+  const lines = renderSparkWidgetLines(
+    {
+      projectTitle: "Spark UX redesign",
+      tasks: [
+        {
+          title: "Planned but unclaimed task",
+          status: "pending",
+          agentLabel: "unassigned",
+          todos: [{ displayNumber: 4, content: "Hidden pre-claim plan item", status: "pending" }],
+        },
+        {
+          title: "Claimed foreground task",
+          status: "running",
+          claim: "mine",
+          agentLabel: "me",
+          todos: [{ displayNumber: 5, content: "Visible claimed plan item", status: "pending" }],
+        },
+        {
+          title: "Claimed background task",
+          status: "running",
+          claim: "role-run",
+          agentLabel: "worker-a1b2c3",
+          backgroundOwner: "session",
+          todos: [{ displayNumber: 6, content: "Visible role-run plan item", status: "pending" }],
+        },
+        {
+          title: "Other session claimed task",
+          status: "running",
+          claim: "other",
+          agentLabel: "other",
+          todos: [
+            { displayNumber: 7, content: "Hidden other-session plan item", status: "pending" },
+          ],
+        },
+      ],
+      independentTodos: [],
+      taskCountTotal: 4,
+      taskCountClaimed: 3,
+      taskCountClaimedBySession: 1,
+      outputLanguage: "en",
+    },
+    { terminal: { columns: 160 }, requestRender() {} },
+    theme,
+  ).join("\n");
+
+  assert.match(lines, /Planned but unclaimed task/);
+  assert.doesNotMatch(lines, /Hidden pre-claim plan item/);
+  assert.match(lines, /Visible claimed plan item/);
+  assert.match(lines, /Visible role-run plan item/);
+  assert.doesNotMatch(lines, /Hidden other-session plan item/);
+});
+
 void test("spark widget shows role/title task rows with nested TODOs and independent TODO siblings", () => {
   const lines = renderSparkWidgetLines(
     {
@@ -444,7 +497,7 @@ void test("spark widget shows role/title task rows with nested TODOs and indepen
   assert.match(text, /#3 Decide project symbol/);
 });
 
-void test("spark widget does not expand TODOs for finished tasks", () => {
+void test("spark widget does not expand plan items for finished tasks", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
@@ -778,7 +831,7 @@ void test("spark widget renders task summary on the project header", () => {
   assert.match(lines[1] ?? "", /^├─ ⠧/);
 });
 
-void test("spark widget hides placeholder-only done TODO state", () => {
+void test("spark widget hides placeholder-only done plan item state", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: undefined,

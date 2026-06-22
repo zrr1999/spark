@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { isoDateTimeSchema, prefixedIdSchema } from "../refs.js";
-import { runtimeFeatureSchema, runtimeProtocolVersionSchema } from "./envelope.js";
+import { isoDateTimeSchema, prefixedIdSchema } from "../refs.ts";
+import { runtimeFeatureSchema, runtimeProtocolVersionSchema } from "./envelope.ts";
 
 export const runtimeWorkspaceRegistrationDetailsSchema = z.object({
   localWorkspaceKey: z.string().min(1),

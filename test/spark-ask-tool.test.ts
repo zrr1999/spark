@@ -47,7 +47,7 @@ function assertSparkToolDetails(details: unknown): asserts details is SparkToolD
   );
 }
 
-void test("spark_ask tool builds flow-native multi-question forms", () => {
+void test("impl_ask tool builds flow-native multi-question forms", () => {
   const request = createSparkAskToolRequest({
     mode: "decision",
     title: "Plan next ask work",
@@ -64,12 +64,12 @@ void test("spark_ask tool builds flow-native multi-question forms", () => {
           {
             id: "tool",
             label: "Tool schema",
-            description: "Implement the unified spark_ask tool schema.",
+            description: "Implement the unified impl_ask tool schema.",
           },
           {
             id: "docs",
             label: "Docs",
-            description: "Document the unified spark_ask form contract.",
+            description: "Document the unified impl_ask form contract.",
           },
         ],
       },
@@ -93,7 +93,7 @@ void test("spark_ask tool builds flow-native multi-question forms", () => {
   assert.equal(request.questions[1]!.type, "freeform");
 });
 
-void test("spark_ask tool requires explicit questions", () => {
+void test("impl_ask tool requires explicit questions", () => {
   assert.throws(
     () =>
       createSparkAskToolRequest({
@@ -105,7 +105,7 @@ void test("spark_ask tool requires explicit questions", () => {
   );
 });
 
-void test("spark_ask tool requires a context-specific title", () => {
+void test("impl_ask tool requires a context-specific title", () => {
   assert.throws(
     () =>
       createSparkAskToolRequest({
@@ -133,7 +133,7 @@ void test("spark_ask tool requires a context-specific title", () => {
   );
 });
 
-void test("spark_ask tool rejects invalid explicit parameter shapes", () => {
+void test("impl_ask tool rejects invalid explicit parameter shapes", () => {
   const validOption = {
     id: "safe",
     label: "Safe",
@@ -230,7 +230,7 @@ void test("spark_ask tool rejects invalid explicit parameter shapes", () => {
   );
 });
 
-void test("spark_ask question defaultValues are preserved", () => {
+void test("impl_ask question defaultValues are preserved", () => {
   const request = createSparkAskToolRequest({
     mode: "decision",
     title: "Choose route",
@@ -258,7 +258,7 @@ void test("spark_ask question defaultValues are preserved", () => {
   assert.deepEqual(request.questions[0]!.defaultValues, ["safe"]);
 });
 
-void test("spark_ask tool uses fullscreen ask flow when custom UI is available", async () => {
+void test("impl_ask tool uses fullscreen ask flow when custom UI is available", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-tool-fullscreen-"));
   try {
     let rendered = "";
@@ -321,7 +321,7 @@ void test("spark_ask tool uses fullscreen ask flow when custom UI is available",
   }
 });
 
-void test("spark_ask tool persists multi-question answers in one artifact", async () => {
+void test("impl_ask tool persists multi-question answers in one artifact", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-tool-flow-"));
   try {
     const response = await runSparkAskTool(
@@ -338,12 +338,12 @@ void test("spark_ask tool persists multi-question answers in one artifact", asyn
               {
                 id: "tool",
                 label: "Tool schema",
-                description: "Implement the unified spark_ask tool schema.",
+                description: "Implement the unified impl_ask tool schema.",
               },
               {
                 id: "docs",
                 label: "Docs",
-                description: "Document the unified spark_ask form contract.",
+                description: "Document the unified impl_ask form contract.",
               },
             ],
           },
@@ -395,7 +395,7 @@ void test("spark_ask tool persists multi-question answers in one artifact", asyn
   }
 });
 
-void test("spark_ask tool validates option descriptions for every question", () => {
+void test("impl_ask tool validates option descriptions for every question", () => {
   assert.throws(
     () =>
       createSparkAskToolRequest({
@@ -417,7 +417,7 @@ void test("spark_ask tool validates option descriptions for every question", () 
   );
 });
 
-void test("spark_ask tool requires clear option descriptions", () => {
+void test("impl_ask tool requires clear option descriptions", () => {
   assert.throws(
     () =>
       createSparkAskToolRequest({
@@ -438,7 +438,7 @@ void test("spark_ask tool requires clear option descriptions", () => {
   );
 });
 
-void test("spark_ask tool persists decision no-selection as a blocked artifact", async () => {
+void test("impl_ask tool persists decision no-selection as a blocked artifact", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-tool-"));
   try {
     const response = await runSparkAskTool(
@@ -480,7 +480,7 @@ void test("spark_ask tool persists decision no-selection as a blocked artifact",
   }
 });
 
-void test("spark_ask tool preserves custom decision text instead of reporting no-selection", async () => {
+void test("impl_ask tool preserves custom decision text instead of reporting no-selection", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-tool-custom-"));
   try {
     const response = await runSparkAskTool(
@@ -528,7 +528,7 @@ void test("spark_ask tool preserves custom decision text instead of reporting no
   }
 });
 
-void test("spark_ask tool multi-select decision persists explicit selections", async () => {
+void test("impl_ask tool multi-select decision persists explicit selections", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-tool-"));
   try {
     const response = await runSparkAskTool(

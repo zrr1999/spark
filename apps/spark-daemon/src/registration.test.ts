@@ -173,8 +173,11 @@ type FakeRegistrationEvent = "open" | "message" | "error" | "close";
 
 class FakeRegistrationSocket {
   private listeners = new Map<FakeRegistrationEvent, Array<(...args: never[]) => void>>();
+  private readonly onSend: (data: string) => void;
 
-  constructor(private readonly onSend: (data: string) => void) {}
+  constructor(onSend: (data: string) => void) {
+    this.onSend = onSend;
+  }
 
   on(event: "open", listener: () => void): FakeRegistrationSocket;
   on(event: "message", listener: (data: Buffer) => void): FakeRegistrationSocket;

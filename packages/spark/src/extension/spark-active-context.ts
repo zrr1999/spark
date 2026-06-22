@@ -134,11 +134,10 @@ function renderNoCurrentSparkProjectSummary(
   strings: ReturnType<typeof activeSparkContextStrings>,
 ): string {
   const projects = graph.projects();
-  const activeProjects = projects.filter((project) => project.status !== "done");
   const lines = [
     strings.noProjectHeader,
     strings.durableStateHint,
-    strings.projectsCountsLine(projects.length, activeProjects.length),
+    strings.projectsCountsLine(projects.length),
   ];
   if (sessionGoal) {
     const reasonText = sessionGoal.pauseReason ?? sessionGoal.completedReason;

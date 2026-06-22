@@ -225,19 +225,15 @@ void test("task graph bootstraps one roadmap per project", () => {
   assert.equal(reloaded.getProject(project.ref).roadmap.ref, "roadmap:main");
 });
 
-void test("task graph can update placeholder project titles and status", () => {
+void test("task graph can update placeholder project titles without project lifecycle status", () => {
   const graph = new TaskGraph();
   const project = graph.createProject({ title: "「自定义输入」", description: "demo" });
-  assert.equal(project.status, "active");
   const updated = graph.updateProject(project.ref, {
     title: "Concrete Spark workflow",
-    status: "done",
   });
   assert.equal(updated.ref, project.ref);
   assert.equal(updated.title, "Concrete Spark workflow");
-  assert.equal(updated.status, "done");
   assert.equal(graph.getProject(project.ref).title, "Concrete Spark workflow");
-  assert.equal(graph.getProject(project.ref).status, "done");
   assert.equal(isPlaceholderProjectTitle("Spark project"), true);
   assert.equal(isPlaceholderProjectTitle("Hypha v0"), false);
 });

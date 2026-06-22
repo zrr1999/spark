@@ -85,7 +85,6 @@ function graphWithRuns(runs: TaskRun[]): TaskGraph {
     ref: projectRef,
     title: "Role TUI project",
     description: "role tui",
-    status: "active",
     roadmap: {
       ref: "roadmap:role-tui",
       title: "Role TUI project",

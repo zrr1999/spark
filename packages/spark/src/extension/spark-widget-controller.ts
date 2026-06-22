@@ -113,33 +113,39 @@ export class SparkWidgetController {
       workflowRun: sparkWorkflowRunWidgetEntry(workflowRunStatus, project.ref),
       goal: sparkGoalWidgetEntry(sessionGoal, sessionLoop),
       activeLens: ctx?.sparkActiveLens,
-      tasks: allTasks.map((task) => ({
-        title: task.title,
-        status: mapTaskStatus(task.status),
-        claim: mapTaskClaim(task, sessionKey),
-        agentLabel: deriveTaskRoleLabel({
-          task,
-          currentSessionKey: sessionKey,
-          latestRun: lastRunsByTaskRef.get(task.ref),
-        }),
-        planSummary: taskPlanSummary(task),
-        backgroundOwner:
+      tasks: allTasks.map((task) => {
+        const backgroundOwner =
           task.claim?.kind === "role-run" &&
           task.claim.sessionId === ownerSessionKey &&
           task.claim.runRef &&
           activeRunRefs.has(task.claim.runRef)
             ? "session"
-            : undefined,
-        todos: (taskTodosByRef.get(task.ref) ?? []).map((todo) => ({
-          id: todo.id,
-          displayNumber: assignTodoDisplayNumber(
-            todoDisplayNumbers,
-            taskTodoDisplayKey(task.ref, todo.id),
-          ),
-          content: todo.content,
-          status: mapTodoStatus(todo.status),
-        })),
-      })),
+            : undefined;
+        const showTodos = shouldExposeTaskTodosInWidget(task, sessionKey, backgroundOwner);
+        return {
+          title: task.title,
+          status: mapTaskStatus(task.status),
+          claim: mapTaskClaim(task, sessionKey),
+          agentLabel: deriveTaskRoleLabel({
+            task,
+            currentSessionKey: sessionKey,
+            latestRun: lastRunsByTaskRef.get(task.ref),
+          }),
+          planSummary: taskPlanSummary(task),
+          backgroundOwner,
+          todos: showTodos
+            ? (taskTodosByRef.get(task.ref) ?? []).map((todo) => ({
+                id: todo.id,
+                displayNumber: assignTodoDisplayNumber(
+                  todoDisplayNumbers,
+                  taskTodoDisplayKey(task.ref, todo.id),
+                ),
+                content: todo.content,
+                status: mapTodoStatus(todo.status),
+              }))
+            : [],
+        };
+      }),
       independentTodos: numberedIndependentTodos,
       taskCountTotal: allTasks.length,
       taskCountClaimed: claimedTasks.length,
@@ -174,6 +180,16 @@ function mapTaskClaim(task: Task, sessionKey: string): TaskEntry["claim"] {
   const claimedBy = taskClaimedBy(task);
   if (!claimedBy) return undefined;
   return isClaimOwnedBySession(task, sessionKey) ? "mine" : "other";
+}
+
+function shouldExposeTaskTodosInWidget(
+  task: Task,
+  sessionKey: string,
+  backgroundOwner: TaskEntry["backgroundOwner"],
+): boolean {
+  if (task.status === "done" || task.status === "cancelled") return false;
+  if (isClaimOwnedBySession(task, sessionKey)) return true;
+  return task.claim?.kind === "role-run" && backgroundOwner === "session";
 }
 
 function mapTodoStatus(status: string): SessionTodoEntry["status"] {

@@ -39,7 +39,7 @@ export function registerSparkStatusTool(
   deps: SparkStatusToolDeps,
 ): void {
   registerSparkTool({
-    name: "spark_status",
+    name: "impl_status",
     label: "Spark Status",
     description:
       "Internal implementation for task_read scoped status actions: workspace_status, project_status, and task_status. Defaults to an active view focused on unfinished work and current session state; use view=full for history.",
@@ -277,7 +277,7 @@ function resolveSparkStatusScope(
 
 function normalizeOptionalSparkStatusSelector(value: unknown, field: string): string | undefined {
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== "string") throw new Error(`spark_status ${field} must be a string`);
+  if (typeof value !== "string") throw new Error(`task_read status ${field} must be a string`);
   const trimmed = value.trim();
   return trimmed || undefined;
 }

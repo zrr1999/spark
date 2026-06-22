@@ -84,7 +84,7 @@ export function registerSparkStateTool(
   deps: SparkStateToolDependencies,
 ): void {
   registerSparkTool({
-    name: "spark_state",
+    name: "impl_state",
     label: "Spark State",
     description:
       "Inspect, doctor, migrate, or explicitly clean Spark state through domain-specific actions. action=state_status and action=state_doctor are read-only; action=store_v2_migrate previews or applies explicit V2 legacy imports with backups; action=cache_cleanup defaults to dryRun=true and never deletes canonical stores; action=workflow_run_prune handles workflow-run retention; action=role_run_artifact_compact previews or applies historical role-run transcript blob replacement and defaults to dry-run.",

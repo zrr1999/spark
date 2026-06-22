@@ -52,7 +52,7 @@ export function registerSparkRunReadyTasksTool(
   deps: SparkRunReadyTasksToolDeps,
 ): void {
   registerSparkTool({
-    name: "spark_run_ready_tasks",
+    name: "impl_run_ready_tasks",
     label: "Spark Run Ready Tasks",
     description:
       "Internal compatibility implementation for assign: run all currently ready Spark tasks with their bound builtin/extension/project/user Spark role specs and persist task-run artifacts. Dry-run by default. Use assign for Spark-native role/task workflow instead of spawning nested pi CLI sessions.",
@@ -74,20 +74,16 @@ export function registerSparkRunReadyTasksTool(
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd;
-      const dryRun = normalizeSparkRunReadyTasksBoolean(
-        params.dryRun,
-        true,
-        "spark_run_ready_tasks dryRun",
-      );
+      const dryRun = normalizeSparkRunReadyTasksBoolean(params.dryRun, true, "assign dryRun");
       const maxConcurrency = normalizeSparkRunReadyTasksPositiveInteger(
         params.maxConcurrency,
         DEFAULT_READY_TASK_MAX_CONCURRENCY,
-        "spark_run_ready_tasks maxConcurrency",
+        "assign maxConcurrency",
       );
       const timeoutMs = normalizeSparkRunReadyTasksPositiveInteger(
         params.timeoutMs,
         DEFAULT_READY_TASK_TIMEOUT_MS,
-        "spark_run_ready_tasks timeoutMs",
+        "assign timeoutMs",
       );
       const store = defaultTaskGraphStore(cwd);
       const graph = await loadSparkGraph(cwd, ctx);

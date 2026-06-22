@@ -19,7 +19,6 @@ import { existingLegacyImportOnlyPaths } from "./store-v2-migration.ts";
 export interface SparkStateTerminalProjectCandidate {
   ref: ProjectRef;
   title: string;
-  status: string;
   tasks: number;
   unfinishedTasks: number;
   updatedAt: string;
@@ -132,13 +131,12 @@ export async function collectSparkStateDiagnostics(
       return {
         ref: project.ref,
         title: project.title,
-        status: project.status,
         tasks: tasks.length,
         unfinishedTasks,
         updatedAt: project.updatedAt,
       };
     })
-    .filter((project) => project.status === "done" || project.unfinishedTasks === 0)
+    .filter((project) => project.unfinishedTasks === 0)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
   const workflowRunSnapshot = await defaultSparkWorkflowRunStore(cwd).load();

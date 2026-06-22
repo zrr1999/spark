@@ -13,9 +13,7 @@ export type PiTaskReadAction =
   | "run_status";
 export type PiTaskWriteAction =
   | "project_use"
-  | "project_finish"
   | "project_rename"
-  | "project_status_update"
   | "project_metadata_update"
   | "claim"
   | "plan"
@@ -76,9 +74,7 @@ const TASK_READ_ACTIONS: readonly PiTaskReadAction[] = [
 
 const TASK_WRITE_ACTIONS: readonly PiTaskWriteAction[] = [
   "project_use",
-  "project_finish",
   "project_rename",
-  "project_status_update",
   "project_metadata_update",
   "claim",
   "plan",
@@ -163,7 +159,7 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
     parameters: Type.Object({
       action: Type.String({
         description:
-          "project_use | project_finish | project_rename | project_status_update | project_metadata_update | claim | plan | finish | recover | todo_update | cache_cleanup",
+          "project_use | project_rename | project_metadata_update | claim | plan | finish | recover | todo_update | cache_cleanup",
       }),
       scope: Type.Optional(Type.String({ description: "For todo_update: session | task." })),
       project: Type.Optional(Type.String({ description: "Project selector/ref/title." })),
@@ -180,7 +176,9 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
             "Optional task executor hint: research | implement | review. Omit for normal work.",
         }),
       ),
-      status: Type.Optional(Type.String({ description: "Task/project status update." })),
+      status: Type.Optional(
+        Type.String({ description: "Task status for task finish/creation paths." }),
+      ),
       outputLanguage: Type.Optional(Type.String({ description: "Project output language." })),
       roleRef: Type.Optional(
         Type.String({
@@ -197,7 +195,7 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
         Type.Array(
           Type.String({
             description:
-              "Low-level initial task TODOs for task-creation handlers that explicitly support them; plan-aware handlers may also derive TODOs from task.plan.",
+              "Low-level initial task plan items for task-creation handlers that explicitly support them; plan-aware handlers may also derive plan items from task.plan.",
           }),
         ),
       ),
@@ -205,7 +203,7 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
         Type.Array(
           Type.Any({
             description:
-              "TODO operation entries, e.g. init/append/start/done/upsert_done/sync_from_plan/block/cancel/delete/restore/remove/note.",
+              "Plan-item operation entries, e.g. init/append/start/done/upsert_done/block/cancel/delete/restore/remove/note.",
           }),
         ),
       ),

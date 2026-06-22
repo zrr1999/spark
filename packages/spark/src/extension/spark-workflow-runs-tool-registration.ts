@@ -48,7 +48,7 @@ export function normalizeSparkWorkflowRunsAction(value: unknown) {
 }
 
 export function normalizeSparkWorkflowRunsRunRef(value: unknown): RunRef | undefined {
-  return normalizeOptionalRunRef(value, "spark_workflow_runs runRef");
+  return normalizeOptionalRunRef(value, "task_read run_status runRef");
 }
 
 export function normalizeSparkWorkflowRunsBoolean(
@@ -56,7 +56,7 @@ export function normalizeSparkWorkflowRunsBoolean(
   fallback: boolean,
   field: string,
 ): boolean {
-  return normalizeSparkBackgroundBoolean(value, fallback, `spark_workflow_runs ${field}`);
+  return normalizeSparkBackgroundBoolean(value, fallback, `task_read run_status ${field}`);
 }
 
 export function normalizeSparkWorkflowRunsNonNegativeInteger(
@@ -74,7 +74,7 @@ export function normalizeSparkWorkflowRunsNonNegativeInteger(
 
 function normalizeControlMessage(value: unknown, action: "reply" | "steer"): string {
   if (typeof value !== "string" || value.trim().length === 0)
-    throw new Error(`spark_workflow_runs ${action} requires a non-empty message`);
+    throw new Error(`task_read run_status ${action} requires a non-empty message`);
   return value.trim();
 }
 
@@ -83,7 +83,7 @@ export function registerSparkWorkflowRunsTool(
   deps: { refreshSparkWidget?: (cwd: string, ctx: SparkToolContext) => Promise<void> } = {},
 ): void {
   registerSparkTool({
-    name: "spark_workflow_runs",
+    name: "impl_workflow_runs",
     label: "Spark Workflow Runs",
     description:
       "Inspect and control Spark background workflow runs: status/list/inspect active child role-runs, kill/reply/steer/reconcile/ack background work, and prune/clear retained terminal records. Compact summaries include transcript refs/tail metadata, task claims, pids, run refs, and next actions.",
@@ -168,24 +168,24 @@ export function registerSparkWorkflowRunsTool(
       const includeHistory = normalizeSparkBackgroundBoolean(
         p.includeHistory,
         false,
-        "spark_workflow_runs includeHistory",
+        "task_read run_status includeHistory",
       );
       const includeDetails = normalizeSparkBackgroundBoolean(
         p.includeDetails,
         false,
-        "spark_workflow_runs includeDetails",
+        "task_read run_status includeDetails",
       );
-      const all = normalizeSparkBackgroundBoolean(p.all, false, "spark_workflow_runs all");
+      const all = normalizeSparkBackgroundBoolean(p.all, false, "task_read run_status all");
       const requestedProjectRef = normalizeOptionalProjectRef(
         p.projectRef,
-        "spark_workflow_runs projectRef",
+        "task_read run_status projectRef",
       );
-      const runRef = normalizeOptionalRunRef(p.runRef, "spark_workflow_runs runRef");
-      const taskSelector = normalizeOptionalTaskSelector(p.taskRef, "spark_workflow_runs taskRef");
-      const signal = normalizeKillSignal(p.signal, "spark_workflow_runs signal");
+      const runRef = normalizeOptionalRunRef(p.runRef, "task_read run_status runRef");
+      const taskSelector = normalizeOptionalTaskSelector(p.taskRef, "task_read run_status taskRef");
+      const signal = normalizeKillSignal(p.signal, "task_read run_status signal");
       const forceAfterMs = normalizeForceAfterMs(
         p.forceAfterMs,
-        "spark_workflow_runs forceAfterMs",
+        "task_read run_status forceAfterMs",
       );
       const graph = await loadSparkGraph(cwd, ctx);
       if (!graph) {
@@ -233,21 +233,21 @@ export function registerSparkWorkflowRunsTool(
       }
       if (action === "prune") {
         const prune = await runStore.pruneRuns({
-          dryRun: normalizeSparkBackgroundBoolean(p.dryRun, true, "spark_workflow_runs dryRun"),
+          dryRun: normalizeSparkBackgroundBoolean(p.dryRun, true, "task_read run_status dryRun"),
           olderThanDays: normalizeSparkWorkflowRunsNonNegativeInteger(
             p.olderThanDays,
             30,
-            "spark_workflow_runs olderThanDays",
+            "task_read run_status olderThanDays",
           ),
           keepRecent: normalizeSparkWorkflowRunsNonNegativeInteger(
             p.keepRecent,
             10,
-            "spark_workflow_runs keepRecent",
+            "task_read run_status keepRecent",
           ),
           keepRecentPerProject: normalizeSparkWorkflowRunsNonNegativeInteger(
             p.keepRecentPerProject,
             10,
-            "spark_workflow_runs keepRecentPerProject",
+            "task_read run_status keepRecentPerProject",
           ),
           activeRunRefs: activeSparkRoleRunProcessesForCwd(cwd).map((process) => process.runRef),
         });
@@ -287,7 +287,7 @@ export function registerSparkWorkflowRunsTool(
                 runRefs: scopedRunRefs,
                 signal,
                 forceAfterMs,
-                reason: "spark_workflow_runs kill_active",
+                reason: "task_read run_status kill_active",
               })
             : [];
         await reconcileSparkWorkflowRunsWithActiveProcesses(runStore, graph, cwd);
@@ -405,7 +405,7 @@ export function registerSparkWorkflowRunsTool(
           runRefs: targetRunRefs,
           signal,
           forceAfterMs,
-          reason: "spark_workflow_runs kill",
+          reason: "task_read run_status kill",
         });
         await reconcileSparkWorkflowRunsWithActiveProcesses(runStore, graph, cwd);
         await deps.refreshSparkWidget?.(cwd, ctx);

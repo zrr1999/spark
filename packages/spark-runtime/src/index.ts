@@ -670,8 +670,10 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
       input.graph.attachOutputArtifact(task.ref, artifact.ref);
     }
 
+    const roleFailure = roleRunCompletionFailure(result, dryRun);
+    if (!roleFailure && !dryRun) markOpenTaskPlanItemsDone(input.graph, task.ref);
     const completionFailure =
-      roleRunCompletionFailure(result, dryRun) ??
+      roleFailure ??
       roleRunEvidenceCompletionFailure(
         input.graph.getTask(task.ref),
         dryRun,
@@ -751,6 +753,25 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
   }
 }
 
+function markOpenTaskPlanItemsDone(graph: TaskGraph, taskRef: TaskRef): void {
+  const task = graph.getTask(taskRef);
+  const plan = task.plan;
+  const items = plan?.items;
+  if (!plan || !items || items.length === 0) return;
+  const updatedAt = nowIso();
+  graph.updateTask(taskRef, {
+    plan: {
+      ...plan,
+      items: items.map((item) =>
+        item.status === "done" || item.status === "cancelled" || item.status === "deleted"
+          ? item
+          : { ...item, status: "done", updatedAt },
+      ),
+      steps: items.map((item) => item.title),
+    },
+  });
+}
+
 function buildSparkTaskRoleInstruction(task: Task, graph: TaskGraph): string {
   const sections = [task.description.trim()];
   if (task.plan) {
@@ -760,7 +781,6 @@ function buildSparkTaskRoleInstruction(task: Task, graph: TaskGraph): string {
         `- Objective: ${task.plan.objective}`,
         renderInstructionList("Success criteria", task.plan.successCriteria),
         renderInstructionList("Evidence required", task.plan.evidenceRequired),
-        renderInstructionList("Steps", task.plan.steps),
         renderInstructionList("Constraints", task.plan.constraints),
         renderInstructionList("Non-goals", task.plan.nonGoals),
       ]
@@ -773,7 +793,7 @@ function buildSparkTaskRoleInstruction(task: Task, graph: TaskGraph): string {
   if (todos.visible.length > 0) {
     sections.push(
       [
-        `Current task TODO preview (showing ${todos.visible.length}/${todos.total} active item${todos.total === 1 ? "" : "s"}; do not expand the full TODO list unless needed):`,
+        `Current task plan item preview (showing ${todos.visible.length}/${todos.total} active item${todos.total === 1 ? "" : "s"}; do not expand the full plan item list unless needed):`,
         ...todos.visible.map((todo) => `- [${todo.status}] ${todo.id}: ${todo.content}`),
         todos.hidden > 0
           ? `- … ${todos.hidden} more TODO(s) hidden from the role-run prompt`

@@ -539,18 +539,15 @@ export function registerSparkCommands(
       const tasks = graph.tasks(project.ref);
       const unfinished = tasks.filter((task) => isUnfinishedTaskStatus(task.status));
       const ready = graph.readyTasks(project.ref);
-      lines.push(strings.currentProjectLine(project.title, project.status));
+      lines.push(strings.currentProjectLine(project.title));
       lines.push(strings.unfinishedReadyLine(unfinished.length, ready.length));
       const readyTitles = ready.slice(0, 5).map((task) => task.title);
       if (readyTitles.length > 0) lines.push(strings.readyFrontierLine(readyTitles));
     } else {
       const projects = graph.projects();
       lines.push(strings.noActiveProject(projects.length));
-      const activeTitles = projects
-        .filter((candidate) => candidate.status !== "done")
-        .slice(0, 5)
-        .map((candidate) => candidate.title);
-      if (activeTitles.length > 0) lines.push(strings.activeProjectCandidates(activeTitles));
+      const projectTitles = projects.slice(0, 5).map((candidate) => candidate.title);
+      if (projectTitles.length > 0) lines.push(strings.activeProjectCandidates(projectTitles));
     }
     return lines.join("\n");
   }
@@ -564,8 +561,11 @@ export function registerSparkCommands(
     const candidate = projects.find((project) =>
       inferredGoalObjectiveMatchesProject(goal.objective, project),
     );
-    if (!candidate || candidate.status !== "done") return undefined;
-    return candidate;
+    if (!candidate) return undefined;
+    const unfinished = graph
+      .tasks(candidate.ref)
+      .some((task) => isUnfinishedTaskStatus(task.status));
+    return unfinished ? undefined : candidate;
   }
 
   function inferredGoalObjectiveMatchesProject(
@@ -1486,7 +1486,7 @@ export function registerSparkCommands(
       loopContinuationPrompt(loop),
       "",
       "Spark foreground loop tick.",
-      project ? `Current project: ${project.title} (status=${project.status}).` : undefined,
+      project ? `Current project: ${project.title}.` : undefined,
       `Loop objective: ${objective}`,
       status,
       LOOP_COMPLETION_BOUNDARY_GUIDANCE,

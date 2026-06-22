@@ -7,6 +7,7 @@ import { registerPiTaskTool, type PiTaskToolHandlers } from "@zendev-lab/pi-task
 import { renderSparkToolCall } from "./tool-rendering.ts";
 import { registerSparkAskTools } from "./spark-ask-tool-registration.ts";
 import { registerSparkWorkflowRunsTool } from "./spark-workflow-runs-tool-registration.ts";
+import { registerSparkWorkflowRunTool } from "./spark-workflow-run-tool-registration.ts";
 import { registerSparkLearningTools } from "./learning-tool-registration.ts";
 import { registerSparkStateTool } from "./spark-state-tool-registration.ts";
 import { registerSparkTodoTools } from "./spark-todo-tool-registration.ts";
@@ -35,6 +36,7 @@ import { SparkWidgetController } from "./spark-widget-controller.ts";
 import { SparkRoleRunTuiController } from "./spark-role-run-tui-controller.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import { PiRolesReviewerRunner, type ReviewerRunner } from "./reviewer-runner.ts";
+import { registerSparkReflectionCommands } from "./reflection-in-session-scheduler.ts";
 
 interface SparkExtensionAPI extends SparkCommandApi {
   registerTool?(config: SparkRegisteredToolConfig): void;
@@ -104,7 +106,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       renderCall: (args, theme, context) => renderSparkToolCall(config.name, args, theme, context),
     });
   };
-  const registerSparkCompatTool = (config: SparkRegisteredToolConfig): void => {
+  const registerSparkImplementationTool = (config: SparkRegisteredToolConfig): void => {
     registeredSparkTools.set(config.name, config);
     pi.registerInternalTool?.(config);
   };
@@ -126,41 +128,44 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     ensureWorkflowRunManager: (cwd, ctx) => workflowRunManagerController.ensure(cwd, ctx),
     createReviewerRunner,
   });
+  registerSparkReflectionCommands(pi);
 
   registerSparkModeCycleShortcut(pi, { refreshSparkWidget });
 
-  registerSparkStatusTool(registerSparkCompatTool, { ensureSparkStateForActiveWorkspace });
+  registerSparkStatusTool(registerSparkImplementationTool, { ensureSparkStateForActiveWorkspace });
 
-  registerSparkStateTool(registerSparkCompatTool, { ensureSparkStateForActiveWorkspace });
+  registerSparkStateTool(registerSparkImplementationTool, { ensureSparkStateForActiveWorkspace });
 
-  registerSparkTodoTools(registerSparkCompatTool, { refreshSparkWidget });
+  registerSparkTodoTools(registerSparkImplementationTool, { refreshSparkWidget });
 
-  registerSparkFinishTaskTool(registerSparkCompatTool, {
+  registerSparkFinishTaskTool(registerSparkImplementationTool, {
     refreshSparkWidget,
     createReviewerRunner,
   });
 
-  registerSparkProjectTools(registerSparkCompatTool, { refreshSparkWidget });
+  registerSparkProjectTools(registerSparkImplementationTool, { refreshSparkWidget });
 
-  registerSparkClaimTaskTool(registerSparkCompatTool, { refreshSparkWidget });
+  registerSparkClaimTaskTool(registerSparkImplementationTool, { refreshSparkWidget });
 
-  registerSparkRecoverTaskClaimTool(registerSparkCompatTool, { refreshSparkWidget });
+  registerSparkRecoverTaskClaimTool(registerSparkImplementationTool, { refreshSparkWidget });
 
-  registerSparkPlanTasksTool(registerSparkCompatTool, { refreshSparkWidget });
+  registerSparkPlanTasksTool(registerSparkImplementationTool, { refreshSparkWidget });
 
   registerSparkGoalTool(registerSparkTool, { refreshSparkWidget, createReviewerRunner });
 
   registerSparkModeTool(registerSparkTool);
 
-  registerSparkRunReadyTasksTool(registerSparkCompatTool, {
+  registerSparkRunReadyTasksTool(registerSparkImplementationTool, {
     ensureWorkflowRunManager: (cwd, ctx) => workflowRunManagerController.ensure(cwd, ctx),
   });
 
-  registerSparkWorkflowRunsTool(registerSparkCompatTool, { refreshSparkWidget });
+  registerSparkWorkflowRunsTool(registerSparkImplementationTool, { refreshSparkWidget });
 
-  registerSparkAskTools(registerSparkCompatTool);
+  registerSparkWorkflowRunTool(registerSparkTool);
 
-  registerSparkLearningTools(registerSparkCompatTool);
+  registerSparkAskTools(registerSparkImplementationTool);
+
+  registerSparkLearningTools(registerSparkImplementationTool);
 
   if (pi.registerTool) {
     const genericToolRegistrar = {
@@ -207,7 +212,7 @@ function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): PiTa
 
   const scopedStatus = (scope: "task" | "project" | "workspace") =>
     (({ toolCallId, params, signal, onUpdate, ctx }) =>
-      executeSparkImplementationTool(resolveTool, "spark_status", {
+      executeSparkImplementationTool(resolveTool, "impl_status", {
         toolCallId,
         params: { ...stripTaskAction(params), scope },
         signal,
@@ -215,35 +220,33 @@ function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): PiTa
         ctx,
       })) satisfies NonNullable<PiTaskToolHandlers["task_status"]>;
 
-  const projectMutation = (intent: "finish" | "rename" | "status_update" | "metadata_update") =>
+  const projectMutation = (intent: "rename" | "metadata_update") =>
     (({ toolCallId, params, signal, onUpdate, ctx }) =>
-      executeSparkImplementationTool(resolveTool, "spark_rename_project", {
+      executeSparkImplementationTool(resolveTool, "impl_project_mutation", {
         toolCallId,
         params: { ...stripTaskAction(params), intent },
         signal,
         onUpdate,
         ctx,
-      })) satisfies NonNullable<PiTaskToolHandlers["project_finish"]>;
+      })) satisfies NonNullable<PiTaskToolHandlers["project_rename"]>;
 
   return {
     task_status: scopedStatus("task"),
     project_status: scopedStatus("project"),
     workspace_status: scopedStatus("workspace"),
-    project_list: direct("spark_list_projects"),
-    project_use: direct("spark_use_project"),
-    project_finish: projectMutation("finish"),
+    project_list: direct("impl_list_projects"),
+    project_use: direct("impl_use_project"),
     project_rename: projectMutation("rename"),
-    project_status_update: projectMutation("status_update"),
     project_metadata_update: projectMutation("metadata_update"),
-    claim: direct("spark_claim_task"),
-    plan: direct("spark_plan_tasks"),
-    finish: direct("spark_finish_task"),
-    recover: direct("spark_recover_task_claim"),
+    claim: direct("impl_claim_task"),
+    plan: direct("impl_plan_tasks"),
+    finish: direct("impl_finish_task"),
+    recover: direct("impl_recover_task_claim"),
     todo_update: ({ toolCallId, params, signal, onUpdate, ctx }) => {
       const scope = normalizeTaskTodoScope(params.scope);
       return executeSparkImplementationTool(
         resolveTool,
-        scope === "task" ? "spark_update_task_todos" : "spark_update_todos",
+        scope === "task" ? "impl_update_task_plan_items" : "impl_update_todos",
         {
           toolCallId,
           params: stripTaskActionAndScope(params),
@@ -254,7 +257,7 @@ function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): PiTa
       );
     },
     run_status: ({ toolCallId, params, signal, onUpdate, ctx }) =>
-      executeSparkImplementationTool(resolveTool, "spark_workflow_runs", {
+      executeSparkImplementationTool(resolveTool, "impl_workflow_runs", {
         toolCallId,
         params: {
           ...stripTaskAction(params),
@@ -265,9 +268,9 @@ function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): PiTa
         onUpdate,
         ctx,
       }),
-    assign: direct("spark_run_ready_tasks"),
+    assign: direct("impl_run_ready_tasks"),
     cache_cleanup: ({ toolCallId, params, signal, onUpdate, ctx }) =>
-      executeSparkImplementationTool(resolveTool, "spark_state", {
+      executeSparkImplementationTool(resolveTool, "impl_state", {
         toolCallId,
         params: { ...stripTaskAction(params), action: "cache_cleanup" },
         signal,
@@ -291,15 +294,15 @@ function createSparkLearningHandlers(
       })) satisfies NonNullable<PiLearningToolHandlers["record"]>;
 
   return {
-    record: direct("spark_learning_record"),
-    search: direct("spark_learning_search"),
-    list: direct("spark_learning_list"),
-    read: direct("spark_learning_read"),
-    mark_stale: direct("spark_learning_mark_stale"),
-    supersede: direct("spark_learning_supersede"),
-    reject: direct("spark_learning_reject"),
-    export_markdown: direct("spark_learning_export_markdown"),
-    import_markdown: direct("spark_learning_import_markdown"),
+    record: direct("impl_learning_record"),
+    search: direct("impl_learning_search"),
+    list: direct("impl_learning_list"),
+    read: direct("impl_learning_read"),
+    mark_stale: direct("impl_learning_mark_stale"),
+    supersede: direct("impl_learning_supersede"),
+    reject: direct("impl_learning_reject"),
+    export_markdown: direct("impl_learning_export_markdown"),
+    import_markdown: direct("impl_learning_import_markdown"),
   };
 }
 

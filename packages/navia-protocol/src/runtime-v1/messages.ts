@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { isoDateTimeSchema, prefixedIdSchema } from "../refs.js";
-import { runtimeEnvelopeFor, runtimeFeatureSchema } from "./envelope.js";
+import { isoDateTimeSchema, prefixedIdSchema } from "../refs.ts";
+import { runtimeEnvelopeFor, runtimeFeatureSchema } from "./envelope.ts";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const artifactRefSchema = prefixedIdSchema("art");

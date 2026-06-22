@@ -221,7 +221,7 @@ function assertIndependentTodoStatuses(
   );
 }
 
-void test("task graph store keeps TODOs out of projects.json and todo store restores them", async () => {
+void test("task graph store persists task plan items without an active sidecar", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tasks-"));
   try {
     const file = join(dir, "projects.json");
@@ -245,7 +245,6 @@ void test("task graph store keeps TODOs out of projects.json and todo store rest
     await todoStore.save(graph);
     const loaded = await store.load();
     assert.ok(loaded);
-    await todoStore.hydrate(loaded);
     assert.equal(loaded.projects()[0]?.title, "Demo");
     assert.equal(loaded.projects()[0]?.purpose, "Ship focused task storage");
     assert.equal(loaded.tasks(project.ref).length, 1);
@@ -257,7 +256,8 @@ void test("task graph store keeps TODOs out of projects.json and todo store rest
     assert.doesNotMatch(projectJson, /"todos"/);
     assert.match(projectJson, /"intent": "Ship focused task storage"/);
     assert.doesNotMatch(projectJson, /"purpose"/);
-    assert.equal((await stat(todoFile)).size > 0, true);
+    assert.equal(await todoStore.load(), null);
+    await assert.rejects(() => stat(todoFile), { code: "ENOENT" });
     assert.deepEqual(
       (await readdir(dir)).filter((entry) => entry.endsWith(".tmp")),
       [],
@@ -478,12 +478,12 @@ void test("default task graph store enforces project-owner locks during V2 write
   }
 });
 
-void test("default task TODO store uses the canonical SQLite path regardless of session scope", () => {
+void test("default task plan item store uses the canonical SQLite path regardless of session scope", () => {
   const store = defaultTaskTodoStore("/workspace/demo", "leaf:main/session");
   assert.equal(store.filePath, "/workspace/demo/.spark/todos/todos.sqlite");
 });
 
-void test("SQLite TODO store separates task and session owners and imports legacy task TODOs idempotently", async () => {
+void test("SQLite TODO store keeps session TODOs and imports legacy task plan items idempotently", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-task-todos-sqlite-"));
   try {
     const todoStore = new TaskTodoStore(join(dir, "todos.sqlite"));
@@ -495,20 +495,9 @@ void test("SQLite TODO store separates task and session owners and imports legac
       description: "first",
       todos: [{ content: "Review" }],
     });
-    const second = graph.createTask({
-      projectRef: project.ref,
-      title: "Second",
-      description: "second",
-      todos: [{ content: "Review" }],
-    });
 
     await todoStore.save(graph);
-    const loadedTaskTodos = await todoStore.load();
-    assert.equal(loadedTaskTodos?.length, 2);
-    assert.deepEqual(
-      loadedTaskTodos?.map((todo) => todo.taskRef).sort(),
-      [first.ref, second.ref].sort(),
-    );
+    assert.equal(await todoStore.load(), null);
 
     await todoStore.saveSessionTodos("session:demo", [
       {
@@ -576,7 +565,7 @@ void test("independent session TODO reducer preserves one active live item", () 
   assert.equal(todos.filter((todo) => todo.status === "in_progress").length, 1);
 });
 
-void test("task TODO legacy import rejects malformed persisted snapshots", async () => {
+void test("task plan item legacy import rejects malformed persisted snapshots", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-task-todos-invalid-"));
   try {
     const todoFile = join(dir, "todos.json");
@@ -822,19 +811,40 @@ void test("task plan normalization is a public spark-tasks contract", () => {
     "Fallback title",
   );
 
-  assert.deepEqual(plan, {
-    objective: "Implement focused change",
-    contextRefs: ["docs/plan.md"],
-    constraints: ["keep scope tight"],
-    nonGoals: [],
-    successCriteria: ["command passes"],
-    evidenceRequired: ["focused test output"],
-    steps: ["Implement focused change"],
-    decompositionRationale: "avoid a broad rewrite",
-    riskLevel: "normal",
-    openQuestions: [],
-    askRefs: ["ask:decision-1"],
-  });
+  assert.deepEqual(
+    {
+      ...plan,
+      items: plan.items?.map((item) => ({
+        title: item.title,
+        status: item.status,
+        notes: item.notes,
+        blockedBy: item.blockedBy,
+        evidenceRefs: item.evidenceRefs,
+      })),
+    },
+    {
+      objective: "Implement focused change",
+      contextRefs: ["docs/plan.md"],
+      constraints: ["keep scope tight"],
+      nonGoals: [],
+      successCriteria: ["command passes"],
+      evidenceRequired: ["focused test output"],
+      items: [
+        {
+          title: "Implement focused change",
+          status: "pending",
+          notes: [],
+          blockedBy: [],
+          evidenceRefs: [],
+        },
+      ],
+      steps: ["Implement focused change"],
+      decompositionRationale: "avoid a broad rewrite",
+      riskLevel: "normal",
+      openQuestions: [],
+      askRefs: ["ask:decision-1"],
+    },
+  );
 });
 
 void test("task plan input rejects standalone design placeholders as a package contract", () => {
@@ -922,7 +932,7 @@ void test("task plan readiness provides remediation for every issue kind", () =>
     [
       [
         "missing_plan",
-        "Add a concrete plan with objective, success criteria, evidence requirements, and steps.",
+        "Add a concrete plan with objective, success criteria, evidence requirements, and plan items.",
       ],
     ],
   );
@@ -955,7 +965,7 @@ void test("task plan readiness provides remediation for every issue kind", () =>
         "missing_evidence_required",
         "Add at least one concrete validation artifact or command to plan.evidenceRequired.",
       ],
-      ["missing_steps", "Add at least one concrete execution step to plan.steps."],
+      ["missing_steps", "Add at least one concrete plan item to plan.items."],
       [
         "open_questions",
         "Resolve material questions with ask, then move decisions into askRefs or the plan body.",
@@ -1000,10 +1010,16 @@ void test("task completion readiness requires output artifacts for declared evid
   assert.equal(missing.ready, false);
   assert.deepEqual(
     missing.issues.map((issue) => issue.kind),
-    ["missing_completion_evidence"],
+    ["missing_completion_evidence", "open_plan_items"],
   );
   assert.deepEqual(missing.issues[0]?.evidenceRequired, task.plan?.evidenceRequired);
 
+  graph.applyTodoOps(task.ref, [{ op: "done", item: "Needs evidence" }]);
+  const doneItems = graph.getTask(task.ref);
+  assert.deepEqual(
+    taskCompletionReadiness(doneItems).issues.map((issue) => issue.kind),
+    ["missing_completion_evidence"],
+  );
   const withArtifact = graph.attachOutputArtifact(task.ref, "artifact:evidence" as const);
   assert.deepEqual(taskCompletionReadiness(withArtifact), { ready: true, issues: [] });
 });
@@ -2150,7 +2166,7 @@ void test("Spark runtime Pi command args use current CLI flags and explicit sess
   );
 });
 
-void test("runSparkTask includes plan and a bounded active TODO preview in role instruction", async () => {
+void test("runSparkTask includes plan and a bounded active plan item preview in role instruction", async () => {
   const graph = new TaskGraph();
   const project = graph.createProject({ title: "Demo", description: "demo" });
   const task = graph.createTask({
@@ -2207,7 +2223,7 @@ void test("runSparkTask includes plan and a bounded active TODO preview in role 
     assert.match(prompt, /Task plan \(execution contract\):/);
     assert.match(prompt, /- Objective: Implement the bounded child prompt preview\./);
     assert.match(prompt, /- Constraints:\n  - Do not dump every TODO into the prompt\./);
-    assert.match(prompt, /Current task TODO preview \(showing 2\/3 active items/);
+    assert.match(prompt, /Current task plan item preview \(showing 2\/3 active items/);
     assert.match(prompt, new RegExp(`\\[in_progress\\] ${firstTodo.id}: First active TODO`));
     assert.match(prompt, new RegExp(`\\[pending\\] ${secondTodo.id}: Second active TODO`));
     assert.doesNotMatch(prompt, /Third hidden TODO/);
@@ -2450,7 +2466,7 @@ void test("background cleanup does not kill role-runs without an owned task grap
   }
 });
 
-void test("background resume propagates TODO persistence failures without rewriting task status", async () => {
+void test("background resume persists plan items through the task graph without a TODO sidecar", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-resume-persistence-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -2477,37 +2493,29 @@ void test("background resume propagates TODO persistence failures without rewrit
     });
     await defaultTaskGraphStore(dir).save(graph);
 
+    await writeFile(join(dir, ".spark", "todos"), "not a directory", "utf8");
     let runTaskCalls = 0;
-    await assert.rejects(
-      () =>
-        resumeOwnedBackgroundSubroles(dir, ctx, {
-          runTask: async ({ graph: runningGraph, taskRef }) => {
-            runTaskCalls += 1;
-            const taskAfterClaim = runningGraph.getTask(taskRef);
-            const finishedAt = nowIso();
-            const run = runningGraph.recordRun({
-              ref: newRef("run"),
-              projectRef: taskAfterClaim.projectRef,
-              taskRef,
-              roleRef: taskAfterClaim.roleRef,
-              runName,
-              ownerSessionId,
-              status: "succeeded",
-              startedAt: finishedAt,
-              finishedAt,
-              outputArtifacts: [],
-            });
-            runningGraph.setTaskStatus(taskRef, "done");
-            await writeFile(join(dir, ".spark", "todos"), "not a directory", "utf8");
-            return run;
-          },
-        }),
-      (error) => {
-        const code = (error as NodeJS.ErrnoException).code;
-        assert.ok(code === "EEXIST" || code === "ENOTDIR", `unexpected error code: ${code}`);
-        return true;
+    await resumeOwnedBackgroundSubroles(dir, ctx, {
+      runTask: async ({ graph: runningGraph, taskRef }) => {
+        runTaskCalls += 1;
+        const taskAfterClaim = runningGraph.getTask(taskRef);
+        const finishedAt = nowIso();
+        const run = runningGraph.recordRun({
+          ref: newRef("run"),
+          projectRef: taskAfterClaim.projectRef,
+          taskRef,
+          roleRef: taskAfterClaim.roleRef,
+          runName,
+          ownerSessionId,
+          status: "succeeded",
+          startedAt: finishedAt,
+          finishedAt,
+          outputArtifacts: [],
+        });
+        runningGraph.setTaskStatus(taskRef, "done");
+        return run;
       },
-    );
+    });
 
     assert.equal(runTaskCalls, 1);
     const stored = await defaultTaskGraphStore(dir).load();
@@ -2859,7 +2867,6 @@ void test("Spark DAG run store keeps foreground-timeout runs active for late pro
             ref: projectRef,
             title: "Project",
             description: "project",
-            status: "active",
             roadmap: {
               ref: "roadmap:main",
               title: "Project roadmap",

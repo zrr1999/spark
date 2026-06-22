@@ -18,7 +18,7 @@ import {
   formatSparkWorkflowRun,
 } from "./spark-workflow-run-status-rendering.ts";
 import {
-  compactProjectStatusSummaries,
+  compactProjectSummaries,
   countTaskStatuses,
   formatTaskStatusCounts,
   isImportantStatus,
@@ -82,7 +82,7 @@ export function renderSparkStatus(input: SparkStatusRenderInput): {
       '\nSpark available: no project selected for this session. Use task_write({ action: "project_use" }) to select a project, or request summary/full history to inspect all projects.',
     );
 
-  const renderedProjectDetails = renderProjectStatusLines(lines, input);
+  const renderedProjectDetails = renderProjectLines(lines, input);
   if (renderedProjectDetails.length === 0) lines.push("\nNo Spark projects matched this view.");
   const independentTodoDetails = includeWorkspaceSummary
     ? appendIndependentTodoStatusLines(lines, input)
@@ -111,7 +111,7 @@ export function renderSparkStatus(input: SparkStatusRenderInput): {
     renderedProjects: renderedProjectDetails,
     ...(includeWorkspaceSummary ? { independentTodos: independentTodoDetails } : {}),
     ...(includeWorkspaceSummary
-      ? { projects: compactProjectStatusSummaries(input.graph, input.sessionKey) }
+      ? { projects: compactProjectSummaries(input.graph, input.sessionKey) }
       : {}),
     ...(includeWorkspaceSummary ? { workflowRunStatus: input.workflowRunStatus } : {}),
     ...(includeWorkspaceSummary ? { runControl: input.runControl } : {}),
@@ -224,7 +224,6 @@ function compactProjectDecisionDetail(
   return {
     ref: input.currentProject?.ref,
     title: input.currentProject?.title,
-    status: input.currentProject?.status,
     taskCounts: {
       total: tasks.length,
       unfinished: tasks.filter((task) => isUnfinishedTaskStatus(task.status)).length,
@@ -243,7 +242,6 @@ function compactRenderedProjectDecisionDetail(
   return {
     ref: project.ref,
     title: project.title,
-    status: project.status,
     current: project.current,
     taskCounts: taskCounts
       ? {
@@ -372,7 +370,7 @@ function appendWorkflowRunStatusLines(
   } else appendSparkWorkflowRunStatusLines(lines, workflowRunStatus);
 }
 
-function renderProjectStatusLines(
+function renderProjectLines(
   lines: string[],
   input: SparkStatusRenderInput,
 ): Array<Record<string, unknown>> {
@@ -410,10 +408,8 @@ function renderProjectStatusLines(
     const hiddenByLimit = allVisibleTasks.length - visibleTasks.length;
     const currentSuffix = project.ref === input.currentProject?.ref ? " [current]" : "";
     const isCurrent = project.ref === input.currentProject?.ref;
-    const statusSuffix = project.status === "done" ? " [done]" : "";
     const projectPrefix = input.view === "active" ? "Project" : `Project ${project.ref}:`;
-    lines.push(`\n${projectPrefix} ${project.title}${currentSuffix}${statusSuffix}`);
-    if (input.view !== "active") lines.push(`  Project status: ${project.status}`);
+    lines.push(`\n${projectPrefix} ${project.title}${currentSuffix}`);
     lines.push(
       `  Tasks: ${tasks.length} total | ${claimed.length} claimed | ${sessionClaimed.length} current_session_claimed | ready_frontier=${readyTasks.length} | ${formatTaskStatusCounts(statusCounts)}`,
     );
@@ -464,7 +460,6 @@ function renderProjectStatusLines(
     const renderedProjectDetail = {
       ref: project.ref,
       title: project.title,
-      status: project.status,
       current: isCurrent,
       taskCounts: {
         total: tasks.length,

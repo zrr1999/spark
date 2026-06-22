@@ -28,7 +28,6 @@ function graphWithRuns(runs: TaskRun[]): TaskGraph {
     ref: projectRef,
     title: "observability",
     description: "observe role runs",
-    status: "active",
     roadmap: {
       ref: "roadmap:observability",
       title: "observability",

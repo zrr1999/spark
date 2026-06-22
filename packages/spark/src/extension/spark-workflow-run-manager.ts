@@ -20,12 +20,7 @@ import { reconcileSparkWorkflowRunsWithActiveProcesses } from "./background-runs
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import { ensureRoleModelSettingsForProject } from "./role-model-settings.ts";
 import { hasLocalSparkDirectory } from "./spark-activation.ts";
-import {
-  currentSparkProject,
-  loadSparkGraph,
-  sparkSessionOwnerKey,
-  sparkTodoStore,
-} from "./session-state.ts";
+import { currentSparkProject, loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
 import { mergeTaskProgressIntoStore } from "./task-progress-store.ts";
 import { sessionModelName } from "./session-model.ts";
 import { createSparkRuntimeReadyTaskRunner } from "./spark-ready-task-runtime.ts";
@@ -138,10 +133,6 @@ export class SparkWorkflowRunManagerController {
       timeoutMs,
       ownerSessionId,
     });
-    const saveTaskTodosAfterMerge = async (current: TaskGraph) => {
-      await sparkTodoStore(cwd, ctx).hydrate(current);
-      await sparkTodoStore(cwd, ctx).save(current);
-    };
     let result: Awaited<ReturnType<typeof runReadyTasks>>;
     try {
       result = await runReadyTasks({
@@ -155,28 +146,18 @@ export class SparkWorkflowRunManagerController {
         onSchedule: async (progress) => {
           touched.add(progress.taskRef);
           await runStore.recordSchedule(workflowRun.ref, progress);
-          await mergeTaskProgressIntoStore(
-            store,
-            graph,
-            [progress.taskRef],
-            saveTaskTodosAfterMerge,
-          );
+          await mergeTaskProgressIntoStore(store, graph, [progress.taskRef]);
           await this.refreshSparkWidget(cwd, ctx);
         },
         onProgress: async (progress) => {
           touched.add(progress.taskRef);
           await runStore.recordProgress(workflowRun.ref, progress);
-          await mergeTaskProgressIntoStore(
-            store,
-            graph,
-            [progress.taskRef],
-            saveTaskTodosAfterMerge,
-          );
+          await mergeTaskProgressIntoStore(store, graph, [progress.taskRef]);
           await this.refreshSparkWidget(cwd, ctx);
         },
       });
       if (touched.size > 0) {
-        await mergeTaskProgressIntoStore(store, graph, [...touched], saveTaskTodosAfterMerge);
+        await mergeTaskProgressIntoStore(store, graph, [...touched]);
         await this.refreshSparkWidget(cwd, ctx);
       }
       const followUp = await runStore.finishRun(workflowRun.ref, result);

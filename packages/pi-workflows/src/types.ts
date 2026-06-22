@@ -21,6 +21,8 @@ export type WorkflowPhaseStatus = "success" | "fail" | "skip";
 
 export interface WorkflowPhaseOptions {
   status?: WorkflowPhaseStatus;
+  /** Soft token ceiling for work started while this phase is current. */
+  budget?: number;
 }
 
 export interface WorkflowPhaseRun {
@@ -101,9 +103,17 @@ export interface WorkflowRunOptions {
   artifactRecord?: WorkflowArtifactRecorder;
   concurrency?: number;
   maxAgents?: number;
+  /** Hard estimated-token ceiling for this script run. Omit/null for unbounded. */
+  tokenBudget?: number | null;
   resumeJournal?: Map<number, WorkflowJournalEntry>;
+  /** Private runtime state shared with nested workflow() calls. */
+  sharedRuntime?: unknown;
+  /** Resolve workflow('name', args) for one-level nested workflow composition. */
+  loadWorkflowScript?: (name: string) => string | undefined;
   onAgentJournal?: (entry: WorkflowJournalEntry) => void;
   onPhase?: (phase: WorkflowPhaseRun) => void;
+  onLog?: (message: string) => void;
+  onTokenUsage?: (usage: { spent: number; tokens: number; index: number; phase?: string }) => void;
   now?: () => string;
   onAgentStart?: (event: WorkflowAgentEvent) => void;
   onAgentEnd?: (event: WorkflowAgentEvent & { result: unknown }) => void;

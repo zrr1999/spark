@@ -161,7 +161,7 @@ export function normalizeSparkBackgroundAction(value: unknown): SparkBackgroundA
   if (SPARK_BACKGROUND_ACTIONS.includes(value as SparkBackgroundAction))
     return value as SparkBackgroundAction;
   throw new Error(
-    "spark_workflow_runs action must be status, list, inspect, kill, reply, steer, reconcile, ack, prune, clear_inactive, or kill_active",
+    "task_read run_status action must be status, list, inspect, kill, reply, steer, reconcile, ack, prune, clear_inactive, or kill_active",
   );
 }
 

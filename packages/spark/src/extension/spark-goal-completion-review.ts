@@ -460,9 +460,11 @@ function goalReviewEvidenceProject(
   const projectsWithEvidence = active.graph
     .projects()
     .filter((project) => projectTaskEvidenceRefs(active.graph!, project.ref).length > 0);
-  const completedProjects = projectsWithEvidence.filter((project) => project.status === "done");
+  const projectsWithoutUnfinishedTasks = projectsWithEvidence.filter((project) =>
+    active.graph!.tasks(project.ref).every((task) => !isUnfinishedTaskStatus(task.status)),
+  );
   return (
-    mostRecentlyUpdatedProject(completedProjects) ??
+    mostRecentlyUpdatedProject(projectsWithoutUnfinishedTasks) ??
     mostRecentlyUpdatedProject(projectsWithEvidence)
   );
 }
@@ -551,7 +553,6 @@ function projectGoalReviewStatus(
   return {
     ref: project.ref,
     title: project.title,
-    status: project.status,
     taskCounts: {
       total: tasks.length,
       unfinished: tasks.filter((task) => isUnfinishedTaskStatus(task.status)).length,

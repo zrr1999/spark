@@ -394,8 +394,6 @@ export interface TaskTodo {
   deletedAt?: string;
 }
 
-export type ProjectStatus = "active" | "done";
-
 export type RoadmapRef = `roadmap:${string}`;
 export type RoadmapItemRef = `roadmap-item:${string}`;
 
@@ -434,7 +432,6 @@ export interface Project {
   description: string;
   /** Durable project purpose; distinct from session goal pursuit. */
   purpose?: string;
-  status: ProjectStatus;
   outputLanguage?: "zh" | "en";
   currentTaskRef?: TaskRef;
   roadmap: ProjectRoadmap;
@@ -472,6 +469,21 @@ export interface TaskCancellation {
   reason?: string;
 }
 
+export type TaskPlanItemStatus = TaskTodoStatus;
+
+export interface TaskPlanItem {
+  id: string;
+  title: string;
+  description?: string;
+  status: TaskPlanItemStatus;
+  notes?: string[];
+  blockedBy?: string[];
+  evidenceRefs?: ArtifactRef[];
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
+}
+
 export interface TaskPlan {
   objective: string;
   contextRefs: string[];
@@ -479,6 +491,9 @@ export interface TaskPlan {
   nonGoals: string[];
   successCriteria: string[];
   evidenceRequired: string[];
+  /** Active task progress truth. Legacy compatibility rows import into these items. */
+  items?: TaskPlanItem[];
+  /** Legacy/import-only execution-step input retained for old snapshots and callers. */
   steps: string[];
   decompositionRationale?: string;
   riskLevel?: "trivial" | "normal" | "high";
@@ -494,7 +509,7 @@ export type TaskPlanIssueKind =
   | "missing_steps"
   | "open_questions";
 
-export type TaskCompletionIssueKind = "missing_completion_evidence" | "open_task_todos";
+export type TaskCompletionIssueKind = "missing_completion_evidence" | "open_plan_items";
 
 export interface TaskPlanIssue {
   kind: TaskPlanIssueKind;
@@ -513,7 +528,7 @@ export interface TaskCompletionIssue {
   severity: "warning" | "blocking";
   message: string;
   evidenceRequired?: string[];
-  openTodos?: string[];
+  openItems?: string[];
 }
 
 export interface TaskCompletionReadiness {

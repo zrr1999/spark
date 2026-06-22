@@ -7,6 +7,8 @@ import {
   parseWorkflowScript,
   readSavedWorkflow,
   runWorkflowScript,
+  type WorkflowRunOptions,
+  type WorkflowRunResult,
 } from "../packages/pi-workflows/src/index.ts";
 import {
   fanOutWithBriefWorkflowScript,
@@ -14,6 +16,7 @@ import {
   reviewWorkflowScript,
 } from "../packages/pi-workflows/src/builtins.ts";
 import { createSparkWorkflowRoleRunAdapter } from "../packages/spark-runtime/src/index.ts";
+import { registerSparkWorkflowRunTool } from "../packages/spark/src/extension/spark-workflow-run-tool-registration.ts";
 
 void test("pi-workflows package stays isolated from runtime execution packages", async () => {
   const pkg = JSON.parse(await readFile("packages/pi-workflows/package.json", "utf8")) as {
@@ -624,6 +627,240 @@ await agent('child', { label: 'child' })`;
       }),
     /workflow agent child produced empty delivery: No final assistant message found/,
   );
+});
+
+void test("pi-workflows requires metadata as the first executable workflow statement", () => {
+  assert.throws(
+    () =>
+      parseWorkflowScript(`const hidden = true
+export const meta = { name: 'late', description: 'late meta' }
+return hidden`),
+    /must start with export const meta/,
+  );
+
+  const parsed = parseWorkflowScript(`// leading comments are allowed
+export const meta = { name: 'first', description: 'first meta' }
+return 'ok'`);
+  assert.equal(parsed.meta.name, "first");
+});
+
+void test("pi-workflows runtime hardens deterministic resume against wall-clock randomness", async () => {
+  await assert.rejects(
+    () =>
+      runWorkflowScript(
+        `export const meta = { name: 'nondeterministic', description: 'nondeterministic test' }
+return Date.now()`,
+        { agent: async () => "unused" },
+      ),
+    /Date\.now\(\) is unavailable/,
+  );
+
+  await assert.rejects(
+    () =>
+      runWorkflowScript(
+        `export const meta = { name: 'random', description: 'random test' }
+return Math.random()`,
+        { agent: async () => "unused" },
+      ),
+    /Math\.random\(\) is unavailable/,
+  );
+});
+
+void test("pi-workflows resume replays only the unchanged prefix", async () => {
+  const script = `export const meta = { name: 'resume prefix', description: 'resume prefix test' }
+await agent(args && args.changed ? 'changed first' : 'original first', { label: 'first' })
+await agent('static second', { label: 'second' })
+return 'done'`;
+  const initial = await runWorkflowScript(script, {
+    args: { changed: false },
+    agent: async (_prompt, options) => options.label,
+  });
+
+  const livePrompts: string[] = [];
+  const replay = await runWorkflowScript(script, {
+    args: { changed: true },
+    resumeJournal: new Map(initial.journal.map((entry) => [entry.index, entry])),
+    agent: async (prompt, options) => {
+      livePrompts.push(`${options.label}:${prompt}`);
+      return `live ${options.label}`;
+    },
+  });
+
+  assert.deepEqual(livePrompts, ["first:changed first", "second:static second"]);
+  assert.deepEqual(
+    replay.journal.map((entry) => entry.result),
+    ["live first", "live second"],
+  );
+});
+
+void test("pi-workflows exposes quality helpers, item pipelines, retry, and gate", async () => {
+  const script = `export const meta = { name: 'quality helpers', description: 'quality helpers test' }
+const verdict = await verify('claim', { reviewers: 3, threshold: 0.66 })
+const best = await judgePanel(['weak', 'strong'], { judges: 2, rubric: 'test rubric' })
+const found = await loopUntilDry({
+  round: (index) => index === 0 ? ['a', 'a', 'b'] : [],
+  maxRounds: 4,
+})
+const piped = await pipeline([1, 2], (value) => value * 2, (value) => value + 1)
+const retried = await retry((index) => index, { attempts: 3, until: (value) => value === 2 })
+const gated = await gate(
+  (feedback) => feedback || 'draft',
+  (value) => value === 'fixed' ? { ok: true } : { ok: false, feedback: 'fixed' },
+  { attempts: 2 },
+)
+return { verdict, best, found, piped, retried, gated }`;
+
+  const run = await runWorkflowScript(script, {
+    agent: async (_prompt, options) => {
+      if (options.label?.startsWith("verify ")) return { real: options.label !== "verify 1" };
+      if (options.label?.startsWith("judge 2.")) return { score: 0.9 };
+      if (options.label?.startsWith("judge ")) return { score: 0.1 };
+      return "unused";
+    },
+  });
+  const result = JSON.parse(JSON.stringify(run.result)) as {
+    verdict: { real: boolean; realCount: number; total: number };
+    best: { index: number; score: number; attempt: string };
+    found: string[];
+    piped: number[];
+    retried: number;
+    gated: { ok: boolean; value: string; attempts: number };
+  };
+
+  assert.deepEqual(result.verdict, {
+    real: true,
+    realCount: 2,
+    total: 3,
+    votes: [{ real: false }, { real: true }, { real: true }],
+  });
+  assert.equal(result.best.index, 1);
+  assert.equal(result.best.attempt, "strong");
+  assert.equal(result.best.score, 0.9);
+  assert.deepEqual(result.found, ["a", "b"]);
+  assert.deepEqual(result.piped, [3, 5]);
+  assert.equal(result.retried, 2);
+  assert.deepEqual(result.gated, { ok: true, value: "fixed", attempts: 2 });
+});
+
+void test("pi-workflows enforces run and phase token budgets between agent calls", async () => {
+  const runBudgetScript = `export const meta = { name: 'run budget', description: 'run budget test' }
+await agent('first', { label: 'first' })
+await agent('second', { label: 'second' })`;
+  await assert.rejects(
+    () =>
+      runWorkflowScript(runBudgetScript, {
+        tokenBudget: 1,
+        agent: async () => "a long enough output",
+      }),
+    /workflow token budget exhausted/,
+  );
+
+  const phaseBudgetScript = `export const meta = { name: 'phase budget', description: 'phase budget test' }
+phase('Scan', { budget: 1 })
+await agent('first', { label: 'first' })
+await agent('second', { label: 'second' })`;
+  await assert.rejects(
+    () => runWorkflowScript(phaseBudgetScript, { agent: async () => "a long enough output" }),
+    /workflow phase budget exhausted: Scan/,
+  );
+});
+
+void test("pi-workflows composes one-level nested workflows through a controlled resolver", async () => {
+  const parent = `export const meta = { name: 'parent', description: 'parent workflow' }
+const child = await workflow('child', { value: 'ok' })
+return { child }`;
+  const child = `export const meta = { name: 'child', description: 'child workflow' }
+return await agent('child ' + args.value, { label: 'child agent' })`;
+
+  const prompts: string[] = [];
+  const run = await runWorkflowScript(parent, {
+    loadWorkflowScript: (name) => (name === "child" ? child : undefined),
+    agent: async (prompt) => {
+      prompts.push(prompt);
+      return `result:${prompt}`;
+    },
+  });
+
+  assert.deepEqual(prompts, ["child ok"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(run.result)), { child: "result:child ok" });
+});
+
+void test("Spark workflow_run tool executes inline and saved workflow scripts through injected runtime", async () => {
+  type TestWorkflowRunTool = {
+    execute: (
+      toolCallId: string,
+      params: Record<string, unknown>,
+      signal: AbortSignal,
+      onUpdate: () => void,
+      ctx: { cwd: string },
+    ) => Promise<{
+      content: Array<{ type: "text"; text: string }>;
+      details: Record<string, unknown>;
+    }>;
+  };
+  const tools = new Map<string, TestWorkflowRunTool>();
+  const seen: Array<{ script: string; args: unknown; tokenBudget?: number; concurrency?: number }> =
+    [];
+  registerSparkWorkflowRunTool(
+    (config) => tools.set(config.name, config as unknown as TestWorkflowRunTool),
+    {
+      createAgentRunner: () => async () => "agent output",
+      resolveScript: async ({ selector }) => ({
+        label: selector,
+        script: `export const meta = { name: 'saved', description: 'saved workflow' }
+return 'saved-result'`,
+      }),
+      async runWorkflow<T = unknown>(
+        script: string,
+        options: WorkflowRunOptions,
+      ): Promise<WorkflowRunResult<T>> {
+        seen.push({
+          script,
+          args: options.args,
+          tokenBudget: options.tokenBudget ?? undefined,
+          concurrency: options.concurrency,
+        });
+        return {
+          meta: parseWorkflowScript(script).meta,
+          result: { ok: true, args: options.args } as T,
+          phases: [{ title: "Done", startedAt: "2026-06-18T00:00:00.000Z", status: "success" }],
+          agentCount: 2,
+          journal: [],
+        };
+      },
+    },
+  );
+  const tool = tools.get("workflow_run");
+  assert.ok(tool, "missing workflow_run tool");
+
+  const inline = await tool.execute(
+    "tool-call",
+    {
+      script: `export const meta = { name: 'inline', description: 'inline workflow' }
+return 'inline-result'`,
+      args: { focus: "demo" },
+      tokenBudget: 50,
+      concurrency: 3,
+    },
+    new AbortController().signal,
+    () => undefined,
+    { cwd: "/tmp/workflow-test" },
+  );
+  assert.match(inline.content[0].text, /Workflow run completed: inline workflow/);
+  const inlineDetails = inline.details as { workflow: { agentCount: number } };
+  assert.equal(inlineDetails.workflow.agentCount, 2);
+  assert.equal(seen[0]?.tokenBudget, 50);
+  assert.equal(seen[0]?.concurrency, 3);
+
+  await tool.execute(
+    "tool-call",
+    { selector: "builtin:research", args: { question: "demo" } },
+    new AbortController().signal,
+    () => undefined,
+    { cwd: "/tmp/workflow-test" },
+  );
+  assert.match(seen[1]?.script ?? "", /name: 'saved'/);
+  assert.deepEqual(seen[1]?.args, { question: "demo" });
 });
 
 async function listTypeScriptFiles(dir: string): Promise<string[]> {

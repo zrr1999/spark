@@ -57,7 +57,6 @@ export interface GoalReviewInput {
   projectStatus?: {
     ref: ProjectRef;
     title: string;
-    status: string;
     taskCounts: {
       total: number;
       unfinished: number;

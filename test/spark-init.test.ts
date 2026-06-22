@@ -157,7 +157,7 @@ void test("active Spark context reports no selected project without persisting c
     });
 
     assert.match(summary ?? "", /Spark available: no project selected/);
-    assert.match(summary ?? "", /Projects: 1 total \/ 1 active/);
+    assert.match(summary ?? "", /Projects: 1 total/);
     assert.doesNotMatch(summary ?? "", /Current project: Dormant project/);
     await assert.rejects(() => stat(join(dir, ".spark", "sessions")));
   } finally {

@@ -16,7 +16,6 @@ import {
   type Task,
   type TaskCompletionReadiness,
   type TaskStatus,
-  type TaskTodo,
 } from "@zendev-lab/pi-extension-api";
 import {
   defaultTaskGraphStore,
@@ -24,12 +23,7 @@ import {
   taskCompletionReadiness,
   type TaskGraph,
 } from "@zendev-lab/pi-tasks";
-import {
-  currentSparkProject,
-  saveCurrentProjectRef,
-  sparkSessionKey,
-  sparkTodoStore,
-} from "./session-state.ts";
+import { currentSparkProject, saveCurrentProjectRef, sparkSessionKey } from "./session-state.ts";
 import { resolveSessionClaimedTask } from "./task-claim-selection.ts";
 import { compactTaskDetail, normalizeOptionalToolString } from "./task-plan-tool.ts";
 import { compactLearningDetail } from "./learning-tools.ts";
@@ -71,7 +65,6 @@ interface SparkFinishEvidenceInput {
 
 interface FinishProjectCompletionCandidate {
   projectRef: ProjectRef;
-  projectStatus: "active" | "done";
   ready: boolean;
   unfinishedTaskCount: number;
   unfinishedTasks: Array<ReturnType<typeof compactTaskDetail>>;
@@ -228,10 +221,10 @@ export function registerSparkFinishTaskTool(
   deps: SparkFinishTaskToolDependencies,
 ): void {
   registerSparkTool({
-    name: "spark_finish_task",
+    name: "impl_finish_task",
     label: "Spark Finish Task",
     description:
-      'Compatibility surface for task_write({ action: "finish" }): finish this session\'s claimed Spark task as done, failed, or cancelled. Defaults to the current claimed task and status=done.',
+      'Implementation for task_write({ action: "finish" }): finish this session\'s claimed Spark task as done, failed, or cancelled. Defaults to the current claimed task and status=done.',
     parameters: Type.Object({
       task: Type.Optional(
         Type.String({
@@ -305,11 +298,9 @@ export function registerSparkFinishTaskTool(
             },
           };
         }
-        const todoReadiness = taskCompletionReadiness(candidate.task, {
-          openTodos: candidate.openTodos,
-        });
+        const todoReadiness = taskCompletionReadiness(candidate.task);
         const openTodoIssue = todoReadiness.issues.find(
-          (entry) => entry.kind === "open_task_todos",
+          (entry) => entry.kind === "open_plan_items",
         );
         if (openTodoIssue) {
           await deps.refreshSparkWidget(cwd, ctx);
@@ -317,12 +308,12 @@ export function registerSparkFinishTaskTool(
             content: [
               {
                 type: "text",
-                text: renderOpenTaskTodoBlockedMessage(candidate.task, todoReadiness),
+                text: renderOpenTaskPlanItemBlockedMessage(candidate.task, todoReadiness),
               },
             ],
             details: {
               found: true,
-              error: "open_task_todos",
+              error: "open_plan_items",
               task: compactTaskDetail(candidate.task),
               completionReadiness: todoReadiness,
             },
@@ -354,7 +345,7 @@ export function registerSparkFinishTaskTool(
         };
         const reviewerRunner = await deps.createReviewerRunner?.(cwd, ctx);
         if (!reviewerRunner)
-          throw new Error("spark_finish_task requires a reviewer runner for done transitions");
+          throw new Error("task_write finish requires a reviewer runner for done transitions");
         try {
           const leasedReview = await withSparkReviewerLease(cwd, ctx, () =>
             reviewerRunner.review(reviewInput, _signal),
@@ -650,11 +641,14 @@ function renderFollowUpDispositionBlockedMessage(
   return `Task finish blocked by follow-up disposition gate: @${task.name}: ${task.title}\nResearch/review output contains follow-up signals that are not explicitly dispositioned. Mark each follow-up as one of: ${check.allowedDispositions.join(", ")}.\nUndispositioned signals:\n${signals}${hidden}\nThe task was not marked done. Create/confirm/defer/reject/scope follow-up work, then call task_write({ action: "finish" }) again.`;
 }
 
-function renderOpenTaskTodoBlockedMessage(task: Task, readiness: TaskCompletionReadiness): string {
-  const issue = readiness.issues.find((entry) => entry.kind === "open_task_todos");
-  const todos = issue?.openTodos ?? [];
-  const list = todos.length > 0 ? todos.map((label) => `- ${label}`).join("\n") : "- (no detail)";
-  return `Task finish blocked by open task TODOs: @${task.name}: ${task.title}\nFinish or disposition (cancel/delete/done) the remaining task TODOs before marking the task done.\nOpen TODOs:\n${list}\nThe task was not marked done. Update task TODOs with task_write({ action: "todo_update", scope: "task", ops: [...] }), then call task_write({ action: "finish" }) again.`;
+function renderOpenTaskPlanItemBlockedMessage(
+  task: Task,
+  readiness: TaskCompletionReadiness,
+): string {
+  const issue = readiness.issues.find((entry) => entry.kind === "open_plan_items");
+  const items = issue?.openItems ?? [];
+  const list = items.length > 0 ? items.map((label) => `- ${label}`).join("\n") : "- (no detail)";
+  return `Task finish blocked by open task plan items: @${task.name}: ${task.title}\nFinish or disposition (cancel/delete/done) the remaining task plan items before marking the task done.\nOpen plan items:\n${list}\nThe task was not marked done. Update task plan items with task_write({ action: "todo_update", scope: "task", ops: [...] }), then call task_write({ action: "finish" }) again.`;
 }
 
 function unknownErrorMessage(error: unknown): string {
@@ -704,12 +698,10 @@ async function resolveFinishReviewCandidate(
       projectRef: ProjectRef;
       task: Task;
       persistedTask: Task;
-      openTodos: TaskTodo[];
     }
 > {
   const updated = await store.update(
     async (graph) => {
-      await sparkTodoStore(cwd, ctx).hydrate(graph);
       const project = await currentSparkProject(cwd, ctx, graph);
       if (!project) return { error: "no_project" as const };
       const task = resolveSessionClaimedTask(graph, project.ref, sparkSessionKey(ctx), input.task);
@@ -719,7 +711,6 @@ async function resolveFinishReviewCandidate(
         projectRef: project.ref,
         task: candidateTask,
         persistedTask: task,
-        openTodos: graph.taskTodos(task.ref),
       };
     },
     { createIfMissing: false },
@@ -732,7 +723,6 @@ async function resolveFinishReviewCandidate(
         projectRef: ProjectRef;
         task: Task;
         persistedTask: Task;
-        openTodos: TaskTodo[];
       };
 }
 
@@ -744,7 +734,6 @@ async function commitFinishedTask(
 ): Promise<Awaited<ReturnType<typeof store.update>>> {
   return store.update(
     async (graph) => {
-      await sparkTodoStore(cwd, ctx).hydrate(graph);
       const project = await currentSparkProject(cwd, ctx, graph);
       if (!project) return { error: "no_project" as const };
       const sessionKey = sparkSessionKey(ctx);
@@ -754,14 +743,9 @@ async function commitFinishedTask(
       task = attachFinishEvidenceRefs(graph, task, input.evidenceRefs);
       const finished = graph.setTaskStatus(task.ref, input.status);
       const completionReadiness =
-        input.status === "done"
-          ? taskCompletionReadiness(finished, {
-              openTodos: graph.taskTodos(finished.ref),
-            })
-          : undefined;
+        input.status === "done" ? taskCompletionReadiness(finished) : undefined;
       const progress = finishProjectProgress(graph, project.ref);
       const nextReady = input.status === "done" ? progress.remainingReadyTasks[0] : undefined;
-      await sparkTodoStore(cwd, ctx).save(graph);
       return {
         task: finished,
         statusBefore,
@@ -862,7 +846,7 @@ function finishProjectProgress(
   graph: TaskGraph,
   projectRef: ProjectRef,
 ): { remainingReadyTasks: Task[]; projectCompletionCandidate: FinishProjectCompletionCandidate } {
-  const project = graph.getProject(projectRef);
+  void graph.getProject(projectRef);
   const unfinishedTasks = graph
     .tasks(projectRef)
     .filter((task) => isUnfinishedTaskStatus(task.status));
@@ -871,12 +855,14 @@ function finishProjectProgress(
     remainingReadyTasks,
     projectCompletionCandidate: {
       projectRef,
-      projectStatus: project.status,
-      ready: unfinishedTasks.length === 0 && project.status !== "done",
+      ready: unfinishedTasks.length === 0,
       unfinishedTaskCount: unfinishedTasks.length,
       unfinishedTasks: unfinishedTasks.slice(0, 8).map(compactTaskDetail),
-      ...(unfinishedTasks.length === 0 && project.status !== "done"
-        ? { suggestedAction: 'task_write({ action: "project_finish" })' }
+      ...(unfinishedTasks.length === 0
+        ? {
+            suggestedAction:
+              'Review evidence and call goal({ action: "complete" }) if the session goal is achieved.',
+          }
         : {}),
     },
   };
@@ -890,7 +876,6 @@ function emptyFinishProjectProgress(projectRef: ProjectRef): {
     remainingReadyTasks: [],
     projectCompletionCandidate: {
       projectRef,
-      projectStatus: "active",
       ready: false,
       unfinishedTaskCount: 0,
       unfinishedTasks: [],

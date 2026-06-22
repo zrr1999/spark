@@ -2,13 +2,12 @@ import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
 import type { ArtifactRef, JsonValue, ProjectRef } from "@zendev-lab/pi-extension-api";
 import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import type { clarifyProjectPurposeIfNeeded } from "../flows/project-purpose-flow.ts";
-import { isImportantStatus, type SparkProjectListStatus } from "./spark-status.ts";
+import { isImportantStatus } from "./spark-status.ts";
 
 export interface SparkProjectPatch {
   title?: string;
   description?: string;
   purpose?: string;
-  status?: "active" | "done";
   outputLanguage?: "zh" | "en";
 }
 
@@ -23,7 +22,6 @@ export interface SparkNewProjectInput {
 export interface SparkDuplicateProjectCandidate {
   ref: ProjectRef;
   title: string;
-  status: "active" | "done";
   score: number;
   reason: string;
 }
@@ -45,12 +43,6 @@ export function normalizeSparkProjectOptionalString(
   return trimmed;
 }
 
-export function normalizeSparkProjectStatus(value: unknown): "active" | "done" | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (value === "active" || value === "done") return value;
-  throw new Error("status must be active or done");
-}
-
 export function normalizeSparkProjectOutputLanguage(value: unknown): "zh" | "en" | undefined {
   if (value === undefined || value === null) return undefined;
   if (value === "zh" || value === "en") return value;
@@ -62,7 +54,6 @@ export function normalizeSparkProjectPatch(params: Record<string, unknown>): Spa
     title: normalizeSparkProjectOptionalString(params.title, "title"),
     description: normalizeSparkProjectOptionalString(params.description, "description"),
     purpose: normalizeSparkProjectOptionalString(params.purpose, "purpose"),
-    status: normalizeSparkProjectStatus(params.status),
     outputLanguage: normalizeSparkProjectOutputLanguage(params.outputLanguage),
   };
 }
@@ -80,9 +71,7 @@ export function normalizeSparkNewProjectInput(
 }
 
 export function hasSparkProjectPatch(patch: SparkProjectPatch): boolean {
-  return Boolean(
-    patch.title || patch.description || patch.purpose || patch.status || patch.outputLanguage,
-  );
+  return Boolean(patch.title || patch.description || patch.purpose || patch.outputLanguage);
 }
 
 export function resolveSparkProject(
@@ -125,7 +114,6 @@ export function findDuplicateSparkProjects(input: {
       return {
         ref: project.ref,
         title: project.title,
-        status: project.status,
         score: score.score,
         reason: score.reason,
       };
@@ -216,33 +204,22 @@ function diceCoefficient(leftTokens: string[], rightTokens: string[]): number {
 
 export function collectSparkProjectSummaries(input: {
   graph: TaskGraph;
-  status: SparkProjectListStatus;
   currentProjectRef?: ProjectRef;
 }): Array<Record<string, unknown>> {
-  return input.graph
-    .projects()
-    .filter((project) =>
-      input.status === "all"
-        ? true
-        : input.status === "done"
-          ? project.status === "done"
-          : project.status !== "done",
-    )
-    .map((project) => {
-      const tasks = input.graph.tasks(project.ref);
-      return {
-        ref: project.ref,
-        title: project.title,
-        status: project.status,
-        taskCounts: {
-          total: tasks.length,
-          active: tasks.filter((task) => isImportantStatus(task.status)).length,
-          done: tasks.filter((task) => task.status === "done").length,
-          cancelled: tasks.filter((task) => task.status === "cancelled").length,
-        },
-        currentForSession: input.currentProjectRef === project.ref,
-      };
-    });
+  return input.graph.projects().map((project) => {
+    const tasks = input.graph.tasks(project.ref);
+    return {
+      ref: project.ref,
+      title: project.title,
+      taskCounts: {
+        total: tasks.length,
+        active: tasks.filter((task) => isImportantStatus(task.status)).length,
+        done: tasks.filter((task) => task.status === "done").length,
+        cancelled: tasks.filter((task) => task.status === "cancelled").length,
+      },
+      currentForSession: input.currentProjectRef === project.ref,
+    };
+  });
 }
 
 export async function saveProjectPurposeTrace(

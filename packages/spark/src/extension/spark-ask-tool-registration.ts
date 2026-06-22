@@ -12,12 +12,12 @@ export function normalizeSparkAskReplayArtifactRef(value: unknown): ArtifactRef 
 
 export function registerSparkAskTools(registerSparkTool: SparkToolRegistrar): void {
   registerSparkTool({
-    name: "spark_ask",
+    name: "impl_ask",
     label: "Spark Ask",
     description:
       "Ask the user a structured multi-question clarification, decision, approval, or unblock form and persist the answer as an artifact.",
     promptGuidelines: [
-      "Use ask as the canonical ask tool; spark_ask is a compatibility surface for persisted Spark ask artifacts.",
+      "Use ask as the canonical ask tool; this implementation persists Spark ask artifacts.",
       "When user-facing open questions or decision points would change task scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order, turn them into context-specific ask questions instead of leaving them as prose.",
       "Each option needs a stable id, short label, and clear description explaining what choosing it means.",
       "Use freeform questions for notes/context instead of creating business options named Other or Type your own.",
@@ -80,7 +80,7 @@ export function registerSparkAskTools(registerSparkTool: SparkToolRegistrar): vo
   });
 
   registerSparkTool({
-    name: "spark_ask_replay",
+    name: "impl_ask_replay",
     label: "Spark Ask Replay",
     description:
       "Replay the latest Spark ask artifact, or a specified ask artifact, preserving prior answers where possible.",

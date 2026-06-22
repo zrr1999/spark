@@ -24,7 +24,7 @@ export function registerSparkLearningImportExportTools(
   registerSparkTool: SparkToolRegistrar,
 ): void {
   registerSparkTool({
-    name: "spark_learning_export_markdown",
+    name: "impl_learning_export_markdown",
     label: "Spark Learning Export Markdown",
     description:
       "Export selected local Spark learnings to an explicit Markdown artifact/file for sharing or review.",
@@ -90,7 +90,7 @@ export function registerSparkLearningImportExportTools(
   });
 
   registerSparkTool({
-    name: "spark_learning_import_markdown",
+    name: "impl_learning_import_markdown",
     label: "Spark Learning Import Markdown",
     description:
       'Import Markdown produced by learning({ action: "export_markdown" }), or legacy compound-learnings Markdown/.learnings directories. Dry-run by default; set apply=true to persist.',

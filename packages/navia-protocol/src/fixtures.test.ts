@@ -10,7 +10,7 @@ import {
   runtimeMessageEnvelopeSchema,
   runtimeRegistrationRequestSchema,
   runtimeRegistrationResponseSchema,
-} from "./index.js";
+} from "./index.ts";
 
 describe("runtime protocol fixtures", () => {
   it("validates runtime registration request fixture", () => {

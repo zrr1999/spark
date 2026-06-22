@@ -121,7 +121,7 @@ function appendTerminalProjectDiagnostics(
   );
   for (const project of summary.candidates)
     lines.push(
-      `  - ${project.ref} ${project.status} tasks=${project.tasks} unfinished=${project.unfinishedTasks} updated=${project.updatedAt} ${project.title}`,
+      `  - ${project.ref} tasks=${project.tasks} unfinished=${project.unfinishedTasks} updated=${project.updatedAt} ${project.title}`,
     );
 }
 

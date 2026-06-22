@@ -7,8 +7,10 @@ export interface ParsedWorkflowScript {
 
 export function parseWorkflowScript(script: string): ParsedWorkflowScript {
   const marker = "export const meta";
-  const markerIndex = script.indexOf(marker);
-  if (markerIndex < 0) throw new Error("Workflow script must export literal meta");
+  const markerIndex = skipIgnoredPrefix(script);
+  if (!script.slice(markerIndex).startsWith(marker)) {
+    throw new Error("Workflow script must start with export const meta literal metadata");
+  }
   const equalsIndex = script.indexOf("=", markerIndex + marker.length);
   if (equalsIndex < 0) throw new Error("Workflow script must assign literal meta");
   const objectStart = script.indexOf("{", equalsIndex);
@@ -18,6 +20,28 @@ export function parseWorkflowScript(script: string): ParsedWorkflowScript {
   let afterMeta = script.slice(objectEnd + 1).trimStart();
   if (afterMeta.startsWith(";")) afterMeta = afterMeta.slice(1).trimStart();
   return { meta, body: afterMeta };
+}
+
+function skipIgnoredPrefix(source: string): number {
+  let index = 0;
+  while (index < source.length) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (isWhitespace(char)) {
+      index++;
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      index = skipLineComment(source, index + 2) + 1;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      index = skipBlockComment(source, index + 2) + 1;
+      continue;
+    }
+    return index;
+  }
+  return index;
 }
 
 function findBalancedObjectEnd(source: string, start: number): number {

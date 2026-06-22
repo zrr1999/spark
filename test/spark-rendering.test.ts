@@ -60,12 +60,12 @@ void test("SparkNativeSession appends streaming assistant chunks smoothly", () =
 
 void test("SparkNativeTuiApp folds tool output and toggles thinking/tool visibility", () => {
   const session = new SparkNativeSession();
-  session.addToolMessage({ toolName: "spark_status", text: "long tool output", status: "success" });
+  session.addToolMessage({ toolName: "impl_status", text: "long tool output", status: "success" });
   session.addThinking("hidden reasoning trace");
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
 
   let rendered = app.render(80).join("\n");
-  assert.match(rendered, /tool:spark_status \[success\] • folded/);
+  assert.match(rendered, /tool:impl_status \[success\] • folded/);
   assert.doesNotMatch(rendered, /long tool output/);
   assert.match(rendered, /thinking • hidden/);
   assert.doesNotMatch(rendered, /hidden reasoning trace/);
@@ -73,7 +73,7 @@ void test("SparkNativeTuiApp folds tool output and toggles thinking/tool visibil
   assert.equal(app.toggleTools(), true);
   assert.equal(app.toggleThinking(), true);
   rendered = app.render(80).join("\n");
-  assert.match(rendered, /tool:spark_status \[success\]> long tool output/);
+  assert.match(rendered, /tool:impl_status \[success\]> long tool output/);
   assert.match(rendered, /thinking> hidden reasoning trace/);
 });
 

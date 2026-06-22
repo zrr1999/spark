@@ -45,13 +45,11 @@ import {
   claimScopeForStoredClaim,
   cloneTask,
   cloneTaskRun,
-  cloneTodos,
   isExpiredClaim,
   isOpenContextTask,
   isUnfinishedTaskStatus,
   materializeTodos,
   normalizeProject,
-  normalizeProjectStatus,
   normalizeRoleRef,
   normalizeTask,
   normalizeTaskCancellation,
@@ -63,7 +61,9 @@ import {
   summarizeTodos,
   taskLookup,
   taskNameFromTitle,
+  taskPlanItemsFromTodos,
   taskPlanReadiness,
+  taskTodosFromPlanItems,
   uniqueTaskName,
 } from "./internal.ts";
 
@@ -72,7 +72,6 @@ export class TaskGraph {
   #tasks = new Map<TaskRef, Task>();
   #dependencies: TaskDependency[] = [];
   #runs = new Map<string, TaskRun>();
-  #todos = new Map<TaskRef, TaskTodo[]>();
 
   static fromSnapshot(snapshot: TaskGraphSnapshot): TaskGraph {
     const graph = new TaskGraph();
@@ -101,7 +100,6 @@ export class TaskGraph {
       title: input.title,
       description: input.description,
       purpose: input.purpose?.trim() || undefined,
-      status: normalizeProjectStatus(input.status),
       outputLanguage: input.outputLanguage,
       roadmap: createDefaultProjectRoadmap(input.title, now),
       createdAt: now,
@@ -123,6 +121,13 @@ export class TaskGraph {
     const requestedStatus = input.status ?? (input.kind === "interaction" ? "running" : "ready");
     const status =
       supersededBy.length > 0 && requestedStatus !== "done" ? "cancelled" : requestedStatus;
+    const plan = normalizeTaskPlan(input.plan, input.description, input.title);
+    if (input.todos?.length) {
+      plan.items = taskPlanItemsFromTodos(
+        normalizeTodos(materializeTodos("task:pending" as TaskRef, input.todos, now)),
+      );
+      plan["steps"] = plan.items.map((item) => item.title);
+    }
     const task: Task = {
       ref: newRef("task"),
       projectRef: input.projectRef,
@@ -141,12 +146,11 @@ export class TaskGraph {
       claim: isUnfinishedTaskStatus(status) ? input.claim : undefined,
       inputArtifacts: input.inputArtifacts ?? [],
       outputArtifacts: [],
-      plan: normalizeTaskPlan(input.plan, input.description, input.title),
+      plan,
       createdAt: now,
       updatedAt: now,
     };
     this.#tasks.set(task.ref, task);
-    this.#todos.set(task.ref, normalizeTodos(materializeTodos(task.ref, input.todos ?? [], now)));
     return task;
   }
 
@@ -510,8 +514,14 @@ export class TaskGraph {
 
   setTaskTodos(taskRef: TaskRef, todos: CreateTaskTodoInput[]): Task {
     const task = this.getTask(taskRef);
-    this.#todos.set(taskRef, normalizeTodos(materializeTodos(taskRef, todos, nowIso())));
-    const updated: Task = { ...task, updatedAt: nowIso() };
+    const items = taskPlanItemsFromTodos(
+      normalizeTodos(materializeTodos(taskRef, todos, nowIso())),
+    );
+    const updated: Task = {
+      ...task,
+      plan: normalizeTaskPlan({ ...task.plan, items }, task.description, task.title),
+      updatedAt: nowIso(),
+    };
     this.#tasks.set(taskRef, updated);
     return updated;
   }
@@ -519,32 +529,47 @@ export class TaskGraph {
   applyTodoOps(taskRef: TaskRef, ops: TaskTodoOp[]): Task {
     if (ops.length === 0) throw new Error("todo ops are required");
     const task = this.getTask(taskRef);
-    this.#todos.set(taskRef, applyTaskTodoOps(taskRef, this.taskTodos(taskRef), ops));
-    const updated: Task = { ...task, updatedAt: nowIso() };
+    const todos = applyTaskTodoOps(taskRef, this.taskTodos(taskRef), ops);
+    const updated: Task = {
+      ...task,
+      plan: normalizeTaskPlan(
+        { ...task.plan, items: taskPlanItemsFromTodos(todos) },
+        task.description,
+        task.title,
+      ),
+      updatedAt: nowIso(),
+    };
     this.#tasks.set(taskRef, updated);
     return updated;
   }
 
   taskTodos(taskRef: TaskRef): TaskTodo[] {
-    this.getTask(taskRef);
-    return cloneTodos(this.#todos.get(taskRef) ?? []);
+    const task = this.getTask(taskRef);
+    return taskTodosFromPlanItems(taskRef, task.plan?.items ?? []);
   }
 
   hydrateTodos(todos: TaskTodo[]): void {
-    this.#todos.clear();
+    const byTask = new Map<TaskRef, TaskTodo[]>();
     for (const todo of todos) {
       if (!this.#tasks.has(todo.taskRef)) continue;
-      const list = this.#todos.get(todo.taskRef) ?? [];
+      const list = byTask.get(todo.taskRef) ?? [];
       list.push(normalizeTodo(todo));
-      this.#todos.set(todo.taskRef, list);
+      byTask.set(todo.taskRef, list);
     }
-    for (const [taskRef, todosForTask] of this.#todos) {
-      this.#todos.set(taskRef, normalizeTodos(todosForTask));
+    for (const [taskRef, legacyTodos] of byTask) {
+      const task = this.getTask(taskRef);
+      const merged = [...this.taskTodos(taskRef), ...normalizeTodos(legacyTodos)];
+      const updated: Task = {
+        ...task,
+        plan: normalizeTaskPlan(
+          { ...task.plan, items: taskPlanItemsFromTodos(merged) },
+          task.description,
+          task.title,
+        ),
+        updatedAt: nowIso(),
+      };
+      this.#tasks.set(taskRef, updated);
     }
-  }
-
-  todoSnapshot(): TaskTodo[] {
-    return this.tasks().flatMap((task) => this.taskTodos(task.ref));
   }
 
   todoSummary(taskRef: TaskRef): TaskTodoSummary {
@@ -657,9 +682,7 @@ export class TaskGraph {
 
   updateProject(
     projectRef: ProjectRef,
-    patch: Partial<
-      Pick<Project, "title" | "description" | "purpose" | "status" | "outputLanguage">
-    >,
+    patch: Partial<Pick<Project, "title" | "description" | "purpose" | "outputLanguage">>,
   ): Project {
     const project = this.getProject(projectRef);
     const title = patch.title ?? project.title;
@@ -671,7 +694,6 @@ export class TaskGraph {
       title,
       description,
       purpose: patch.purpose !== undefined ? patch.purpose.trim() || undefined : project.purpose,
-      status: normalizeProjectStatus(patch.status ?? project.status),
       outputLanguage: patch.outputLanguage ?? project.outputLanguage,
       updatedAt: nowIso(),
     };

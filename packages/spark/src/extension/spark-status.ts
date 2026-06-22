@@ -5,45 +5,34 @@ import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 export type SparkStatusView = "active" | "summary" | "full";
 export type SparkStatusFormat = "text" | "json";
 export type SparkStatusScope = "workspace" | "project" | "task";
-export type SparkProjectListStatus = "active" | "done" | "all";
-
 export function normalizeSparkStatusScope(params: Record<string, unknown>): SparkStatusScope {
   const value = params.scope;
   if (value === undefined || value === null) return "workspace";
   if (value === "workspace" || value === "project" || value === "task") return value;
-  throw new Error("spark_status scope must be workspace, project, or task");
+  throw new Error("task_read status scope must be workspace, project, or task");
 }
 
 export function normalizeSparkStatusView(params: Record<string, unknown>): SparkStatusView {
   const value = params.view;
   if (value === undefined || value === null) return "active";
   if (value === "active" || value === "summary" || value === "full") return value;
-  throw new Error("spark_status view must be active, summary, or full");
+  throw new Error("task_read status view must be active, summary, or full");
 }
 
 export function normalizeSparkStatusFormat(params: Record<string, unknown>): SparkStatusFormat {
   const value = params.format;
   if (value === undefined || value === null) return "text";
   if (value === "text" || value === "json") return value;
-  throw new Error("spark_status format must be text or json");
-}
-
-export function normalizeSparkProjectListStatus(
-  params: Record<string, unknown>,
-): SparkProjectListStatus {
-  const value = params.status;
-  if (value === undefined || value === null) return "active";
-  if (value === "active" || value === "done" || value === "all") return value;
-  throw new Error("spark_list_projects status must be active, done, or all");
+  throw new Error("task_read status format must be text or json");
 }
 
 export function normalizeSparkStatusLimit(params: Record<string, unknown>): number | undefined {
   const value = params.limit;
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "number" || !Number.isFinite(value))
-    throw new Error("spark_status limit must be a finite number");
+    throw new Error("task_read status limit must be a finite number");
   if (!Number.isInteger(value) || value < 0)
-    throw new Error("spark_status limit must be a non-negative integer");
+    throw new Error("task_read status limit must be a non-negative integer");
   return value;
 }
 
@@ -51,7 +40,7 @@ export function normalizeSparkStatusShowFinished(params: Record<string, unknown>
   const value = params.showFinished;
   if (value === undefined || value === null) return false;
   if (typeof value === "boolean") return value;
-  throw new Error("spark_status showFinished must be a boolean");
+  throw new Error("task_read status showFinished must be a boolean");
 }
 
 export function isImportantStatus(status: TaskStatus): boolean {
@@ -118,7 +107,7 @@ export function formatTaskStatusCounts(counts: Partial<Record<TaskStatus, number
   return parts.length > 0 ? parts.join(" ") : "none";
 }
 
-export function compactProjectStatusSummaries(graph: TaskGraph, sessionKey: string) {
+export function compactProjectSummaries(graph: TaskGraph, sessionKey: string) {
   return graph.projects().map((project) => {
     const tasks = graph.tasks(project.ref);
     const claimed = tasks.filter((task) => taskClaimedBy(task));
@@ -126,7 +115,6 @@ export function compactProjectStatusSummaries(graph: TaskGraph, sessionKey: stri
     return {
       ref: project.ref,
       title: project.title,
-      status: project.status,
       tasks: tasks.length,
       unfinished: tasks.filter((task) => isUnfinishedTaskStatus(task.status)).length,
       claimed: claimed.length,

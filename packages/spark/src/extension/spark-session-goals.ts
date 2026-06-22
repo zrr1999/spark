@@ -172,9 +172,8 @@ export function inferSessionGoalObjective(
   if (activeTodos.length > 0)
     return "处理当前 active session TODO：逐项完成、取消、删除或明确等待条件，直到没有 active session TODO 阻塞 goal completion review。";
   if (project) return inferProjectBackedSessionGoalObjective(graph, project);
-  const activeSessionProjects = graph.projects().filter((candidate) => candidate.status !== "done");
-  if (activeSessionProjects.length === 1)
-    return inferProjectBackedSessionGoalObjective(graph, activeSessionProjects[0]!);
+  const projects = graph.projects();
+  if (projects.length === 1) return inferProjectBackedSessionGoalObjective(graph, projects[0]!);
   return undefined;
 }
 

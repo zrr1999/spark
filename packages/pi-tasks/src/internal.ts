@@ -5,7 +5,6 @@ import {
   nowIso,
   stableId,
   type Project,
-  type ProjectStatus,
   type RoleRef,
   type Task,
   type TaskAttribution,
@@ -18,6 +17,7 @@ import {
   type TaskPlan,
   type TaskPlanIssue,
   type TaskPlanIssueKind,
+  type TaskPlanItem,
   type TaskPlanReadiness,
   type TaskRef,
   type TaskRun,
@@ -216,7 +216,6 @@ export function normalizeProject(project: Project): Project {
     title: project.title,
     description: project.description,
     purpose: typeof rawPurpose === "string" ? rawPurpose.trim() || undefined : undefined,
-    status: normalizeProjectStatus(project.status),
     outputLanguage: project.outputLanguage,
     currentTaskRef: project.currentTaskRef,
     roadmap: project.roadmap
@@ -225,10 +224,6 @@ export function normalizeProject(project: Project): Project {
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
   };
-}
-
-export function normalizeProjectStatus(status: unknown): ProjectStatus {
-  return status === "done" ? "done" : "active";
 }
 
 export function normalizeTask(task: Task): Task {
@@ -267,6 +262,18 @@ export function normalizeTaskPlan(
   title: string,
 ): TaskPlan {
   const objective = plan?.objective?.trim() || description.trim() || title.trim();
+  const legacySteps = normalizeStringList(plan?.steps);
+  const explicitItems = normalizeTaskPlanItems(plan?.items);
+  const legacyStepItems = normalizeTaskPlanItems(legacySteps.map((step) => ({ title: step })));
+  const fallbackItemTitle = description.trim() || title.trim();
+  const fallbackItems = fallbackItemTitle
+    ? normalizeTaskPlanItems([{ title: fallbackItemTitle }])
+    : [];
+  const items = explicitItems.length
+    ? explicitItems
+    : legacyStepItems.length
+      ? legacyStepItems
+      : fallbackItems;
   return {
     objective,
     contextRefs: normalizeStringList(plan?.contextRefs),
@@ -274,14 +281,68 @@ export function normalizeTaskPlan(
     nonGoals: normalizeStringList(plan?.nonGoals),
     successCriteria: normalizeStringList(plan?.successCriteria),
     evidenceRequired: normalizeStringList(plan?.evidenceRequired),
-    steps: normalizeStringList(plan?.steps).length
-      ? normalizeStringList(plan?.steps)
-      : [description.trim() || title.trim()],
+    ...(items.length ? { items } : {}),
+    // Legacy/import-only mirror for old snapshots and callers; active progress truth is items.
+    steps: items.map((item) => item.title),
     decompositionRationale: plan?.decompositionRationale?.trim() || undefined,
     riskLevel: normalizeTaskPlanRiskLevel(plan?.riskLevel),
     openQuestions: normalizeStringList(plan?.openQuestions),
     askRefs: normalizeStringList(plan?.askRefs) as TaskPlan["askRefs"],
   };
+}
+
+function normalizeTaskPlanItems(
+  items: readonly Partial<TaskPlanItem>[] | undefined,
+): TaskPlanItem[] {
+  const now = nowIso();
+  const normalized = (items ?? [])
+    .map((item, index) => normalizeTaskPlanItem(item, index, now))
+    .filter((item): item is TaskPlanItem => Boolean(item));
+  return dedupeTaskPlanItems(normalized);
+}
+
+function normalizeTaskPlanItem(
+  item: Partial<TaskPlanItem>,
+  index: number,
+  now: string,
+): TaskPlanItem | undefined {
+  const title = item.title?.trim() || item.description?.trim();
+  if (!title) return undefined;
+  return {
+    id: item.id?.trim() || `item-${index + 1}`,
+    title,
+    description: item.description?.trim() || undefined,
+    status: normalizeTaskPlanItemStatus(item.status),
+    notes: normalizeStringList(item.notes),
+    blockedBy: normalizeStringList(item.blockedBy),
+    evidenceRefs: normalizeStringList(item.evidenceRefs) as TaskPlanItem["evidenceRefs"],
+    createdAt: item.createdAt?.trim() || now,
+    updatedAt: item.updatedAt?.trim() || now,
+    deletedAt: item.deletedAt?.trim() || undefined,
+  };
+}
+
+function dedupeTaskPlanItems(items: TaskPlanItem[]): TaskPlanItem[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = item.id || item.title;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function normalizeTaskPlanItemStatus(value: unknown): TaskPlanItem["status"] {
+  if (
+    value === "pending" ||
+    value === "in_progress" ||
+    value === "done" ||
+    value === "blocked" ||
+    value === "cancelled" ||
+    value === "deleted"
+  )
+    return value;
+  return "pending";
 }
 
 export function collectNonConcreteTaskIssues(
@@ -327,7 +388,7 @@ export const TASK_PLAN_READINESS_RULES: readonly TaskPlanReadinessRule[] = [
     severity: "blocking",
     message: "Task has no bound plan.",
     remediation:
-      "Add a concrete plan with objective, success criteria, evidence requirements, and steps.",
+      "Add a concrete plan with objective, success criteria, evidence requirements, and plan items.",
     description: "the task must have a bound plan.",
   },
   {
@@ -356,9 +417,9 @@ export const TASK_PLAN_READINESS_RULES: readonly TaskPlanReadinessRule[] = [
   {
     kind: "missing_steps",
     severity: "blocking",
-    message: "Task plan needs execution steps.",
-    remediation: "Add at least one concrete execution step to plan.steps.",
-    description: "plan.steps must include at least one execution step.",
+    message: "Task plan needs plan items.",
+    remediation: "Add at least one concrete plan item to plan.items.",
+    description: "plan.items must include at least one concrete progress item.",
   },
   {
     kind: "open_questions",
@@ -404,7 +465,8 @@ export function taskPlanReadiness(task: Pick<Task, "plan" | "status">): TaskPlan
   if (plan.evidenceRequired.length === 0) {
     issues.push(taskPlanIssue("missing_evidence_required"));
   }
-  if (plan.steps.length === 0) {
+  const activePlanItemCount = (plan.items ?? []).filter((item) => item.status !== "deleted").length;
+  if (activePlanItemCount === 0) {
     issues.push(taskPlanIssue("missing_steps"));
   }
   if (plan.openQuestions.length > 0) {
@@ -452,7 +514,6 @@ export function taskPlanIssue(kind: TaskPlanIssueKind, message?: string): TaskPl
 
 export function taskCompletionReadiness(
   task: Pick<Task, "plan" | "outputArtifacts" | "status">,
-  options: { openTodos?: ReadonlyArray<{ status: TaskTodo["status"]; content: string }> } = {},
 ): TaskCompletionReadiness {
   if (task.status === "cancelled") return { ready: true, issues: [] };
   const issues: TaskCompletionIssue[] = [];
@@ -465,16 +526,16 @@ export function taskCompletionReadiness(
       message: `Task completion needs evidence artifacts: ${evidenceRequired.join("; ")}`,
     });
   }
-  const openTodos = (options.openTodos ?? []).filter(
-    (todo) => todo.status !== "done" && todo.status !== "cancelled" && todo.status !== "deleted",
+  const openItems = (task.plan?.items ?? []).filter(
+    (item) => item.status !== "done" && item.status !== "cancelled" && item.status !== "deleted",
   );
-  if (openTodos.length > 0) {
-    const labels = openTodos.slice(0, 5).map((todo) => `${todo.status}: ${todo.content}`);
+  if (openItems.length > 0) {
+    const labels = openItems.slice(0, 5).map((item) => `${item.status}: ${item.title}`);
     issues.push({
-      kind: "open_task_todos",
+      kind: "open_plan_items",
       severity: "blocking",
-      openTodos: labels,
-      message: `Task completion needs all task TODOs done or dispositioned; ${openTodos.length} still open: ${labels.join("; ")}`,
+      openItems: labels,
+      message: `Task completion needs all task plan items done or dispositioned; ${openItems.length} still open: ${labels.join("; ")}`,
     });
   }
   return { ready: issues.every((issue) => issue.severity !== "blocking"), issues };
@@ -488,7 +549,13 @@ export function cloneTaskPlan(plan: TaskPlan): TaskPlan {
     nonGoals: [...plan.nonGoals],
     successCriteria: [...plan.successCriteria],
     evidenceRequired: [...plan.evidenceRequired],
-    steps: [...plan.steps],
+    items: (plan.items ?? []).map((item) => ({
+      ...item,
+      notes: item.notes ? [...item.notes] : undefined,
+      blockedBy: item.blockedBy ? [...item.blockedBy] : undefined,
+      evidenceRefs: item.evidenceRefs ? [...item.evidenceRefs] : undefined,
+    })),
+    steps: [...plan["steps"]],
     openQuestions: [...plan.openQuestions],
     askRefs: [...plan.askRefs],
   };
@@ -866,6 +933,40 @@ export function materializeTodos(
       updatedAt: now,
     } satisfies TaskTodo;
   });
+}
+
+export function taskPlanItemsFromTodos(todos: TaskTodo[]): TaskPlanItem[] {
+  return normalizeTaskPlanItems(
+    todos.map((todo) => ({
+      id: todo.id,
+      title: todo.content,
+      status: todo.status,
+      notes: todo.notes,
+      blockedBy: todo.blockedBy,
+      createdAt: todo.createdAt,
+      updatedAt: todo.updatedAt,
+      deletedAt: todo.deletedAt,
+    })),
+  );
+}
+
+export function taskTodosFromPlanItems(
+  taskRef: TaskRef,
+  items: readonly TaskPlanItem[],
+): TaskTodo[] {
+  return cloneTodos(
+    items.map((item) => ({
+      id: item.id,
+      taskRef,
+      content: item.title,
+      status: item.status,
+      notes: item.notes,
+      blockedBy: item.blockedBy,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+      deletedAt: item.deletedAt,
+    })),
+  );
 }
 
 export function cloneTask(task: Task): Task {

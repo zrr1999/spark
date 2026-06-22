@@ -7,12 +7,7 @@ import {
   runSparkTask,
 } from "@zendev-lab/spark-runtime";
 import { defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
-import {
-  loadSparkGraph,
-  saveSparkGraphAndTodos,
-  sparkSessionOwnerKey,
-  sparkTodoStore,
-} from "./session-state.ts";
+import { loadSparkGraph, saveSparkGraphAndTodos, sparkSessionOwnerKey } from "./session-state.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 import { mergeTaskProgressIntoStore } from "./task-progress-store.ts";
@@ -141,10 +136,7 @@ export async function resumeOwnedBackgroundSubroles(
       });
       graph.setTaskStatus(task.ref, "failed");
     }
-    await mergeTaskProgressIntoStore(store, graph, [task.ref], async (current) => {
-      await sparkTodoStore(cwd, ctx).hydrate(current);
-      await sparkTodoStore(cwd, ctx).save(current);
-    });
+    await mergeTaskProgressIntoStore(store, graph, [task.ref]);
   }
   return resumed;
 }

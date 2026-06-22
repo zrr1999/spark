@@ -25,17 +25,12 @@ import {
   taskKindDescription,
   taskPlanSchema,
 } from "./task-plan-tool.ts";
-import {
-  currentSparkProject,
-  saveCurrentProjectRef,
-  sparkSessionKey,
-  sparkTodoStore,
-} from "./session-state.ts";
+import { currentSparkProject, saveCurrentProjectRef, sparkSessionKey } from "./session-state.ts";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import { isGenericInitialTaskTitle } from "./spark-graph-invariants.ts";
 import { findActiveSessionClaim, resolveSessionClaimedTask } from "./task-claim-selection.ts";
 import { taskClaimSummary } from "./task-display.ts";
-import { syncTaskTodosFromPlan } from "./task-plan-todos.ts";
+import { syncTaskPlanItemsFromPlan, taskPlanItemTitles } from "./task-plan-items.ts";
 import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 import { truncateInline } from "./tool-rendering.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
@@ -89,10 +84,10 @@ export function registerSparkClaimTaskTool(
   deps: SparkClaimTaskToolDependencies,
 ): void {
   registerSparkTool({
-    name: "spark_claim_task",
+    name: "impl_claim_task",
     label: "Spark Claim Task",
     description:
-      'Compatibility surface for task_write({ action: "claim" }): create or update a concrete Spark task for this session. For Spark-native delegated work, tasks may include an optional roleRef hint, but assign({ dryRun: true }) assigns the concrete executor role at dispatch; do not spawn nested pi CLI sessions as pseudo-roles unless explicitly testing Pi CLI behavior.',
+      'Implementation for task_write({ action: "claim" }): create or update a concrete Spark task for this session. For Spark-native delegated work, tasks may include an optional roleRef hint, but assign({ dryRun: true }) assigns the concrete executor role at dispatch; do not spawn nested pi CLI sessions as pseudo-roles unless explicitly testing Pi CLI behavior.',
     parameters: Type.Object({
       project: Type.Optional(Type.String({ description: "Optional project selector/ref/title." })),
       projectRef: Type.Optional(
@@ -169,7 +164,6 @@ export function registerSparkClaimTaskTool(
       const activeRoleRunProcesses = activeSparkRoleRunProcessesForCwd(cwd);
       const claimed = await store.update(
         async (graph) => {
-          await sparkTodoStore(cwd, ctx).hydrate(graph);
           const project = input.projectSelector
             ? resolveClaimProject(graph, input.projectSelector)
             : await currentSparkProject(cwd, ctx, graph);
@@ -256,7 +250,8 @@ export function registerSparkClaimTaskTool(
               leaseMs: MAIN_TASK_CLAIM_LEASE_MS,
             });
           }
-          if (!graph.taskTodos(task.ref).some(isActiveTaskTodo)) syncTaskTodosFromPlan(graph, task);
+          if (!graph.taskTodos(task.ref).some(isActiveTaskTodo))
+            syncTaskPlanItemsFromPlan(graph, task);
           const taskTodos = graph.taskTodos(task.ref);
           const hasActiveTodos = taskTodos.some(isActiveTaskTodo);
           return {
@@ -278,7 +273,7 @@ export function registerSparkClaimTaskTool(
           content: [
             {
               type: "text",
-              text: `Cannot claim ${claimInputLabel(input)}: creating or claiming a task without a bound task.plan is not allowed. Provide a concrete plan with objective, success criteria, evidence requirements, and steps before claiming.`,
+              text: `Cannot claim ${claimInputLabel(input)}: creating or claiming a task without a bound task.plan is not allowed. Provide a concrete plan with objective, success criteria, evidence requirements, and plan items before claiming.`,
             },
           ],
           details: { found: true, error: "task_plan_required" },
@@ -416,7 +411,7 @@ function renderClaimedTaskText(
       "- objective: missing",
       "- successCriteria: missing",
       "- evidenceRequired: missing",
-      "- steps: missing",
+      "- planItems: missing",
       "- constraints: missing",
     );
   } else {
@@ -424,7 +419,7 @@ function renderClaimedTaskText(
       `- objective: ${truncateInline(plan.objective, 220)}`,
       `- successCriteria: ${renderPlanList(plan.successCriteria)}`,
       `- evidenceRequired: ${renderPlanList(plan.evidenceRequired)}`,
-      `- steps: ${renderPlanList(plan.steps)}`,
+      `- planItems: ${renderPlanList(taskPlanItemTitles(plan))}`,
       `- constraints: ${renderPlanList(plan.constraints)}`,
     );
   }
@@ -438,7 +433,7 @@ function renderClaimedTaskText(
   lines.push("");
   if (hasActiveTodos) {
     lines.push(
-      'Task TODOs are present for this claim. Next: execute the task TODOs, and refine them with task_write({ action: "todo_update", scope: "task", ops: [...] }) if the breakdown is incomplete.',
+      'Task plan items are present for this claim. Next: execute the task plan items, and refine them with task_write({ action: "todo_update", scope: "task", ops: [...] }) if the breakdown is incomplete.',
     );
   } else {
     lines.push(

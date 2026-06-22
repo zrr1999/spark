@@ -87,7 +87,7 @@ export interface GoalInstructionStrings {
 
 export interface GoalContextStrings {
   notInitialized: string;
-  currentProjectLine: (title: string, status: string) => string;
+  currentProjectLine: (title: string) => string;
   unfinishedReadyLine: (unfinished: number, ready: number) => string;
   readyFrontierLine: (titles: string[]) => string;
   noActiveProject: (count: number) => string;
@@ -211,12 +211,12 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
 const CONTEXTS: Record<SparkLanguage, GoalContextStrings> = {
   en: {
     notInitialized: "Spark project state: not initialized.",
-    currentProjectLine: (title, status) => `Current project: ${title} (status=${status}).`,
+    currentProjectLine: (title) => `Current project: ${title}.`,
     unfinishedReadyLine: (unfinished, ready) =>
       `Unfinished tasks: ${unfinished}. Ready tasks: ${ready}.`,
     readyFrontierLine: (titles) => `Ready frontier: ${titles.join("; ")}.`,
-    noActiveProject: (count) => `Active project: none. Total projects: ${count}.`,
-    activeProjectCandidates: (titles) => `Active project candidates: ${titles.join("; ")}.`,
+    noActiveProject: (count) => `Current project: none. Total projects: ${count}.`,
+    activeProjectCandidates: (titles) => `Project candidates: ${titles.join("; ")}.`,
     projectStatus: (unfinished, ready, frontier) => {
       const tail = frontier.length > 0 ? ` Ready frontier: ${frontier.join("; ")}.` : "";
       return `Project status: unfinished=${unfinished}, ready=${ready}.${tail}`;
@@ -224,11 +224,11 @@ const CONTEXTS: Record<SparkLanguage, GoalContextStrings> = {
   },
   zh: {
     notInitialized: "Spark 项目尚未初始化。",
-    currentProjectLine: (title, status) => `当前项目：${title}（状态=${status}）。`,
+    currentProjectLine: (title) => `当前项目：${title}。`,
     unfinishedReadyLine: (unfinished, ready) => `未完成任务：${unfinished}。可执行任务：${ready}。`,
     readyFrontierLine: (titles) => `就绪边界：${titles.join("；")}。`,
-    noActiveProject: (count) => `当前没有激活项目，项目总数：${count}。`,
-    activeProjectCandidates: (titles) => `候选活跃项目：${titles.join("；")}。`,
+    noActiveProject: (count) => `当前没有选择项目，项目总数：${count}。`,
+    activeProjectCandidates: (titles) => `候选项目：${titles.join("；")}。`,
     projectStatus: (unfinished, ready, frontier) => {
       const tail = frontier.length > 0 ? ` 就绪边界：${frontier.join("；")}。` : "";
       return `项目状态：unfinished=${unfinished}, ready=${ready}。${tail}`;
@@ -271,7 +271,7 @@ export interface ActiveSparkContextStrings {
   }) => string;
   myClaimedTodosHidden: (hidden: number) => string;
   hiddenSessionClaimed: (hidden: number) => string;
-  projectsCountsLine: (total: number, active: number) => string;
+  projectsCountsLine: (total: number) => string;
   durableStateHint: string;
   sparkMdHeader: string;
   sparkMdReadFull: string;
@@ -299,7 +299,7 @@ const ACTIVE_CONTEXT: Record<SparkLanguage, ActiveSparkContextStrings> = {
     myClaimedTodosHidden: (hidden) => `  - … ${hidden} more active TODOs`,
     hiddenSessionClaimed: (hidden) =>
       `- … ${hidden} more claimed task(s); use task_read({ action: "project_status" }) for details`,
-    projectsCountsLine: (total, active) => `- Projects: ${total} total / ${active} active`,
+    projectsCountsLine: (total) => `- Projects: ${total} total`,
     durableStateHint:
       '- Durable state is authoritative; compact summaries/history are hints. Verify with task_read({ action: "project_status" }) or task_read({ action: "workspace_status" }) before changing project/task/goal state.',
     sparkMdHeader: "SPARK.md (intent excerpt):",
@@ -326,7 +326,7 @@ const ACTIVE_CONTEXT: Record<SparkLanguage, ActiveSparkContextStrings> = {
     myClaimedTodosHidden: (hidden) => `  - … 还有 ${hidden} 条活动 TODO`,
     hiddenSessionClaimed: (hidden) =>
       `- … 还有 ${hidden} 条已认领任务；用 task_read({ action: "project_status" }) 查看详情`,
-    projectsCountsLine: (total, active) => `- 项目：${total} 个 / ${active} 个活跃`,
+    projectsCountsLine: (total) => `- 项目：${total} 个`,
     durableStateHint:
       '- durable state 是权威；compact summary/历史记录只是线索。修改项目/任务/goal 前，先用 task_read({ action: "project_status" }) 或 task_read({ action: "workspace_status" }) 核对。',
     sparkMdHeader: "SPARK.md（intent 摘录）：",

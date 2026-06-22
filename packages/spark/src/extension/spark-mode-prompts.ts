@@ -71,7 +71,7 @@ export function renderSparkGoalModePrompt(
         SPARK_GOAL_DECISION_RULE,
       ]
     : [
-        'No current project is selected for goal driver execution. Inspect projects with task_read({ action: "workspace_status" }) or task_read({ action: "project_list" }), select the active project only when the inspected state identifies a single intended project, or stop and report when multiple active projects or scopes could be the intended goal.',
+        'No current project is selected for goal driver execution. Inspect projects with task_read({ action: "workspace_status" }) or task_read({ action: "project_list" }), select a current project only when the inspected state identifies a single intended project, or stop and report when multiple projects or scopes could be the intended goal.',
         "Do not claim project-bound work until a current project is selected.",
         ASK_BEFORE_GUESSING,
       ];

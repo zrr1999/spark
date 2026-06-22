@@ -2,7 +2,6 @@ import type {
   ArtifactRef,
   Project,
   ProjectRef,
-  ProjectStatus,
   RoleRef,
   RunRef,
   Task,
@@ -24,7 +23,6 @@ export interface CreateProjectInput {
   title: string;
   description: string;
   purpose?: string;
-  status?: ProjectStatus;
   outputLanguage?: "zh" | "en";
 }
 
@@ -52,8 +50,8 @@ export interface CreateTaskInput {
   inputArtifacts?: ArtifactRef[];
   plan?: TaskPlan;
   /**
-   * Seed durable TODOs for this task. TaskGraphStore intentionally keeps TODOs
-   * out of projects.json; persist them through TaskTodoStore.
+   * Legacy/import seed rows for task plan items. TaskGraphStore projects these
+   * rows into task.plan.items; TaskTodoStore remains migration/projection-only.
    */
   todos?: CreateTaskTodoInput[];
 }

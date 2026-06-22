@@ -285,7 +285,6 @@ interface ProjectIndexEntry {
   roadmapPath: string;
   dependenciesPath: string;
   tasksPath: string;
-  status: Project["status"];
   title: string;
   updatedAt: string;
   taskCount: number;
@@ -404,7 +403,6 @@ async function writeProjectTreeSnapshot(
         roadmapPath: join(relativeProjectDir, "roadmap.json"),
         dependenciesPath: join(relativeProjectDir, "dependencies.json"),
         tasksPath: join(relativeProjectDir, "tasks"),
-        status: project.status,
         title: project.title,
         updatedAt: project.updatedAt,
         taskCount: projectTasks.length,
