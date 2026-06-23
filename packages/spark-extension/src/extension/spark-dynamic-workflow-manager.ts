@@ -296,7 +296,7 @@ export class SparkDynamicWorkflowManager {
     await input.onLiveUpdate?.(next);
     const listeners = this.subscribers.get(input.run.ref);
     if (!listeners) return;
-    await Promise.all([...listeners].map((listener) => listener(next)));
+    await Promise.all([...listeners].map((listener) => Promise.resolve(listener(next))));
   }
 
   private async checkpoint(runRef: string): Promise<void> {

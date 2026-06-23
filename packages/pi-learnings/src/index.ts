@@ -13,7 +13,6 @@ import {
 import {
   type ArtifactRef,
   type JsonValue,
-  contentHash,
   isRef,
   newRef,
   nowIso,
