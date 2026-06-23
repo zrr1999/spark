@@ -1,5 +1,6 @@
 export {
   Box,
+  CombinedAutocompleteProvider,
   Container,
   Editor,
   Input,
@@ -14,6 +15,9 @@ export {
 } from "@earendil-works/pi-tui";
 export { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./text.ts";
 export type {
+  AutocompleteItem,
+  AutocompleteProvider,
+  AutocompleteSuggestions,
   Component,
   Focusable,
   OverlayHandle,
@@ -21,5 +25,6 @@ export type {
   SelectItem,
   SelectListLayoutOptions,
   SelectListTheme,
+  SlashCommand,
   TUI as TuiInstance,
 } from "@earendil-works/pi-tui";

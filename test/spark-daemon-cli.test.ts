@@ -338,7 +338,15 @@ void test("Spark TUI and headless print attach and release workspace clients", a
         daemonClient,
         createHostServices: async () =>
           ({
+            cwd: dir,
             runtime,
+            providerRegistry: { listProviders: () => [] },
+            modelSelector: {
+              getActive: () => undefined,
+              openPicker: async () => undefined,
+              select: async () => ({ providerName: "fake", modelId: "model" }),
+              getPickerState: () => ({ providers: [], items: [], active: undefined }),
+            },
             sessionStore: { list: async () => [] },
             keybindings: undefined,
           }) as never,
@@ -357,8 +365,14 @@ void test("Spark TUI and headless print attach and release workspace clients", a
     const slashCommands = (capturedTuiOptions as { slashCommands?: Record<string, unknown> })
       .slashCommands;
     assert.equal(Boolean(slashCommands?.plan), true, "runtime /plan command is wired");
+    assert.equal(Boolean(slashCommands?.model), true, "native /model command is wired");
     assert.equal(Boolean(slashCommands?.sessions), true, "host /sessions command is wired");
     assert.equal(Boolean(slashCommands?.status), true, "daemon /status command is preserved");
+    assert.equal(
+      (capturedTuiOptions as { autocompleteBasePath?: string }).autocompleteBasePath,
+      dir,
+      "native TUI receives cwd for pi-tui file/path autocomplete",
+    );
 
     assert.deepEqual(
       attaches.map((attach) => attach.kind),

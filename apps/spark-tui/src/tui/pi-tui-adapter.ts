@@ -1,4 +1,5 @@
 export {
+  CombinedAutocompleteProvider,
   Editor,
   Key,
   matchesKey,
@@ -10,10 +11,14 @@ export {
   wrapTextWithAnsi,
 } from "@zendev-lab/spark-tui/pi-tui";
 export type {
+  AutocompleteItem,
+  AutocompleteProvider,
+  AutocompleteSuggestions,
   Component,
   Focusable,
   OverlayOptions,
   SelectItem,
   SelectListLayoutOptions,
   SelectListTheme,
+  SlashCommand,
 } from "@zendev-lab/spark-tui/pi-tui";

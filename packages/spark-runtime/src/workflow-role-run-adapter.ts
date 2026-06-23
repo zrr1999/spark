@@ -132,8 +132,9 @@ export function createSparkWorkflowRoleRunAdapter(
         env: effectiveOptions.env,
         allowedTools: effectiveOptions.allowedTools,
       });
-      reportWorkflowAgentTelemetry(options, response);
-      return workflowAgentResult(response, Boolean(isolationPolicy));
+      const result = workflowAgentResult(response, Boolean(isolationPolicy));
+      reportWorkflowAgentTelemetry(options, response, graftRefsFromResult(result));
+      return result;
     }
     const request: SparkWorkflowRoleRunRequest = {
       roleRef: deps.roleRef,
@@ -158,8 +159,9 @@ export function createSparkWorkflowRoleRunAdapter(
       allowedTools: effectiveOptions.allowedTools,
     };
     const response = await deps.runRoleInstruction(request);
-    reportWorkflowAgentTelemetry(options, response);
-    return workflowAgentResult(response, Boolean(isolationPolicy));
+    const result = workflowAgentResult(response, Boolean(isolationPolicy));
+    reportWorkflowAgentTelemetry(options, response, graftRefsFromResult(result));
+    return result;
   };
 }
 
@@ -243,8 +245,22 @@ function appendGraftIsolationInstruction(lines: string[]): void {
 function reportWorkflowAgentTelemetry(
   options: { reportTelemetry?: (telemetry: WorkflowAgentReportedTelemetry) => void },
   response: SparkWorkflowRoleRunResponse,
+  graftRefs?: SparkWorkflowGraftRefs,
 ): void {
-  if (response.telemetry) options.reportTelemetry?.(response.telemetry);
+  const hasGraftRefs = Boolean(
+    graftRefs &&
+    (graftRefs.scratchRefs.length > 0 ||
+      graftRefs.candidateRefs.length > 0 ||
+      graftRefs.patchRefs.length > 0),
+  );
+  if (!response.telemetry && !hasGraftRefs) return;
+  options.reportTelemetry?.({
+    ...response.telemetry,
+    metadata: {
+      ...response.telemetry?.metadata,
+      ...(hasGraftRefs ? { graftRefs } : {}),
+    },
+  });
 }
 
 function workflowAgentResult(response: SparkWorkflowRoleRunResponse, isolated: boolean): unknown {
@@ -253,6 +269,17 @@ function workflowAgentResult(response: SparkWorkflowRoleRunResponse, isolated: b
   const result: SparkWorkflowGraftAgentResult = { text: response.text, graftRefs };
   if (response.structured !== undefined) result.structured = response.structured;
   return result;
+}
+
+function graftRefsFromResult(result: unknown): SparkWorkflowGraftRefs | undefined {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return undefined;
+  const graftRefs = (result as { graftRefs?: unknown }).graftRefs;
+  if (!graftRefs || typeof graftRefs !== "object" || Array.isArray(graftRefs)) return undefined;
+  return {
+    scratchRefs: stringArray((graftRefs as { scratchRefs?: unknown }).scratchRefs),
+    candidateRefs: stringArray((graftRefs as { candidateRefs?: unknown }).candidateRefs),
+    patchRefs: stringArray((graftRefs as { patchRefs?: unknown }).patchRefs),
+  };
 }
 
 function extractGraftRefs(response: SparkWorkflowRoleRunResponse): SparkWorkflowGraftRefs {
@@ -282,6 +309,12 @@ function collectRefs(value: unknown, refs: Set<string>): void {
   if (typeof value === "object") {
     for (const item of Object.values(value as Record<string, unknown>)) collectRefs(item, refs);
   }
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 function workflowEnvKeys(env: NodeJS.ProcessEnv | undefined): string[] | undefined {

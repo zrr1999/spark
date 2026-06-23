@@ -25,7 +25,7 @@ import {
 } from "./spark-dynamic-workflow-run-rendering.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
-type SparkWorkflowNavigatorAction =
+export type SparkWorkflowNavigatorAction =
   | "inspect"
   | "pause"
   | "resume"
@@ -224,7 +224,7 @@ function parseDynamicWorkflowNavigatorOption(
   return { dynamicAction: match[1] as SparkWorkflowNavigatorAction, runRef: match[2] as RunRef };
 }
 
-async function executeDynamicWorkflowNavigatorAction(
+export async function executeDynamicWorkflowNavigatorAction(
   ctx: SparkToolContext,
   deps: SparkModeEntryDeps,
   selection: { dynamicAction: SparkWorkflowNavigatorAction; runRef: RunRef },

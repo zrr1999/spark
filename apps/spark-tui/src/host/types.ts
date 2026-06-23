@@ -22,6 +22,13 @@ export interface RegisteredTool {
 
 export interface RegisteredCommand {
   description: string;
+  argumentHint?: string;
+  getArgumentCompletions?: (
+    prefix: string,
+  ) =>
+    | Array<{ value: string; label: string; description?: string }>
+    | null
+    | Promise<Array<{ value: string; label: string; description?: string }> | null>;
   handler: (
     args: string,
     ctx: ExtensionContext & {
@@ -29,7 +36,6 @@ export interface RegisteredCommand {
       sendUserMessage?: (content: string) => Promise<void>;
     },
   ) => void | Promise<void>;
-  getArgumentCompletions?: (prefix: string) => unknown;
 }
 
 export type BuiltinEventName =

@@ -6,7 +6,7 @@ import {
 } from "@zendev-lab/pi-loop";
 import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
 import { listBuiltinWorkflows } from "@zendev-lab/pi-workflows";
-import { nowIso, type ProjectRef } from "@zendev-lab/pi-extension-api";
+import { nowIso, type ProjectRef, type RunRef } from "@zendev-lab/pi-extension-api";
 import type { SparkEntryIntent, SparkEntryMode } from "./spark-entry.ts";
 import {
   applySparkEntryResolution,
@@ -50,7 +50,14 @@ import { renderSparkGoalDriverModePrompt } from "./spark-mode-prompts.ts";
 import {
   enterSparkUltracodeDriver,
   enterSparkWorkflowDriver,
+  executeDynamicWorkflowNavigatorAction,
+  type SparkWorkflowNavigatorAction,
 } from "./spark-workflow-driver-entry.ts";
+import { defaultSparkDynamicWorkflowEventStore } from "./spark-dynamic-workflow-event-store.ts";
+import {
+  buildSparkDynamicWorkflowDashboardView,
+  renderSparkDynamicWorkflowDashboardText,
+} from "./spark-dynamic-workflow-run-rendering.ts";
 
 type SparkProjectLike = ReturnType<TaskGraph["projects"]>[number];
 import type { ReviewerRunner } from "./reviewer-runner.ts";
@@ -70,6 +77,13 @@ export interface SparkCommandApi {
     name: string,
     config: {
       description: string;
+      argumentHint?: string;
+      getArgumentCompletions?: (
+        argumentPrefix: string,
+      ) =>
+        | Array<{ value: string; label: string; description?: string }>
+        | null
+        | Promise<Array<{ value: string; label: string; description?: string }> | null>;
       handler: (args: string, ctx: SparkCommandContext) => void | Promise<void>;
     },
   ): void;
@@ -266,6 +280,24 @@ export function registerSparkCommands(
     },
   });
 
+  pi.registerCommand("workflow-runs", {
+    description: "Show the live dynamic workflow run dashboard. Usage: /workflow-runs [runRef].",
+    argumentHint: "[runRef]",
+    async handler(args, ctx) {
+      await handleSparkDynamicWorkflowDashboardCommand(ctx, args.trim());
+    },
+  });
+
+  for (const action of ["inspect", "pause", "resume", "stop", "restart", "save", "ack"] as const) {
+    pi.registerCommand(`workflow-${action}`, {
+      description: `Dynamic workflow ${action}. Usage: /workflow-${action} <runRef>.`,
+      argumentHint: "<runRef>",
+      async handler(args, ctx) {
+        await handleSparkDynamicWorkflowActionCommand(ctx, action, args.trim());
+      },
+    });
+  }
+
   pi.registerCommand("ultracode", {
     description:
       "Opt into high-effort dynamic workflow generation and execution through workflow_run.",
@@ -284,6 +316,44 @@ export function registerSparkCommands(
         });
       },
     });
+  }
+
+  async function handleSparkDynamicWorkflowDashboardCommand(
+    ctx: SparkCommandContext,
+    args: string,
+  ): Promise<void> {
+    const store = defaultSparkDynamicWorkflowEventStore(ctx.cwd);
+    await store.reconcileStale();
+    const runRef = args ? parseDynamicWorkflowRunRefArg("workflow-runs", args) : undefined;
+    const runs = await store.listRuns();
+    const text = renderSparkDynamicWorkflowDashboardText(
+      buildSparkDynamicWorkflowDashboardView({
+        action: "dashboard",
+        runs,
+        includeHistory: true,
+        detailed: true,
+        targetRunRef: runRef,
+      }),
+    );
+    ctx.ui?.notify?.(text, "info");
+    await deps.refreshSparkWidget(ctx.cwd, ctx);
+  }
+
+  async function handleSparkDynamicWorkflowActionCommand(
+    ctx: SparkCommandContext,
+    action: SparkWorkflowNavigatorAction,
+    args: string,
+  ): Promise<void> {
+    const runRef = parseDynamicWorkflowRunRefArg(`workflow-${action}`, args);
+    await executeDynamicWorkflowNavigatorAction(ctx, deps, { dynamicAction: action, runRef });
+  }
+
+  function parseDynamicWorkflowRunRefArg(command: string, args: string): RunRef {
+    const runRef = args.trim().split(/\s+/u)[0] ?? "";
+    if (!/^run:[a-zA-Z0-9-]+$/u.test(runRef)) {
+      throw new Error(`/${command} requires a runRef like run:<id>`);
+    }
+    return runRef as RunRef;
   }
 
   function parseWorkflowCommandArgs(args: string): { selector?: string; focus: string } {

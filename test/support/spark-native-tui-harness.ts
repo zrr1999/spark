@@ -38,6 +38,8 @@ export interface SparkNativeTuiHarnessOptions {
   cols?: number;
   responder?: SparkNativeResponder;
   slashCommands?: SparkNativeSlashCommandMap;
+  autocompleteBasePath?: string;
+  autocompleteFdPath?: string | null;
   interactionHandler?: SparkNativeInteractionHandler;
   keybindings?: SparkKeybindings;
   withOverlay?: boolean;

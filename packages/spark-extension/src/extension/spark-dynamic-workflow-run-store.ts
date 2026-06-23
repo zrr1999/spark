@@ -25,6 +25,15 @@ import { userWorkflowDir, workspaceWorkflowDir } from "./spark-workflow-registry
 const execFileAsync = promisify(execFile);
 const DEFAULT_DYNAMIC_WORKFLOW_STALE_AFTER_MS = 30 * 60 * 1_000;
 
+/**
+ * Legacy v1 dynamic workflow snapshot store.
+ *
+ * Production dynamic workflow execution, dashboard/status rendering, and controls use the v2
+ * event-sourced store in spark-dynamic-workflow-event-store.ts. Keep this module for importing
+ * pre-existing .spark/dynamic-workflow-runs.json state, migration tests, and compatibility type
+ * definitions only.
+ */
+
 export type SparkDynamicWorkflowRunStatus =
   | "running"
   | "succeeded"
@@ -485,6 +494,7 @@ export function sparkDynamicWorkflowRunStorePath(cwd: string): string {
   return join(cwd, ".spark", "dynamic-workflow-runs.json");
 }
 
+/** Legacy v1 import helper. Prefer defaultSparkDynamicWorkflowEventStore for active code. */
 export function defaultSparkDynamicWorkflowRunStore(cwd: string): SparkDynamicWorkflowRunStore {
   return new SparkDynamicWorkflowRunStore(sparkDynamicWorkflowRunStorePath(cwd));
 }

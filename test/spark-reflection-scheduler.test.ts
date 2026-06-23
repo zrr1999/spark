@@ -178,6 +178,13 @@ class FakePi implements SparkCommandApi {
     name: string,
     config: {
       description: string;
+      argumentHint?: string;
+      getArgumentCompletions?: (
+        argumentPrefix: string,
+      ) =>
+        | Array<{ value: string; label: string; description?: string }>
+        | null
+        | Promise<Array<{ value: string; label: string; description?: string }> | null>;
       handler: (args: string, ctx: SparkCommandContext) => Promise<void> | void;
     },
   ): void {

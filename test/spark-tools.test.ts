@@ -8299,6 +8299,76 @@ void test("impl_workflow_runs renders and controls dynamic workflow_run records"
   }
 });
 
+void test("workflow run slash commands expose direct dashboard controls", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-workflow-run-slash-controls-"));
+  try {
+    const ctx = testSparkContext(dir, "main");
+    const { commands } = registerSparkToolsForTest();
+    const dynamicStore = defaultSparkDynamicWorkflowEventStore(dir);
+    const script =
+      "export const meta = { name: 'slash control', description: 'slash command workflow controls' }\nreturn 'ok'";
+    const run = await dynamicStore.start({
+      source: { kind: "inline", label: "slash control workflow" },
+      script,
+      meta: { name: "slash control", description: "slash command workflow controls" },
+      options: {},
+    });
+
+    const dashboard = commands.get("workflow-runs");
+    const inspect = commands.get("workflow-inspect");
+    const pause = commands.get("workflow-pause");
+    const resume = commands.get("workflow-resume");
+    const stop = commands.get("workflow-stop");
+    const restart = commands.get("workflow-restart");
+    const save = commands.get("workflow-save");
+    assert.ok(dashboard, "missing /workflow-runs");
+    assert.ok(inspect, "missing /workflow-inspect");
+    assert.ok(pause, "missing /workflow-pause");
+    assert.ok(resume, "missing /workflow-resume");
+    assert.ok(stop, "missing /workflow-stop");
+    assert.ok(restart, "missing /workflow-restart");
+    assert.ok(save, "missing /workflow-save");
+
+    await dashboard.handler(run.ref, ctx);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark dynamic workflow dashboard/);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", new RegExp(run.ref));
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Actions: inspect, pause, stop, save/);
+
+    await inspect.handler(run.ref, ctx);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Selected: run:/);
+
+    await pause.handler(run.ref, ctx);
+    assert.equal((await dynamicStore.get(run.ref))?.status, "paused");
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Control: pause .* -> paused/);
+
+    await resume.handler(run.ref, ctx);
+    assert.equal((await dynamicStore.get(run.ref))?.status, "running");
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Control: resume .* -> running/);
+
+    await stop.handler(run.ref, ctx);
+    assert.equal((await dynamicStore.get(run.ref))?.status, "stopped");
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Control: stop .* -> stopped/);
+
+    await restart.handler(run.ref, ctx);
+    assert.equal((await dynamicStore.get(run.ref))?.status, "running");
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Control: restart .* -> running/);
+
+    await save.handler(run.ref, ctx);
+    assert.match(
+      ctx.notifications.at(-1)?.message ?? "",
+      /Control: save .* -> workspace:slash-control/,
+    );
+    assert.match(
+      (await dynamicStore.get(run.ref))?.savedWorkflow?.selector ?? "",
+      /^workspace:slash-control/u,
+    );
+
+    await assert.rejects(async () => pause.handler("", ctx), /\/workflow-pause requires a runRef/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("impl_workflow_runs rejects invalid explicit control parameters", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-runs-invalid-params-"));
   try {

@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { SPARK_PROTOCOL_VERSION } from "../packages/spark-protocol/src/index.ts";
-import { SparkHostRuntime } from "../apps/spark-tui/src/host/runtime.ts";
+import {
+  SparkHostRuntime,
+  SparkModelSelector,
+  SparkProviderRegistry,
+  type ProviderConfig,
+  type ProviderModelDefinition,
+} from "../apps/spark-tui/src/host/index.ts";
 import { createSparkNativeRuntimeSlashCommands } from "../apps/spark-tui/src/native-tui.ts";
 import { createSparkNativeTuiHarness } from "./support/spark-native-tui-harness.ts";
 
@@ -53,15 +59,87 @@ void test("Spark native TUI editor path submits slash commands from real keystro
     notify: (message, level) => harness.session.addSystemMessage(`${level}:${message}`),
   });
 
-  await typeEditorText(harness, "/help");
-  await harness.press("\r");
+  await typeEditorText(harness, "/");
+  await harness.flush();
+  assert.equal(harness.app.isShowingAutocomplete(), true);
+  assert.match(harness.render(), /plan\s+Enter Spark plan mode for the current project/);
+  assert.match(harness.render(), /goal\s+Set or inspect the current Spark goal/);
+  harness.app.setEditorText("");
+
+  await submitEditorText(harness, "/help");
   assert.match(harness.render(), /\/plan — Enter Spark plan mode for the current project/);
   assert.match(harness.render(), /\/goal — Set or inspect the current Spark goal/);
 
-  await typeEditorText(harness, "/plan close slash gap");
-  await harness.press("\r");
+  await submitEditorText(harness, "/plan close slash gap");
   assert.deepEqual(invoked, [{ name: "plan", args: "close slash gap" }]);
   assert.match(harness.render(), /system> info:planned:close slash gap/);
+});
+
+void test("Spark native TUI routes /model through native slash command and model selector overlay", async () => {
+  const registry = new SparkProviderRegistry();
+  registry.registerProvider(
+    "fake",
+    fakeProvider("fake", [fakeModel("model-a"), fakeModel("model-b")]),
+  );
+  registry.setActive({ providerName: "fake", modelId: "model-a" });
+  const selector = new SparkModelSelector({
+    registry,
+    config: { extensions: [], providers: [] },
+    saveConfig: () => undefined,
+    picker: async (state) => {
+      assert.equal(state.active?.modelId, "model-a");
+      return { providerName: "fake", modelId: "model-b" };
+    },
+  });
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-native-model-command", hasUI: true });
+  host.registerCommand("model", {
+    description: "Switch or inspect the active Spark model",
+    argumentHint: "[provider/model|model-id]",
+    getArgumentCompletions: (prefix) =>
+      selector
+        .getPickerState()
+        .items.map((item) => ({
+          value: `${item.providerName}/${item.modelId}`,
+          label: `${item.providerName}/${item.modelId}${item.active ? " (active)" : ""}`,
+          description: item.description,
+        }))
+        .filter((item) => item.value.includes(prefix)),
+    async handler(args, ctx) {
+      const requested = args.trim();
+      const selection = requested
+        ? await selector.select(
+            requested.includes("/")
+              ? {
+                  providerName: requested.slice(0, requested.indexOf("/")),
+                  modelId: requested.slice(requested.indexOf("/") + 1),
+                }
+              : { providerName: "fake", modelId: requested },
+          )
+        : await selector.openPicker(ctx as Parameters<typeof selector.openPicker>[0]);
+      ctx.ui?.notify?.(`Model: ${selection?.providerName}/${selection?.modelId}`, "info");
+    },
+  });
+  const harness = createSparkNativeTuiHarness({
+    slashCommands: createSparkNativeRuntimeSlashCommands(host),
+  });
+  host.setUiTransport({
+    notify: (message, level) => harness.session.addSystemMessage(`${level}:${message}`),
+    custom: <T>() => ({ providerName: "fake", modelId: "model-b" }) as T,
+  });
+
+  await typeEditorText(harness, "/model ");
+  await harness.flush();
+  assert.equal(harness.app.isShowingAutocomplete(), true);
+  assert.match(harness.render(), /fake\/model-a/);
+  harness.app.setEditorText("");
+
+  await submitEditorText(harness, "/model");
+  assert.deepEqual(registry.getActive(), { providerName: "fake", modelId: "model-b" });
+  assert.match(harness.render(), /system> info:Model: fake\/model-b/);
+
+  await submitEditorText(harness, "/model fake/model-a");
+  assert.deepEqual(registry.getActive(), { providerName: "fake", modelId: "model-a" });
+  assert.doesNotMatch(harness.render(), /Unknown command: \/model/);
 });
 
 void test("Spark native runtime slash bridge preserves editor helpers and deterministic command errors", async () => {
@@ -94,17 +172,14 @@ void test("Spark native runtime slash bridge preserves editor helpers and determ
     setEditorText: (text) => harness.app.setEditorText(text),
   });
 
-  await typeEditorText(harness, "/implement task frontier");
-  await harness.press("\r");
+  await submitEditorText(harness, "/implement task frontier");
   assert.deepEqual(sent, ["implement:task frontier"]);
 
-  await typeEditorText(harness, "/prompt");
-  await harness.press("\r");
+  await submitEditorText(harness, "/prompt");
   assert.match(harness.render(), /\/plan /);
   harness.app.setEditorText("");
 
-  await typeEditorText(harness, "/explode");
-  await harness.press("\r");
+  await submitEditorText(harness, "/explode");
   assert.match(harness.render(), /Command \/explode failed: boom/);
 });
 
@@ -207,7 +282,7 @@ void test("Spark cockpit renders shared workflow, run, task, artifact, review, a
       runs: [
         {
           version: SPARK_PROTOCOL_VERSION,
-          id: "workflow:release-readiness",
+          id: "run:release-readiness",
           kind: "workflow",
           title: "Release readiness workflow",
           status: "running",
@@ -248,7 +323,7 @@ void test("Spark cockpit renders shared workflow, run, task, artifact, review, a
             { id: "map", content: "Map data surfaces", status: "done", notes: [] },
             { id: "render", content: "Render cockpit panels", status: "in_progress", notes: [] },
           ],
-          runRefs: ["workflow:release-readiness"],
+          runRefs: ["run:release-readiness"],
           artifactRefs: ["artifact:review-ok"],
           metadata: {},
         },
@@ -308,8 +383,12 @@ void test("Spark cockpit renders shared workflow, run, task, artifact, review, a
   assert.match(harness.render(), /role role:reviewer \[running\] 40% artifacts=1 Reviewer pass/);
   assert.match(
     harness.render(),
-    /workflow workflow:release-readiness \[running\] 50% Release readiness workflow/,
+    /workflow run:release-readiness \[running\] 50% Release readiness workflow/,
   );
+  assert.match(harness.render(), /Actions: \/workflow-inspect run:release-readiness/);
+  assert.match(harness.render(), /\/workflow-pause run:release-readiness/);
+  assert.match(harness.render(), /\/workflow-stop run:release-readiness/);
+  assert.match(harness.render(), /\/workflow-save run:release-readiness/);
 
   assert.equal(await harness.submit("/tasks"), "command");
   assert.match(
@@ -419,6 +498,38 @@ async function typeEditorText(
   text: string,
 ): Promise<void> {
   for (const char of text) await harness.press(char);
+}
+
+async function submitEditorText(
+  harness: ReturnType<typeof createSparkNativeTuiHarness>,
+  text: string,
+): Promise<void> {
+  harness.app.setEditorText(text);
+  await harness.press("\r");
+}
+
+const fakeStream: ProviderConfig["streamSimple"] = () => ({}) as unknown;
+
+function fakeModel(id: string): ProviderModelDefinition {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 4096,
+    maxTokens: 1024,
+  };
+}
+
+function fakeProvider(name: string, models: ProviderModelDefinition[]): ProviderConfig {
+  return {
+    name,
+    baseUrl: `https://${name}.test`,
+    api: "anthropic-messages",
+    streamSimple: fakeStream,
+    models,
+  };
 }
 
 const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\u001B\[[0-?]*[ -/]*[@-~]`, "gu");

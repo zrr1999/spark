@@ -19,10 +19,17 @@ import {
 } from "./native-tui.ts";
 import {
   createSparkCliHostServices,
+  formatSparkModelSelection,
   registerSparkSessionsCommand,
+  type SparkActiveSelection,
   type SparkCliHostServices,
   type SparkCliHostServicesOptions,
+  type SparkModelPickerState,
 } from "./host/index.ts";
+import {
+  createSparkModelPickerFromCustomUi,
+  type SparkModelSelectorCustomUi,
+} from "./tui/model-selector.ts";
 
 export interface SparkCliArgs {
   initialMessage?: string;
@@ -104,16 +111,27 @@ export async function runSparkCli(
       });
       try {
         const createHostServices = options.createHostServices ?? createSparkCliHostServices;
-        const services = await createHostServices({ hasUI: true });
+        let pendingNativeUiTransport: ReturnType<typeof createSparkNativeUiTransport> | undefined;
+        const services = await createHostServices({
+          hasUI: true,
+          modelPicker: (state, ctx) =>
+            pendingNativeUiTransport
+              ? createSparkModelPickerFromCustomUi(
+                  pendingNativeUiTransport as SparkModelSelectorCustomUi,
+                )(state, ctx)
+              : undefined,
+        });
         registerSparkSessionsCommand(services.runtime, {
           store: services.sessionStore,
           getNavigationState: () => undefined,
         });
+        registerSparkNativeModelCommand(services);
         const runTui = options.runTui ?? runNativeSparkTui;
         await runTui({
           initialMessage: command.initialMessage,
           responder: createSparkDaemonNativeResponder(daemonClient),
           slashCommands: createSparkNativeSlashCommands(services, daemonClient),
+          autocompleteBasePath: services.cwd,
           keybindings: services.keybindings,
           messageRenderers: new Map(
             services.runtime
@@ -121,7 +139,8 @@ export async function runSparkCli(
               .map(({ customType, renderer }) => [customType, renderer]),
           ),
           configureApp: async (app, session) => {
-            services.runtime.setUiTransport(createSparkNativeUiTransport(app, session));
+            pendingNativeUiTransport = createSparkNativeUiTransport(app, session);
+            services.runtime.setUiTransport(pendingNativeUiTransport);
             await services.runtime.emit("session_start", { source: "native-tui" });
           },
         });
@@ -150,10 +169,89 @@ const NATIVE_SLASH_COMMAND_EXCLUSIONS = [
   "quit",
 ] as const;
 
+function registerSparkNativeModelCommand(services: SparkCliHostServices): void {
+  if (services.runtime.getCommand("model")) return;
+  services.runtime.registerCommand("model", {
+    description: "Switch or inspect the active Spark model",
+    argumentHint: "[provider/model|model-id]",
+    getArgumentCompletions: (prefix) => modelArgumentCompletions(services, prefix),
+    async handler(args, ctx) {
+      const selection = await handleSparkNativeModelCommand(services, args);
+      ctx.ui?.notify?.(formatSparkModelSelection(selection), "info");
+    },
+  });
+}
+
+async function handleSparkNativeModelCommand(
+  services: SparkCliHostServices,
+  args: string,
+): Promise<SparkActiveSelection> {
+  const query = args.trim();
+  if (query) return await services.modelSelector.select(resolveSparkModelArgument(services, query));
+  const picked = await services.modelSelector.openPicker({ hasUI: true });
+  const active = picked ?? services.modelSelector.getActive();
+  if (!active) throw new Error("No Spark provider/model is registered yet.");
+  return active;
+}
+
+function resolveSparkModelArgument(
+  services: SparkCliHostServices,
+  query: string,
+): SparkActiveSelection {
+  const slash = query.indexOf("/");
+  if (slash > 0) {
+    return { providerName: query.slice(0, slash), modelId: query.slice(slash + 1) };
+  }
+  const active = services.modelSelector.getActive();
+  if (
+    active &&
+    services.providerRegistry.listModelsFor(active.providerName).some((model) => model.id === query)
+  ) {
+    return { providerName: active.providerName, modelId: query };
+  }
+  const matches = services.providerRegistry
+    .listProviders()
+    .filter((provider) => provider.models.some((model) => model.id === query));
+  if (matches.length === 1) return { providerName: matches[0]!.name, modelId: query };
+  if (matches.length > 1) throw new Error(`Ambiguous model id "${query}"; use provider/model.`);
+  throw new Error(`Unknown Spark model: ${query}`);
+}
+
+function modelArgumentCompletions(
+  services: SparkCliHostServices,
+  prefix: string,
+): Array<{ value: string; label: string; description?: string }> {
+  const normalized = prefix.trim().toLowerCase();
+  return modelCompletionItems(services.modelSelector.getPickerState())
+    .filter((item) =>
+      [item.value, item.label, item.description ?? ""].some((text) =>
+        text.toLowerCase().includes(normalized),
+      ),
+    )
+    .slice(0, 25);
+}
+
+function modelCompletionItems(
+  state: SparkModelPickerState,
+): Array<{ value: string; label: string; description?: string }> {
+  return state.items.flatMap((item) => {
+    const full = `${item.providerName}/${item.modelId}`;
+    const label = `${full}${item.active ? " (active)" : ""}`;
+    const entries = [{ value: full, label, description: item.description }];
+    const duplicateId = state.items.some(
+      (other) => other !== item && other.modelId === item.modelId,
+    );
+    if (!duplicateId)
+      entries.push({ value: item.modelId, label: item.modelLabel, description: full });
+    return entries;
+  });
+}
+
 function createSparkNativeSlashCommands(
   services: SparkCliHostServices,
   daemonClient: SparkDaemonClientOptions,
 ): SparkNativeSlashCommandMap {
+  registerSparkNativeModelCommand(services);
   const daemonCommands = createSparkDaemonNativeCommands(daemonClient);
   const commandSessionId = `spark-native-command-${Date.now().toString(36)}`;
   const runtimeCommands = createSparkNativeRuntimeSlashCommands(services.runtime, {

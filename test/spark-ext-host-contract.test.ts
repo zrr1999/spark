@@ -85,6 +85,8 @@ class PiExtensionApiAdapter implements ExtensionAPI {
     const registeredName = this.nextCommandName(name);
     this.commands.set(registeredName, {
       description: config.description,
+      argumentHint: config.argumentHint,
+      getArgumentCompletions: config.getArgumentCompletions,
       handler: config.handler as RegisteredCommand["handler"],
     });
   }

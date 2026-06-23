@@ -54,6 +54,13 @@ export interface ExtensionAPI {
 
 export interface CommandConfig {
   description: string;
+  argumentHint?: string;
+  getArgumentCompletions?: (
+    argumentPrefix: string,
+  ) =>
+    | Array<{ value: string; label: string; description?: string }>
+    | null
+    | Promise<Array<{ value: string; label: string; description?: string }> | null>;
   handler: (args: string, ctx: ExtensionCommandContext) => void | Promise<void>;
 }
 

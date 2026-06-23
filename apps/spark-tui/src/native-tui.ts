@@ -1,4 +1,5 @@
 import {
+  CombinedAutocompleteProvider,
   Editor,
   Key,
   matchesKey,
@@ -11,6 +12,7 @@ import {
   type Focusable,
   type OverlayOptions,
   type SelectListTheme,
+  type SlashCommand,
 } from "./tui/pi-tui-adapter.ts";
 import {
   SPARK_PROTOCOL_VERSION,
@@ -117,6 +119,13 @@ export type SparkNativeSlashCommandHandler = (
 
 export interface SparkNativeSlashCommand {
   description: string;
+  argumentHint?: string;
+  getArgumentCompletions?: (
+    argumentPrefix: string,
+  ) =>
+    | Array<{ value: string; label: string; description?: string }>
+    | null
+    | Promise<Array<{ value: string; label: string; description?: string }> | null>;
   handler: SparkNativeSlashCommandHandler;
 }
 
@@ -125,7 +134,10 @@ export type SparkNativeSlashCommandMap = Record<string, SparkNativeSlashCommand>
 export interface SparkNativeRuntimeCommandHost {
   listCommands(): Array<{
     name: string;
-    command: Pick<RegisteredCommand, "description" | "handler">;
+    command: Pick<
+      RegisteredCommand,
+      "description" | "argumentHint" | "getArgumentCompletions" | "handler"
+    >;
   }>;
   makeContext(
     extra?: Partial<ExtensionCommandContext> & { setEditorText?: (text: string) => void },
@@ -570,6 +582,28 @@ function graftSummaryFromRecord(record: Record<string, unknown>): string | undef
     .join(" ");
 }
 
+function workflowRunControlHints(run: SparkRunView): string[] {
+  if (!/^run:[a-zA-Z0-9-]+$/u.test(run.id)) {
+    return ["Actions: /workflow-runs to open the live dynamic workflow dashboard"];
+  }
+  const inspect = `/workflow-inspect ${run.id}`;
+  const save = `/workflow-save ${run.id}`;
+  if (run.status === "running" || run.status === "queued") {
+    return [
+      `Actions: ${inspect}`,
+      `         /workflow-pause ${run.id}`,
+      `         /workflow-stop ${run.id}`,
+      `         ${save}`,
+    ];
+  }
+  return [
+    `Actions: ${inspect}`,
+    `         /workflow-restart ${run.id}`,
+    `         ${save}`,
+    `         /workflow-ack ${run.id}`,
+  ];
+}
+
 function compareRunsForCockpit(left: SparkRunView, right: SparkRunView): number {
   const rank = (run: SparkRunView): number => {
     if (run.kind === "role") return 0;
@@ -601,6 +635,8 @@ export function createSparkNativeRuntimeSlashCommands(
     if (!normalizedName || excluded.has(normalizedName)) continue;
     commands[normalizedName] = {
       description: command.description,
+      argumentHint: command.argumentHint,
+      getArgumentCompletions: command.getArgumentCompletions,
       handler: async (args, context) => {
         const commandContext = runtime.makeContext({
           waitForIdle: options.waitForIdle ?? (async () => undefined),
@@ -621,19 +657,53 @@ function toIterable<T>(value: Iterable<T> | undefined): Iterable<T> {
   return value ?? [];
 }
 
-function normalizeNativeWidgetLines(key: string, content: unknown): string[] {
+function normalizeNativeWidgetLines(key: string, content: unknown, tui: TUI): string[] {
   if (content === undefined || content === null || content === false) return [];
-  const rawLines = Array.isArray(content)
-    ? content.flatMap((line) => String(line).split("\n"))
-    : typeof content === "string"
-      ? content.split("\n")
-      : typeof content === "function"
-        ? [`widget:${key} component factory is not supported by native spark-tui yet`]
-        : [JSON.stringify(content) ?? Object.prototype.toString.call(content)];
+  const rawLines = nativeWidgetContentToLines(key, content, tui);
   return rawLines
     .map((line) => line.trimEnd())
     .filter(Boolean)
     .slice(0, MAX_NATIVE_WIDGET_LINES);
+}
+
+function nativeWidgetContentToLines(_key: string, content: unknown, tui: TUI): string[] {
+  if (Array.isArray(content)) return content.flatMap((line) => String(line).split("\n"));
+  if (typeof content === "string") return content.split("\n");
+  if (typeof content === "function")
+    return renderNativeWidgetFactory(content as NativeWidgetFactory, tui);
+  return [JSON.stringify(content) ?? Object.prototype.toString.call(content)];
+}
+
+type NativeWidgetFactory = (
+  tui: { terminal: { columns: number }; requestRender(): void },
+  theme: SparkHostRenderTheme,
+) => Component | { render(width?: number): string[]; invalidate?(): void } | undefined;
+
+function renderNativeWidgetFactory(content: NativeWidgetFactory, tui: TUI): string[] {
+  try {
+    const component = content(createNativeWidgetTui(tui), plainRenderTheme);
+    if (!component || typeof component.render !== "function") return [];
+    const width = Math.max(1, widgetTuiColumns(tui));
+    return component.render(width).flatMap((line) => String(line).split("\n"));
+  } catch (error) {
+    return [`widget render failed: ${error instanceof Error ? error.message : String(error)}`];
+  }
+}
+
+function createNativeWidgetTui(tui: TUI): { terminal: { columns: number }; requestRender(): void } {
+  return {
+    terminal: {
+      get columns() {
+        return widgetTuiColumns(tui);
+      },
+    },
+    requestRender: () => tui.requestRender(),
+  };
+}
+
+function widgetTuiColumns(tui: TUI): number {
+  const terminal = (tui as { terminal?: { columns?: number; cols?: number } }).terminal;
+  return terminal?.columns ?? terminal?.cols ?? 80;
 }
 
 export interface SparkNativeTuiAppOptions {
@@ -641,6 +711,8 @@ export interface SparkNativeTuiAppOptions {
   keybindingContext?: SparkKeybindingContext;
   messageRenderers?: ReadonlyMap<string, SparkHostMessageRenderer>;
   slashCommands?: SparkNativeSlashCommandMap;
+  autocompleteBasePath?: string;
+  autocompleteFdPath?: string | null;
   interactionHandler?: SparkNativeInteractionHandler;
 }
 
@@ -680,6 +752,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
     this.interactionHandler = options.interactionHandler;
     this.registerToggleKeybindings(options.keybindings);
     this.editor = new Editor(tui, createEditorTheme(), { paddingX: 1 });
+    this.installAutocompleteProvider(options);
     this.editor.onSubmit = (text) => {
       const expandedText = text;
       this.editor.addToHistory(expandedText);
@@ -707,6 +780,10 @@ export class SparkNativeTuiApp implements Component, Focusable {
     this.editor.setText(text);
     this.invalidate();
     this.tui.requestRender();
+  }
+
+  isShowingAutocomplete(): boolean {
+    return this.editor.isShowingAutocomplete();
   }
 
   async submitInput(input: string): Promise<"started" | "queued" | "ignored" | "command"> {
@@ -754,7 +831,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
     options?: { placement?: "aboveEditor" | "belowEditor" },
   ): void {
     if (!key) return;
-    const lines = normalizeNativeWidgetLines(key, content);
+    const lines = normalizeNativeWidgetLines(key, content, this.tui);
     if (lines.length === 0) this.widgets.delete(key);
     else {
       this.widgets.set(key, {
@@ -984,6 +1061,59 @@ export class SparkNativeTuiApp implements Component, Focusable {
     return true;
   }
 
+  private installAutocompleteProvider(options: SparkNativeTuiAppOptions): void {
+    this.editor.setAutocompleteProvider(
+      new CombinedAutocompleteProvider(
+        this.autocompleteSlashCommands(),
+        options.autocompleteBasePath ?? process.cwd(),
+        options.autocompleteFdPath ?? null,
+      ),
+    );
+  }
+
+  private autocompleteSlashCommands(): SlashCommand[] {
+    const registered = Object.entries(this.slashCommands)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, command]) => ({
+        name,
+        description: command.description,
+        argumentHint: command.argumentHint,
+        getArgumentCompletions: command.getArgumentCompletions,
+      }));
+    return [...registered, ...this.builtInAutocompleteCommands()];
+  }
+
+  private builtInAutocompleteCommands(): SlashCommand[] {
+    return [
+      { name: "help", description: "show native TUI commands" },
+      { name: "clear", description: "clear the visible transcript" },
+      {
+        name: "stop",
+        description: "stop the current Spark turn and clear queued follow-ups",
+        argumentHint: "[reason]",
+      },
+      { name: "retry", description: "resubmit the previous user prompt" },
+      {
+        name: "cockpit",
+        description: "show Spark cockpit panels",
+        argumentHint: "[overview|workflows|runs|tasks|artifacts|reviews|graft|off]",
+        getArgumentCompletions: (prefix) =>
+          ["overview", "workflows", "runs", "tasks", "artifacts", "reviews", "graft", "off"]
+            .filter((value) => value.startsWith(prefix.toLowerCase()))
+            .map((value) => ({ value, label: value })),
+      },
+      { name: "workflows", description: "open the workflow cockpit panel" },
+      { name: "runs", description: "open the run cockpit panel" },
+      { name: "tasks", description: "open the task cockpit panel" },
+      { name: "artifacts", description: "open the artifact/evidence cockpit panel" },
+      { name: "evidence", description: "open the artifact/evidence cockpit panel" },
+      { name: "reviews", description: "open the reviewer verdict cockpit panel" },
+      { name: "graft", description: "open the Graft provenance cockpit panel" },
+      { name: "exit", description: "exit the native TUI" },
+      { name: "quit", description: "exit the native TUI" },
+    ];
+  }
+
   private registerToggleKeybindings(keybindings: SparkKeybindings | undefined): void {
     if (!keybindings) return;
     keybindings.register({
@@ -1141,7 +1271,11 @@ export class SparkNativeTuiApp implements Component, Focusable {
   }
 
   private renderWorkflowCockpit(): string[] {
-    const lines = ["◆ Spark cockpit: workflows"];
+    const lines = [
+      "◆ Spark cockpit: workflows",
+      "│  Actions: /workflow-runs [runRef] · /workflow-inspect <runRef>",
+      "│           /workflow-pause|resume|stop|restart|save|ack <runRef>",
+    ];
     const interactions = [...this.cockpit.interactions.values()].filter(
       (request) => request.kind === "workflowPicker",
     );
@@ -1160,14 +1294,19 @@ export class SparkNativeTuiApp implements Component, Focusable {
       lines.push(
         `├─ workflow run ${run.id} [${run.status}] ${run.title ?? run.summary ?? ""}`.trimEnd(),
       );
+      for (const hint of workflowRunControlHints(run)) lines.push(`│  ${hint}`);
     }
-    if (lines.length === 1)
+    if (lines.length === 3)
       lines.push("└─ No workflow picker options or workflow runs have been published yet.");
     return lines;
   }
 
   private renderRunCockpit(): string[] {
-    const lines = ["◆ Spark cockpit: role/run board"];
+    const lines = [
+      "◆ Spark cockpit: role/run board",
+      "│  Workflow controls: /workflow-runs [runRef] · /workflow-inspect <runRef>",
+      "│                     /workflow-pause|resume|stop|restart|save|ack <runRef>",
+    ];
     const runs = [...this.cockpit.runs.values()].sort(compareRunsForCockpit);
     for (const run of runs.slice(0, MAX_COCKPIT_PANEL_ROWS)) {
       const progress = run.progress === undefined ? "" : ` ${(run.progress * 100).toFixed(0)}%`;
@@ -1175,8 +1314,11 @@ export class SparkNativeTuiApp implements Component, Focusable {
       lines.push(
         `├─ ${run.kind} ${run.id} [${run.status}]${progress}${artifacts} ${run.title ?? run.summary ?? ""}`.trimEnd(),
       );
+      if (run.kind === "workflow") {
+        for (const hint of workflowRunControlHints(run)) lines.push(`│  ${hint}`);
+      }
     }
-    if (lines.length === 1) lines.push("└─ No run view-model updates have been published yet.");
+    if (lines.length === 3) lines.push("└─ No run view-model updates have been published yet.");
     return lines;
   }
 
@@ -1478,6 +1620,8 @@ export interface RunNativeSparkTuiOptions {
   initialMessage?: string;
   responder?: SparkNativeResponder;
   slashCommands?: SparkNativeSlashCommandMap;
+  autocompleteBasePath?: string;
+  autocompleteFdPath?: string | null;
   interactionHandler?: SparkNativeInteractionHandler;
   keybindings?: SparkKeybindings;
   keybindingContext?: SparkKeybindingContext;
@@ -1499,6 +1643,8 @@ export async function runNativeSparkTui(input?: string | RunNativeSparkTuiOption
 
   const app = new SparkNativeTuiApp(tui, session, stop, {
     slashCommands: options.slashCommands,
+    autocompleteBasePath: options.autocompleteBasePath,
+    autocompleteFdPath: options.autocompleteFdPath,
     interactionHandler: options.interactionHandler,
     keybindings: options.keybindings,
     keybindingContext: options.keybindingContext,

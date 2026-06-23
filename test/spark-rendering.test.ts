@@ -344,16 +344,25 @@ void test("SparkHostRuntime custom messages reach native registered message rend
   );
 });
 
-void test("SparkNativeTuiApp uses a bounded fallback for component widget factories", () => {
+void test("SparkNativeTuiApp renders component widget factories natively", () => {
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
 
-  app.setWidget("spark-status", () => undefined, { placement: "aboveEditor" });
-
-  assert.match(
-    app.render(100).join("\n"),
-    /widget:spark-status component factory is not supported by native spark-tui yet/,
+  app.setWidget(
+    "spark-status",
+    (
+      tui: { terminal: { columns: number } },
+      theme: { fg(color: string, text: string): string },
+    ) => ({
+      render: () => [theme.fg("accent", `◆ Spark status width=${tui.terminal.columns}`)],
+      invalidate: () => undefined,
+    }),
+    { placement: "aboveEditor" },
   );
+
+  const rendered = app.render(100).join("\n");
+  assert.match(rendered, /◆ Spark status width=100/);
+  assert.doesNotMatch(rendered, /component factory is not supported/);
 });
 
 void test("SparkNativeTuiApp dispatches app keybindings before editor input", async () => {

@@ -462,6 +462,8 @@ export class SparkHostRuntime implements ExtensionAPI {
     }
     return {
       description: config.description,
+      argumentHint: config.argumentHint,
+      getArgumentCompletions: config.getArgumentCompletions,
       handler: config.handler as RegisteredCommand["handler"],
     };
   }

@@ -327,8 +327,13 @@ function workflowNodeDepth(view: SparkDynamicWorkflowEventRunView, nodeId: strin
 function dashboardNodeDetail(
   node: SparkDynamicWorkflowEventRunView["snapshot"]["nodes"][number],
 ): string | undefined {
-  if (node.phase && node.phase !== node.label) return `phase=${node.phase}`;
   if (node.errorMessage) return compact(node.errorMessage, 80);
+  const graft = formatGraftProvenance(
+    extractGraftRefsFromUnknown(node.result, node.telemetry?.metadata, node.data),
+    node.phase && node.phase !== node.label ? `phase=${node.phase}` : undefined,
+  );
+  if (graft) return graft;
+  if (node.phase && node.phase !== node.label) return `phase=${node.phase}`;
   if (node.result !== undefined) return `result=${compact(formatUnknown(node.result), 80)}`;
   return undefined;
 }
@@ -545,6 +550,8 @@ function formatAgentTelemetry(
   if (item.tokensPerSecond !== undefined)
     parts.push(`rate=${item.tokensPerSecond.toFixed(2)} tok/s`);
   if (item.runRef) parts.push(`run=${item.runRef}`);
+  const graft = formatGraftProvenance(extractGraftRefsFromUnknown(item.metadata));
+  if (graft) parts.push(graft);
   if (item.lastActivityAt) parts.push(`last=${item.lastActivityAt}`);
   return parts.join(" ");
 }
@@ -615,7 +622,67 @@ function dynamicWorkflowNextAction(run: SparkDynamicWorkflowRunRecord): string {
 
 function formatJournalResult(value: unknown): string {
   if (value === undefined) return "";
-  return ` result=${compact(formatUnknown(value), 120)}`;
+  const graft = formatGraftProvenance(extractGraftRefsFromUnknown(value));
+  const result = ` result=${compact(formatUnknown(value), 120)}`;
+  return graft ? `${result} ${graft}` : result;
+}
+
+interface SparkDynamicWorkflowGraftRefsView {
+  scratchRefs: string[];
+  candidateRefs: string[];
+  patchRefs: string[];
+}
+
+function extractGraftRefsFromUnknown(...values: unknown[]): SparkDynamicWorkflowGraftRefsView {
+  const refs = new Set<string>();
+  for (const value of values) collectGraftRefs(value, refs);
+  return {
+    scratchRefs: [...refs].filter((ref) => ref.startsWith("scratch:")),
+    candidateRefs: [...refs].filter((ref) => ref.startsWith("candidate:")),
+    patchRefs: [...refs].filter((ref) => ref.startsWith("patch:")),
+  };
+}
+
+function collectGraftRefs(value: unknown, refs: Set<string>): void {
+  if (value === undefined || value === null) return;
+  if (typeof value === "string") {
+    for (const match of value.matchAll(/\b(?:scratch|candidate|patch):[A-Za-z0-9._-]+\b/gu)) {
+      refs.add(match[0]!);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectGraftRefs(item, refs);
+    return;
+  }
+  if (typeof value === "object") {
+    for (const item of Object.values(value as Record<string, unknown>))
+      collectGraftRefs(item, refs);
+  }
+}
+
+function formatGraftProvenance(
+  refs: SparkDynamicWorkflowGraftRefsView,
+  prefix?: string,
+): string | undefined {
+  if (
+    refs.scratchRefs.length === 0 &&
+    refs.candidateRefs.length === 0 &&
+    refs.patchRefs.length === 0
+  )
+    return prefix;
+  const status =
+    refs.patchRefs.length > 0
+      ? "admitted"
+      : refs.candidateRefs.length > 0
+        ? "candidate"
+        : "scratch";
+  const parts = [prefix, `Graft: status=${status}`].filter((part): part is string => Boolean(part));
+  if (refs.scratchRefs.length > 0) parts.push(`scratch=${formatInlineRefs(refs.scratchRefs)}`);
+  if (refs.candidateRefs.length > 0)
+    parts.push(`candidate=${formatInlineRefs(refs.candidateRefs)}`);
+  if (refs.patchRefs.length > 0) parts.push(`patch=${formatInlineRefs(refs.patchRefs)}`);
+  return parts.join(" · ");
 }
 
 function formatUnknown(value: unknown): string {

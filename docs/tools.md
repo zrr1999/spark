@@ -24,7 +24,7 @@ Tools:
 - `context` — canonical registered context-provider tool. Use `action: "list"` or `action: "preview"` with optional `providerIds`/`budgetChars`; content must come from registered providers such as `spark.active`, not arbitrary prompt text.
 - `recall` — canonical controlled recall-candidate tool. Use explicit `scope: "user" | "workspace" | "repo"` with `record_candidate`, `list`, `search`, and `reject`; recall candidates are not `.learnings/` and are not automatic memory.
 - `workflow` — canonical builtin/saved-script workflow discovery/preview tool. Use `action: "list"` or `action: "read"` with `builtin:<id>` / `workspace:<id>` / `user:<id>` selectors; inline workflows and arbitrary paths are rejected. Execution remains through `/workflow[:selector]` host runtime policy, with builtin registry metadata such as `research` mode applied by Spark command routing.
-- `workflow_run` — Spark-owned dynamic workflow execution tool. Use it only for explicit workflow/fan-out/ultracode requests, with either a saved selector, a generated metadata-first JavaScript script, or `runRef` to resume a persisted dynamic run. It routes `agent()` calls through Spark workflow role-run boundaries, stores script hash/body, args, metadata, phases, journal, result/error, base metadata, and required approval provenance in `.spark/dynamic-workflow-runs.json`, and keeps workflow output standalone unless the user explicitly asks to attach it to project/task state. Runs with significant fan-out, web/fetch use, write/isolation/shell tool policy, high token bounds, or long timeouts must be approved through a scoped user/reviewer gate before any child agents run; the approval summary includes script hash, resource bounds, tools, isolation, and Graft base metadata. `agent(..., { isolation: "graft" })` injects the stored base as `GRAFT_BASE_REF`, narrows child tools to Graft scratch/candidate/validation operations, and asks the child to return scratch/candidate/patch refs; env base alone does not isolate direct working-tree writes.
+- `workflow_run` — Spark-owned dynamic workflow execution tool. Use it only for explicit workflow/fan-out/ultracode requests, with either a saved selector, a generated metadata-first JavaScript script, or `runRef` to resume/control a persisted dynamic run. By default it starts a manager-owned background run and returns a live `runRef`; pass `wait: true` only for explicit foreground compatibility. It routes `agent()` calls through Spark workflow role-run boundaries, stores script hash/body, args, metadata, append-only events, projected snapshots, result/error, base metadata, and required approval provenance in the v2 event store under `.spark/dynamic-workflows/runs/<run-id>/`, and keeps workflow output standalone unless the user explicitly asks to attach it to project/task state. `.spark/dynamic-workflow-runs.json` is legacy-import-only and exists only to migrate old v1 dynamic runs. Runs with significant fan-out, web/fetch use, write/isolation/shell tool policy, high token bounds, or long timeouts must be approved through a scoped user/reviewer gate before any child agents run; the approval summary includes script hash, resource bounds, tools, isolation, and Graft base metadata. `agent(..., { isolation: "graft" })` injects the stored base as `GRAFT_BASE_REF`, narrows child tools to Graft scratch/candidate/validation operations, and surfaces returned scratch/candidate/patch refs in agent telemetry/dashboard provenance; env base alone does not isolate direct working-tree writes.
 - `role` — canonical role action tool. Use `action: "list" | "get" | "create" | "call" | "model_list" | "model_get" | "model_set" | "model_delete"`; Spark task execution should prefer `assign({ dryRun: true })` so task claims, run records, and evidence attribution stay coherent.
 - `pi-cue` tools (`cue_exec`, `cue_run`, `cue_script`, `script_run`, `script_eval`, `cue_jobs`, `cue_resources`, `cue_schedule`, `cue_scope`, `cue_history`) — cue-shell execution and job/scope/history management.
 - `pi-graft` tools (`graft_read`, `graft_write`, `graft_edit`, `graft_delete`, `graft_candidate_from_scratch`, `graft_validate`, `graft_admit`, `graft_show`, `graft_evidence`, `graft_candidates`, `graft_search`, `graft_materialize`, `graft_repo`, ...) — explicit Graft scratch/candidate/patch workflows. Patcher-style child runs are provided by explicit extension roles rather than a hidden public patch tool.
@@ -140,18 +140,20 @@ Automatic behavior:
      failed delivery is recorded as a failed attempt and does not synthesize a
      `replied` success transition.
    - the same `run_status` surface renders persisted dynamic `workflow_run`
-     records from `.spark/dynamic-workflow-runs.json` with phase summaries,
-     agent journal tail metadata/result snippets, per-agent telemetry, child
-     run refs, actual/estimated token totals, optional cost, liveness/rate
-     signals, completed results, base metadata, approval provenance, errors, saved-workflow selectors,
-     acknowledged state, and next actions. Dynamic workflow controls are deterministic state
-     transitions: `pause`, `resume`, `stop`, `restart`, `save`, and `ack`
-     require a dynamic runRef; restart resets phases/journal and instructs
-     callers to execute with `workflow_run({ runRef })`, save writes the script
-     to a controlled workflow file (`.spark/workflows/<id>.js` by default, or
-     `~/.agents/workflows/<id>.js` with `workflowScope: "user"`), choosing a
-     numeric suffix instead of silently overwriting an existing workflow, and ack hides
-     delivered terminal dynamic runs from compact default status.
+     records from the v2 event store under `.spark/dynamic-workflows/runs/<run-id>/` with
+     phase/fan-out/helper/nested trees, event tails, agent journal metadata/result snippets,
+     per-agent telemetry, child run refs, actual/estimated token totals, optional cost,
+     liveness/rate signals, completed results/errors, background result inbox entries,
+     base metadata, approval provenance, Graft scratch/candidate/patch provenance,
+     saved-workflow selectors, acknowledged state, and next actions. Dynamic workflow
+     controls are deterministic manager-backed state transitions: `pause`, `resume`, `stop`,
+     `restart`, `save`, and `ack` require a dynamic runRef; restart aborts the active
+     generation and starts a fresh remembered run, save writes the script to a controlled
+     workflow file (`.spark/workflows/<id>.js` by default, or `~/.agents/workflows/<id>.js`
+     with `workflowScope: "user"`), choosing a numeric suffix instead of silently overwriting
+     an existing workflow, and ack hides delivered terminal dynamic runs from compact default
+     status. `.spark/dynamic-workflow-runs.json` is retained as legacy-import-only data for
+     migration of existing v1 dynamic records.
    - stale task-claim recovery is explicit and evidence-gated. `task_write({
      action: "recover", task: "@name" })` releases a recoverable other-session
      claim, records a recovery artifact, and leaves the task pending/unclaimed

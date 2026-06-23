@@ -30,10 +30,17 @@ import {
   registerSparkWorkflowRunTool,
   workflowAgentTelemetryFromRoleRun,
 } from "../packages/spark-extension/src/extension/spark-workflow-run-tool-registration.ts";
-import { defaultSparkDynamicWorkflowEventStore } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-event-store.ts";
+import {
+  defaultSparkDynamicWorkflowEventStore,
+  type SparkDynamicWorkflowEventInput,
+} from "../packages/spark-extension/src/extension/spark-dynamic-workflow-event-store.ts";
 import { defaultSparkDynamicWorkflowManager } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-manager.ts";
 import { defaultSparkDynamicWorkflowRunStore } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-run-store.ts";
-import { formatSparkDynamicWorkflowRunLine } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-run-rendering.ts";
+import {
+  buildSparkDynamicWorkflowDashboardView,
+  formatSparkDynamicWorkflowRunLine,
+  renderSparkDynamicWorkflowDashboardText,
+} from "../packages/spark-extension/src/extension/spark-dynamic-workflow-run-rendering.ts";
 
 void test("pi-workflows package stays isolated from runtime execution packages", async () => {
   const pkg = JSON.parse(await readFile("packages/pi-workflows/package.json", "utf8")) as {
@@ -424,6 +431,90 @@ return { web, values }`;
     "parallel:0:item:0",
     "parallel:0:item:1",
   ]);
+  assert.equal(snapshot.nodesById["parallel:0"]?.parentId, "phase:Plan");
+  assert.equal(snapshot.nodesById["agent:0"]?.parentId, "parallel:0:item:0");
+  assert.equal(snapshot.nodesById["tool:1"]?.parentId, "parallel:0:item:1");
+});
+
+void test("pi-workflows projects zero-agent parallel helper work into dashboard tree", async () => {
+  const script = `export const meta = { name: 'zero agent fanout', description: 'zero agent fanout workflow' }
+phase('Fanout')
+const results = await parallel([
+  () => webSearch({ query: 'fanout' }),
+  () => fetchContent({ url: 'https://example.test/facts' }),
+  () => artifactRecord({ title: 'Brief', body: 'Body' }),
+  () => workflow('child', { marker: 'nested' }),
+], { concurrency: 2 })
+phase('Fanout', { status: 'success' })
+return results`;
+  const child = `export const meta = { name: 'child', description: 'child workflow' }
+return { child: true }`;
+  const events: WorkflowRunEvent[] = [];
+  const run = await runWorkflowScript(script, {
+    agent: async () => assert.fail("zero-agent fanout should not call agent"),
+    artifactRecord: async () => ({ ref: "artifact:fanout-brief" }),
+    webSearch: (request) => ({ searched: request.query }),
+    fetchContent: (request) => ({ fetched: request.url }),
+    loadWorkflowScript: (name) => (name === "child" ? child : undefined),
+    onEvent: (event) => {
+      events.push(event);
+    },
+  });
+
+  assert.equal(run.agentCount, 0);
+  const snapshot = projectWorkflowRunEvents(events);
+  assert.equal(snapshot.nodesById["parallel:0"]?.kind, "parallel_group");
+  assert.deepEqual(snapshot.nodesById["parallel:0"]?.children, [
+    "parallel:0:item:0",
+    "parallel:0:item:1",
+    "parallel:0:item:2",
+    "parallel:0:item:3",
+  ]);
+  assert.equal(snapshot.nodesById["tool:0"]?.parentId, "parallel:0:item:0");
+  assert.equal(snapshot.nodesById["tool:1"]?.parentId, "parallel:0:item:1");
+  assert.equal(snapshot.nodesById["tool:2"]?.parentId, "parallel:0:item:2");
+  assert.equal(snapshot.nodesById["artifact:artifact:fanout-brief"]?.parentId, "tool:2");
+  assert.equal(snapshot.nodesById["workflow:0"]?.parentId, "parallel:0:item:3");
+
+  const dir = await mkdtemp(join(tmpdir(), "spark-zero-agent-fanout-dashboard-"));
+  try {
+    const store = defaultSparkDynamicWorkflowEventStore(dir);
+    const meta = parseWorkflowScript(script).meta;
+    const runRef = "run:zero-agent-fanout" as const;
+    await store.startRun({
+      runRef,
+      source: { kind: "inline", label: "zero-agent fanout dashboard" },
+      script,
+      meta,
+      options: { concurrency: 2 },
+      now: "2026-06-23T00:00:00.000Z",
+    });
+    for (const event of events.filter((candidate) => candidate.type !== "run_started")) {
+      const { id: _id, sequence: _sequence, timestamp, type, ...input } = event;
+      await store.appendEvent(runRef, {
+        ...(input as SparkDynamicWorkflowEventInput),
+        type,
+        timestamp,
+      });
+    }
+    const dashboard = renderSparkDynamicWorkflowDashboardText(
+      buildSparkDynamicWorkflowDashboardView({
+        action: "inspect",
+        runs: await store.listRuns(),
+        includeHistory: true,
+        detailed: true,
+        targetRunRef: runRef,
+      }),
+    );
+    assert.match(dashboard, /parallel_group parallel group 1 \[succeeded\]/);
+    assert.match(dashboard, /parallel_item parallel item 1 \[succeeded\]/);
+    assert.match(dashboard, /tool webSearch \[succeeded\]/);
+    assert.match(dashboard, /tool fetchContent \[succeeded\]/);
+    assert.match(dashboard, /artifact artifact:fanout-brief \[succeeded\]/);
+    assert.match(dashboard, /nested_workflow child \[succeeded\]/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 void test("pi-workflows projects failed run and node events", async () => {
@@ -651,6 +742,7 @@ void test("pi-workflows role-run adapter forwards child usage telemetry", async 
     {
       runRef: "run:child-telemetry",
       usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15, costUsd: 0.004 },
+      metadata: {},
     },
   ]);
 });
@@ -727,6 +819,7 @@ void test("pi-workflows role-run adapter fails model agents when model hook is m
 
 void test("pi-workflows role-run adapter maps workflow agents to Spark dependency boundary", async () => {
   const requests: unknown[] = [];
+  const telemetryReports: unknown[] = [];
   const agent = createSparkWorkflowRoleRunAdapter({
     roleRef: "role:builtin-worker",
     graftBaseRef: "tree:isolated",
@@ -745,6 +838,9 @@ void test("pi-workflows role-run adapter maps workflow agents to Spark dependenc
     isolation: "graft",
     timeoutMs: 123,
     artifactRef: "artifact:brief-123",
+    reportTelemetry: (telemetry) => {
+      telemetryReports.push(telemetry);
+    },
   })) as SparkWorkflowGraftAgentResult;
 
   assert.equal(result.text, "adapter result with scratch:abc candidate:def patch:ghi");
@@ -753,6 +849,17 @@ void test("pi-workflows role-run adapter maps workflow agents to Spark dependenc
     candidateRefs: ["candidate:def"],
     patchRefs: ["patch:ghi"],
   });
+  assert.deepEqual(telemetryReports, [
+    {
+      metadata: {
+        graftRefs: {
+          scratchRefs: ["scratch:abc"],
+          candidateRefs: ["candidate:def"],
+          patchRefs: ["patch:ghi"],
+        },
+      },
+    },
+  ]);
   assert.equal(requests.length, 1);
   const request = requests[0] as SparkWorkflowRoleRunRequest;
   assert.equal(request.label, "auth reviewer");
@@ -778,6 +885,82 @@ void test("pi-workflows role-run adapter maps workflow agents to Spark dependenc
   assert.match(request.instruction, /Allowed tools: graft_help,graft_status/);
   assert.match(request.instruction, /Graft isolation is active/);
   assert.match(request.instruction, /graft_candidate_from_scratch/);
+});
+
+void test("Spark dynamic workflow dashboard renders isolated Graft agent provenance", async () => {
+  const script = `export const meta = { name: 'graft ui', description: 'graft UI workflow' }
+phase('Edit')
+const result = await agent('edit file', { label: 'isolated editor', isolation: 'graft' })
+phase('Edit', { status: 'success' })
+return result`;
+  const events: WorkflowRunEvent[] = [];
+  const agent = createSparkWorkflowRoleRunAdapter({
+    roleRef: "role:builtin-worker",
+    graftBaseRef: "tree:base",
+    async runRoleInstruction() {
+      return {
+        text: "created scratch:edit candidate:edit patch:edit",
+        metadata: { validation: "passed", candidateRef: "candidate:edit", patchRef: "patch:edit" },
+      };
+    },
+  });
+  await runWorkflowScript(script, {
+    agent,
+    onEvent: (event) => {
+      events.push(event);
+    },
+  });
+  const snapshot = projectWorkflowRunEvents(events);
+  assert.deepEqual(snapshot.nodesById["agent:0"]?.telemetry?.metadata?.graftRefs, {
+    scratchRefs: ["scratch:edit"],
+    candidateRefs: ["candidate:edit"],
+    patchRefs: ["patch:edit"],
+  });
+
+  const dir = await mkdtemp(join(tmpdir(), "spark-graft-provenance-dashboard-"));
+  try {
+    const store = defaultSparkDynamicWorkflowEventStore(dir);
+    const meta = parseWorkflowScript(script).meta;
+    const runRef = "run:graft-provenance" as const;
+    await store.startRun({
+      runRef,
+      source: { kind: "inline", label: "graft provenance dashboard" },
+      script,
+      meta,
+      options: {},
+      base: {
+        baseRef: "tree:base",
+        baseState: "state:base",
+        baseTree: "tree:base",
+        capturedAt: "2026-06-23T00:00:00.000Z",
+      },
+      now: "2026-06-23T00:00:00.000Z",
+    });
+    for (const event of events.filter((candidate) => candidate.type !== "run_started")) {
+      const { id: _id, sequence: _sequence, timestamp, type, ...input } = event;
+      await store.appendEvent(runRef, {
+        ...(input as SparkDynamicWorkflowEventInput),
+        type,
+        timestamp,
+      });
+    }
+    const dashboard = renderSparkDynamicWorkflowDashboardText(
+      buildSparkDynamicWorkflowDashboardView({
+        action: "inspect",
+        runs: await store.listRuns(),
+        includeHistory: true,
+        detailed: true,
+        targetRunRef: runRef,
+      }),
+    );
+    assert.match(dashboard, /agent isolated editor \[succeeded\]/);
+    assert.match(dashboard, /Graft: status=admitted/);
+    assert.match(dashboard, /scratch=scratch:edit/);
+    assert.match(dashboard, /candidate=candidate:edit/);
+    assert.match(dashboard, /patch=patch:edit/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 void test("pi-workflows fan_out_with_brief records one brief and fans out with artifactRef", async () => {
@@ -1082,12 +1265,16 @@ const gated = await gate(
 )
 return { verdict, best, found, piped, retried, gated }`;
 
+  const events: WorkflowRunEvent[] = [];
   const run = await runWorkflowScript(script, {
     agent: async (_prompt, options) => {
       if (options.label?.startsWith("verify ")) return { real: options.label !== "verify 1" };
       if (options.label?.startsWith("judge 2.")) return { score: 0.9 };
       if (options.label?.startsWith("judge ")) return { score: 0.1 };
       return "unused";
+    },
+    onEvent: (event) => {
+      events.push(event);
     },
   });
   const result = JSON.parse(JSON.stringify(run.result)) as {
@@ -1112,6 +1299,23 @@ return { verdict, best, found, piped, retried, gated }`;
   assert.deepEqual(result.piped, [3, 5]);
   assert.equal(result.retried, 2);
   assert.deepEqual(result.gated, { ok: true, value: "fixed", attempts: 2 });
+  const snapshot = projectWorkflowRunEvents(events);
+  const verifyNode = snapshot.nodes.find((node) => node.kind === "tool" && node.label === "verify");
+  const judgePanelNode = snapshot.nodes.find(
+    (node) => node.kind === "tool" && node.label === "judgePanel",
+  );
+  assert.ok(verifyNode, "expected verify helper node");
+  assert.ok(judgePanelNode, "expected judgePanel helper node");
+  assert.ok(
+    verifyNode.children.some((childId) => snapshot.nodesById[childId]?.kind === "parallel_group"),
+    "expected verify helper fan-out under the verify node",
+  );
+  assert.ok(
+    judgePanelNode.children.some(
+      (childId) => snapshot.nodesById[childId]?.kind === "parallel_group",
+    ),
+    "expected judgePanel helper fan-out under the judgePanel node",
+  );
 });
 
 void test("pi-workflows enforces run and phase token budgets between agent calls", async () => {
@@ -1280,6 +1484,17 @@ return 'ok'`;
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+void test("Spark production dynamic workflow surfaces are cut over to v2 event store", async () => {
+  const sourceFiles = await listTypeScriptFiles("packages/spark-extension/src/extension");
+  const offenders: string[] = [];
+  for (const file of sourceFiles) {
+    if (file.endsWith("spark-dynamic-workflow-run-store.ts")) continue;
+    const source = await readFile(file, "utf8");
+    if (/defaultSparkDynamicWorkflowRunStore\s*\(/u.test(source)) offenders.push(file);
+  }
+  assert.deepEqual(offenders, []);
 });
 
 void test("Spark dynamic workflow event store migrates v1 dynamic records", async () => {

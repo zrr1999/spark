@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import vm from "node:vm";
@@ -101,6 +102,7 @@ export async function runWorkflowScript<T = unknown>(
   let parallelGroupIndex = 0;
   let toolCallIndex = 0;
   let nestedWorkflowIndex = 0;
+  const nodeContext = new AsyncLocalStorage<{ parentNodeId: string }>();
   const emitWorkflowEvent = (
     type: WorkflowRunEvent["type"],
     event: Omit<WorkflowRunEvent, "id" | "sequence" | "timestamp" | "type"> = {},
@@ -117,11 +119,15 @@ export async function runWorkflowScript<T = unknown>(
   };
   const phaseNodeId = (phaseTitle: string | undefined) =>
     phaseTitle ? `phase:${phaseTitle}` : undefined;
+  const currentParentNodeId = (phaseTitle: string | undefined = currentPhase) =>
+    nodeContext.getStore()?.parentNodeId ?? phaseNodeId(phaseTitle) ?? "run";
+  const withWorkflowParent = <T>(parentNodeId: string, thunk: () => Promise<T> | T) =>
+    nodeContext.run({ parentNodeId }, thunk);
   const emitToolStarted = (toolName: string, data?: unknown) => {
     const nodeId = `tool:${toolCallIndex++}`;
     emitWorkflowEvent("tool_started", {
       nodeId,
-      parentId: phaseNodeId(currentPhase),
+      parentId: currentParentNodeId(),
       nodeKind: "tool",
       phase: currentPhase,
       toolName,
@@ -233,7 +239,7 @@ export async function runWorkflowScript<T = unknown>(
     if (cached?.hash === hash && index < firstResumeMiss) {
       emitWorkflowEvent("agent_cached", {
         nodeId: `agent:${index}`,
-        parentId: phaseNodeId(phaseName),
+        parentId: currentParentNodeId(phaseName),
         nodeKind: "agent",
         phase: phaseName,
         index,
@@ -258,7 +264,7 @@ export async function runWorkflowScript<T = unknown>(
     let reportedTelemetry: WorkflowAgentReportedTelemetry | undefined;
     emitWorkflowEvent("agent_started", {
       nodeId: `agent:${index}`,
-      parentId: phaseNodeId(phaseName),
+      parentId: currentParentNodeId(phaseName),
       nodeKind: "agent",
       phase: phaseName,
       index,
@@ -485,7 +491,7 @@ export async function runWorkflowScript<T = unknown>(
     });
     emitWorkflowEvent("parallel_group_started", {
       nodeId: groupNodeId,
-      parentId: phaseNodeId(currentPhase),
+      parentId: currentParentNodeId(),
       nodeKind: "parallel_group",
       phase: currentPhase,
       label: `parallel group ${groupIndex + 1}`,
@@ -517,7 +523,7 @@ export async function runWorkflowScript<T = unknown>(
         throw error;
       }
       try {
-        const value = await item();
+        const value = await withWorkflowParent(itemNodeId, item);
         emitWorkflowEvent("parallel_item_succeeded", {
           nodeId: itemNodeId,
           nodeKind: "parallel_item",
@@ -573,7 +579,7 @@ export async function runWorkflowScript<T = unknown>(
     const nodeId = `workflow:${nestedWorkflowIndex++}`;
     emitWorkflowEvent("nested_workflow_started", {
       nodeId,
-      parentId: phaseNodeId(currentPhase),
+      parentId: currentParentNodeId(),
       nodeKind: "nested_workflow",
       phase: currentPhase,
       workflowName: requested,
@@ -628,22 +634,24 @@ export async function runWorkflowScript<T = unknown>(
         : [verifyOptions.lens]
       : [];
     const claim = typeof item === "string" ? item : JSON.stringify(item);
-    const votes = (await parallel(
-      Array.from(
-        { length: reviewers },
-        (_value, index) => () =>
-          agent(
-            [
-              "Adversarially verify whether this item is real/correct.",
-              "Return JSON-compatible data with a boolean `real` field and optional `reason`.",
-              lenses.length ? `Lens: ${lenses[index % lenses.length]}` : undefined,
-              "",
-              claim,
-            ]
-              .filter((line): line is string => line !== undefined)
-              .join("\n"),
-            { label: `verify ${index + 1}`, schema: VERIFY_SCHEMA },
-          ),
+    const votes = (await withWorkflowParent(toolNodeId, () =>
+      parallel(
+        Array.from(
+          { length: reviewers },
+          (_value, index) => () =>
+            agent(
+              [
+                "Adversarially verify whether this item is real/correct.",
+                "Return JSON-compatible data with a boolean `real` field and optional `reason`.",
+                lenses.length ? `Lens: ${lenses[index % lenses.length]}` : undefined,
+                "",
+                claim,
+              ]
+                .filter((line): line is string => line !== undefined)
+                .join("\n"),
+              { label: `verify ${index + 1}`, schema: VERIFY_SCHEMA },
+            ),
+        ),
       ),
     )) as unknown[];
     const realCount = votes.filter(readRealVote).length;
@@ -669,22 +677,24 @@ export async function runWorkflowScript<T = unknown>(
     const toolNodeId = emitToolStarted("judgePanel", { attempts, options: judgeOptions });
     const judges = Math.max(1, Math.trunc(judgeOptions.judges ?? 3));
     const rubric = judgeOptions.rubric ?? "overall quality and correctness";
-    const scored = (await parallel(
-      attempts.map((attempt, attemptIndex) => async () => {
-        const text = typeof attempt === "string" ? attempt : JSON.stringify(attempt);
-        const judgments = (await parallel(
-          Array.from(
-            { length: judges },
-            (_value, judgeIndex) => () =>
-              agent(
-                `Score this candidate from 0 to 1 on ${rubric}. Return JSON with numeric score and optional reason.\n\n${text}`,
-                { label: `judge ${attemptIndex + 1}.${judgeIndex + 1}`, schema: JUDGE_SCHEMA },
-              ),
-          ),
-        )) as unknown[];
-        const score = meanScore(judgments);
-        return { index: attemptIndex, attempt, score, judgments };
-      }),
+    const scored = (await withWorkflowParent(toolNodeId, () =>
+      parallel(
+        attempts.map((attempt, attemptIndex) => async () => {
+          const text = typeof attempt === "string" ? attempt : JSON.stringify(attempt);
+          const judgments = (await parallel(
+            Array.from(
+              { length: judges },
+              (_value, judgeIndex) => () =>
+                agent(
+                  `Score this candidate from 0 to 1 on ${rubric}. Return JSON with numeric score and optional reason.\n\n${text}`,
+                  { label: `judge ${attemptIndex + 1}.${judgeIndex + 1}`, schema: JUDGE_SCHEMA },
+                ),
+            ),
+          )) as unknown[];
+          const score = meanScore(judgments);
+          return { index: attemptIndex, attempt, score, judgments };
+        }),
+      ),
     )) as Array<{ index: number; attempt: unknown; score: number; judgments: unknown[] }>;
     const result =
       scored.length === 0
