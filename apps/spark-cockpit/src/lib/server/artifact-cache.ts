@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { createId } from "@zendev-lab/navia-protocol";
+import { createId } from "@zendev-lab/spark-protocol";
 import { resolveNaviaPaths } from "@zendev-lab/navia-system";
 
 /**

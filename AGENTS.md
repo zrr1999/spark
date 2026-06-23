@@ -6,9 +6,9 @@ Spark monorepo: agent-oriented docs for contributors and automation. Product ove
 
 Target package topology follows type-first names:
 
-- `apps/spark-cli` — thin `spark` dispatcher only; it resolves `spark <name>` to `spark-<name>` like cue-shell dispatch.
+- `apps/spark-cli` — thin `spark` dispatcher only; it resolves public `spark ...` command groups to Spark app surfaces.
 - `apps/spark-tui` — executable native terminal host (`@zendev-lab/spark-tui-app`). Keep host/runtime/editor code here, not in the dispatcher.
-- `apps/spark-daemon` — Spark daemon service package that owns the former local runner/service implementation.
+- `apps/spark-daemon` — Spark daemon service package that owns local workspace state, IPC, and background execution.
 - `apps/spark-cockpit` — Spark Cockpit SvelteKit local web cockpit/projection app. Keep SvelteKit/browser-specific checks isolated from the non-Svelte Spark package checks.
 - `packages/pi-*` — host-neutral Pi-style capabilities and contracts (`pi-extension-api`, `pi-tasks`, `pi-workflows`, `pi-cue`, …). These must not depend on Spark product packages.
 - `packages/spark-extension` — Spark Pi-style extension facade. It owns Spark command/tool policy and depends on `pi-extension-api` instead of concrete host runtimes.

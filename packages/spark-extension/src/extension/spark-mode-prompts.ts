@@ -69,7 +69,7 @@ export function renderSparkGoalModePrompt(
         renderGoalAction(Boolean(focus?.trim())),
         WORKFLOW_AND_SUBAGENT_ARE_TOOLS,
         PARALLEL_EXECUTION_WORKFLOW_STRATEGY,
-        "Goal driver is non-interactive and auto-decision capable: do not call ask_user/ask_flow. Use canonical ask only with reviewer auto-answer for material decisions; if reviewer auto-answer is blocked, record/report the blocker instead of waiting for raw human input. If a blocker appears, resolve the blocker by doing or planning the blocking work; do not pause or weaken the goal autonomously.",
+        "Goal driver decisions use canonical ask with reviewer auto-answer for material decisions. If reviewer auto-answer is blocked, record or report the blocker and resolve it through concrete work or planning while keeping the goal objective unchanged.",
         SPARK_GOAL_DECISION_RULE,
       ]
     : [

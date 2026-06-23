@@ -113,6 +113,7 @@ void test("SparkWidget registers, invalidates renders, clears hidden state, and 
   assert.equal(registrations.length, 2);
 
   state = widgetState({
+    projectTitle: undefined,
     independentTodos: [{ content: "Legacy hidden item", status: "pending" }],
   });
   widget.update();
@@ -122,7 +123,7 @@ void test("SparkWidget registers, invalidates renders, clears hidden state, and 
   assert.equal(registrations.length, 2);
 
   widget.dispose();
-  assert.equal(registrations.length, 4);
+  assert.equal(registrations.length, 2);
 });
 
 void test("spark widget hides deleted task plan items but keeps done task plan items visible", () => {
@@ -513,7 +514,7 @@ void test("spark widget hides task plan items until a task is claimed", () => {
   assert.doesNotMatch(lines, /Hidden other-session plan item/);
 });
 
-void test("spark widget shows role/title task rows with nested TODOs and independent TODO siblings", () => {
+void test("spark widget shows role/title task rows with nested task plan items", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
@@ -544,7 +545,7 @@ void test("spark widget shows role/title task rows with nested TODOs and indepen
   assert.doesNotMatch(text, /Implementation details are hidden in the widget/);
   assert.match(text, /#7 Update widget layout/);
   assert.match(text, /#12 Update docs/);
-  assert.match(text, /#3 Decide project symbol/);
+  assert.doesNotMatch(text, /Decide project symbol/);
 });
 
 void test("spark widget does not expand plan items for finished tasks", () => {
@@ -605,7 +606,9 @@ void test("spark widget uses stable TODO display numbers instead of sorted row o
           ],
         },
       ],
-      independentTodos: [{ displayNumber: 2, content: "Independent item", status: "pending" }],
+      independentTodos: [
+        { displayNumber: 2, content: "Legacy independent item", status: "pending" },
+      ],
       taskCountTotal: 1,
       taskCountClaimed: 1,
       taskCountClaimedBySession: 1,
@@ -617,7 +620,7 @@ void test("spark widget uses stable TODO display numbers instead of sorted row o
 
   assert.match(lines, /#9 Active item created later/);
   assert.match(lines, /#4 Pending item created first/);
-  assert.match(lines, /#2 Independent item/);
+  assert.doesNotMatch(lines, /Legacy independent item/);
   assert.ok(lines.indexOf("#9 Active") < lines.indexOf("#4 Pending"));
 });
 

@@ -5,13 +5,16 @@ import {
   type HumanRequestCreatedPayload,
   type HumanResponseAckPayload,
   type HumanResponseDeliverPayload,
+  type ExecutorClientProjection,
   type InvocationLogChunkPayload,
   type InvocationUpdatePayload,
   type RuntimeCommandAckPayload,
   type RuntimeCommandRejectPayload,
   type ServerCommandPayload,
   type TaskGraphSnapshotPayload,
-} from "@zendev-lab/navia-protocol";
+  type WorkspaceBorrowedState,
+  type WorkspaceClientProjection,
+} from "@zendev-lab/spark-protocol";
 
 function nowIso() {
   return new Date().toISOString();
@@ -380,8 +383,32 @@ export interface QueueCommandInput {
   createdAt?: string;
 }
 
+export type CockpitWorkspaceDaemonConnectionStatus = "connected" | "disconnected";
+
+export interface CockpitWorkspaceControlProjection {
+  workspaceId: string;
+  runtimeWorkspaceBindingId: string | null;
+  connection: {
+    status: CockpitWorkspaceDaemonConnectionStatus;
+    runtimeStatus: string | null;
+    runtimeName: string | null;
+    lastSeenAt: string | null;
+  };
+  borrowed: WorkspaceBorrowedState;
+  workspaceClients: WorkspaceClientProjection[];
+  executor: ExecutorClientProjection;
+  control: {
+    mode: "full" | "snapshot_only";
+    reason?: string;
+    serverMutationAllowed: boolean;
+    message: string;
+  };
+}
+
 export function queueCommandForWorkspaceOwner(db: DatabaseSync, input: QueueCommandInput) {
   return withTransaction(db, () => {
+    assertWorkspaceServerMutationAllowed(db, input.workspaceId, input.payload);
+
     const owner = db
       .prepare(
         `SELECT runtime_workspace_binding_id AS runtimeWorkspaceBindingId
@@ -439,6 +466,199 @@ export function queueCommandForWorkspaceOwner(db: DatabaseSync, input: QueueComm
 
     return command;
   });
+}
+
+export function loadWorkspaceServerControl(
+  db: DatabaseSync,
+  workspaceId: string,
+): CockpitWorkspaceControlProjection {
+  const owner = db
+    .prepare(
+      `SELECT wob.runtime_workspace_binding_id AS runtimeWorkspaceBindingId,
+              rc.name AS runtimeName,
+              rc.status AS runtimeStatus,
+              rc.last_heartbeat_at AS lastHeartbeatAt,
+              rc.updated_at AS runtimeUpdatedAt
+       FROM workspace_owner_bindings wob
+       JOIN runtime_workspace_bindings rb ON rb.id = wob.runtime_workspace_binding_id
+       JOIN runtime_connections rc ON rc.id = rb.runtime_id
+       WHERE wob.workspace_id = ? AND wob.ended_at IS NULL
+       LIMIT 1`,
+    )
+    .get(workspaceId) as
+    | {
+        runtimeWorkspaceBindingId: string;
+        runtimeName: string;
+        runtimeStatus: string;
+        lastHeartbeatAt: string | null;
+        runtimeUpdatedAt: string;
+      }
+    | undefined;
+
+  const snapshot = owner
+    ? latestWorkspaceSnapshotPayload(db, workspaceId, owner.runtimeWorkspaceBindingId)
+    : null;
+  const connectionStatus: CockpitWorkspaceDaemonConnectionStatus =
+    owner && (owner.runtimeStatus === "online" || owner.runtimeStatus === "draining")
+      ? "connected"
+      : "disconnected";
+  const borrowed = normalizeBorrowedState(snapshot?.borrowed);
+  const workspaceClients = Array.isArray(snapshot?.workspaceClients)
+    ? snapshot.workspaceClients
+    : [];
+  const executor = normalizeExecutorProjection(snapshot?.executor);
+  const snapshotControl = normalizeSnapshotControl(snapshot?.control);
+  const derivedReason =
+    connectionStatus === "disconnected"
+      ? "daemon_disconnected"
+      : borrowed.borrowed
+        ? "workspace_borrowed"
+        : undefined;
+  const serverMutationAllowed =
+    connectionStatus === "connected" && !borrowed.borrowed && snapshotControl.serverMutationAllowed;
+  const reason = serverMutationAllowed ? undefined : (derivedReason ?? snapshotControl.reason);
+  const message = serverMutationAllowed
+    ? "Server commands may mutate this workspace."
+    : workspaceControlMessage(reason);
+
+  return {
+    workspaceId,
+    runtimeWorkspaceBindingId: owner?.runtimeWorkspaceBindingId ?? null,
+    connection: {
+      status: connectionStatus,
+      runtimeStatus: owner?.runtimeStatus ?? null,
+      runtimeName: owner?.runtimeName ?? null,
+      lastSeenAt: owner ? (owner.lastHeartbeatAt ?? owner.runtimeUpdatedAt) : null,
+    },
+    borrowed,
+    workspaceClients,
+    executor,
+    control: {
+      mode: serverMutationAllowed ? "full" : "snapshot_only",
+      ...(reason ? { reason } : {}),
+      serverMutationAllowed,
+      message,
+    },
+  };
+}
+
+function assertWorkspaceServerMutationAllowed(
+  db: DatabaseSync,
+  workspaceId: string,
+  payload: ServerCommandPayload,
+): void {
+  if (!isServerWorkspaceMutation(payload.kind)) return;
+  const control = loadWorkspaceServerControl(db, workspaceId);
+  if (control.control.serverMutationAllowed) return;
+  throw new Error(control.control.message);
+}
+
+function isServerWorkspaceMutation(kind: ServerCommandPayload["kind"]): boolean {
+  return kind === "project.create.request" || kind === "task.start.request";
+}
+
+function latestWorkspaceSnapshotPayload(
+  db: DatabaseSync,
+  workspaceId: string,
+  runtimeWorkspaceBindingId: string,
+): Partial<{
+  borrowed: WorkspaceBorrowedState;
+  workspaceClients: WorkspaceClientProjection[];
+  executor: ExecutorClientProjection;
+  control: { mode: "full" | "snapshot_only"; reason?: string; serverMutationAllowed: boolean };
+}> | null {
+  const row = db
+    .prepare(
+      `SELECT payload_json AS payloadJson
+       FROM events
+       WHERE workspace_id = ?
+         AND actor_id = ?
+         AND kind = 'workspace.snapshot.received'
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+    )
+    .get(workspaceId, runtimeWorkspaceBindingId) as { payloadJson: string } | undefined;
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.payloadJson) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeBorrowedState(value: unknown): WorkspaceBorrowedState {
+  if (!isRecord(value)) {
+    return { borrowed: false, interactiveClientCount: 0, borrowedByClientIds: [] };
+  }
+  const borrowedByClientIds = Array.isArray(value.borrowedByClientIds)
+    ? value.borrowedByClientIds.filter((item): item is string => typeof item === "string")
+    : [];
+  return {
+    borrowed: value.borrowed === true,
+    interactiveClientCount:
+      typeof value.interactiveClientCount === "number" && value.interactiveClientCount >= 0
+        ? Math.floor(value.interactiveClientCount)
+        : borrowedByClientIds.length,
+    borrowedByClientIds,
+    ...(typeof value.since === "string" ? { since: value.since } : {}),
+  };
+}
+
+function normalizeExecutorProjection(value: unknown): ExecutorClientProjection {
+  if (!isRecord(value)) {
+    return { state: "none", activeInvocationCount: 0, activeAgentCount: 0 };
+  }
+  const state =
+    value.state === "starting" || value.state === "online" || value.state === "unhealthy"
+      ? value.state
+      : "none";
+  return {
+    state,
+    ...(typeof value.clientId === "string" ? { clientId: value.clientId } : {}),
+    activeInvocationCount: nonnegativeInteger(value.activeInvocationCount),
+    activeAgentCount: nonnegativeInteger(value.activeAgentCount),
+    ...(typeof value.lastSeenAt === "string" ? { lastSeenAt: value.lastSeenAt } : {}),
+    ...(typeof value.unhealthyReason === "string"
+      ? { unhealthyReason: value.unhealthyReason }
+      : {}),
+  };
+}
+
+function normalizeSnapshotControl(value: unknown): {
+  mode: "full" | "snapshot_only";
+  reason?: string;
+  serverMutationAllowed: boolean;
+} {
+  if (!isRecord(value)) {
+    return { mode: "full", serverMutationAllowed: true };
+  }
+  const mode = value.mode === "snapshot_only" ? "snapshot_only" : "full";
+  const serverMutationAllowed = value.serverMutationAllowed === true && mode === "full";
+  return {
+    mode,
+    ...(typeof value.reason === "string" ? { reason: value.reason } : {}),
+    serverMutationAllowed,
+  };
+}
+
+function workspaceControlMessage(reason: string | undefined): string {
+  switch (reason) {
+    case "workspace_borrowed":
+      return "Workspace is borrowed by an open TUI client; server actions are snapshot-only until it releases the workspace.";
+    case "daemon_disconnected":
+      return "Workspace daemon is disconnected; server actions are snapshot-only until it reconnects.";
+    default:
+      return "Workspace is in snapshot-only mode; server actions are disabled.";
+  }
+}
+
+function nonnegativeInteger(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 export interface RecordHumanRequestInput {

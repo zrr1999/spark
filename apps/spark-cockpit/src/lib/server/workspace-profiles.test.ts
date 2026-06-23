@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { migrate, openMemoryDatabase } from "@zendev-lab/navia-db";
-import { createId, runtimeProtocolVersion } from "@zendev-lab/navia-protocol";
+import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { gitCommand } from "@zendev-lab/navia-system";
 import { createWorkspaceWithOwnerBinding } from "./projection-services";
 import {

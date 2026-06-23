@@ -422,7 +422,7 @@ void test("SparkAgentLoop triggerTurn runs hidden before_agent_start context", a
   host.on("before_agent_start", () => ({
     message: {
       customType: "spark-mode-context",
-      content: "Spark foreground goal loop tick.",
+      content: "hidden context payload",
       display: false,
     },
   }));
@@ -455,7 +455,7 @@ void test("SparkAgentLoop triggerTurn runs hidden before_agent_start context", a
   assert.equal(contextMessages.length, 1);
   assert.equal(contextMessages[0]?.role, "user");
   assert.match(String(contextMessages[0]?.content), /\[spark-mode-context\]/);
-  assert.match(String(contextMessages[0]?.content), /Spark foreground goal loop tick/);
+  assert.match(String(contextMessages[0]?.content), /hidden context payload/);
   assert.doesNotMatch(JSON.stringify(loop.getMessages()), /spark-goal-request/);
 });
 

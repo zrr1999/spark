@@ -248,7 +248,7 @@ inside this repo's tests/docs as a normal path.
 | `@zendev-lab/navia-runner` | `@zendev-lab/spark-daemon` | Rename package; publish as daemon package if public. |
 | former web cockpit app path | `apps/spark-cockpit` | Renamed; keep old path out of active repo references. |
 | former web cockpit package | `@zendev-lab/spark-cockpit` | Renamed with cockpit package. |
-| `@zendev-lab/navia-protocol` | `@zendev-lab/spark-cockpit-protocol` or `@zendev-lab/spark-daemon-protocol` | Rename if public schemas expose runtime identity. |
+| former `@zendev-lab/navia-protocol` surface | `@zendev-lab/spark-protocol` | Consolidated into the single Spark shared protocol package for runtime, cockpit, interaction, and view-model schemas. |
 | `@zendev-lab/navia-db` | `@zendev-lab/spark-cockpit-db` | Rename if package remains public/internal. |
 | `@zendev-lab/navia-domain` | `@zendev-lab/spark-cockpit-domain` | Rename or fold into cockpit app. |
 | `@zendev-lab/navia-system` | `@zendev-lab/spark-daemon-system` or fold into daemon | Rename helpers that resolve daemon paths/secrets. |

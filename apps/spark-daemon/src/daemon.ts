@@ -11,7 +11,7 @@ import {
   serverHelloAckEnvelopeSchema,
   type RuntimeFeature,
   type RuntimeWorkspaceBindingSummary,
-} from "@zendev-lab/navia-protocol";
+} from "@zendev-lab/spark-protocol";
 import { writePrivateFile, type NaviaPaths } from "@zendev-lab/navia-system";
 import { readSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
 import {

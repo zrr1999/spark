@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { runtimeProtocolVersion } from "@zendev-lab/navia-protocol";
+import { runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { gitCommand, resolveNaviaPaths } from "@zendev-lab/navia-system";
 import { main, type CliIo } from "./cli.js";
 import { writeSparkDaemonConfig } from "./config.js";
@@ -110,8 +110,8 @@ function testSparkDaemonConfig(
     displayName: "Test daemon",
     serverUrl: "http://127.0.0.1:5173",
     runtimeId: "rt_11111111111141111111111111111111",
-    runtimeToken: "navia_rt_test_token_00000000000000000000000000000000",
-    refreshToken: "navia_rt_refresh_test_0000000000000000000000000000",
+    runtimeToken: "spark_rt_test_token_00000000000000000000000000000000",
+    refreshToken: "spark_rt_refresh_test_0000000000000000000000000000",
     ...overrides,
   };
 }
@@ -172,7 +172,7 @@ describe("Spark daemon CLI", () => {
     const code = await withTempNaviaEnv(async (root) => {
       mkdirSync(join(root, "checkout"));
       process.env.INIT_CWD = root;
-      return await main(["ws", "register", "checkout", "--token", "navia_wsreg_test"], capture.io);
+      return await main(["ws", "register", "checkout", "--token", "spark_wsreg_test"], capture.io);
     });
 
     expect(code).toBe(1);
@@ -201,7 +201,7 @@ describe("Spark daemon CLI", () => {
     const code = await withTempNaviaEnv(async (root) => {
       mkdirSync(join(root, "checkout"));
       process.env.INIT_CWD = root;
-      process.env.NAVIA_WORKSPACE_REGISTRATION_TOKEN = "navia_wsreg_test";
+      process.env.SPARK_WORKSPACE_REGISTRATION_TOKEN = "spark_wsreg_test";
       return await main(
         [
           "ws",
@@ -219,12 +219,12 @@ describe("Spark daemon CLI", () => {
     expect(code).toBe(0);
     expect(registerWorkspaceInService).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ registrationToken: "navia_wsreg_test" }),
+      expect.objectContaining({ registrationToken: "spark_wsreg_test" }),
     );
   });
 
   it("reads a workspace registration token from stdin when --token is dash", async () => {
-    const capture = createCliIo({ stdin: stdinFrom("navia_wsreg_stdin\n") });
+    const capture = createCliIo({ stdin: stdinFrom("spark_wsreg_stdin\n") });
     const registerWorkspaceInService = vi.fn(
       async (
         _paths: ReturnType<typeof resolveNaviaPaths>,
@@ -264,7 +264,7 @@ describe("Spark daemon CLI", () => {
     expect(code).toBe(0);
     expect(registerWorkspaceInService).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ registrationToken: "navia_wsreg_stdin" }),
+      expect.objectContaining({ registrationToken: "spark_wsreg_stdin" }),
     );
   });
 
@@ -280,9 +280,9 @@ describe("Spark daemon CLI", () => {
           "register",
           "checkout",
           "--server-url",
-          "http://127.0.0.1:5173/setup?registration=navia_wsreg_leaked",
+          "http://127.0.0.1:5173/setup?registration=spark_wsreg_leaked",
           "--token",
-          "navia_wsreg_test",
+          "spark_wsreg_test",
         ],
         capture.io,
       );
@@ -312,7 +312,7 @@ describe("Spark daemon CLI", () => {
           "--server-url",
           "http://127.0.0.1:5173",
           "--token",
-          "navia_wsreg_used",
+          "spark_wsreg_used",
         ],
         capture.io,
       );
@@ -362,7 +362,7 @@ describe("Spark daemon CLI", () => {
 
       await expect(
         main(
-          ["ws", "register", "workspace", "--token", "navia_wsreg_test", "--no-service"],
+          ["ws", "register", "workspace", "--token", "spark_wsreg_test", "--no-service"],
           capture.io,
         ),
       ).resolves.toBe(0);
@@ -538,7 +538,7 @@ describe("Spark daemon CLI", () => {
             serverUrl: "http://127.0.0.1:5173/",
             localPath: realWorkspacePath,
             displayName: "Socket Workspace",
-            registrationToken: "navia_wsreg_socket",
+            registrationToken: "spark_wsreg_socket",
           });
           return {
             id: "rtwb_socket",
@@ -563,7 +563,7 @@ describe("Spark daemon CLI", () => {
             "--name",
             "Socket Workspace",
             "--token",
-            "navia_wsreg_socket",
+            "spark_wsreg_socket",
           ],
           createCliIo({ registerWorkspaceInService }).io,
         ),
@@ -595,7 +595,7 @@ describe("Spark daemon CLI", () => {
             serverUrl: "http://127.0.0.1:5173/",
             localPath: realWorkspacePath,
             displayName: "Lazy Workspace",
-            registrationToken: "navia_wsreg_lazy",
+            registrationToken: "spark_wsreg_lazy",
           });
           return {
             id: "rtwb_lazy",
@@ -614,7 +614,7 @@ describe("Spark daemon CLI", () => {
       const capture = createCliIo({ startService, registerWorkspaceInService });
       await expect(
         main(
-          ["ws", "register", "checkout", "--name", "Lazy Workspace", "--token", "navia_wsreg_lazy"],
+          ["ws", "register", "checkout", "--name", "Lazy Workspace", "--token", "spark_wsreg_lazy"],
           capture.io,
         ),
       ).resolves.toBe(0);
@@ -646,7 +646,7 @@ describe("Spark daemon CLI", () => {
             serverUrl: "http://127.0.0.1:5173/",
             localPath: realWorkspacePath,
             displayName: "spore",
-            registrationToken: "navia_wsreg_scripted",
+            registrationToken: "spark_wsreg_scripted",
           });
           return {
             id: "rtwb_spore",
@@ -678,7 +678,7 @@ describe("Spark daemon CLI", () => {
             "--server-url",
             "http://127.0.0.1:5173",
             "--token",
-            "navia_wsreg_scripted",
+            "spark_wsreg_scripted",
             "--name",
             "spore",
           ],
@@ -716,7 +716,7 @@ describe("Spark daemon CLI", () => {
     await withTempNaviaEnv(async (root) => {
       process.env.INIT_CWD = root;
       const capture = createCliIo({
-        stdin: interactiveStdin(["", "http://127.0.0.1:5173", "navia_wsreg_interactive", "Spore"]),
+        stdin: interactiveStdin(["", "http://127.0.0.1:5173", "spark_wsreg_interactive", "Spore"]),
       });
 
       await expect(main(["ws", "register"], capture.io)).resolves.toBe(0);
@@ -750,7 +750,7 @@ describe("Spark daemon CLI", () => {
       writeSparkDaemonConfig(paths, testSparkDaemonConfig());
       await expect(
         main(
-          ["ws", "register", "checkout", "--token", "navia_wsreg_test", "--no-service"],
+          ["ws", "register", "checkout", "--token", "spark_wsreg_test", "--no-service"],
           capture.io,
         ),
       ).resolves.toBe(0);
@@ -785,7 +785,7 @@ describe("Spark daemon CLI", () => {
         }),
       });
       await expect(
-        main(["ws", "register", "checkout", "--token", "navia_wsreg_unreachable"], capture.io),
+        main(["ws", "register", "checkout", "--token", "spark_wsreg_unreachable"], capture.io),
       ).resolves.toBe(2);
       expect(capture.stderr()).toContain("Spark daemon is running but cannot be reached");
 
@@ -835,7 +835,7 @@ describe("Spark daemon CLI", () => {
       const capture = createCliIo({ startService, registerWorkspaceInService });
 
       await expect(
-        main(["ws", "register", "checkout", "--token", "navia_wsreg_retry"], capture.io),
+        main(["ws", "register", "checkout", "--token", "spark_wsreg_retry"], capture.io),
       ).resolves.toBe(0);
 
       expect(startService).toHaveBeenCalledOnce();
@@ -1112,7 +1112,7 @@ describe("Spark daemon CLI", () => {
             "--name",
             "Navia Dev",
             "--token",
-            "navia_wsreg_test",
+            "spark_wsreg_test",
             "--no-service",
           ],
           capture.io,
@@ -1171,7 +1171,7 @@ describe("Spark daemon CLI", () => {
             "--name",
             "Navia Dev",
             "--token",
-            "navia_wsreg_test",
+            "spark_wsreg_test",
             "--no-service",
           ],
           capture.io,
@@ -1253,7 +1253,7 @@ describe("Spark daemon CLI", () => {
             "--profile",
             profile.ref,
             "--token",
-            "navia_wsreg_profile",
+            "spark_wsreg_profile",
             "--no-service",
           ],
           capture.io,
@@ -1284,7 +1284,7 @@ describe("Spark daemon CLI", () => {
 
   it("asks before importing a detected workspace profile in interactive registration", async () => {
     const capture = createCliIo({
-      stdin: interactiveStdin(["checkout", "", "navia_wsreg_interactive", "", "y"]),
+      stdin: interactiveStdin(["checkout", "", "spark_wsreg_interactive", "", "y"]),
     });
 
     await withTempNaviaEnv(async (root) => {
@@ -1332,7 +1332,7 @@ describe("Spark daemon CLI", () => {
             "--name",
             "Navia Dev",
             "--token",
-            "navia_wsreg_test",
+            "spark_wsreg_test",
             "--no-service",
           ],
           capture.io,
@@ -1369,7 +1369,7 @@ describe("Spark daemon CLI", () => {
               "--name",
               "Navia Dev",
               "--token",
-              "navia_wsreg_first",
+              "spark_wsreg_first",
               "--no-service",
             ],
             capture.io,
@@ -1384,7 +1384,7 @@ describe("Spark daemon CLI", () => {
               "--server-url",
               "http://127.0.0.1:5174",
               "--token",
-              "navia_wsreg_second",
+              "spark_wsreg_second",
               "--name",
               "Navia Dev",
               "--no-service",
@@ -1479,7 +1479,7 @@ describe("Spark daemon CLI", () => {
 
       await expect(
         main(
-          ["ws", "register", "missing", "--token", "navia_wsreg_missing", "--no-service"],
+          ["ws", "register", "missing", "--token", "spark_wsreg_missing", "--no-service"],
           capture.io,
         ),
       ).resolves.toBe(3);
@@ -1507,7 +1507,7 @@ describe("Spark daemon CLI", () => {
             "--name",
             "First",
             "--token",
-            "navia_wsreg_first",
+            "spark_wsreg_first",
             "--no-service",
           ],
           capture.io,
@@ -1522,7 +1522,7 @@ describe("Spark daemon CLI", () => {
             "--name",
             "Second",
             "--token",
-            "navia_wsreg_second",
+            "spark_wsreg_second",
             "--no-service",
           ],
           capture.io,
@@ -1588,7 +1588,7 @@ describe("Spark daemon CLI", () => {
             "--name",
             "Workspace",
             "--token",
-            "navia_wsreg_test",
+            "spark_wsreg_test",
             "--no-service",
           ],
           capture.io,
@@ -1612,7 +1612,7 @@ describe("Spark daemon CLI", () => {
 
       await expect(
         main(
-          ["ws", "register", "workspace", "--token", "navia_wsreg_test", "--no-service"],
+          ["ws", "register", "workspace", "--token", "spark_wsreg_test", "--no-service"],
           capture.io,
         ),
       ).resolves.toBe(0);
@@ -1641,7 +1641,7 @@ describe("Spark daemon CLI", () => {
 
       await expect(
         main(
-          ["ws", "register", "workspace", "--token", "navia_wsreg_test", "--no-service"],
+          ["ws", "register", "workspace", "--token", "spark_wsreg_test", "--no-service"],
           capture.io,
         ),
       ).resolves.toBe(0);
@@ -1679,7 +1679,7 @@ describe("Spark daemon CLI", () => {
 
       await expect(
         main(
-          ["ws", "register", "parent", "--token", "navia_wsreg_parent", "--no-service"],
+          ["ws", "register", "parent", "--token", "spark_wsreg_parent", "--no-service"],
           capture.io,
         ),
       ).resolves.toBe(0);
@@ -1694,7 +1694,7 @@ describe("Spark daemon CLI", () => {
             "--name",
             "child",
             "--token",
-            "navia_wsreg_child",
+            "spark_wsreg_child",
             "--no-service",
           ],
           conflictCapture.io,
@@ -1724,7 +1724,7 @@ describe("Spark daemon CLI", () => {
             "--key",
             "stable",
             "--token",
-            "navia_wsreg_first",
+            "spark_wsreg_first",
             "--no-service",
           ],
           capture.io,
@@ -1741,7 +1741,7 @@ describe("Spark daemon CLI", () => {
             "--key",
             "stable",
             "--token",
-            "navia_wsreg_second",
+            "spark_wsreg_second",
             "--no-service",
           ],
           conflictCapture.io,
@@ -1763,7 +1763,7 @@ describe("Spark daemon CLI", () => {
 
       await expect(
         main(
-          ["ws", "register", "workspace", "--token", "navia_wsreg_test", "--no-service"],
+          ["ws", "register", "workspace", "--token", "spark_wsreg_test", "--no-service"],
           capture.io,
         ),
       ).resolves.toBe(0);
@@ -1824,7 +1824,7 @@ describe("Spark daemon CLI", () => {
 
       await expect(
         main(
-          ["ws", "register", "workspace", "--token", "navia_wsreg_test", "--no-service"],
+          ["ws", "register", "workspace", "--token", "spark_wsreg_test", "--no-service"],
           capture.io,
         ),
       ).resolves.toBe(0);
@@ -2132,7 +2132,7 @@ async function withTempNaviaEnv<T>(callback: (root: string) => Promise<T>): Prom
     SPARK_DAEMON_CACHE_DIR: process.env.SPARK_DAEMON_CACHE_DIR,
     SPARK_DAEMON_STATE_DIR: process.env.SPARK_DAEMON_STATE_DIR,
     SPARK_DAEMON_CWD: process.env.SPARK_DAEMON_CWD,
-    NAVIA_WORKSPACE_REGISTRATION_TOKEN: process.env.NAVIA_WORKSPACE_REGISTRATION_TOKEN,
+    SPARK_WORKSPACE_REGISTRATION_TOKEN: process.env.SPARK_WORKSPACE_REGISTRATION_TOKEN,
   };
 
   process.env.HOME = root;
@@ -2145,7 +2145,7 @@ async function withTempNaviaEnv<T>(callback: (root: string) => Promise<T>): Prom
   delete process.env.SPARK_DAEMON_CACHE_DIR;
   delete process.env.SPARK_DAEMON_STATE_DIR;
   delete process.env.SPARK_DAEMON_CWD;
-  delete process.env.NAVIA_WORKSPACE_REGISTRATION_TOKEN;
+  delete process.env.SPARK_WORKSPACE_REGISTRATION_TOKEN;
 
   try {
     return await callback(root);
@@ -2231,9 +2231,9 @@ function stubRuntimeRegistrationFetch() {
     return new Response(
       JSON.stringify({
         runtimeId,
-        runtimeToken: "navia_rt_token_00000000000000000000000000000000",
+        runtimeToken: "spark_rt_token_00000000000000000000000000000000",
         runtimeTokenExpiresAt: "2026-05-26T01:00:00.000Z",
-        refreshToken: "navia_rt_refresh_000000000000000000000000000000",
+        refreshToken: "spark_rt_refresh_000000000000000000000000000000",
         refreshTokenExpiresAt: "2026-06-25T00:00:00.000Z",
         protocolVersion: runtimeProtocolVersion,
         webSocketUrl: webSocketUrl.toString(),

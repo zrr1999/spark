@@ -1,0 +1,116 @@
+[
+  {
+    "protocolVersion": "spark.runtime.v1alpha1",
+    "messageId": "msg_41414141414141414141414141414141",
+    "type": "workspace.snapshot",
+    "sentAt": "2026-05-22T00:00:00.000Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "workspaceBindingId": "rtwb_11111111111141111111111111111111",
+    "workspaceId": "ws_22222222222242222222222222222222",
+    "payload": {
+      "displayName": "Borrowed workspace",
+      "status": "available",
+      "connection": { "status": "connected", "lastSeenAt": "2026-05-22T00:00:00.000Z" },
+      "borrowed": {
+        "borrowed": true,
+        "interactiveClientCount": 1,
+        "borrowedByClientIds": ["wcl-tui-1"],
+        "since": "2026-05-22T00:00:00.000Z"
+      },
+      "workspaceClients": [
+        {
+          "clientId": "wcl-tui-1",
+          "kind": "interactive",
+          "status": "connected",
+          "displayName": "Spark TUI",
+          "attachedAt": "2026-05-22T00:00:00.000Z",
+          "lastSeenAt": "2026-05-22T00:00:00.000Z"
+        }
+      ],
+      "executor": {
+        "state": "online",
+        "clientId": "exec-local-1",
+        "activeInvocationCount": 2,
+        "activeAgentCount": 3,
+        "lastSeenAt": "2026-05-22T00:00:00.000Z"
+      },
+      "control": {
+        "mode": "snapshot_only",
+        "reason": "workspace_borrowed",
+        "serverMutationAllowed": false
+      }
+    }
+  },
+  {
+    "protocolVersion": "spark.runtime.v1alpha1",
+    "messageId": "msg_42424242424242424242424242424242",
+    "type": "workspace.snapshot",
+    "sentAt": "2026-05-22T00:01:00.000Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "workspaceBindingId": "rtwb_11111111111141111111111111111111",
+    "workspaceId": "ws_22222222222242222222222222222222",
+    "payload": {
+      "displayName": "Unborrowed workspace",
+      "status": "available",
+      "connection": { "status": "connected", "lastSeenAt": "2026-05-22T00:01:00.000Z" },
+      "borrowed": { "borrowed": false, "interactiveClientCount": 0, "borrowedByClientIds": [] },
+      "workspaceClients": [],
+      "executor": {
+        "state": "none",
+        "activeInvocationCount": 0,
+        "activeAgentCount": 0
+      },
+      "control": { "mode": "full", "serverMutationAllowed": true }
+    }
+  },
+  {
+    "protocolVersion": "spark.runtime.v1alpha1",
+    "messageId": "msg_43434343434343434343434343434343",
+    "type": "workspace.snapshot",
+    "sentAt": "2026-05-22T00:02:00.000Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "workspaceBindingId": "rtwb_11111111111141111111111111111111",
+    "workspaceId": "ws_22222222222242222222222222222222",
+    "payload": {
+      "displayName": "Starting executor workspace",
+      "status": "available",
+      "connection": { "status": "connected", "lastSeenAt": "2026-05-22T00:02:00.000Z" },
+      "borrowed": { "borrowed": false, "interactiveClientCount": 0, "borrowedByClientIds": [] },
+      "executor": {
+        "state": "starting",
+        "clientId": "exec-local-2",
+        "activeInvocationCount": 1,
+        "activeAgentCount": 0
+      },
+      "control": { "mode": "full", "serverMutationAllowed": true }
+    }
+  },
+  {
+    "protocolVersion": "spark.runtime.v1alpha1",
+    "messageId": "msg_44444444444444444444444444444444",
+    "type": "workspace.snapshot",
+    "sentAt": "2026-05-22T00:03:00.000Z",
+    "runtimeId": "rt_11111111111141111111111111111111",
+    "workspaceBindingId": "rtwb_11111111111141111111111111111111",
+    "workspaceId": "ws_22222222222242222222222222222222",
+    "payload": {
+      "displayName": "Disconnected unhealthy workspace",
+      "status": "unavailable",
+      "connection": { "status": "disconnected", "lastSeenAt": "2026-05-22T00:02:30.000Z" },
+      "borrowed": { "borrowed": false, "interactiveClientCount": 0, "borrowedByClientIds": [] },
+      "executor": {
+        "state": "unhealthy",
+        "clientId": "exec-local-3",
+        "activeInvocationCount": 0,
+        "activeAgentCount": 0,
+        "lastSeenAt": "2026-05-22T00:02:30.000Z",
+        "unhealthyReason": "heartbeat missed"
+      },
+      "control": {
+        "mode": "snapshot_only",
+        "reason": "daemon_disconnected",
+        "serverMutationAllowed": false
+      }
+    }
+  }
+]

@@ -1,9 +1,7 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import mvpMessages from "./fixtures/runtime-v1/mvp-messages.ws.json" with { type: "json" };
-import registerRequest from "./fixtures/runtime-v1/register-runtime.request.json" with { type: "json" };
-import registerResponse from "./fixtures/runtime-v1/register-runtime.response.json" with { type: "json" };
-import heartbeat from "./fixtures/runtime-v1/runtime-heartbeat.ws.json" with { type: "json" };
-import hello from "./fixtures/runtime-v1/runtime-hello.ws.json" with { type: "json" };
 import {
   runtimeHeartbeatEnvelopeSchema,
   runtimeHelloEnvelopeSchema,
@@ -14,6 +12,24 @@ import {
   workspaceSnapshotEnvelopeSchema,
 } from "./index.ts";
 
+const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "runtime-v1");
+const mvpMessages = readFixture("mvp-messages.ws.json") as unknown[];
+const workspaceControlStates = readFixture("workspace-control-states.ws.json") as unknown[];
+const registerRequest = readFixture("register-runtime.request.json");
+const registerResponse = readFixture("register-runtime.response.json");
+const heartbeat = readFixture("runtime-heartbeat.ws.json");
+const hello = readFixture("runtime-hello.ws.json");
+
+function readFixture(name: string): unknown {
+  return JSON.parse(readFileSync(join(fixtureDir, name), "utf8")) as unknown;
+}
+
+function hasMessageType(message: unknown, type: string): boolean {
+  return (
+    typeof message === "object" && message !== null && "type" in message && message.type === type
+  );
+}
+
 describe("runtime protocol fixtures", () => {
   it("validates runtime registration request fixture", () => {
     expect(runtimeRegistrationRequestSchema.parse(registerRequest).displayName).toBe(
@@ -23,7 +39,7 @@ describe("runtime protocol fixtures", () => {
 
   it("validates runtime registration response fixture", () => {
     expect(runtimeRegistrationResponseSchema.parse(registerResponse).protocolVersion).toBe(
-      "navia.runtime.v1alpha1",
+      "spark.runtime.v1alpha1",
     );
   });
 
@@ -43,6 +59,37 @@ describe("runtime protocol fixtures", () => {
     expect(parsed.payload.workspaceBindings?.[0]?.workspaceClients?.[0]?.kind).toBe("interactive");
   });
 
+  it("validates workspace control state fixtures", () => {
+    const parsed = workspaceControlStates.map((message) =>
+      workspaceSnapshotEnvelopeSchema.parse(message),
+    );
+
+    expect(parsed.map((message) => message.payload.borrowed?.borrowed)).toEqual([
+      true,
+      false,
+      false,
+      false,
+    ]);
+    expect(parsed.map((message) => message.payload.connection?.status)).toEqual([
+      "connected",
+      "connected",
+      "connected",
+      "disconnected",
+    ]);
+    expect(parsed.map((message) => message.payload.executor?.state)).toEqual([
+      "online",
+      "none",
+      "starting",
+      "unhealthy",
+    ]);
+    expect(parsed.map((message) => message.payload.control?.serverMutationAllowed)).toEqual([
+      false,
+      true,
+      true,
+      false,
+    ]);
+  });
+
   it("validates MVP protocol message fixtures", () => {
     const parsed = mvpMessages.map((message) => runtimeMessageEnvelopeSchema.parse(message));
 
@@ -52,13 +99,13 @@ describe("runtime protocol fixtures", () => {
     expect(parsed.map((message) => message.type)).toContain("artifact.projected");
 
     const reconcile = runtimeReconcileReportEnvelopeSchema.parse(
-      mvpMessages.find((message) => message.type === "runtime.reconcile.report"),
+      mvpMessages.find((message) => hasMessageType(message, "runtime.reconcile.report")),
     );
     expect(reconcile.payload.activeAgentCount).toBe(0);
     expect(reconcile.payload.executor?.state).toBe("online");
 
     const snapshot = workspaceSnapshotEnvelopeSchema.parse(
-      mvpMessages.find((message) => message.type === "workspace.snapshot"),
+      mvpMessages.find((message) => hasMessageType(message, "workspace.snapshot")),
     );
     expect(snapshot.payload.borrowed).toMatchObject({
       borrowed: true,

@@ -809,23 +809,36 @@ function renderWorkflowRunResultText(
   >,
 ): string {
   const body = result.result === undefined ? "undefined" : JSON.stringify(result.result, null, 2);
+  const usage = workflowRunUsageText(run);
+  const phaseTimeline = workflowRunPhaseTimeline(result.phases);
+  const controlHint = `inspect: task_read({ action: "run_status", runRef: "${run.ref}", includeDetails: true }) · save: task_read({ action: "run_status", runAction: "save", runRef: "${run.ref}" }) · ack: task_read({ action: "run_status", runAction: "ack", runRef: "${run.ref}" })`;
   return [
     `Workflow run completed: ${source}`,
-    `Run: ${run.ref}`,
-    `Name: ${result.meta.name}`,
-    `Script hash: ${run.scriptHash.slice(0, 12)}`,
-    run.base?.baseRef ? `Base: ${run.base.baseRef}` : undefined,
-    `Agents: ${result.agentCount}`,
-    workflowRunUsageText(run),
-    result.phases.length
-      ? `Phases: ${result.phases.map((phase) => `${phase.title}${phase.status ? `:${phase.status}` : ""}`).join(", ")}`
-      : undefined,
-    "",
-    "Result:",
+    `╭─ Workflow ${result.meta.name} [succeeded]`,
+    `│ run        ${run.ref}`,
+    `│ source     ${source}`,
+    `│ script     ${run.scriptHash.slice(0, 12)}`,
+    run.base?.baseRef ? `│ base       ${run.base.baseRef}` : undefined,
+    `│ agents     ${result.agentCount} (${result.journal.length} journal entr${result.journal.length === 1 ? "y" : "ies"})`,
+    usage ? `│ usage      ${usage.replace(/^Usage: /u, "")}` : undefined,
+    `│ phases     ${phaseTimeline}`,
+    `│ controls   ${controlHint}`,
+    `╰─ Result (${result.result === undefined ? "undefined" : "compact JSON"}; full value is in details.workflow.result)`,
     body,
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
+}
+
+function workflowRunPhaseTimeline(phases: WorkflowRunResult["phases"]): string {
+  if (phases.length === 0) return "no phases recorded";
+  return phases.map((phase) => `${workflowPhaseIcon(phase.status)} ${phase.title}`).join(" → ");
+}
+
+function workflowPhaseIcon(status: WorkflowRunResult["phases"][number]["status"]): string {
+  if (status === "fail") return "✗";
+  if (status === "skip") return "↷";
+  return "✓";
 }
 
 function workflowRunUsageText(

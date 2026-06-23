@@ -21,7 +21,7 @@
     "access": "public"
   },
   "scripts": {
-    "check": "tsc -p ../../tsconfig.json --noEmit"
+    "check": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.79.4",

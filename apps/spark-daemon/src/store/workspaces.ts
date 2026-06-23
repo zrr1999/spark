@@ -9,7 +9,7 @@ import {
   type WorkspaceBorrowedState,
   type WorkspaceClientKind,
   type WorkspaceClientProjection,
-} from "@zendev-lab/navia-protocol";
+} from "@zendev-lab/spark-protocol";
 import { asciiSlug } from "@zendev-lab/navia-system";
 
 export interface WorkspaceProfileRegistration {
@@ -111,6 +111,13 @@ export interface RegisterWorkspaceOptions {
   profile?: WorkspaceProfileRegistration;
   consumedRegistrationToken?: string;
   serverCredential?: SparkDaemonServerCredentialRegistration;
+  now?: string;
+}
+
+export interface EnsureLocalWorkspaceOptions {
+  localPath: string;
+  displayName?: string;
+  localWorkspaceKey?: string;
   now?: string;
 }
 
@@ -232,6 +239,25 @@ export function registerWorkspace(
     const workspace = addWorkspace(db, addOptions);
     recordSparkDaemonWorkspaceRegistration(db, workspace, options, now);
     return workspace;
+  });
+}
+
+export function ensureLocalWorkspace(
+  db: DatabaseSync,
+  options: EnsureLocalWorkspaceOptions,
+): SparkDaemonWorkspace {
+  const localPath = normalizeLocalPath(options.localPath);
+  const existing = findWorkspaceByPathOnServer(db, "", localPath);
+  if (existing) {
+    return isUserDetachedWorkspace(existing) ? attachWorkspace(db, { id: existing.id }) : existing;
+  }
+
+  return registerWorkspace(db, {
+    serverUrl: "",
+    localPath,
+    ...(options.displayName ? { displayName: options.displayName } : {}),
+    ...(options.localWorkspaceKey ? { localWorkspaceKey: options.localWorkspaceKey } : {}),
+    ...(options.now ? { now: options.now } : {}),
   });
 }
 

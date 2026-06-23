@@ -2,7 +2,7 @@
 
 `spark` is the Spark suite for Pi: a controlled agentic development system where intent-specific Pi commands and canonical tools compose lower-level `pi-*` extension capabilities through project/task orchestration policy.
 
-The repository also contains standalone Spark entrypoints. The target topology mirrors cue-shell-style dispatch: `apps/spark-cli` publishes a thin `spark` dispatcher, and the dispatcher resolves subcommands to executable apps such as `spark-tui`, `spark-daemon`, and `spark-cockpit`.
+The repository also contains standalone Spark entrypoints. The target topology mirrors cue-shell-style dispatch: `apps/spark-cli` publishes a thin `spark` dispatcher, and the dispatcher resolves public subcommands such as `spark tui`, `spark daemon`, and `spark cockpit` to Spark app surfaces.
 
 ```text
 spark tui
@@ -79,7 +79,7 @@ Manage settings through the canonical role tool actions: `role({ action: "model_
 
 Spark package names are type-first:
 
-- `@zendev-lab/spark-cli` — thin dispatcher package for the root `spark` binary under `apps/spark-cli`. It routes `spark <name>` to `spark-<name>` and does not own product runtime logic.
+- `@zendev-lab/spark-cli` — thin dispatcher package for the root `spark` binary under `apps/spark-cli`. It routes public `spark ...` command groups to Spark app surfaces and does not own product runtime logic.
 - `@zendev-lab/spark-tui` — Spark-owned reusable TUI compatibility boundary over `@earendil-works/pi-tui`; centralizes text width/truncation/wrapping, key parsing, and current `pi-tui` component/runtime exports so future renderer swaps do not leak through extension packages.
 - `@zendev-lab/spark-tui-app` — executable Spark native TUI app under `apps/spark-tui`; publishes the `spark-tui` binary plus public provider/headless-executor surfaces used by the daemon.
 - `@zendev-lab/spark-daemon` — Spark daemon executable app package under `apps/spark-daemon`.
@@ -102,7 +102,7 @@ Spark package names are type-first:
 Spark Cockpit is the local web cockpit/projection product line while retaining separate implementation package boundaries:
 
 - `@zendev-lab/spark-cockpit-db`, `@zendev-lab/spark-cockpit-system`, and `@zendev-lab/spark-cockpit-ui` are the target names for Cockpit-private projection DB, local-system helper, and UI packages.
-- `@zendev-lab/navia-protocol`, `@zendev-lab/navia-db`, `@zendev-lab/navia-domain`, `@zendev-lab/navia-system`, and `@zendev-lab/navia-ui` are legacy-named transition packages under `packages/navia-*`. The intended hard cutover is to move protocol schemas into `@zendev-lab/spark-protocol`, rename DB/system/UI to `spark-cockpit-*`, and merge away `navia-domain` unless it gains a concrete stable responsibility.
+- `@zendev-lab/spark-protocol` is the consolidated Spark protocol package and owns the former `navia-protocol` runtime/schema surface. `@zendev-lab/navia-db`, `@zendev-lab/navia-domain`, `@zendev-lab/navia-system`, and `@zendev-lab/navia-ui` remain legacy-named transition packages under `packages/navia-*`; the intended hard cutover is to rename DB/system/UI to `spark-cockpit-*` and merge away `navia-domain` unless it gains a concrete stable responsibility.
 
 Typical merged-repo development commands:
 

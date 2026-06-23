@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createId, runtimeProtocolVersion } from "@zendev-lab/navia-protocol";
+import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { migrate, openMemoryDatabase } from "@zendev-lab/navia-db";
 import { createWorkspaceWithOwnerBinding, recordArtifactProjection } from "./projection-services";
 import {

@@ -14,7 +14,7 @@ import {
   runtimeReconcileReportEnvelopeSchema,
   taskGraphSnapshotEnvelopeSchema,
   workspaceSnapshotEnvelopeSchema,
-} from "@zendev-lab/navia-protocol";
+} from "@zendev-lab/spark-protocol";
 import { bearerTokenFromAuthorization } from "@zendev-lab/navia-system";
 import { hashSecret } from "./auth";
 import {
@@ -1077,7 +1077,7 @@ function sendError(
 ): void {
   ws.send(
     JSON.stringify({
-      protocolVersion: "navia.runtime.v1alpha1",
+      protocolVersion: runtimeProtocolVersion,
       messageId: createId("msg"),
       type: "server.error",
       sentAt: new Date().toISOString(),

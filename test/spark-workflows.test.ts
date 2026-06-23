@@ -1286,6 +1286,13 @@ return 'inline-result'`,
       { cwd: dir },
     );
     assert.match(inline.content[0].text, /Workflow run completed: inline workflow/);
+    assert.match(inline.content[0].text, /╭─ Workflow inline \[succeeded\]/);
+    assert.match(inline.content[0].text, /│ phases\s+✓ Done/);
+    assert.match(inline.content[0].text, /│ controls\s+inspect: task_read/);
+    assert.match(
+      inline.content[0].text,
+      /╰─ Result \(compact JSON; full value is in details\.workflow\.result\)/,
+    );
     const inlineDetails = inline.details as { workflow: { agentCount: number } };
     assert.equal(inlineDetails.workflow.agentCount, 2);
     assert.equal(seen[0]?.tokenBudget, 50);

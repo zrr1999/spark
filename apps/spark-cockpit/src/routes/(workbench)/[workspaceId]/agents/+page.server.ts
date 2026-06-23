@@ -1,4 +1,4 @@
-import { createId } from "@zendev-lab/navia-protocol";
+import { createId } from "@zendev-lab/spark-protocol";
 import { fail, redirect } from "@sveltejs/kit";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { getDatabase } from "$lib/server/db";

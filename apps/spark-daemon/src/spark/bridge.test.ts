@@ -6,7 +6,7 @@ import {
   createId,
   runtimeProtocolVersion,
   serverCommandEnvelopeSchema,
-} from "@zendev-lab/navia-protocol";
+} from "@zendev-lab/spark-protocol";
 import { resolveNaviaPaths } from "@zendev-lab/navia-system";
 import { openSparkDaemonDatabase } from "../store/schema.js";
 import { addWorkspace } from "../store/workspaces.js";

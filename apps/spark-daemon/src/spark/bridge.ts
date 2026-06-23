@@ -73,7 +73,7 @@ import {
   type ArtifactProjectionPayload,
   type ServerCommandPayload,
   type serverCommandEnvelopeSchema,
-} from "@zendev-lab/navia-protocol";
+} from "@zendev-lab/spark-protocol";
 import type { NaviaPaths } from "@zendev-lab/navia-system";
 import type { SparkDaemonWorkspace } from "../store/workspaces.js";
 import {

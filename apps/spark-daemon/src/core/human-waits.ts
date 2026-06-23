@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { createId, type HumanRequestCreatedPayload } from "@zendev-lab/navia-protocol";
+import { createId, type HumanRequestCreatedPayload } from "@zendev-lab/spark-protocol";
 
 type JsonObject = Record<string, unknown>;
 type HumanQuestion = HumanRequestCreatedPayload["questions"][number];

@@ -113,6 +113,8 @@ function appendSparkDynamicWorkflowRunDetails(
     );
   const usage = formatWorkflowUsageDetails(run);
   if (usage) lines.push(`${indent}Usage: ${usage}`);
+  lines.push(`${indent}Timeline: ${formatPhaseTimeline(run)}`);
+  lines.push(`${indent}Controls: ${formatDynamicWorkflowControls(run)}`);
   if ((run.agentTelemetry ?? []).length > 0) {
     const tail = (run.agentTelemetry ?? []).slice(-5);
     lines.push(
@@ -189,7 +191,48 @@ function formatAgentTelemetry(
 
 function formatPhaseSummary(run: SparkDynamicWorkflowRunRecord): string {
   if (run.phases.length === 0) return "0";
-  return run.phases.map((phase) => `${phase.title}:${phase.status ?? "running"}`).join(",");
+  return run.phases
+    .map((phase) => `${phase.title}:${phase.status ?? phaseStatusFallback(run.status)}`)
+    .join(",");
+}
+
+function formatPhaseTimeline(run: SparkDynamicWorkflowRunRecord): string {
+  if (run.phases.length === 0) return "no phases recorded";
+  return run.phases
+    .map((phase) => `${phaseStatusIcon(phase.status, run.status)} ${phase.title}`)
+    .join(" → ");
+}
+
+function phaseStatusFallback(status: SparkDynamicWorkflowRunRecord["status"]): string {
+  if (status === "succeeded") return "done";
+  if (status === "failed") return "interrupted";
+  if (status === "stopped") return "stopped";
+  if (status === "paused") return "paused";
+  if (status === "stale") return "stale";
+  return "running";
+}
+
+function phaseStatusIcon(
+  status: SparkDynamicWorkflowRunRecord["phases"][number]["status"],
+  runStatus: SparkDynamicWorkflowRunRecord["status"],
+): string {
+  if (status === "fail" || runStatus === "failed") return "✗";
+  if (status === "skip") return "↷";
+  if (runStatus === "paused") return "Ⅱ";
+  if (runStatus === "stale") return "!";
+  if (runStatus === "running" && status === undefined) return "…";
+  return "✓";
+}
+
+function formatDynamicWorkflowControls(run: SparkDynamicWorkflowRunRecord): string {
+  const inspect = `inspect runRef=${run.ref}`;
+  if (run.status === "running") return `${inspect} · pause · stop`;
+  if (run.status === "paused" || run.status === "stale")
+    return `${inspect} · resume · stop · restart`;
+  if (run.status === "failed") return `${inspect} · save · restart · ack`;
+  if (run.status === "stopped") return `${inspect} · save · restart · ack`;
+  if (run.status === "succeeded") return `${inspect} · save · ack`;
+  return inspect;
 }
 
 function dynamicWorkflowNextAction(run: SparkDynamicWorkflowRunRecord): string {

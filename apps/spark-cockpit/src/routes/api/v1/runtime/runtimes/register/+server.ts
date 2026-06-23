@@ -2,7 +2,7 @@ import {
   runtimeRegistrationRequestSchema,
   runtimeRegistrationResponseSchema,
   runtimeProtocolVersion,
-} from "@zendev-lab/navia-protocol";
+} from "@zendev-lab/spark-protocol";
 import { bearerTokenFromAuthorization } from "@zendev-lab/navia-system";
 import { json, type RequestHandler } from "@sveltejs/kit";
 import { getDatabase } from "$lib/server/db";

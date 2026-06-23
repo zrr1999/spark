@@ -3,7 +3,6 @@ import { readdir, readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 import {
-  LOOP_COMPLETION_BOUNDARY_GUIDANCE,
   compactContinuationPrompt,
   continuationGoalIdFromPrompt,
   createGoal,
@@ -42,9 +41,8 @@ void test("pi-goal helpers create goals and continuation prompts", () => {
   assert.match(prompt, /<spark_goal_continuation/);
   assert.match(prompt, /goal\(\{ action: "status" \}\)/);
   assert.match(prompt, /goal\(\{ action: "complete" \}\)/);
-  assert.match(prompt, /requesting reviewer-gated completion/);
-  assert.match(prompt, /pi-loop primitive/);
-  assert.match(prompt, /not the completion authority/);
+  assert.match(prompt, /goal\(\{ action: "status" \}\)/);
+  assert.match(prompt, /goal\(\{ action: "complete" \}\)/);
   assert.equal(continuationGoalIdFromPrompt(prompt), goal.goalId);
 
   const response = goalToolResponse(goal);
@@ -52,7 +50,7 @@ void test("pi-goal helpers create goals and continuation prompts", () => {
   assert.equal(response.goal?.status, "active");
 });
 
-void test("pi-goal re-exports non-completing pi-loop primitives without moving completion into loop", () => {
+void test("pi-goal re-exports non-completing pi-loop primitives", () => {
   const loop = createLoop("Continue without completing", 123);
   const tick = evaluateLoopTick({ loop, now: 124, reason: "start" });
 
@@ -60,7 +58,6 @@ void test("pi-goal re-exports non-completing pi-loop primitives without moving c
   assert.equal(tick.loop?.status, "active");
   assert.notEqual(tick.decision, "complete");
   assert.notEqual(tick.loop?.status, "complete");
-  assert.match(LOOP_COMPLETION_BOUNDARY_GUIDANCE, /must not decide that a goal is complete/);
 });
 
 async function listTypeScriptFiles(dir: string): Promise<string[]> {

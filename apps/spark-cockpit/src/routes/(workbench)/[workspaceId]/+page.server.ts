@@ -1,5 +1,6 @@
 import { error } from "@sveltejs/kit";
 import { getDatabase } from "$lib/server/db";
+import { loadWorkspaceServerControl } from "$lib/server/projection-services";
 import type { PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = ({ params }) => {
@@ -139,6 +140,7 @@ export const load: PageServerLoad = ({ params }) => {
 
   return {
     workspaces,
+    workspaceControl: loadWorkspaceServerControl(db, workspace.id),
     runnerConnections,
     runnerBindings,
     ownerBindings,

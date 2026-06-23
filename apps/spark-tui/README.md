@@ -16,7 +16,7 @@ spark tui "initial Spark goal"
 spark --print "headless Spark prompt"
 ```
 
-`spark-tui` launches a Spark-owned terminal UI by default, but user prompts are submitted to the single Spark daemon over local IPC. `spark-tui --print` uses the same headless `turn.submit` path. The root `spark` command is a thin dispatcher in `apps/spark-cli` that routes to `spark-tui` or `spark-daemon`; it does not own TUI/runtime logic.
+`spark-tui` launches a Spark-owned terminal UI by default, but user prompts are submitted to the single Spark daemon over local IPC. `spark-tui --print` uses the same headless `turn.submit` path. The root `spark` command is a thin dispatcher in `apps/spark-cli` that routes `spark tui ...` and `spark daemon ...` to their app surfaces; it does not own TUI/runtime logic.
 
 ## Native host wiring
 

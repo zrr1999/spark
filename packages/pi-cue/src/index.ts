@@ -145,6 +145,10 @@ function cueTransportKey(transport: CueResolvedTransport): string {
   );
 }
 
+function cueErrorDetail(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function cueSessionOptionsFromContext(ctx?: PiCueToolContext): Required<CueSessionOptions> {
   const cwd = resolveCueWorkingDirectory(undefined, ctx?.cwd);
   const sessionId = cueSessionIdFromContext(ctx, cwd);
@@ -187,12 +191,17 @@ async function getClient(ctx?: PiCueToolContext): Promise<CueClient> {
   } catch (error) {
     if (error instanceof CueError && error.code === "UNSUPPORTED_PROTOCOL") throw error;
     if (transport.transport === "ssh") throw error;
-    // Daemon not running — auto-start local/unix transports only.
+    if (!(error instanceof CueError) || error.code !== "DAEMON_UNREACHABLE") throw error;
+    // Local socket could not be reached — auto-start local/unix transports only.
     ctx?.ui?.notify?.("cue-shell: auto-starting daemon…", "info");
     try {
       await autoStartDaemon(transport.socket_path);
     } catch (startErr) {
-      const msg = `cue-shell daemon not reachable at ${transport.socket_path}. Auto-start failed: ${(startErr as Error).message}`;
+      const msg = [
+        `cue-shell daemon not reachable at ${transport.socket_path}.`,
+        `Initial connection failure: ${cueErrorDetail(error)}`,
+        `Auto-start failed: ${cueErrorDetail(startErr)}`,
+      ].join("\n");
       throw new CueError("DAEMON_UNREACHABLE", msg);
     }
     // Retry connection after starting.
@@ -201,7 +210,11 @@ async function getClient(ctx?: PiCueToolContext): Promise<CueClient> {
       clientTransportKey = transportKey;
     } catch (err) {
       if (err instanceof CueError && err.code === "UNSUPPORTED_PROTOCOL") throw err;
-      const msg = `cue-shell daemon started but still not reachable at ${transport.socket_path}: ${(err as Error).message}`;
+      const msg = [
+        `cue-shell daemon auto-started but still not reachable at ${transport.socket_path}.`,
+        `Initial connection failure: ${cueErrorDetail(error)}`,
+        `Retry failure: ${cueErrorDetail(err)}`,
+      ].join("\n");
       throw new CueError("DAEMON_UNREACHABLE", msg);
     }
   }

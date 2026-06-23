@@ -1,5 +1,5 @@
 {
-  "protocolVersion": "navia.runtime.v1alpha1",
+  "protocolVersion": "spark.runtime.v1alpha1",
   "messageId": "msg_22222222222242222222222222222222",
   "type": "runtime.heartbeat",
   "sentAt": "2026-05-21T00:00:15.000Z",

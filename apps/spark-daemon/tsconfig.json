@@ -10,7 +10,6 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "allowSyntheticDefaultImports": true,
-    "rootDir": "src",
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "types": ["node", "vitest/globals"]

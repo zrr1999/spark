@@ -226,6 +226,75 @@ void test("CueClient.connect rejects daemons without required Pong protocol fiel
   }
 });
 
+void test("pi-cue local IPC initialization failures are not masked by daemon auto-start", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-cue-init-fail-"));
+  const socketPath = join(dir, "cued.sock");
+  const server = net.createServer((socket) => {
+    let buffer = Buffer.alloc(0);
+    socket.on("data", (chunk: Buffer) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      while (buffer.length >= 4) {
+        const len = buffer.readUInt32BE(0);
+        if (buffer.length < 4 + len) break;
+        const body = buffer.subarray(4, 4 + len);
+        buffer = buffer.subarray(4 + len);
+        const message = JSON.parse(body.toString("utf8")) as CueFrame;
+        const payload = requestPayload(message);
+        if ("Handshake" in payload) {
+          sendFrame(socket, {
+            type: "response",
+            id: message.id as number,
+            payload: { Ok: { Ack: {} } },
+          });
+          continue;
+        }
+        if ("Ping" in payload) socket.destroy();
+      }
+    });
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    await withTempPath(
+      {
+        "cue-client": `#!/bin/sh\nprintf '%s\n' '{"schema_version":1,"profile_name":"local","transport":"unix","socket_path":"${socketPath}"}'\n`,
+        cued: `#!/bin/sh\necho unexpected-autostart >&2\nexit 1\n`,
+      },
+      async () => {
+        const tools = registerCueToolsForProtocolTest();
+        const execTool = tools.get("cue_exec");
+        assert.ok(execTool);
+        await assert.rejects(
+          execTool.execute(
+            "init-fail",
+            { command: "echo never-runs", background: true },
+            new AbortController().signal,
+            () => undefined,
+            { cwd: "/work" },
+          ),
+          (error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            return (
+              error instanceof CueError &&
+              error.code === "UNSUPPORTED_PROTOCOL" &&
+              message.includes("IPC initialization failed") &&
+              message.includes("connection closed") &&
+              !message.includes("Auto-start failed") &&
+              !message.includes("unexpected-autostart")
+            );
+          },
+        );
+      },
+    );
+  } finally {
+    __resetPiCueClientForTests();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
 function singleJobCueServer(label: string) {
   return (message: CueFrame, socket: Socket) => {
     const id = message.id as number;
@@ -538,6 +607,7 @@ exit 1
           return (
             error instanceof CueError &&
             error.code === "DAEMON_UNREACHABLE" &&
+            message.includes("Initial connection failure:") &&
             message.includes("cued start exited with code 1") &&
             message.includes(`Attempted: cued start --socket ${socketPath}`) &&
             message.includes(`Socket: ${socketPath}`) &&

@@ -2,11 +2,13 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
+  attachSparkWorkspaceClient,
   createSparkDaemonNativeCommands,
   createSparkDaemonNativeResponder,
   handleSparkDaemonCliCommand,
   parseSparkDaemonCliArgs,
   runSparkDaemonCliCommand,
+  type SparkDaemonClientOptions,
   type SparkDaemonCliCommand,
 } from "./cli/daemon.ts";
 import { runNativeSparkTui } from "./native-tui.ts";
@@ -21,6 +23,11 @@ export type SparkCliCommand =
   | { kind: "print"; prompt: string }
   | { kind: "tui"; initialMessage?: string }
   | { kind: "daemon"; command: SparkDaemonCliCommand };
+
+export interface RunSparkCliOptions {
+  daemonClient?: SparkDaemonClientOptions;
+  runTui?: typeof runNativeSparkTui;
+}
 
 export function parseSparkCliArgs(argv: string[]): SparkCliArgs {
   if (argv.some((arg) => arg === "-h" || arg === "--help")) return { help: true };
@@ -44,38 +51,63 @@ export function parseSparkCliCommand(argv: string[]): SparkCliCommand {
   return { kind: "tui", initialMessage: initialMessage || undefined };
 }
 
-export async function runSparkCli(argv: string[] = process.argv.slice(2)): Promise<number> {
+export async function runSparkCli(
+  argv: string[] = process.argv.slice(2),
+  options: RunSparkCliOptions = {},
+): Promise<number> {
   const command = parseSparkCliCommand(argv);
+  const daemonClient = options.daemonClient ?? {};
   switch (command.kind) {
     case "help":
       printHelp();
       return 0;
     case "daemon":
-      return await runSparkDaemonCliCommand(command.command);
+      return await runSparkDaemonCliCommand(command.command, undefined, daemonClient);
     case "print": {
-      const result = await handleSparkDaemonCliCommand({
-        action: "submit",
-        json: true,
-        sessionId: `spark-print-${Date.now().toString(36)}`,
-        prompt: command.prompt,
+      const lease = await attachSparkWorkspaceClient(daemonClient, {
+        kind: "headless",
+        displayName: "Spark headless submit",
+        heartbeatIntervalMs: false,
       });
-      console.log(JSON.stringify(result, null, 2));
-      return 0;
+      try {
+        const result = await handleSparkDaemonCliCommand(
+          {
+            action: "submit",
+            json: true,
+            sessionId: `spark-print-${Date.now().toString(36)}`,
+            prompt: command.prompt,
+          },
+          daemonClient,
+        );
+        console.log(JSON.stringify(result, null, 2));
+        return 0;
+      } finally {
+        await lease.release();
+      }
     }
     case "tui": {
-      await runNativeSparkTui({
-        initialMessage: command.initialMessage,
-        responder: createSparkDaemonNativeResponder(),
-        slashCommands: createSparkDaemonNativeCommands(),
+      const lease = await attachSparkWorkspaceClient(daemonClient, {
+        kind: "interactive",
+        displayName: "Spark TUI",
       });
-      return 0;
+      try {
+        const runTui = options.runTui ?? runNativeSparkTui;
+        await runTui({
+          initialMessage: command.initialMessage,
+          responder: createSparkDaemonNativeResponder(daemonClient),
+          slashCommands: createSparkDaemonNativeCommands(daemonClient),
+        });
+        return 0;
+      } finally {
+        await lease.release();
+      }
     }
   }
 }
 
 function printHelp(): void {
   console.log(
-    `spark-tui - Spark terminal UI\n\nUsage:\n  spark-tui [initial message]\n  spark-tui --print <prompt>\n  spark-tui --help\n\nRuns terminal UI rendering by default, but all prompts are submitted to the Spark daemon over local IPC. Use the root "spark daemon ..." dispatcher path or the "spark-daemon" executable for daemon administration.`,
+    `spark-tui - Spark terminal UI\n\nUsage:\n  spark-tui [initial message]\n  spark-tui --print <prompt>\n  spark-tui --help\n\nRuns terminal UI rendering by default, but all prompts are submitted to the Spark daemon over local IPC. Use the root "spark daemon ..." dispatcher path for daemon administration.`,
   );
 }
 

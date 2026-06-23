@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createId, type ArtifactProjectionPayload } from "@zendev-lab/navia-protocol";
+import { createId, type ArtifactProjectionPayload } from "@zendev-lab/spark-protocol";
 
 /**
  * Maximum byte size for an inline preview embedded in a daemon-produced

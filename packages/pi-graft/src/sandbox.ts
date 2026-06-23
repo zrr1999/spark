@@ -746,6 +746,114 @@ function stringArrayField(value: unknown, field: string): string[] {
   return fieldValue.filter((item): item is string => typeof item === "string");
 }
 
+function safeTreeMetadata(value: JsonRecord | undefined): JsonRecord {
+  const metadata: JsonRecord = {};
+  for (const field of ["path", "kind", "hash", "mime", "source_ref"] as const) {
+    const item = stringField(value, field);
+    if (item !== undefined) metadata[field] = item;
+  }
+  for (const field of ["size", "line_count", "child_count"] as const) {
+    const item = numberField(value, field);
+    if (item !== undefined) metadata[field] = item;
+  }
+  const isUtf8 = booleanField(value, "is_utf8_text");
+  if (isUtf8 !== undefined) metadata.is_utf8_text = isUtf8;
+  const source = isRecord(value?.source) ? value.source : undefined;
+  if (source) {
+    const safeSource: JsonRecord = {};
+    for (const field of ["kind", "base", "scratch", "resolved_state"] as const) {
+      const item = stringField(source, field);
+      if (item !== undefined) safeSource[field] = item;
+    }
+    if (Object.keys(safeSource).length > 0) metadata.source = safeSource;
+  }
+  return metadata;
+}
+
+async function sandboxNativeMetadata(
+  state: PiGraftSandboxState,
+  path: string,
+): Promise<{ metadata: JsonRecord; backend: SandboxTreeBackend; execution: unknown }> {
+  const run = await runGraftJson(state.workspace, [
+    "tree",
+    "metadata",
+    ...sandboxTreeSourceArgv(state),
+    path,
+  ]);
+  return {
+    metadata: safeTreeMetadata(run.result),
+    backend: NATIVE_TREE_BACKEND,
+    execution: run.execution,
+  };
+}
+
+async function sandboxMaterializedMetadata(
+  state: PiGraftSandboxState,
+  path: string,
+  fallback?: { attemptedBackend: SandboxTreeBackend; fallbackReason: string },
+): Promise<{
+  metadata: JsonRecord;
+  backend: SandboxTreeBackend;
+  attemptedBackend?: SandboxTreeBackend;
+  fallbackReason?: string;
+  execution?: unknown;
+}> {
+  const visible = await sandboxMaterializedVisiblePaths(state, {}, fallback);
+  const prefix = `${path}/`;
+  const isFile = visible.paths.includes(path);
+  const childCount = visible.paths.filter((item) => item.startsWith(prefix)).length;
+  if (!isFile && childCount === 0) throw new Error(`sandbox path not found: ${path}`);
+  const metadata: JsonRecord = {
+    path,
+    kind: isFile ? "file" : "directory",
+  };
+  if (!isFile) metadata.child_count = childCount;
+  return {
+    metadata,
+    backend: MATERIALIZED_TREE_BACKEND,
+    attemptedBackend: fallback?.attemptedBackend,
+    fallbackReason: fallback?.fallbackReason,
+    execution: visible.execution,
+  };
+}
+
+async function sandboxFileMetadata(
+  state: PiGraftSandboxState,
+  path: string,
+): Promise<{
+  metadata: JsonRecord;
+  backend: SandboxTreeBackend;
+  attemptedBackend?: SandboxTreeBackend;
+  fallbackReason?: string;
+  execution?: unknown;
+}> {
+  const preference = sandboxTreeBackendPreference();
+  if (preference === "materialized") return sandboxMaterializedMetadata(state, path);
+  try {
+    return await sandboxNativeMetadata(state, path);
+  } catch (error) {
+    const fallbackReason = nativeTreeUnavailableReason(error);
+    if (preference === "native" || !fallbackReason) throw error;
+    return sandboxMaterializedMetadata(state, path, {
+      attemptedBackend: NATIVE_TREE_BACKEND,
+      fallbackReason,
+    });
+  }
+}
+
+function metadataSummary(metadata: JsonRecord): string {
+  const path = stringField(metadata, "path") ?? "unknown";
+  const kind = stringField(metadata, "kind") ?? "unknown";
+  const size = numberField(metadata, "size");
+  const isUtf8 = booleanField(metadata, "is_utf8_text");
+  return [
+    `path: ${path}`,
+    `kind: ${kind}`,
+    ...(size === undefined ? [] : [`size: ${size}`]),
+    ...(isUtf8 === undefined ? [] : [`isUtf8Text: ${isUtf8}`]),
+  ].join("\n");
+}
+
 async function sandboxNativeGrep(
   state: PiGraftSandboxState,
   options: { pattern: string; basePath?: string; glob?: string; limit: number },
@@ -920,23 +1028,53 @@ export function registerPiGraftSandboxExtension(pi: PiGraftExtensionApi): void {
     ) {
       const state = requireSandboxState(sandboxState);
       const path = sandboxPath(params.path);
-      const read = await readSandboxFile(state, path);
-      sandboxState = updateSandboxState(pi, state, { lastScratch: read.scratch });
-      const rendered = renderTextSlice(read.content, params.offset, params.limit);
-      return {
-        content: [{ type: "text", text: rendered.text }],
-        details: {
-          truncation: undefined,
-          sandbox: true,
-          operation: "read",
-          path,
-          source: sandboxSourceLabel(state),
-          state: sandboxState,
-          result: read.result,
-          execution: read.execution,
-          nextOffset: rendered.nextOffset,
-        },
-      };
+      try {
+        const read = await readSandboxFile(state, path);
+        sandboxState = updateSandboxState(pi, state, { lastScratch: read.scratch });
+        const rendered = renderTextSlice(read.content, params.offset, params.limit);
+        return {
+          content: [{ type: "text", text: rendered.text }],
+          details: {
+            truncation: undefined,
+            sandbox: true,
+            operation: "read",
+            path,
+            source: sandboxSourceLabel(state),
+            state: sandboxState,
+            result: read.result,
+            execution: read.execution,
+            nextOffset: rendered.nextOffset,
+          },
+        };
+      } catch (error) {
+        const metadata = await sandboxFileMetadata(state, path);
+        return {
+          content: [
+            {
+              type: "text",
+              text: [
+                "Graft sandbox read did not return UTF-8 text; returning safe metadata instead.",
+                metadataSummary(metadata.metadata),
+                "Use graft_sandbox_materialize with dryRun:false for binary inspection if needed.",
+              ].join("\n"),
+            },
+          ],
+          details: {
+            truncation: undefined,
+            sandbox: true,
+            operation: "read_metadata",
+            path,
+            source: sandboxSourceLabel(state),
+            state: sandboxState,
+            backend: metadata.backend,
+            attemptedBackend: metadata.attemptedBackend,
+            fallbackReason: metadata.fallbackReason,
+            metadata: metadata.metadata,
+            readError: error instanceof Error ? error.message : String(error),
+            execution: metadata.execution,
+          },
+        };
+      }
     },
   });
 

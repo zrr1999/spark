@@ -13,6 +13,7 @@ import {
 import {
   attachWorkspace,
   attachWorkspaceClient,
+  ensureLocalWorkspace,
   ensureWorkspaceExecutorClient,
   heartbeatWorkspaceClient,
   listWorkspaces,
@@ -77,6 +78,12 @@ export interface LocalWorkspaceRegisterRequest extends RegisterWorkspaceOptions 
   registrationToken?: string;
 }
 
+export interface LocalWorkspaceEnsureLocalRequest {
+  localPath: string;
+  displayName?: string;
+  localWorkspaceKey?: string;
+}
+
 export interface LocalWorkspaceClientAttachRequest {
   workspaceId: string;
   clientId?: string;
@@ -117,6 +124,7 @@ type LocalRpcRequest =
   | { id: string; method: "turn.submit"; params: LocalTurnSubmitParams }
   | { id: string; method: "workspace.list" }
   | { id: string; method: "workspace.register"; params: LocalWorkspaceRegisterParams }
+  | { id: string; method: "workspace.ensure-local"; params: LocalWorkspaceEnsureLocalParams }
   | { id: string; method: "workspace.attach" | "workspace.stop"; params: { id: string } }
   | { id: string; method: "workspace.client.attach"; params: LocalWorkspaceClientAttachParams }
   | {
@@ -234,6 +242,21 @@ export async function requestWorkspaceRegister(
       id: localRequestId(),
       method: "workspace.register",
       params: localWorkspaceRegisterParams(params),
+    },
+    sparkDaemonWorkspace,
+  );
+}
+
+export async function requestWorkspaceEnsureLocal(
+  paths: NaviaPaths,
+  params: LocalWorkspaceEnsureLocalRequest,
+): Promise<SparkDaemonWorkspace> {
+  return localRpcRequest(
+    paths,
+    {
+      id: localRequestId(),
+      method: "workspace.ensure-local",
+      params: localWorkspaceEnsureLocalParams(params),
     },
     sparkDaemonWorkspace,
   );
@@ -457,6 +480,12 @@ export async function handleLocalRpcLine(
             observedAt: new Date().toISOString(),
           },
         };
+      case "workspace.ensure-local":
+        return {
+          id: request.id,
+          ok: true,
+          result: ensureLocalWorkspace(db, request.params),
+        };
       case "workspace.register":
         const planned = planWorkspaceRegistration(db, request.params);
         const serviceRegistration = await ensureRegistration(paths, {
@@ -599,6 +628,13 @@ function parseLocalRpcRequest(line: string): LocalRpcRequest {
       params: parseLocalWorkspaceRegisterParams(value.params),
     };
   }
+  if (value.method === "workspace.ensure-local") {
+    return {
+      id: value.id,
+      method: value.method,
+      params: parseLocalWorkspaceEnsureLocalParams(value.params),
+    };
+  }
   if (value.method === "workspace.attach" || value.method === "workspace.stop") {
     if (!isRecord(value.params) || typeof value.params.id !== "string") {
       throw new Error(`Missing workspace id for local RPC method: ${value.method}`);
@@ -658,6 +694,7 @@ type LocalWorkspaceRegisterParams = {
   profile?: NonNullable<SparkDaemonWorkspace["profile"]>;
 };
 
+type LocalWorkspaceEnsureLocalParams = LocalWorkspaceEnsureLocalRequest;
 type LocalWorkspaceClientAttachParams = LocalWorkspaceClientAttachRequest;
 type LocalWorkspaceClientHeartbeatParams = LocalWorkspaceClientHeartbeatRequest;
 type LocalWorkspaceExecutorEnsureParams = LocalWorkspaceExecutorEnsureRequest;
@@ -689,6 +726,16 @@ function localWorkspaceRegisterParams(
     ...(params.localWorkspaceKey ? { localWorkspaceKey: params.localWorkspaceKey } : {}),
     ...(params.displayName ? { displayName: params.displayName } : {}),
     ...(params.profile ? { profile: params.profile } : {}),
+  };
+}
+
+function localWorkspaceEnsureLocalParams(
+  params: LocalWorkspaceEnsureLocalRequest,
+): LocalWorkspaceEnsureLocalParams {
+  return {
+    localPath: params.localPath,
+    ...(params.displayName ? { displayName: params.displayName } : {}),
+    ...(params.localWorkspaceKey ? { localWorkspaceKey: params.localWorkspaceKey } : {}),
   };
 }
 
@@ -791,6 +838,19 @@ function parseLocalWorkspaceRegisterParams(value: unknown): LocalWorkspaceRegist
     params.profile = profile;
   }
   return params;
+}
+
+function parseLocalWorkspaceEnsureLocalParams(value: unknown): LocalWorkspaceEnsureLocalParams {
+  if (!isRecord(value) || typeof value.localPath !== "string") {
+    throw new Error("Invalid local RPC workspace ensure-local params.");
+  }
+  return {
+    localPath: value.localPath,
+    ...(typeof value.displayName === "string" ? { displayName: value.displayName } : {}),
+    ...(typeof value.localWorkspaceKey === "string"
+      ? { localWorkspaceKey: value.localWorkspaceKey }
+      : {}),
+  };
 }
 
 function parseLocalWorkspaceClientAttachParams(value: unknown): LocalWorkspaceClientAttachParams {

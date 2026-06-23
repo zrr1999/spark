@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { loadWorkspaceServerControl } from "./projection-services";
 
 function parseJsonArray(value: string | null): string[] {
   if (!value) {
@@ -401,6 +402,7 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
   return {
     project,
     ownerBinding,
+    workspaceControl: loadWorkspaceServerControl(db, project.workspaceId),
     latestSnapshot: latestSnapshot ?? null,
     tasks,
     taskSummary,

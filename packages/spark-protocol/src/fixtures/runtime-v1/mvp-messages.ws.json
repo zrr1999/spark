@@ -1,6 +1,6 @@
 [
   {
-    "protocolVersion": "navia.runtime.v1alpha1",
+    "protocolVersion": "spark.runtime.v1alpha1",
     "messageId": "msg_12121212121242121212121212121212",
     "type": "runtime.reconcile.request",
     "sentAt": "2026-05-21T00:00:10.000Z",
@@ -12,7 +12,7 @@
     }
   },
   {
-    "protocolVersion": "navia.runtime.v1alpha1",
+    "protocolVersion": "spark.runtime.v1alpha1",
     "messageId": "msg_13131313131343131313131313131313",
     "type": "runtime.reconcile.report",
     "sentAt": "2026-05-21T00:00:12.000Z",
@@ -74,7 +74,7 @@
     }
   },
   {
-    "protocolVersion": "navia.runtime.v1alpha1",
+    "protocolVersion": "spark.runtime.v1alpha1",
     "messageId": "msg_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "type": "workspace.snapshot",
     "sentAt": "2026-05-21T00:00:16.000Z",
@@ -130,7 +130,7 @@
     }
   },
   {
-    "protocolVersion": "navia.runtime.v1alpha1",
+    "protocolVersion": "spark.runtime.v1alpha1",
     "messageId": "msg_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "type": "server.command",
     "sentAt": "2026-05-21T00:01:00.000Z",
@@ -150,7 +150,7 @@
     }
   },
   {
-    "protocolVersion": "navia.runtime.v1alpha1",
+    "protocolVersion": "spark.runtime.v1alpha1",
     "messageId": "msg_cccccccccccccccccccccccccccccccc",
     "type": "runtime.command.ack",
     "sentAt": "2026-05-21T00:01:00.250Z",
@@ -168,7 +168,7 @@
     }
   },
   {
-    "protocolVersion": "navia.runtime.v1alpha1",
+    "protocolVersion": "spark.runtime.v1alpha1",
     "messageId": "msg_cdcdcdcdcdcd4dcdcdcdcdcdcdcdcdcd",
     "type": "runtime.command.reject",
     "sentAt": "2026-05-21T00:01:01.000Z",
@@ -186,7 +186,7 @@
     }
   },
   {
-    "protocolVersion": "navia.runtime.v1alpha1",
+    "protocolVersion": "spark.runtime.v1alpha1",
     "messageId": "msg_dddddddddddddddddddddddddddddddd",
     "type": "human.request.created",
     "sentAt": "2026-05-21T00:02:00.000Z",
@@ -227,7 +227,7 @@
     }
   },
   {
-    "protocolVersion": "navia.runtime.v1alpha1",
+    "protocolVersion": "spark.runtime.v1alpha1",
     "messageId": "msg_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     "type": "human.response.deliver",
     "sentAt": "2026-05-21T00:05:00.000Z",
@@ -249,7 +249,7 @@
     }
   },
   {
-    "protocolVersion": "navia.runtime.v1alpha1",
+    "protocolVersion": "spark.runtime.v1alpha1",
     "messageId": "msg_fefefefefefe4efefefefefefefefefe",
     "type": "human.response.ack",
     "sentAt": "2026-05-21T00:05:00.100Z",
@@ -264,7 +264,7 @@
     }
   },
   {
-    "protocolVersion": "navia.runtime.v1alpha1",
+    "protocolVersion": "spark.runtime.v1alpha1",
     "messageId": "msg_abababababab4abababababababababa",
     "type": "task_graph.snapshot",
     "sentAt": "2026-05-21T00:06:00.000Z",
@@ -312,7 +312,7 @@
     }
   },
   {
-    "protocolVersion": "navia.runtime.v1alpha1",
+    "protocolVersion": "spark.runtime.v1alpha1",
     "messageId": "msg_acacacacacac4acacacacacacacacaca",
     "type": "invocation.updated",
     "sentAt": "2026-05-21T00:06:05.000Z",
@@ -331,7 +331,7 @@
     }
   },
   {
-    "protocolVersion": "navia.runtime.v1alpha1",
+    "protocolVersion": "spark.runtime.v1alpha1",
     "messageId": "msg_adadadadadad4adadadadadadadadada",
     "type": "invocation.log_chunk",
     "sentAt": "2026-05-21T00:06:06.000Z",
@@ -349,7 +349,7 @@
     }
   },
   {
-    "protocolVersion": "navia.runtime.v1alpha1",
+    "protocolVersion": "spark.runtime.v1alpha1",
     "messageId": "msg_aeaeaeaeaeae4aeaeaeaeaeaeaeaeaea",
     "type": "artifact.projected",
     "sentAt": "2026-05-21T00:06:10.000Z",

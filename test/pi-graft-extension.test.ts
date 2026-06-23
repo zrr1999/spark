@@ -670,6 +670,18 @@ esac`,
       assert.equal(read.details?.sandbox, true);
       assert.equal(read.details?.operation, "read");
 
+      const truncatedRead = await executeTool(
+        tools.get("read"),
+        "read",
+        { path: "src/example.ts", limit: 1 },
+        { cwd: project },
+      );
+      assert.match(
+        truncatedRead.content[0].text,
+        /^alpha old\n\n\[Showing lines 1-1 of 2\. Use offset=2 to continue\.\]$/,
+      );
+      assert.equal(truncatedRead.details?.nextOffset, 2);
+
       const write = await executeTool(
         tools.get("write"),
         "write",
@@ -699,6 +711,7 @@ esac`,
         `--cwd ${workspace} --json repo add --default-branch main sandbox ${project}`,
         `--cwd ${workspace} --json repo lock sandbox`,
         `--cwd ${workspace} --json scratch read --base repo:sandbox@main src/example.ts --mode text`,
+        `--cwd ${workspace} --json scratch read --from scratch:read src/example.ts --mode text`,
         `--cwd ${workspace} --json scratch write --from scratch:read src/example.ts --content-stdin`,
         `--cwd ${workspace} --json scratch read --from scratch:write src/example.ts --mode text`,
         `--cwd ${workspace} --json scratch write --from scratch:read src/example.ts --content-stdin`,
@@ -1078,7 +1091,8 @@ envTest("graft sandbox read reports unsupported non-text content clearly", async
   process.env.GRAFT_BIN = await writeMockGraft(
     dir,
     `case "$*" in
-  *"scratch read"*) printf '%s\\n' '{"status":"ok","result":{"bytes":42,"scratch":"scratch:binary","binary":true}}' ;;
+  *"scratch read"*) printf '%s\\n' '{"status":"ok","result":{"bytes_len":42,"scratch":"scratch:binary","binary":true}}' ;;
+  *"tree metadata"*) printf '%s\\n' '{"status":"ok","result":{"source":{"kind":"base","base":"repo:sandbox@main"},"operation":"metadata","path":"asset.bin","kind":"file","size":42,"is_utf8_text":false,"content":"SHOULD_NOT_LEAK","bytes":"SHOULD_NOT_LEAK"}}' ;;
   *) printf '%s\\n' '{"status":"ok"}' ;;
 esac`,
   );
@@ -1099,16 +1113,99 @@ esac`,
       { cwd: project },
     );
 
-    await assert.rejects(
-      () => executeTool(tools.get("read"), "read", { path: "asset.bin" }, { cwd: project }),
-      /UTF-8 text files only/,
+    const read = await executeTool(
+      tools.get("read"),
+      "read",
+      { path: "asset.bin" },
+      { cwd: project },
     );
+    assert.match(read.content[0].text, /returning safe metadata/);
+    assert.match(read.content[0].text, /isUtf8Text: false/);
+    assert.equal(read.details?.operation, "read_metadata");
+    assert.equal(read.details?.backend, "native_tree");
+    assert.deepEqual(read.details?.metadata, {
+      path: "asset.bin",
+      kind: "file",
+      size: 42,
+      is_utf8_text: false,
+      source: { kind: "base", base: "repo:sandbox@main" },
+    });
   } finally {
     if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
     else process.env.GRAFT_BIN = previousGraftBin;
     await rm(dir, { force: true, recursive: true });
   }
 });
+
+envTest(
+  "graft sandbox read metadata falls back to materialized tree when native is disabled",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-graft-sandbox-binary-materialized-"));
+    const workspace = join(dir, "workspace");
+    const previousGraftBin = process.env.GRAFT_BIN;
+    const previousTreeBackend = process.env.PI_GRAFT_SANDBOX_TREE_BACKEND;
+    await mkdir(workspace, { recursive: true });
+    process.env.PI_GRAFT_SANDBOX_TREE_BACKEND = "materialized";
+    process.env.GRAFT_BIN = await writeMockGraft(
+      dir,
+      `case "$*" in
+  *"scratch read"*) printf '%s\\n' '{"status":"ok","result":{"bytes_len":42,"scratch":"scratch:binary","binary":true}}' ;;
+  *"run --cwd . repo:sandbox@main -- find . -type f"*) printf '%s\\n' '{"status":"ok","view":{"type":"run","data":{"exit_code":0,"stdout":"./asset.bin\\n","stderr":""}}}' ;;
+  *) echo "unexpected argv: $*" >&2; exit 2 ;;
+esac`,
+    );
+
+    try {
+      const restoredState = {
+        active: true,
+        repoRoot: "/repo",
+        repoId: "sandbox",
+        workspace,
+        base: "repo:sandbox@main",
+        resolvedBase: "tree:base",
+        changedPaths: [],
+        guardrails: { blockShellFileIo: true, allowValidationCommands: true },
+        createdAt: "2026-06-18T00:00:00.000Z",
+        updatedAt: "2026-06-18T00:01:00.000Z",
+      };
+      const { pi, tools, entries, handlers } = createFakePi();
+      entries.push({
+        type: "custom",
+        customType: "pi-graft-sandbox-state",
+        data: { state: restoredState },
+      });
+      registerPiGraftSandboxExtension(pi);
+      for (const handler of handlers.get("session_start") ?? []) {
+        await handler(
+          { reason: "startup" },
+          { cwd: "/repo", sessionManager: { getEntries: () => entries } },
+        );
+      }
+
+      const read = await executeTool(
+        tools.get("read"),
+        "read",
+        { path: "asset.bin" },
+        { cwd: "/repo" },
+      );
+      assert.match(read.content[0].text, /returning safe metadata/);
+      assert.equal(read.details?.operation, "read_metadata");
+      assert.equal(read.details?.backend, "materialized_run_overlay");
+      assert.deepEqual(read.details?.metadata, { path: "asset.bin", kind: "file" });
+
+      await assert.rejects(
+        () => executeTool(tools.get("read"), "read", { path: "missing.bin" }, { cwd: "/repo" }),
+        /sandbox path not found: missing\.bin/,
+      );
+    } finally {
+      if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+      else process.env.GRAFT_BIN = previousGraftBin;
+      if (previousTreeBackend === undefined) delete process.env.PI_GRAFT_SANDBOX_TREE_BACKEND;
+      else process.env.PI_GRAFT_SANDBOX_TREE_BACKEND = previousTreeBackend;
+      await rm(dir, { force: true, recursive: true });
+    }
+  },
+);
 
 envTest("graft sandbox lifecycle checkpoints, materializes, and promotes explicitly", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-graft-sandbox-lifecycle-"));

@@ -40,6 +40,22 @@ export interface SparkDaemonClientOptions {
     paths: SparkDaemonClientPaths,
     input: { sessionId: string; prompt: string; reset?: boolean },
   ) => Promise<LocalTurnSubmitResult>;
+  workspaceEnsureLocal?: (
+    paths: SparkDaemonClientPaths,
+    input: LocalWorkspaceEnsureLocalInput,
+  ) => Promise<SparkDaemonWorkspace>;
+  workspaceClientAttach?: (
+    paths: SparkDaemonClientPaths,
+    input: LocalWorkspaceClientAttachInput,
+  ) => Promise<LocalWorkspaceClientResult>;
+  workspaceClientHeartbeat?: (
+    paths: SparkDaemonClientPaths,
+    input: LocalWorkspaceClientHeartbeatInput,
+  ) => Promise<LocalWorkspaceClientResult>;
+  workspaceClientRelease?: (
+    paths: SparkDaemonClientPaths,
+    input: LocalWorkspaceClientReleaseInput,
+  ) => Promise<LocalWorkspaceClientResult>;
   serviceCommand?: (argv: string[]) => Promise<number>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -87,6 +103,73 @@ export interface LocalDaemonQueueResult {
     Record<"inbox" | "processed" | "failed", NonNullable<LocalDaemonQueueResult["entries"]>>
   >;
   observedAt: string;
+}
+
+export interface SparkDaemonWorkspace {
+  id: string;
+  serverUrl: string;
+  localWorkspaceKey: string;
+  displayName: string;
+  localPath: string;
+  status: string;
+}
+
+export type SparkWorkspaceClientKind = "interactive" | "headless" | "executor";
+
+export interface LocalWorkspaceEnsureLocalInput {
+  localPath: string;
+  displayName?: string;
+  localWorkspaceKey?: string;
+}
+
+export interface LocalWorkspaceClientAttachInput {
+  workspaceId: string;
+  clientId?: string;
+  kind: SparkWorkspaceClientKind;
+  displayName?: string;
+  leaseTtlMs?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface LocalWorkspaceClientHeartbeatInput {
+  clientId: string;
+  leaseTtlMs?: number;
+}
+
+export interface LocalWorkspaceClientReleaseInput {
+  clientId: string;
+}
+
+export interface SparkWorkspaceClientLease {
+  id: string;
+  workspaceId: string;
+  kind: SparkWorkspaceClientKind;
+  status: "connected" | "disconnected";
+  attachedAt: string;
+  lastSeenAt: string;
+}
+
+export interface LocalWorkspaceClientResult {
+  client: SparkWorkspaceClientLease;
+  workspace: SparkDaemonWorkspace;
+  observedAt: string;
+}
+
+export interface SparkWorkspaceClientHandle {
+  client: SparkWorkspaceClientLease;
+  workspace: SparkDaemonWorkspace;
+  heartbeat(): Promise<LocalWorkspaceClientResult>;
+  release(): Promise<LocalWorkspaceClientResult | null>;
+}
+
+export interface AttachSparkWorkspaceClientOptions {
+  kind: SparkWorkspaceClientKind;
+  clientId?: string;
+  displayName?: string;
+  localPath?: string;
+  leaseTtlMs?: number;
+  heartbeatIntervalMs?: number | false;
+  metadata?: Record<string, unknown>;
 }
 
 export interface SparkDaemonCliCommandBase {
@@ -304,6 +387,49 @@ export function createSparkDaemonNativeCommands(
   };
 }
 
+export async function attachSparkWorkspaceClient(
+  client: SparkDaemonClientOptions = {},
+  options: AttachSparkWorkspaceClientOptions,
+): Promise<SparkWorkspaceClientHandle> {
+  await clientEnsureRunning(client);
+  const workspace = await clientEnsureLocalWorkspace(
+    { localPath: options.localPath ?? process.cwd() },
+    client,
+  );
+  const leaseTtlMs = options.leaseTtlMs ?? 60_000;
+  const attached = await clientWorkspaceClientAttach(
+    {
+      workspaceId: workspace.id,
+      ...(options.clientId ? { clientId: options.clientId } : {}),
+      kind: options.kind,
+      displayName: options.displayName ?? defaultWorkspaceClientDisplayName(options.kind),
+      leaseTtlMs,
+      ...(options.metadata ? { metadata: options.metadata } : {}),
+    },
+    client,
+  );
+  let released = false;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  const heartbeat = async () =>
+    await clientWorkspaceClientHeartbeat({ clientId: attached.client.id, leaseTtlMs }, client);
+  const release = async () => {
+    if (released) return null;
+    released = true;
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    return await clientWorkspaceClientRelease({ clientId: attached.client.id }, client);
+  };
+
+  const heartbeatIntervalMs = options.heartbeatIntervalMs ?? 15_000;
+  if (heartbeatIntervalMs !== false && heartbeatIntervalMs > 0) {
+    heartbeatTimer = setInterval(() => {
+      void heartbeat().catch(() => undefined);
+    }, heartbeatIntervalMs);
+    heartbeatTimer.unref?.();
+  }
+
+  return { client: attached.client, workspace: attached.workspace, heartbeat, release };
+}
+
 async function clientStatus(client: SparkDaemonClientOptions): Promise<SparkDaemonClientStatus> {
   const paths = resolveSparkDaemonClientPaths(client);
   if (client.daemonStatus) {
@@ -370,9 +496,79 @@ async function clientSubmit(
   });
 }
 
+async function clientEnsureLocalWorkspace(
+  input: LocalWorkspaceEnsureLocalInput,
+  client: SparkDaemonClientOptions,
+): Promise<SparkDaemonWorkspace> {
+  const paths = resolveSparkDaemonClientPaths(client);
+  await clientEnsureRunning(client);
+  if (client.workspaceEnsureLocal) return await client.workspaceEnsureLocal(paths, input);
+  return await localRpcRequest<SparkDaemonWorkspace>(paths, {
+    id: localRequestId(),
+    method: "workspace.ensure-local",
+    params: input,
+  });
+}
+
+async function clientWorkspaceClientAttach(
+  input: LocalWorkspaceClientAttachInput,
+  client: SparkDaemonClientOptions,
+): Promise<LocalWorkspaceClientResult> {
+  const paths = resolveSparkDaemonClientPaths(client);
+  if (client.workspaceClientAttach) return await client.workspaceClientAttach(paths, input);
+  return await localRpcRequest<LocalWorkspaceClientResult>(paths, {
+    id: localRequestId(),
+    method: "workspace.client.attach",
+    params: input,
+  });
+}
+
+async function clientWorkspaceClientHeartbeat(
+  input: LocalWorkspaceClientHeartbeatInput,
+  client: SparkDaemonClientOptions,
+): Promise<LocalWorkspaceClientResult> {
+  const paths = resolveSparkDaemonClientPaths(client);
+  if (client.workspaceClientHeartbeat) return await client.workspaceClientHeartbeat(paths, input);
+  return await localRpcRequest<LocalWorkspaceClientResult>(paths, {
+    id: localRequestId(),
+    method: "workspace.client.heartbeat",
+    params: input,
+  });
+}
+
+async function clientWorkspaceClientRelease(
+  input: LocalWorkspaceClientReleaseInput,
+  client: SparkDaemonClientOptions,
+): Promise<LocalWorkspaceClientResult> {
+  const paths = resolveSparkDaemonClientPaths(client);
+  if (client.workspaceClientRelease) return await client.workspaceClientRelease(paths, input);
+  return await localRpcRequest<LocalWorkspaceClientResult>(paths, {
+    id: localRequestId(),
+    method: "workspace.client.release",
+    params: input,
+  });
+}
+
+function defaultWorkspaceClientDisplayName(kind: SparkWorkspaceClientKind): string {
+  switch (kind) {
+    case "interactive":
+      return "Spark TUI";
+    case "headless":
+      return "Spark headless submit";
+    case "executor":
+      return "Spark background executor";
+  }
+}
+
 async function clientEnsureRunning(client: SparkDaemonClientOptions): Promise<void> {
   const paths = resolveSparkDaemonClientPaths(client);
-  if (client.startService || client.daemonStatus || client.turnSubmit) {
+  if (
+    client.startService ||
+    client.daemonStatus ||
+    client.turnSubmit ||
+    client.workspaceEnsureLocal ||
+    client.workspaceClientAttach
+  ) {
     client.startService?.(paths);
     await client.daemonStatus?.(paths);
     return;
@@ -439,7 +635,7 @@ function sparkDaemonServiceCliCommand(): { command: string; args: string[] } {
     }
   }
 
-  return { command: "spark-daemon", args: [] };
+  return { command: "spark", args: ["daemon"] };
 }
 
 async function waitForDaemonRpc(

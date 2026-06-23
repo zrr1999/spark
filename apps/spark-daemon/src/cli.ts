@@ -575,7 +575,7 @@ async function registerWorkspaceCommand(
   const registrationToken = await resolveRegistrationToken(flags, io, { interactive });
   if (!registrationToken) {
     throw new Error(
-      "Missing workspace registration token. Pass --token <token>, --token -, or set NAVIA_WORKSPACE_REGISTRATION_TOKEN.",
+      "Missing workspace registration token. Pass --token <token>, --token -, or set SPARK_WORKSPACE_REGISTRATION_TOKEN.",
     );
   }
   const displayName =
@@ -1398,7 +1398,7 @@ function syncSparkDaemonIfConfigured(paths: ReturnType<typeof resolveNaviaPaths>
   const config = readSparkDaemonConfig(paths);
   if (!config.serverUrl || !hasRunnableSparkDaemonCredentialsForServer(config, config.serverUrl)) {
     io.stdout.write(
-      "  sync     local only; run spark daemon workspace register with a registration token to sync with Navia.\n",
+      "  sync     local only; run spark daemon workspace register with a registration token to sync with Spark Cockpit.\n",
     );
     return;
   }
@@ -1578,7 +1578,7 @@ async function resolveRegistrationServerUrl(
 }
 
 function registrationToken(flags: Record<string, string>): string | undefined {
-  return flags.token ?? process.env.NAVIA_WORKSPACE_REGISTRATION_TOKEN;
+  return flags.token ?? process.env.SPARK_WORKSPACE_REGISTRATION_TOKEN;
 }
 
 function isScriptedWorkspaceRegistration(flags: Record<string, string>): boolean {

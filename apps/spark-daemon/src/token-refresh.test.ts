@@ -18,9 +18,9 @@ describe("Spark daemon token refresh", () => {
           installationId: "install-test",
           displayName: "Test daemon",
           runtimeId: "rt_11111111111141111111111111111111",
-          runtimeToken: "navia_rt_test_token_00000000000000000000000000000000",
+          runtimeToken: "spark_rt_test_token_00000000000000000000000000000000",
           runtimeTokenExpiresAt: "2026-05-25T00:04:59.000Z",
-          refreshToken: "navia_rt_refresh_test_0000000000000000000000000000",
+          refreshToken: "spark_rt_refresh_test_0000000000000000000000000000",
         },
         new Date("2026-05-25T00:00:00.000Z"),
       ),
@@ -32,9 +32,9 @@ describe("Spark daemon token refresh", () => {
           installationId: "install-test",
           displayName: "Test daemon",
           runtimeId: "rt_11111111111141111111111111111111",
-          runtimeToken: "navia_rt_test_token_00000000000000000000000000000000",
+          runtimeToken: "spark_rt_test_token_00000000000000000000000000000000",
           runtimeTokenExpiresAt: "2026-05-25T01:00:00.000Z",
-          refreshToken: "navia_rt_refresh_test_0000000000000000000000000000",
+          refreshToken: "spark_rt_refresh_test_0000000000000000000000000000",
         },
         new Date("2026-05-25T00:00:00.000Z"),
       ),
@@ -59,9 +59,9 @@ describe("Spark daemon token refresh", () => {
       displayName: "Test daemon",
       serverUrl: "http://127.0.0.1:5173",
       runtimeId: "rt_11111111111141111111111111111111",
-      runtimeToken: "navia_rt_old_token_0000000000000000000000000000000",
+      runtimeToken: "spark_rt_old_token_0000000000000000000000000000000",
       runtimeTokenExpiresAt: "2026-05-25T00:01:00.000Z",
-      refreshToken: "navia_rt_refresh_old_000000000000000000000000000",
+      refreshToken: "spark_rt_refresh_old_000000000000000000000000000",
       refreshTokenExpiresAt: "2026-06-24T00:00:00.000Z",
     };
     writeSparkDaemonConfig(paths, config);
@@ -69,9 +69,9 @@ describe("Spark daemon token refresh", () => {
       return new Response(
         JSON.stringify({
           runtimeId: config.runtimeId,
-          runtimeToken: "navia_rt_new_token_0000000000000000000000000000000",
+          runtimeToken: "spark_rt_new_token_0000000000000000000000000000000",
           runtimeTokenExpiresAt: "2026-05-25T01:00:00.000Z",
-          refreshToken: "navia_rt_refresh_new_000000000000000000000000000",
+          refreshToken: "spark_rt_refresh_new_000000000000000000000000000",
           refreshTokenExpiresAt: "2026-06-24T00:30:00.000Z",
           refreshedAt: "2026-05-25T00:30:00.000Z",
         }),
@@ -94,15 +94,15 @@ describe("Spark daemon token refresh", () => {
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify({
-            refreshToken: "navia_rt_refresh_old_000000000000000000000000000",
+            refreshToken: "spark_rt_refresh_old_000000000000000000000000000",
           }),
         }),
       );
-      expect(refreshed.runtimeToken).toBe("navia_rt_new_token_0000000000000000000000000000000");
-      expect(config.refreshToken).toBe("navia_rt_refresh_new_000000000000000000000000000");
+      expect(refreshed.runtimeToken).toBe("spark_rt_new_token_0000000000000000000000000000000");
+      expect(config.refreshToken).toBe("spark_rt_refresh_new_000000000000000000000000000");
       expect(readSparkDaemonConfig(paths)).toMatchObject({
-        runtimeToken: "navia_rt_new_token_0000000000000000000000000000000",
-        refreshToken: "navia_rt_refresh_new_000000000000000000000000000",
+        runtimeToken: "spark_rt_new_token_0000000000000000000000000000000",
+        refreshToken: "spark_rt_refresh_new_000000000000000000000000000",
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -132,8 +132,8 @@ describe("Spark daemon token refresh", () => {
             installationId: "install-test",
             displayName: "Test daemon",
             runtimeId: "rt_11111111111141111111111111111111",
-            runtimeToken: "navia_rt_old_token_0000000000000000000000000000000",
-            refreshToken: "navia_rt_refresh_old_000000000000000000000000000",
+            runtimeToken: "spark_rt_old_token_0000000000000000000000000000000",
+            refreshToken: "spark_rt_refresh_old_000000000000000000000000000",
           },
           fetchFn,
         }),

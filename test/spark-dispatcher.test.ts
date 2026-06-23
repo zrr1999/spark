@@ -10,22 +10,22 @@ import {
 void test("parseSparkDispatcherArgs routes default, tui, daemon, and print commands", () => {
   assert.deepEqual(parseSparkDispatcherArgs([]), {
     kind: "dispatch",
-    executable: "spark-tui",
+    target: "tui",
     argv: [],
   });
   assert.deepEqual(parseSparkDispatcherArgs(["tui", "build", "this"]), {
     kind: "dispatch",
-    executable: "spark-tui",
+    target: "tui",
     argv: ["build", "this"],
   });
   assert.deepEqual(parseSparkDispatcherArgs(["daemon", "status", "--json"]), {
     kind: "dispatch",
-    executable: "spark-daemon",
+    target: "daemon",
     argv: ["status", "--json"],
   });
   assert.deepEqual(parseSparkDispatcherArgs(["--print", "hello"]), {
     kind: "dispatch",
-    executable: "spark-tui",
+    target: "tui",
     argv: ["--print", "hello"],
   });
 });
@@ -39,27 +39,27 @@ void test("parseSparkDispatcherArgs keeps help/version local and rejects unknown
   assert.match(command.kind === "error" ? command.message : "", /spark tui build this/u);
 });
 
-void test("runSparkDispatcher invokes injected runner with the selected executable", async () => {
-  const calls: Array<{ executable: string; argv: string[] }> = [];
+void test("runSparkDispatcher invokes injected launcher with the selected target", async () => {
+  const calls: Array<{ target: string; argv: string[] }> = [];
   const code = await runSparkDispatcher(
     ["daemon", "workspace", "ls"],
     {},
     {
-      run: async (executable, argv) => {
-        calls.push({ executable, argv });
+      run: async (target, argv) => {
+        calls.push({ target, argv });
         return 7;
       },
     },
   );
 
   assert.equal(code, 7);
-  assert.deepEqual(calls, [{ executable: "spark-daemon", argv: ["workspace", "ls"] }]);
+  assert.deepEqual(calls, [{ target: "daemon", argv: ["workspace", "ls"] }]);
 });
 
 void test("runSparkDispatcher renders help and unknown-command diagnostics without dispatching", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const runner = {
+  const launcher = {
     run: async () => {
       throw new Error("should not dispatch");
     },
@@ -76,7 +76,7 @@ void test("runSparkDispatcher renders help and unknown-command diagnostics witho
           },
         },
       },
-      runner,
+      launcher,
     ),
     0,
   );
@@ -93,7 +93,7 @@ void test("runSparkDispatcher renders help and unknown-command diagnostics witho
           },
         },
       },
-      runner,
+      launcher,
     ),
     2,
   );

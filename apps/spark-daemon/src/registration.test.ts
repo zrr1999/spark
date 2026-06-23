@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createId, runtimeProtocolVersion } from "@zendev-lab/navia-protocol";
+import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { resolveNaviaPaths } from "@zendev-lab/navia-system";
 import { readSparkDaemonConfig, writeSparkDaemonConfig } from "./config.js";
 import {
@@ -33,9 +33,9 @@ describe("Spark daemon workspace registration", () => {
       displayName: "Test daemon",
       serverUrl: "http://127.0.0.1:5173",
       runtimeId: "rt_11111111111141111111111111111111",
-      runtimeToken: "navia_rt_old_token_0000000000000000000000000000000",
+      runtimeToken: "spark_rt_old_token_0000000000000000000000000000000",
       runtimeTokenExpiresAt: "2026-05-25T00:01:00.000Z",
-      refreshToken: "navia_rt_refresh_old_000000000000000000000000000",
+      refreshToken: "spark_rt_refresh_old_000000000000000000000000000",
       refreshTokenExpiresAt: "2026-06-24T00:00:00.000Z",
       webSocketUrl:
         "ws://127.0.0.1:5173/api/v1/runtime/runtimes/rt_11111111111141111111111111111111/ws",
@@ -46,9 +46,9 @@ describe("Spark daemon workspace registration", () => {
         return new Response(
           JSON.stringify({
             runtimeId: "rt_11111111111141111111111111111111",
-            runtimeToken: "navia_rt_new_token_0000000000000000000000000000000",
+            runtimeToken: "spark_rt_new_token_0000000000000000000000000000000",
             runtimeTokenExpiresAt: "2026-05-25T01:00:00.000Z",
-            refreshToken: "navia_rt_refresh_new_000000000000000000000000000",
+            refreshToken: "spark_rt_refresh_new_000000000000000000000000000",
             refreshTokenExpiresAt: "2026-06-24T00:30:00.000Z",
             refreshedAt: "2026-05-25T00:30:00.000Z",
           }),
@@ -57,7 +57,7 @@ describe("Spark daemon workspace registration", () => {
       }
 
       expect(init?.headers).toMatchObject({
-        authorization: "Bearer navia_rt_new_token_0000000000000000000000000000000",
+        authorization: "Bearer spark_rt_new_token_0000000000000000000000000000000",
       });
       return new Response(
         JSON.stringify({
@@ -79,7 +79,7 @@ describe("Spark daemon workspace registration", () => {
     try {
       const registered = await ensureSparkDaemonRegistrationForWorkspace(paths, {
         serverUrl: "http://127.0.0.1:5173",
-        registrationToken: "navia_wsreg_second",
+        registrationToken: "spark_wsreg_second",
         workspaceRegistration: {
           localWorkspaceKey: "spore",
           displayName: "spore",
@@ -92,8 +92,8 @@ describe("Spark daemon workspace registration", () => {
         status: "indexing",
       });
       expect(readSparkDaemonConfig(paths)).toMatchObject({
-        runtimeToken: "navia_rt_new_token_0000000000000000000000000000000",
-        refreshToken: "navia_rt_refresh_new_000000000000000000000000000",
+        runtimeToken: "spark_rt_new_token_0000000000000000000000000000000",
+        refreshToken: "spark_rt_refresh_new_000000000000000000000000000",
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -125,7 +125,7 @@ describe("Spark daemon workspace registration", () => {
     const createWebSocket = vi.fn((url: string, options: { headers: Record<string, string> }) => {
       expect(url).toBe("ws://127.0.0.1:5173/runtime/ws");
       expect(options.headers.Authorization).toBe(
-        "Bearer navia_rt_token_00000000000000000000000000000000",
+        "Bearer spark_rt_token_00000000000000000000000000000000",
       );
       return fakeSocket;
     });
@@ -135,7 +135,7 @@ describe("Spark daemon workspace registration", () => {
         installationId: "install-test",
         displayName: "Test daemon",
         runtimeId: "rt_11111111111141111111111111111111",
-        runtimeToken: "navia_rt_token_00000000000000000000000000000000",
+        runtimeToken: "spark_rt_token_00000000000000000000000000000000",
         webSocketUrl: "ws://127.0.0.1:5173/runtime/ws",
       },
       workspaceBinding: {

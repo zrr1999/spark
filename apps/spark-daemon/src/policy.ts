@@ -1,4 +1,4 @@
-import type { ServerCommandPayload } from "@zendev-lab/navia-protocol";
+import type { ServerCommandPayload } from "@zendev-lab/spark-protocol";
 
 export interface CommandPolicyInput {
   command: ServerCommandPayload;

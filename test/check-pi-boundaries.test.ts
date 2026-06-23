@@ -12,7 +12,7 @@ void test("boundary checker rejects pi package imports from Spark and cockpit pa
   const root = await fixtureRoot();
   await writePackage(root, "packages/pi-sample", {
     name: "@zendev-lab/pi-sample",
-    dependencies: { "@zendev-lab/navia-protocol": "workspace:*" },
+    dependencies: { "@zendev-lab/navia-db": "workspace:*" },
     source: 'import { runSparkTask } from "@zendev-lab/spark-runtime";\n',
   });
 
@@ -27,7 +27,7 @@ void test("boundary checker rejects Spark packages importing cockpit packages", 
   const root = await fixtureRoot();
   await writePackage(root, "packages/spark-sample", {
     name: "@zendev-lab/spark-sample",
-    source: 'import { runtimeMessageSchema } from "@zendev-lab/navia-protocol";\n',
+    source: 'import { readNaviaDb } from "@zendev-lab/navia-db";\n',
   });
 
   const result = runBoundaryCheck(root);
@@ -69,7 +69,7 @@ void test("boundary checker rejects unqualified legacy Navia package names in ac
   const root = await fixtureRoot();
   await writeFile(
     join(root, "README.md"),
-    "# Example\n\nUse @zendev-lab/navia-protocol as the product protocol package.\n",
+    "# Example\n\nUse @zendev-lab/navia-db as the product database package.\n",
   );
 
   const result = runBoundaryCheck(root);
@@ -107,12 +107,12 @@ void test("boundary checker treats spark-daemon as the daemon/cockpit adapter", 
   await writePackage(root, "apps/spark-daemon", {
     name: "@zendev-lab/spark-daemon",
     dependencies: {
-      "@zendev-lab/navia-protocol": "workspace:*",
+      "@zendev-lab/spark-protocol": "workspace:*",
       "@zendev-lab/spark-runtime": "workspace:^",
       "@zendev-lab/spark-tui-app": "workspace:^",
     },
     source:
-      'import { runtimeMessageSchema } from "@zendev-lab/navia-protocol";\n' +
+      'import { runtimeMessageSchema } from "@zendev-lab/spark-protocol";\n' +
       'import { createSparkHeadlessRoleExecutor, createSparkHeadlessSessionExecutor } from "@zendev-lab/spark-tui-app/headless-role-executor";\n',
   });
 

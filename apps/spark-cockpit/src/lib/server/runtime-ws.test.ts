@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
-import { createId, runtimeProtocolVersion } from "@zendev-lab/navia-protocol";
+import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { migrate, openMemoryDatabase } from "@zendev-lab/navia-db";
 import {
   createWorkspaceWithOwnerBinding,
@@ -106,9 +106,9 @@ describe("runtime WebSocket handling", () => {
     migrate(db);
     const now = "2026-05-25T00:00:00.000Z";
     const runtimeId = createId("rt");
-    const accessToken = "navia_rt_access_00000000000000000000000000000000";
-    const refreshToken = "navia_rt_refresh_000000000000000000000000000000";
-    const expiredToken = "navia_rt_expired_000000000000000000000000000000";
+    const accessToken = "spark_rt_access_00000000000000000000000000000000";
+    const refreshToken = "spark_rt_refresh_000000000000000000000000000000";
+    const expiredToken = "spark_rt_expired_000000000000000000000000000000";
     db.prepare(
       `INSERT INTO runtime_connections
         (id, installation_id, name, status, protocol_version, capabilities_json, labels_json, created_at, updated_at)

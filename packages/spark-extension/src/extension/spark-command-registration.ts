@@ -664,6 +664,9 @@ export function registerSparkCommands(
     const graph = await loadSparkGraph(ctx.cwd, ctx);
     const project = graph ? await currentSparkProject(ctx.cwd, ctx, graph) : undefined;
     const instructions = goalInstructions(language);
+    const selectedMode = graph
+      ? resolveForegroundGoalMode(graph, project?.ref, goal.objective)
+      : "plan";
     const instruction = [
       instructions.goalActiveHeader,
       projectTitle ? instructions.currentProject(projectTitle) : undefined,
@@ -678,6 +681,7 @@ export function registerSparkCommands(
     sendSparkRuntimeInstruction(piApi, "spark-goal-request", instruction, visible, {
       goalId: goal.goalId,
       purpose: "foreground-goal-start",
+      selectedMode,
     });
     markForegroundGoalAwaitingTurn(piApi, ctx, goal.goalId);
     if (!piApi.on)
@@ -1002,6 +1006,9 @@ export function registerSparkCommands(
     const language = sparkLanguageForProject({ project, goal });
     const notifications = goalNotifications(language);
     const visible = notifications.goalTickHeader(compactInline(goal.objective), projectLabel);
+    const selectedMode = active.graph
+      ? resolveForegroundGoalMode(active.graph, project?.ref, goal.objective)
+      : "plan";
     const instruction = renderForegroundGoalTickInstruction(
       project?.title,
       goal.objective,
@@ -1013,6 +1020,7 @@ export function registerSparkCommands(
     sendSparkRuntimeInstruction(piApi, "spark-goal-request", instruction, visible, {
       goalId: goal.goalId,
       purpose: "foreground-goal-tick",
+      selectedMode,
     });
     markForegroundGoalAwaitingTurn(piApi, ctx, goal.goalId);
   }
@@ -1076,6 +1084,9 @@ export function registerSparkCommands(
     }
     const projectLabel = project ? ` · project: ${project.title}` : "";
     const visible = `Spark loop tick: ${compactInline(loop.objective)}${projectLabel}`;
+    const selectedMode = active.graph
+      ? resolveForegroundGoalMode(active.graph, project?.ref, loop.objective)
+      : "plan";
     const instruction = renderSparkLoopInstruction(
       loop.objective,
       active.graph,
@@ -1085,6 +1096,7 @@ export function registerSparkCommands(
     sendSparkRuntimeInstruction(piApi, "spark-loop-request", instruction, visible, {
       loopId: loop.loopId,
       purpose: "foreground-loop-tick",
+      selectedMode,
     });
     markForegroundLoopAwaitingTurn(piApi, ctx, loop.loopId);
   }

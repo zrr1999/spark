@@ -1,7 +1,7 @@
 {
   "name": "@zendev-lab/spark-cli",
   "version": "0.1.0",
-  "description": "Thin dispatcher for the root spark command; routes spark <name> to spark-<name> executables.",
+  "description": "Thin dispatcher for the root spark command; routes public spark subcommands to Spark app surfaces.",
   "license": "MIT",
   "author": "zrr1999",
   "bin": {
@@ -17,7 +17,7 @@
     "access": "public"
   },
   "scripts": {
-    "check": "tsc -p ../../tsconfig.json --noEmit"
+    "check": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@zendev-lab/spark-daemon": "workspace:^",

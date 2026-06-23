@@ -629,11 +629,11 @@ describe("Spark daemon workspace store", () => {
         serverBindingId: "rtwb_11111111111141111111111111111111",
         localPath: workspacePath,
         displayName: "Navia Dev",
-        consumedRegistrationToken: "navia_wsreg_secret",
+        consumedRegistrationToken: "spark_wsreg_secret",
         serverCredential: {
           runtimeId: "rt_11111111111141111111111111111111",
-          runtimeToken: "navia_rt_secret",
-          refreshToken: "navia_rt_refresh_secret",
+          runtimeToken: "spark_rt_secret",
+          refreshToken: "spark_rt_refresh_secret",
         },
         now: "2026-05-26T00:00:00.000Z",
       });
@@ -661,7 +661,7 @@ describe("Spark daemon workspace store", () => {
         runtimeId: "rt_11111111111141111111111111111111",
       });
       expect(credential.runtimeTokenHash).toMatch(/^sha256:/);
-      expect(credential.runtimeTokenHash).not.toContain("navia_rt_secret");
+      expect(credential.runtimeTokenHash).not.toContain("spark_rt_secret");
       expect(credential.refreshTokenHash).toMatch(/^sha256:/);
 
       const sparkDaemonWorkspace = db
@@ -701,7 +701,7 @@ describe("Spark daemon workspace store", () => {
         )
         .get(workspace.id) as { grantTokenHash: string; consumedAt: string };
       expect(grant.grantTokenHash).toMatch(/^sha256:/);
-      expect(grant.grantTokenHash).not.toContain("navia_wsreg_secret");
+      expect(grant.grantTokenHash).not.toContain("spark_wsreg_secret");
       expect(grant.consumedAt).toBe("2026-05-26T00:00:00.000Z");
 
       stopWorkspace(db, { id: workspace.id, now: "2026-05-26T00:01:00.000Z" });
@@ -750,7 +750,7 @@ describe("Spark daemon workspace store", () => {
           serverBindingId: "rtwb_duplicate",
           localPath: workspacePath,
           displayName: "Navia Dev",
-          consumedRegistrationToken: "navia_wsreg_secret",
+          consumedRegistrationToken: "spark_wsreg_secret",
         }),
       ).toThrow();
 

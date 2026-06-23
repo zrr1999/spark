@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { anyPrefixedIdSchema, isoDateTimeSchema, prefixedIdSchema } from "../refs.ts";
 
-export const runtimeProtocolVersion = "navia.runtime.v1alpha1" as const;
+export const runtimeProtocolVersion = "spark.runtime.v1alpha1" as const;
 export const runtimeProtocolVersionSchema = z.literal(runtimeProtocolVersion);
 
 export const runtimeEnvelopeSchema = z.object({

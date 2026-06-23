@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -32,8 +32,8 @@ describe("Spark daemon local RPC", () => {
           displayName: "Test Spark daemon",
           serverUrl: "http://127.0.0.1:5173/",
           runtimeId: "rt_11111111111141111111111111111111",
-          runtimeToken: "navia_rt_token_00000000000000000000000000000000",
-          refreshToken: "navia_rt_refresh_000000000000000000000000000000",
+          runtimeToken: "spark_rt_token_00000000000000000000000000000000",
+          refreshToken: "spark_rt_refresh_000000000000000000000000000000",
           webSocketUrl:
             "ws://127.0.0.1:5173/api/v1/runtime/runtimes/rt_11111111111141111111111111111111/ws",
         },
@@ -57,7 +57,7 @@ describe("Spark daemon local RPC", () => {
             serverUrl: "http://127.0.0.1:5173/",
             localPath: workspacePath,
             displayName: "Spore",
-            registrationToken: "navia_wsreg_local_rpc",
+            registrationToken: "spark_wsreg_local_rpc",
           },
         }),
         paths,
@@ -84,7 +84,7 @@ describe("Spark daemon local RPC", () => {
         paths,
         expect.objectContaining({
           serverUrl: "http://127.0.0.1:5173/",
-          registrationToken: "navia_wsreg_local_rpc",
+          registrationToken: "spark_wsreg_local_rpc",
           workspaceRegistration: {
             localWorkspaceKey: "spore",
             displayName: "Spore",
@@ -112,7 +112,7 @@ describe("Spark daemon local RPC", () => {
         serverBindingId: "rtwb_33333333333341113333333333333333",
         lastKnownStatus: "indexing",
       });
-      expect(JSON.stringify(listWorkspaces(db))).not.toContain("navia_wsreg_local_rpc");
+      expect(JSON.stringify(listWorkspaces(db))).not.toContain("spark_wsreg_local_rpc");
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });
@@ -142,8 +142,8 @@ describe("Spark daemon local RPC", () => {
           displayName: "Test Spark daemon",
           serverUrl: "http://127.0.0.1:5173/",
           runtimeId: "rt_11111111111141111111111111111111",
-          runtimeToken: "navia_rt_token_00000000000000000000000000000000",
-          refreshToken: "navia_rt_refresh_000000000000000000000000000000",
+          runtimeToken: "spark_rt_token_00000000000000000000000000000000",
+          refreshToken: "spark_rt_refresh_000000000000000000000000000000",
           webSocketUrl:
             "ws://127.0.0.1:5173/api/v1/runtime/runtimes/rt_11111111111141111111111111111111/ws",
         },
@@ -164,7 +164,7 @@ describe("Spark daemon local RPC", () => {
             serverUrl: "http://127.0.0.1:5173/",
             localPath: workspacePath,
             displayName: "Spore",
-            registrationToken: "navia_wsreg_local_rpc",
+            registrationToken: "spark_wsreg_local_rpc",
           },
         }),
         paths,
@@ -266,6 +266,82 @@ describe("Spark daemon local RPC", () => {
             },
           ],
         },
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ensures implicit local workspaces idempotently before client attach", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
+    const paths = resolveNaviaPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+
+    try {
+      const workspacePath = join(root, "workspace");
+      mkdirSync(workspacePath);
+      const first = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "ensure_local_1",
+          method: "workspace.ensure-local",
+          params: { localPath: workspacePath },
+        }),
+        paths,
+        db,
+        undefined,
+      );
+      const second = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "ensure_local_2",
+          method: "workspace.ensure-local",
+          params: { localPath: workspacePath },
+        }),
+        paths,
+        db,
+        undefined,
+      );
+      const firstResult = (first as { ok: true; result: { id: string; localPath: string } }).result;
+      const workspaceId = firstResult.id;
+
+      expect(first).toMatchObject({
+        ok: true,
+        result: { serverUrl: "", localPath: realpathSync(workspacePath), status: "available" },
+      });
+      expect(second).toMatchObject({ ok: true, result: { id: workspaceId } });
+
+      await handleLocalRpcLine(
+        JSON.stringify({
+          id: "client_attach_1",
+          method: "workspace.client.attach",
+          params: { workspaceId, clientId: "wcl-tui-1", kind: "interactive" },
+        }),
+        paths,
+        db,
+        undefined,
+      );
+      const attached = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "client_attach_2",
+          method: "workspace.client.attach",
+          params: { workspaceId, clientId: "wcl-tui-2", kind: "interactive" },
+        }),
+        paths,
+        db,
+        undefined,
+      );
+      expect(attached).toMatchObject({
+        ok: true,
+        result: { workspace: { id: workspaceId, borrowed: { interactiveClientCount: 2 } } },
       });
     } finally {
       db.close();

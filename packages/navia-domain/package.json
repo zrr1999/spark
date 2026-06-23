@@ -20,8 +20,7 @@
     "test": "vp test run --passWithNoTests"
   },
   "dependencies": {
-    "@zendev-lab/navia-db": "workspace:*",
-    "@zendev-lab/navia-protocol": "workspace:*"
+    "@zendev-lab/navia-db": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^6.0.3",

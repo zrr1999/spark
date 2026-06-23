@@ -13,7 +13,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { createConnection } from "node:net";
+import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { env } from "node:process";
@@ -573,13 +573,28 @@ function normalizeCueSessionOptions(
 }
 
 async function connectUnixCueClient(path: string, session?: CueSessionOptions): Promise<CueClient> {
-  const client = await new Promise<CueClient>((resolve, reject) => {
-    const socket = createConnection({ path }, () => {
-      resolve(new CueClient(socket));
+  const socket = await openUnixSocket(path);
+  return initializeConnectedClient(new CueClient(socket), session);
+}
+
+async function openUnixSocket(path: string): Promise<Socket> {
+  try {
+    return await new Promise<Socket>((resolve, reject) => {
+      const socket = createConnection({ path }, () => {
+        resolve(socket);
+      });
+      socket.on("error", reject);
     });
-    socket.on("error", reject);
-  });
-  return initializeConnectedClient(client, session);
+  } catch (error) {
+    throw new CueError(
+      "DAEMON_UNREACHABLE",
+      `failed to connect to cue-shell daemon socket ${path}: ${describeError(error)}`,
+    );
+  }
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function connectSshCueClient(
@@ -609,7 +624,11 @@ async function initializeConnectedClient(
     return client;
   } catch (error) {
     client.close();
-    throw error;
+    if (error instanceof CueError) throw error;
+    throw unsupportedProtocolError(
+      "cue-shell daemon accepted the connection but IPC initialization failed; upgrade/restart cued",
+      error,
+    );
   }
 }
 

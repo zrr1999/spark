@@ -4,7 +4,7 @@ import { migrate, openMemoryDatabase } from "@zendev-lab/navia-db";
 import {
   runtimeProtocolVersion,
   type RuntimeRegistrationRequest,
-} from "@zendev-lab/navia-protocol";
+} from "@zendev-lab/spark-protocol";
 import {
   createRuntimeEnrollmentToken,
   listRuntimeEnrollmentTokens,
@@ -59,7 +59,7 @@ describe("runtime registration", () => {
       expiresAt: string;
     };
 
-    expect(enrollment.refreshToken).toMatch(/^navia_wsreg_/);
+    expect(enrollment.refreshToken).toMatch(/^spark_wsreg_/);
     expect(stored.tokenHash).toBe(hash(enrollment.refreshToken));
     expect(JSON.stringify(stored)).not.toContain(enrollment.refreshToken);
     expect(stored).toMatchObject({
@@ -112,8 +112,8 @@ describe("runtime registration", () => {
 
     const registered = registerRuntime(db, registrationRequest, enrollment.refreshToken);
 
-    expect(registered.runtimeToken).toMatch(/^navia_rt_/);
-    expect(registered.refreshToken).toMatch(/^navia_rt_refresh_/);
+    expect(registered.runtimeToken).toMatch(/^spark_rt_/);
+    expect(registered.refreshToken).toMatch(/^spark_rt_refresh_/);
     const runtime = db
       .prepare("SELECT name, protocol_version AS protocolVersion FROM runtime_connections")
       .get() as { name: string; protocolVersion: string };
@@ -388,9 +388,9 @@ describe("runtime registration", () => {
       refreshedAt: "2026-05-25T00:30:00.000Z",
     });
 
-    expect(refreshed.runtimeToken).toMatch(/^navia_rt_/);
+    expect(refreshed.runtimeToken).toMatch(/^spark_rt_/);
     expect(refreshed.runtimeToken).not.toBe(registered.runtimeToken);
-    expect(refreshed.refreshToken).toMatch(/^navia_rt_refresh_/);
+    expect(refreshed.refreshToken).toMatch(/^spark_rt_refresh_/);
     expect(refreshed.refreshToken).not.toBe(registered.refreshToken);
 
     const rows = db
@@ -441,7 +441,7 @@ describe("runtime registration", () => {
 
     expect(revokeRuntimeEnrollmentToken(db, { id: revoked.id })).toBe(true);
     expectRuntimeEnrollmentError(db, null, "WORKSPACE_REGISTRATION_TOKEN_REQUIRED");
-    expectRuntimeEnrollmentError(db, "navia_wsreg_invalid", "WORKSPACE_REGISTRATION_TOKEN_INVALID");
+    expectRuntimeEnrollmentError(db, "spark_wsreg_invalid", "WORKSPACE_REGISTRATION_TOKEN_INVALID");
     expectRuntimeEnrollmentError(db, expired.refreshToken, "WORKSPACE_REGISTRATION_TOKEN_EXPIRED");
     expectRuntimeEnrollmentError(db, revoked.refreshToken, "WORKSPACE_REGISTRATION_TOKEN_REVOKED");
     db.close();

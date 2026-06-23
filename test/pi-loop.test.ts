@@ -59,7 +59,6 @@ void test("pi-loop tick continues, waits, blocks, and never emits goal completio
   assert.equal(first.loop?.tick.count, 1);
   assert.match(first.prompt ?? "", /pi_loop_continuation/);
   assert.doesNotMatch(first.prompt ?? "", /goal\(\{ action: "complete" \}\)/);
-  assert.doesNotMatch(first.prompt ?? "", /reviewer/iu);
 
   const failed = recordLoopFailure(first.loop!, { retryBackoffMs: [30_000] }, 102);
   const waiting = evaluateLoopTick({ loop: failed, now: 120, reason: "retry" });

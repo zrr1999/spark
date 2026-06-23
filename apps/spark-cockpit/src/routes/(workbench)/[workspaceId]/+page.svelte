@@ -2,6 +2,7 @@
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
   import { daemonDisplayStatus, type DaemonDisplayStatus } from "$lib/daemon-status";
+  import { workspaceControlDisplay } from "$lib/workspace-control-display";
   import { workspacePath } from "$lib/workspace-routes";
 
   let { data } = $props();
@@ -24,6 +25,7 @@
     "draining",
     "disabled",
   ];
+  let controlDisplay = $derived(workspaceControlDisplay(data.workspaceControl));
 
   function countRunners(status: (typeof runnerStatusOrder)[number]) {
     return data.runnerConnections.filter((runner) => daemonDisplayStatus(runner) === status)
@@ -101,6 +103,13 @@
       <small>{common.reportedByConnectedRunners}</small>
     </div>
   </article>
+</section>
+
+<section class="control-strip" aria-label="Workspace control mode">
+  <span>{controlDisplay.connectionLabel}</span>
+  <span>{controlDisplay.borrowedLabel}</span>
+  <span>{controlDisplay.executorLabel}</span>
+  <strong>{controlDisplay.controlLabel}</strong>
 </section>
 
 <section class="dashboard-grid">

@@ -49,6 +49,11 @@ import type {
 } from "@earendil-works/pi-ai";
 
 import type { ExtensionContext, ToolConfig } from "@zendev-lab/pi-extension-api";
+import {
+  SPARK_PROTOCOL_VERSION,
+  type SparkRunView,
+  type SparkViewModelEvent,
+} from "@zendev-lab/spark-protocol";
 
 import type { SparkHostRuntime } from "./runtime.ts";
 
@@ -78,6 +83,7 @@ export type SparkAgentLoopEvent =
   | { type: "user_message"; message: Message }
   | { type: "tool_result"; message: ToolResultMessage }
   | { type: "turn_complete"; assistant: AssistantMessage; reason: AssistantMessage["stopReason"] }
+  | { type: "view_event"; event: SparkViewModelEvent }
   | { type: "abort"; reason: string }
   | { type: "error"; message: string };
 
@@ -91,6 +97,9 @@ export class SparkAgentLoop {
   private state: SparkAgentLoopState = "idle";
   private currentAbort: AbortController | undefined;
   private triggerTurnRunning = false;
+  private viewSessionId = "spark-agent";
+  private viewRunCounter = 0;
+  private currentViewRunId: string | undefined;
   private readonly subscribers = new Set<(event: SparkAgentLoopEvent) => void>();
 
   constructor(options: SparkAgentLoopOptions) {
@@ -106,6 +115,15 @@ export class SparkAgentLoop {
 
   setSystemPrompt(prompt: string): void {
     this.systemPrompt = prompt;
+  }
+
+  setViewSessionId(sessionId: string | undefined): void {
+    const normalized = sessionId?.trim();
+    this.viewSessionId = normalized || "spark-agent";
+  }
+
+  getViewSessionId(): string {
+    return this.viewSessionId;
   }
 
   /** Snapshot of the current message log. Useful for sessions/branches. */
@@ -147,6 +165,7 @@ export class SparkAgentLoop {
       );
     }
 
+    this.startViewRun("user submit");
     const userMessage: Message = {
       role: "user",
       content,
@@ -176,6 +195,7 @@ export class SparkAgentLoop {
       const queued = this.drainOutboxIntoMessages();
       const injected = await this.injectBeforeAgentStartMessages();
       if (queued + injected === 0) return;
+      this.startViewRun("triggered turn");
       await this.runTurns({ skipInitialLifecycle: true });
     } finally {
       this.triggerTurnRunning = false;
@@ -404,6 +424,27 @@ export class SparkAgentLoop {
   private transition(next: SparkAgentLoopState): void {
     this.state = next;
     this.host.setIdle(next === "idle");
+  }
+
+  private startViewRun(title: string): void {
+    const runId = `${this.viewSessionId}:run:${++this.viewRunCounter}`;
+    this.currentViewRunId = runId;
+    const run: SparkRunView = {
+      version: SPARK_PROTOCOL_VERSION,
+      id: runId,
+      kind: "session",
+      title,
+      status: "running",
+      startedAt: new Date().toISOString(),
+      artifactRefs: [],
+      metadata: { source: "SparkAgentLoop" },
+    };
+    this.host.publishView({
+      version: SPARK_PROTOCOL_VERSION,
+      type: "run.update",
+      sessionId: this.viewSessionId,
+      run,
+    });
   }
 
   private publish(event: SparkAgentLoopEvent): void {

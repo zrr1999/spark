@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { createId, runtimeProtocolVersion } from "@zendev-lab/navia-protocol";
+import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { migrate, openMemoryDatabase } from "@zendev-lab/navia-db";
 import {
+  appendEvent,
   createProject,
   createWorkspaceWithOwnerBinding,
   ingestTaskGraphSnapshot,
+  loadWorkspaceServerControl,
   queueCommandForWorkspaceOwner,
   recordArtifactProjection,
   recordHumanRequestFromRuntime,
@@ -83,6 +85,163 @@ describe("projection services", () => {
       count: number;
     };
     expect(eventCount.count).toBe(3);
+    db.close();
+  });
+
+  it("projects borrowed workspaces as snapshot-only and blocks server mutations", () => {
+    const { db, runtimeWorkspaceBindingId, now } = setupRuntimeBinding();
+    const workspace = createWorkspaceWithOwnerBinding(db, {
+      slug: "local-default",
+      name: "Local default",
+      runtimeWorkspaceBindingId,
+      createdAt: now,
+    });
+    const project = createProject(db, {
+      workspaceId: workspace.id,
+      slug: "mvp",
+      name: "MVP",
+      createdAt: now,
+    });
+
+    appendEvent(db, {
+      workspaceId: workspace.id,
+      actorKind: "runtime",
+      actorId: runtimeWorkspaceBindingId,
+      kind: "workspace.snapshot.received",
+      subjectKind: "runtime_workspace_binding",
+      subjectId: runtimeWorkspaceBindingId,
+      payload: {
+        displayName: "Local default",
+        status: "available",
+        borrowed: {
+          borrowed: true,
+          interactiveClientCount: 1,
+          borrowedByClientIds: ["wcl-tui"],
+          since: now,
+        },
+        workspaceClients: [
+          {
+            clientId: "wcl-tui",
+            kind: "interactive",
+            status: "connected",
+            attachedAt: now,
+            lastSeenAt: now,
+          },
+        ],
+        executor: {
+          state: "online",
+          clientId: "exec-local",
+          activeInvocationCount: 2,
+          activeAgentCount: 2,
+          lastSeenAt: now,
+        },
+      },
+      createdAt: now,
+    });
+
+    const control = loadWorkspaceServerControl(db, workspace.id);
+    expect(control.connection).toMatchObject({ status: "connected", lastSeenAt: now });
+    expect(control.borrowed).toMatchObject({
+      borrowed: true,
+      interactiveClientCount: 1,
+      borrowedByClientIds: ["wcl-tui"],
+    });
+    expect(control.executor).toMatchObject({
+      state: "online",
+      clientId: "exec-local",
+      activeInvocationCount: 2,
+      activeAgentCount: 2,
+    });
+    expect(control.control).toMatchObject({
+      mode: "snapshot_only",
+      reason: "workspace_borrowed",
+      serverMutationAllowed: false,
+    });
+    expect(() =>
+      queueCommandForWorkspaceOwner(db, {
+        workspaceId: workspace.id,
+        projectId: project.id,
+        payload: { kind: "task.start.request", title: "Start MVP task" },
+        createdAt: now,
+      }),
+    ).toThrow(/borrowed by an open TUI client/);
+
+    const commandCount = db.prepare("SELECT COUNT(*) AS count FROM commands").get() as {
+      count: number;
+    };
+    expect(commandCount.count).toBe(0);
+    db.close();
+  });
+
+  it("projects disconnected workspaces as snapshot-only without stale status wording", () => {
+    const { db, runtimeId, runtimeWorkspaceBindingId, now } = setupRuntimeBinding();
+    const workspace = createWorkspaceWithOwnerBinding(db, {
+      slug: "local-default",
+      name: "Local default",
+      runtimeWorkspaceBindingId,
+      createdAt: now,
+    });
+    db.prepare(
+      "UPDATE runtime_connections SET status = 'offline', last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
+    ).run(now, "2026-05-22T00:01:00.000Z", runtimeId);
+
+    const control = loadWorkspaceServerControl(db, workspace.id);
+    expect(control.connection).toMatchObject({
+      status: "disconnected",
+      runtimeStatus: "offline",
+      lastSeenAt: now,
+    });
+    expect(control.control).toMatchObject({
+      mode: "snapshot_only",
+      reason: "daemon_disconnected",
+      serverMutationAllowed: false,
+    });
+    expect(control.control.message).not.toMatch(/stale/iu);
+    expect(() =>
+      queueCommandForWorkspaceOwner(db, {
+        workspaceId: workspace.id,
+        payload: { kind: "task.start.request", title: "Start MVP task" },
+        createdAt: now,
+      }),
+    ).toThrow(/disconnected/);
+    db.close();
+  });
+
+  it("allows server mutations for connected unborrowed workspaces", () => {
+    const { db, runtimeWorkspaceBindingId, now } = setupRuntimeBinding();
+    const workspace = createWorkspaceWithOwnerBinding(db, {
+      slug: "local-default",
+      name: "Local default",
+      runtimeWorkspaceBindingId,
+      createdAt: now,
+    });
+
+    appendEvent(db, {
+      workspaceId: workspace.id,
+      actorKind: "runtime",
+      actorId: runtimeWorkspaceBindingId,
+      kind: "workspace.snapshot.received",
+      payload: {
+        displayName: "Local default",
+        status: "available",
+        borrowed: { borrowed: false, interactiveClientCount: 0, borrowedByClientIds: [] },
+        executor: { state: "online", activeInvocationCount: 0, activeAgentCount: 0 },
+        control: { mode: "full", serverMutationAllowed: true },
+      },
+      createdAt: now,
+    });
+
+    expect(loadWorkspaceServerControl(db, workspace.id).control).toMatchObject({
+      mode: "full",
+      serverMutationAllowed: true,
+    });
+    expect(() =>
+      queueCommandForWorkspaceOwner(db, {
+        workspaceId: workspace.id,
+        payload: { kind: "task.start.request", title: "Start MVP task" },
+        createdAt: now,
+      }),
+    ).not.toThrow();
     db.close();
   });
 

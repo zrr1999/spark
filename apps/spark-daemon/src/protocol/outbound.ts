@@ -9,7 +9,7 @@ import {
   type RuntimeReconcileReportPayload,
   type TaskGraphSnapshotPayload,
   type WorkspaceSnapshotPayload,
-} from "@zendev-lab/navia-protocol";
+} from "@zendev-lab/spark-protocol";
 
 export interface RouteContext {
   runtimeId: string;

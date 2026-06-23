@@ -5,7 +5,7 @@ import {
   serverHelloAckEnvelopeSchema,
   runtimeWorkspaceRegistrationResponseSchema,
   type RuntimeRegistrationResponse,
-} from "@zendev-lab/navia-protocol";
+} from "@zendev-lab/spark-protocol";
 import type { NaviaPaths } from "@zendev-lab/navia-system";
 import WebSocket from "ws";
 import { readSparkDaemonConfig, writeSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
@@ -105,7 +105,7 @@ export async function ensureSparkDaemonRegistrationForWorkspace(
 
   if (!input.registrationToken) {
     throw new Error(
-      "Missing workspace registration token. Pass --token <token>, --token -, or set NAVIA_WORKSPACE_REGISTRATION_TOKEN.",
+      "Missing workspace registration token. Pass --token <token>, --token -, or set SPARK_WORKSPACE_REGISTRATION_TOKEN.",
     );
   }
 
@@ -158,7 +158,7 @@ export function validateRegistrationServerUrl(serverUrl: string): string {
 
   if (found.size > 0) {
     throw new Error(
-      `Registration secrets must not be embedded in --server-url (${[...found].join(", ")}). Pass the workspace registration token with --token <token>, --token -, or NAVIA_WORKSPACE_REGISTRATION_TOKEN.`,
+      `Registration secrets must not be embedded in --server-url (${[...found].join(", ")}). Pass the workspace registration token with --token <token>, --token -, or SPARK_WORKSPACE_REGISTRATION_TOKEN.`,
     );
   }
 

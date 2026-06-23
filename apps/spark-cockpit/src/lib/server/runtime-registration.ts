@@ -4,7 +4,7 @@ import {
   runtimeProtocolVersion,
   type RuntimeRegistrationRequest,
   type RuntimeWorkspaceRegistrationRequest,
-} from "@zendev-lab/navia-protocol";
+} from "@zendev-lab/spark-protocol";
 import { asciiSlug } from "@zendev-lab/navia-system";
 import { hashSecret } from "./auth";
 import type { DatabaseSync } from "node:sqlite";
@@ -91,11 +91,11 @@ const runtimeAccessTokenTtlMs = 60 * 60 * 1000;
 const runtimeRefreshTokenTtlMs = 30 * 24 * 60 * 60 * 1000;
 
 export function createRuntimeToken(): string {
-  return `navia_rt_${randomBytes(32).toString("base64url")}`;
+  return `spark_rt_${randomBytes(32).toString("base64url")}`;
 }
 
 export function createRuntimeRefreshToken(): string {
-  return `navia_rt_refresh_${randomBytes(32).toString("base64url")}`;
+  return `spark_rt_refresh_${randomBytes(32).toString("base64url")}`;
 }
 
 export function createRuntimeEnrollmentToken(
@@ -113,7 +113,7 @@ export function createRuntimeEnrollmentToken(
   const createdAtDate = input.createdAt ? new Date(input.createdAt) : new Date();
   const createdAt = createdAtDate.toISOString();
   const expiresAt = new Date(createdAtDate.getTime() + (input.ttlMs ?? 86_400_000)).toISOString();
-  const refreshToken = `navia_wsreg_${randomBytes(32).toString("base64url")}`;
+  const refreshToken = `spark_wsreg_${randomBytes(32).toString("base64url")}`;
   const id = createId("rtetok");
 
   db.prepare(

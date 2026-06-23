@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+export * from "./errors.ts";
+export * from "./refs.ts";
+export * from "./runtime-v1/envelope.ts";
+export * from "./runtime-v1/messages.ts";
+export * from "./runtime-v1/registration.ts";
+
 export const SPARK_PROTOCOL_VERSION = 1 as const;
 
 const jsonPrimitiveSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);

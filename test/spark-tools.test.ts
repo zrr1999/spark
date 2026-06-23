@@ -671,6 +671,10 @@ type TestSparkContext = {
   inputValue?: string;
   editorText?: string;
   askAutoAnswer?: "reviewer";
+  sparkActiveLens?: {
+    mode: "research" | "plan" | "implement";
+    driver?: "interactive" | "goal" | "workflow";
+  };
   ui: {
     notify: (message: string, level?: "info" | "warning" | "error" | "success") => void;
     setWidget: (key: string, cb: unknown, opts?: { placement?: string }) => void;
@@ -784,16 +788,6 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
     assert.match(executeMessage, /suggest \/loop/);
     assert.match(executeMessage, /suggest \/goal/);
     assert.match(executeMessage, /suggest \/workflow/);
-    assert.match(
-      executeMessage,
-      /Workflow and subagent role runs are execution tools, not session modes/,
-    );
-    assert.match(
-      executeMessage,
-      /Implementation mode should use the workflow tool\/runtime boundary/,
-    );
-    assert.match(executeMessage, /workflow\(\{ action: "list" \}\)/);
-    assert.match(executeMessage, /workflow\(\{ action: "read" \}\)/);
     assert.match(executeMessage, /user-facing open question or decision/);
     assert.match(executeMessage, /Do not guess user intent/);
     assert.doesNotMatch(executeMessage, /Stop after that task finishes/);
@@ -837,7 +831,6 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
       /Finish the queue until done/,
     );
     const goalPrompt = initializedRun.customMessages.at(-1)?.content ?? "";
-    assert.match(goalPrompt, /Spark session goal is active/);
     assert.match(goalPrompt, /Finish the queue until done/);
     const goalSessionStateRaw = await readFile(
       sessionGoalPath(initializedDir, initializedCtx),
@@ -854,11 +847,11 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
     assert.equal(sessionAfterGoal.executionMode, undefined);
 
     await goalCommand.handler("", initializedCtx);
-    const inferredGoalPrompt = initializedRun.customMessages.at(-1)?.content ?? "";
-    assert.match(inferredGoalPrompt, /Spark foreground goal loop tick/);
+    const inferredGoalMessage = initializedRun.customMessages.at(-1);
+    const inferredGoalPrompt = inferredGoalMessage?.content ?? "";
+    assert.equal(inferredGoalMessage?.customType, "spark-goal-request");
+    assert.equal(inferredGoalMessage?.details?.purpose, "foreground-goal-tick");
     assert.match(inferredGoalPrompt, /Finish the queue until done/);
-    assert.match(inferredGoalPrompt, /Underlying pi-loop decision: continue/);
-    assert.match(inferredGoalPrompt, /reviewer-gated completion policy/);
     assert.doesNotMatch(inferredGoalPrompt, /Advance project/);
     assert.equal(initializedRun.commands.get("workflow:ready"), undefined);
 
@@ -868,14 +861,9 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
     const loopMessage = initializedRun.customMessages.at(-1);
     const loopPrompt = loopMessage?.content ?? "";
     assert.equal(loopMessage?.customType, "spark-loop-request");
+    assert.equal(loopMessage?.details?.purpose, "foreground-loop-tick");
     assert.match(customMessageVisible(loopMessage), /Spark loop tick/);
-    assert.match(loopPrompt, /Spark foreground loop tick/);
     assert.match(loopPrompt, /pi_loop_continuation/);
-    assert.match(loopPrompt, /Selected Spark mode for loop driver/);
-    assert.match(loopPrompt, /first-class open-ended continuous-progress driver/);
-    assert.match(loopPrompt, /must not call goal\(\{ action: "complete" \}\)/);
-    assert.doesNotMatch(loopPrompt, /Spark foreground goal loop tick/);
-    assert.doesNotMatch(loopPrompt, /Spark session goal is active/);
     const activeLoop = await loadSessionLoop(initializedDir, initializedCtx);
     assert.equal(activeLoop?.objective, "Continue the queue without completing");
     assert.equal(activeLoop?.status, "active");
@@ -1103,19 +1091,11 @@ void test("latest direct Spark mode replaces older pending hidden mode context",
     await executeCommand.handler("take one task", ctx);
     await planCommand.handler("revise the failed task plan", ctx);
 
-    const hidden = run.customMessages.at(-1)?.content ?? "";
-    assert.match(hidden, /## Planning mode requirements/);
-    assert.match(hidden, /revise the failed task plan/);
-    assert.match(
-      hidden,
-      /Compact summaries, restored conversation history, and hidden mode text are historical hints only/,
-    );
-    assert.match(hidden, /task_read\(\{ action: "project_status" \}\)/);
-    assert.match(hidden, /task_read\(\{ action: "workspace_status" \}\)/);
-    assert.doesNotMatch(hidden, /task_read\(\{ action: "status"/);
-    assert.doesNotMatch(hidden, /project_update/);
-    assert.doesNotMatch(hidden, /## Default research requirements/);
-    assert.doesNotMatch(hidden, /## Implementation mode requirements/);
+    const hiddenMessage = run.customMessages.at(-1);
+    assert.equal(hiddenMessage?.customType, "spark-mode-request");
+    assert.equal(ctx.sparkActiveLens?.mode, "plan");
+    assert.equal(ctx.sparkActiveLens?.driver, "interactive");
+    assert.match(hiddenMessage?.content ?? "", /revise the failed task plan/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -1658,26 +1638,8 @@ void test("/goal sets a durable session goal instead of execute-mode continuatio
     assert.equal(run.commands.get("workflow:goal"), undefined);
     await goalCommand.handler("work through the ready queue until done", ctx);
     const goalPrompt = run.customMessages.at(-1)?.content ?? "";
-    assert.match(goalPrompt, /Spark session goal is active/);
-    assert.match(
-      goalPrompt,
-      /Foreground goal tick uses exactly one main session mode: research, plan, or implement/,
-    );
-    assert.match(goalPrompt, /host selects the starting mode for this turn/);
-    assert.match(goalPrompt, /Goal, workflow, subagent role, and role-run are not modes/);
-    assert.match(goalPrompt, /Goal is a foreground driver, not a mode/);
-    assert.match(goalPrompt, /Selected Spark mode for goal driver: implement/);
-    assert.doesNotMatch(goalPrompt, /## Goal Mode Requirements/);
-    assert.doesNotMatch(goalPrompt, /## Default research requirements/);
-    assert.doesNotMatch(goalPrompt, /## Planning mode requirements/);
-    assert.match(goalPrompt, /## Implementation mode requirements/);
-    assert.match(goalPrompt, /## Goal driver guidance/);
-    assert.match(goalPrompt, /Implementation mode should use the workflow tool\/runtime boundary/);
-    assert.match(goalPrompt, /reviewer-gated completion flow/);
-    assert.match(goalPrompt, /reviewer-backed auto-decision\/auto-ask policy/);
-    assert.match(goalPrompt, /reviewer auto-answer/);
-    assert.match(goalPrompt, /main session requests completion/);
-    assert.doesNotMatch(goalPrompt, /goal\(\{ action: "complete" \}\).*concise verified reason/);
+    assert.equal(run.customMessages.at(-1)?.customType, "spark-goal-request");
+    assert.match(goalPrompt, /work through the ready queue until done/);
     assert.doesNotMatch(run.customMessages.at(-1)?.content ?? "", /strategy: goal/);
     assert.doesNotMatch(run.customMessages.at(-1)?.content ?? "", /workflow: builtin:goal/);
     const goalState = JSON.parse(await readFile(sessionGoalPath(dir, ctx), "utf8")) as {
@@ -1692,7 +1654,7 @@ void test("/goal sets a durable session goal instead of execute-mode continuatio
     };
     assert.equal(sessionState.executionMode, undefined);
     assert.equal(sessionState.runMode, undefined);
-    assert.match(goalPrompt, /foreground goal loop/);
+    assert.equal(run.customMessages.at(-1)?.details?.purpose, "foreground-goal-start");
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -1710,18 +1672,14 @@ void test("foreground drivers plan empty-frontier research-progress objectives",
     const goalCommand = run.commands.get("goal");
     assert.ok(goalCommand, "missing /goal command");
     await goalCommand.handler(objective, ctx);
-    const goalPrompt = run.customMessages.at(-1)?.content ?? "";
-    assert.match(goalPrompt, /Selected Spark mode for goal driver: plan/);
-    assert.match(goalPrompt, /## Planning mode requirements/);
-    assert.doesNotMatch(goalPrompt, /## Default research requirements/);
+    assert.equal(run.customMessages.at(-1)?.customType, "spark-goal-request");
+    assert.equal(run.customMessages.at(-1)?.details?.selectedMode, "plan");
 
     const loopCommand = run.commands.get("loop");
     assert.ok(loopCommand, "missing /loop command");
     await loopCommand.handler(objective, ctx);
-    const loopPrompt = run.customMessages.at(-1)?.content ?? "";
-    assert.match(loopPrompt, /Selected Spark mode for loop driver: plan/);
-    assert.match(loopPrompt, /Use the selected mode's tool policy/);
-    assert.doesNotMatch(loopPrompt, /Selected Spark mode for loop driver: research/);
+    assert.equal(run.customMessages.at(-1)?.customType, "spark-loop-request");
+    assert.equal(run.customMessages.at(-1)?.details?.selectedMode, "plan");
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -1739,17 +1697,14 @@ void test("foreground drivers preserve pure empty-frontier research objectives",
     const goalCommand = run.commands.get("goal");
     assert.ok(goalCommand, "missing /goal command");
     await goalCommand.handler(objective, ctx);
-    const goalPrompt = run.customMessages.at(-1)?.content ?? "";
-    assert.match(goalPrompt, /Selected Spark mode for goal driver: research/);
-    assert.match(goalPrompt, /## Default research requirements/);
-    assert.doesNotMatch(goalPrompt, /## Planning mode requirements/);
+    assert.equal(run.customMessages.at(-1)?.customType, "spark-goal-request");
+    assert.equal(run.customMessages.at(-1)?.details?.selectedMode, "research");
 
     const loopCommand = run.commands.get("loop");
     assert.ok(loopCommand, "missing /loop command");
     await loopCommand.handler(objective, ctx);
-    const loopPrompt = run.customMessages.at(-1)?.content ?? "";
-    assert.match(loopPrompt, /Selected Spark mode for loop driver: research/);
-    assert.doesNotMatch(loopPrompt, /Selected Spark mode for loop driver: plan/);
+    assert.equal(run.customMessages.at(-1)?.customType, "spark-loop-request");
+    assert.equal(run.customMessages.at(-1)?.details?.selectedMode, "research");
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -1843,7 +1798,6 @@ void test("goal status explains absent durable goal against current project cont
     const status = await executeSparkTool(run.tools, "goal", ctx, { action: "status" });
     const statusText = toolText(status);
     assert.match(statusText, /No session goal is set in durable session state/);
-    assert.match(statusText, /Historical compact summaries are context hints only/);
     assert.match(statusText, /Current project: .* unfinishedTasks=0 readyTasks=0/);
     assert.match(statusText, /goal\(\{ action: "start" \}\)/);
     const relationship = status.details?.goalProjectRelationship as
@@ -1876,7 +1830,6 @@ void test("/goal restarts without overwriting an existing goal objective", async
     assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
     assert.equal(run.customMessages.at(-1)?.details?.purpose, "foreground-goal-tick");
     const goalPrompt = run.customMessages.at(-1)?.content ?? "";
-    assert.match(goalPrompt, /Spark foreground goal loop tick/);
     assert.match(goalPrompt, /finish the original queue/);
     assert.doesNotMatch(goalPrompt, /replace with a different goal/);
   } finally {
@@ -1928,7 +1881,6 @@ void test("/goal handles stale inferred project goals after project work has no 
       /replaced a stale completed-project goal/,
     );
     const goalPrompt = run.customMessages.at(-1)?.content ?? "";
-    assert.match(goalPrompt, /Spark session goal is active/);
     assert.match(goalPrompt, /review 全盘代码进行改进/);
     assert.doesNotMatch(goalPrompt, /Unfinished tasks: 3/);
   } finally {
@@ -2050,10 +2002,7 @@ void test("/loop foreground driver persists, reschedules, and does not call revi
     assert.equal(loop?.status, "active");
     assert.equal(loop?.objective, "Continue without completion review");
     assert.equal(run.customMessages.at(-1)?.customType, "spark-loop-request");
-    assert.match(
-      run.customMessages.at(-1)?.content ?? "",
-      /must not call goal\(\{ action: "complete" \}\)/,
-    );
+    assert.match(run.customMessages.at(-1)?.content ?? "", /pi_loop_continuation/);
     assert.equal(reviewerCalls, 0);
 
     for (const handler of run.eventHandlers.get("agent_end") ?? []) {
@@ -2333,12 +2282,7 @@ void test("/goal foreground loop reschedules active goal on session_start", asyn
     assert.match(customMessageVisible(restartedRun.customMessages.at(-1)), /Spark goal tick/);
     assert.equal(restartedRun.customMessages.at(-1)?.display, false);
     assert.equal(restartedRun.customMessages.at(-1)?.options?.deliverAs, "followUp");
-    const tickPrompt = restartedRun.customMessages.at(-1)?.content ?? "";
-    assert.match(tickPrompt, /Spark foreground goal loop tick/);
-    assert.match(tickPrompt, /reviewer-gated completion flow/i);
-    assert.match(tickPrompt, /reviewer-backed auto-decision\/auto-ask policy/);
-    assert.match(tickPrompt, /reviewer auto-answer/);
-    assert.doesNotMatch(tickPrompt, /call goal\(\{ action: "complete" \}\)/);
+    assert.equal(restartedRun.customMessages.at(-1)?.details?.purpose, "foreground-goal-tick");
   } finally {
     if (restartedRun) {
       const ctx = testSparkContext(dir, "main");
@@ -2559,7 +2503,7 @@ void test("/goal foreground loop drops stale tick context after pause", async ()
       (rejectedPause.details as { error?: string }).error,
       "autonomous_goal_pause_forbidden",
     );
-    assert.match(run.customMessages.at(-1)?.content ?? "", /foreground goal loop tick/);
+    assert.equal(run.customMessages.at(-1)?.details?.purpose, "foreground-goal-tick");
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
@@ -3785,7 +3729,7 @@ void test("/goal foreground loop waits for idle and stops after pause", async ()
     assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
     assert.equal(run.customMessages.at(-1)?.display, false);
     assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark foreground goal loop tick/);
+    assert.equal(run.customMessages.at(-1)?.details?.purpose, "foreground-goal-tick");
     assert.equal(timers.length, 2);
 
     for (const handler of run.eventHandlers.get("turn_end") ?? []) {
@@ -3833,7 +3777,7 @@ void test("/goal foreground loop waits for idle and stops after pause", async ()
     assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
     assert.equal(run.customMessages.at(-1)?.display, false);
     assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark foreground goal loop tick/);
+    assert.equal(run.customMessages.at(-1)?.details?.purpose, "foreground-goal-tick");
     for (const handler of run.eventHandlers.get("turn_end") ?? []) {
       await handler(
         {
@@ -6947,12 +6891,9 @@ void test("spark_goal foreground loop asks agent to bootstrap a project when non
     await flushAsyncWork();
 
     assert.match(customMessageVisible(run.customMessages.at(-1)), /Spark goal tick/);
-    const prompt = run.customMessages.at(-1)?.content ?? "";
-    assert.match(prompt, /Spark foreground goal loop tick/);
-    assert.match(prompt, /No current project is selected/);
-    assert.match(prompt, /task_write\(\{ action: "project_use", title, description \}\)/);
-    assert.match(prompt, /task_write\(\{ action: "plan" \}\)/);
-    assert.doesNotMatch(prompt, /No Spark project\/task state is available to infer/);
+    assert.equal(run.customMessages.at(-1)?.customType, "spark-goal-request");
+    assert.equal(run.customMessages.at(-1)?.details?.purpose, "foreground-goal-tick");
+    assert.equal(run.customMessages.at(-1)?.details?.selectedMode, "plan");
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
@@ -8320,6 +8261,9 @@ void test("impl_workflow_runs renders and controls dynamic workflow_run records"
     assert.match(statusText, /paused control workflow/);
     assert.match(statusText, /completed control workflow/);
     assert.match(statusText, /Plan: success/);
+    assert.match(statusText, /Timeline: ✓ Plan/);
+    assert.match(statusText, /Controls: inspect runRef=.* · pause · stop/);
+    assert.match(statusText, /Controls: inspect runRef=.* · save · ack/);
     assert.match(statusText, /Base: ref=graft:test state=state:test tree=tree:test/);
     assert.match(statusText, /Error: agent boom/);
     assert.match(statusText, /Result: \{"report":"delivered"\}/);

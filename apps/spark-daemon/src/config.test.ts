@@ -26,9 +26,9 @@ describe("Spark daemon config", () => {
         displayName: "Test Daemon",
         serverUrl: "http://127.0.0.1:5173",
         runtimeId: "rt_11111111111141111111111111111111",
-        runtimeToken: "navia_rt_test_token_00000000000000000000000000000000",
+        runtimeToken: "spark_rt_test_token_00000000000000000000000000000000",
         runtimeTokenExpiresAt: "2026-05-25T01:00:00.000Z",
-        refreshToken: "navia_rt_refresh_test_0000000000000000000000000000",
+        refreshToken: "spark_rt_refresh_test_0000000000000000000000000000",
         refreshTokenExpiresAt: "2026-06-24T00:00:00.000Z",
         webSocketUrl: "ws://127.0.0.1:5173/api/v1/runtime/runtimes/rt/ws",
       });

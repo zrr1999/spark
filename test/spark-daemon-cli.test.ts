@@ -4,12 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { parseSparkCliCommand } from "../apps/spark-tui/src/cli.ts";
+import { parseSparkCliCommand, runSparkCli } from "../apps/spark-tui/src/cli.ts";
 import {
   createSparkDaemonNativeResponder,
   handleSparkDaemonCliCommand,
   parseSparkDaemonCliArgs,
   runSparkDaemonCliCommand,
+  type SparkDaemonClientOptions,
 } from "../apps/spark-tui/src/cli/daemon.ts";
 
 void test("parseSparkCliCommand routes daemon and print commands without changing default TUI parsing", () => {
@@ -181,6 +182,112 @@ function testDaemonPaths(root: string) {
     lockPath: join(runtimeDir, "daemon.lock"),
   };
 }
+
+void test("Spark TUI and headless print attach and release workspace clients", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-workspace-client-"));
+  try {
+    const paths = testDaemonPaths(dir);
+    const workspace = {
+      id: "rtwb_local",
+      serverUrl: "",
+      localWorkspaceKey: "workspace",
+      displayName: "Workspace",
+      localPath: dir,
+      status: "available",
+    };
+    const ensures: Array<{ localPath: string }> = [];
+    const attaches: Array<{ kind: string; workspaceId: string; displayName?: string }> = [];
+    const releases: string[] = [];
+    const submitted: Array<{ sessionId: string; prompt: string }> = [];
+    const daemonClient: SparkDaemonClientOptions = {
+      paths,
+      startService: () => ({ kind: "detached" as const, alreadyRunning: false, detail: "started" }),
+      daemonStatus: async () => ({
+        observedAt: "2026-06-19T00:00:00.000Z",
+        servers: [],
+        queue: { inbox: 0, processed: 0, failed: 0 },
+      }),
+      workspaceEnsureLocal: async (_paths, input) => {
+        ensures.push(input);
+        return workspace;
+      },
+      workspaceClientAttach: async (_paths, input) => {
+        attaches.push(input);
+        const id = `wcl-${input.kind}-${attaches.length}`;
+        return {
+          client: {
+            id,
+            workspaceId: input.workspaceId,
+            kind: input.kind,
+            status: "connected" as const,
+            attachedAt: "2026-06-19T00:00:00.000Z",
+            lastSeenAt: "2026-06-19T00:00:00.000Z",
+          },
+          workspace,
+          observedAt: "2026-06-19T00:00:00.000Z",
+        };
+      },
+      workspaceClientRelease: async (_paths, input) => {
+        releases.push(input.clientId);
+        return {
+          client: {
+            id: input.clientId,
+            workspaceId: workspace.id,
+            kind: "interactive" as const,
+            status: "disconnected" as const,
+            attachedAt: "2026-06-19T00:00:00.000Z",
+            lastSeenAt: "2026-06-19T00:00:01.000Z",
+          },
+          workspace,
+          observedAt: "2026-06-19T00:00:01.000Z",
+        };
+      },
+      turnSubmit: async (_paths, input) => {
+        submitted.push(input);
+        return {
+          observedAt: "2026-06-19T00:00:00.000Z",
+          fileName: "turn.json",
+          filePath: join(dir, "turn.json"),
+          task: { type: "session.run" as const, sessionId: input.sessionId, prompt: input.prompt },
+        };
+      },
+    };
+
+    const originalLog = console.log;
+    const logs: string[] = [];
+    console.log = (value?: unknown) => {
+      logs.push(String(value));
+    };
+    try {
+      assert.equal(await runSparkCli(["--print", "headless prompt"], { daemonClient }), 0);
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(
+      await runSparkCli(["hello tui"], {
+        daemonClient,
+        runTui: async () => undefined,
+      }),
+      0,
+    );
+
+    assert.deepEqual(
+      attaches.map((attach) => attach.kind),
+      ["headless", "interactive"],
+    );
+    assert.deepEqual(
+      attaches.map((attach) => attach.workspaceId),
+      [workspace.id, workspace.id],
+    );
+    assert.deepEqual(releases, ["wcl-headless-1", "wcl-interactive-2"]);
+    assert.equal(ensures.length, 2);
+    assert.equal(submitted[0]?.prompt, "headless prompt");
+    assert.match(logs.join("\n"), /turn\.json/u);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 void test("Spark native responder submits prompts through daemon IPC", async () => {
   const calls: Array<{ sessionId: string; prompt: string }> = [];

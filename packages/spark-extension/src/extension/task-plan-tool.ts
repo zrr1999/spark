@@ -46,9 +46,18 @@ export function taskPlanSchema() {
     ),
     riskLevel: Type.Optional(Type.String({ description: "trivial | normal | high" })),
     openQuestions: Type.Optional(
-      Type.Array(Type.String({ description: "Material unresolved questions." })),
+      Type.Array(
+        Type.String({
+          description:
+            "Warning-only scratch questions that do not block readiness; material decisions should be promoted to askRefs or plan fields.",
+        }),
+      ),
     ),
-    askRefs: Type.Optional(Type.Array(Type.String({ description: "Ask artifact refs." }))),
+    askRefs: Type.Optional(
+      Type.Array(
+        Type.String({ description: "Ask artifact refs for resolved material decisions." }),
+      ),
+    ),
   });
 }
 

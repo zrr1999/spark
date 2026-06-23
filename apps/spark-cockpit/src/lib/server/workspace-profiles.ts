@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { createId } from "@zendev-lab/navia-protocol";
+import { createId } from "@zendev-lab/spark-protocol";
 import { asciiSlug, gitCommand } from "@zendev-lab/navia-system";
 import { parse, stringify } from "smol-toml";
 

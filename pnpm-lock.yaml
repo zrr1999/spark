@@ -68,9 +68,6 @@ importers:
       '@types/node':
         specifier: ^25.9.3
         version: 25.9.3
-      '@zendev-lab/navia-protocol':
-        specifier: workspace:*
-        version: link:packages/navia-protocol
       '@zendev-lab/navia-system':
         specifier: workspace:*
         version: link:packages/navia-system
@@ -116,15 +113,15 @@ importers:
       '@zendev-lab/navia-domain':
         specifier: workspace:*
         version: link:../../packages/navia-domain
-      '@zendev-lab/navia-protocol':
-        specifier: workspace:*
-        version: link:../../packages/navia-protocol
       '@zendev-lab/navia-system':
         specifier: workspace:*
         version: link:../../packages/navia-system
       '@zendev-lab/navia-ui':
         specifier: workspace:*
         version: link:../../packages/navia-ui
+      '@zendev-lab/spark-protocol':
+        specifier: workspace:*
+        version: link:../../packages/spark-protocol
       smol-toml:
         specifier: ^1.6.1
         version: 1.6.1
@@ -190,12 +187,12 @@ importers:
       '@zendev-lab/navia-db':
         specifier: workspace:*
         version: link:../../packages/navia-db
-      '@zendev-lab/navia-protocol':
-        specifier: workspace:*
-        version: link:../../packages/navia-protocol
       '@zendev-lab/navia-system':
         specifier: workspace:*
         version: link:../../packages/navia-system
+      '@zendev-lab/spark-protocol':
+        specifier: workspace:*
+        version: link:../../packages/spark-protocol
       esbuild:
         specifier: ^0.28.0
         version: 0.28.1
@@ -242,22 +239,6 @@ importers:
       '@zendev-lab/navia-db':
         specifier: workspace:*
         version: link:../navia-db
-      '@zendev-lab/navia-protocol':
-        specifier: workspace:*
-        version: link:../navia-protocol
-    devDependencies:
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
-        version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@voidzero-dev/vite-plus-core@0.1.24(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(esbuild@0.28.1)(jiti@2.7.0)(jsdom@27.4.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0)'
-
-  packages/navia-protocol:
-    dependencies:
-      zod:
-        specifier: ^4.1.5
-        version: 4.4.3
     devDependencies:
       typescript:
         specifier: ^6.0.3
@@ -479,6 +460,13 @@ importers:
       zod:
         specifier: ^4.1.5
         version: 4.4.3
+    devDependencies:
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@voidzero-dev/vite-plus-core@0.1.24(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(esbuild@0.28.1)(jiti@2.7.0)(jsdom@27.4.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0)'
 
   packages/spark-runtime:
     dependencies:
