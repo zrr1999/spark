@@ -14,6 +14,7 @@ import {
 } from "./spark-entry-application.ts";
 import { detectSparkProjectState, resolveSparkEntry } from "./spark-entry-resolution.ts";
 import { currentSparkProject, loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
+import { suggestForegroundGoalMode } from "./spark-foreground-goal-mode.ts";
 import {
   requestGoalCompletionReview,
   type GoalCompletionReviewOutcome,
@@ -1004,6 +1005,7 @@ export function registerSparkCommands(
     const selectedMode = active.graph
       ? resolveForegroundGoalMode(active.graph, project?.ref, goal.objective)
       : "plan";
+    ctx.sparkActiveLens = { mode: selectedMode, driver: "goal" };
     const instruction = renderForegroundGoalTickInstruction(
       project?.title,
       goal.objective,
@@ -1082,6 +1084,7 @@ export function registerSparkCommands(
     const selectedMode = active.graph
       ? resolveForegroundGoalMode(active.graph, project?.ref, loop.objective)
       : "plan";
+    ctx.sparkActiveLens = { mode: selectedMode, driver: "goal" };
     const instruction = renderSparkLoopInstruction(
       loop.objective,
       active.graph,
@@ -1706,64 +1709,6 @@ export function registerSparkCommands(
       fallback: "implement",
     });
     return isSparkEntryMode(resolved.mode) ? resolved.mode : "implement";
-  }
-
-  function suggestForegroundGoalMode(
-    graph: TaskGraph,
-    selectedProjectRef: ProjectRef | undefined,
-    objective: string,
-  ): SparkEntryMode {
-    const normalized = objective.trim();
-    if (!selectedProjectRef) return "plan";
-
-    const frontier = selectedProjectForegroundState(graph, selectedProjectRef);
-    if (frontier.ready > 0) return "implement";
-    if (frontier.unfinished > 0) return "plan";
-    if (emptyFrontierNeedsPlanning(normalized)) return "plan";
-
-    if (foregroundPlanIntent(normalized)) return "plan";
-    if (foregroundImplementIntent(normalized)) return "implement";
-    if (foregroundResearchIntent(normalized)) return "research";
-    return "implement";
-  }
-
-  function selectedProjectForegroundState(
-    graph: TaskGraph,
-    selectedProjectRef: ProjectRef,
-  ): { ready: number; unfinished: number } {
-    return {
-      ready: graph.readyTasks(selectedProjectRef).length,
-      unfinished: graph
-        .tasks(selectedProjectRef)
-        .filter((task) => isUnfinishedTaskStatus(task.status)).length,
-    };
-  }
-
-  function emptyFrontierNeedsPlanning(objective: string): boolean {
-    if (foregroundPlanIntent(objective)) return true;
-    return foregroundResearchIntent(objective) && foregroundProgressOrCreationIntent(objective);
-  }
-
-  function foregroundResearchIntent(objective: string): boolean {
-    return /(调研|研究|审阅|review|research|investigate|inspect|audit)/iu.test(objective);
-  }
-
-  function foregroundPlanIntent(objective: string): boolean {
-    return /(规划|计划|拆分|创建(任务|计划|项目)?|生成(任务|计划)?|plan|clarify|decompose|break down|create tasks?|task creation)/iu.test(
-      objective,
-    );
-  }
-
-  function foregroundImplementIntent(objective: string): boolean {
-    return /(执行|完成|修复|继续|跑完|ready queue|until done|finish|fix|implement|execute)/iu.test(
-      objective,
-    );
-  }
-
-  function foregroundProgressOrCreationIntent(objective: string): boolean {
-    return /(不断|持续|继续|推进|优化|改进|完善|创建|拆分|任务|完成(任务|它们|这些|全部|所有|队列)|ongoing|continue|progress|optimise|optimize|improve|create|task|finish (tasks|queue|them|all)|complete (tasks|queue|them|all))/iu.test(
-      objective,
-    );
   }
 
   function isSparkEntryMode(mode: string): mode is SparkEntryMode {

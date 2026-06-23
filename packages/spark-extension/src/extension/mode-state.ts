@@ -7,6 +7,12 @@ import {
 import type { SparkAgentMode, SparkPlanningModeSource } from "./current-project-state-schema.ts";
 import type { SparkSessionContext } from "./session-identity.ts";
 
+interface SparkActiveLensContext extends SparkSessionContext {
+  sparkActiveLens?: {
+    mode: SparkSessionMode;
+  };
+}
+
 /**
  * Per-turn Spark operating lens. The durable session store no longer records
  * this value; callers that need a direct lens for the current turn inject it as
@@ -26,8 +32,10 @@ export interface SparkSessionModeInput {
 }
 
 /**
- * Resolved Spark lens state. It is intentionally always `research` when loaded
- * from disk; non-default direct lenses are per-turn instructions, not state.
+ * Resolved Spark lens state. The durable disk value intentionally falls back to
+ * `research`; non-default direct lenses are per-turn instructions. When the
+ * current host context carries an active per-turn lens, expose that lens so the
+ * mode tool and active prompt agree with the driver that selected the turn.
  */
 export interface SparkSessionModeState {
   mode: SparkSessionMode;
@@ -39,12 +47,11 @@ export interface SparkSessionModeState {
 
 export async function loadSparkMode(
   cwd: string,
-  ctx?: SparkSessionContext,
+  ctx?: SparkActiveLensContext,
 ): Promise<SparkSessionModeState> {
   const state = await loadCurrentProjectState(cwd, ctx);
-  return state?.projectRef
-    ? { mode: "research", projectRef: state.projectRef }
-    : { mode: "research" };
+  const mode = ctx?.sparkActiveLens?.mode ?? "research";
+  return state?.projectRef ? { mode, projectRef: state.projectRef } : { mode };
 }
 
 /**

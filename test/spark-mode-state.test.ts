@@ -30,6 +30,15 @@ void test("loadSparkMode defaults to research with no persisted state", async ()
   });
 });
 
+void test("loadSparkMode exposes current host active lens without persisting it", async () => {
+  await withTempDir(async (dir) => {
+    const state = await loadSparkMode(dir, { sparkActiveLens: { mode: "implement" } });
+
+    assert.deepEqual(state, { mode: "implement" });
+    assert.deepEqual(await loadSparkMode(dir, undefined), { mode: "research" });
+  });
+});
+
 void test("saveSparkMode persists only current project ref", async () => {
   await withTempDir(async (dir) => {
     const projectRef = "proj:test-research" as ProjectRef;
