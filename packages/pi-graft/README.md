@@ -82,7 +82,7 @@ These tools do not override Pi built-ins. Each scratch tool accepts either `base
 ### Graft lifecycle and inspection tools
 
 - `graft_help` — show maintained workflow guidance (`agent-workflow`) or command help.
-- `graft_init` — bootstrap or register a workspace through `graft --json init`.
+- `graft_init` — bootstrap or register a workspace through `graft --json workspace init`.
 - `graft_status` — inspect pi-graft convenience state and graftd status.
 - `graft_ps` — show global daemon and registry status.
 - `graft_doctor` — diagnose or repair registry state.
@@ -91,15 +91,15 @@ These tools do not override Pi built-ins. Each scratch tool accepts either `base
 - `graft_scratch_drop` — drop an unpinned daemon scratch.
 - `graft_scratch_pin` / `graft_scratch_unpin` — manage explicit scratch leases.
 - `graft_candidate_from_scratch` — create a candidate through `graft --json candidate from-scratch`; its `expected` tool parameter maps to `--expect` flags.
-- `graft_validate` — validate a candidate or patch.
-- `graft_admit` — admit a validated candidate as a patch.
-- `graft_show` — show a candidate or patch summary.
+- `graft_validate` — validate a candidate or patch through `graft patch validate`.
+- `graft_admit` — admit a validated candidate as a patch through `graft patch admit`.
+- `graft_show` — show a candidate or patch summary through `graft patch show`.
 - `graft_evidence` — list evidence for a candidate or patch.
-- `graft_candidates` — list unadmitted candidates.
-- `graft_search` — search admitted patches.
-- `graft_materialize` — plan or materialize an admitted patch target; dry-run defaults to true.
+- `graft_candidates` — list unadmitted candidates, optionally filtered by constraint.
+- `graft_search` — search admitted patches through `graft patch search`, optionally filtered by constraint.
+- `graft_materialize` — plan or materialize an admitted patch target through `graft patch materialize`; dry-run defaults to true.
 - `graft_repo` — manage configured repositories with the current `repo add/list/sync/lock/update` flow through `graft --json repo ...`; the Rust CLI decides local vs daemon execution.
-- `graft_cli_exec` — allowlisted argv-only path for low-frequency read-only or diagnostic commands; bootstrap and mutation commands use dedicated tools.
+- `graft_cli_exec` — allowlisted argv-only path for low-frequency advanced CLI workflows (`explain`, `sync`, `get`, `run`, `bundle export/import`, `repo ...`, `workspace ...`, and selected `patch ...` inspection/promotion commands); high-frequency scratch and patch lifecycle commands use dedicated typed tools.
 
 When several Graft lifecycle or inspection calls share one workspace/daemon state, issue them sequentially instead of in parallel. In validation, parallel `graft_show`/`graft_evidence` calls could contend on the local writer lock; the same calls succeeded when sequenced.
 
@@ -122,7 +122,7 @@ graft_write { from: "scratch:...", path: "obsolete.txt", content: "temporary\n" 
 graft_delete { from: "scratch:...", path: "obsolete.txt" }
 # -> details.result.scratch = scratch:...
 
-graft_candidate_from_scratch { scratch: "scratch:...", expected: ["CargoTestsPass"], message: "ready" }
+graft_candidate_from_scratch { scratch: "scratch:...", expected: ["tests_pass"], message: "ready" }
 ```
 
 ## Replacement readiness
@@ -171,7 +171,7 @@ Verdict: **ready as the explicit UTF-8 text replacement path, with known caveats
 
 - P1 — future default tool replacement would change core Pi semantics. Current mitigation: scratch operations are explicit `graft_*` tools, while Pi built-ins remain available.
 - P1 — scratch state is not durable across daemon restart. Mitigation: scratch ids are returned from each tool and pi-graft's convenience state is optional; lost scratch ids fail through graftd wire errors instead of hidden recovery. Multi-workspace scratch isolation is verified through graftd's normalized workspace-route engine map and `tests/workspace_daemon_isolation_smoke.sh`.
-- P1 — current graft property/admission behavior can still require project-specific policy tuning. Mitigation: `graft_candidate_from_scratch`, `graft_validate`, and `graft_admit` are explicit separate steps; graft_read/graft_write/graft_edit/graft_delete never auto-create candidates or auto-admit.
+- P1 — current graft constraint/admission behavior can still require project-specific policy tuning. Mitigation: `graft_candidate_from_scratch`, `graft_validate`, and `graft_admit` are explicit separate steps; graft_read/graft_write/graft_edit/graft_delete never auto-create candidates or auto-admit.
 - P2 — file kind support is text-first. Mitigation: no passthrough fallback is implemented, so unsupported file kinds fail loudly.
 - P2 — integration depends on Pi's tool registration surface staying stable. Mitigation: `@zendev-lab/pi-graft` exports a narrow boundary type and the registration test asserts that it installs no slash commands and the expected tools.
 

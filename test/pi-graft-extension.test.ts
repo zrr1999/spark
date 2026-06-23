@@ -282,6 +282,73 @@ void test("graft_cli_exec validates argv before daemon work", async () => {
       ),
     /argv\[1] must be a string/,
   );
+  await assert.rejects(
+    () =>
+      executeTool(
+        cliExec,
+        "graft_cli_exec",
+        { argv: ["property", "list"] },
+        { cwd: "/tmp/pi-graft-no-daemon" },
+      ),
+    /does not allow graft property/,
+  );
+  await assert.rejects(
+    () =>
+      executeTool(
+        cliExec,
+        "graft_cli_exec",
+        { argv: ["scratch", "read", "--base", "graft:empty", "note.txt"] },
+        { cwd: "/tmp/pi-graft-no-daemon" },
+      ),
+    /does not allow graft scratch/,
+  );
+  await assert.rejects(
+    () =>
+      executeTool(
+        cliExec,
+        "graft_cli_exec",
+        { argv: ["patch", "materialize", "patch:abc"] },
+        { cwd: "/tmp/pi-graft-no-daemon" },
+      ),
+    /does not allow graft patch materialize/,
+  );
+});
+
+void test("graft_cli_exec allows canonical patch incoming argv", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graft-patch-incoming-"));
+  const argvFile = join(dir, "argv.txt");
+  const previousGraftBin = process.env.GRAFT_BIN;
+  const previousArgvFile = process.env.PI_GRAFT_MOCK_ARGV;
+  process.env.PI_GRAFT_MOCK_ARGV = argvFile;
+  process.env.GRAFT_BIN = await writeMockGraft(
+    dir,
+    `printf '%s\\n' "$@" > "$PI_GRAFT_MOCK_ARGV"\nprintf '{"message":"incoming groups"}\\n'`,
+  );
+
+  try {
+    const { pi, tools } = createFakePi();
+    registerPiGraftExtension(pi);
+    const result = await executeTool(
+      tools.get("graft_cli_exec"),
+      "graft_cli_exec",
+      { argv: ["patch", "incoming"] },
+      { cwd: dir },
+    );
+    assert.match(result.content[0].text, /incoming groups/);
+    assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
+      "--cwd",
+      dir,
+      "--json",
+      "patch",
+      "incoming",
+    ]);
+  } finally {
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
+    if (previousArgvFile === undefined) delete process.env.PI_GRAFT_MOCK_ARGV;
+    else process.env.PI_GRAFT_MOCK_ARGV = previousArgvFile;
+    await rm(dir, { force: true, recursive: true });
+  }
 });
 
 void test("simple pi-graft tools use graft --json CLI routes", async () => {
@@ -292,7 +359,7 @@ void test("simple pi-graft tools use graft --json CLI routes", async () => {
       toolName: "graft_ps",
       mockOutput: `printf '{"message":"ps direct"}\n'`,
       expectedText: /ps direct/,
-      expectedArgv: ({ dir }) => ["--cwd", dir, "--json", "ps"],
+      expectedArgv: ({ dir }) => ["--cwd", dir, "--json", "workspace", "ps"],
     },
     {
       name: "graft_init",
@@ -302,7 +369,7 @@ void test("simple pi-graft tools use graft --json CLI routes", async () => {
       mockOutput: `printf '{"status":"ok","message":"initialized mock"}\n'`,
       expectedText: /initialized mock/,
       expectedEnvelope: { status: "ok", message: "initialized mock" },
-      expectedArgv: ({ project }) => ["--cwd", project, "--json", "init"],
+      expectedArgv: ({ project }) => ["--cwd", project, "--json", "workspace", "init"],
     },
     {
       name: "graft_doctor",
@@ -311,7 +378,14 @@ void test("simple pi-graft tools use graft --json CLI routes", async () => {
       params: () => ({ rebuildRegistry: true }),
       mockOutput: `printf '{"message":"doctor ok"}\n'`,
       expectedText: /doctor ok/,
-      expectedArgv: ({ dir }) => ["--cwd", dir, "--json", "doctor", "--rebuild-registry"],
+      expectedArgv: ({ dir }) => [
+        "--cwd",
+        dir,
+        "--json",
+        "workspace",
+        "doctor",
+        "--rebuild-registry",
+      ],
     },
     {
       name: "graft_validate",
@@ -321,7 +395,108 @@ void test("simple pi-graft tools use graft --json CLI routes", async () => {
       ctx: ({ project }) => ({ cwd: project }),
       mockOutput: `printf '{"message":"validation completed"}\n'`,
       expectedText: /validation completed/,
-      expectedArgv: ({ project }) => ["--cwd", project, "--json", "validate", "candidate:abc"],
+      expectedArgv: ({ project }) => [
+        "--cwd",
+        project,
+        "--json",
+        "patch",
+        "validate",
+        "candidate:abc",
+      ],
+    },
+    {
+      name: "graft_admit",
+      tempPrefix: "pi-graft-admit-cli-",
+      toolName: "graft_admit",
+      params: () => ({ candidate: "candidate:abc", required: ["tests_pass"] }),
+      ctx: ({ project }) => ({ cwd: project }),
+      mockOutput: `printf '{"message":"admitted","patch_id":"patch:abc"}\n'`,
+      expectedText: /admitted/,
+      expectedArgv: ({ project }) => [
+        "--cwd",
+        project,
+        "--json",
+        "patch",
+        "admit",
+        "candidate:abc",
+        "--require",
+        "tests_pass",
+      ],
+    },
+    {
+      name: "graft_show",
+      tempPrefix: "pi-graft-show-cli-",
+      toolName: "graft_show",
+      params: () => ({ target: "patch:abc", evidence: true, change: true }),
+      ctx: ({ project }) => ({ cwd: project }),
+      mockOutput: `printf '{"message":"patch details"}\n'`,
+      expectedText: /patch details/,
+      expectedArgv: ({ project }) => [
+        "--cwd",
+        project,
+        "--json",
+        "patch",
+        "show",
+        "patch:abc",
+        "--evidence",
+        "--change",
+      ],
+    },
+    {
+      name: "graft_search",
+      tempPrefix: "pi-graft-search-cli-",
+      toolName: "graft_search",
+      params: () => ({ constraint: "tests_pass", hasEvidence: "tests_pass" }),
+      ctx: ({ project }) => ({ cwd: project }),
+      mockOutput: `printf '{"message":"found patches"}\n'`,
+      expectedText: /found patches/,
+      expectedArgv: ({ project }) => [
+        "--cwd",
+        project,
+        "--json",
+        "patch",
+        "search",
+        "--constraint",
+        "tests_pass",
+        "--has-evidence",
+        "tests_pass",
+      ],
+    },
+    {
+      name: "graft_candidates",
+      tempPrefix: "pi-graft-candidates-cli-",
+      toolName: "graft_candidates",
+      params: () => ({ constraint: "tests_pass", failed: true }),
+      ctx: ({ project }) => ({ cwd: project }),
+      mockOutput: `printf '{"message":"candidate list"}\n'`,
+      expectedText: /candidate list/,
+      expectedArgv: ({ project }) => [
+        "--cwd",
+        project,
+        "--json",
+        "candidates",
+        "--constraint",
+        "tests_pass",
+        "--failed",
+      ],
+    },
+    {
+      name: "graft_materialize",
+      tempPrefix: "pi-graft-materialize-cli-",
+      toolName: "graft_materialize",
+      params: () => ({ patch: "patch:abc", dryRun: true }),
+      ctx: ({ project }) => ({ cwd: project }),
+      mockOutput: `printf '{"message":"materialization dry-run"}\n'`,
+      expectedText: /materialization dry-run/,
+      expectedArgv: ({ project }) => [
+        "--cwd",
+        project,
+        "--json",
+        "patch",
+        "materialize",
+        "patch:abc",
+        "--dry-run",
+      ],
     },
     {
       name: "graft_status",
@@ -371,6 +546,25 @@ void test("simple pi-graft tools use graft --json CLI routes", async () => {
   for (const route of routes) {
     await assertSimpleGraftRoute(route);
   }
+});
+
+void test("graft candidates/search use constraint terminology", async () => {
+  const { pi, tools } = createFakePi();
+  registerPiGraftExtension(pi);
+
+  const candidates = tools.get("graft_candidates");
+  const search = tools.get("graft_search");
+  assert.ok(candidates);
+  assert.ok(search);
+
+  await assert.rejects(
+    () => executeTool(candidates, "graft_candidates", { property: "tests_pass" }, { cwd: "/tmp" }),
+    /property was renamed to constraint/,
+  );
+  await assert.rejects(
+    () => executeTool(search, "graft_search", { property: "tests_pass" }, { cwd: "/tmp" }),
+    /property was renamed to constraint/,
+  );
 });
 
 void test("pi-graft tools require explicit cwd or restored session state", async () => {
