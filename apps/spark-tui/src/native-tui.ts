@@ -180,6 +180,7 @@ interface SparkNativeCockpitState {
   sessionId?: string;
   sessionTitle?: string;
   sessionStatus?: SparkSessionView["status"];
+  selectedWorkflowRunId?: string;
   readonly workflows: Map<string, SparkNativeWorkflowOption>;
   readonly runs: Map<string, SparkRunView>;
   readonly tasks: Map<string, SparkTaskView>;
@@ -582,18 +583,33 @@ function graftSummaryFromRecord(record: Record<string, unknown>): string | undef
     .join(" ");
 }
 
+function workflowRunDisplayStatus(run: SparkRunView): string {
+  return stringFromRecord(run.metadata, "dynamicStatus") ?? run.status;
+}
+
 function workflowRunControlHints(run: SparkRunView): string[] {
   if (!/^run:[a-zA-Z0-9-]+$/u.test(run.id)) {
     return ["Actions: /workflow-runs to open the live dynamic workflow dashboard"];
   }
   const inspect = `/workflow-inspect ${run.id}`;
   const save = `/workflow-save ${run.id}`;
-  if (run.status === "running" || run.status === "queued") {
+  const status = workflowRunDisplayStatus(run);
+  if (status === "running" || status === "queued") {
     return [
       `Actions: ${inspect}`,
       `         /workflow-pause ${run.id}`,
       `         /workflow-stop ${run.id}`,
       `         ${save}`,
+    ];
+  }
+  if (status === "paused" || status === "stale") {
+    return [
+      `Actions: ${inspect}`,
+      `         /workflow-resume ${run.id}`,
+      `         /workflow-stop ${run.id}`,
+      `         /workflow-restart ${run.id}`,
+      `         ${save}`,
+      `         /workflow-ack ${run.id}`,
     ];
   }
   return [
@@ -812,6 +828,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
       this.toggleThinking();
       return;
     }
+    if (this.handleCockpitPanelInput(data)) return;
     this.editor.handleInput(data);
     this.invalidate();
     this.tui.requestRender();
@@ -862,6 +879,9 @@ export class SparkNativeTuiApp implements Component, Focusable {
 
   toggleCockpitPanel(panel: SparkNativeCockpitPanel = "overview"): boolean {
     this.activeCockpitPanel = this.activeCockpitPanel === panel ? undefined : panel;
+    if (this.activeCockpitPanel === "runs" || this.activeCockpitPanel === "workflows") {
+      this.ensureWorkflowRunSelection();
+    }
     this.invalidate();
     this.tui.requestRender();
     return this.activeCockpitPanel !== undefined;
@@ -872,9 +892,97 @@ export class SparkNativeTuiApp implements Component, Focusable {
     const index = SPARK_COCKPIT_PANELS.indexOf(current);
     const next = SPARK_COCKPIT_PANELS[(index + 1) % SPARK_COCKPIT_PANELS.length] ?? "overview";
     this.activeCockpitPanel = next;
+    if (next === "runs" || next === "workflows") this.ensureWorkflowRunSelection();
     this.invalidate();
     this.tui.requestRender();
     return next;
+  }
+
+  private handleCockpitPanelInput(data: string): boolean {
+    if (this.activeCockpitPanel !== "runs" && this.activeCockpitPanel !== "workflows") {
+      return false;
+    }
+    if (matchesKey(data, Key.escape)) {
+      this.activeCockpitPanel = undefined;
+      this.invalidate();
+      this.tui.requestRender();
+      return true;
+    }
+    if (matchesKey(data, Key.up) || data === "k") {
+      this.moveWorkflowRunSelection(-1);
+      return true;
+    }
+    if (matchesKey(data, Key.down) || data === "j") {
+      this.moveWorkflowRunSelection(1);
+      return true;
+    }
+    if (matchesKey(data, Key.enter) || data === "i") {
+      this.runSelectedWorkflowCommand("inspect");
+      return true;
+    }
+    if (data === "p") {
+      this.runSelectedWorkflowCommand("pause");
+      return true;
+    }
+    if (data === "u") {
+      this.runSelectedWorkflowCommand("resume");
+      return true;
+    }
+    if (data === "x") {
+      this.runSelectedWorkflowCommand("stop");
+      return true;
+    }
+    if (data === "r") {
+      this.runSelectedWorkflowCommand("restart");
+      return true;
+    }
+    if (data === "s") {
+      this.runSelectedWorkflowCommand("save");
+      return true;
+    }
+    if (data === "a") {
+      this.runSelectedWorkflowCommand("ack");
+      return true;
+    }
+    return false;
+  }
+
+  private moveWorkflowRunSelection(delta: number): void {
+    const runs = this.selectableWorkflowRuns();
+    if (runs.length === 0) return;
+    const selectedIndex = Math.max(
+      0,
+      runs.findIndex((run) => run.id === this.cockpit.selectedWorkflowRunId),
+    );
+    const nextIndex = (selectedIndex + delta + runs.length) % runs.length;
+    this.cockpit.selectedWorkflowRunId = runs[nextIndex]?.id;
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
+  private runSelectedWorkflowCommand(
+    action: "inspect" | "pause" | "resume" | "stop" | "restart" | "save" | "ack",
+  ): void {
+    const run = this.selectedWorkflowRun();
+    if (!run) {
+      this.session.addSystemMessage("No workflow run is selected in the Spark cockpit.");
+      return;
+    }
+    if (!/^run:[a-zA-Z0-9-]+$/u.test(run.id)) {
+      this.session.addSystemMessage(
+        `Selected workflow ${run.id} is not a live dynamic workflow runRef. Use /workflow-runs to list dynamic runs.`,
+      );
+      return;
+    }
+    const commandName = `workflow-${action}`;
+    if (!this.slashCommands[commandName]) {
+      this.session.addSystemMessage(`/${commandName} is not registered in this Spark host.`);
+      return;
+    }
+    void this.runSlashCommand(`/${commandName} ${run.id}`).finally(() => {
+      this.invalidate();
+      this.tui.requestRender();
+    });
   }
 
   custom<T>(
@@ -1007,6 +1115,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
         description: run.summary,
         source: "run",
       });
+      this.ensureWorkflowRunSelection();
     }
   }
 
@@ -1271,10 +1380,15 @@ export class SparkNativeTuiApp implements Component, Focusable {
   }
 
   private renderWorkflowCockpit(): string[] {
+    const selected = this.selectedWorkflowRun();
     const lines = [
       "◆ Spark cockpit: workflows",
-      "│  Actions: /workflow-runs [runRef] · /workflow-inspect <runRef>",
-      "│           /workflow-pause|resume|stop|restart|save|ack <runRef>",
+      "│  Keys: ↑/↓ or j/k select · Enter/i inspect · p pause · u resume · x stop · r restart · s save · a ack · Esc close",
+      selected
+        ? `│  Selected: ${selected.id} [${workflowRunDisplayStatus(selected)}]`
+        : "│  Selected: none",
+      "│  Commands: /workflow-runs [runRef] · /workflow-inspect <runRef>",
+      "│            /workflow-pause|resume|stop|restart|save|ack <runRef>",
     ];
     const interactions = [...this.cockpit.interactions.values()].filter(
       (request) => request.kind === "workflowPicker",
@@ -1291,34 +1405,44 @@ export class SparkNativeTuiApp implements Component, Focusable {
       );
     }
     for (const run of this.runsByKind("workflow").slice(0, MAX_COCKPIT_PANEL_ROWS)) {
+      const marker = run.id === selected?.id ? "▸" : "├";
       lines.push(
-        `├─ workflow run ${run.id} [${run.status}] ${run.title ?? run.summary ?? ""}`.trimEnd(),
+        `${marker}─ workflow run ${run.id} [${workflowRunDisplayStatus(run)}] ${run.title ?? run.summary ?? ""}`.trimEnd(),
       );
-      for (const hint of workflowRunControlHints(run)) lines.push(`│  ${hint}`);
+      if (run.id === selected?.id) {
+        for (const hint of workflowRunControlHints(run)) lines.push(`│  ${hint}`);
+      }
     }
-    if (lines.length === 3)
+    if (lines.length === 5)
       lines.push("└─ No workflow picker options or workflow runs have been published yet.");
     return lines;
   }
 
   private renderRunCockpit(): string[] {
+    const selected = this.selectedWorkflowRun();
     const lines = [
       "◆ Spark cockpit: role/run board",
-      "│  Workflow controls: /workflow-runs [runRef] · /workflow-inspect <runRef>",
+      "│  Keys: ↑/↓ or j/k select workflow run · Enter/i inspect · p pause · u resume · x stop · r restart · s save · a ack · Esc close",
+      selected
+        ? `│  Selected: ${selected.id} [${workflowRunDisplayStatus(selected)}]`
+        : "│  Selected: none",
+      "│  Workflow commands: /workflow-runs [runRef] · /workflow-inspect <runRef>",
       "│                     /workflow-pause|resume|stop|restart|save|ack <runRef>",
     ];
     const runs = [...this.cockpit.runs.values()].sort(compareRunsForCockpit);
     for (const run of runs.slice(0, MAX_COCKPIT_PANEL_ROWS)) {
       const progress = run.progress === undefined ? "" : ` ${(run.progress * 100).toFixed(0)}%`;
       const artifacts = run.artifactRefs.length > 0 ? ` artifacts=${run.artifactRefs.length}` : "";
+      const marker = run.kind === "workflow" && run.id === selected?.id ? "▸" : "├";
+      const status = run.kind === "workflow" ? workflowRunDisplayStatus(run) : run.status;
       lines.push(
-        `├─ ${run.kind} ${run.id} [${run.status}]${progress}${artifacts} ${run.title ?? run.summary ?? ""}`.trimEnd(),
+        `${marker}─ ${run.kind} ${run.id} [${status}]${progress}${artifacts} ${run.title ?? run.summary ?? ""}`.trimEnd(),
       );
-      if (run.kind === "workflow") {
+      if (run.kind === "workflow" && run.id === selected?.id) {
         for (const hint of workflowRunControlHints(run)) lines.push(`│  ${hint}`);
       }
     }
-    if (lines.length === 3) lines.push("└─ No run view-model updates have been published yet.");
+    if (lines.length === 5) lines.push("└─ No run view-model updates have been published yet.");
     return lines;
   }
 
@@ -1368,6 +1492,31 @@ export class SparkNativeTuiApp implements Component, Focusable {
     if (lines.length === 1)
       lines.push("└─ No Graft candidate, patch, or provenance metadata has been published yet.");
     return lines;
+  }
+
+  private selectableWorkflowRuns(): SparkRunView[] {
+    return this.runsByKind("workflow").sort(compareRunsForCockpit);
+  }
+
+  private selectedWorkflowRun(): SparkRunView | undefined {
+    this.ensureWorkflowRunSelection();
+    const selectedId = this.cockpit.selectedWorkflowRunId;
+    if (!selectedId) return undefined;
+    return this.cockpit.runs.get(selectedId);
+  }
+
+  private ensureWorkflowRunSelection(): void {
+    const runs = this.selectableWorkflowRuns();
+    if (runs.length === 0) {
+      this.cockpit.selectedWorkflowRunId = undefined;
+      return;
+    }
+    if (
+      !this.cockpit.selectedWorkflowRunId ||
+      !runs.some((run) => run.id === this.cockpit.selectedWorkflowRunId)
+    ) {
+      this.cockpit.selectedWorkflowRunId = runs[0]?.id;
+    }
   }
 
   private runsByKind(kind: SparkRunView["kind"]): SparkRunView[] {
@@ -1535,6 +1684,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
 
   private openCockpitPanel(panel: SparkNativeCockpitPanel): string | false {
     this.activeCockpitPanel = panel;
+    if (panel === "runs" || panel === "workflows") this.ensureWorkflowRunSelection();
     this.invalidate();
     this.tui.requestRender();
     const snapshot = this.cockpitSnapshot();

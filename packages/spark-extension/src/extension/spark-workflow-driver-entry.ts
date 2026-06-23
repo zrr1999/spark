@@ -14,7 +14,10 @@ import {
 } from "./spark-mode-prompts.ts";
 import { discoverSparkSavedWorkflows } from "./spark-workflow-builtins.ts";
 import { listSparkWorkflowRegistry, normalizeSparkWorkflowId } from "./spark-workflow-registry.ts";
-import { defaultSparkDynamicWorkflowEventStore } from "./spark-dynamic-workflow-event-store.ts";
+import {
+  defaultSparkDynamicWorkflowEventStore,
+  type SparkDynamicWorkflowEventRunView,
+} from "./spark-dynamic-workflow-event-store.ts";
 import { defaultSparkDynamicWorkflowManager } from "./spark-dynamic-workflow-manager.ts";
 import {
   buildSparkDynamicWorkflowDashboardView,
@@ -134,6 +137,7 @@ async function resolveInteractiveWorkflowSelection(
       ),
       "info",
     );
+    publishDynamicWorkflowRunViews(ctx, dynamicRunViews);
   }
   const dynamicOptions = dynamicWorkflowNavigatorOptions(
     projectSparkDynamicWorkflowRuns({ runs: dynamicRunViews, includeHistory: true }),
@@ -194,6 +198,55 @@ async function promptWorkflowSelectionWithCustom(
   if (customText) return { customFocus: customText };
   if (result.value?.trim()) return { selector: result.value.trim() };
   return undefined;
+}
+
+export function publishDynamicWorkflowRunViews(
+  ctx: SparkToolContext,
+  runs: SparkDynamicWorkflowEventRunView[],
+): void {
+  const publishView = (ctx.ui as { publishView?: (event: unknown) => void } | undefined)
+    ?.publishView;
+  if (typeof publishView !== "function") return;
+  for (const run of runs) {
+    const status = run.snapshot.status;
+    publishView({
+      version: 1,
+      type: "run.update",
+      run: {
+        version: 1,
+        id: run.metadata.runRef,
+        kind: "workflow",
+        title: run.metadata.meta.name,
+        status: toSparkRunViewStatus(status),
+        progress: workflowRunProgress(run.snapshot),
+        summary: run.metadata.source.label,
+        artifactRefs: [],
+        metadata: {
+          dynamicStatus: status,
+          source: run.metadata.source.kind,
+          scriptHash: run.metadata.scriptHash,
+          selector: run.metadata.savedWorkflow?.selector,
+        },
+      },
+    });
+  }
+}
+
+function toSparkRunViewStatus(status: string): string {
+  if (status === "succeeded") return "succeeded";
+  if (status === "failed" || status === "stale") return "failed";
+  if (status === "stopped") return "cancelled";
+  if (status === "queued") return "queued";
+  return "running";
+}
+
+function workflowRunProgress(snapshot: { nodes?: Array<{ status?: string }> }): number | undefined {
+  const nodes = snapshot.nodes ?? [];
+  if (nodes.length === 0) return undefined;
+  const complete = nodes.filter((node) =>
+    ["succeeded", "failed", "stopped", "skipped", "cached"].includes(node.status ?? ""),
+  ).length;
+  return Math.max(0, Math.min(1, complete / nodes.length));
 }
 
 function dynamicWorkflowNavigatorOptions(runs: SparkDynamicWorkflowRunProjection[]): string[] {
@@ -277,6 +330,7 @@ export async function executeDynamicWorkflowNavigatorAction(
     }),
   );
   ctx.ui?.notify?.(text, selection.dynamicAction === "inspect" ? "info" : "success");
+  publishDynamicWorkflowRunViews(ctx, await store.listRuns());
   await deps.refreshSparkWidget(ctx.cwd, ctx);
 }
 

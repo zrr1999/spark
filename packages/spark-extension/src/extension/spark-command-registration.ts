@@ -51,6 +51,7 @@ import {
   enterSparkUltracodeDriver,
   enterSparkWorkflowDriver,
   executeDynamicWorkflowNavigatorAction,
+  publishDynamicWorkflowRunViews,
   type SparkWorkflowNavigatorAction,
 } from "./spark-workflow-driver-entry.ts";
 import { defaultSparkDynamicWorkflowEventStore } from "./spark-dynamic-workflow-event-store.ts";
@@ -326,6 +327,7 @@ export function registerSparkCommands(
     await store.reconcileStale();
     const runRef = args ? parseDynamicWorkflowRunRefArg("workflow-runs", args) : undefined;
     const runs = await store.listRuns();
+    publishDynamicWorkflowRunViews(ctx, runs);
     const text = renderSparkDynamicWorkflowDashboardText(
       buildSparkDynamicWorkflowDashboardView({
         action: "dashboard",

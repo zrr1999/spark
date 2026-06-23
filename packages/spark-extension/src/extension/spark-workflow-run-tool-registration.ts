@@ -42,6 +42,7 @@ import {
   type SparkDynamicWorkflowRunSource,
 } from "./spark-dynamic-workflow-run-store.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
+import { publishDynamicWorkflowRunViews } from "./spark-workflow-driver-entry.ts";
 
 const DEFAULT_WORKFLOW_ROLE_REF = "role:builtin-worker" as RoleRef;
 const WORKFLOW_WEB_TOOL_TIMEOUT_MS = 120_000;
@@ -282,6 +283,7 @@ export function registerSparkWorkflowRunTool(
             run: SparkDynamicWorkflowRunRecord;
           }) => createManagerRunInput(nextRun, nextAbortController, []),
           onLiveUpdate: async (update) => {
+            publishDynamicWorkflowRunViews(ctx, await dynamicStore.listRuns());
             await refreshSparkWorkflowWidgetSafely(deps, cwd, ctx);
             if (!waitForCompletion) return;
             onUpdate({
@@ -299,6 +301,7 @@ export function registerSparkWorkflowRunTool(
           },
         };
       };
+      publishDynamicWorkflowRunViews(ctx, await dynamicStore.listRuns());
       const handle = defaultSparkDynamicWorkflowManager().start(
         await createManagerRunInput(
           dynamicRun,

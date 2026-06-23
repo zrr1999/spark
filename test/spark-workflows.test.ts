@@ -1879,17 +1879,23 @@ void test("Spark workflow_run returns before background DynamicWorkflowManager c
 
     const script = `export const meta = { name: 'background', description: 'background workflow' }
 return await agent('slow child', { label: 'slow-child' })`;
+    const publishedViews: unknown[] = [];
     const result = await tool.execute(
       "tool-call",
       { script },
       new AbortController().signal,
       () => undefined,
-      { cwd: dir },
+      {
+        cwd: dir,
+        ui: { publishView: (event: unknown) => publishedViews.push(event) },
+      } as { cwd: string },
     );
     const details = result.details as { workflow: { runRef: `run:${string}`; status: string } };
     assert.equal(details.workflow.status, "running");
     assert.match(result.content[0].text, /Workflow run started: inline workflow/);
     assert.match(result.content[0].text, /background DynamicWorkflowManager/);
+    assert.match(JSON.stringify(publishedViews), new RegExp(details.workflow.runRef));
+    assert.match(JSON.stringify(publishedViews), /"dynamicStatus":"running"/);
 
     const store = defaultSparkDynamicWorkflowEventStore(dir);
     assert.equal((await store.get(details.workflow.runRef))?.status, "running");
@@ -1907,6 +1913,7 @@ return await agent('slow child', { label: 'slow-child' })`;
     }
     assert.equal(completed?.status, "succeeded");
     assert.equal(completed?.result, "background result");
+    assert.match(JSON.stringify(publishedViews), /"dynamicStatus":"succeeded"/);
     assert.deepEqual(events.map((event) => event.type).slice(0, 4), [
       "run_started",
       "agent_started",

@@ -8314,6 +8314,11 @@ void test("workflow run slash commands expose direct dashboard controls", async 
       options: {},
     });
 
+    const publishedViews: unknown[] = [];
+    (ctx.ui as typeof ctx.ui & { publishView: (event: unknown) => void }).publishView = (event) => {
+      publishedViews.push(event);
+    };
+
     const dashboard = commands.get("workflow-runs");
     const inspect = commands.get("workflow-inspect");
     const pause = commands.get("workflow-pause");
@@ -8330,6 +8335,8 @@ void test("workflow run slash commands expose direct dashboard controls", async 
     assert.ok(save, "missing /workflow-save");
 
     await dashboard.handler(run.ref, ctx);
+    assert.match(JSON.stringify(publishedViews), new RegExp(run.ref));
+    assert.match(JSON.stringify(publishedViews), /"dynamicStatus":"running"/);
     assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark dynamic workflow dashboard/);
     assert.match(ctx.notifications.at(-1)?.message ?? "", new RegExp(run.ref));
     assert.match(ctx.notifications.at(-1)?.message ?? "", /Actions: inspect, pause, stop, save/);

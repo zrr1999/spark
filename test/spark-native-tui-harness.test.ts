@@ -421,6 +421,89 @@ void test("Spark cockpit renders shared workflow, run, task, artifact, review, a
   assert.match(harness.render(), /task:task:graft-apply patch=patch:abc status=admitted/);
 });
 
+void test("Spark cockpit supports selectable workflow run keyboard controls", async () => {
+  const invoked: Array<{ name: string; args: string }> = [];
+  const slashCommands = Object.fromEntries(
+    ["inspect", "pause", "resume", "stop", "restart", "save", "ack"].map((action) => [
+      `workflow-${action}`,
+      {
+        description: `Workflow ${action}`,
+        handler: (args: string) => {
+          invoked.push({ name: `workflow-${action}`, args });
+          return `handled:${action}:${args}`;
+        },
+      },
+    ]),
+  );
+  const harness = createSparkNativeTuiHarness({ cols: 140, slashCommands });
+  harness.app.applyViewModelEvent({
+    version: SPARK_PROTOCOL_VERSION,
+    type: "session.snapshot",
+    session: {
+      version: SPARK_PROTOCOL_VERSION,
+      sessionId: "session:workflow-controls",
+      status: "idle",
+      messages: [],
+      tools: [],
+      runs: [
+        {
+          version: SPARK_PROTOCOL_VERSION,
+          id: "run:first",
+          kind: "workflow",
+          title: "First workflow",
+          status: "running",
+          progress: 0.25,
+          artifactRefs: [],
+          metadata: { dynamicStatus: "running" },
+        },
+        {
+          version: SPARK_PROTOCOL_VERSION,
+          id: "run:second",
+          kind: "workflow",
+          title: "Second workflow",
+          status: "running",
+          progress: 0.75,
+          artifactRefs: [],
+          metadata: { dynamicStatus: "paused" },
+        },
+      ],
+      tasks: [],
+      artifacts: [],
+      metadata: {},
+    },
+  });
+
+  assert.equal(await harness.submit("/runs"), "command");
+  assert.match(harness.render(), /▸─ workflow run:first \[running\] 25% First workflow/);
+  assert.match(harness.render(), /Keys: ↑\/↓ or j\/k select workflow run/);
+
+  await harness.press("j");
+  assert.match(harness.render(), /Selected: run:second \[paused\]/);
+  assert.match(harness.render(), /▸─ workflow run:second \[paused\] 75% Second workflow/);
+  assert.match(harness.render(), /\/workflow-resume run:second/);
+
+  await harness.press("i");
+  assert.deepEqual(invoked.at(-1), { name: "workflow-inspect", args: "run:second" });
+  await harness.press("u");
+  assert.deepEqual(invoked.at(-1), { name: "workflow-resume", args: "run:second" });
+  await harness.press("x");
+  assert.deepEqual(invoked.at(-1), { name: "workflow-stop", args: "run:second" });
+
+  await harness.press("k");
+  assert.match(harness.render(), /Selected: run:first \[running\]/);
+  await harness.press("p");
+  assert.deepEqual(invoked.at(-1), { name: "workflow-pause", args: "run:first" });
+  await harness.press("r");
+  assert.deepEqual(invoked.at(-1), { name: "workflow-restart", args: "run:first" });
+  await harness.press("s");
+  assert.deepEqual(invoked.at(-1), { name: "workflow-save", args: "run:first" });
+  await harness.press("a");
+  assert.deepEqual(invoked.at(-1), { name: "workflow-ack", args: "run:first" });
+
+  await harness.press("\x1B");
+  assert.equal(harness.app.cockpitSnapshot().activePanel, undefined);
+});
+
 void test("Spark cockpit records workflow picker requests and exposes slash command navigation", async () => {
   const harness = createSparkNativeTuiHarness({ cols: 110 });
 
