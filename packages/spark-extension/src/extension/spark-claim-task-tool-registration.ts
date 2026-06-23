@@ -14,16 +14,15 @@ import {
   defaultTaskGraphStore,
   isUnfinishedTaskStatus,
   normalizeTaskPlan,
+  taskPlanReadiness,
   type TaskGraph,
 } from "@zendev-lab/pi-tasks";
 import {
   compactTaskDetail,
   normalizeOptionalToolString,
   normalizeTaskKind,
-  normalizeTaskPlanPatch,
   normalizeTaskStatus,
   taskKindDescription,
-  taskPlanSchema,
 } from "./task-plan-tool.ts";
 import { currentSparkProject, saveCurrentProjectRef, sparkSessionKey } from "./session-state.ts";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
@@ -58,13 +57,16 @@ export interface NormalizedSparkClaimTaskInput {
   kind?: NonNullable<ReturnType<typeof normalizeTaskKind>>;
   requestedStatus?: ReturnType<typeof normalizeTaskStatus>;
   roleRef?: RoleRef;
-  plan?: Partial<TaskPlan>;
 }
 
 export function normalizeSparkClaimTaskInput(
   params: Record<string, unknown>,
   registry: RoleRegistry,
 ): NormalizedSparkClaimTaskInput {
+  if (params.plan !== undefined)
+    throw new Error(
+      'plan is not accepted by task_write({ action: "claim" }); create or update task.plan with task_write({ action: "plan", tasks: [...] }) before claiming',
+    );
   const roleRefInput = normalizeOptionalToolString(params.roleRef, "roleRef");
   return {
     projectSelector: normalizeOptionalToolString(params.projectRef ?? params.project, "project"),
@@ -75,7 +77,6 @@ export function normalizeSparkClaimTaskInput(
     kind: normalizeTaskKind(params.kind),
     requestedStatus: normalizeTaskStatus(params.status),
     roleRef: roleRefInput ? registry.select(roleRefInput).ref : undefined,
-    plan: normalizeTaskPlanPatch(params.plan, "plan"),
   };
 }
 
@@ -87,7 +88,7 @@ export function registerSparkClaimTaskTool(
     name: "impl_claim_task",
     label: "Spark Claim Task",
     description:
-      'Implementation for task_write({ action: "claim" }): create or update a concrete Spark task for this session. For Spark-native delegated work, tasks may include an optional roleRef hint, but assign({ dryRun: true }) assigns the concrete executor role at dispatch; do not spawn nested pi CLI sessions as pseudo-roles unless explicitly testing Pi CLI behavior.',
+      'Implementation for task_write({ action: "claim" }): claim an existing Spark task that already has a complete task.plan. Claim never accepts or applies a new plan; create or update task plans first with task_write({ action: "plan", tasks: [...] }). For Spark-native delegated work, existing tasks may include an optional roleRef hint, but assign({ dryRun: true }) assigns the concrete executor role at dispatch; do not spawn nested pi CLI sessions as pseudo-roles unless explicitly testing Pi CLI behavior.',
     parameters: Type.Object({
       project: Type.Optional(Type.String({ description: "Optional project selector/ref/title." })),
       projectRef: Type.Optional(
@@ -130,9 +131,18 @@ export function registerSparkClaimTaskTool(
             'Optional builtin/extension/project/user role spec id or ref from role({ action: "list" }), e.g. scout, reviewer, worker, or role:extension-patcher. This is a preferred executor hint; assign({ dryRun: true }) can also assign a role at dispatch.',
         }),
       ),
-      plan: Type.Optional(taskPlanSchema()),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (params.plan !== undefined)
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: 'Cannot claim task: task_write({ action: "claim" }) does not accept plan. Create or update task.plan with task_write({ action: "plan", tasks: [...] }) before claiming.',
+            },
+          ],
+          details: { found: true, error: "claim_plan_not_allowed" },
+        };
       const cwd = ctx.cwd;
       const registry = await createSparkRoleRegistry(cwd);
       const input = normalizeSparkClaimTaskInput(params, registry);
@@ -151,7 +161,6 @@ export function registerSparkClaimTaskTool(
           },
         };
       const status = input.requestedStatus ?? (input.roleRef ? "pending" : "running");
-      const providedPlan = input.plan !== undefined;
       const sessionKey = sparkSessionKey(ctx);
       const store = defaultTaskGraphStore(cwd);
       const existingGraph = await store.load();
@@ -213,34 +222,25 @@ export function registerSparkClaimTaskTool(
           const activeClaim = findActiveSessionClaim(graph, project.ref, sessionKey, existing?.ref);
           if (isUnfinishedTaskStatus(status) && activeClaim)
             return { error: "active_claim_exists" as const, activeTask: activeClaim };
-          if (!providedPlan && (!existing || !existing.plan))
-            return { error: "task_plan_required" as const };
+          if (!existing) return { error: "task_not_found" as const };
+          const readiness = taskPlanReadiness(existing);
+          if (!readiness.ready)
+            return { error: "task_plan_required" as const, issues: readiness.issues };
           const resolved = resolveClaimedTaskFields(input, existing);
           if (!resolved) return { error: "task_title_required" as const };
           const requestedName = taskNamePatchForClaim(existing, input.name, input.title);
           const namePatch = requestedName
-            ? uniqueTaskNameForExistingTask(tasks, requestedName, existing?.ref)
+            ? uniqueTaskNameForExistingTask(tasks, requestedName, existing.ref)
             : undefined;
-          const task = existing
-            ? graph.updateTask(existing.ref, {
-                ...(namePatch ? { name: namePatch } : {}),
-                title: resolved.title,
-                description: resolved.description,
-                kind: resolved.kind,
-                status,
-                roleRef: input.roleRef ?? existing.roleRef,
-                plan: normalizeTaskPlan(resolved.plan, resolved.description, resolved.title),
-              })
-            : graph.createTask({
-                projectRef: project.ref,
-                name: input.name,
-                title: resolved.title,
-                description: resolved.description,
-                kind: resolved.kind,
-                status,
-                roleRef: input.roleRef,
-                plan: normalizeTaskPlan(resolved.plan, resolved.description, resolved.title),
-              });
+          const task = graph.updateTask(existing.ref, {
+            ...(namePatch ? { name: namePatch } : {}),
+            title: resolved.title,
+            description: resolved.description,
+            kind: resolved.kind,
+            status,
+            roleRef: input.roleRef ?? existing.roleRef,
+            plan: normalizeTaskPlan(resolved.plan, resolved.description, resolved.title),
+          });
           if (isUnfinishedTaskStatus(status)) {
             graph.claimTask(task.ref, {
               kind: "main",
@@ -273,10 +273,24 @@ export function registerSparkClaimTaskTool(
           content: [
             {
               type: "text",
-              text: `Cannot claim ${claimInputLabel(input)}: creating or claiming a task without a bound task.plan is not allowed. Provide a concrete plan with objective, success criteria, evidence requirements, and plan items before claiming.`,
+              text: `Cannot claim ${claimInputLabel(input)}: task.plan is not execution-ready. Create or update the task with task_write({ action: "plan", tasks: [...] }) before claiming; claim does not accept inline plan.`,
             },
           ],
-          details: { found: true, error: "task_plan_required" },
+          details: {
+            found: true,
+            error: "task_plan_required",
+            issues: claimed.result.issues,
+          },
+        };
+      if (claimed.result.error === "task_not_found")
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Cannot claim ${claimInputLabel(input)}: no existing planned task matched. Create it first with task_write({ action: "plan", tasks: [...] }), then claim it without a plan argument.`,
+            },
+          ],
+          details: { found: true, error: "task_not_found" },
         };
       if (claimed.result.error === "task_title_required")
         return {
@@ -349,7 +363,7 @@ function resolveClaimedTaskFields(
 ): ResolvedClaimedTaskFields | undefined {
   const title = input.title ?? existing?.title ?? titleFromTaskName(input.name);
   if (!title) return undefined;
-  const plan = input.plan ?? existing?.plan;
+  const plan = existing?.plan;
   if (!plan) return undefined;
   const description = input.description ?? existing?.description ?? plan.objective ?? title;
   return {

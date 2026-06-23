@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { gitCommand } from "@zendev-lab/navia-system";
+import { gitCommand } from "@zendev-lab/spark-system";
 
 export interface ProfileGitAccess {
   canRead: boolean;

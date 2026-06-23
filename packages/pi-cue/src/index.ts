@@ -309,7 +309,7 @@ function renderCuedStartFailure(input: {
   lines.push(stderr ? `stderr:\n${stderr}` : "stderr: <empty>");
   lines.push(stdout ? `stdout:\n${stdout}` : "stdout: <empty>");
   lines.push(
-    `Recovery: run ${JSON.stringify(`cued start --fg --socket ${input.socketPath}`)} in a terminal for full daemon logs; check for a stale socket at ${input.socketPath}; after protocol upgrades, restart/reload the Pi host so its pi-cue client matches cued.`,
+    `Recovery: run ${JSON.stringify(`cued start --fg --socket ${input.socketPath}`)} in a terminal for daemon logs; check for a stale socket at ${input.socketPath}; after protocol upgrades, restart/reload the Pi host so its pi-cue client matches cued.`,
   );
   return lines.join("\n");
 }
@@ -417,7 +417,7 @@ function statusLabel(status: JobStatus): string {
 }
 
 function tailStr(s: string, maxBytes: number): { text: string; truncated: boolean } {
-  if (maxBytes <= 0) return { text: s, truncated: false };
+  if (maxBytes <= 0) throw new Error("tail byte limit must be a positive integer");
   if (s.length <= maxBytes) return { text: s, truncated: false };
   return { text: s.slice(s.length - maxBytes), truncated: true };
 }
@@ -472,7 +472,7 @@ export function renderCueScriptResult(
       lines.push(t.text.trimEnd());
       if (t.truncated) {
         lines.push(
-          `[stdout truncated — use cue_jobs action=status id=${item.jobIds[0] ?? "?"} tail_bytes=0 for full output]`,
+          `[stdout truncated — use cue_jobs action=status id=${item.jobIds[0] ?? "?"} with a larger bounded tail_bytes value]`,
         );
       }
     }
@@ -482,7 +482,7 @@ export function renderCueScriptResult(
       lines.push(t.text.trimEnd());
       if (t.truncated) {
         lines.push(
-          `[stderr truncated — use cue_jobs action=status id=${item.jobIds[0] ?? "?"} tail_bytes=0 for full output]`,
+          `[stderr truncated — use cue_jobs action=status id=${item.jobIds[0] ?? "?"} with a larger bounded tail_bytes value]`,
         );
       }
     }
@@ -774,8 +774,8 @@ export function normalizeCueTailBytes(
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`${field} must be a finite number`);
   }
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error(`${field} must be a non-negative integer`);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${field} must be a positive integer`);
   }
   return value;
 }
@@ -789,8 +789,8 @@ export function normalizeCueLimit(
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`${field} must be a finite number`);
   }
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error(`${field} must be a non-negative integer`);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${field} must be a positive integer`);
   }
   return value;
 }
@@ -969,23 +969,25 @@ function pythonExecutableForVenv(venv: string | undefined): string {
   return venv ? `${venv.replace(/\/+$/u, "")}/bin/python` : "python3";
 }
 
-function rejectDeprecatedCueParam(
+function rejectRemovedCueParam(
   params: Record<string, unknown>,
   param: string,
   replacement: string,
   toolName: string,
 ): void {
   if (param in params && params[param] !== undefined && params[param] !== null) {
-    throw new Error(`${toolName} ${param} is no longer supported; use ${replacement}`);
+    throw new Error(
+      `${toolName} ${param} is not supported; use ${replacement}. ${toolName} ${param} is no longer supported; use ${replacement}`,
+    );
   }
 }
 
 function truncationLine(stream: string, jobId: string): string {
-  return `[${stream} truncated — use cue_jobs action=status id=${jobId} tail_bytes=0 for full output]`;
+  return `[${stream} truncated — use cue_jobs action=status id=${jobId} with a larger bounded tail_bytes value]`;
 }
 
 function limitLines(text: string, maxLines: number): { text: string; truncated: boolean } {
-  if (maxLines <= 0) return { text, truncated: false };
+  if (maxLines <= 0) throw new Error("history line limit must be a positive integer");
   const lines = text.split(/\r?\n/);
   if (lines.length <= maxLines) return { text, truncated: false };
   return { text: lines.slice(Math.max(0, lines.length - maxLines)).join("\n"), truncated: true };
@@ -1126,7 +1128,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       tail_bytes: Type.Optional(
         Type.Number({
           description:
-            "Limit stdout/stderr to the last N bytes per stream. Default: 16384. Pass 0 for full output.",
+            "Limit stdout/stderr to the last N bytes per stream. Default: 16384. Must be positive.",
         }),
       ),
     }),
@@ -1152,7 +1154,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: PiCueToolContext,
     ) {
-      rejectDeprecatedCueParam(params, "tail", "tail_bytes=0", "cue_exec");
+      rejectRemovedCueParam(params, "tail", "tail_bytes", "cue_exec");
       const command = normalizeRequiredCueString(params.command, "cue_exec command");
       const background = normalizeCueBoolean(params.background, false, "cue_exec background");
       const pty = normalizeCueBoolean(params.pty, false, "cue_exec pty");
@@ -1253,7 +1255,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           if (t.truncated) parts.push(`\n${truncationLine("stdout", result.jobId)}`);
         }
         if (stderr.trim()) {
-          const t = tailStr(stderr, tailBytes === 0 ? 0 : Math.min(tailBytes, 2_000));
+          const t = tailStr(stderr, Math.min(tailBytes, 2_000));
           parts.push("\n[stderr tail]\n" + t.text.trimEnd());
           if (t.truncated) parts.push(`\n${truncationLine("stderr", result.jobId)}`);
         }
@@ -1364,7 +1366,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       tail_bytes: Type.Optional(
         Type.Number({
           description:
-            "Limit per-item stdout/stderr to the last N bytes when rendering the aggregated transcript. Default: 16384. Pass 0 for full output.",
+            "Limit per-item stdout/stderr to the last N bytes when rendering the aggregated transcript. Default: 16384. Must be positive.",
         }),
       ),
     }),
@@ -1443,7 +1445,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       tail_bytes: Type.Optional(
         Type.Number({
           description:
-            "Limit per-item stdout/stderr to the last N bytes when rendering the aggregated transcript. Default: 16384. Pass 0 for full output.",
+            "Limit per-item stdout/stderr to the last N bytes when rendering the aggregated transcript. Default: 16384. Must be positive.",
         }),
       ),
     }),
@@ -1518,8 +1520,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       ),
       tail_bytes: Type.Optional(
         Type.Number({
-          description:
-            "Limit stdout/stderr to the last N bytes. Default: 16384. Pass 0 for full output.",
+          description: "Limit stdout/stderr to the last N bytes. Default: 16384. Must be positive.",
         }),
       ),
       venv: Type.Optional(
@@ -1629,8 +1630,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       ),
       tail_bytes: Type.Optional(
         Type.Number({
-          description:
-            "Limit stdout/stderr to the last N bytes. Default: 16384. Pass 0 for full output.",
+          description: "Limit stdout/stderr to the last N bytes. Default: 16384. Must be positive.",
         }),
       ),
       venv: Type.Optional(
@@ -1744,7 +1744,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       tail_bytes: Type.Optional(
         Type.Number({
           description:
-            "Limit stdout/stderr to the last N bytes for action='status' or action='wait'. Default: 16384. Pass 0 for full output.",
+            "Limit stdout/stderr to the last N bytes for action='status' or action='wait'. Default: 16384. Must be positive.",
         }),
       ),
     }),
@@ -2256,7 +2256,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       tail_bytes: Type.Optional(
         Type.Number({
           description:
-            "For action='env' or action='config', limit output to the last N bytes. Default: 16384. Pass 0 for full output.",
+            "For action='env' or action='config', limit output to the last N bytes. Default: 16384. Must be positive.",
         }),
       ),
       key: Type.Optional(
@@ -2290,7 +2290,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: PiCueToolContext,
     ) {
-      rejectDeprecatedCueParam(params, "env_tail_bytes", "tail_bytes", "cue_scope");
+      rejectRemovedCueParam(params, "env_tail_bytes", "tail_bytes", "cue_scope");
       const action = normalizeCueEnum(params.action, "list", CUE_SCOPE_ACTIONS, "cue_scope action");
       const limit = normalizeCueLimit(params.limit, DEFAULT_LIST_LIMIT, "cue_scope limit");
       const includeEnv = normalizeCueBoolean(params.includeEnv, false, "cue_scope includeEnv");
@@ -2349,7 +2349,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         const pathPreview = tailStr(pathValue, Math.min(tailBytes, DEFAULT_CUE_TAIL_BYTES));
         const lines = [cwdLine, `PATH=${pathPreview.text}`];
         if (pathPreview.truncated)
-          lines.push("[PATH truncated — use action=env tail_bytes=0 for full env]");
+          lines.push("[PATH truncated — use action=env with a larger bounded tail_bytes value]");
         return {
           content: [{ type: "text" as const, text: lines.join("\n") }],
           details: {
@@ -2367,7 +2367,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         const tailed = tailStr(raw, tailBytes);
         const lines = [tailed.text.trimEnd()];
         if (tailed.truncated)
-          lines.push(`[${action} truncated — use tail_bytes=0 for full output]`);
+          lines.push(`[${action} truncated — use a larger bounded tail_bytes value]`);
         return {
           content: [{ type: "text" as const, text: lines.join("\n") }],
           details: {
@@ -2394,7 +2394,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       if (includeEnv) {
         const env = tailStr(await cued.showEnv(), tailBytes);
         lines.push("", "--- HEAD env ---", env.text.trimEnd());
-        if (env.truncated) lines.push("[HEAD env truncated — use tail_bytes=0 for full env]");
+        if (env.truncated)
+          lines.push("[HEAD env truncated — use a larger bounded tail_bytes value]");
       }
       return {
         content: [{ type: "text" as const, text: lines.join("\n") }],
@@ -2411,7 +2412,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     name: "cue_history",
     label: "Cue History",
     description:
-      "Show recent cue-shell history. Pass an id to focus on one job/cron. Output is bounded by default; pass tail_bytes=0 and limit=0 for full history.",
+      "Show recent cue-shell history. Pass an id to focus on one job/cron. Output is bounded by default.",
     parameters: Type.Object({
       id: Type.Optional(
         Type.String({
@@ -2420,14 +2421,12 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       ),
       limit: Type.Optional(
         Type.Number({
-          description:
-            "Maximum recent history lines to show. Default: 80. Pass 0 for no line limit.",
+          description: "Maximum recent history lines to show. Default: 80. Must be positive.",
         }),
       ),
       tail_bytes: Type.Optional(
         Type.Number({
-          description:
-            "Limit history text to the last N bytes. Default: 16384. Pass 0 for full text.",
+          description: "Limit history text to the last N bytes. Default: 16384. Must be positive.",
         }),
       ),
     }),
@@ -2462,9 +2461,9 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       const limited = limitLines(tailed.text, limit);
       const messages: string[] = [];
       if (tailed.truncated)
-        messages.push("[history truncated by bytes — use tail_bytes=0 for full text]");
+        messages.push("[history truncated by bytes — use a larger bounded tail_bytes value]");
       if (limited.truncated)
-        messages.push("[history truncated by lines — use limit=0 for full text]");
+        messages.push("[history truncated by lines — use a larger bounded limit value]");
       return {
         content: [
           { type: "text" as const, text: [limited.text, ...messages].filter(Boolean).join("\n") },

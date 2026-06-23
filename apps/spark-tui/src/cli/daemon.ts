@@ -7,6 +7,14 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  exportSparkSessionRecord,
+  formatSessionList,
+  formatSessionReplay,
+  readSparkSessionExportFormat,
+  type SparkSessionExportFormat,
+} from "../host/session-navigation.ts";
+import { SparkSessionStore, type SparkSessionInfo } from "../host/session-store.ts";
 import type { SparkNativeSlashCommandMap } from "../native-tui.ts";
 import {
   consoleSparkCliOutput,
@@ -18,7 +26,14 @@ import {
   type SparkCliOutput,
 } from "./shared.ts";
 
-export type SparkDaemonCliAction = "help" | "status" | "submit" | "queue" | "start" | "service";
+export type SparkDaemonCliAction =
+  | "help"
+  | "status"
+  | "submit"
+  | "queue"
+  | "start"
+  | "sessions"
+  | "service";
 export type SparkDaemonCliQueueState = "inbox" | "processed" | "failed" | "all";
 
 export interface SparkDaemonClientPaths {
@@ -56,9 +71,19 @@ export interface SparkDaemonClientOptions {
     paths: SparkDaemonClientPaths,
     input: LocalWorkspaceClientReleaseInput,
   ) => Promise<LocalWorkspaceClientResult>;
+  sessionList?: (paths: SparkDaemonClientPaths) => Promise<LocalDaemonSessionListResult>;
+  sessionExport?: (
+    paths: SparkDaemonClientPaths,
+    params: { sessionId: string; format: SparkSessionExportFormat; leafId?: string | null },
+  ) => Promise<LocalDaemonSessionTextResult>;
+  sessionReplay?: (
+    paths: SparkDaemonClientPaths,
+    params: { sessionId: string; leafId?: string | null },
+  ) => Promise<LocalDaemonSessionTextResult>;
   serviceCommand?: (argv: string[]) => Promise<number>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  sparkHome?: string;
 }
 
 export interface SparkDaemonLocalStatus {
@@ -82,6 +107,18 @@ export interface LocalTurnSubmitResult {
   fileName: string;
   filePath: string;
   task: { type: "session.run"; sessionId: string; prompt: string; reset?: boolean };
+  observedAt: string;
+}
+
+export interface LocalDaemonSessionListResult {
+  sessions: SparkSessionInfo[];
+  text: string;
+  observedAt: string;
+}
+
+export interface LocalDaemonSessionTextResult {
+  sessionId: string;
+  text: string;
   observedAt: string;
 }
 
@@ -198,6 +235,14 @@ export interface SparkDaemonQueueCommand extends SparkDaemonCliCommandBase {
   limit?: number;
 }
 
+export interface SparkDaemonSessionsCommand extends SparkDaemonCliCommandBase {
+  action: "sessions";
+  subcommand: "list" | "export" | "replay";
+  sessionId?: string;
+  format?: SparkSessionExportFormat;
+  leafId?: string | null;
+}
+
 export interface SparkDaemonStartCommand extends SparkDaemonCliCommandBase {
   action: "start";
 }
@@ -212,6 +257,7 @@ export type SparkDaemonCliCommand =
   | SparkDaemonStatusCommand
   | SparkDaemonSubmitCommand
   | SparkDaemonQueueCommand
+  | SparkDaemonSessionsCommand
   | SparkDaemonStartCommand
   | SparkDaemonServiceCommand;
 
@@ -220,6 +266,7 @@ export type SparkDaemonCliResult =
   | SparkDaemonStatusResult
   | SparkDaemonSubmitResult
   | SparkDaemonQueueResult
+  | SparkDaemonSessionsResult
   | SparkDaemonStartResult;
 
 export interface SparkDaemonStatusResult {
@@ -235,6 +282,11 @@ export interface SparkDaemonSubmitResult {
 export interface SparkDaemonQueueResult {
   action: "queue";
   result: LocalDaemonQueueResult;
+}
+
+export interface SparkDaemonSessionsResult {
+  action: "sessions";
+  result: LocalDaemonSessionListResult | LocalDaemonSessionTextResult;
 }
 
 export interface SparkDaemonStartResult {
@@ -276,6 +328,9 @@ export function parseSparkDaemonCliArgs(argv: string[]): SparkDaemonCliCommand {
       const limit = readNumberOption(parsed.options, "limit");
       return { action: "queue", json, state, limit };
     }
+    case "session":
+    case "sessions":
+      return parseSparkDaemonSessionsCommand(parsed, json);
     case "start":
       return { action: "start", json };
     case "stop":
@@ -291,6 +346,43 @@ export function parseSparkDaemonCliArgs(argv: string[]): SparkDaemonCliCommand {
     default:
       throw new Error(`unknown spark daemon command: ${String(action)}`);
   }
+}
+
+function parseSparkDaemonSessionsCommand(
+  parsed: ReturnType<typeof parseSparkCliOptions>,
+  json: boolean,
+): SparkDaemonSessionsCommand {
+  const [subcommand = "list", maybeLeaf] = parsed.positionals;
+  if (subcommand === "list") return { action: "sessions", subcommand, json };
+  if (subcommand === "export") {
+    const sessionId = readStringOption(parsed.options, "session")?.trim();
+    if (!sessionId) throw new Error("spark daemon sessions export requires --session <id|path>");
+    const format = readSparkSessionExportFormat(
+      readStringOption(parsed.options, "format") ?? "jsonl",
+    );
+    const leafId = readDaemonLeafArg(readStringOption(parsed.options, "leaf") ?? maybeLeaf);
+    return {
+      action: "sessions",
+      subcommand,
+      json,
+      sessionId,
+      format,
+      ...(leafId !== undefined ? { leafId } : {}),
+    };
+  }
+  if (subcommand === "replay") {
+    const sessionId = readStringOption(parsed.options, "session")?.trim();
+    if (!sessionId) throw new Error("spark daemon sessions replay requires --session <id|path>");
+    const leafId = readDaemonLeafArg(readStringOption(parsed.options, "leaf") ?? maybeLeaf);
+    return {
+      action: "sessions",
+      subcommand,
+      json,
+      sessionId,
+      ...(leafId !== undefined ? { leafId } : {}),
+    };
+  }
+  throw new Error(`unknown spark daemon sessions command: ${subcommand}`);
 }
 
 export async function handleSparkDaemonCliCommand(
@@ -315,6 +407,8 @@ export async function handleSparkDaemonCliCommand(
         action: "queue",
         result: await clientQueue({ state: command.state, limit: command.limit }, client),
       };
+    case "sessions":
+      return { action: "sessions", result: await clientSessions(command, client) };
     case "start":
       await clientEnsureRunning(client);
       return { action: "start", daemon: await clientStatus(client) };
@@ -337,12 +431,16 @@ export async function runSparkDaemonCliCommand(
     output.write(result.text);
     return 0;
   }
+  if (result.action === "sessions" && !command.json) {
+    output.write(result.result.text);
+    return 0;
+  }
   printSparkCliResult(output, result, { json: command.json });
   return 0;
 }
 
 export function sparkDaemonHelpText(): string {
-  return `spark daemon - Spark daemon control surface\n\nUsage:\n  spark daemon [--workspace <name>]\n  spark daemon status [--json]\n  spark daemon start [--json]\n  spark daemon stop [--yes]\n  spark daemon restart [--yes]\n  spark daemon logs [--follow] [--lines <n>]\n  spark daemon submit --session <id> --prompt <text> [--reset] [--json]\n  spark daemon queue [--state inbox|processed|failed|all] [--limit <n>] [--json]\n  spark daemon workspace register [path] --server-url <url> --token <token|-> --name <name>\n  spark daemon workspace ls [--json] [--all] [--full]\n  spark daemon workspace show [name] [--json]\n  spark daemon workspace stop <name> [--yes]\n\nSpark CLI never runs an independent queue worker; it starts/wakes the Spark daemon and talks over local IPC.`;
+  return `spark daemon - Spark daemon control surface\n\nUsage:\n  spark daemon [--workspace <name>]\n  spark daemon status [--json]\n  spark daemon start [--json]\n  spark daemon stop [--yes]\n  spark daemon restart [--yes]\n  spark daemon logs [--follow] [--lines <n>]\n  spark daemon submit --session <id> --prompt <text> [--reset] [--json]\n  spark daemon queue [--state inbox|processed|failed|all] [--limit <n>] [--json]\n  spark daemon sessions [list] [--json]\n  spark daemon sessions export --session <id|path> [--format jsonl|json|text] [--leaf <entry-id|root>] [--json]\n  spark daemon sessions replay --session <id|path> [--leaf <entry-id|root>] [--json]\n  spark daemon workspace register [path] --server-url <url> --token <token|-> --name <name>\n  spark daemon workspace ls [--json] [--all] [--full]\n  spark daemon workspace show [name] [--json]\n  spark daemon workspace stop <name> [--yes]\n\nSpark CLI never runs an independent queue worker; it starts/wakes the Spark daemon and talks over local IPC.`;
 }
 
 export interface SparkDaemonNativeResponderOptions {
@@ -428,6 +526,54 @@ export async function attachSparkWorkspaceClient(
   }
 
   return { client: attached.client, workspace: attached.workspace, heartbeat, release };
+}
+
+async function clientSessions(
+  command: SparkDaemonSessionsCommand,
+  client: SparkDaemonClientOptions,
+): Promise<LocalDaemonSessionListResult | LocalDaemonSessionTextResult> {
+  const paths = resolveSparkDaemonClientPaths(client);
+  if (command.subcommand === "list") {
+    if (client.sessionList) return await client.sessionList(paths);
+    const sessions = await createLocalSessionStore(client).list();
+    return { sessions, text: formatSessionList(sessions), observedAt: observedAt(client) };
+  }
+  if (command.subcommand === "export") {
+    const sessionId = command.sessionId!;
+    const format = command.format ?? "jsonl";
+    const leafId = command.leafId;
+    const leafParams = leafId !== undefined ? { leafId } : {};
+    if (client.sessionExport)
+      return await client.sessionExport(paths, { sessionId, format, ...leafParams });
+    const record = await createLocalSessionStore(client).loadByRef(sessionId);
+    return {
+      sessionId: record.header.id,
+      text: exportSparkSessionRecord(record, { format, ...leafParams }),
+      observedAt: observedAt(client),
+    };
+  }
+
+  const sessionId = command.sessionId!;
+  const leafId = command.leafId;
+  const leafParams = leafId !== undefined ? { leafId } : {};
+  if (client.sessionReplay) return await client.sessionReplay(paths, { sessionId, ...leafParams });
+  const record = await createLocalSessionStore(client).loadByRef(sessionId);
+  return {
+    sessionId: record.header.id,
+    text: formatSessionReplay(record, leafId),
+    observedAt: observedAt(client),
+  };
+}
+
+function createLocalSessionStore(client: SparkDaemonClientOptions): SparkSessionStore {
+  return new SparkSessionStore({
+    cwd: process.cwd(),
+    ...(client.sparkHome ? { sparkHome: client.sparkHome } : {}),
+  });
+}
+
+function observedAt(client: SparkDaemonClientOptions): string {
+  return new Date(client.now?.() ?? Date.now()).toISOString();
 }
 
 async function clientStatus(client: SparkDaemonClientOptions): Promise<SparkDaemonClientStatus> {
@@ -729,6 +875,11 @@ function readPrompt(parsed: ReturnType<typeof parseSparkCliOptions>): string | u
   const fromOption = readStringOption(parsed.options, "prompt");
   const text = fromOption ?? parsed.positionals.join(" ");
   return text.trim() || undefined;
+}
+
+function readDaemonLeafArg(raw: string | undefined): string | null | undefined {
+  if (raw === undefined || raw === "all") return undefined;
+  return raw === "root" ? null : raw;
 }
 
 function readQueueState(raw: string): SparkDaemonCliQueueState {

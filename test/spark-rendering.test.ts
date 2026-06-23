@@ -152,6 +152,165 @@ void test("Spark native UI transport bridges notify, status, widget, and custom"
   assert.match(rendered, /second line/);
 });
 
+void test("SparkNativeTuiApp records protocol cockpit state and renders Spark panels", async () => {
+  const session = new SparkNativeSession();
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
+
+  app.applyViewModelEvent({
+    version: SPARK_PROTOCOL_VERSION,
+    type: "session.snapshot",
+    session: {
+      version: SPARK_PROTOCOL_VERSION,
+      sessionId: "native-cockpit-session",
+      status: "idle",
+      messages: [],
+      tools: [],
+      runs: [
+        {
+          version: SPARK_PROTOCOL_VERSION,
+          id: "role-run-reviewer",
+          kind: "role",
+          title: "reviewer audit",
+          status: "running",
+          progress: 0.5,
+          artifactRefs: ["artifact:review-verdict"],
+          metadata: { reviewer: "reviewer", outcome: "pending" },
+        },
+        {
+          version: SPARK_PROTOCOL_VERSION,
+          id: "workflow-run-release",
+          kind: "workflow",
+          title: "release readiness workflow",
+          status: "queued",
+          artifactRefs: [],
+          metadata: { selector: "builtin:release-readiness" },
+        },
+      ],
+      tasks: [
+        {
+          version: SPARK_PROTOCOL_VERSION,
+          ref: "task:cockpit",
+          title: "Build cockpit",
+          status: "running",
+          todos: [
+            { id: "todo-1", content: "wire task board", status: "done", notes: [] },
+            { id: "todo-2", content: "wire evidence panel", status: "in_progress", notes: [] },
+          ],
+          runRefs: ["role-run-reviewer"],
+          artifactRefs: ["artifact:evidence"],
+          metadata: {},
+        },
+      ],
+      artifacts: [
+        {
+          version: SPARK_PROTOCOL_VERSION,
+          ref: "artifact:review-verdict",
+          title: "Reviewer verdict",
+          kind: "record",
+          format: "json",
+          status: "approved",
+          producer: "review",
+          preview: "approved with evidence",
+          metadata: { outcome: "approved" },
+        },
+        {
+          version: SPARK_PROTOCOL_VERSION,
+          ref: "artifact:graft-patch",
+          title: "Graft patch status",
+          kind: "record",
+          format: "json",
+          status: "candidate",
+          producer: "task",
+          preview: "patch:abc123",
+          metadata: {
+            patchRef: "patch:abc123",
+            candidateRef: "candidate:def456",
+            base: "HEAD",
+            graftStatus: "validated",
+          },
+        },
+      ],
+      metadata: {},
+    },
+  });
+
+  await app.handleInteractionRequest({
+    version: SPARK_PROTOCOL_VERSION,
+    kind: "workflowPicker",
+    requestId: "workflow-picker-1",
+    title: "Pick a workflow",
+    prompt: "Choose a saved workflow",
+    options: [
+      {
+        selector: "builtin:release-readiness",
+        label: "Release readiness",
+        description: "Run release preflight",
+        metadata: {},
+      },
+    ],
+    metadata: {},
+  });
+
+  assert.deepEqual(app.cockpitSnapshot(), {
+    activePanel: undefined,
+    sessionId: "native-cockpit-session",
+    sessionStatus: "idle",
+    workflows: 1,
+    workflowRuns: 1,
+    roleRuns: 1,
+    tasks: 1,
+    artifacts: 2,
+    reviews: 2,
+    graftItems: 1,
+    interactions: 1,
+  });
+
+  assert.equal(await app.submitInput("/cockpit"), "command");
+  assert.equal(app.cockpitSnapshot().activePanel, "overview");
+  let rendered = app.render(120).join("\n");
+  assert.match(rendered, /Spark cockpit: overview/);
+  assert.match(rendered, /Workflow picker\/progress: 1 option\(s\), 1 workflow run\(s\)/);
+  assert.match(rendered, /Role-run board: 1 role run\(s\), 1 interaction\(s\)/);
+  assert.match(rendered, /Graft provenance\/patch status: 1 item\(s\)/);
+
+  assert.equal(await app.submitInput("/workflows"), "command");
+  rendered = app.render(120).join("\n");
+  assert.match(rendered, /Spark cockpit: workflows/);
+  assert.match(rendered, /picker workflow-picker-1: Pick a workflow/);
+  assert.match(rendered, /builtin:release-readiness: Release readiness/);
+
+  assert.equal(await app.submitInput("/runs"), "command");
+  rendered = app.render(120).join("\n");
+  assert.match(rendered, /Spark cockpit: role\/run board/);
+  assert.match(rendered, /role role-run-reviewer \[running\] 50% artifacts=1 reviewer audit/);
+
+  assert.equal(await app.submitInput("/tasks"), "command");
+  rendered = app.render(120).join("\n");
+  assert.match(rendered, /Spark cockpit: task\/project board/);
+  assert.match(rendered, /task:cockpit \[running\] todos=1\/2 evidence=1 Build cockpit/);
+
+  assert.equal(await app.submitInput("/artifacts"), "command");
+  rendered = app.render(120).join("\n");
+  assert.match(rendered, /Spark cockpit: artifacts\/evidence/);
+  assert.match(
+    rendered,
+    /artifact:review-verdict \[record\/json\] producer=review status=approved Reviewer verdict/,
+  );
+
+  assert.equal(await app.submitInput("/reviews"), "command");
+  rendered = app.render(120).join("\n");
+  assert.match(rendered, /Spark cockpit: reviewer verdicts/);
+  assert.match(rendered, /artifact:review-verdict \[approved\] Reviewer verdict/);
+
+  assert.equal(await app.submitInput("/graft"), "command");
+  rendered = app.render(120).join("\n");
+  assert.match(rendered, /Spark cockpit: Graft provenance\/patch status/);
+  assert.match(
+    rendered,
+    /patch=patch:abc123 candidate=candidate:def456 base=HEAD status=validated/,
+  );
+});
+
 void test("SparkHostRuntime custom messages reach native registered message renderers", () => {
   const runtime = new SparkHostRuntime({ cwd: "/tmp/spark-rendering", hasUI: true });
   runtime.registerMessageRenderer("spark-role-run-completion", (message) => ({
@@ -215,17 +374,22 @@ void test("SparkNativeTuiApp dispatches app keybindings before editor input", as
   assert.equal(picked, 1);
 });
 
-void test("SparkNativeTuiApp installs Ctrl+O/Ctrl+T toggle handlers into SparkKeybindings", async () => {
+void test("SparkNativeTuiApp installs Ctrl+O/Ctrl+T and cockpit keybindings", async () => {
   const session = new SparkNativeSession();
   const keybindings = new SparkKeybindings();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined, { keybindings });
 
   assert.equal(app.areToolsExpanded(), false);
   assert.equal(app.isThinkingExpanded(), false);
+  assert.equal(app.cockpitSnapshot().activePanel, undefined);
   assert.equal(await keybindings.executeKey("ctrl+o", {}), true);
   assert.equal(await keybindings.executeKey("ctrl+t", {}), true);
+  assert.equal(await keybindings.executeKey("ctrl+k", {}), true);
   assert.equal(app.areToolsExpanded(), true);
   assert.equal(app.isThinkingExpanded(), true);
+  assert.equal(app.cockpitSnapshot().activePanel, "overview");
+  assert.equal(await keybindings.executeKey("shift+ctrl+k", {}), true);
+  assert.equal(app.cockpitSnapshot().activePanel, "workflows");
 });
 
 void test("SparkNativeTuiApp handles local slash commands without submitting to responder", async () => {
@@ -249,6 +413,11 @@ void test("SparkNativeTuiApp handles local slash commands without submitting to 
   const rendered = app.render(100).join("\n");
   assert.equal(responderCalls, 0);
   assert.match(rendered, /\/status — show daemon status/);
+  assert.match(
+    rendered,
+    /\/cockpit \[overview\|workflows\|runs\|tasks\|artifacts\|reviews\|graft\|off\]/,
+  );
+  assert.match(rendered, /Ctrl\+K — toggle Spark cockpit overview/);
   assert.match(rendered, /daemon: running/);
 });
 

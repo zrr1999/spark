@@ -10,7 +10,9 @@ import {
   SparkHostRuntime,
   SparkSessionStore,
   buildSparkSessionTree,
+  exportSparkSessionRecord,
   flattenSparkSessionTree,
+  formatSessionReplay,
   getSparkSessionBranch,
   registerSparkSessionsCommand,
   switchSparkSessionLeaf,
@@ -62,6 +64,12 @@ void test("session navigation builds Pi-style branch trees, labels, flatten rows
       [record.entries[0]!.id, "branch-user"],
     );
     assert.equal(switchSparkSessionLeaf(record, "branch-user"), "branch-user");
+    assert.match(formatSessionReplay(record, "branch-user"), /alternate prompt/);
+    assert.match(
+      exportSparkSessionRecord(record, { format: "text", leafId: "branch-user" }),
+      /root prompt/,
+    );
+    assert.match(exportSparkSessionRecord(record, { format: "jsonl" }), /^\{"type":"session"/);
     assert.throws(
       () => switchSparkSessionLeaf(record, "missing"),
       /Session entry not found: missing/,
@@ -94,6 +102,8 @@ void test("/sessions command supports list, branch, and switch subcommands", asy
     await command.handler("list", host.makeContext());
     await command.handler("branch", host.makeContext());
     await command.handler("switch branch-user", host.makeContext());
+    await command.handler("replay branch-user", host.makeContext());
+    await command.handler("export text branch-user", host.makeContext());
     await command.handler("switch missing", host.makeContext());
 
     assert.match(notifications[0]!.message, /nav/);
@@ -101,8 +111,10 @@ void test("/sessions command supports list, branch, and switch subcommands", asy
     assert.equal(notifications[2]!.message, "Active session branch: branch-user");
     assert.equal(notifications[2]!.level, "info");
     assert.equal(activeLeafId, "branch-user");
-    assert.match(notifications[3]!.message, /Session entry not found: missing/);
-    assert.equal(notifications[3]!.level, "error");
+    assert.match(notifications[3]!.message, /alternate prompt/);
+    assert.match(notifications[4]!.message, /root prompt/);
+    assert.match(notifications[5]!.message, /Session entry not found: missing/);
+    assert.equal(notifications[5]!.level, "error");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -1,7 +1,7 @@
 import { chmodSync, copyFileSync, cpSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { ensurePrivateDir, writePrivateFile, type NaviaPaths } from "@zendev-lab/navia-system";
+import { ensurePrivateDir, writePrivateFile, type SparkPaths } from "@zendev-lab/spark-system";
 
 export interface SparkDaemonLegacyStatePaths {
   configFile: string;
@@ -69,7 +69,7 @@ export function legacySparkDaemonStatePaths(
 }
 
 export function migrateLegacySparkDaemonState(
-  paths: NaviaPaths,
+  paths: SparkPaths,
   options: { env?: Record<string, string | undefined>; cwd?: string; now?: Date } = {},
 ): SparkDaemonLegacyStateMigrationResult {
   const legacy = legacySparkDaemonStatePaths(options.env, options.cwd);
@@ -99,7 +99,7 @@ export function migrateLegacySparkDaemonState(
 }
 
 function copyConfigIfNeeded(
-  paths: NaviaPaths,
+  paths: SparkPaths,
   legacy: SparkDaemonLegacyStatePaths,
   result: SparkDaemonLegacyStateMigrationResult,
 ): void {

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
-import { resolveNaviaPaths } from "@zendev-lab/navia-system";
+import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import { readSparkDaemonConfig, writeSparkDaemonConfig } from "./config.js";
 import {
   ensureSparkDaemonRegistrationForWorkspace,
@@ -17,7 +17,7 @@ describe("Spark daemon workspace registration", () => {
 
   it("refreshes an expiring runtime token before consuming an additional workspace grant", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-registration-"));
-    const paths = resolveNaviaPaths({
+    const paths = resolveSparkPaths({
       app: "daemon",
       env: { HOME: root },
       overrides: {

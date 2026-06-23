@@ -22,10 +22,10 @@
   },
   "type": "module",
   "scripts": {
-    "check": "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && node scripts/check-pi-boundaries.mjs && vp check && node --experimental-strip-types --test \"test/*.test.ts\" && pnpm -r --filter './packages/*' --filter './apps/*' run check && pnpm --filter @zendev-lab/spark-cockpit run test && pnpm --filter @zendev-lab/spark-daemon run test && pnpm --filter '@zendev-lab/navia-*' run test",
+    "check": "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && node scripts/check-pi-boundaries.mjs && vp check && node --experimental-strip-types --test \"test/*.test.ts\" && pnpm -r --filter './packages/*' --filter './apps/*' run check && pnpm --filter @zendev-lab/spark-cockpit run test && pnpm --filter @zendev-lab/spark-daemon run test",
     "build": "pnpm --filter @zendev-lab/spark-daemon run build && pnpm --filter @zendev-lab/spark-cockpit run build",
     "preview": "pnpm --filter @zendev-lab/spark-cockpit run dev",
-    "publish": "pnpm run check && pnpm run build && pnpm -r --filter @zendev-lab/spark-protocol --filter @zendev-lab/navia-system --filter @zendev-lab/navia-db --filter @zendev-lab/navia-domain --filter @zendev-lab/navia-ui --filter @zendev-lab/spark-daemon publish --access public"
+    "publish": "pnpm run check && pnpm run build && pnpm -r --filter @zendev-lab/spark-protocol --filter @zendev-lab/spark-system --filter @zendev-lab/spark-db --filter @zendev-lab/spark-daemon publish --access public"
   },
   "dependencies": {
     "@zendev-lab/pi-artifacts": "workspace:^",
@@ -48,7 +48,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
-    "@zendev-lab/navia-system": "workspace:*",
+    "@zendev-lab/spark-system": "workspace:*",
     "oxlint": "1.70.0",
     "typescript": "^6.0.3",
     "vite": "catalog:",

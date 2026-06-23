@@ -134,8 +134,7 @@ cue_exec(command="find . -name '*.rs' |> head -20")
 
 ```text
 cue_exec(command="system_profiler SPFontsDataType")                    # auto-tailed to 16 KiB/stream
-cue_exec(command="system_profiler SPFontsDataType", tail_bytes=0)       # full output
-cue_exec(command="system_profiler SPFontsDataType", tail_bytes=4096)    # smaller tail
+cue_exec(command="system_profiler SPFontsDataType", tail_bytes=4096)    # smaller bounded tail
 ```
 
 ### Package management
@@ -190,7 +189,7 @@ cue_scope(action="list")                         # compact scope list, no env du
 cue_scope(action="list", includeEnv=true)          # include HEAD env, tailed by default
 cue_history()                                 # recent global history only
 cue_history(id="J42")                         # recent target history
-cue_history(id="J42", limit=0, tail_bytes=0)  # full target history
+cue_history(id="J42", limit=120, tail_bytes=32768)  # larger bounded target history
 ```
 
 ### Changing working directory
@@ -322,9 +321,9 @@ ssh user@example.com "cued start"
 - Max buffered output per stream: 4 MiB
 - Default timeout: 300 seconds (5 min)
 - File-system commands (mv, cp, rm, ls, cat, find, ...): 10 seconds
-- **`cue_exec`**: runs with `pty=false` by default; stdout/stderr are tailed to 16 KiB per stream by default. Pass `tail_bytes=0` for full output.
+- **`cue_exec`**: runs with `pty=false` by default; stdout/stderr are tailed to 16 KiB per stream by default. `tail_bytes` must be positive.
 - **Cue-shell scripts** (`cue_run`, `cue_script`, `script_run language=cue-shell`, `script_eval language=cue-shell`): successful no-output items are summarized; failed/message/output-producing items remain expanded.
-- **`cue_jobs(action="status")` / `cue_jobs(action="wait")`**: default to 16 KiB per stream. Chain output summarizes clean successful leaves and prioritizes failed/running/non-clean leaves. Pass `tail_bytes=0` for full output.
+- **`cue_jobs(action="status")` / `cue_jobs(action="wait")`**: default to 16 KiB per stream. Chain output summarizes clean successful leaves and prioritizes failed/running/non-clean leaves. `tail_bytes` must be positive.
 - **`cue_history`**: passes `limit` and `tail_bytes` to the daemon when supported, then applies client-side safety trimming.
 
 ---

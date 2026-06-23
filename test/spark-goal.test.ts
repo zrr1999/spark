@@ -38,11 +38,6 @@ void test("pi-goal helpers create goals and continuation prompts", () => {
   assert.equal(goal.status, "active");
 
   const prompt = compactContinuationPrompt(goal);
-  assert.match(prompt, /<spark_goal_continuation/);
-  assert.match(prompt, /goal\(\{ action: "status" \}\)/);
-  assert.match(prompt, /goal\(\{ action: "complete" \}\)/);
-  assert.match(prompt, /goal\(\{ action: "status" \}\)/);
-  assert.match(prompt, /goal\(\{ action: "complete" \}\)/);
   assert.equal(continuationGoalIdFromPrompt(prompt), goal.goalId);
 
   const response = goalToolResponse(goal);

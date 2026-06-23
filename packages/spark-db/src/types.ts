@@ -441,7 +441,7 @@ export interface EventsTable {
   created_at: string;
 }
 
-export interface NaviaDatabase {
+export interface SparkDatabase {
   schema_migrations: SchemaMigrationsTable;
   app_settings: AppSettingsTable;
   users: UsersTable;

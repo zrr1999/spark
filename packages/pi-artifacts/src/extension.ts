@@ -44,11 +44,11 @@ type ArtifactAction =
   | "promote"
   | "archive"
   | "supersede";
-type ArtifactListView = "ref-only" | "summary" | "full";
+type ArtifactListView = "ref-only" | "summary";
 
 const DEFAULT_ARTIFACT_READ_PREVIEW_CHARS = 1_500;
 const ARTIFACT_PRODUCER_DESCRIPTION =
-  "Artifact producer must be one of: spark, role, task, review, ask, cue, user. Do not use assistant; use task for parent-session work/evidence, review for reviewer verdicts, ask for ask results, cue for cue-shell execution output, or user for user-supplied material. producer=spark and producer=role are legacy compatibility; prefer producer=task with runRef/taskRef for new execution evidence.";
+  "Artifact producer must be one of: spark, role, task, review, ask, cue, user. Do not use assistant; use task for parent-session work/evidence, review for reviewer verdicts, ask for ask results, cue for cue-shell execution output, or user for user-supplied material. Use producer=task with runRef/taskRef for execution evidence.";
 const ARTIFACT_KIND_DESCRIPTION =
   "Artifact kind is the role/domain-agnostic shape of the artifact, never who produced it (use producer) or its lifecycle (use status). One of: document (prose/markdown deliverable: charter, research, plan), record (structured JSON record of a decision/answer/event; origin via producer ask/review/task), trace (prunable execution output/transcript), knowledge (reusable learning entry).";
 
@@ -137,8 +137,7 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
       ),
       roleRef: Type.Optional(
         Type.String({
-          description:
-            "Legacy role ref filter for action=list, or provenance shortcut for action=record. Prefer runRef/taskRef for new generic execution evidence.",
+          description: "Role ref filter for action=list, or provenance shortcut for action=record.",
         }),
       ),
       linkedTo: Type.Optional(Type.String({ description: "Target ref filter for action=list." })),
@@ -168,14 +167,13 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
         Type.Number({ description: "Maximum rows for action=list. Default: 20." }),
       ),
       view: Type.Optional(
-        Type.String({ description: "List view for action=list: ref-only | summary | full." }),
-      ),
-      full: Type.Optional(
-        Type.Boolean({ description: "Read full body for action=read. Default: false." }),
+        Type.String({
+          description: "List view for action=list: ref-only | summary.",
+        }),
       ),
       maxChars: Type.Optional(
         Type.Number({
-          description: "Maximum body chars for action=read when full=false. Default: 1500.",
+          description: "Maximum body chars for action=read. Default: 1500.",
         }),
       ),
       dryRun: Type.Optional(
@@ -197,6 +195,8 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
       const action = normalizeAction(params.action);
 
       if (action === "list") {
+        const limit = normalizeLimit(params.limit, 20, "limit");
+        const view = normalizeArtifactListView(params.view);
         const artifacts = await store.list({
           kind: normalizeOptionalArtifactKind(params.kind, "kind"),
           producer: normalizeOptionalProducer(params.producer, "producer"),
@@ -210,8 +210,6 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
           includeArchived: normalizeBoolean(params.includeArchived, false, "includeArchived"),
         });
         const newest = artifacts.slice().reverse();
-        const limit = normalizeLimit(params.limit, 20, "limit");
-        const view = normalizeArtifactListView(params.view);
         const visible = newest.slice(0, limit);
         const lines = [
           `Artifacts: ${artifacts.length}${visible.length < artifacts.length ? ` (showing ${visible.length})` : ""}`,
@@ -224,11 +222,7 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
           count: artifacts.length,
           shown: visible.length,
           view,
-          artifacts: visible.map((artifact) =>
-            view === "full"
-              ? compactArtifactDetail(artifact)
-              : compactArtifactSummaryDetail(artifact),
-          ),
+          artifacts: visible.map((artifact) => compactArtifactSummaryDetail(artifact)),
         });
       }
 
@@ -236,14 +230,13 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
         const artifactRef = normalizeArtifactRef(params.artifactRef, "artifactRef");
         const artifact = await store.get(artifactRef);
         const body = await store.getBody(artifactRef);
-        const full = normalizeBoolean(params.full, false, "full");
         const maxChars = normalizeLimit(
           params.maxChars,
           DEFAULT_ARTIFACT_READ_PREVIEW_CHARS,
           "maxChars",
         );
-        const renderedBody = full ? body : truncateBlock(body, maxChars);
-        const truncated = !full && renderedBody.length < body.length;
+        const renderedBody = truncateBlock(body, maxChars);
+        const truncated = renderedBody.length < body.length;
         const lines = [
           `${artifact.ref} [${artifact.kind}] ${artifact.title}`,
           `format=${artifact.format} producer=${artifact.provenance.producer} curation=${renderCurationLabel(artifact)} updated=${artifact.updatedAt}`,
@@ -253,7 +246,7 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
         if (truncated) {
           lines.push(
             "",
-            `… truncated ${body.length - renderedBody.length} char(s); call full=true for the complete artifact body`,
+            `… truncated ${body.length - renderedBody.length} char(s); increase maxChars for a larger bounded preview`,
           );
         }
         return toolResult("artifact", action, lines.join("\n"), {
@@ -473,14 +466,11 @@ function compactArtifactSummaryDetail(artifact: Artifact): Record<string, unknow
 
 function renderArtifactListLine(artifact: Artifact, view: ArtifactListView): string {
   if (view === "ref-only") return `- ${artifact.ref}`;
-  if (view === "full") {
-    return `- [${artifact.kind}] ${artifact.ref}: ${artifact.title} format=${artifact.format} producer=${artifact.provenance.producer} curation=${renderCurationLabel(artifact)} links=${artifact.links.length} bodySize=${artifact.bodySize ?? "unknown"}`;
-  }
   return `- [${artifact.kind}] ${artifact.ref}: ${artifact.title} curation=${renderCurationLabel(artifact)}`;
 }
 
 function renderCurationLabel(artifact: Artifact): string {
-  const status = artifact.curation?.status ?? "legacy";
+  const status = artifact.curation?.status ?? "uncurated";
   const retention = artifact.curation?.retention;
   return retention ? `${status}/${retention}` : status;
 }
@@ -518,8 +508,8 @@ function normalizeAction(value: unknown): ArtifactAction {
 
 function normalizeArtifactListView(value: unknown): ArtifactListView {
   if (value === undefined || value === null) return "summary";
-  if (value === "ref-only" || value === "summary" || value === "full") return value;
-  throw new Error("view must be ref-only, summary, or full");
+  if (value === "ref-only" || value === "summary") return value;
+  throw new Error("view must be ref-only or summary");
 }
 
 function normalizeArtifactKind(value: unknown, field: string): ArtifactKind {

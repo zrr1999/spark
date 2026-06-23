@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
-import { launchctlCommand, type NaviaPaths } from "@zendev-lab/navia-system";
+import { launchctlCommand, type SparkPaths } from "@zendev-lab/spark-system";
 
 const launchdLabel = "dev.spark.daemon";
 const legacyLaunchdLabel = "dev.navia.runner";
@@ -22,7 +22,7 @@ export interface SparkDaemonServiceResult {
   detail: string;
 }
 
-export function startSparkDaemonService(paths: NaviaPaths): SparkDaemonServiceResult {
+export function startSparkDaemonService(paths: SparkPaths): SparkDaemonServiceResult {
   if (process.platform === "darwin") {
     return startLaunchdService(paths);
   }
@@ -30,7 +30,7 @@ export function startSparkDaemonService(paths: NaviaPaths): SparkDaemonServiceRe
   return startDetachedSparkDaemon(paths);
 }
 
-export function stopSparkDaemonService(paths: NaviaPaths): SparkDaemonServiceResult | null {
+export function stopSparkDaemonService(paths: SparkPaths): SparkDaemonServiceResult | null {
   if (process.platform === "darwin") {
     const uid = readCurrentUid();
     cleanupLegacyLaunchdService(uid);
@@ -48,7 +48,7 @@ export function stopSparkDaemonService(paths: NaviaPaths): SparkDaemonServiceRes
   return stopPidFileProcess(paths);
 }
 
-function startLaunchdService(paths: NaviaPaths): SparkDaemonServiceResult {
+function startLaunchdService(paths: SparkPaths): SparkDaemonServiceResult {
   const uid = readCurrentUid();
   cleanupLegacyLaunchdService(uid);
   const plistPath = writeLaunchdPlist(paths);
@@ -73,7 +73,7 @@ function startLaunchdService(paths: NaviaPaths): SparkDaemonServiceResult {
   };
 }
 
-function writeLaunchdPlist(paths: NaviaPaths): string {
+function writeLaunchdPlist(paths: SparkPaths): string {
   const home = process.env.HOME || homedir();
   const launchAgentsDir = join(home, "Library", "LaunchAgents");
   const plistPath = join(launchAgentsDir, `${launchdLabel}.plist`);
@@ -126,7 +126,7 @@ ${Object.entries(environment)
   return plistPath;
 }
 
-function startDetachedSparkDaemon(paths: NaviaPaths): SparkDaemonServiceResult {
+function startDetachedSparkDaemon(paths: SparkPaths): SparkDaemonServiceResult {
   const runningPid = readRunningPid(paths);
   if (runningPid) {
     return {
@@ -154,7 +154,7 @@ function startDetachedSparkDaemon(paths: NaviaPaths): SparkDaemonServiceResult {
   };
 }
 
-function stopPidFileProcess(paths: NaviaPaths): SparkDaemonServiceResult | null {
+function stopPidFileProcess(paths: SparkPaths): SparkDaemonServiceResult | null {
   const runningPid = readRunningPid(paths);
   if (!runningPid) {
     return null;
@@ -168,7 +168,7 @@ function stopPidFileProcess(paths: NaviaPaths): SparkDaemonServiceResult | null 
   };
 }
 
-export function readRunningPid(paths: NaviaPaths): number | null {
+export function readRunningPid(paths: SparkPaths): number | null {
   if (!existsSync(paths.pidFile)) {
     return null;
   }

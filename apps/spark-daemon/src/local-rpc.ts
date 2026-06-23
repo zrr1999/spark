@@ -3,7 +3,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { createConnection, createServer, type Socket } from "node:net";
 import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import type { NaviaPaths } from "@zendev-lab/navia-system";
+import type { SparkPaths } from "@zendev-lab/spark-system";
 import {
   SparkDaemonQueue,
   type SparkDaemonQueueEntry,
@@ -147,12 +147,12 @@ type LocalRpcResponse =
 
 export class LocalRpcUnavailableError extends Error {}
 
-export function localRpcSocketPath(paths: NaviaPaths): string {
+export function localRpcSocketPath(paths: SparkPaths): string {
   return join(paths.runtimeDir, "daemon.sock");
 }
 
 export async function startLocalRpcServer(options: {
-  paths: NaviaPaths;
+  paths: SparkPaths;
   db: DatabaseSync;
   onStop?: () => void | Promise<void>;
 }): Promise<LocalRpcServer> {
@@ -194,20 +194,20 @@ export async function startLocalRpcServer(options: {
   };
 }
 
-export async function requestWorkspaceList(paths: NaviaPaths): Promise<WorkspaceListResult> {
+export async function requestWorkspaceList(paths: SparkPaths): Promise<WorkspaceListResult> {
   return localRpcRequest(paths, { id: localRequestId(), method: "workspace.list" }, workspaceList);
 }
 
-export async function requestDaemonStatus(paths: NaviaPaths): Promise<LocalDaemonStatusResult> {
+export async function requestDaemonStatus(paths: SparkPaths): Promise<LocalDaemonStatusResult> {
   return localRpcRequest(paths, { id: localRequestId(), method: "daemon.status" }, daemonStatus);
 }
 
-export async function requestDaemonStop(paths: NaviaPaths): Promise<LocalDaemonStopResult> {
+export async function requestDaemonStop(paths: SparkPaths): Promise<LocalDaemonStopResult> {
   return localRpcRequest(paths, { id: localRequestId(), method: "daemon.stop" }, daemonStop);
 }
 
 export async function requestDaemonQueue(
-  paths: NaviaPaths,
+  paths: SparkPaths,
   params: Partial<LocalDaemonQueueParams> = {},
 ): Promise<LocalDaemonQueueResult> {
   return localRpcRequest(
@@ -222,7 +222,7 @@ export async function requestDaemonQueue(
 }
 
 export async function requestTurnSubmit(
-  paths: NaviaPaths,
+  paths: SparkPaths,
   params: LocalTurnSubmitParams,
 ): Promise<LocalTurnSubmitResult> {
   return localRpcRequest(
@@ -233,7 +233,7 @@ export async function requestTurnSubmit(
 }
 
 export async function requestWorkspaceRegister(
-  paths: NaviaPaths,
+  paths: SparkPaths,
   params: LocalWorkspaceRegisterRequest,
 ): Promise<SparkDaemonWorkspace> {
   return localRpcRequest(
@@ -248,7 +248,7 @@ export async function requestWorkspaceRegister(
 }
 
 export async function requestWorkspaceEnsureLocal(
-  paths: NaviaPaths,
+  paths: SparkPaths,
   params: LocalWorkspaceEnsureLocalRequest,
 ): Promise<SparkDaemonWorkspace> {
   return localRpcRequest(
@@ -263,7 +263,7 @@ export async function requestWorkspaceEnsureLocal(
 }
 
 export async function requestWorkspaceAttach(
-  paths: NaviaPaths,
+  paths: SparkPaths,
   id: string,
 ): Promise<SparkDaemonWorkspace> {
   return localRpcRequest(
@@ -274,7 +274,7 @@ export async function requestWorkspaceAttach(
 }
 
 export async function requestWorkspaceStop(
-  paths: NaviaPaths,
+  paths: SparkPaths,
   id: string,
 ): Promise<SparkDaemonWorkspace> {
   return localRpcRequest(
@@ -285,7 +285,7 @@ export async function requestWorkspaceStop(
 }
 
 export async function requestWorkspaceClientAttach(
-  paths: NaviaPaths,
+  paths: SparkPaths,
   params: LocalWorkspaceClientAttachRequest,
 ): Promise<LocalWorkspaceClientResult> {
   return localRpcRequest(
@@ -300,7 +300,7 @@ export async function requestWorkspaceClientAttach(
 }
 
 export async function requestWorkspaceClientHeartbeat(
-  paths: NaviaPaths,
+  paths: SparkPaths,
   params: LocalWorkspaceClientHeartbeatRequest,
 ): Promise<LocalWorkspaceClientResult> {
   return localRpcRequest(
@@ -315,7 +315,7 @@ export async function requestWorkspaceClientHeartbeat(
 }
 
 export async function requestWorkspaceClientRelease(
-  paths: NaviaPaths,
+  paths: SparkPaths,
   clientId: string,
 ): Promise<LocalWorkspaceClientResult> {
   return localRpcRequest(
@@ -326,7 +326,7 @@ export async function requestWorkspaceClientRelease(
 }
 
 export async function requestWorkspaceExecutorEnsure(
-  paths: NaviaPaths,
+  paths: SparkPaths,
   params: LocalWorkspaceExecutorEnsureRequest,
 ): Promise<LocalWorkspaceClientResult> {
   return localRpcRequest(
@@ -341,7 +341,7 @@ export async function requestWorkspaceExecutorEnsure(
 }
 
 async function localRpcRequest<T>(
-  paths: NaviaPaths,
+  paths: SparkPaths,
   request: LocalRpcRequest,
   parseResult: (value: unknown) => T,
 ): Promise<T> {
@@ -387,7 +387,7 @@ async function localRpcRequest<T>(
 
 function handleLocalRpcSocket(
   socket: Socket,
-  paths: NaviaPaths,
+  paths: SparkPaths,
   db: DatabaseSync,
   onStop: (() => void | Promise<void>) | undefined,
 ): void {
@@ -408,7 +408,7 @@ function handleLocalRpcSocket(
 
 export async function handleLocalRpcLine(
   line: string,
-  paths: NaviaPaths,
+  paths: SparkPaths,
   db: DatabaseSync,
   onStop: (() => void | Promise<void>) | undefined,
   options: LocalRpcHandlerOptions = {},

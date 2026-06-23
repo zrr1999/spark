@@ -13,7 +13,6 @@ import { sparkRunStrategyForMaxConcurrency } from "./session-state.ts";
 import {
   appendCompactSparkWorkflowRunStatusLines,
   appendSparkWorkflowRunNextStepLines,
-  appendSparkWorkflowRunStatusLines,
   formatSparkWorkflowRun,
 } from "./spark-workflow-run-status-rendering.ts";
 import {
@@ -36,6 +35,15 @@ import {
 } from "./task-display.ts";
 import { deriveTaskRoleLabel, isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 import { staleClaimStatusHint } from "./task-claim-recovery.ts";
+import {
+  projectSparkDynamicWorkflowRuns,
+  type SparkDynamicWorkflowRunProjection,
+} from "./spark-dynamic-workflow-run-rendering.ts";
+import type { SparkDynamicWorkflowEventRunView } from "./spark-dynamic-workflow-event-store.ts";
+import {
+  appendSparkDynamicWorkflowResultInboxLines,
+  projectSparkDynamicWorkflowResultDeliveries,
+} from "./spark-dynamic-workflow-result-inbox.ts";
 import { truncateInline } from "./tool-rendering.ts";
 
 export const DEFAULT_SPARK_STATUS_ACTIVE_LIMIT = 8;
@@ -53,6 +61,7 @@ export interface SparkStatusRenderInput {
   sessionKey: string;
   currentProject?: ReturnType<TaskGraph["projects"]>[number];
   workflowRunStatus: WorkflowRunStatusSummary;
+  dynamicWorkflowRuns?: SparkDynamicWorkflowEventRunView[];
   runControl?: WorkflowRunControl;
   sessionGoal?: SparkSessionGoal;
   recentRoleRunCompletions: TaskRunCompletionSummary[];
@@ -73,11 +82,13 @@ export function renderSparkStatus(input: SparkStatusRenderInput): {
     lines.push(sparkRunControlStatusLine(input.runControl));
   if (includeWorkspaceSummary)
     appendWorkflowRunStatusLines(lines, input.view, input.workflowRunStatus);
+  if (includeWorkspaceSummary && input.dynamicWorkflowRuns)
+    appendDynamicWorkflowStatusLines(lines, input.dynamicWorkflowRuns);
   if (includeWorkspaceSummary && input.recentRoleRunCompletions.length > 0)
     appendRecentRoleRunCompletionLines(lines, input.recentRoleRunCompletions);
   if (input.view === "active" && !input.currentProject)
     lines.push(
-      '\nSpark available: no project selected for this session. Use task_write({ action: "project_use" }) to select a project, or request summary/full history to inspect all projects.',
+      '\nSpark available: no project selected for this session. Use task_write({ action: "project_use" }) to select a project, or request summary view / project_list to inspect projects.',
     );
 
   const renderedProjectDetails = renderProjectLines(lines, input);
@@ -108,6 +119,9 @@ export function renderSparkStatus(input: SparkStatusRenderInput): {
       ? { projects: compactProjectSummaries(input.graph, input.sessionKey) }
       : {}),
     ...(includeWorkspaceSummary ? { workflowRunStatus: input.workflowRunStatus } : {}),
+    ...(includeWorkspaceSummary && input.dynamicWorkflowRuns
+      ? { dynamicWorkflowRuns: compactDynamicWorkflowRuns(input.dynamicWorkflowRuns) }
+      : {}),
     ...(includeWorkspaceSummary ? { runControl: input.runControl } : {}),
     sessionGoal: input.sessionGoal,
     ...(includeWorkspaceSummary
@@ -194,7 +208,8 @@ function compactSparkStatusDetails(
         }
       : undefined,
     hints: [
-      'Use view="full" or includeDetails=true for full project/task/workflow-run details.',
+      "Use projectRef/taskRef/limit for bounded status drill-down.",
+      'Use task_read({ action: "run_status", runAction: "inspect", runRef/taskRef }) for targeted workflow-run details.',
       "Use text format for a human-readable active frontier.",
     ],
   };
@@ -320,6 +335,73 @@ function compactWorkflowRunRecordDecisionDetail(
   };
 }
 
+function appendDynamicWorkflowStatusLines(
+  lines: string[],
+  runs: SparkDynamicWorkflowEventRunView[],
+): void {
+  const visible = projectSparkDynamicWorkflowRuns({ runs, includeHistory: false });
+  const active = visible.find((run) => run.status === "running" || run.status === "paused");
+  const problem = visible.find((run) => ["failed", "stale", "stopped"].includes(run.status));
+  const deliveries = projectSparkDynamicWorkflowResultDeliveries({ runs, limit: 3 });
+  const run = active ?? problem;
+  if (!run && deliveries.length === 0) return;
+  const counts = countDynamicWorkflowStatuses(
+    projectSparkDynamicWorkflowRuns({ runs, includeHistory: true }),
+  );
+  lines.push(
+    `Dynamic workflow runs: running=${counts.running} paused=${counts.paused} failed=${counts.failed} stale=${counts.stale} stopped=${counts.stopped} succeeded=${counts.succeeded}`,
+  );
+  if (run)
+    lines.push(
+      `  ${active ? "Active" : "Actionable"} dynamic workflow: ${run.ref} [${run.status}] ${run.name} nodes=${run.completedNodes}/${run.totalNodes}`,
+    );
+  appendSparkDynamicWorkflowResultInboxLines(lines, deliveries);
+}
+
+function compactDynamicWorkflowRuns(
+  runs: SparkDynamicWorkflowEventRunView[],
+): Record<string, unknown> {
+  const projected = projectSparkDynamicWorkflowRuns({ runs, includeHistory: true });
+  const counts = countDynamicWorkflowStatuses(projected);
+  return {
+    counts,
+    active: projected
+      .filter((run) => run.active && !run.acknowledgedAt)
+      .map(compactDynamicWorkflowRun)
+      .slice(0, 3),
+    resultInbox: projectSparkDynamicWorkflowResultDeliveries({ runs, limit: 5 }),
+    recent: projected.slice(0, 5).map(compactDynamicWorkflowRun),
+  };
+}
+
+function compactDynamicWorkflowRun(
+  run: SparkDynamicWorkflowRunProjection,
+): Record<string, unknown> {
+  return {
+    ref: run.ref,
+    status: run.status,
+    name: run.name,
+    sourceLabel: run.sourceLabel,
+    updatedAt: run.updatedAt,
+    acknowledgedAt: run.acknowledgedAt,
+    completedNodes: run.completedNodes,
+    totalNodes: run.totalNodes,
+  };
+}
+
+function countDynamicWorkflowStatuses(
+  runs: SparkDynamicWorkflowRunProjection[],
+): Record<string, number> {
+  return {
+    running: runs.filter((run) => run.status === "running").length,
+    paused: runs.filter((run) => run.status === "paused").length,
+    failed: runs.filter((run) => run.status === "failed").length,
+    stale: runs.filter((run) => run.status === "stale").length,
+    stopped: runs.filter((run) => run.status === "stopped").length,
+    succeeded: runs.filter((run) => run.status === "succeeded").length,
+  };
+}
+
 function appendWorkflowRunStatusLines(
   lines: string[],
   view: SparkStatusView,
@@ -332,9 +414,9 @@ function appendWorkflowRunStatusLines(
       lines.push(`  ${label} workflow run: ${formatSparkWorkflowRun(compactRun)}`);
       appendSparkWorkflowRunNextStepLines(lines, compactRun, "  ");
     }
-  } else if (view === "summary") {
+  } else {
     appendCompactSparkWorkflowRunStatusLines(lines, workflowRunStatus);
-  } else appendSparkWorkflowRunStatusLines(lines, workflowRunStatus);
+  }
 }
 
 function renderProjectLines(
@@ -422,7 +504,7 @@ function renderProjectLines(
       lines.push(`  Completed tasks: ${formatCompletedTaskCounts(statusCounts)}`);
     if (hiddenByLimit > 0)
       lines.push(
-        `  Hidden by limit: ${hiddenByLimit} (increase limit or use view=full without limit)`,
+        `  Hidden by limit: ${hiddenByLimit} (increase limit for a larger bounded sample)`,
       );
     const renderedProjectDetail = {
       ref: project.ref,
@@ -479,7 +561,7 @@ function appendTaskStatusLines(
     readyTaskRefs: ReadonlySet<string>;
   },
 ): void {
-  lines.push(input.view === "full" ? "  Durable active tasks:" : "  Active tasks:");
+  lines.push("  Active tasks:");
   for (const task of input.visibleTasks) {
     const owner = deriveTaskRoleLabel({
       task,

@@ -11,15 +11,15 @@ export interface Migration {
 
 const sourceMigrationsDir = join(dirname(fileURLToPath(import.meta.url)), "migrations");
 const repoMigrationsDir = resolve(
-  process.env.NAVIA_REPO_ROOT ?? findRepoRoot(process.cwd()),
-  "packages/db/src/migrations",
+  process.env.SPARK_REPO_ROOT ?? process.env.NAVIA_REPO_ROOT ?? findRepoRoot(process.cwd()),
+  "packages/spark-db/src/migrations",
 );
 
 export function loadMigrations(): Migration[] {
   const migrationsDir = existsSync(sourceMigrationsDir) ? sourceMigrationsDir : repoMigrationsDir;
 
   if (!existsSync(migrationsDir)) {
-    throw new Error(`Navia migrations directory not found: ${migrationsDir}`);
+    throw new Error(`Spark migrations directory not found: ${migrationsDir}`);
   }
 
   return readdirSync(migrationsDir)
@@ -45,7 +45,7 @@ function findRepoRoot(start: string): string {
   while (true) {
     if (
       existsSync(join(current, "pnpm-workspace.yaml")) &&
-      existsSync(join(current, "packages/db/src/migrations"))
+      existsSync(join(current, "packages/spark-db/src/migrations"))
     ) {
       return current;
     }

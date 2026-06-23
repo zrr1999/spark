@@ -57,8 +57,7 @@ void test("pi-loop tick continues, waits, blocks, and never emits goal completio
   const first = evaluateLoopTick({ loop, now: 101, reason: "start" });
   assert.equal(first.decision, "continue");
   assert.equal(first.loop?.tick.count, 1);
-  assert.match(first.prompt ?? "", /pi_loop_continuation/);
-  assert.doesNotMatch(first.prompt ?? "", /goal\(\{ action: "complete" \}\)/);
+  assert.equal(continuationLoopIdFromPrompt(first.prompt ?? ""), first.loop?.loopId);
 
   const failed = recordLoopFailure(first.loop!, { retryBackoffMs: [30_000] }, 102);
   const waiting = evaluateLoopTick({ loop: failed, now: 120, reason: "retry" });
@@ -70,15 +69,13 @@ void test("pi-loop tick continues, waits, blocks, and never emits goal completio
   assert.match(blocked.message, /needs user decision/);
 });
 
-void test("pi-loop prompts preserve continuation markers", () => {
+void test("pi-loop prompts remain parseable by loop id", () => {
   const loop = createLoop("Ship a layered primitive", 100);
   const compact = compactLoopPrompt(loop);
   const full = loopContinuationPrompt(loop);
 
   assert.equal(continuationLoopIdFromPrompt(compact), loop.loopId);
   assert.equal(continuationLoopIdFromPrompt(full), loop.loopId);
-  assert.match(full, /<pi_loop_continuation loop_id=/);
-  assert.match(full, /<\/pi_loop_continuation>/);
 });
 
 void test("pi-loop result helpers reject empty objectives and concurrent loops", () => {

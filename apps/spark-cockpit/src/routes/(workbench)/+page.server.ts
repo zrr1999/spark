@@ -1,5 +1,5 @@
 import { fail, redirect, type Cookies } from "@sveltejs/kit";
-import { asciiSlug } from "@zendev-lab/navia-system";
+import { asciiSlug } from "@zendev-lab/spark-system";
 import type { DatabaseSync } from "node:sqlite";
 import { getRequestDictionary, localeCookieName, type AppMessages } from "$lib/i18n";
 import { ensureCurrentOwnerSession } from "$lib/server/auth";

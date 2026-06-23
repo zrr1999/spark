@@ -126,7 +126,7 @@ export async function readRoleRunArtifactPreview(
     return {
       artifactRef,
       bodySize: metadataStat.size,
-      skippedReason: `metadata_too_large: ${metadataStat.size} bytes; full artifact not loaded`,
+      skippedReason: `metadata_too_large: ${metadataStat.size} bytes; artifact body not loaded`,
     };
   }
   const rawMetadata = await readFile(metadataPath, "utf8").catch((error: NodeJS.ErrnoException) => {
@@ -163,7 +163,7 @@ export async function readRoleRunArtifactPreview(
       artifactRef,
       bodySize: artifact.bodySize,
       bodyTruncated: artifact.bodyTruncated,
-      skippedReason: "unsupported_role_run_body: full artifact not loaded",
+      skippedReason: "unsupported_role_run_body: artifact body not loaded",
     };
   }
   return {
@@ -547,7 +547,7 @@ function roleRunReplacementSummary(
 ): string {
   const identity = info.runName ?? info.runRef ?? ref;
   const status = info.status ? ` with status ${info.status}` : "";
-  return `Historical role-run transcript ${identity}${status} compacted from ${formatRoleRunRetentionByteSize(bytes)} full transcript blob; compact summary, serialized tail, and optional export path are retained in artifact metadata.`;
+  return `Historical role-run transcript ${identity}${status} compacted from ${formatRoleRunRetentionByteSize(bytes)} transcript blob; compact summary, serialized tail, and optional export path are retained in artifact metadata.`;
 }
 
 function roleRunArtifactBodyBytes(raw: Record<string, unknown>, blobBytes: number): number {

@@ -534,8 +534,12 @@ function renderGoalEditRejectedMessage(
   const summary =
     verdict?.summary ??
     "reviewer did not approve editing this goal; autonomous edits must correct a material description or direction error without lowering difficulty";
-  const findings = verdict?.findings?.length ? `\nFindings: ${verdict.findings.join("; ")}` : "";
-  const blockers = verdict?.blockers?.length ? `\nBlockers: ${verdict.blockers.join("; ")}` : "";
+  const findings = verdict?.findings?.length
+    ? `\nFindings: ${formatGoalReviewList(verdict.findings)}`
+    : "";
+  const blockers = verdict?.blockers?.length
+    ? `\nBlockers: ${formatGoalReviewList(verdict.blockers)}`
+    : "";
   const artifact = result.reviewArtifactRef ? `\nReview artifact: ${result.reviewArtifactRef}` : "";
   return `Goal edit blocked by reviewer for session goal: ${oneLine(goal.objective)}\nReview outcome: ${verdict?.outcome ?? "blocked"}\nReview summary: ${summary}${findings}${blockers}${artifact}`;
 }
@@ -546,9 +550,17 @@ function renderGoalPauseRejectedMessage(
 ): string {
   const verdict = result.review?.verdict as GoalReviewVerdict | undefined;
   const summary = verdict?.summary ?? "reviewer did not approve pausing this goal";
-  const blockers = verdict?.blockers?.length ? `\nBlockers: ${verdict.blockers.join("; ")}` : "";
+  const blockers = verdict?.blockers?.length
+    ? `\nBlockers: ${formatGoalReviewList(verdict.blockers)}`
+    : "";
   const artifact = result.reviewArtifactRef ? `\nReview artifact: ${result.reviewArtifactRef}` : "";
   return `Goal pause blocked by reviewer for session goal: ${oneLine(goal.objective)}\nReview outcome: ${verdict?.outcome ?? "blocked"}\nReview summary: ${summary}${blockers}${artifact}`;
+}
+
+function formatGoalReviewList(items: readonly string[]): string {
+  const visible = items.slice(0, 5);
+  const hidden = items.length - visible.length;
+  return `${visible.join("; ")}${hidden > 0 ? `; … ${hidden} more` : ""}`;
 }
 
 function goalCompletionResult(
@@ -576,7 +588,9 @@ function goalCompletionResult(
     };
   }
   if (result.outcome === "blocked") {
-    const blockers = result.blockers.length ? `\nBlockers: ${result.blockers.join("; ")}` : "";
+    const blockers = result.blockers.length
+      ? `\nBlockers: ${formatGoalReviewList(result.blockers)}`
+      : "";
     const remainingWork = result.remainingWork ? `\nRemaining work: ${result.remainingWork}` : "";
     const artifact = result.artifactRef ? `\nReview artifact: ${result.artifactRef}` : "";
     return {

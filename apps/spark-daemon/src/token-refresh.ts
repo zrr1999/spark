@@ -1,5 +1,5 @@
 import { runtimeTokenRefreshResponseSchema } from "@zendev-lab/spark-protocol";
-import type { NaviaPaths } from "@zendev-lab/navia-system";
+import type { SparkPaths } from "@zendev-lab/spark-system";
 import { readSparkDaemonConfig, writeSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
 
 const refreshLeadMs = 5 * 60 * 1000;
@@ -42,7 +42,7 @@ export function nextSparkDaemonTokenRefreshDelayMs(
 }
 
 export async function refreshSparkDaemonCredentials(options: {
-  paths: NaviaPaths;
+  paths: SparkPaths;
   config: SparkDaemonConfig;
   fetchFn?: typeof fetch;
 }): Promise<SparkDaemonConfig> {

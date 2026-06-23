@@ -68,9 +68,9 @@ importers:
       '@types/node':
         specifier: ^25.9.3
         version: 25.9.3
-      '@zendev-lab/navia-system':
+      '@zendev-lab/spark-system':
         specifier: workspace:*
-        version: link:packages/navia-system
+        version: link:packages/spark-system
       oxlint:
         specifier: 1.70.0
         version: 1.70.0(oxlint-tsgolint@0.23.0)(vite-plus@0.1.24(@types/node@25.9.3)(@voidzero-dev/vite-plus-core@0.1.24(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(esbuild@0.28.1)(jiti@2.7.0)(jsdom@27.4.0)(svelte@5.56.3)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))
@@ -107,21 +107,15 @@ importers:
       '@sveltejs/kit':
         specifier: ^2.28.0
         version: 2.65.1(@sveltejs/vite-plugin-svelte@6.2.4(@voidzero-dev/vite-plus-core@0.1.24(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(svelte@5.56.3))(@voidzero-dev/vite-plus-core@0.1.24(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(svelte@5.56.3)(typescript@6.0.3)
-      '@zendev-lab/navia-db':
+      '@zendev-lab/spark-db':
         specifier: workspace:*
-        version: link:../../packages/navia-db
-      '@zendev-lab/navia-domain':
-        specifier: workspace:*
-        version: link:../../packages/navia-domain
-      '@zendev-lab/navia-system':
-        specifier: workspace:*
-        version: link:../../packages/navia-system
-      '@zendev-lab/navia-ui':
-        specifier: workspace:*
-        version: link:../../packages/navia-ui
+        version: link:../../packages/spark-db
       '@zendev-lab/spark-protocol':
         specifier: workspace:*
         version: link:../../packages/spark-protocol
+      '@zendev-lab/spark-system':
+        specifier: workspace:*
+        version: link:../../packages/spark-system
       smol-toml:
         specifier: ^1.6.1
         version: 1.6.1
@@ -184,15 +178,15 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
-      '@zendev-lab/navia-db':
+      '@zendev-lab/spark-db':
         specifier: workspace:*
-        version: link:../../packages/navia-db
-      '@zendev-lab/navia-system':
-        specifier: workspace:*
-        version: link:../../packages/navia-system
+        version: link:../../packages/spark-db
       '@zendev-lab/spark-protocol':
         specifier: workspace:*
         version: link:../../packages/spark-protocol
+      '@zendev-lab/spark-system':
+        specifier: workspace:*
+        version: link:../../packages/spark-system
       esbuild:
         specifier: ^0.28.0
         version: 0.28.1
@@ -217,62 +211,6 @@ importers:
       '@zendev-lab/spark-tui':
         specifier: workspace:^
         version: link:../../packages/spark-tui
-
-  packages/navia-db:
-    dependencies:
-      '@zendev-lab/navia-system':
-        specifier: workspace:*
-        version: link:../navia-system
-      kysely:
-        specifier: ^0.28.7
-        version: 0.28.17
-    devDependencies:
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
-        version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@voidzero-dev/vite-plus-core@0.1.24(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(esbuild@0.28.1)(jiti@2.7.0)(jsdom@27.4.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0)'
-
-  packages/navia-domain:
-    dependencies:
-      '@zendev-lab/navia-db':
-        specifier: workspace:*
-        version: link:../navia-db
-    devDependencies:
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
-        version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@voidzero-dev/vite-plus-core@0.1.24(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(esbuild@0.28.1)(jiti@2.7.0)(jsdom@27.4.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0)'
-
-  packages/navia-system:
-    devDependencies:
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
-        version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@voidzero-dev/vite-plus-core@0.1.24(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(esbuild@0.28.1)(jiti@2.7.0)(jsdom@27.4.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0)'
-
-  packages/navia-ui:
-    devDependencies:
-      '@sveltejs/vite-plugin-svelte':
-        specifier: ^6.2.1
-        version: 6.2.4(@voidzero-dev/vite-plus-core@0.1.24(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(svelte@5.56.3)
-      jsdom:
-        specifier: ^27.0.0
-        version: 27.4.0
-      svelte:
-        specifier: ^5.38.8
-        version: 5.56.3
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
-        version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@voidzero-dev/vite-plus-core@0.1.24(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(esbuild@0.28.1)(jiti@2.7.0)(jsdom@27.4.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0)'
 
   packages/pi-artifacts:
     dependencies:
@@ -413,6 +351,22 @@ importers:
         specifier: ^1.2.13
         version: 1.2.13
 
+  packages/spark-db:
+    dependencies:
+      '@zendev-lab/spark-system':
+        specifier: workspace:*
+        version: link:../spark-system
+      kysely:
+        specifier: ^0.28.7
+        version: 0.28.17
+    devDependencies:
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@voidzero-dev/vite-plus-core@0.1.24(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(esbuild@0.28.1)(jiti@2.7.0)(jsdom@27.4.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0)'
+
   packages/spark-extension:
     dependencies:
       '@zendev-lab/pi-artifacts':
@@ -485,6 +439,15 @@ importers:
       '@zendev-lab/pi-workflows':
         specifier: workspace:^
         version: link:../pi-workflows
+
+  packages/spark-system:
+    devDependencies:
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@voidzero-dev/vite-plus-core@0.1.24(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(esbuild@0.28.1)(jiti@2.7.0)(jsdom@27.4.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0)'
 
   packages/spark-tui:
     dependencies:
@@ -2606,7 +2569,8 @@ packages:
 
 snapshots:
 
-  '@acemir/cssom@0.9.31': {}
+  '@acemir/cssom@0.9.31':
+    optional: true
 
   '@anthropic-ai/sdk@0.91.1(zod@4.4.3)':
     dependencies:
@@ -2621,6 +2585,7 @@ snapshots:
       '@csstools/css-parser-algorithms': 4.0.0(@csstools/css-tokenizer@4.0.0)
       '@csstools/css-tokenizer': 4.0.0
       lru-cache: 11.5.1
+    optional: true
 
   '@asamuzakjp/dom-selector@6.8.1':
     dependencies:
@@ -2629,8 +2594,10 @@ snapshots:
       css-tree: 3.2.1
       is-potential-custom-element-name: 1.0.1
       lru-cache: 11.5.1
+    optional: true
 
-  '@asamuzakjp/nwsapi@2.3.9': {}
+  '@asamuzakjp/nwsapi@2.3.9':
+    optional: true
 
   '@aws-crypto/crc32@5.2.0':
     dependencies:
@@ -2857,12 +2824,14 @@ snapshots:
 
   '@babel/runtime@7.29.7': {}
 
-  '@csstools/color-helpers@6.0.2': {}
+  '@csstools/color-helpers@6.0.2':
+    optional: true
 
   '@csstools/css-calc@3.2.1(@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.0))(@csstools/css-tokenizer@4.0.0)':
     dependencies:
       '@csstools/css-parser-algorithms': 4.0.0(@csstools/css-tokenizer@4.0.0)
       '@csstools/css-tokenizer': 4.0.0
+    optional: true
 
   '@csstools/css-color-parser@4.1.7(@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.0))(@csstools/css-tokenizer@4.0.0)':
     dependencies:
@@ -2870,16 +2839,20 @@ snapshots:
       '@csstools/css-calc': 3.2.1(@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.0))(@csstools/css-tokenizer@4.0.0)
       '@csstools/css-parser-algorithms': 4.0.0(@csstools/css-tokenizer@4.0.0)
       '@csstools/css-tokenizer': 4.0.0
+    optional: true
 
   '@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.0)':
     dependencies:
       '@csstools/css-tokenizer': 4.0.0
+    optional: true
 
   '@csstools/css-syntax-patches-for-csstree@1.1.5(css-tree@3.2.1)':
     optionalDependencies:
       css-tree: 3.2.1
+    optional: true
 
-  '@csstools/css-tokenizer@4.0.0': {}
+  '@csstools/css-tokenizer@4.0.0':
+    optional: true
 
   '@earendil-works/pi-agent-core@0.79.4(ws@8.21.0)(zod@4.4.3)':
     dependencies:
@@ -3028,7 +3001,8 @@ snapshots:
   '@esbuild/win32-x64@0.28.1':
     optional: true
 
-  '@exodus/bytes@1.15.1': {}
+  '@exodus/bytes@1.15.1':
+    optional: true
 
   '@google/genai@1.52.0':
     dependencies:
@@ -3697,6 +3671,7 @@ snapshots:
   bidi-js@1.0.3:
     dependencies:
       require-from-string: 2.0.2
+    optional: true
 
   bignumber.js@9.0.0: {}
 
@@ -3730,6 +3705,7 @@ snapshots:
     dependencies:
       mdn-data: 2.27.1
       source-map-js: 1.2.1
+    optional: true
 
   cssstyle@5.3.7:
     dependencies:
@@ -3737,6 +3713,7 @@ snapshots:
       '@csstools/css-syntax-patches-for-csstree': 1.1.5(css-tree@3.2.1)
       css-tree: 3.2.1
       lru-cache: 11.5.1
+    optional: true
 
   data-uri-to-buffer@4.0.0: {}
 
@@ -3744,12 +3721,14 @@ snapshots:
     dependencies:
       whatwg-mimetype: 5.0.0
       whatwg-url: 15.1.0
+    optional: true
 
   debug@4.4.3:
     dependencies:
       ms: 2.1.3
 
-  decimal.js@10.6.0: {}
+  decimal.js@10.6.0:
+    optional: true
 
   deepmerge@4.3.1: {}
 
@@ -3763,7 +3742,8 @@ snapshots:
     dependencies:
       safe-buffer: 5.2.1
 
-  entities@8.0.0: {}
+  entities@8.0.0:
+    optional: true
 
   es-errors@1.3.0: {}
 
@@ -3894,6 +3874,7 @@ snapshots:
       '@exodus/bytes': 1.15.1
     transitivePeerDependencies:
       - '@noble/hashes'
+    optional: true
 
   http-proxy-agent@7.0.2:
     dependencies:
@@ -3917,7 +3898,8 @@ snapshots:
 
   is-module@1.0.0: {}
 
-  is-potential-custom-element-name@1.0.1: {}
+  is-potential-custom-element-name@1.0.1:
+    optional: true
 
   is-reference@1.2.1:
     dependencies:
@@ -3958,6 +3940,7 @@ snapshots:
       - bufferutil
       - supports-color
       - utf-8-validate
+    optional: true
 
   json-bigint@1.0.0:
     dependencies:
@@ -4044,7 +4027,8 @@ snapshots:
 
   marked@15.0.12: {}
 
-  mdn-data@2.27.1: {}
+  mdn-data@2.27.1:
+    optional: true
 
   minimatch@10.2.5:
     dependencies:
@@ -4166,6 +4150,7 @@ snapshots:
   parse5@8.0.1:
     dependencies:
       entities: 8.0.0
+    optional: true
 
   partial-json@0.1.7: {}
 
@@ -4216,11 +4201,13 @@ snapshots:
       '@types/node': 25.9.3
       long: 5.3.2
 
-  punycode@2.3.1: {}
+  punycode@2.3.1:
+    optional: true
 
   readdirp@4.1.2: {}
 
-  require-from-string@2.0.2: {}
+  require-from-string@2.0.2:
+    optional: true
 
   resolve@1.22.12:
     dependencies:
@@ -4273,6 +4260,7 @@ snapshots:
   saxes@6.0.0:
     dependencies:
       xmlchars: 2.2.0
+    optional: true
 
   semver@7.8.0: {}
 
@@ -4338,7 +4326,8 @@ snapshots:
     transitivePeerDependencies:
       - '@typescript-eslint/types'
 
-  symbol-tree@3.2.4: {}
+  symbol-tree@3.2.4:
+    optional: true
 
   tinybench@2.9.0: {}
 
@@ -4351,21 +4340,25 @@ snapshots:
 
   tinypool@2.1.0: {}
 
-  tldts-core@7.4.3: {}
+  tldts-core@7.4.3:
+    optional: true
 
   tldts@7.4.3:
     dependencies:
       tldts-core: 7.4.3
+    optional: true
 
   totalist@3.0.1: {}
 
   tough-cookie@6.0.1:
     dependencies:
       tldts: 7.4.3
+    optional: true
 
   tr46@6.0.0:
     dependencies:
       punycode: 2.3.1
+    optional: true
 
   ts-algebra@2.0.0: {}
 
@@ -4444,19 +4437,24 @@ snapshots:
   w3c-xmlserializer@5.0.0:
     dependencies:
       xml-name-validator: 5.0.0
+    optional: true
 
   web-streams-polyfill@3.0.3: {}
 
-  webidl-conversions@8.0.1: {}
+  webidl-conversions@8.0.1:
+    optional: true
 
-  whatwg-mimetype@4.0.0: {}
+  whatwg-mimetype@4.0.0:
+    optional: true
 
-  whatwg-mimetype@5.0.0: {}
+  whatwg-mimetype@5.0.0:
+    optional: true
 
   whatwg-url@15.1.0:
     dependencies:
       tr46: 6.0.0
       webidl-conversions: 8.0.1
+    optional: true
 
   which@2.0.1:
     dependencies:
@@ -4464,11 +4462,13 @@ snapshots:
 
   ws@8.21.0: {}
 
-  xml-name-validator@5.0.0: {}
+  xml-name-validator@5.0.0:
+    optional: true
 
   xml-naming@0.1.0: {}
 
-  xmlchars@2.2.0: {}
+  xmlchars@2.2.0:
+    optional: true
 
   yaml@2.9.0: {}
 

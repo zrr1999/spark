@@ -192,9 +192,9 @@ Every run references an existing role. A run can be fresh or forked regardless o
 | `role({ action: "get" })`    | Pi role-spec management over `RoleRegistry.select()`                                         |
 | `role({ action: "create" })` | Pi role-spec management creating project/user `RoleSpec`s                                    |
 | `role({ action: "call" })`   | One-off direct role invocation; not attached to managed task graphs or workflow runs          |
-| Task executor binding        | Compatibility `Task.roleRef` string resolved by `RoleRegistry` at the host/runtime boundary  |
+| Task executor binding        | `Task.roleRef` string resolved by `RoleRegistry` at the host/runtime boundary                 |
 | Task execution               | `spark-runtime` calls `runRole()` behind explicit `assign` scheduling                         |
-| Runtime claim                | Compatibility `TaskClaim.kind = "role-run"`, `roleRef`, `runName`, `runRef` attribution      |
-| Runtime artifact             | Compatibility `kind: "role-run"` records with task/run provenance                            |
+| Runtime claim                | `TaskClaim.kind = "role-run"`, `roleRef`, `runName`, `runRef` attribution                    |
+| Runtime artifact             | `kind: "role-run"` records with task/run provenance                                          |
 
-Runtime package boundaries should not keep compatibility aliases. Repair stale local state with explicit migration or cleanup tooling before it reaches `pi-roles`, `pi-tasks`, or `spark-runtime`.
+Runtime package boundaries should reject stale local state with explicit migration or cleanup tooling before it reaches `pi-roles`, `pi-tasks`, or `spark-runtime`.

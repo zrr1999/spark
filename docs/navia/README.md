@@ -156,7 +156,7 @@ pnpm run build
 The merged Spark root intentionally exposes a small command surface: use
 `pnpm run check` for validation, `pnpm run build` for production builds, and
 `pnpm run publish` for the selected public npm packages. Imported standalone
-Navia release-gate names are historical compatibility notes, not root scripts. For the contract and trade-offs see
+Navia release-gate names are historical notes, not root scripts. For the contract and trade-offs see
 [docs/release/e2e-gate.md](./docs/release/e2e-gate.md); for failure modes see
 [docs/release/troubleshooting.md](./docs/release/troubleshooting.md).
 

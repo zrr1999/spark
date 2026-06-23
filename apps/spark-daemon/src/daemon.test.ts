@@ -1,13 +1,18 @@
+import { Buffer } from "node:buffer";
+import { once } from "node:events";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { WebSocketServer } from "ws";
 import { describe, expect, it } from "vitest";
 import {
+  SPARK_PROTOCOL_VERSION,
   createId,
   runtimeProtocolVersion,
   serverCommandEnvelopeSchema,
 } from "@zendev-lab/spark-protocol";
-import { resolveNaviaPaths } from "@zendev-lab/navia-system";
+import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import {
   createDaemonHumanWait,
   handleCommand,
@@ -20,13 +25,26 @@ import { SparkDaemonInvocationRegistry, SparkDaemonQueue } from "./core/index.ts
 import { SparkDaemonHumanWaitRegistry } from "./core/human-waits.ts";
 import type { CancelSparkInvocationFn, RunSparkCommandFn } from "./spark/bridge.js";
 import { openSparkDaemonDatabase } from "./store/schema.js";
-import { addWorkspace, attachWorkspaceClient, stopWorkspace } from "./store/workspaces.js";
-import type { SparkDaemonConfig } from "./config.js";
+import {
+  addWorkspace,
+  attachWorkspaceClient,
+  registerWorkspace,
+  stopWorkspace,
+} from "./store/workspaces.js";
+import { writeSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
 
 type BridgeInput = Parameters<RunSparkCommandFn>[0];
 
+function webSocketDataToString(data: unknown): string {
+  if (typeof data === "string") return data;
+  if (data instanceof Buffer) return data.toString("utf8");
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
+  if (Array.isArray(data)) return Buffer.concat(data).toString("utf8");
+  return "";
+}
+
 interface TestHarness {
-  paths: ReturnType<typeof resolveNaviaPaths>;
+  paths: ReturnType<typeof resolveSparkPaths>;
   db: ReturnType<typeof openSparkDaemonDatabase>;
   workspace: ReturnType<typeof addWorkspace>;
   cleanup(): void;
@@ -34,7 +52,7 @@ interface TestHarness {
 
 function makeHarness(): TestHarness {
   const root = mkdtempSync(join(tmpdir(), "spark-daemon-daemon-"));
-  const paths = resolveNaviaPaths({
+  const paths = resolveSparkPaths({
     app: "daemon",
     env: { HOME: root },
     overrides: {
@@ -330,6 +348,179 @@ describe("Spark daemon handleCommand task.start.request", () => {
       expect(processedEntry.payload.result).toEqual({ text: "done" });
       expect(existsSync(harness.paths.pidFile)).toBe(false);
     } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("publishes daemon queue events over the runtime WebSocket stream", async () => {
+    const harness = makeHarness();
+    const server = new WebSocketServer({ port: 0 });
+    const shutdown = new AbortController();
+    const helloReceived = deferred<void>();
+    const viewEventReceived = deferred<void>();
+    const interactionEventReceived = deferred<void>();
+    const daemonEventTypes: string[] = [];
+
+    try {
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected WebSocket server to listen on a TCP port");
+      }
+      const port = (address as AddressInfo).port;
+      const serverUrl = `http://127.0.0.1:${port}/`;
+      const webSocketUrl = `ws://127.0.0.1:${port}/runtime`;
+      const serverWorkspaceId = "ws_22222222222241112222222222222222";
+      const routedWorkspace = registerWorkspace(harness.db, {
+        serverUrl,
+        serverWorkspaceId,
+        serverBindingId: "rtwb_33333333333341113333333333333333",
+        localPath: harness.workspace.localPath,
+        localWorkspaceKey: "local-default",
+        displayName: "Local default",
+      });
+      writeSparkDaemonConfig(harness.paths, {
+        installationId: "install-test",
+        displayName: "Test daemon",
+        runtimeId: "rt_11111111111111111111111111111111",
+        runtimeToken: "runtime-token",
+        webSocketUrl,
+      });
+
+      server.on("connection", (socket) => {
+        socket.on("message", (data) => {
+          const message = JSON.parse(webSocketDataToString(data)) as {
+            type: string;
+            workspaceBindingId?: string;
+            workspaceId?: string;
+            payload?: {
+              type?: string;
+              view?: { type?: string; sessionId?: string };
+              request?: { kind?: string; requestId?: string };
+            };
+          };
+          if (message.type === "runtime.hello") {
+            socket.send(
+              JSON.stringify({
+                protocolVersion: runtimeProtocolVersion,
+                messageId: createId("msg"),
+                type: "server.hello.ack",
+                sentAt: new Date().toISOString(),
+                payload: {
+                  runtimeSessionId: createId("rtsn"),
+                  acceptedFeatures: ["ws-control-v1"],
+                  heartbeatIntervalMs: 15_000,
+                  serverTime: new Date().toISOString(),
+                },
+              }),
+            );
+            helloReceived.resolve(undefined);
+            return;
+          }
+          if (message.type !== "daemon.event") {
+            return;
+          }
+          const eventType = message.payload?.type;
+          if (eventType) {
+            daemonEventTypes.push(eventType);
+          }
+          if (
+            eventType === "daemon.view_event" &&
+            message.workspaceBindingId === routedWorkspace.id &&
+            message.workspaceId === serverWorkspaceId &&
+            message.payload?.view?.type === "session.message" &&
+            message.payload.view.sessionId === "queued-ws-session"
+          ) {
+            viewEventReceived.resolve(undefined);
+          }
+          if (
+            eventType === "daemon.interaction.request" &&
+            message.workspaceBindingId === routedWorkspace.id &&
+            message.workspaceId === serverWorkspaceId &&
+            message.payload?.request?.kind === "confirmation" &&
+            message.payload.request.requestId === "confirm-live-daemon"
+          ) {
+            interactionEventReceived.resolve(undefined);
+          }
+        });
+      });
+
+      const queue = new SparkDaemonQueue({ paths: harness.paths });
+      const running = startSparkDaemon({
+        paths: harness.paths,
+        db: harness.db,
+        config: {
+          installationId: "install-test",
+          displayName: "Test daemon",
+        },
+        signal: shutdown.signal,
+        queue,
+        queuePollIntervalMs: 5,
+        executeQueueTask: async (task) => ({
+          ok: true,
+          jsonEvents: [
+            {
+              type: "view_event",
+              event: {
+                version: SPARK_PROTOCOL_VERSION,
+                type: "session.message",
+                sessionId: task.sessionId,
+                message: {
+                  version: SPARK_PROTOCOL_VERSION,
+                  id: "assistant-ws-1",
+                  role: "assistant",
+                  text: "done from live daemon",
+                  status: "done",
+                  metadata: {},
+                },
+              },
+            },
+            {
+              type: "daemon_event",
+              event: {
+                version: SPARK_PROTOCOL_VERSION,
+                type: "daemon.interaction.request",
+                source: "runtime",
+                request: {
+                  version: SPARK_PROTOCOL_VERSION,
+                  kind: "confirmation",
+                  requestId: "confirm-live-daemon",
+                  title: "Confirm live daemon",
+                  prompt: "Continue?",
+                  severity: "info",
+                  confirmLabel: "Confirm",
+                  cancelLabel: "Cancel",
+                  metadata: {},
+                },
+                metadata: {},
+              },
+            },
+          ],
+        }),
+      });
+
+      await helloReceived.promise;
+      await queue.enqueue({
+        type: "session.run",
+        sessionId: "queued-ws-session",
+        prompt: "hello over ws",
+        workspaceBindingId: routedWorkspace.id,
+        workspaceId: serverWorkspaceId,
+      });
+      await viewEventReceived.promise;
+      await interactionEventReceived.promise;
+      shutdown.abort();
+      await running;
+
+      expect(daemonEventTypes).toEqual([
+        "daemon.task.lifecycle",
+        "daemon.task.lifecycle",
+        "daemon.view_event",
+        "daemon.interaction.request",
+      ]);
+    } finally {
+      shutdown.abort();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
       harness.cleanup();
     }
   });

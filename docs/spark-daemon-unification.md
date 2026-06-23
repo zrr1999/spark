@@ -43,7 +43,7 @@ Workspace client, borrowed-workspace, executor-client, connection-state, and sna
 4. **Hard cut package/app/service names.**
    - Rename active runtime packages, apps, bins, sockets, launchd labels, docs,
      tests, and scripts rather than keeping dual public surfaces.
-   - A one-time state migration is allowed; long-lived compatibility command
+   - A one-time state migration is allowed; long-lived duplicate command
      trees are not.
 5. **Keep execution truth in Spark stores.**
    - Spark `.spark/` task, run, artifact, ask, and review stores remain
@@ -122,7 +122,7 @@ Addy Osmani's `agent-skills` maps development lifecycle into a small set of
 commands and auto-activated skills
 ([README.md#L10-L36](https://github.com/addyosmani/agent-skills/blob/a5f0b176381e9fea24a61aefc243506686aa2435/README.md#L10-L36)).
 Superpowers treats workflows as mandatory methods layered on harness-native
-skills; its Pi integration uses native skills rather than a compatibility Skill
+skills; its Pi integration uses native skills rather than a shim Skill
 tool
 ([README.md#L200-L218](https://github.com/obra/superpowers/blob/b62616fc12f6a007c6fd5118146821d748da0d33/README.md#L200-L218)).
 
@@ -235,8 +235,7 @@ spark daemon enqueue/run      # replace with submit/start/queue verbs in the uni
 ```
 
 If a temporary external shim is required for a published package transition, it
-must be a separate deprecation package that execs `spark ...` and is not used
-inside this repo's tests/docs as a normal path.
+must live outside this repo and must not appear in tests/docs as a normal path.
 
 ## Rename and migration inventory
 
@@ -249,10 +248,10 @@ inside this repo's tests/docs as a normal path.
 | former web cockpit app path | `apps/spark-cockpit` | Renamed; keep old path out of active repo references. |
 | former web cockpit package | `@zendev-lab/spark-cockpit` | Renamed with cockpit package. |
 | former `@zendev-lab/navia-protocol` surface | `@zendev-lab/spark-protocol` | Consolidated into the single Spark shared protocol package for runtime, cockpit, interaction, and view-model schemas. |
-| `@zendev-lab/navia-db` | `@zendev-lab/spark-cockpit-db` | Rename if package remains public/internal. |
-| `@zendev-lab/navia-domain` | `@zendev-lab/spark-cockpit-domain` | Rename or fold into cockpit app. |
-| `@zendev-lab/navia-system` | `@zendev-lab/spark-daemon-system` or fold into daemon | Rename helpers that resolve daemon paths/secrets. |
-| `@zendev-lab/navia-ui` | `@zendev-lab/spark-cockpit-ui` | Rename if retained. |
+| former `@zendev-lab/navia-db` surface | `@zendev-lab/spark-db` | Renamed to shared Spark SQLite/migration helpers because both daemon and Cockpit use it. |
+| former `@zendev-lab/navia-system` surface | `@zendev-lab/spark-system` | Renamed to shared Spark path/permission/command helpers because both daemon and Cockpit use it. |
+| former `@zendev-lab/navia-domain` package | removed | Folded away; it only exposed a tiny generic time helper. |
+| former `@zendev-lab/navia-ui` package | removed | Deleted; it only exposed a marker constant and no reusable UI surface. |
 | former Spark CLI host daemon slice | `apps/spark-daemon/src/core/*` plus `apps/spark-daemon/src/spark/session-run.ts` | Folded into single daemon and deleted from the Spark CLI host tree. |
 
 ### Binaries, scripts, and service names
@@ -333,8 +332,8 @@ Spark runtime now accepts a host-provided `SparkRoleInstructionExecutor`, and
 non-TUI implementation. The Spark daemon injects that executor for cockpit
 `task.start.request` work, so daemon-owned background role execution runs inside
 the Spark agent loop instead of spawning `pi --print --mode json`. Pi extension
-host support remains valid when Spark is loaded inside Pi, and the legacy Pi
-child launcher remains only as a compatibility fallback for non-daemon hosts.
+host support remains valid when Spark is loaded inside Pi, and the Pi
+child launcher is not used for daemon-owned work.
 
 ### State migration and legacy runtime deletion
 

@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
+import { defaultSparkDynamicWorkflowEventStore } from "./spark-dynamic-workflow-event-store.ts";
 import { defaultTaskGraphStore, type TaskGraph } from "@zendev-lab/pi-tasks";
 import type { Project, ProjectRef, Task } from "@zendev-lab/pi-extension-api";
 import { reconcileSparkWorkflowRunsWithActiveProcesses } from "./background-runs.ts";
@@ -21,7 +22,6 @@ import {
   normalizeSparkStatusFormat,
   normalizeSparkStatusLimit,
   normalizeSparkStatusScope,
-  normalizeSparkStatusShowFinished,
   normalizeSparkStatusView,
 } from "./spark-status.ts";
 import { sparkStateSessionScopes } from "./spark-state-tool-registration.ts";
@@ -41,7 +41,7 @@ export function registerSparkStatusTool(
     name: "impl_status",
     label: "Spark Status",
     description:
-      "Internal implementation for task_read scoped status actions: workspace_status, project_status, and task_status. Defaults to an active view focused on unfinished work and current session state; use view=full for history.",
+      "Internal implementation for task_read scoped status actions: workspace_status, project_status, and task_status. Defaults to an active view focused on unfinished work and current session state; use bounded selectors/limits for drill-down.",
     parameters: Type.Object({
       scope: Type.Optional(
         Type.String({
@@ -70,13 +70,13 @@ export function registerSparkStatusTool(
         Type.String({
           default: "active",
           description:
-            "active | summary | full. active shows unfinished work for the current project/session, summary shows project counts only, full includes done/cancelled history.",
+            "active | summary. active shows unfinished work for the current project/session, summary shows project counts only; use selectors/limits for bounded drill-down.",
         }),
       ),
       limit: Type.Optional(
         Type.Number({
           description:
-            "Maximum number of task rows per project. Defaults to 8 in active view; omitted in summary/full unless provided.",
+            "Maximum number of task rows per project. Defaults to 8 in active view; omitted in summary unless provided.",
         }),
       ),
       format: Type.Optional(
@@ -86,28 +86,18 @@ export function registerSparkStatusTool(
             "text | json. text returns the human-readable status; json returns the structured status payload as JSON text for tool/LLM callers.",
         }),
       ),
-      includeDetails: Type.Optional(
-        Type.Boolean({
-          default: false,
-          description:
-            "When format=json, return the full historical payload instead of the compact decision payload.",
-        }),
-      ),
-      showFinished: Type.Optional(
-        Type.Boolean({
-          default: false,
-          description: "Deprecated alias for view=full when true.",
-        }),
-      ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd;
       await deps.ensureSparkStateForActiveWorkspace(cwd, ctx);
       const format = normalizeSparkStatusFormat(params);
+      const scope = normalizeSparkStatusScope(params);
+      const view = normalizeSparkStatusView(params);
+      const explicitLimit = normalizeSparkStatusLimit(params);
       const store = defaultTaskGraphStore(cwd);
       const graph = await loadSparkGraph(cwd, ctx);
       if (!graph) {
-        const details = { found: false, active: false, format };
+        const details = { found: false, active: false, format, scope, view };
         return {
           content: [
             {
@@ -120,11 +110,6 @@ export function registerSparkStatusTool(
         };
       }
       if (ensureSparkGraphInvariants(graph)) await saveSparkGraphAndTodos(cwd, graph, ctx, store);
-      const scope = normalizeSparkStatusScope(params);
-      const view = normalizeSparkStatusShowFinished(params)
-        ? "full"
-        : normalizeSparkStatusView(params);
-      const explicitLimit = normalizeSparkStatusLimit(params);
       const taskLimit =
         view === "summary"
           ? undefined
@@ -132,6 +117,9 @@ export function registerSparkStatusTool(
       const runStore = defaultSparkWorkflowRunStore(cwd);
       await reconcileSparkWorkflowRunsWithActiveProcesses(runStore, graph, cwd);
       const workflowRunStatus = await runStore.status();
+      const dynamicWorkflowRuns = await defaultSparkDynamicWorkflowEventStore(cwd)
+        .listRuns()
+        .catch(() => []);
       const runControl = await runStore.loadControl();
       const sessionKey = sparkSessionKey(ctx);
       const currentProject = await currentSparkProject(cwd, ctx, graph);
@@ -166,10 +154,9 @@ export function registerSparkStatusTool(
               projectRef: scoped.project?.ref ?? currentProject?.ref,
               limit: DEFAULT_SPARK_STATUS_RECENT_COMPLETIONS_LIMIT,
             });
-      const state =
-        view === "full" || includeStateSummary
-          ? await collectSparkStateHousekeeping(cwd, sparkStateSessionScopes(ctx), graph)
-          : undefined;
+      const state = includeStateSummary
+        ? await collectSparkStateHousekeeping(cwd, sparkStateSessionScopes(ctx), graph)
+        : undefined;
       const rendered = renderSparkStatus({
         graph,
         scope,
@@ -181,18 +168,13 @@ export function registerSparkStatusTool(
         sessionKey,
         currentProject,
         workflowRunStatus,
+        dynamicWorkflowRuns,
         runControl,
         sessionGoal,
         recentRoleRunCompletions,
         state,
       });
-      const includeDetails = normalizeSparkStatusBoolean(
-        params.includeDetails,
-        false,
-        "includeDetails",
-      );
-      const jsonPayload =
-        includeDetails || view === "full" ? rendered.details : rendered.compactDetails;
+      const jsonPayload = rendered.compactDetails;
       const details = {
         ...(format === "json" ? jsonPayload : rendered.details),
         format,

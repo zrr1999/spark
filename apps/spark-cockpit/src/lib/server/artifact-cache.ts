@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createId } from "@zendev-lab/spark-protocol";
-import { resolveNaviaPaths } from "@zendev-lab/navia-system";
+import { resolveSparkPaths } from "@zendev-lab/spark-system";
 
 /**
  * Maximum body size the server is willing to materialize as an inline preview
@@ -64,7 +64,7 @@ export interface ArtifactCacheReadResult {
 }
 
 export function defaultArtifactCacheRoot() {
-  return resolveNaviaPaths({ app: "server" }).artifactCacheDir;
+  return resolveSparkPaths({ app: "cockpit" }).artifactCacheDir;
 }
 
 /**

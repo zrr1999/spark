@@ -155,11 +155,14 @@ export {
 } from "./session-store.ts";
 export {
   buildSparkSessionTree,
+  exportSparkSessionRecord,
   flattenSparkSessionTree,
   formatBranchRows,
   formatSessionList,
+  formatSessionReplay,
   getSparkSessionBranch,
   getSparkSessionLeafId,
+  readSparkSessionExportFormat,
   registerSparkSessionsCommand,
   runSparkSessionsCommand,
   switchSparkSessionLeaf,
@@ -185,6 +188,7 @@ export type {
   SparkThinkingLevelChangeEntry,
 } from "./session-store.ts";
 export type {
+  SparkSessionExportFormat,
   SparkSessionNavigationState,
   SparkSessionsCommandHost,
   SparkSessionsCommandOptions,

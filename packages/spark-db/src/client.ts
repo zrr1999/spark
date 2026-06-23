@@ -1,14 +1,14 @@
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { resolveNaviaPaths } from "@zendev-lab/navia-system";
+import { resolveSparkPaths } from "@zendev-lab/spark-system";
 
 export interface OpenDatabaseOptions {
   path?: string;
 }
 
 export function defaultDatabasePath(): string {
-  return resolveNaviaPaths({ app: "server" }).databasePath;
+  return resolveSparkPaths({ app: "cockpit" }).databasePath;
 }
 
 export function openDatabase(options: OpenDatabaseOptions = {}): DatabaseSync {

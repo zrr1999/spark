@@ -118,12 +118,6 @@ export interface LearningPutArtifactInput<T extends JsonValue | string = JsonVal
   ref?: ArtifactRef;
 }
 
-export interface LegacyCompoundLearningMarkdownInput {
-  markdown: string;
-  sourcePath: string;
-  relativePath?: string;
-}
-
 const DEFAULT_ACTIVE_STATUSES: LearningStatus[] = ["active"];
 const LEARNING_STATUSES: LearningStatus[] = [
   "candidate",
@@ -215,27 +209,6 @@ export function parseLearningExportMarkdown(
     records.push(record);
   }
   return records;
-}
-
-export function parseLegacyCompoundLearningMarkdown(
-  input: LegacyCompoundLearningMarkdownInput,
-): LearningRecordInput {
-  const { frontmatter, body } = splitMarkdownFrontmatter(input.markdown);
-  const title = frontmatter.title ?? firstMarkdownHeading(body) ?? filenameTitle(input.sourcePath);
-  const context = frontmatter.context;
-  return {
-    title,
-    statement: context ?? firstMeaningfulMarkdownParagraph(body) ?? title,
-    category: legacyLearningCategory(frontmatter.category, input.relativePath ?? input.sourcePath),
-    status: "active",
-    applicability: context ?? `Imported from legacy compound-learnings file ${input.sourcePath}.`,
-    evidenceRefs: [input.sourcePath],
-    sourcePaths: [input.sourcePath],
-    sourceHash: contentHash(input.markdown),
-    sourceContent: input.markdown,
-    tags: parseLegacyTags(frontmatter.tags),
-    confidence: 0.8,
-  };
 }
 
 export class LearningStore {
@@ -661,98 +634,6 @@ function requireNonEmpty(value: unknown, label: string): string {
   const trimmed = value.trim();
   if (!trimmed) throw new Error(`${label} is required`);
   return trimmed;
-}
-
-function splitMarkdownFrontmatter(markdown: string): {
-  frontmatter: Record<string, string>;
-  body: string;
-} {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(markdown);
-  if (!match) return { frontmatter: {}, body: markdown };
-  return {
-    frontmatter: parseSimpleFrontmatter(match[1] ?? ""),
-    body: markdown.slice(match[0].length),
-  };
-}
-
-function parseSimpleFrontmatter(raw: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const line of raw.split(/\r?\n/)) {
-    const index = line.indexOf(":");
-    if (index < 0) continue;
-    const key = line.slice(0, index).trim();
-    if (!key) continue;
-    result[key] = stripFrontmatterQuotes(line.slice(index + 1).trim());
-  }
-  return result;
-}
-
-function stripFrontmatterQuotes(value: string): string {
-  if (
-    (value.startsWith('"') && value.endsWith('"')) ||
-    (value.startsWith("'") && value.endsWith("'"))
-  )
-    return value.slice(1, -1);
-  return value;
-}
-
-function parseLegacyTags(value: string | undefined): string[] {
-  if (!value) return [];
-  const trimmed = value.trim();
-  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-    return trimmed
-      .slice(1, -1)
-      .split(",")
-      .map(stripFrontmatterQuotes)
-      .map((tag) => tag.trim())
-      .filter(Boolean);
-  }
-  return trimmed
-    .split(/[,\s]+/)
-    .map((tag) => tag.trim())
-    .filter(Boolean);
-}
-
-function legacyLearningCategory(
-  frontmatterCategory: string | undefined,
-  relativePath: string,
-): LearningCategory {
-  const normalized = frontmatterCategory?.toLowerCase().trim();
-  if (normalized === "pattern" || normalized === "patterns") return "pattern";
-  if (normalized === "gotcha" || normalized === "gotchas") return "gotcha";
-  if (normalized === "decision" || normalized === "decisions") return "decision";
-
-  const segments = relativePath.split(/[\\/]/);
-  if (segments.includes("patterns")) return "pattern";
-  if (segments.includes("gotchas")) return "gotcha";
-  if (segments.includes("decisions")) return "decision";
-  return "pattern";
-}
-
-function firstMarkdownHeading(markdown: string): string | undefined {
-  const heading = markdown
-    .split(/\r?\n/)
-    .find((line) => line.startsWith("# ") && line.slice(2).trim());
-  return heading?.slice(2).trim();
-}
-
-function firstMeaningfulMarkdownParagraph(markdown: string): string | undefined {
-  const paragraphs = markdown.split(/\r?\n\s*\r?\n/);
-  for (const paragraph of paragraphs) {
-    const normalized = paragraph
-      .split(/\r?\n/)
-      .filter((line) => !line.trim().startsWith("#") && !line.trim().startsWith("```"))
-      .join(" ")
-      .replace(/[`*_]/g, "")
-      .trim();
-    if (normalized) return normalized;
-  }
-  return undefined;
-}
-
-function filenameTitle(filePath: string): string {
-  const filename = filePath.split(/[\\/]/).pop() ?? "learning.md";
-  return filename.replace(/\.md$/i, "").replace(/[-_]+/g, " ");
 }
 
 function assertStringArray(value: unknown, label: string): void {

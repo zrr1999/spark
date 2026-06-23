@@ -2,6 +2,7 @@ import {
   createId,
   runtimeProtocolVersion,
   type ArtifactProjectionPayload,
+  type DaemonEventPayload,
   type InvocationLogChunkPayload,
   type InvocationUpdatePayload,
   type RuntimeCommandAckPayload,
@@ -64,6 +65,10 @@ export function taskGraphSnapshot(payload: TaskGraphSnapshotPayload, route: Rout
 
 export function workspaceSnapshot(payload: WorkspaceSnapshotPayload, route: RouteContext) {
   return runtimeEnvelope("workspace.snapshot", payload, route);
+}
+
+export function daemonEvent(payload: DaemonEventPayload, route: RouteContext) {
+  return runtimeEnvelope("daemon.event", payload, route);
 }
 
 export function artifactProjected(payload: ArtifactProjectionPayload, route: RouteContext) {

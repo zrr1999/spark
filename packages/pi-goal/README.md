@@ -2,7 +2,7 @@
 
 Generic durable goal state, usage accounting, and continuation prompt primitives for Pi extensions, layered on `@zendev-lab/pi-loop`.
 
-Spark uses this package for project-bound `/goal` mode, but `@zendev-lab/pi-goal` does not own Spark commands, task scheduling, workflow runs, or widget policy. Historical serialized marker strings such as `"spark-goal"` remain stable for on-disk compatibility and are not package ownership markers.
+Spark uses this package for project-bound `/goal` mode, but `@zendev-lab/pi-goal` does not own Spark commands, task scheduling, workflow runs, or widget policy. Serialized marker strings such as `"spark-goal"` are not package ownership markers.
 
 This package vendors and rewrites selected MIT-licensed ideas from `pi-codex-goal`. It intentionally does not expose Pi extension entrypoints, slash commands, or workflow script registration.
 

@@ -1,6 +1,6 @@
 # @zendev-lab/spark-tui
 
-Spark-owned TUI compatibility boundary over `@earendil-works/pi-tui`.
+Spark-owned TUI boundary over `@earendil-works/pi-tui`.
 
 This package intentionally stays small. It centralizes:
 

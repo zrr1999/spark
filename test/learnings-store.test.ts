@@ -9,11 +9,10 @@ import {
   defaultLearningStore,
   LearningExportFormatError,
   LearningStore,
-  parseLegacyCompoundLearningMarkdown,
   parseLearningExportMarkdown,
   renderLearningExportMarkdown,
 } from "@zendev-lab/pi-learnings";
-import { contentHash, newRef } from "@zendev-lab/pi-extension-api";
+import { newRef } from "@zendev-lab/pi-extension-api";
 
 void test("learning store records active learnings and searches by content", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-learnings-"));
@@ -179,39 +178,6 @@ void test("learning export markdown round-trips and rejects malformed blocks", a
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-});
-
-void test("legacy compound learning markdown parses as package-owned import input", () => {
-  const markdown = `---
-title: "Webhook 验证必须使用 raw body"
-category: gotchas
-tags: [stripe, webhook, python]
-context: "集成 Stripe webhook 时验证始终失败"
----
-
-## 问题
-
-Stripe webhook 签名验证要求使用原始请求体（raw body）。
-`;
-  const input = parseLegacyCompoundLearningMarkdown({
-    markdown,
-    sourcePath: ".learnings/gotchas/stripe-webhook-raw-body.md",
-    relativePath: "gotchas/stripe-webhook-raw-body.md",
-  });
-
-  assert.deepEqual(input, {
-    title: "Webhook 验证必须使用 raw body",
-    statement: "集成 Stripe webhook 时验证始终失败",
-    category: "gotcha",
-    status: "active",
-    applicability: "集成 Stripe webhook 时验证始终失败",
-    evidenceRefs: [".learnings/gotchas/stripe-webhook-raw-body.md"],
-    sourcePaths: [".learnings/gotchas/stripe-webhook-raw-body.md"],
-    sourceHash: contentHash(markdown),
-    sourceContent: markdown,
-    tags: ["stripe", "webhook", "python"],
-    confidence: 0.8,
-  });
 });
 
 void test("learning store keeps candidates out of default active recall", async () => {

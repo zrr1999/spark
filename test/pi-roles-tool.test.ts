@@ -522,10 +522,7 @@ void test("pi-roles tools reject invalid explicit parameters instead of using de
     executeRoleTool(tools, "list_roles", { source: "managed" }),
     /list_roles source must be builtin, extension, project, or user/,
   );
-  await assert.rejects(
-    executeRoleTool(tools, "get_role", { role: "worker", includePrompt: "true" }),
-    /get_role includePrompt must be a boolean/,
-  );
+
   await assert.rejects(
     executeRoleTool(tools, "get_role", { role: 42 }),
     /get_role role must be a string/,

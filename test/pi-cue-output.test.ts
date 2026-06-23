@@ -248,16 +248,17 @@ function chainJob(
 
 void test("pi-cue numeric and boolean normalizers reject invalid explicit values", () => {
   assert.equal(normalizeCueTailBytes(undefined, 128), 128);
-  assert.equal(normalizeCueTailBytes(0), 0);
   assert.equal(normalizeCueTailBytes(4096), 4096);
   assert.throws(() => normalizeCueTailBytes("4096"), /tail_bytes must be a finite number/);
-  assert.throws(() => normalizeCueTailBytes(1.5), /tail_bytes must be a non-negative integer/);
-  assert.throws(() => normalizeCueTailBytes(-1), /tail_bytes must be a non-negative integer/);
+  assert.throws(() => normalizeCueTailBytes(0), /tail_bytes must be a positive integer/);
+  assert.throws(() => normalizeCueTailBytes(1.5), /tail_bytes must be a positive integer/);
+  assert.throws(() => normalizeCueTailBytes(-1), /tail_bytes must be a positive integer/);
 
   assert.equal(normalizeCueLimit(null, 10), 10);
   assert.equal(normalizeCueLimit(5), 5);
   assert.throws(() => normalizeCueLimit(Number.NaN), /limit must be a finite number/);
-  assert.throws(() => normalizeCueLimit(2.25), /limit must be a non-negative integer/);
+  assert.throws(() => normalizeCueLimit(0), /limit must be a positive integer/);
+  assert.throws(() => normalizeCueLimit(2.25), /limit must be a positive integer/);
 
   assert.equal(normalizeCueTimeoutSeconds(undefined, 300), 300);
   assert.equal(normalizeCueTimeoutSeconds(0.25, 300), 0.25);
@@ -335,7 +336,7 @@ void test("pi-cue tools validate bad parameters before connecting to cued", asyn
         () => undefined,
         {},
       ),
-    /cue_exec tail is no longer supported; use tail_bytes=0/,
+    /cue_exec tail is not supported; use tail_bytes/,
   );
 
   await assert.rejects(
@@ -347,7 +348,7 @@ void test("pi-cue tools validate bad parameters before connecting to cued", asyn
         () => undefined,
         {},
       ),
-    /cue_scope env_tail_bytes is no longer supported; use tail_bytes/,
+    /cue_scope env_tail_bytes is not supported; use tail_bytes/,
   );
 
   await assert.rejects(
@@ -493,7 +494,7 @@ void test("script_run and script_eval route venv only to python", async () => {
   );
 });
 
-void test("script_run and script_eval do not pass deprecated scope to RunScript", async () => {
+void test("script_run and script_eval do not pass removed scope to RunScript", async () => {
   const tools = registerCueToolsForTest();
   const runTool = tools.get("script_run");
   const evalTool = tools.get("script_eval");

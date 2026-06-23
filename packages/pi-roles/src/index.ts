@@ -592,7 +592,6 @@ export class RoleModelSettingsStore {
   }
 }
 
-/** @deprecated Compatibility default path for existing project role model settings. Prefer host-owned path injection with RoleModelSettingsStore. */
 export function defaultProjectRoleModelSettingsStore(cwd: string): RoleModelSettingsStore {
   return new RoleModelSettingsStore(join(cwd, ".spark", "role-model-settings.json"), "project");
 }

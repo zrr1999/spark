@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   SPARK_PROTOCOL_VERSION,
   createBlockedInteractionResponse,
+  parseSparkDaemonEvent,
   parseSparkInteractionRequest,
   parseSparkInteractionResponse,
   parseSparkSessionView,
@@ -101,6 +102,36 @@ void test("spark protocol validates view model events", () => {
 
   assert.equal(event.version, SPARK_PROTOCOL_VERSION);
   assert.equal(event.type, "session.message");
+});
+
+void test("spark protocol validates daemon-routable view and interaction events", () => {
+  const viewEvent = parseSparkDaemonEvent({
+    type: "daemon.view_event",
+    source: "daemon",
+    sessionId: "session-daemon",
+    invocationId: "inv:daemon",
+    view: {
+      type: "session.message",
+      sessionId: "session-daemon",
+      message: { id: "m1", role: "assistant", text: "hello", status: "done" },
+    },
+  });
+  assert.equal(viewEvent.version, SPARK_PROTOCOL_VERSION);
+  assert.equal(viewEvent.type, "daemon.view_event");
+  assert.equal(viewEvent.view.type, "session.message");
+
+  const requestEvent = parseSparkDaemonEvent({
+    type: "daemon.interaction.request",
+    source: "runtime",
+    request: {
+      requestId: "req-approval",
+      kind: "toolApproval",
+      title: "Approve edit?",
+      toolName: "edit",
+    },
+  });
+  assert.equal(requestEvent.type, "daemon.interaction.request");
+  assert.equal(requestEvent.request.kind, "toolApproval");
 });
 
 void test("spark protocol rejects malformed interaction requests", () => {

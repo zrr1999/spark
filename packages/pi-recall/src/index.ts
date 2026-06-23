@@ -132,7 +132,6 @@ export function recallStorePath(
     : join(cwd, ".spark", "recall-candidates.json");
 }
 
-/** @deprecated Compatibility default for historical Spark-backed local stores. Prefer explicit host-owned paths via RecallStore or recallStorePath paths. */
 export function defaultRecallStore(
   cwd: string,
   scope: RecallScope,

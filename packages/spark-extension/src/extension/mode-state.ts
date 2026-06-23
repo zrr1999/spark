@@ -15,8 +15,8 @@ import type { SparkSessionContext } from "./session-identity.ts";
 export type SparkSessionMode = SparkAgentMode;
 
 /**
- * Compatibility input for callers that still pass mode-shaped data while the
- * mode/driver refactor is rolling forward. Only `projectRef` is durable.
+ * Input for updating the durable current-project pointer through mode-shaped callers.
+ * Only `projectRef` is durable; the lens itself is per-turn context.
  */
 export interface SparkSessionModeInput {
   mode: SparkSessionMode;
@@ -48,8 +48,8 @@ export async function loadSparkMode(
 }
 
 /**
- * Compatibility shim: persists only the selected project pointer. The requested
- * lens is intentionally not stored because mode is resolved per turn.
+ * Persists only the selected project pointer. The requested lens is intentionally
+ * not stored because mode is resolved per turn.
  */
 export async function saveSparkMode(
   cwd: string,

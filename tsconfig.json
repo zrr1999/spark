@@ -6,5 +6,5 @@
     "apps/spark-tui/**/*.ts",
     "test/**/*.ts"
   ],
-  "exclude": ["packages/navia-*/**", "apps/spark-cockpit/**"]
+  "exclude": ["apps/spark-cockpit/**"]
 }

@@ -297,6 +297,8 @@ export const invocationLogChunkPayloadSchema = z.object({
   content: z.string(),
 });
 
+export const daemonEventPayloadSchema = jsonObjectSchema;
+
 export const artifactProjectionPayloadSchema = z.object({
   artifactId: artifactRefSchema,
   scope: z.enum(["workspace", "project"]),
@@ -416,6 +418,10 @@ export const invocationLogChunkEnvelopeSchema = routedRuntimeEnvelopeFor(
   type: z.literal("invocation.log_chunk"),
 });
 
+export const daemonEventEnvelopeSchema = routedRuntimeEnvelopeFor(daemonEventPayloadSchema).extend({
+  type: z.literal("daemon.event"),
+});
+
 export const artifactProjectionEnvelopeSchema = routedRuntimeEnvelopeFor(
   artifactProjectionPayloadSchema,
 ).extend({
@@ -438,6 +444,7 @@ export const runtimeMessageEnvelopeSchema = z.discriminatedUnion("type", [
   taskGraphSnapshotEnvelopeSchema,
   invocationUpdateEnvelopeSchema,
   invocationLogChunkEnvelopeSchema,
+  daemonEventEnvelopeSchema,
   artifactProjectionEnvelopeSchema,
 ]);
 
@@ -466,4 +473,5 @@ export type HumanResponseAckPayload = z.infer<typeof humanResponseAckPayloadSche
 export type TaskGraphSnapshotPayload = z.infer<typeof taskGraphSnapshotPayloadSchema>;
 export type InvocationUpdatePayload = z.infer<typeof invocationUpdatePayloadSchema>;
 export type InvocationLogChunkPayload = z.infer<typeof invocationLogChunkPayloadSchema>;
+export type DaemonEventPayload = z.infer<typeof daemonEventPayloadSchema>;
 export type ArtifactProjectionPayload = z.infer<typeof artifactProjectionPayloadSchema>;

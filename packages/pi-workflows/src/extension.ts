@@ -45,10 +45,10 @@ export function registerPiWorkflowTool(pi: PiWorkflowExtensionApi): void {
       includeUser: Type.Optional(
         Type.Boolean({ description: "Include user workflows. Defaults to true." }),
       ),
-      full: Type.Optional(
-        Type.Boolean({ description: "For read: include full script. Default false." }),
-      ),
       maxChars: Type.Optional(Type.Number({ description: "For read: script preview max chars." })),
+      limit: Type.Optional(
+        Type.Number({ description: "For list: maximum workflow rows. Default 20." }),
+      ),
     }),
     renderCall(args, theme) {
       return renderWorkflowCall(args, theme);
@@ -59,16 +59,26 @@ export function registerPiWorkflowTool(pi: PiWorkflowExtensionApi): void {
       const includeUser = normalizeBoolean(params.includeUser, true, "includeUser");
       if (action === "list") {
         const listing = await listSavedWorkflows(cwd, { includeUser });
+        const limit = normalizePositiveInteger(params.limit, 20, "limit");
+        const visible = listing.workflows.slice(0, limit);
         return {
-          content: [{ type: "text" as const, text: renderWorkflowList(listing.workflows) }],
-          details: listing as unknown as Record<string, unknown>,
+          content: [
+            {
+              type: "text" as const,
+              text: renderWorkflowList(visible, listing.workflows.length),
+            },
+          ],
+          details: {
+            count: listing.workflows.length,
+            shown: visible.length,
+            workflows: visible,
+          } as unknown as Record<string, unknown>,
         };
       }
       const selector = requiredString(params.selector, "selector");
-      const full = normalizeBoolean(params.full, false, "full");
       const maxChars = normalizePositiveInteger(params.maxChars, 4_000, "maxChars");
       const { descriptor, script } = await readSavedWorkflow({ cwd, selector, includeUser });
-      const body = full ? script : truncate(script, maxChars);
+      const body = truncate(script, maxChars);
       return {
         content: [
           {
@@ -96,14 +106,20 @@ export default function piWorkflowExtension(pi: PiWorkflowExtensionApi): void {
   registerPiWorkflowTool(pi);
 }
 
-function renderWorkflowList(workflows: WorkflowDescriptor[]): string {
-  if (workflows.length === 0) return "No saved workflows found.";
-  return workflows
-    .map(
+function renderWorkflowList(workflows: WorkflowDescriptor[], total: number): string {
+  if (total === 0) return "No saved workflows found.";
+  const lines = [
+    `Workflows: ${total}${workflows.length < total ? ` (showing ${workflows.length})` : ""}`,
+    ...workflows.map(
       (workflow) =>
         `- ${workflow.selector}: ${workflow.title} (${workflow.phases.length} phase(s))`,
-    )
-    .join("\n");
+    ),
+  ];
+  if (workflows.length < total)
+    lines.push(
+      `- … ${total - workflows.length} more workflow(s); increase limit for a larger bounded sample.`,
+    );
+  return lines.join("\n");
 }
 
 function normalizeWorkflowAction(value: unknown): PiWorkflowAction {

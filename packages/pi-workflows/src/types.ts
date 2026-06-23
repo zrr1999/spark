@@ -155,6 +155,114 @@ export interface WorkflowAgentTelemetry {
   metadata?: Record<string, unknown>;
 }
 
+export type WorkflowRunEventStatus =
+  | "queued"
+  | "running"
+  | "paused"
+  | "stopped"
+  | "succeeded"
+  | "failed"
+  | "stale"
+  | "skipped"
+  | "cached";
+
+export type WorkflowRunNodeKind =
+  | "run"
+  | "phase"
+  | "parallel_group"
+  | "parallel_item"
+  | "agent"
+  | "tool"
+  | "nested_workflow"
+  | "artifact";
+
+export type WorkflowRunEventType =
+  | "run_started"
+  | "run_succeeded"
+  | "run_failed"
+  | "run_paused"
+  | "run_stopped"
+  | "run_stale"
+  | "phase_started"
+  | "phase_finished"
+  | "parallel_group_started"
+  | "parallel_group_succeeded"
+  | "parallel_group_failed"
+  | "parallel_item_started"
+  | "parallel_item_succeeded"
+  | "parallel_item_failed"
+  | "agent_started"
+  | "agent_cached"
+  | "agent_succeeded"
+  | "agent_failed"
+  | "tool_started"
+  | "tool_succeeded"
+  | "tool_failed"
+  | "artifact_recorded"
+  | "nested_workflow_started"
+  | "nested_workflow_succeeded"
+  | "nested_workflow_failed"
+  | "control_applied"
+  | "log";
+
+export interface WorkflowRunEvent {
+  id: string;
+  sequence: number;
+  timestamp: string;
+  type: WorkflowRunEventType;
+  status?: WorkflowRunEventStatus;
+  nodeId?: string;
+  parentId?: string;
+  nodeKind?: WorkflowRunNodeKind;
+  phase?: string;
+  title?: string;
+  label?: string;
+  index?: number;
+  toolName?: string;
+  workflowName?: string;
+  meta?: WorkflowMeta;
+  phaseRun?: WorkflowPhaseRun;
+  telemetry?: WorkflowAgentTelemetry;
+  usage?: WorkflowAgentTokenUsage;
+  errorMessage?: string;
+  message?: string;
+  data?: unknown;
+  result?: unknown;
+}
+
+export interface WorkflowRunNode {
+  id: string;
+  kind: WorkflowRunNodeKind;
+  label: string;
+  status: WorkflowRunEventStatus;
+  parentId?: string;
+  phase?: string;
+  startedAt?: string;
+  updatedAt?: string;
+  finishedAt?: string;
+  children: string[];
+  errorMessage?: string;
+  result?: unknown;
+  telemetry?: WorkflowAgentTelemetry;
+  usage?: WorkflowAgentTokenUsage;
+  data?: unknown;
+}
+
+export interface WorkflowRunSnapshot {
+  status: WorkflowRunEventStatus;
+  runRef?: string;
+  meta?: WorkflowMeta;
+  startedAt?: string;
+  updatedAt?: string;
+  finishedAt?: string;
+  nodes: WorkflowRunNode[];
+  nodesById: Record<string, WorkflowRunNode>;
+  phases: WorkflowRunNode[];
+  eventTail: WorkflowRunEvent[];
+  result?: unknown;
+  errorMessage?: string;
+}
+
 export interface WorkflowAgentRuntimeOptions extends WorkflowAgentOptions {
   index: number;
   phase?: string;
@@ -195,6 +303,7 @@ export interface WorkflowRunOptions {
   onAgentStart?: (event: WorkflowAgentEvent) => void;
   onAgentEnd?: (event: WorkflowAgentEvent & { result: unknown }) => void;
   onAgentTelemetry?: (telemetry: WorkflowAgentTelemetry) => void | Promise<void>;
+  onEvent?: (event: WorkflowRunEvent) => void | Promise<void>;
 }
 
 export interface WorkflowRunResult<T = unknown> {

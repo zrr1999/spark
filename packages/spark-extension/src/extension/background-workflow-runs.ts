@@ -172,7 +172,7 @@ function backgroundRunNextActions(run: WorkflowRunRecord, activeChildren: number
     ];
   if (run.status === "timed_out")
     return [
-      "legacy foreground timeout record; reconcile and inspect incomplete child runs before acking",
+      "historical foreground timeout record; reconcile and inspect incomplete child runs before acking",
     ];
   return ["no action is required for this completed background record"];
 }

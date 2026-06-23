@@ -1,6 +1,11 @@
 import type { Task, ProjectRef } from "@zendev-lab/pi-extension-api";
 import type { WorkflowRunStatusSummary } from "@zendev-lab/pi-workflows";
+import {
+  projectSparkDynamicWorkflowRuns,
+  type SparkDynamicWorkflowRunProjection,
+} from "./spark-dynamic-workflow-run-rendering.ts";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
+import { defaultSparkDynamicWorkflowEventStore } from "./spark-dynamic-workflow-event-store.ts";
 import { defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
 import type { SessionTodoEntry } from "@zendev-lab/pi-tasks";
 import {
@@ -71,6 +76,11 @@ export class SparkWidgetController {
     const runStore = defaultSparkWorkflowRunStore(cwd);
     if (graph && activeRunRefs.size > 0) await runStore.reconcile({ graph, activeRunRefs });
     const workflowRunStatus = await runStore.status();
+    const dynamicWorkflowRuns = await defaultSparkDynamicWorkflowEventStore(cwd)
+      .listRuns()
+      .then((runs) => projectSparkDynamicWorkflowRuns({ runs, includeHistory: false }))
+      .catch(() => [] as SparkDynamicWorkflowRunProjection[]);
+    const dynamicWorkflowRun = sparkDynamicWorkflowRunWidgetEntry(dynamicWorkflowRuns);
     const todoDisplayNumbers = await loadTodoDisplayNumberState(cwd, ctx);
     const project = graph ? await currentSparkProject(cwd, ctx, graph) : undefined;
     const sessionGoal = await loadSessionGoal(cwd, ctx);
@@ -78,6 +88,7 @@ export class SparkWidgetController {
     if (!graph || !project) {
       this.state = {
         workflowRun: sparkWorkflowRunWidgetEntry(workflowRunStatus),
+        dynamicWorkflowRun,
         goal: sparkGoalWidgetEntry(sessionGoal, sessionLoop),
         activeLens: ctx?.sparkActiveLens,
         tasks: [],
@@ -101,6 +112,7 @@ export class SparkWidgetController {
     this.state = {
       projectTitle: isPlaceholderProjectTitle(project.title) ? undefined : project.title,
       workflowRun: sparkWorkflowRunWidgetEntry(workflowRunStatus, project.ref),
+      dynamicWorkflowRun,
       goal: sparkGoalWidgetEntry(sessionGoal, sessionLoop),
       activeLens: ctx?.sparkActiveLens,
       tasks: allTasks.map((task) => {
@@ -229,6 +241,26 @@ function compactGoalObjective(objective: string): string {
     .find((line) => line.length > 0);
   const normalized = (firstLine ?? objective).replace(/\s+/gu, " ").trim();
   return normalized.length > 96 ? `${normalized.slice(0, 93)}...` : normalized;
+}
+
+function sparkDynamicWorkflowRunWidgetEntry(
+  runs: SparkDynamicWorkflowRunProjection[],
+): SparkWidgetState["dynamicWorkflowRun"] {
+  const run =
+    runs.find((candidate) => candidate.active) ??
+    runs.find((candidate) => candidate.status === "succeeded" || candidate.status === "failed") ??
+    runs[0];
+  if (!run) return undefined;
+  return {
+    status: run.status,
+    runRef: run.ref,
+    name: run.name,
+    completedNodes: run.completedNodes,
+    totalNodes: run.totalNodes,
+    active: run.active,
+    ...(run.status === "succeeded" ? { delivery: "result" as const } : {}),
+    ...(run.status === "failed" ? { delivery: "error" as const } : {}),
+  };
 }
 
 function sparkWorkflowRunWidgetEntry(

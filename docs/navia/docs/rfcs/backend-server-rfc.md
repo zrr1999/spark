@@ -131,7 +131,7 @@ Rationale:
 
 - Node 26 provides the native `node:sqlite` module, avoiding third-party native SQLite addon packaging for the default path.
 - Stable production/local deployment story.
-- Best compatibility with pnpm, Vite, Vitest, SvelteKit, WebSocket/SSE, OpenAPI generation, and background jobs.
+- Best fit for pnpm, Vite, Vitest, SvelteKit, WebSocket/SSE, OpenAPI generation, and background jobs.
 - Avoids premature Bun/Deno operational questions.
 
 If Node 26 is not available in a target deployment, hold the affected release or temporarily pin an implementation branch rather than silently switching database drivers. Bun/Deno can be revisited only if a concrete deployment or packaging reason appears.

@@ -221,6 +221,43 @@ export class SparkSessionStore {
     return (await this.list())[0];
   }
 
+  async findById(sessionId: string): Promise<SparkSessionRecord | undefined> {
+    const normalized = normalizeSessionRef(sessionId);
+    for (const info of await this.list()) {
+      if (info.id === sessionId || info.id === normalized) return await this.load(info.path);
+    }
+    return undefined;
+  }
+
+  async loadByRef(sessionRef: string): Promise<SparkSessionRecord> {
+    const trimmed = sessionRef.trim();
+    if (!trimmed) throw new Error("Spark session ref is required");
+
+    if (looksLikeSessionPath(trimmed)) {
+      try {
+        return await this.load(resolve(trimmed));
+      } catch {
+        // Fall through to id lookup so callers can pass a basename-like id.
+      }
+    }
+
+    const byId = await this.findById(trimmed);
+    if (byId) return byId;
+    throw new Error(`Spark session not found: ${sessionRef}`);
+  }
+
+  forkSession(
+    parent: SparkSessionRecord,
+    options: NewSparkSessionOptions = {},
+  ): SparkSessionRecord {
+    const fork = this.createSession({
+      ...options,
+      parentSession: options.parentSession ?? parent.path,
+    });
+    fork.entries = parent.entries.map(cloneSessionEntry);
+    return fork;
+  }
+
   appendMessage(record: SparkSessionRecord, message: SparkSessionMessage): string {
     return appendEntry(record, { type: "message", message });
   }
@@ -345,6 +382,19 @@ function getSessionModifiedDate(record: SparkSessionRecord, statsMtime: Date): D
   if (lastActivityTime > 0) return new Date(lastActivityTime);
   const headerTime = new Date(record.header.timestamp).getTime();
   return Number.isNaN(headerTime) ? statsMtime : new Date(headerTime);
+}
+
+function looksLikeSessionPath(sessionRef: string): boolean {
+  return sessionRef.endsWith(".jsonl") || sessionRef.includes("/") || sessionRef.includes("\\");
+}
+
+function normalizeSessionRef(sessionRef: string): string {
+  const trimmed = sessionRef.trim();
+  return trimmed.startsWith("session:") ? trimmed.slice("session:".length) : trimmed;
+}
+
+function cloneSessionEntry(entry: SparkSessionEntry): SparkSessionEntry {
+  return JSON.parse(JSON.stringify(entry)) as SparkSessionEntry;
 }
 
 function extractTextContent(message: SparkSessionMessage): string {

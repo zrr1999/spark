@@ -2,7 +2,7 @@ import type { Task, TaskStatus, ProjectRef } from "@zendev-lab/pi-extension-api"
 import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
 import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 
-export type SparkStatusView = "active" | "summary" | "full";
+export type SparkStatusView = "active" | "summary";
 export type SparkStatusFormat = "text" | "json";
 export type SparkStatusScope = "workspace" | "project" | "task";
 export function normalizeSparkStatusScope(params: Record<string, unknown>): SparkStatusScope {
@@ -15,8 +15,8 @@ export function normalizeSparkStatusScope(params: Record<string, unknown>): Spar
 export function normalizeSparkStatusView(params: Record<string, unknown>): SparkStatusView {
   const value = params.view;
   if (value === undefined || value === null) return "active";
-  if (value === "active" || value === "summary" || value === "full") return value;
-  throw new Error("task_read status view must be active, summary, or full");
+  if (value === "active" || value === "summary") return value;
+  throw new Error("task_read status view must be active or summary");
 }
 
 export function normalizeSparkStatusFormat(params: Record<string, unknown>): SparkStatusFormat {
@@ -34,13 +34,6 @@ export function normalizeSparkStatusLimit(params: Record<string, unknown>): numb
   if (!Number.isInteger(value) || value < 0)
     throw new Error("task_read status limit must be a non-negative integer");
   return value;
-}
-
-export function normalizeSparkStatusShowFinished(params: Record<string, unknown>): boolean {
-  const value = params.showFinished;
-  if (value === undefined || value === null) return false;
-  if (typeof value === "boolean") return value;
-  throw new Error("task_read status showFinished must be a boolean");
 }
 
 export function isImportantStatus(status: TaskStatus): boolean {
@@ -79,7 +72,7 @@ export function shouldRenderProjectInSparkStatus(input: {
   activeProjectRef?: ProjectRef;
   sessionClaimedCount: number;
 }): boolean {
-  if (input.view === "full" || input.view === "summary") return true;
+  if (input.view === "summary") return true;
   if (input.projectRef === input.activeProjectRef) return true;
   return input.sessionClaimedCount > 0;
 }

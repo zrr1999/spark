@@ -11,7 +11,7 @@ spark cockpit
 spark <extension-subcommand>
 ```
 
-The standalone `spark` command is published by `@zendev-lab/spark-cli` from `apps/spark-cli` and is only a dispatcher. The Spark-first native TUI host lives in `apps/spark-tui` as `@zendev-lab/spark-tui-app` / `spark-tui`, built through the Spark-owned `@zendev-lab/spark-tui` compatibility boundary backed by `@earendil-works/pi-tui`. It owns the terminal loop, editor, transcript, follow-up queue, host runtime, provider registry, model selection, session store, and explicit Spark extension loading instead of embedding Pi SDK `InteractiveMode`. `spark --print`, `spark daemon submit`, and cockpit-triggered background role-runs now route through the single Spark daemon/client boundary. The daemon injects Spark's native headless role executor into `@zendev-lab/spark-runtime`, so daemon-owned background work no longer depends on spawning `pi --print --mode json`.
+The standalone `spark` command is published by `@zendev-lab/spark-cli` from `apps/spark-cli` and is only a dispatcher. The Spark-first native TUI host lives in `apps/spark-tui` as `@zendev-lab/spark-tui-app` / `spark-tui`, built through the Spark-owned `@zendev-lab/spark-tui` boundary backed by `@earendil-works/pi-tui`. It owns the terminal loop, editor, transcript, follow-up queue, host runtime, provider registry, model selection, session store, and explicit Spark extension loading instead of embedding Pi SDK `InteractiveMode`. `spark --print`, `spark daemon submit`, and cockpit-triggered background role-runs now route through the single Spark daemon/client boundary. The daemon injects Spark's native headless role executor into `@zendev-lab/spark-runtime`, so daemon-owned background work no longer depends on spawning `pi --print --mode json`.
 
 ## Spark TUI native host vs Pi extension
 
@@ -38,7 +38,7 @@ Generated one-off scripts passed to `workflow_run({ script })` must be metadata-
 
 ## User-facing commands
 
-Spark exposes intent-specific commands instead of a generic compatibility entry. Project-bound commands initialize local Spark state only when durable graph, review, artifact, or run state is needed. Spark first records the initial intent and uses investigation/planning work to gather context. It does not synthesize placeholder current tasks; the model claims one concrete task at a time within the active project. Follow-up asks should be grounded in the actual project state: when open questions or decision points would change task scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order, Spark should use context-specific `ask` questions instead of leaving those questions as prose. The output language defaults from the current request language and is confirmed only when that decision is genuinely unclear.
+Spark exposes intent-specific commands instead of a generic duplicate entry. Project-bound commands initialize local Spark state only when durable graph, review, artifact, or run state is needed. Spark first records the initial intent and uses investigation/planning work to gather context. It does not synthesize placeholder current tasks; the model claims one concrete task at a time within the active project. Follow-up asks should be grounded in the actual project state: when open questions or decision points would change task scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order, Spark should use context-specific `ask` questions instead of leaving those questions as prose. The output language defaults from the current request language and is confirmed only when that decision is genuinely unclear.
 
 Spark command modes are intentionally split:
 
@@ -80,7 +80,7 @@ Manage settings through the canonical role tool actions: `role({ action: "model_
 Spark package names are type-first:
 
 - `@zendev-lab/spark-cli` — thin dispatcher package for the root `spark` binary under `apps/spark-cli`. It routes public `spark ...` command groups to Spark app surfaces and does not own product runtime logic.
-- `@zendev-lab/spark-tui` — Spark-owned reusable TUI compatibility boundary over `@earendil-works/pi-tui`; centralizes text width/truncation/wrapping, key parsing, and current `pi-tui` component/runtime exports so future renderer swaps do not leak through extension packages.
+- `@zendev-lab/spark-tui` — Spark-owned reusable TUI boundary over `@earendil-works/pi-tui`; centralizes text width/truncation/wrapping, key parsing, and current `pi-tui` component/runtime exports so future renderer swaps do not leak through extension packages.
 - `@zendev-lab/spark-tui-app` — executable Spark native TUI app under `apps/spark-tui`; publishes the `spark-tui` binary plus public provider/headless-executor surfaces used by the daemon.
 - `@zendev-lab/spark-daemon` — Spark daemon executable app package under `apps/spark-daemon`.
 - `@zendev-lab/spark-cockpit` — private Spark Cockpit SvelteKit executable app package under `apps/spark-cockpit`.
@@ -101,8 +101,10 @@ Spark package names are type-first:
 
 Spark Cockpit is the local web cockpit/projection product line while retaining separate implementation package boundaries:
 
-- `@zendev-lab/spark-cockpit-db`, `@zendev-lab/spark-cockpit-system`, and `@zendev-lab/spark-cockpit-ui` are the target names for Cockpit-private projection DB, local-system helper, and UI packages.
-- `@zendev-lab/spark-protocol` is the consolidated Spark protocol package and owns the former `navia-protocol` runtime/schema surface. `@zendev-lab/navia-db`, `@zendev-lab/navia-domain`, `@zendev-lab/navia-system`, and `@zendev-lab/navia-ui` remain legacy-named transition packages under `packages/navia-*`; the intended hard cutover is to rename DB/system/UI to `spark-cockpit-*` and merge away `navia-domain` unless it gains a concrete stable responsibility.
+- `@zendev-lab/spark-protocol` is the consolidated Spark protocol package for runtime, Cockpit, interaction, and view-model schemas.
+- `@zendev-lab/spark-db` owns shared SQLite migrations, database helpers, and the Node SQLite dialect used by Spark Cockpit and the daemon.
+- `@zendev-lab/spark-system` owns shared filesystem path, permission, command, and local runtime helpers used by Spark Cockpit and the daemon.
+- Former `navia-domain` and `navia-ui` marker packages were removed instead of preserving empty shells.
 
 Typical merged-repo development commands:
 
@@ -114,7 +116,7 @@ pnpm install -g .                                 # link the unified spark CLI
 pnpm run publish                                  # validate, build, publish public packages
 ```
 
-Retired migration packages (`spark-core`, `spark-tasks`, `spark-learnings`, `spark-goal`, and `spark-workflows`) are no longer workspaces. No compatibility packages, long-lived `spark_*` tool aliases, or dual public/default tool surfaces are planned. Public action tools render as `tool action=<value> ...`. `spark-github` is intentionally deferred.
+Retired migration packages (`spark-core`, `spark-tasks`, `spark-learnings`, `spark-goal`, and `spark-workflows`) are no longer workspaces. No duplicate packages, long-lived `spark_*` tool aliases, or dual public/default tool surfaces are planned. Public action tools render as `tool action=<value> ...`. `spark-github` is intentionally deferred.
 
 Pi package loading is manifest-first: the root `pi` manifest explicitly lists each user-visible extension entry (`@zendev-lab/pi-ask`, `@zendev-lab/pi-artifacts`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-recall`, `@zendev-lab/pi-workflows`, `@zendev-lab/pi-graft`, the Baidu OneAPI provider, and `@zendev-lab/spark-extension`). Library-only packages stay as dependencies. `pi-* -> spark-*` regressions are guarded by the boundary checker inside `pnpm run check`, a `prek` hook, and the CI static-check workflow.
 

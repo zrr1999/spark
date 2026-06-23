@@ -9,10 +9,11 @@ import {
   runtimeReconcileRequestEnvelopeSchema,
   serverCommandEnvelopeSchema,
   serverHelloAckEnvelopeSchema,
+  type SparkDaemonEvent,
   type RuntimeFeature,
   type RuntimeWorkspaceBindingSummary,
 } from "@zendev-lab/spark-protocol";
-import { writePrivateFile, type NaviaPaths } from "@zendev-lab/navia-system";
+import { writePrivateFile, type SparkPaths } from "@zendev-lab/spark-system";
 import { readSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
 import {
   createSparkDaemonWorkerContext,
@@ -21,6 +22,7 @@ import {
   SparkDaemonQueue,
   SparkDaemonWorkerLoop,
   waitForSparkDaemonActiveTasks,
+  type SparkDaemonEventSink,
   type SparkDaemonTaskExecutor,
 } from "./core/index.ts";
 import {
@@ -32,6 +34,7 @@ import { decideCommandPolicy } from "./policy.js";
 import {
   commandAck,
   commandReject,
+  daemonEvent,
   invocationLogChunk,
   invocationUpdated,
   reconcileReport,
@@ -88,7 +91,7 @@ export interface ServerSocket {
 }
 
 export interface StartSparkDaemonOptions {
-  paths: NaviaPaths;
+  paths: SparkPaths;
   config: SparkDaemonConfig;
   db: DatabaseSync;
   once?: boolean;
@@ -114,6 +117,13 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
   writePrivateFile(options.paths.pidFile, `${process.pid}\n`);
   const invocationRegistry = options.invocationRegistry ?? new SparkDaemonInvocationRegistry();
   const humanWaits = options.humanWaits ?? new SparkDaemonHumanWaitRegistry(options.db);
+  let emitQueueEventToServer: SparkDaemonEventSink | null = null;
+  const setQueueEventTarget = (sink?: SparkDaemonEventSink) => {
+    emitQueueEventToServer = sink ?? null;
+  };
+  const emitQueueEvent: SparkDaemonEventSink = async (event) => {
+    await emitQueueEventToServer?.(event);
+  };
   const queueContext =
     options.runQueue === false
       ? null
@@ -123,6 +133,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
           executeTask:
             options.executeQueueTask ??
             createSparkDaemonQueueTaskExecutor({ paths: options.paths, cwd: process.cwd() }),
+          emitEvent: emitQueueEvent,
         });
   const queueLoop = queueContext
     ? new SparkDaemonWorkerLoop({
@@ -153,7 +164,12 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
         await waitForSparkDaemonActiveTasks(queueContext.active);
       }
       if (!options.signal?.aborted && canAttemptServerConnection(options.config)) {
-        await runSparkDaemonServerConnection({ ...options, invocationRegistry, humanWaits });
+        await runSparkDaemonServerConnection({
+          ...options,
+          invocationRegistry,
+          humanWaits,
+          setQueueEventTarget,
+        });
       }
       return;
     }
@@ -171,6 +187,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
           config,
           invocationRegistry,
           humanWaits,
+          setQueueEventTarget,
         });
       } catch (error) {
         sendErrorLog(options.db, config.runtimeId ?? "unknown", error);
@@ -189,7 +206,15 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
   }
 }
 
-async function runSparkDaemonServerConnection(options: StartSparkDaemonOptions): Promise<void> {
+interface SparkDaemonServerConnectionOptions extends StartSparkDaemonOptions {
+  invocationRegistry: SparkDaemonInvocationRegistry;
+  humanWaits: SparkDaemonHumanWaitRegistry;
+  setQueueEventTarget?: (sink?: SparkDaemonEventSink) => void;
+}
+
+async function runSparkDaemonServerConnection(
+  options: SparkDaemonServerConnectionOptions,
+): Promise<void> {
   let config = shouldRefreshSparkDaemonToken(options.config)
     ? await refreshSparkDaemonCredentials({ paths: options.paths, config: options.config })
     : options.config;
@@ -204,6 +229,7 @@ async function runSparkDaemonServerConnection(options: StartSparkDaemonOptions):
     let tokenRefresh: NodeJS.Timeout | undefined;
     let intentionalClose = false;
     let settled = false;
+    let queueEventTargetAttached = false;
     const activeHandlers = new Set<Promise<void>>();
     const scheduleTokenRefresh = (delayMs = nextSparkDaemonTokenRefreshDelayMs(config)) => {
       if (delayMs === undefined) {
@@ -224,11 +250,20 @@ async function runSparkDaemonServerConnection(options: StartSparkDaemonOptions):
     };
     scheduleTokenRefresh();
 
+    const detachQueueEventTarget = () => {
+      if (!queueEventTargetAttached) {
+        return;
+      }
+      queueEventTargetAttached = false;
+      options.setQueueEventTarget?.(undefined);
+    };
+
     const settle = (error?: unknown) => {
       if (settled) {
         return;
       }
       settled = true;
+      detachQueueEventTarget();
       options.signal?.removeEventListener("abort", requestShutdown);
       if (error) {
         reject(error);
@@ -292,6 +327,24 @@ async function runSparkDaemonServerConnection(options: StartSparkDaemonOptions):
       if (serverUrl) {
         markSparkDaemonServerConnected(options.db, serverUrl);
       }
+      queueEventTargetAttached = true;
+      options.setQueueEventTarget?.((event) => {
+        if (ws.readyState !== WebSocket.OPEN) {
+          return;
+        }
+        const route = routeForDaemonEvent(event, {
+          db: options.db,
+          runtimeId,
+          serverUrl,
+        });
+        if (!route) {
+          console.error(
+            `[spark-daemon] dropping unroutable daemon event ${event.type}; no workspace route was available`,
+          );
+          return;
+        }
+        sendJson(ws, daemonEvent(event, route));
+      });
       sendJson(ws, {
         protocolVersion: runtimeProtocolVersion,
         messageId: createId("msg"),
@@ -394,7 +447,7 @@ function canAttemptServerConnection(config: SparkDaemonConfig): boolean {
 }
 
 export interface MessageContext {
-  paths: NaviaPaths;
+  paths: SparkPaths;
   config: SparkDaemonConfig;
   db: DatabaseSync;
   runtimeId: string;
@@ -754,6 +807,69 @@ export async function handleCommand(
 function runtimeInvocationIdForCancel(payload: Record<string, unknown> | undefined): string | null {
   const value = payload?.runtimeInvocationId ?? payload?.invocationId;
   return typeof value === "string" && value.startsWith("inv_") ? value : null;
+}
+
+function routeForDaemonEvent(
+  event: SparkDaemonEvent,
+  context: { db: DatabaseSync; runtimeId: string; serverUrl: string | null },
+): RouteContext | null {
+  const metadata = event.metadata;
+  let workspaceBindingId = stringMetadata(metadata, "workspaceBindingId");
+  let workspaceId = event.workspaceId ?? stringMetadata(metadata, "workspaceId");
+  if (!workspaceBindingId || !workspaceId) {
+    const inferred = inferDaemonEventWorkspaceRoute(context.db, context.serverUrl, {
+      workspaceBindingId,
+      workspaceId,
+    });
+    workspaceBindingId ??= inferred?.workspaceBindingId;
+    workspaceId ??= inferred?.workspaceId;
+  }
+  if (!workspaceBindingId || !workspaceId) {
+    return null;
+  }
+  return {
+    runtimeId: context.runtimeId,
+    workspaceBindingId,
+    workspaceId,
+    projectId: event.projectId,
+    invocationId: event.invocationId,
+  };
+}
+
+function inferDaemonEventWorkspaceRoute(
+  db: DatabaseSync,
+  serverUrl: string | null,
+  hints: { workspaceBindingId?: string; workspaceId?: string },
+): { workspaceBindingId: string; workspaceId: string } | null {
+  if (!serverUrl) {
+    return null;
+  }
+  const rows = db
+    .prepare(
+      `SELECT w.id AS workspaceBindingId,
+              dw.server_workspace_id AS workspaceId
+       FROM workspaces w
+       JOIN daemon_workspaces dw ON dw.id = w.id
+       WHERE w.server_url = ?
+         AND dw.server_workspace_id IS NOT NULL
+         AND (? IS NULL OR w.id = ?)
+         AND (? IS NULL OR dw.server_workspace_id = ?)
+       ORDER BY w.updated_at DESC
+       LIMIT 2`,
+    )
+    .all(
+      serverUrl,
+      hints.workspaceBindingId ?? null,
+      hints.workspaceBindingId ?? null,
+      hints.workspaceId ?? null,
+      hints.workspaceId ?? null,
+    ) as Array<{ workspaceBindingId: string; workspaceId: string }>;
+  return rows.length === 1 ? rows[0]! : null;
+}
+
+function stringMetadata(metadata: Record<string, unknown>, key: string): string | undefined {
+  const value = metadata[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function sendHeartbeat(

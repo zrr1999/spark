@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createId } from "@zendev-lab/spark-protocol";
-import { asciiSlug, gitCommand } from "@zendev-lab/navia-system";
+import { asciiSlug, gitCommand } from "@zendev-lab/spark-system";
 import { parse, stringify } from "smol-toml";
 
-export const workspaceProfileSchemaVersion = "navia.profile/v1";
+export const workspaceProfileSchemaVersion = "spark.profile/v1";
 export const freshProfileId = "builtin:fresh";
 
 export type ProfileInputType = "string";
@@ -131,7 +131,7 @@ export function loadWorkspaceProfileFromDirectory(profilePath: string): Workspac
 
 export function loadWorkspaceProfileFromGitHubUrl(profileUrl: string): WorkspaceProfileDefinition {
   const parsed = parseGitHubProfileUrl(profileUrl);
-  const checkoutRoot = mkdtempSync(join(tmpdir(), "navia-profile-"));
+  const checkoutRoot = mkdtempSync(join(tmpdir(), "spark-profile-"));
 
   try {
     const cloneArgs = ["clone", "--depth", "1"];

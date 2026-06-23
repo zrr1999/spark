@@ -1,5 +1,6 @@
 /** Types shared by the Spark daemon core runtime. */
 
+import type { SparkDaemonEvent } from "@zendev-lab/spark-protocol";
 import { SparkDaemonInvocationRegistry } from "./invocations.ts";
 
 export type SparkDaemonTask = SparkDaemonSessionRunTask;
@@ -12,6 +13,9 @@ export interface SparkDaemonSessionRunTask {
   actor?: string;
   note?: string;
   input?: string;
+  workspaceBindingId?: string;
+  workspaceId?: string;
+  projectId?: string;
 }
 
 export interface SparkDaemonQueuePayload<TTask extends SparkDaemonTask = SparkDaemonTask> {
@@ -45,11 +49,14 @@ export interface SparkDaemonQueueEntry<TTask extends SparkDaemonTask = SparkDaem
   payload: SparkDaemonQueuePayload<TTask>;
 }
 
+export type SparkDaemonEventSink = (event: SparkDaemonEvent) => void | Promise<void>;
+
 export interface SparkDaemonTaskExecutionContext {
   fileName: string;
   queueEntry: SparkDaemonQueueEntry;
   invocationId: string;
   signal: AbortSignal;
+  emitEvent?: SparkDaemonEventSink;
 }
 
 export type SparkDaemonTaskExecutor = (
@@ -92,8 +99,15 @@ export function validateSparkDaemonTask(value: unknown): SparkDaemonTask {
     sessionId: task.sessionId.trim(),
     prompt: task.prompt,
     reset: typeof task.reset === "boolean" ? task.reset : undefined,
-    actor: typeof task.actor === "string" && task.actor.length > 0 ? task.actor : undefined,
-    note: typeof task.note === "string" && task.note.length > 0 ? task.note : undefined,
-    input: typeof task.input === "string" && task.input.length > 0 ? task.input : undefined,
+    actor: nonEmptyString(task.actor),
+    note: nonEmptyString(task.note),
+    input: nonEmptyString(task.input),
+    workspaceBindingId: nonEmptyString(task.workspaceBindingId),
+    workspaceId: nonEmptyString(task.workspaceId),
+    projectId: nonEmptyString(task.projectId),
   };
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }

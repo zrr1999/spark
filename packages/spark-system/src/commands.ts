@@ -4,7 +4,7 @@ const fixedGitCandidates = ["/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local
 const fixedLaunchctl = "/bin/launchctl";
 
 export function gitCommand(): string {
-  const configured = process.env.NAVIA_GIT_COMMAND;
+  const configured = process.env.SPARK_GIT_COMMAND;
   if (configured?.startsWith("/") && existsSync(configured)) {
     return configured;
   }
@@ -15,7 +15,7 @@ export function gitCommand(): string {
     }
   }
 
-  throw new Error("Navia requires git at a fixed absolute path or NAVIA_GIT_COMMAND.");
+  throw new Error("Spark requires git at a fixed absolute path or SPARK_GIT_COMMAND.");
 }
 
 export function launchctlCommand(): string {

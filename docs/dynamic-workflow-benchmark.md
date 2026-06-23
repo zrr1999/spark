@@ -1,6 +1,6 @@
 # Dynamic workflow benchmark
 
-This is the minimum bar for Spark workflow after reviewing Claude Code dynamic workflows and `@quintinshaw/pi-dynamic-workflows`.
+This is the minimum bar for Spark workflow after reviewing Claude Code dynamic workflows and `@quintinshaw/pi-dynamic-workflows`. The live/background refactor acceptance contract is tracked in [`live-dynamic-workflow-refactor.md`](./live-dynamic-workflow-refactor.md).
 
 ## External baseline
 
@@ -41,7 +41,7 @@ Spark workflow must keep the existing `pi-workflows`/`spark-runtime` boundary, b
 4. **Resource bounds**: default 16-way concurrency, 1000-agent cap, optional run/phase token budgets, optional `maxAgents` and `concurrency` controls.
 5. **Quality patterns**: first-class adversarial verification, best-of-N judging, dry-loop discovery, completeness checks, bounded retry, and feedback gates.
 6. **Saved/nested workflows**: controlled resolver only; no arbitrary path execution.
-7. **UI parity is a product requirement, not a backend footnote**: `workflow_run` completion and `/workflows`/`task_read run_status` output should show a legible phase timeline, run metadata, agent/fan-out/telemetry summary, controls, and compact result/error delivery instead of dumping raw JSON-only tool output.
+7. **UI parity is a product requirement, not a backend footnote**: `workflow_run` completion and `/workflows`/`task_read run_status` output must become genuinely live/background and controllable. Final text cards are not sufficient; see [`live-dynamic-workflow-refactor.md`](./live-dynamic-workflow-refactor.md) for the required event model, manager, dashboard, controls, telemetry, and cutover plan.
 
 ## Parity matrix
 

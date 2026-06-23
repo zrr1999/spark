@@ -9,17 +9,17 @@ afterEach(() => {
 });
 
 describe("defaultDatabasePath", () => {
-  it("uses the server XDG data path by default", () => {
+  it("uses the Spark Cockpit XDG data path by default", () => {
     process.env = { HOME: "/Users/example" };
 
     expect(defaultDatabasePath()).toBe(
-      join("/Users/example", ".local", "share", "navia", "server", "navia.sqlite"),
+      join("/Users/example", ".local", "share", "spark", "cockpit", "cockpit.sqlite"),
     );
   });
 
-  it("keeps NAVIA_DATA_DIR as a deprecated server data override", () => {
+  it("keeps NAVIA_DATA_DIR as a legacy Cockpit data override", () => {
     process.env = { HOME: "/Users/example", NAVIA_DATA_DIR: "/Users/example/legacy-navia" };
 
-    expect(defaultDatabasePath()).toBe(join("/Users/example/legacy-navia", "navia.sqlite"));
+    expect(defaultDatabasePath()).toBe(join("/Users/example/legacy-navia", "cockpit.sqlite"));
   });
 });

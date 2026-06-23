@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   artifactProjectionEnvelopeSchema,
   createId,
+  daemonEventEnvelopeSchema,
   humanRequestCreatedEnvelopeSchema,
   humanResponseAckEnvelopeSchema,
   invocationLogChunkEnvelopeSchema,
@@ -12,10 +13,11 @@ import {
   runtimeHelloEnvelopeSchema,
   runtimeProtocolVersion,
   runtimeReconcileReportEnvelopeSchema,
+  parseSparkDaemonEvent,
   taskGraphSnapshotEnvelopeSchema,
   workspaceSnapshotEnvelopeSchema,
 } from "@zendev-lab/spark-protocol";
-import { bearerTokenFromAuthorization } from "@zendev-lab/navia-system";
+import { bearerTokenFromAuthorization } from "@zendev-lab/spark-system";
 import { hashSecret } from "./auth";
 import {
   appendEvent,
@@ -473,6 +475,44 @@ function handleMvpRuntimeMessage(
       invocationLogChunk.data.protocolVersion,
       invocationLogChunk.data.messageId,
       invocationLogChunk.data.type,
+    );
+    return true;
+  }
+
+  const daemonEvent = daemonEventEnvelopeSchema.safeParse(value);
+  if (daemonEvent.success) {
+    const routed = requireRoutedContext(ws, context, daemonEvent.data, {
+      workspaceBinding: true,
+      workspace: true,
+    });
+    if (!routed) {
+      return true;
+    }
+
+    if (acknowledgeProcessedRuntimeMessage(ws, context, daemonEvent.data)) {
+      return true;
+    }
+    const parsedDaemonEvent = parseSparkDaemonEvent(daemonEvent.data.payload);
+    appendEvent(context.db, {
+      workspaceId: routed.workspaceId,
+      projectId: routed.projectId ?? null,
+      actorKind: "runtime",
+      actorId: routed.workspaceBindingId,
+      kind: parsedDaemonEvent.type,
+      subjectKind: parsedDaemonEvent.type === "daemon.view_event" ? "view_model" : "daemon_event",
+      subjectId:
+        parsedDaemonEvent.eventId ??
+        parsedDaemonEvent.sessionId ??
+        parsedDaemonEvent.invocationId ??
+        daemonEvent.data.messageId,
+      payload: parsedDaemonEvent,
+    });
+    rememberProcessedRuntimeMessage(context, daemonEvent.data);
+    sendIngestAck(
+      ws,
+      daemonEvent.data.protocolVersion,
+      daemonEvent.data.messageId,
+      daemonEvent.data.type,
     );
     return true;
   }

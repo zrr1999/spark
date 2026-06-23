@@ -1,3 +1,8 @@
+import type {
+  ExtensionInteractionRequest,
+  ExtensionInteractionResponse,
+} from "@zendev-lab/pi-extension-api";
+
 import { SENTINEL_LABELS } from "./schema.ts";
 
 export type AskQuestionTypeLike = "single" | "multi" | "preview" | "freeform" | undefined;
@@ -28,6 +33,9 @@ export interface SelectWithCustomUi {
     title: string,
     defaultValue?: string,
   ) => Promise<string | undefined> | string | undefined;
+  interaction?: (
+    request: ExtensionInteractionRequest,
+  ) => Promise<ExtensionInteractionResponse> | ExtensionInteractionResponse;
 }
 
 export interface ParsedAskChoice {

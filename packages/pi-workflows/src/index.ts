@@ -51,7 +51,6 @@ export function workflowSelector(source: WorkflowSource, id: string): WorkflowSe
   return `${source}:${normalizeWorkflowId(id)}`;
 }
 
-/** @deprecated Compatibility default path for existing workspace workflow registries. Prefer injecting workspaceWorkflowDir explicitly from the host package. */
 export function workspaceWorkflowDir(cwd: string): string {
   return join(cwd, ".spark", "workflows");
 }
@@ -218,5 +217,6 @@ function compareStrings(left: string, right: string): number {
 export * from "./types.ts";
 export * from "./metadata.ts";
 export * from "./runtime.ts";
+export * from "./events.ts";
 export * from "./builtins.ts";
 export * from "./orchestrator/index.ts";

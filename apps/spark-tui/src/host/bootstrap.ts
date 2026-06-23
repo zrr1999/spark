@@ -2,7 +2,13 @@
 
 import { mkdir } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
-import type { AssistantMessageEvent, Context, Model, StreamOptions } from "@earendil-works/pi-ai";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  Context,
+  Model,
+  StreamOptions,
+} from "@earendil-works/pi-ai";
 import { stableId, type ExtensionAPI } from "@zendev-lab/pi-extension-api";
 
 import { renderSparkActiveSystemPrompt } from "../../../../packages/spark-extension/src/extension/spark-active-injection.ts";
@@ -238,10 +244,10 @@ export function createProviderRegistryStreamFunction(
     if (!active) throw new Error("No active Spark model selected");
     const provider = registry.getProvider(active.providerName);
     if (!provider) throw new Error(`Unknown active Spark provider: ${active.providerName}`);
-    const stream = provider.streamSimple(model as Model<ProviderConfig["api"]>, context, options);
-    return stream as AsyncIterable<AssistantMessageEvent> & {
-      result(): Promise<unknown>;
-    } as ReturnType<SparkAgentStreamFunction>;
+    return normalizeProviderStream(
+      provider.streamSimple(model as Model<ProviderConfig["api"]>, context, options),
+      active.providerName,
+    );
   };
 }
 
@@ -261,13 +267,10 @@ export function createProviderRegistryWorkflowModelRunner(
       messages: [{ role: "user", content: request.prompt, timestamp: Date.now() }],
       tools: [],
     };
-    const stream = provider.streamSimple(
-      model,
-      context,
-      {},
-    ) as AsyncIterable<AssistantMessageEvent> & {
-      result(): Promise<unknown>;
-    };
+    const stream = normalizeProviderStream(
+      provider.streamSimple(model, context, {}),
+      selection.providerName,
+    );
     for await (const _event of stream) {
       void _event;
     }
@@ -281,6 +284,45 @@ export function createProviderRegistryWorkflowModelRunner(
       },
     };
   };
+}
+
+function normalizeProviderStream(
+  stream: unknown,
+  providerName: string,
+): ReturnType<SparkAgentStreamFunction> {
+  if (!isAsyncIterable(stream)) {
+    throw new Error(`Provider "${providerName}" returned a non-async-iterable stream`);
+  }
+  const result = typeof stream.result === "function" ? stream.result.bind(stream) : undefined;
+  let terminalAssistant: AssistantMessage | undefined;
+  return {
+    async *[Symbol.asyncIterator]() {
+      for await (const event of stream) {
+        const normalized = event as AssistantMessageEvent;
+        if (normalized.type === "done") terminalAssistant = normalized.message;
+        if (normalized.type === "error") terminalAssistant = normalized.error;
+        yield normalized;
+      }
+    },
+    async result() {
+      if (result) return (await result()) as AssistantMessage;
+      if (terminalAssistant) return terminalAssistant;
+      throw new Error(
+        `Provider "${providerName}" stream completed without result() or terminal assistant message`,
+      );
+    },
+  };
+}
+
+function isAsyncIterable(
+  value: unknown,
+): value is AsyncIterable<unknown> & { result?: () => unknown } {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    Symbol.asyncIterator in value &&
+    typeof (value as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] === "function",
+  );
 }
 
 function resolveWorkflowModelSelection(

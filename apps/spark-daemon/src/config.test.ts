@@ -2,13 +2,13 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveNaviaPaths } from "@zendev-lab/navia-system";
+import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import { readSparkDaemonConfig, writeSparkDaemonConfig } from "./config.js";
 
 describe("Spark daemon config", () => {
   it("round-trips daemon TOML with private file permissions", () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-config-"));
-    const paths = resolveNaviaPaths({
+    const paths = resolveSparkPaths({
       app: "daemon",
       env: { HOME: root },
       overrides: {

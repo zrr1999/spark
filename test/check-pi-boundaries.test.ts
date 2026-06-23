@@ -12,7 +12,7 @@ void test("boundary checker rejects pi package imports from Spark and cockpit pa
   const root = await fixtureRoot();
   await writePackage(root, "packages/pi-sample", {
     name: "@zendev-lab/pi-sample",
-    dependencies: { "@zendev-lab/navia-db": "workspace:*" },
+    dependencies: { "@zendev-lab/spark-cockpit-db": "workspace:*" },
     source: 'import { runSparkTask } from "@zendev-lab/spark-runtime";\n',
   });
 
@@ -27,7 +27,7 @@ void test("boundary checker rejects Spark packages importing cockpit packages", 
   const root = await fixtureRoot();
   await writePackage(root, "packages/spark-sample", {
     name: "@zendev-lab/spark-sample",
-    source: 'import { readNaviaDb } from "@zendev-lab/navia-db";\n',
+    source: 'import { readCockpitDb } from "@zendev-lab/spark-cockpit-db";\n',
   });
 
   const result = runBoundaryCheck(root);
@@ -89,12 +89,12 @@ void test("boundary checker rejects retired Navia web names in active docs", asy
   assert.match(result.stderr, /retired Navia web package\/path name in active documentation/u);
 });
 
-void test("boundary checker allows isolated cockpit package dependencies", async () => {
+void test("boundary checker allows shared Spark system/database packages", async () => {
   const root = await fixtureRoot();
-  await writePackage(root, "packages/navia-db", {
-    name: "@zendev-lab/navia-db",
-    dependencies: { "@zendev-lab/navia-system": "workspace:*" },
-    source: 'import { resolveNaviaPath } from "@zendev-lab/navia-system";\n',
+  await writePackage(root, "packages/spark-db", {
+    name: "@zendev-lab/spark-db",
+    dependencies: { "@zendev-lab/spark-system": "workspace:*" },
+    source: 'import { resolveSparkPaths } from "@zendev-lab/spark-system";\n',
   });
 
   const result = runBoundaryCheck(root);

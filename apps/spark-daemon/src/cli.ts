@@ -13,7 +13,7 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { ensureNaviaPathDirs, gitCommand, resolveNaviaPaths } from "@zendev-lab/navia-system";
+import { ensureSparkPathDirs, gitCommand, resolveSparkPaths } from "@zendev-lab/spark-system";
 import {
   defaultSparkDaemonConfig,
   readSparkDaemonConfig,
@@ -83,15 +83,15 @@ class SparkDaemonUnavailableError extends Error {
 
 class WorkspacePathValidationError extends Error {}
 
-function prepareSparkDaemonState(paths: ReturnType<typeof resolveNaviaPaths>): void {
-  ensureNaviaPathDirs(paths);
+function prepareSparkDaemonState(paths: ReturnType<typeof resolveSparkPaths>): void {
+  ensureSparkPathDirs(paths);
   migrateLegacySparkDaemonState(paths);
 }
 
 export async function main(argv = process.argv.slice(2), io: CliIo = defaultIo): Promise<number> {
   const args = argv[0] === "--" ? argv.slice(1) : argv;
   const [command, subcommand, ...rest] = args;
-  const paths = resolveNaviaPaths({ app: "daemon" });
+  const paths = resolveSparkPaths({ app: "daemon" });
 
   try {
     if (command === "help" || command === "--help" || command === "-h") {
@@ -150,7 +150,7 @@ export async function main(argv = process.argv.slice(2), io: CliIo = defaultIo):
   }
 }
 
-function install(paths: ReturnType<typeof resolveNaviaPaths>, io: CliIo): number {
+function install(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): number {
   prepareSparkDaemonState(paths);
   const config = existsSync(paths.configFile)
     ? readSparkDaemonConfig(paths)
@@ -160,7 +160,7 @@ function install(paths: ReturnType<typeof resolveNaviaPaths>, io: CliIo): number
   return 0;
 }
 
-function doctor(paths: ReturnType<typeof resolveNaviaPaths>, io: CliIo): number {
+function doctor(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): number {
   const config = readSparkDaemonConfig(paths);
   const legacyExists = existsSync(paths.legacyRepoDataDir);
   io.stdout.write(
@@ -191,7 +191,7 @@ function doctor(paths: ReturnType<typeof resolveNaviaPaths>, io: CliIo): number 
   return 0;
 }
 
-async function status(paths: ReturnType<typeof resolveNaviaPaths>, io: CliIo): Promise<number> {
+async function status(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): Promise<number> {
   prepareSparkDaemonState(paths);
   const config = readSparkDaemonConfig(paths);
   const daemon = await buildDaemonStatus(paths, io);
@@ -218,7 +218,7 @@ async function status(paths: ReturnType<typeof resolveNaviaPaths>, io: CliIo): P
   return 0;
 }
 
-async function start(paths: ReturnType<typeof resolveNaviaPaths>): Promise<number> {
+async function start(paths: ReturnType<typeof resolveSparkPaths>): Promise<number> {
   prepareSparkDaemonState(paths);
   const lock = await acquireSparkDaemonLock({ runtimeDir: paths.runtimeDir, cwd: process.cwd() });
   const db = openSparkDaemonDatabase(paths);
@@ -251,7 +251,7 @@ async function start(paths: ReturnType<typeof resolveNaviaPaths>): Promise<numbe
 }
 
 async function stop(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   args: string[],
   io: CliIo,
 ): Promise<number> {
@@ -288,7 +288,7 @@ async function stop(
 }
 
 async function daemon(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   subcommand: string | undefined,
   args: string[],
   io: CliIo,
@@ -330,7 +330,7 @@ async function daemon(
 }
 
 async function daemonStatus(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   args: string[],
   io: CliIo,
 ): Promise<number> {
@@ -383,7 +383,7 @@ async function daemonStatus(
 }
 
 async function daemonQueue(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   args: string[],
   io: CliIo,
 ): Promise<number> {
@@ -412,7 +412,7 @@ async function daemonQueue(
 }
 
 async function daemonSubmit(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   args: string[],
   io: CliIo,
 ): Promise<number> {
@@ -481,7 +481,7 @@ type DaemonStatus =
     };
 
 async function buildDaemonStatus(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   io: CliIo,
 ): Promise<DaemonStatus> {
   const socketPath = localRpcSocketPath(paths);
@@ -515,7 +515,7 @@ async function buildDaemonStatus(
 }
 
 async function workspace(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   subcommand: string | undefined,
   args: string[],
   io: CliIo,
@@ -558,7 +558,7 @@ async function workspace(
 }
 
 async function registerWorkspaceCommand(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   args: string[],
   io: CliIo,
 ): Promise<number> {
@@ -611,7 +611,7 @@ async function registerWorkspaceCommand(
 }
 
 async function defaultWorkspace(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   args: string[],
   io: CliIo,
 ): Promise<number> {
@@ -661,7 +661,7 @@ async function defaultWorkspace(
 }
 
 async function listWorkspaceCommand(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   args: string[],
   io: CliIo,
 ): Promise<number> {
@@ -709,7 +709,7 @@ type WorkspaceRegistrationRequest = RegisterWorkspaceOptions & {
 };
 
 async function requestWorkspaceService<T>(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   io: CliIo,
   request: () => Promise<T>,
 ): Promise<T> {
@@ -762,7 +762,7 @@ function isWorkspaceDomainError(error: unknown): boolean {
 }
 
 function isMissingLocalRpcSocketError(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   error: unknown,
 ): boolean {
   const message = errorMessage(error);
@@ -774,7 +774,7 @@ function errorMessage(error: unknown): string {
 }
 
 async function loadWorkspaceList(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   io: CliIo,
 ): Promise<SparkDaemonWorkspace[]> {
   return await requestWorkspaceService(paths, io, async () => {
@@ -783,7 +783,7 @@ async function loadWorkspaceList(
 }
 
 async function registerWorkspaceForCli(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   options: WorkspaceRegistrationRequest,
   io: CliIo,
 ): Promise<SparkDaemonWorkspace> {
@@ -793,7 +793,7 @@ async function registerWorkspaceForCli(
 }
 
 async function attachWorkspaceForCli(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   id: string,
   io: CliIo,
 ): Promise<SparkDaemonWorkspace> {
@@ -803,7 +803,7 @@ async function attachWorkspaceForCli(
 }
 
 async function stopWorkspaceForCli(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   id: string,
   io: CliIo,
 ): Promise<SparkDaemonWorkspace> {
@@ -813,7 +813,7 @@ async function stopWorkspaceForCli(
 }
 
 async function showWorkspaceCommand(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   args: string[],
   io: CliIo,
 ): Promise<number> {
@@ -836,7 +836,7 @@ async function showWorkspaceCommand(
 }
 
 async function startWorkspaceShell(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   workspace: SparkDaemonWorkspace,
   io: CliIo,
 ): Promise<void> {
@@ -944,7 +944,7 @@ function resolveWorkspaceForShow(
 }
 
 async function stopWorkspaceCommand(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   args: string[],
   io: CliIo,
 ): Promise<number> {
@@ -1017,7 +1017,7 @@ interface WorkspaceStatusContext {
 }
 
 function workspaceStatusContext(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
 ): WorkspaceStatusContext {
   return { daemonRunning: readRunningPid(paths) !== null };
 }
@@ -1388,13 +1388,13 @@ function normalizeLocalPath(localPath: string): string {
 }
 
 function startSparkDaemonProcess(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   io: CliIo,
 ): ReturnType<typeof startSparkDaemonService> {
   return (io.startService ?? startSparkDaemonService)(paths);
 }
 
-function syncSparkDaemonIfConfigured(paths: ReturnType<typeof resolveNaviaPaths>, io: CliIo): void {
+function syncSparkDaemonIfConfigured(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): void {
   const config = readSparkDaemonConfig(paths);
   if (!config.serverUrl || !hasRunnableSparkDaemonCredentialsForServer(config, config.serverUrl)) {
     io.stdout.write(
@@ -1611,7 +1611,7 @@ async function resolveRegistrationToken(
 }
 
 async function logs(
-  paths: ReturnType<typeof resolveNaviaPaths>,
+  paths: ReturnType<typeof resolveSparkPaths>,
   args: string[],
   io: CliIo,
 ): Promise<number> {

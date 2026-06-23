@@ -672,18 +672,18 @@ void test("cue RunScript request matches the current strict daemon schema", asyn
       assert.equal(
         "mode" in (scriptPayload.RunScript as Record<string, unknown>),
         false,
-        "RunScript must not send deprecated mode",
+        "RunScript must not send removed mode",
       );
       assert.equal(
         "scope" in (scriptPayload.RunScript as Record<string, unknown>),
         false,
-        "RunScript must not send deprecated scope",
+        "RunScript must not send removed scope",
       );
     },
   );
 });
 
-void test("pi-cue script tool schemas do not expose deprecated RunScript scope", () => {
+void test("pi-cue script tool schemas do not expose RunScript scope", () => {
   const tools = registerCueToolsForProtocolTest();
   for (const name of ["cue_run", "cue_script", "script_run", "script_eval"]) {
     const properties = toolParameterProperties(tools.get(name));

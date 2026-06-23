@@ -355,16 +355,6 @@ const report = await agent([
 return { task, search, findings, critiques, rebuttal, report }`;
 }
 
-/** @deprecated Use researchWorkflowScript; fusion is now an implementation strategy, not a public builtin workflow id. */
-export function fusionWorkflowScript(): string {
-  return researchWorkflowScript();
-}
-
-/** @deprecated Use researchWorkflowScript; deep research is folded into the public research workflow. */
-export function deepResearchWorkflowScript(): string {
-  return researchWorkflowScript();
-}
-
 export function fanOutWithBriefWorkflowScript(): string {
   return `export const meta = {
   name: 'fan_out_with_brief',
@@ -410,9 +400,4 @@ phase('Fan out', { status: 'success' })
 
 phase('Fan in')
 return { briefRef: brief.ref, outputs }`;
-}
-
-/** @deprecated Use reviewWorkflowScript; adversarial review is now the review workflow strategy. */
-export function adversarialReviewWorkflowScript(): string {
-  return reviewWorkflowScript();
 }

@@ -1,5 +1,5 @@
 import { fail, redirect } from "@sveltejs/kit";
-import { asciiSlug } from "@zendev-lab/navia-system";
+import { asciiSlug } from "@zendev-lab/spark-system";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { getDatabase } from "$lib/server/db";
 import { formText } from "$lib/server/form-data";

@@ -103,7 +103,7 @@ function workflowRunNextActions(run: WorkflowRunRecord): string[] {
     );
   } else if (run.status === "timed_out") {
     nextActions.push(
-      'timed_out: legacy foreground timeout record; inspect task_read({ action: "run_status" }) for active child runs or reconcile before retrying.',
+      'timed_out: historical foreground timeout record; inspect task_read({ action: "run_status" }) for active child runs or reconcile before retrying.',
       "timed_out: if child work is still active, stop stuck children through explicit host run-management controls only when you intend to cancel them.",
     );
   }
@@ -113,7 +113,7 @@ function workflowRunNextActions(run: WorkflowRunRecord): string[] {
     );
   if (run.completed < run.scheduled)
     nextActions.push(
-      'Review incomplete scheduled task runs in task_read({ action: "project_status", view: "full" }) before launching another workflow wave.',
+      'Review incomplete scheduled task runs with task_read({ action: "run_status", runAction: "inspect", runRef: "<run ref>" }) or targeted task_read({ action: "task_status", taskRef: "<task ref>" }) before launching another workflow wave.',
     );
   if (nextActions.length === 0)
     nextActions.push("Review task outputs and continue with newly unblocked ready tasks if any.");

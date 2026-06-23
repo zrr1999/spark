@@ -18,7 +18,7 @@ const retiredNaviaWebPattern =
   /\b(?:apps\/navia-web|@zendev-lab\/navia-web|navia-web|Navia web)\b/u;
 const legacyNaviaPackagePattern = /(?:@zendev-lab\/navia-|packages\/navia-|`navia-)/u;
 const intentionalLegacyNaviaLinePattern =
-  /\b(?:legacy|legacy-named|historical|migration|transition|compatibility|retired|archived|former)\b/iu;
+  /\b(?:legacy|legacy-named|historical|migration|transition|retired|archived|former)\b/iu;
 const allowedPiTuiImportFiles = new Set([
   join(root, "apps", "spark", "src", "tui", "pi-tui-adapter.ts"),
 ]);

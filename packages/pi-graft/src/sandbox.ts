@@ -306,6 +306,8 @@ function positiveIntegerParam(value: unknown, field: string): number | undefined
   return value;
 }
 
+const DEFAULT_SANDBOX_READ_LINE_LIMIT = 200;
+
 function renderTextSlice(
   content: string,
   offset?: unknown,
@@ -313,8 +315,8 @@ function renderTextSlice(
 ): { text: string; nextOffset?: number } {
   const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
   const start = positiveIntegerParam(offset, "offset") ?? 1;
-  const max = positiveIntegerParam(limit, "limit");
-  const selected = lines.slice(start - 1, max ? start - 1 + max : undefined);
+  const max = positiveIntegerParam(limit, "limit") ?? DEFAULT_SANDBOX_READ_LINE_LIMIT;
+  const selected = lines.slice(start - 1, start - 1 + max);
   const nextOffset = max && start - 1 + max < lines.length ? start + max : undefined;
   const suffix = nextOffset
     ? `\n\n[Showing lines ${start}-${start + selected.length - 1} of ${lines.length}. Use offset=${nextOffset} to continue.]`
@@ -1018,7 +1020,9 @@ export function registerPiGraftSandboxExtension(pi: PiGraftExtensionApi): void {
       offset: Type.Optional(
         Type.Number({ description: "Line number to start reading from (1-indexed)." }),
       ),
-      limit: Type.Optional(Type.Number({ description: "Maximum number of lines to return." })),
+      limit: Type.Optional(
+        Type.Number({ description: "Maximum number of lines to return. Default: 200." }),
+      ),
     }),
     async execute(
       _toolCallId: string,

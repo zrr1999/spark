@@ -8,7 +8,6 @@ import {
   ArtifactStore,
   ArtifactStoreFormatError,
   defaultArtifactStore,
-  readArtifactMetadataFile,
 } from "@zendev-lab/pi-artifacts";
 import { registerPiArtifactTool } from "@zendev-lab/pi-artifacts/extension";
 import {
@@ -77,39 +76,6 @@ void test("artifact store writes hashes, blobs, and lineage links", async () => 
   }
 });
 
-void test("artifact store reads legacy agent-plan artifacts as documents", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-core-artifact-legacy-kind-"));
-  try {
-    const filePath = join(dir, "legacy-agent-plan.json");
-    await writeFile(
-      filePath,
-      JSON.stringify(
-        {
-          ref: "artifact:legacy-agent-plan",
-          kind: "agent-plan",
-          title: "Initial agent plan",
-          format: "markdown",
-          body: "# Initial Agent Plan\n",
-          hash: "legacy-hash",
-          provenance: { producer: "spark" },
-          links: [],
-          createdAt: "2026-05-17T10:10:34.895Z",
-          updatedAt: "2026-05-17T10:10:34.895Z",
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-
-    const artifact = await readArtifactMetadataFile(filePath);
-
-    assert.equal(artifact.kind, "document");
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
 void test("artifact tool describes valid provenance producers", () => {
   const tools = new Map<string, { promptGuidelines?: string[]; parameters?: unknown }>();
   registerPiArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
@@ -123,12 +89,11 @@ void test("artifact tool describes valid provenance producers", () => {
   for (const text of [promptGuidelines, parameters]) {
     assert.match(text, /spark, role, task, review, ask, cue, user/);
     assert.match(text, /Do not use assistant/);
-    assert.match(text, /producer=spark and producer=role are legacy compatibility/);
-    assert.match(text, /prefer producer=task with runRef\/taskRef/);
+    assert.match(text, /Use producer=task with runRef\/taskRef for execution evidence/);
     assert.doesNotMatch(text, /role for child role-run output/);
     assert.doesNotMatch(text, /use producer=(?:spark|role)/i);
   }
-  assert.match(parameters, /Legacy role ref/);
+  assert.match(parameters, /Role ref filter/);
 });
 
 void test("artifact record stores validation evidence as a producer-tagged record", async () => {
@@ -199,14 +164,14 @@ void test("artifact record rejects retired verification kind with a directed hin
   }
 });
 
-void test("artifact store folds legacy kinds onto canonical kinds when reading history", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-artifact-legacy-kind-"));
+void test("artifact store rejects non-canonical artifact kinds when reading metadata", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-artifact-noncanonical-kind-"));
   try {
-    const ref = newRef("artifact", "legacy-role-plan");
-    const legacyMetadata = {
+    const ref = newRef("artifact", "noncanonical-role-plan");
+    const metadata = {
       ref,
       kind: "role-plan",
-      title: "Legacy role plan",
+      title: "Role plan",
       format: "markdown",
       body: "# Roles\n",
       links: [],
@@ -216,18 +181,12 @@ void test("artifact store folds legacy kinds onto canonical kinds when reading h
     };
     await writeFile(
       join(dir, `${ref.slice("artifact:".length)}.json`),
-      `${JSON.stringify(legacyMetadata, null, 2)}\n`,
+      `${JSON.stringify(metadata, null, 2)}\n`,
       "utf8",
     );
 
     const store = new ArtifactStore({ rootDir: dir });
-    const loaded = await store.get(ref);
-    assert.equal(loaded.kind, "document");
-    const documents = await store.list({ kind: "document" });
-    assert.deepEqual(
-      documents.map((artifact) => artifact.ref),
-      [ref],
-    );
+    await assert.rejects(() => store.get(ref), /kind must be a valid artifact kind/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -267,13 +226,13 @@ void test("artifact record tool stores top-level refs as provenance shortcuts", 
 
     const listed = await tool.execute(
       "artifact-list-shortcuts",
-      { action: "list", projectRef, view: "full" },
+      { action: "list", projectRef, view: "summary" },
       new AbortController().signal,
       () => undefined,
       { cwd: dir },
     );
     assert.equal(listed.details.count, 1);
-    assert.equal(listed.details.artifacts[0]?.provenance?.projectRef, projectRef);
+    assert.equal(listed.details.artifacts[0]?.projectRef, projectRef);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -871,6 +830,115 @@ void test("ask_user tool summary uses option labels rather than raw ids", async 
   const text = result.content.map((part: { text: string }) => part.text).join("\n");
   assert.match(text, /mode=Safe path/);
   assert.doesNotMatch(text, /safe_mode/);
+});
+
+void test("ask_user uses protocol interaction before legacy select UI", async () => {
+  let selectInvoked = false;
+  let sawRequest: unknown;
+  const result = await askUser(
+    createAskUserRequest({
+      title: "Choose mode",
+      mode: "decision",
+      questions: [
+        {
+          id: "mode",
+          prompt: "Which mode?",
+          type: "single",
+          required: true,
+          options: [
+            { value: "fast_mode", label: "Fast path" },
+            { value: "safe_mode", label: "Safe path" },
+          ],
+        },
+      ],
+    }),
+    {
+      interaction: async (request) => {
+        sawRequest = request;
+        return {
+          kind: "askFlow",
+          requestId: request.requestId,
+          status: "answered",
+          answers: { mode: { values: ["safe_mode"] } },
+        };
+      },
+      select: async () => {
+        selectInvoked = true;
+        return "Fast path";
+      },
+    },
+  );
+
+  assert.equal(selectInvoked, false);
+  assert.equal((sawRequest as { kind?: unknown }).kind, "askFlow");
+  assert.equal((sawRequest as { source?: unknown }).source, "extension");
+  assert.deepEqual(result.answers.mode, { values: ["safe_mode"], labels: ["Safe path"] });
+  assert.equal(result.nextAction, "resume");
+});
+
+void test("ask_user falls back to legacy UI when protocol interaction is blocked", async () => {
+  const result = await askUser(
+    createAskUserRequest({
+      title: "Choose mode",
+      mode: "clarification",
+      questions: [
+        {
+          id: "mode",
+          prompt: "Which mode?",
+          type: "single",
+          options: [
+            { value: "fast_mode", label: "Fast path" },
+            { value: "safe_mode", label: "Safe path" },
+          ],
+        },
+      ],
+    }),
+    {
+      interaction: async (request) => ({
+        kind: "askFlow",
+        requestId: request.requestId,
+        status: "blocked",
+        message: "headless host",
+      }),
+      select: async () => "Safe path",
+    },
+  );
+
+  assert.deepEqual(result.answers.mode, { values: ["safe_mode"], labels: ["Safe path"] });
+});
+
+void test("ask_user preserves protocol cancellation as a blocking result", async () => {
+  const result = await askUser(
+    createAskUserRequest({
+      title: "Choose mode",
+      mode: "decision",
+      questions: [
+        {
+          id: "mode",
+          prompt: "Which mode?",
+          type: "single",
+          required: true,
+          options: [
+            { value: "fast_mode", label: "Fast path" },
+            { value: "safe_mode", label: "Safe path" },
+          ],
+        },
+      ],
+    }),
+    {
+      interaction: async (request) => ({
+        kind: "askFlow",
+        requestId: request.requestId,
+        status: "cancelled",
+      }),
+      select: async () => "Safe path",
+    },
+  );
+
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.cancelled, true);
+  assert.equal(result.nextAction, "block");
+  assert.deepEqual(result.answers, {});
 });
 
 void test("ask action tool dispatches canonical single-question asks", async () => {

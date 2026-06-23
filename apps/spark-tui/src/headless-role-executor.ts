@@ -111,6 +111,9 @@ export async function runSparkHeadlessSession(
   const unsubscribe = services.agentLoop.onEvent((event) => {
     jsonEvents.push(serializeLoopEvent(event));
   });
+  const unsubscribeDaemon = services.runtime.onDaemonEvent((event) => {
+    jsonEvents.push({ type: "daemon_event", event });
+  });
   const abort = () => services.agentLoop.abort(abortReason(input.signal));
   if (input.signal?.aborted) abort();
   else input.signal?.addEventListener("abort", abort, { once: true });
@@ -133,6 +136,7 @@ export async function runSparkHeadlessSession(
   } finally {
     input.signal?.removeEventListener("abort", abort);
     unsubscribe();
+    unsubscribeDaemon();
   }
 }
 
@@ -140,8 +144,10 @@ export async function runSparkHeadlessRoleInstruction(
   input: SparkHeadlessRoleInstructionInput,
   options: SparkHeadlessRoleExecutorOptions = {},
 ): Promise<SparkHeadlessRoleInstructionResult> {
-  if (input.launch === "forked") {
-    throw new Error("Spark daemon-native role execution does not support forked role runs yet");
+  const launch = input.launch ?? input.record.launch ?? "fresh";
+  const forkFromSession = input.forkFromSession ?? input.record.forkFromSession;
+  if (launch === "forked" && !forkFromSession?.trim()) {
+    throw new Error("Spark daemon-native forked role execution requires forkFromSession");
   }
   const startedAt = input.record.startedAt ?? new Date().toISOString();
   const jsonEvents: unknown[] = [];
@@ -159,6 +165,9 @@ export async function runSparkHeadlessRoleInstruction(
   const unsubscribe = services.agentLoop.onEvent((event) => {
     jsonEvents.push(serializeLoopEvent(event));
   });
+  const unsubscribeDaemon = services.runtime.onDaemonEvent((event) => {
+    jsonEvents.push({ type: "daemon_event", event });
+  });
   const abort = () => services.agentLoop.abort(abortReason(input.signal));
   if (input.signal?.aborted) abort();
   else input.signal?.addEventListener("abort", abort, { once: true });
@@ -169,6 +178,7 @@ export async function runSparkHeadlessRoleInstruction(
       sessionId: headlessSessionId(input),
       prompt: input.instruction.instruction,
       reset: true,
+      ...(launch === "forked" && forkFromSession ? { forkFromSession } : {}),
     });
     const status = statusForAssistant(result.assistant, input.signal);
     return {
@@ -177,8 +187,10 @@ export async function runSparkHeadlessRoleInstruction(
         status,
         startedAt,
         finishedAt: new Date().toISOString(),
+        launch,
         model: input.model,
         sessionDir: services.sessionStore.sessionDir,
+        ...(launch === "forked" && forkFromSession ? { forkFromSession } : {}),
       },
       stdout: result.assistantText,
       stderr: renderDiagnostics(services.diagnostics),
@@ -192,7 +204,9 @@ export async function runSparkHeadlessRoleInstruction(
         status: aborted ? "cancelled" : "failed",
         startedAt,
         finishedAt: new Date().toISOString(),
+        launch,
         model: input.model,
+        ...(launch === "forked" && forkFromSession ? { forkFromSession } : {}),
       },
       stdout: "",
       stderr: [renderDiagnostics(services.diagnostics), errorMessage(error)]
@@ -203,6 +217,7 @@ export async function runSparkHeadlessRoleInstruction(
   } finally {
     input.signal?.removeEventListener("abort", abort);
     unsubscribe();
+    unsubscribeDaemon();
   }
 }
 
@@ -274,6 +289,8 @@ function serializeLoopEvent(event: SparkAgentLoopEvent): unknown {
       return { type: event.type, message: event.message };
     case "turn_complete":
       return { type: event.type, message: event.assistant, reason: event.reason };
+    case "view_event":
+      return { type: event.type, event: event.event };
     case "abort":
       return { type: event.type, reason: event.reason };
     case "error":

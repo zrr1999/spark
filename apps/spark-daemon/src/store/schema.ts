@@ -1,9 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import { openDatabase } from "@zendev-lab/navia-db";
-import type { NaviaPaths } from "@zendev-lab/navia-system";
+import { openDatabase } from "@zendev-lab/spark-db";
+import type { SparkPaths } from "@zendev-lab/spark-system";
 
-export function openSparkDaemonDatabase(paths: NaviaPaths): DatabaseSync {
+export function openSparkDaemonDatabase(paths: SparkPaths): DatabaseSync {
   const db = openDatabase({ path: paths.databasePath });
   migrateSparkDaemonDatabase(db);
   return db;

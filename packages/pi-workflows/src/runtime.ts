@@ -17,6 +17,7 @@ import type {
   WorkflowPhaseRun,
   WorkflowPhaseStatus,
   WorkflowFetchContentInput,
+  WorkflowRunEvent,
   WorkflowRunOptions,
   WorkflowRunResult,
   WorkflowWebSearchInput,
@@ -96,12 +97,53 @@ export async function runWorkflowScript<T = unknown>(
     depth: 0,
   };
   const tokenBudget = options.tokenBudget ?? null;
+  let eventSequence = 0;
+  let parallelGroupIndex = 0;
+  let toolCallIndex = 0;
+  let nestedWorkflowIndex = 0;
+  const emitWorkflowEvent = (
+    type: WorkflowRunEvent["type"],
+    event: Omit<WorkflowRunEvent, "id" | "sequence" | "timestamp" | "type"> = {},
+  ) => {
+    if (!options.onEvent) return;
+    const sequence = eventSequence++;
+    void options.onEvent({
+      id: `event:${sequence}`,
+      sequence,
+      timestamp: now(),
+      type,
+      ...event,
+    });
+  };
+  const phaseNodeId = (phaseTitle: string | undefined) =>
+    phaseTitle ? `phase:${phaseTitle}` : undefined;
+  const emitToolStarted = (toolName: string, data?: unknown) => {
+    const nodeId = `tool:${toolCallIndex++}`;
+    emitWorkflowEvent("tool_started", {
+      nodeId,
+      parentId: phaseNodeId(currentPhase),
+      nodeKind: "tool",
+      phase: currentPhase,
+      toolName,
+      label: toolName,
+      data,
+    });
+    return nodeId;
+  };
+
+  emitWorkflowEvent("run_started", {
+    nodeId: "run",
+    nodeKind: "run",
+    label: parsed.meta.name,
+    meta: parsed.meta,
+  });
 
   const phase = (title: string, phaseOptions: WorkflowPhaseOptions = {}) => {
     const phaseTitle = String(title);
     const status = normalizeWorkflowPhaseStatus(phaseOptions.status);
     const timestamp = now();
     let record = phaseByTitle.get(phaseTitle);
+    const isNewPhase = !record;
     if (!record) {
       record = { title: phaseTitle, startedAt: timestamp };
       phaseByTitle.set(phaseTitle, record);
@@ -118,9 +160,27 @@ export async function runWorkflowScript<T = unknown>(
     if (status) {
       record.status = status;
       record.finishedAt = timestamp;
+      emitWorkflowEvent("phase_finished", {
+        nodeId: phaseNodeId(phaseTitle),
+        nodeKind: "phase",
+        title: phaseTitle,
+        phase: phaseTitle,
+        phaseRun: { ...record },
+        status: status === "fail" ? "failed" : status === "skip" ? "skipped" : "succeeded",
+      });
       if (currentPhase === phaseTitle) currentPhase = undefined;
     } else {
       currentPhase = phaseTitle;
+      if (isNewPhase) {
+        emitWorkflowEvent("phase_started", {
+          nodeId: phaseNodeId(phaseTitle),
+          parentId: "run",
+          nodeKind: "phase",
+          title: phaseTitle,
+          phase: phaseTitle,
+          phaseRun: { ...record },
+        });
+      }
     }
     options.onPhase?.({ ...record });
   };
@@ -171,6 +231,15 @@ export async function runWorkflowScript<T = unknown>(
     });
     const cached = resume.get(index);
     if (cached?.hash === hash && index < firstResumeMiss) {
+      emitWorkflowEvent("agent_cached", {
+        nodeId: `agent:${index}`,
+        parentId: phaseNodeId(phaseName),
+        nodeKind: "agent",
+        phase: phaseName,
+        index,
+        label: effectiveAgentOptions.label ?? "agent " + (index + 1),
+        result: cached.result,
+      });
       journal.push(cached);
       return cached.result;
     }
@@ -187,6 +256,15 @@ export async function runWorkflowScript<T = unknown>(
     const startedAt = workflowTelemetryTimestamp();
     const startedMs = performance.now();
     let reportedTelemetry: WorkflowAgentReportedTelemetry | undefined;
+    emitWorkflowEvent("agent_started", {
+      nodeId: `agent:${index}`,
+      parentId: phaseNodeId(phaseName),
+      nodeKind: "agent",
+      phase: phaseName,
+      index,
+      label: event.label,
+      data: { model: event.model },
+    });
     options.onAgentStart?.(event);
     await options.onAgentTelemetry?.({
       ...agentTelemetryBase(event, startedAt),
@@ -208,17 +286,25 @@ export async function runWorkflowScript<T = unknown>(
       );
     } catch (error) {
       const finishedAt = workflowTelemetryTimestamp();
-      await options.onAgentTelemetry?.(
-        agentTelemetryFromRuntime({
-          event,
-          status: "failed",
-          startedAt,
-          finishedAt,
-          startedMs,
-          reportedTelemetry,
-          spentTokens: shared.spentTokens,
-        }),
-      );
+      const telemetry = agentTelemetryFromRuntime({
+        event,
+        status: "failed",
+        startedAt,
+        finishedAt,
+        startedMs,
+        reportedTelemetry,
+        spentTokens: shared.spentTokens,
+      });
+      emitWorkflowEvent("agent_failed", {
+        nodeId: `agent:${index}`,
+        nodeKind: "agent",
+        phase: phaseName,
+        index,
+        label: event.label,
+        telemetry,
+        errorMessage: errorText(error),
+      });
+      await options.onAgentTelemetry?.(telemetry);
       throw error;
     }
     assertWorkflowAgentDelivered(result, event.label);
@@ -242,6 +328,16 @@ export async function runWorkflowScript<T = unknown>(
       usage,
       spentTokens: shared.spentTokens,
     });
+    emitWorkflowEvent("agent_succeeded", {
+      nodeId: `agent:${index}`,
+      nodeKind: "agent",
+      phase: phaseName,
+      index,
+      label: event.label,
+      telemetry,
+      usage,
+      result,
+    });
     await options.onAgentTelemetry?.(telemetry);
     await options.onTokenUsage?.({
       spent: shared.spentTokens,
@@ -260,51 +356,230 @@ export async function runWorkflowScript<T = unknown>(
   const artifactRecord = async (
     input: WorkflowArtifactRecordInput,
   ): Promise<WorkflowArtifactRecordResult> => {
-    if (!options.artifactRecord) {
-      throw new Error("workflow artifactRecord adapter is required for this workflow");
-    }
     const normalized = normalizeWorkflowArtifactRecordInput(input);
-    const result = await options.artifactRecord(normalized);
-    if (!result.ref.trim()) throw new Error("workflow artifactRecord adapter returned empty ref");
-    return { ref: result.ref.trim() };
+    const nodeId = emitToolStarted("artifactRecord", normalized);
+    if (!options.artifactRecord) {
+      const error = new Error("workflow artifactRecord adapter is required for this workflow");
+      emitWorkflowEvent("tool_failed", {
+        nodeId,
+        nodeKind: "tool",
+        toolName: "artifactRecord",
+        errorMessage: error.message,
+      });
+      throw error;
+    }
+    try {
+      const result = await options.artifactRecord(normalized);
+      if (!result.ref.trim()) throw new Error("workflow artifactRecord adapter returned empty ref");
+      const recorded = { ref: result.ref.trim() };
+      emitWorkflowEvent("tool_succeeded", {
+        nodeId,
+        nodeKind: "tool",
+        toolName: "artifactRecord",
+        result: recorded,
+      });
+      emitWorkflowEvent("artifact_recorded", {
+        nodeId: `artifact:${recorded.ref}`,
+        parentId: nodeId,
+        nodeKind: "artifact",
+        phase: currentPhase,
+        label: recorded.ref,
+        result: recorded,
+        data: normalized,
+      });
+      return recorded;
+    } catch (error) {
+      emitWorkflowEvent("tool_failed", {
+        nodeId,
+        nodeKind: "tool",
+        toolName: "artifactRecord",
+        errorMessage: errorText(error),
+      });
+      throw error;
+    }
   };
 
   const webSearch = async (input: WorkflowWebSearchInput): Promise<unknown> => {
     const normalized = normalizeWorkflowWebSearchInput(input);
+    const nodeId = emitToolStarted("webSearch", normalized);
     if (!options.webSearch) {
-      return {
+      const unavailable = {
         unavailable: true,
         reason: "workflow webSearch adapter is not configured",
         input: normalized,
       };
+      emitWorkflowEvent("tool_succeeded", {
+        nodeId,
+        nodeKind: "tool",
+        toolName: "webSearch",
+        result: unavailable,
+      });
+      return unavailable;
     }
-    return options.webSearch(normalized);
+    try {
+      const result = await options.webSearch(normalized);
+      emitWorkflowEvent("tool_succeeded", {
+        nodeId,
+        nodeKind: "tool",
+        toolName: "webSearch",
+        result,
+      });
+      return result;
+    } catch (error) {
+      emitWorkflowEvent("tool_failed", {
+        nodeId,
+        nodeKind: "tool",
+        toolName: "webSearch",
+        errorMessage: errorText(error),
+      });
+      throw error;
+    }
   };
 
   const fetchContent = async (input: WorkflowFetchContentInput): Promise<unknown> => {
     const normalized = normalizeWorkflowFetchContentInput(input);
+    const nodeId = emitToolStarted("fetchContent", normalized);
     if (!options.fetchContent) {
-      return {
+      const unavailable = {
         unavailable: true,
         reason: "workflow fetchContent adapter is not configured",
         input: normalized,
       };
+      emitWorkflowEvent("tool_succeeded", {
+        nodeId,
+        nodeKind: "tool",
+        toolName: "fetchContent",
+        result: unavailable,
+      });
+      return unavailable;
     }
-    return options.fetchContent(normalized);
+    try {
+      const result = await options.fetchContent(normalized);
+      emitWorkflowEvent("tool_succeeded", {
+        nodeId,
+        nodeKind: "tool",
+        toolName: "fetchContent",
+        result,
+      });
+      return result;
+    } catch (error) {
+      emitWorkflowEvent("tool_failed", {
+        nodeId,
+        nodeKind: "tool",
+        toolName: "fetchContent",
+        errorMessage: errorText(error),
+      });
+      throw error;
+    }
   };
 
   const parallel = async <T>(
     items: Array<() => Promise<T> | T>,
     parallelOptions: WorkflowParallelOptions = {},
-  ): Promise<T[] | Array<WorkflowParallelSettledResult<T>>> =>
-    runWorkflowParallel(items, {
+  ): Promise<T[] | Array<WorkflowParallelSettledResult<T>>> => {
+    const groupIndex = parallelGroupIndex++;
+    const groupNodeId = `parallel:${groupIndex}`;
+    const normalized = normalizeWorkflowParallelOptions({
       ...parallelOptions,
       concurrency: parallelOptions.concurrency ?? options.concurrency,
     });
+    emitWorkflowEvent("parallel_group_started", {
+      nodeId: groupNodeId,
+      parentId: phaseNodeId(currentPhase),
+      nodeKind: "parallel_group",
+      phase: currentPhase,
+      label: `parallel group ${groupIndex + 1}`,
+      data: {
+        items: items.length,
+        concurrency: normalized.concurrency,
+        onError: normalized.onError,
+      },
+    });
+    const wrapped = items.map((item, itemIndex) => async () => {
+      const itemNodeId = `${groupNodeId}:item:${itemIndex}`;
+      emitWorkflowEvent("parallel_item_started", {
+        nodeId: itemNodeId,
+        parentId: groupNodeId,
+        nodeKind: "parallel_item",
+        phase: currentPhase,
+        index: itemIndex,
+        label: `parallel item ${itemIndex + 1}`,
+      });
+      if (typeof item !== "function") {
+        const error = new TypeError("workflow parallel item must be a function");
+        emitWorkflowEvent("parallel_item_failed", {
+          nodeId: itemNodeId,
+          nodeKind: "parallel_item",
+          phase: currentPhase,
+          index: itemIndex,
+          errorMessage: error.message,
+        });
+        throw error;
+      }
+      try {
+        const value = await item();
+        emitWorkflowEvent("parallel_item_succeeded", {
+          nodeId: itemNodeId,
+          nodeKind: "parallel_item",
+          phase: currentPhase,
+          index: itemIndex,
+          result: value,
+        });
+        return value;
+      } catch (error) {
+        emitWorkflowEvent("parallel_item_failed", {
+          nodeId: itemNodeId,
+          nodeKind: "parallel_item",
+          phase: currentPhase,
+          index: itemIndex,
+          errorMessage: errorText(error),
+        });
+        throw error;
+      }
+    });
+    try {
+      const result = await runWorkflowParallel(wrapped, normalized);
+      const failed = Array.isArray(result)
+        ? result.filter(
+            (item): item is WorkflowParallelSettledResult<T> & { status: "rejected" } =>
+              item !== null &&
+              typeof item === "object" &&
+              "status" in item &&
+              item.status === "rejected",
+          )
+        : [];
+      emitWorkflowEvent(failed.length > 0 ? "parallel_group_failed" : "parallel_group_succeeded", {
+        nodeId: groupNodeId,
+        nodeKind: "parallel_group",
+        phase: currentPhase,
+        result,
+        errorMessage: failed.length > 0 ? `${failed.length} parallel item(s) failed` : undefined,
+      });
+      return result;
+    } catch (error) {
+      emitWorkflowEvent("parallel_group_failed", {
+        nodeId: groupNodeId,
+        nodeKind: "parallel_group",
+        phase: currentPhase,
+        errorMessage: errorText(error),
+      });
+      throw error;
+    }
+  };
   const pipeline = async (...input: unknown[]): Promise<unknown> => runWorkflowPipeline(input);
   const workflow = async (nameOrScript: string, childArgs?: unknown): Promise<unknown> => {
     if (shared.depth >= 1) throw new Error("workflow() nesting is limited to one level");
     const requested = String(nameOrScript);
+    const nodeId = `workflow:${nestedWorkflowIndex++}`;
+    emitWorkflowEvent("nested_workflow_started", {
+      nodeId,
+      parentId: phaseNodeId(currentPhase),
+      nodeKind: "nested_workflow",
+      phase: currentPhase,
+      workflowName: requested,
+      label: requested,
+      data: childArgs,
+    });
     shared.depth += 1;
     try {
       const loaded = options.loadWorkflowScript
@@ -316,8 +591,25 @@ export async function runWorkflowScript<T = unknown>(
         args: childArgs,
         resumeJournal: undefined,
         sharedRuntime: shared,
+        onEvent: undefined,
+      });
+      emitWorkflowEvent("nested_workflow_succeeded", {
+        nodeId,
+        nodeKind: "nested_workflow",
+        phase: currentPhase,
+        workflowName: requested,
+        result: child.result,
       });
       return child.result;
+    } catch (error) {
+      emitWorkflowEvent("nested_workflow_failed", {
+        nodeId,
+        nodeKind: "nested_workflow",
+        phase: currentPhase,
+        workflowName: requested,
+        errorMessage: errorText(error),
+      });
+      throw error;
     } finally {
       shared.depth -= 1;
     }
@@ -327,6 +619,7 @@ export async function runWorkflowScript<T = unknown>(
     item: unknown,
     verifyOptions: { reviewers?: number; threshold?: number; lens?: string | string[] } = {},
   ) => {
+    const toolNodeId = emitToolStarted("verify", { item, options: verifyOptions });
     const reviewers = Math.max(1, Math.trunc(verifyOptions.reviewers ?? 2));
     const threshold = verifyOptions.threshold ?? 0.5;
     const lenses = verifyOptions.lens
@@ -354,18 +647,26 @@ export async function runWorkflowScript<T = unknown>(
       ),
     )) as unknown[];
     const realCount = votes.filter(readRealVote).length;
-    return {
+    const result = {
       real: votes.length > 0 && realCount / votes.length >= threshold,
       realCount,
       total: votes.length,
       votes,
     };
+    emitWorkflowEvent("tool_succeeded", {
+      nodeId: toolNodeId,
+      nodeKind: "tool",
+      toolName: "verify",
+      result,
+    });
+    return result;
   };
 
   const judgePanel = async (
     attempts: unknown[],
     judgeOptions: { judges?: number; rubric?: string } = {},
   ) => {
+    const toolNodeId = emitToolStarted("judgePanel", { attempts, options: judgeOptions });
     const judges = Math.max(1, Math.trunc(judgeOptions.judges ?? 3));
     const rubric = judgeOptions.rubric ?? "overall quality and correctness";
     const scored = (await parallel(
@@ -385,13 +686,22 @@ export async function runWorkflowScript<T = unknown>(
         return { index: attemptIndex, attempt, score, judgments };
       }),
     )) as Array<{ index: number; attempt: unknown; score: number; judgments: unknown[] }>;
-    if (scored.length === 0) return undefined;
-    return scored.reduce((best, candidate) =>
-      candidate.score > best.score ||
-      (candidate.score === best.score && candidate.index < best.index)
-        ? candidate
-        : best,
-    );
+    const result =
+      scored.length === 0
+        ? undefined
+        : scored.reduce((best, candidate) =>
+            candidate.score > best.score ||
+            (candidate.score === best.score && candidate.index < best.index)
+              ? candidate
+              : best,
+          );
+    emitWorkflowEvent("tool_succeeded", {
+      nodeId: toolNodeId,
+      nodeKind: "tool",
+      toolName: "judgePanel",
+      result,
+    });
+    return result;
   };
 
   const loopUntilDry = async (loopOptions: {
@@ -483,7 +793,11 @@ export async function runWorkflowScript<T = unknown>(
     console,
     gate,
     judgePanel,
-    log: (message: unknown) => options.onLog?.(String(message)),
+    log: (message: unknown) => {
+      const text = String(message);
+      emitWorkflowEvent("log", { message: text });
+      options.onLog?.(text);
+    },
     webSearch,
     fetchContent,
     loopUntilDry,
@@ -496,8 +810,22 @@ export async function runWorkflowScript<T = unknown>(
     setTimeout,
     clearTimeout,
   });
-  const result = (await runTrustedWorkflowScriptInVm<T>(parsed.body, context)) as T;
-  return { meta: parsed.meta, result, phases, agentCount: callIndex, journal };
+  try {
+    const result = (await runTrustedWorkflowScriptInVm<T>(parsed.body, context)) as T;
+    emitWorkflowEvent("run_succeeded", { nodeId: "run", nodeKind: "run", result });
+    return { meta: parsed.meta, result, phases, agentCount: callIndex, journal };
+  } catch (error) {
+    emitWorkflowEvent("run_failed", {
+      nodeId: "run",
+      nodeKind: "run",
+      errorMessage: errorText(error),
+    });
+    throw error;
+  }
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function runTrustedWorkflowScriptInVm<T>(body: string, context: vm.Context): Promise<T> {

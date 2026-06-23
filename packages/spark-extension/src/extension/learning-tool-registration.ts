@@ -208,20 +208,18 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
     description: "Read one Spark learning by artifact ref or stable id.",
     parameters: Type.Object({
       ref: Type.String({ description: "Learning artifact ref or stable id." }),
-      full: Type.Optional(Type.Boolean({ default: false })),
       location: Type.Optional(Type.String({ description: "user | workspace | repo" })),
       maxChars: Type.Optional(
-        Type.Number({ description: "Maximum JSON chars when full=false. Default: 4000." }),
+        Type.Number({ description: "Maximum JSON chars to show. Default: 4000." }),
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const store = defaultLearningStore(ctx.cwd, normalizeLearningLocation(params.location));
-      const full = normalizeLearningBoolean(params.full, false, "full");
       const maxChars = normalizeArtifactLimit(params.maxChars, 4_000, "maxChars");
       const artifact = await store.get(normalizeLearningArtifactRef(params.ref));
       const body = JSON.stringify(artifact.body, null, 2);
-      const renderedBody = full ? body : truncateBlock(body, maxChars);
-      const truncated = !full && renderedBody.length < body.length;
+      const renderedBody = truncateBlock(body, maxChars);
+      const truncated = renderedBody.length < body.length;
       const lines = [
         `${artifact.ref} [${artifact.body.status}/${artifact.body.category}/${store.location}] ${artifact.body.title}`,
         `updated=${artifact.updatedAt} evidence=${artifact.body.evidenceRefs.length}`,
@@ -231,7 +229,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
       if (truncated)
         lines.push(
           "",
-          `… truncated ${body.length - renderedBody.length} char(s); call full=true for the complete learning`,
+          `… truncated ${body.length - renderedBody.length} char(s); increase maxChars for a larger bounded preview`,
         );
       return {
         content: [{ type: "text", text: lines.join("\n") }],

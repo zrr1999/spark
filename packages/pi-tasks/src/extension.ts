@@ -105,7 +105,6 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
       taskRef: Type.Optional(Type.String({ description: "Task ref/name/title selector." })),
       status: Type.Optional(Type.String({ description: "Project-list status filter." })),
       includeHistory: Type.Optional(Type.Boolean({ description: "Include terminal run history." })),
-      includeDetails: Type.Optional(Type.Boolean({ description: "Expand task/run records." })),
       includeWorkspaceSummary: Type.Optional(
         Type.Boolean({
           description: "For scoped status actions, include broad workspace summary.",
@@ -120,7 +119,7 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
       ),
       view: Type.Optional(
         Type.String({
-          description: "For workspace_status/project_status/task_status: active | summary | full.",
+          description: "For workspace_status/project_status/task_status: active | summary.",
         }),
       ),
       format: Type.Optional(
@@ -129,7 +128,6 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
         }),
       ),
       limit: Type.Optional(Type.Number({ description: "Bounded row/list limit." })),
-      showFinished: Type.Optional(Type.Boolean({ description: "Deprecated full status alias." })),
     }),
     renderCall(args, theme) {
       return renderTaskCall("task_read", args, theme);
@@ -183,7 +181,7 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
       roleRef: Type.Optional(
         Type.String({
           description:
-            "Compatibility executor role ref for hosts that still bind reusable role specs; omit for normal task planning.",
+            "Executor role ref for hosts that bind reusable role specs; omit for normal task planning.",
         }),
       ),
       plan: Type.Optional(Type.Any({ description: "Task plan patch or plan metadata." })),

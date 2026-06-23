@@ -1,11 +1,19 @@
 /** Queue worker for Spark daemon tasks. */
 
+import {
+  SPARK_PROTOCOL_VERSION,
+  parseSparkDaemonEvent,
+  parseSparkViewModelEvent,
+  type SparkDaemonEvent,
+  type SparkJsonObject,
+} from "@zendev-lab/spark-protocol";
 import type { SparkDaemonQueue } from "./queue.ts";
 import {
   createSparkDaemonActiveTasks,
   getSparkDaemonTaskSessionId,
   type SparkDaemonActiveTasks,
   type SparkDaemonQueueEntry,
+  type SparkDaemonEventSink,
   type SparkDaemonTask,
   type SparkDaemonTaskExecutor,
 } from "./types.ts";
@@ -19,6 +27,7 @@ export interface ProcessSparkDaemonQueueBatchOptions {
   queue: SparkDaemonQueue;
   active: SparkDaemonActiveTasks;
   executeTask: SparkDaemonTaskExecutor;
+  emitEvent?: SparkDaemonEventSink;
   label?: string;
   limit?: number;
   concurrency?: number;
@@ -79,6 +88,8 @@ function launchQueueTask(
   options.active.files.add(options.fileName);
   if (sessionId) options.active.sessions.add(sessionId);
 
+  emitDaemonEvent(options.emitEvent, daemonTaskLifecycleEvent(options, "running"));
+
   void runQueueTask({
     ...options,
     invocationId: invocation.invocationId,
@@ -110,8 +121,13 @@ async function runQueueTask(
       queueEntry: options.entry,
       invocationId: options.invocationId,
       signal: options.signal,
+      emitEvent: options.emitEvent,
     });
     await options.queue.markProcessed(options.fileName, result);
+    emitDaemonEvent(options.emitEvent, daemonTaskLifecycleEvent(options, "succeeded"));
+    for (const event of daemonEventsFromResult(result, options)) {
+      emitDaemonEvent(options.emitEvent, event);
+    }
   } catch (error) {
     await failQueueTask({ ...options, error });
   }
@@ -127,7 +143,121 @@ async function failQueueTask(
   console.error(
     `[${options.label ?? "spark-daemon"}] failed ${options.fileName}: ${String(options.error)}`,
   );
+  emitDaemonEvent(
+    options.emitEvent,
+    daemonTaskLifecycleEvent(options, "failed", errorMessage(options.error)),
+  );
   await options.queue.markFailed(options.fileName, options.error);
+}
+
+function daemonTaskLifecycleEvent(
+  options: {
+    fileName: string;
+    entry?: SparkDaemonQueueEntry | null;
+    invocationId?: string;
+  },
+  status: "running" | "succeeded" | "failed" | "cancelled",
+  summary?: string,
+): SparkDaemonEvent {
+  const task = options.entry?.payload.task;
+  return {
+    version: SPARK_PROTOCOL_VERSION,
+    type: "daemon.task.lifecycle",
+    source: "daemon",
+    emittedAt: new Date().toISOString(),
+    sessionId: task ? (getSparkDaemonTaskSessionId(task) ?? undefined) : undefined,
+    ...(task?.workspaceId ? { workspaceId: task.workspaceId } : {}),
+    ...(task?.projectId ? { projectId: task.projectId } : {}),
+    invocationId: options.invocationId,
+    taskType: task?.type ?? "unknown",
+    taskFileName: options.fileName,
+    status,
+    summary,
+    metadata: daemonTaskRouteMetadata(task),
+  };
+}
+
+function daemonEventsFromResult(
+  result: unknown,
+  options: { entry: SparkDaemonQueueEntry; invocationId: string },
+): SparkDaemonEvent[] {
+  const rawEvents =
+    result && typeof result === "object"
+      ? (result as { jsonEvents?: unknown }).jsonEvents
+      : undefined;
+  if (!Array.isArray(rawEvents)) return [];
+  const sessionId = getSparkDaemonTaskSessionId(options.entry.payload.task) ?? undefined;
+  return rawEvents.flatMap((raw): SparkDaemonEvent[] => {
+    if (!raw || typeof raw !== "object") return [];
+    const candidate = raw as { type?: unknown; event?: unknown };
+    if (candidate.type === "view_event") {
+      let view: ReturnType<typeof parseSparkViewModelEvent>;
+      try {
+        view = parseSparkViewModelEvent(candidate.event);
+      } catch {
+        return [];
+      }
+      return [
+        {
+          version: SPARK_PROTOCOL_VERSION,
+          type: "daemon.view_event",
+          source: "daemon",
+          emittedAt: new Date().toISOString(),
+          sessionId,
+          ...(options.entry.payload.task.workspaceId
+            ? { workspaceId: options.entry.payload.task.workspaceId }
+            : {}),
+          ...(options.entry.payload.task.projectId
+            ? { projectId: options.entry.payload.task.projectId }
+            : {}),
+          invocationId: options.invocationId,
+          view,
+          metadata: daemonTaskRouteMetadata(options.entry.payload.task),
+        },
+      ];
+    }
+    if (candidate.type !== "daemon_event") return [];
+    try {
+      const event = parseSparkDaemonEvent(candidate.event);
+      return [
+        {
+          ...event,
+          emittedAt: event.emittedAt ?? new Date().toISOString(),
+          ...(options.entry.payload.task.workspaceId && !event.workspaceId
+            ? { workspaceId: options.entry.payload.task.workspaceId }
+            : {}),
+          ...(options.entry.payload.task.projectId && !event.projectId
+            ? { projectId: options.entry.payload.task.projectId }
+            : {}),
+          sessionId: event.sessionId ?? sessionId,
+          invocationId: event.invocationId ?? options.invocationId,
+          metadata: {
+            ...daemonTaskRouteMetadata(options.entry.payload.task),
+            ...event.metadata,
+          },
+        },
+      ];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function daemonTaskRouteMetadata(task: SparkDaemonTask | undefined): SparkJsonObject {
+  return {
+    ...(task?.workspaceBindingId ? { workspaceBindingId: task.workspaceBindingId } : {}),
+  };
+}
+
+function emitDaemonEvent(sink: SparkDaemonEventSink | undefined, event: SparkDaemonEvent): void {
+  if (!sink) return;
+  void Promise.resolve(sink(event)).catch((error) => {
+    console.error(`[spark-daemon] daemon event sink failed: ${errorMessage(error)}`);
+  });
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {

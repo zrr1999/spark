@@ -10,13 +10,13 @@ This migration is implemented for package boundaries and the visible tool facade
 - Generic implementations now live in `pi-extension-api`, `pi-artifacts`, `pi-tasks`, `pi-learnings`, `pi-goal`, and `pi-workflows`.
 - Spark's visible tool surface uses canonical tools (`task_read`, `task_write`, `assign`, `learning`, `artifact`, `ask`, `context`, `workflow`, `role`, `recall`, `goal`). Legacy `spark_*` tool configs are retired rather than kept as internal dispatch wiring.
 - `pi-* -> spark-*` regressions are guarded by the boundary checker inside `pnpm run check`, `prek`, and CI static checks.
-- On-disk schema roots remain stable: `.spark/`, `.spark/projects/`, `.spark/workflow-runs.json`, and historical goal marker strings are compatibility data, not package ownership; legacy `.spark/projects.json` is import-only.
+- On-disk schema roots remain stable: `.spark/`, `.spark/projects/`, `.spark/workflow-runs.json`, and historical goal marker strings are schema data, not package ownership; legacy `.spark/projects.json` is import-only.
 
 ## Goals
 
 - Promote reusable capabilities to `pi-*` packages when they are not Spark-specific.
 - Keep Spark as a mode/facade that composes reusable Pi capabilities for project/goal workflows.
-- Remove duplicate or worse user-facing tool surfaces instead of keeping long-lived compatibility aliases.
+- Remove duplicate or worse user-facing tool surfaces instead of keeping long-lived aliases.
 - Keep tool behavior controlled: strict schemas, provenance, state machines, review queues, and bounded context budgets.
 - Preserve clear ownership boundaries so implementation packages are decoupled even when the user experience is unified.
 
@@ -137,7 +137,7 @@ Actions:
 | --------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------------- |
 | `record`  | `kind`, `title`, `format`, `body`, `provenance`, optional `links`        | writes blob then metadata; metadata is commit point; validates provenance | `ArtifactStore.put()`                                 |
 | `list`    | optional `kind`, `producer`, `projectRef`, `taskRef`, `roleRef`, `limit` | bounded newest-first listing                                              | `spark_list_artifacts`                                |
-| `read`    | `artifactRef`, optional `full`, `maxChars`                               | default truncated body; full read explicit                                | `spark_get_artifact`, `get_search_content` pattern    |
+| `read`    | `artifactRef`, optional `maxChars`                                       | bounded body preview                                                       | `spark_get_artifact`, `get_search_content` pattern    |
 | `link`    | `from`, `to`, `relation`                                                 | typed relation only; no arbitrary graph edges                             | current `ArtifactLink`                                |
 | `compact` | strategy-specific options, `dryRun` default true                         | owner-specific retention only; no generic deletion                        | role-run retention, `context-mode` storage discipline |
 
@@ -346,11 +346,11 @@ It should not register duplicate canonical tools for task, artifact, ask, role, 
 | `spark_claim_task`                        | `task_write({ action: "claim" })`                                                                        | No                 | Preserve one-claim-per-session rule.                                    |
 | `spark_plan_tasks`                        | `task_write({ action: "plan" })`                                                                         | No                 | Preserve readiness blocking rules.                                      |
 | `spark_finish_task`                       | `task_write({ action: "finish" })`                                                                       | No                 | Preserve completion evidence requirement.                               |
-| Retired session-scoped helper             | internal compatibility `impl_update_todos`                                                             | Retired            | Kept only for legacy snapshot compatibility; public planning uses durable project tasks and task plan items. |
+| Retired session-scoped helper             | removed `impl_update_todos`                                                                            | Retired            | Public planning uses durable project tasks and task plan items. |
 | Retired task plan-item helper             | `task_write({ action: "todo_update", scope: "task" })`                                                   | No                 | Task scope updates TaskPlan.items through internal `impl_update_task_plan_items`. |
 | `spark_run_ready_tasks`                   | `assign({ dryRun: true })`                                                                    | No                 | Spark role scheduling remains an adapter behind task capability.        |
 | `spark_background_runs`                   | `task_read({ action: "run_status" })`                                                            | No                 | Read/reconcile status remains visible; public run_control is not default. |
-| `spark_dag_manager`                       | `task_read({ action: "run_status" })` / internal workflow-run maintenance                         | No                 | Compatibility/debug surface is not canonical.                           |
+| `spark_dag_manager`                       | `task_read({ action: "run_status" })` / internal workflow-run maintenance                         | No                 | Debug surface is not canonical.                           |
 | Retired broad state status/doctor actions | owner-specific state status and doctor actions | No | Avoid one broad state dumping ground. |
 | Retired broad state cache cleanup action | `task_write({ action: "cache_cleanup" })` plus owner-specific cleanup actions | No | Owner-scoped dry-run cleanup only. |
 | Retired workflow-run prune action | Spark workflow-run retention policy | No | Workflow-run store owner handles retention; not a public workflow tool action. |
@@ -374,7 +374,7 @@ It should not register duplicate canonical tools for task, artifact, ask, role, 
 | `spark_learning_reject`                   | `learning({ action: "reject" })`                                                                   | No                 | Generic evidence-backed learning.                                       |
 | `spark_learning_export_markdown`          | `learning({ action: "export_markdown" })`                                                          | No                 | Generic export.                                                         |
 | `spark_learning_import_markdown`          | `learning({ action: "import_markdown" })`                                                          | No                 | Generic import.                                                         |
-| Retired Spark compatibility entry            | canonical tools and explicit mode commands                           | No                 | Do not keep a separate compatibility entry; use canonical tool/action surfaces and slash commands.     |
+| Retired Spark duplicate entry            | canonical tools and explicit mode commands                           | No                 | Do not keep a separate entry; use canonical tool/action surfaces and slash commands.     |
 | default research behavior, `/plan`, `/implement`, `/goal`, `/loop` | same                                                                 | Yes                | Spark mode/driver surfaces.                                             |
 | `/workflow`                                 | `/workflow` through Spark host/runtime policy over saved workflows   | Yes                | Saved scripts only.                                                     |
 | `/workflow:goal`                          | none                                                                                               | No                 | Goal is not workflow.                                                   |

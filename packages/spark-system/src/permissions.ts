@@ -1,6 +1,6 @@
 import { closeSync, existsSync, mkdirSync, openSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
-import type { NaviaPaths } from "./paths.js";
+import type { SparkPaths } from "./paths.js";
 
 export function ensurePrivateDir(path: string): void {
   mkdirSync(path, { recursive: true, mode: 0o700 });
@@ -11,7 +11,7 @@ export function ensurePublicDir(path: string): void {
   mkdirSync(path, { recursive: true, mode: 0o755 });
 }
 
-export function ensureNaviaPathDirs(paths: NaviaPaths): void {
+export function ensureSparkPathDirs(paths: SparkPaths): void {
   ensurePrivateDir(paths.configDir);
   ensurePrivateDir(paths.dataDir);
   ensurePublicDir(paths.cacheDir);

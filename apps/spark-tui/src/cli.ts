@@ -11,7 +11,18 @@ import {
   type SparkDaemonClientOptions,
   type SparkDaemonCliCommand,
 } from "./cli/daemon.ts";
-import { runNativeSparkTui } from "./native-tui.ts";
+import {
+  createSparkNativeRuntimeSlashCommands,
+  createSparkNativeUiTransport,
+  runNativeSparkTui,
+  type SparkNativeSlashCommandMap,
+} from "./native-tui.ts";
+import {
+  createSparkCliHostServices,
+  registerSparkSessionsCommand,
+  type SparkCliHostServices,
+  type SparkCliHostServicesOptions,
+} from "./host/index.ts";
 
 export interface SparkCliArgs {
   initialMessage?: string;
@@ -27,6 +38,7 @@ export type SparkCliCommand =
 export interface RunSparkCliOptions {
   daemonClient?: SparkDaemonClientOptions;
   runTui?: typeof runNativeSparkTui;
+  createHostServices?: (options?: SparkCliHostServicesOptions) => Promise<SparkCliHostServices>;
 }
 
 export function parseSparkCliArgs(argv: string[]): SparkCliArgs {
@@ -91,11 +103,27 @@ export async function runSparkCli(
         displayName: "Spark TUI",
       });
       try {
+        const createHostServices = options.createHostServices ?? createSparkCliHostServices;
+        const services = await createHostServices({ hasUI: true });
+        registerSparkSessionsCommand(services.runtime, {
+          store: services.sessionStore,
+          getNavigationState: () => undefined,
+        });
         const runTui = options.runTui ?? runNativeSparkTui;
         await runTui({
           initialMessage: command.initialMessage,
           responder: createSparkDaemonNativeResponder(daemonClient),
-          slashCommands: createSparkDaemonNativeCommands(daemonClient),
+          slashCommands: createSparkNativeSlashCommands(services, daemonClient),
+          keybindings: services.keybindings,
+          messageRenderers: new Map(
+            services.runtime
+              .listMessageRenderers()
+              .map(({ customType, renderer }) => [customType, renderer]),
+          ),
+          configureApp: async (app, session) => {
+            services.runtime.setUiTransport(createSparkNativeUiTransport(app, session));
+            await services.runtime.emit("session_start", { source: "native-tui" });
+          },
         });
         return 0;
       } finally {
@@ -103,6 +131,48 @@ export async function runSparkCli(
       }
     }
   }
+}
+
+const NATIVE_SLASH_COMMAND_EXCLUSIONS = [
+  "help",
+  "clear",
+  "stop",
+  "retry",
+  "cockpit",
+  "workflows",
+  "runs",
+  "tasks",
+  "artifacts",
+  "evidence",
+  "reviews",
+  "graft",
+  "exit",
+  "quit",
+] as const;
+
+function createSparkNativeSlashCommands(
+  services: SparkCliHostServices,
+  daemonClient: SparkDaemonClientOptions,
+): SparkNativeSlashCommandMap {
+  const daemonCommands = createSparkDaemonNativeCommands(daemonClient);
+  const commandSessionId = `spark-native-command-${Date.now().toString(36)}`;
+  const runtimeCommands = createSparkNativeRuntimeSlashCommands(services.runtime, {
+    exclude: [...NATIVE_SLASH_COMMAND_EXCLUSIONS, ...Object.keys(daemonCommands)],
+    sendUserMessage: async (content) => {
+      const prompt = content.trim();
+      if (!prompt) return;
+      await handleSparkDaemonCliCommand(
+        {
+          action: "submit",
+          json: true,
+          sessionId: commandSessionId,
+          prompt,
+        },
+        daemonClient,
+      );
+    },
+  });
+  return { ...runtimeCommands, ...daemonCommands };
 }
 
 function printHelp(): void {

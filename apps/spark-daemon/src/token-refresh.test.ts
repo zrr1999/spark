@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resolveNaviaPaths } from "@zendev-lab/navia-system";
+import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import { readSparkDaemonConfig, writeSparkDaemonConfig } from "./config.js";
 import {
   nextSparkDaemonTokenRefreshDelayMs,
@@ -43,7 +43,7 @@ describe("Spark daemon token refresh", () => {
 
   it("refreshes credentials and writes the rotated tokens to config", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-refresh-"));
-    const paths = resolveNaviaPaths({
+    const paths = resolveSparkPaths({
       app: "daemon",
       env: { HOME: root },
       overrides: {
@@ -111,7 +111,7 @@ describe("Spark daemon token refresh", () => {
 
   it("fails loudly when token refresh has no server URL", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-refresh-"));
-    const paths = resolveNaviaPaths({
+    const paths = resolveSparkPaths({
       app: "daemon",
       env: { HOME: root },
       overrides: {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  askUser,
   createPiAskFlowRequest,
   createPiAskFlowResult,
   isPiAskFlowGateBlocked,
@@ -90,6 +91,186 @@ void test("context-specific approval asks record explicit selections", async () 
   assert.equal(result.status, "answered");
   assert.equal(result.nextAction, "resume");
   assert.equal(result.answers.approval?.values[0], "approve");
+});
+
+void test("ask_user prefers protocol interaction answers before legacy selectors", async () => {
+  let fallbackSelectCalls = 0;
+  const result = await askUser(
+    {
+      mode: "decision",
+      title: "Choose protocol route",
+      questions: [
+        {
+          id: "route",
+          prompt: "Which route?",
+          type: "single",
+          required: true,
+          options: [
+            { value: "fast", label: "Fast" },
+            { value: "safe", label: "Safe" },
+          ],
+        },
+      ],
+    },
+    {
+      interaction: async (request) => {
+        assert.equal(request.kind, "askFlow");
+        assert.equal(request.metadata?.tool, "ask_user");
+        assert.equal((request.questions as Array<{ id: string }>)[0]?.id, "route");
+        return {
+          kind: "askFlow",
+          requestId: request.requestId,
+          status: "answered",
+          answers: { route: "safe" },
+        };
+      },
+      select: async () => {
+        fallbackSelectCalls += 1;
+        return "Fast";
+      },
+    },
+  );
+
+  assert.equal(fallbackSelectCalls, 0);
+  assert.equal(result.status, "answered");
+  assert.equal(result.nextAction, "resume");
+  assert.deepEqual(result.answers.route?.values, ["safe"]);
+  assert.deepEqual(result.answers.route?.labels, ["Safe"]);
+});
+
+void test("ask_user falls back to legacy selectors when protocol interaction is blocked", async () => {
+  let fallbackSelectCalls = 0;
+  const result = await askUser(
+    {
+      mode: "decision",
+      title: "Choose fallback route",
+      questions: [
+        {
+          id: "route",
+          prompt: "Which route?",
+          type: "single",
+          required: true,
+          options: [
+            { value: "fast", label: "Fast" },
+            { value: "safe", label: "Safe" },
+          ],
+        },
+      ],
+    },
+    {
+      interaction: async (request) => ({
+        kind: "askFlow",
+        requestId: request.requestId,
+        status: "blocked",
+        message: "no protocol renderer installed",
+      }),
+      select: async () => {
+        fallbackSelectCalls += 1;
+        return "Safe";
+      },
+    },
+  );
+
+  assert.equal(fallbackSelectCalls, 1);
+  assert.equal(result.status, "answered");
+  assert.equal(result.nextAction, "resume");
+  assert.deepEqual(result.answers.route?.values, ["safe"]);
+});
+
+void test("ask_user converts protocol interaction failures into cancelled gate results", async () => {
+  let fallbackSelectCalls = 0;
+  const warnings: string[] = [];
+  const result = await askUser(
+    {
+      mode: "approval",
+      title: "Approve failing route?",
+      questions: [
+        {
+          id: "approval",
+          prompt: "Approve?",
+          type: "single",
+          required: true,
+          options: [
+            { value: "approve", label: "Approve" },
+            { value: "reject", label: "Reject" },
+          ],
+        },
+      ],
+    },
+    {
+      interaction: async () => {
+        throw new Error("renderer crashed");
+      },
+      select: async () => {
+        fallbackSelectCalls += 1;
+        return "Approve";
+      },
+      notify: (message, level) => {
+        if (level === "warning") warnings.push(message);
+      },
+    },
+  );
+
+  assert.equal(fallbackSelectCalls, 0);
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.cancelled, true);
+  assert.equal(result.nextAction, "block");
+  assert.match(warnings[0] ?? "", /renderer crashed/);
+});
+
+void test("ask_flow uses protocol interaction answers and blocked fallback selectors", async () => {
+  const request = createPiAskFlowRequest({
+    flow: "protocol-route",
+    mode: "decision",
+    title: "Choose protocol route",
+    questions: [
+      {
+        id: "route",
+        prompt: "Which route?",
+        type: "single",
+        required: true,
+        options: [
+          { value: "fast", label: "Fast" },
+          { value: "safe", label: "Safe" },
+        ],
+      },
+    ],
+  });
+
+  const protocolResult = await runPiAskFlow(request, {
+    interaction: async (protocolRequest) => {
+      assert.equal(protocolRequest.kind, "askFlow");
+      assert.equal(protocolRequest.metadata?.tool, "ask_flow");
+      assert.equal(protocolRequest.flow, "protocol-route");
+      return {
+        kind: "askFlow",
+        requestId: protocolRequest.requestId,
+        status: "answered",
+        answers: { route: { values: ["safe"] } },
+      };
+    },
+    select: async () => "Fast",
+  });
+  assert.equal(protocolResult.status, "answered");
+  assert.equal(protocolResult.nextAction, "resume");
+  assert.deepEqual(protocolResult.answers.route?.values, ["safe"]);
+
+  let fallbackSelectCalls = 0;
+  const fallbackResult = await runPiAskFlow(request, {
+    interaction: async (protocolRequest) => ({
+      kind: "askFlow",
+      requestId: protocolRequest.requestId,
+      status: "blocked",
+      message: "no renderer",
+    }),
+    select: async () => {
+      fallbackSelectCalls += 1;
+      return "Fast";
+    },
+  });
+  assert.equal(fallbackSelectCalls, 1);
+  assert.equal(fallbackResult.status, "answered");
+  assert.deepEqual(fallbackResult.answers.route?.values, ["fast"]);
 });
 
 void test("decision/approval asks expose no-selection as a blocking result envelope", async () => {

@@ -1,11 +1,6 @@
 import { Type } from "typebox";
-import {
-  applyIndependentTodoOps,
-  defaultTaskGraphStore,
-  type TaskTodoOp,
-} from "@zendev-lab/pi-tasks";
+import { defaultTaskGraphStore, type TaskTodoOp } from "@zendev-lab/pi-tasks";
 import { currentSparkProject, sparkSessionKey } from "./session-state.ts";
-import { loadIndependentTodos, saveIndependentTodos } from "./session-todos.ts";
 import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
 import { resolveSessionClaimedTask } from "./task-claim-selection.ts";
 import { normalizeOptionalToolString, normalizeToolStringArray } from "./task-plan-tool.ts";
@@ -31,47 +26,6 @@ export function registerSparkTodoTools(
   registerSparkTool: SparkToolRegistrar,
   deps: SparkTodoToolDependencies,
 ): void {
-  registerSparkTool({
-    name: "impl_update_todos",
-    label: "Spark Update Compatibility TODOs",
-    description:
-      "Internal compatibility storage for legacy session-scoped snapshots. Public planning should use durable project tasks and task plan items.",
-    parameters: Type.Object({
-      ops: Type.Array(
-        Type.Object({
-          op: Type.String({
-            description:
-              "init | append | start | done | upsert_done | block | cancel | delete | restore | remove | note",
-          }),
-          id: Type.Optional(Type.String()),
-          item: Type.Optional(Type.String()),
-          items: Type.Optional(Type.Array(Type.String())),
-          text: Type.Optional(Type.String()),
-          blockedBy: Type.Optional(Type.Array(Type.String())),
-        }),
-      ),
-    }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const cwd = ctx.cwd;
-      const ops = normalizeSparkTodoOps(params.ops);
-      if (!ops)
-        return {
-          content: [{ type: "text", text: "plan item ops are required." }],
-          details: { error: "missing_ops" },
-        };
-      const sessionOps = rejectPlanTodoOpsForSession(ops);
-      const todos = applyIndependentTodoOps(await loadIndependentTodos(cwd, ctx), sessionOps);
-      await saveIndependentTodos(cwd, ctx, todos);
-      await deps.refreshSparkWidget(cwd, ctx);
-      return {
-        content: [
-          { type: "text", text: `Updated ${todos.length} compatibility TODO snapshot item(s).` },
-        ],
-        details: { todos: todos as unknown as Record<string, unknown>[] },
-      };
-    },
-  });
-
   registerSparkTool({
     name: "impl_update_task_plan_items",
     label: "Spark Update Task plan items",
@@ -153,10 +107,6 @@ export function registerSparkTodoTools(
       };
     },
   });
-}
-
-function rejectPlanTodoOpsForSession(ops: SparkTaskPlanItemOp[]): TaskTodoOp[] {
-  return ops;
 }
 
 function normalizeSparkTodoOp(value: unknown, path: string): SparkTaskPlanItemOp {

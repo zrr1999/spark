@@ -37,7 +37,11 @@ import type {
   ToolInfo,
 } from "@zendev-lab/pi-extension-api";
 import {
+  SPARK_PROTOCOL_VERSION,
   createBlockedInteractionResponse,
+  parseSparkInteractionRequest,
+  parseSparkInteractionResponse,
+  type SparkDaemonEvent,
   type SparkInteractionRequest,
   type SparkInteractionResponse,
   type SparkViewModelEvent,
@@ -60,6 +64,7 @@ import type {
   RegisteredToolMap,
   SparkHostMessageRenderer,
   SparkHostSessionManagerStub,
+  SparkDaemonEventListener,
   SparkHostUiTransport,
   ToolRegistrationListener,
 } from "./types.ts";
@@ -88,6 +93,7 @@ export class SparkHostRuntime implements ExtensionAPI {
   private triggerTurnHandler: (() => void | Promise<void>) | undefined;
   private readonly messageRenderers = new Map<string, SparkHostMessageRenderer>();
   private readonly toolRegistrationListeners = new Set<ToolRegistrationListener>();
+  private readonly daemonEventListeners = new Set<SparkDaemonEventListener>();
   private uiTransport: SparkHostUiTransport;
   private sessionManager: SparkHostSessionManagerStub;
   private idle = true;
@@ -280,15 +286,45 @@ export class SparkHostRuntime implements ExtensionAPI {
   }
 
   async requestInteraction(request: SparkInteractionRequest): Promise<SparkInteractionResponse> {
-    if (this.uiTransport.interaction) return await this.uiTransport.interaction(request);
-    return createBlockedInteractionResponse(
-      request,
-      "Spark UI transport has no interaction handler.",
-    );
+    const parsedRequest = parseSparkInteractionRequest(request);
+    this.publishDaemonEvent({
+      version: SPARK_PROTOCOL_VERSION,
+      type: "daemon.interaction.request",
+      source: this.hasUI ? "tui" : "runtime",
+      emittedAt: new Date().toISOString(),
+      request: parsedRequest,
+      metadata: {},
+    });
+
+    const response = this.uiTransport.interaction
+      ? parseSparkInteractionResponse(await this.uiTransport.interaction(parsedRequest))
+      : createBlockedInteractionResponse(
+          parsedRequest,
+          "Spark UI transport has no interaction handler.",
+        );
+    this.publishDaemonEvent({
+      version: SPARK_PROTOCOL_VERSION,
+      type: "daemon.interaction.response",
+      source: this.hasUI ? "tui" : "runtime",
+      emittedAt: new Date().toISOString(),
+      response,
+      metadata: {},
+    });
+    return response;
   }
 
   publishView(event: SparkViewModelEvent): void {
     this.uiTransport.publishView?.(event);
+  }
+
+  publishDaemonEvent(event: SparkDaemonEvent): void {
+    for (const listener of this.daemonEventListeners) {
+      try {
+        listener(event);
+      } catch {
+        // Daemon-event observers are best-effort projection hooks.
+      }
+    }
   }
 
   /** Register the agent-loop wakeup used by extension-triggered next turns. */
@@ -343,6 +379,13 @@ export class SparkHostRuntime implements ExtensionAPI {
     this.toolRegistrationListeners.add(listener);
     return () => {
       this.toolRegistrationListeners.delete(listener);
+    };
+  }
+
+  onDaemonEvent(listener: SparkDaemonEventListener): () => void {
+    this.daemonEventListeners.add(listener);
+    return () => {
+      this.daemonEventListeners.delete(listener);
     };
   }
 

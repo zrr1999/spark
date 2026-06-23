@@ -16,6 +16,7 @@ export interface SparkAgentSessionRunOptions {
   sessionId: string;
   prompt: string;
   reset?: boolean;
+  forkFromSession?: string;
 }
 
 export interface SparkAgentSessionRunResult {
@@ -35,6 +36,7 @@ export class SparkAgentSession {
 
   async run(options: SparkAgentSessionRunOptions): Promise<SparkAgentSessionRunResult> {
     const record = await this.loadOrCreateRecord(options);
+    this.services.agentLoop.setViewSessionId(record.header.id);
     const priorMessages = sessionRecordToAgentMessages(record);
     this.services.agentLoop.replaceMessages(priorMessages);
     const beforeCount = this.services.agentLoop.getMessages().length;
@@ -59,16 +61,13 @@ export class SparkAgentSession {
   private async loadOrCreateRecord(
     options: SparkAgentSessionRunOptions,
   ): Promise<SparkSessionRecord> {
-    if (options.reset) return this.services.sessionStore.createSession({ id: options.sessionId });
-    const existing = await this.findExistingRecord(options.sessionId);
-    return existing ?? this.services.sessionStore.createSession({ id: options.sessionId });
-  }
-
-  private async findExistingRecord(sessionId: string): Promise<SparkSessionRecord | undefined> {
-    for (const info of await this.services.sessionStore.list()) {
-      if (info.id === sessionId) return await this.services.sessionStore.load(info.path);
+    if (options.forkFromSession) {
+      const parent = await this.services.sessionStore.loadByRef(options.forkFromSession);
+      return this.services.sessionStore.forkSession(parent, { id: options.sessionId });
     }
-    return undefined;
+    if (options.reset) return this.services.sessionStore.createSession({ id: options.sessionId });
+    const existing = await this.services.sessionStore.findById(options.sessionId);
+    return existing ?? this.services.sessionStore.createSession({ id: options.sessionId });
   }
 }
 

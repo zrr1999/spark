@@ -1,25 +1,25 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveNaviaPaths } from "./paths.js";
+import { resolveSparkPaths } from "./paths.js";
 
 const home = "/Users/example";
 
-describe("resolveNaviaPaths", () => {
-  it("uses XDG defaults for server paths", () => {
-    const paths = resolveNaviaPaths({ app: "server", env: { HOME: home }, cwd: "/" });
+describe("resolveSparkPaths", () => {
+  it("uses XDG defaults for Cockpit paths", () => {
+    const paths = resolveSparkPaths({ app: "cockpit", env: { HOME: home }, cwd: "/" });
 
-    expect(paths.configFile).toBe(join(home, ".config", "navia", "server.toml"));
-    expect(paths.dataDir).toBe(join(home, ".local", "share", "navia", "server"));
+    expect(paths.configFile).toBe(join(home, ".config", "spark", "cockpit.toml"));
+    expect(paths.dataDir).toBe(join(home, ".local", "share", "spark", "cockpit"));
     expect(paths.databasePath).toBe(
-      join(home, ".local", "share", "navia", "server", "navia.sqlite"),
+      join(home, ".local", "share", "spark", "cockpit", "cockpit.sqlite"),
     );
-    expect(paths.artifactCacheDir).toBe(join(home, ".cache", "navia", "server", "artifacts"));
-    expect(paths.logDir).toBe(join(home, ".local", "state", "navia", "server", "logs"));
-    expect(paths.runtimeDir).toBe(join(home, ".local", "state", "navia", "server", "run"));
+    expect(paths.artifactCacheDir).toBe(join(home, ".cache", "spark", "cockpit", "artifacts"));
+    expect(paths.logDir).toBe(join(home, ".local", "state", "spark", "cockpit", "logs"));
+    expect(paths.runtimeDir).toBe(join(home, ".local", "state", "spark", "cockpit", "run"));
   });
 
   it("uses XDG defaults for daemon-specific paths", () => {
-    const paths = resolveNaviaPaths({ app: "daemon", env: { HOME: home }, cwd: "/" });
+    const paths = resolveSparkPaths({ app: "daemon", env: { HOME: home }, cwd: "/" });
 
     expect(paths.configFile).toBe(join(home, ".config", "spark", "daemon.toml"));
     expect(paths.databasePath).toBe(
@@ -32,7 +32,7 @@ describe("resolveNaviaPaths", () => {
   });
 
   it("honors explicit XDG homes and runtime dir", () => {
-    const paths = resolveNaviaPaths({
+    const paths = resolveSparkPaths({
       app: "daemon",
       env: {
         HOME: home,
@@ -53,7 +53,7 @@ describe("resolveNaviaPaths", () => {
   });
 
   it("honors the Spark daemon runtime directory environment override", () => {
-    const paths = resolveNaviaPaths({
+    const paths = resolveSparkPaths({
       app: "daemon",
       env: { HOME: home, SPARK_DAEMON_RUNTIME_DIR: "/daemon-run" },
       cwd: "/",
@@ -63,44 +63,47 @@ describe("resolveNaviaPaths", () => {
     expect(paths.pidFile).toBe("/daemon-run/daemon.pid");
   });
 
-  it("honors app-specific overrides before the deprecated NAVIA_DATA_DIR alias", () => {
-    const paths = resolveNaviaPaths({
-      app: "server",
+  it("honors Spark Cockpit overrides before legacy Navia aliases", () => {
+    const paths = resolveSparkPaths({
+      app: "cockpit",
       env: {
         HOME: home,
         NAVIA_DATA_DIR: "/legacy",
-        NAVIA_SERVER_DATA_DIR: "/server-data",
-        NAVIA_SERVER_CACHE_DIR: "/server-cache",
-        NAVIA_SERVER_STATE_DIR: "/server-state",
+        NAVIA_SERVER_DATA_DIR: "/legacy-server-data",
+        NAVIA_SERVER_CACHE_DIR: "/legacy-server-cache",
+        NAVIA_SERVER_STATE_DIR: "/legacy-server-state",
+        SPARK_COCKPIT_DATA_DIR: "/cockpit-data",
+        SPARK_COCKPIT_CACHE_DIR: "/cockpit-cache",
+        SPARK_COCKPIT_STATE_DIR: "/cockpit-state",
       },
       cwd: "/",
     });
 
-    expect(paths.dataDir).toBe("/server-data");
-    expect(paths.cacheDir).toBe("/server-cache");
-    expect(paths.stateDir).toBe("/server-state");
-    expect(paths.deprecatedDataDirAlias).toBeUndefined();
+    expect(paths.dataDir).toBe("/cockpit-data");
+    expect(paths.cacheDir).toBe("/cockpit-cache");
+    expect(paths.stateDir).toBe("/cockpit-state");
+    expect(paths.legacyDataDirAlias).toBeUndefined();
   });
 
-  it("keeps NAVIA_DATA_DIR as a deprecated server-only alias", () => {
-    const serverPaths = resolveNaviaPaths({
-      app: "server",
+  it("keeps Navia data directory variables as Cockpit-only legacy aliases", () => {
+    const cockpitPaths = resolveSparkPaths({
+      app: "cockpit",
       env: { HOME: home, NAVIA_DATA_DIR: "/legacy" },
       cwd: "/",
     });
-    const daemonPaths = resolveNaviaPaths({
+    const daemonPaths = resolveSparkPaths({
       app: "daemon",
       env: { HOME: home, NAVIA_DATA_DIR: "/legacy" },
       cwd: "/",
     });
 
-    expect(serverPaths.dataDir).toBe("/legacy");
-    expect(serverPaths.deprecatedDataDirAlias).toBe("/legacy");
+    expect(cockpitPaths.dataDir).toBe("/legacy");
+    expect(cockpitPaths.legacyDataDirAlias).toBe("/legacy");
     expect(daemonPaths.dataDir).toBe(join(home, ".local", "share", "spark", "daemon"));
   });
 
   it("honors direct test overrides", () => {
-    const paths = resolveNaviaPaths({
+    const paths = resolveSparkPaths({
       app: "daemon",
       env: { HOME: home },
       cwd: "/repo",

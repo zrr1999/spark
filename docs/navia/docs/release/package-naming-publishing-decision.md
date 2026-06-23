@@ -59,4 +59,4 @@ story is clear.
    internal unless a release consumer is identified.
 4. Run `pnpm run publish` after logging in; it validates, builds, and publishes the selected public package set.
 5. If any packages were ever published under the former standalone Navia scope,
-   publish compatibility shims or npm deprecation notices and document the migration.
+   document the migration and choose explicit replacement packages instead of shims.

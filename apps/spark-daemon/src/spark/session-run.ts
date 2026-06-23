@@ -1,4 +1,4 @@
-import type { NaviaPaths } from "@zendev-lab/navia-system";
+import type { SparkPaths } from "@zendev-lab/spark-system";
 import type {
   SparkDaemonSessionRunTask,
   SparkDaemonTask,
@@ -24,7 +24,7 @@ interface SparkHeadlessSessionModule {
 }
 
 export interface SparkDaemonQueueTaskExecutorOptions {
-  paths: NaviaPaths;
+  paths: SparkPaths;
   cwd?: string;
   createSparkHeadlessSessionExecutor?: CreateSparkHeadlessSessionExecutorFn;
 }

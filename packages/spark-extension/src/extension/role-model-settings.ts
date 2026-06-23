@@ -92,9 +92,11 @@ export async function ensureRoleModelSettingsForProject(input: {
     }
   }
   if (missingRoleRefs.length > 0) {
+    const visibleMissingRoleRefs = missingRoleRefs.slice(0, 8);
+    const hiddenMissingRoleRefs = missingRoleRefs.length - visibleMissingRoleRefs.length;
     return {
       ready: false,
-      message: `Spark role model unavailable before dispatch: ${missingRoleRefs.join(", ")}. Rerun with an active session model or save a concrete model with role({ action: "model_set" }) for each role.`,
+      message: `Spark role model unavailable before dispatch: ${visibleMissingRoleRefs.join(", ")}${hiddenMissingRoleRefs > 0 ? `, … ${hiddenMissingRoleRefs} more` : ""}. Rerun with an active session model or save a concrete model with role({ action: "model_set" }) for each role.`,
       checkedRoleRefs: roleRefs,
       boundRoleRefs,
       missingRoleRefs,
@@ -130,7 +132,10 @@ function renderRoleModelSettingsReadyMessage(
     ? inheritedRoleRefs.map((roleRef) => `${roleRef}=${sessionModel} (session)`)
     : [];
   const total = boundRoleRefs.length + inheritedRoleRefs.length;
-  return `Spark role models ready for ${total} role(s): ${[...saved, ...inherited].join(", ")}.`;
+  const labels = [...saved, ...inherited];
+  const visibleLabels = labels.slice(0, 8);
+  const hiddenLabels = labels.length - visibleLabels.length;
+  return `Spark role models ready for ${total} role(s): ${visibleLabels.join(", ")}${hiddenLabels > 0 ? `, … ${hiddenLabels} more` : ""}.`;
 }
 
 function uniqueRoleRefs(roleRefs: RoleRef[]): RoleRef[] {

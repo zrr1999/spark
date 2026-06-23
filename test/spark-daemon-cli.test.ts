@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { parseSparkCliCommand, runSparkCli } from "../apps/spark-tui/src/cli.ts";
+import { SparkHostRuntime } from "../apps/spark-tui/src/host/runtime.ts";
 import {
   createSparkDaemonNativeResponder,
   handleSparkDaemonCliCommand,
@@ -59,6 +60,32 @@ void test("parseSparkDaemonCliArgs parses daemon IPC commands", () => {
     state: "all",
     limit: 2,
   });
+  assert.deepEqual(
+    parseSparkDaemonCliArgs([
+      "sessions",
+      "export",
+      "--session",
+      "s1",
+      "--format",
+      "text",
+      "--leaf",
+      "root",
+    ]),
+    {
+      action: "sessions",
+      json: false,
+      subcommand: "export",
+      sessionId: "s1",
+      format: "text",
+      leafId: null,
+    },
+  );
+  assert.deepEqual(parseSparkDaemonCliArgs(["session", "replay", "--json", "--session", "s1"]), {
+    action: "sessions",
+    json: true,
+    subcommand: "replay",
+    sessionId: "s1",
+  });
   assert.deepEqual(parseSparkDaemonCliArgs(["start", "--json"]), {
     action: "start",
     json: true,
@@ -109,6 +136,21 @@ void test("daemon CLI handlers use Spark daemon local IPC instead of direct queu
         filePath: join(dir, "queued.json"),
         task: { type: "session.run" as const, sessionId: input.sessionId, prompt: input.prompt },
       }),
+      sessionList: async () => ({
+        observedAt: "2026-06-19T00:00:00.000Z",
+        sessions: [],
+        text: "No Spark sessions found",
+      }),
+      sessionExport: async (_paths: typeof paths, input: { sessionId: string }) => ({
+        observedAt: "2026-06-19T00:00:00.000Z",
+        sessionId: input.sessionId,
+        text: "exported jsonl",
+      }),
+      sessionReplay: async (_paths: typeof paths, input: { sessionId: string }) => ({
+        observedAt: "2026-06-19T00:00:00.000Z",
+        sessionId: input.sessionId,
+        text: "replayed transcript",
+      }),
       sleep: async () => undefined,
     };
 
@@ -130,6 +172,27 @@ void test("daemon CLI handlers use Spark daemon local IPC instead of direct queu
     );
     assert.equal(queue.action, "queue");
     assert.equal(queue.result.entries?.[0]?.payload.task.prompt, "hello");
+
+    const sessions = await handleSparkDaemonCliCommand(
+      { action: "sessions", json: false, subcommand: "list" },
+      client,
+    );
+    assert.equal(sessions.action, "sessions");
+    assert.match(sessions.result.text, /No Spark sessions/);
+
+    const exported = await handleSparkDaemonCliCommand(
+      { action: "sessions", json: false, subcommand: "export", sessionId: "session-a" },
+      client,
+    );
+    assert.equal(exported.action, "sessions");
+    assert.match(exported.result.text, /exported jsonl/);
+
+    const replayed = await handleSparkDaemonCliCommand(
+      { action: "sessions", json: false, subcommand: "replay", sessionId: "session-a" },
+      client,
+    );
+    assert.equal(replayed.action, "sessions");
+    assert.match(replayed.result.text, /replayed transcript/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -264,13 +327,38 @@ void test("Spark TUI and headless print attach and release workspace clients", a
       console.log = originalLog;
     }
 
+    const runtime = new SparkHostRuntime({ cwd: dir, hasUI: true });
+    runtime.registerCommand("plan", {
+      description: "Enter Spark plan mode",
+      handler: () => undefined,
+    });
+    let capturedTuiOptions: unknown;
     assert.equal(
       await runSparkCli(["hello tui"], {
         daemonClient,
-        runTui: async () => undefined,
+        createHostServices: async () =>
+          ({
+            runtime,
+            sessionStore: { list: async () => [] },
+            keybindings: undefined,
+          }) as never,
+        runTui: async (input) => {
+          capturedTuiOptions = input;
+        },
       }),
       0,
     );
+
+    assert.equal(
+      typeof capturedTuiOptions === "object" && capturedTuiOptions !== null,
+      true,
+      "TUI should receive structured native options",
+    );
+    const slashCommands = (capturedTuiOptions as { slashCommands?: Record<string, unknown> })
+      .slashCommands;
+    assert.equal(Boolean(slashCommands?.plan), true, "runtime /plan command is wired");
+    assert.equal(Boolean(slashCommands?.sessions), true, "host /sessions command is wired");
+    assert.equal(Boolean(slashCommands?.status), true, "daemon /status command is preserved");
 
     assert.deepEqual(
       attaches.map((attach) => attach.kind),

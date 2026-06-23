@@ -55,7 +55,7 @@ export function registerSparkRunReadyTasksTool(
     name: "impl_run_ready_tasks",
     label: "Spark Run Ready Tasks",
     description:
-      "Internal compatibility implementation for assign: run all currently ready Spark tasks with their bound builtin/extension/project/user Spark role specs and persist task-run artifacts. Dry-run by default. Use assign for Spark-native role/task workflow instead of spawning nested pi CLI sessions.",
+      "Internal implementation for assign: run all currently ready Spark tasks with their bound builtin/extension/project/user Spark role specs and persist task-run artifacts. Dry-run by default. Use assign for Spark-native role/task workflow instead of spawning nested pi CLI sessions.",
     parameters: Type.Object({
       dryRun: Type.Optional(Type.Boolean({ default: true })),
       maxConcurrency: Type.Optional(
@@ -169,6 +169,11 @@ export function registerSparkRunReadyTasksTool(
         timeoutMs,
       });
       const runLabels = result.runs.map((run) => run.runName ?? run.roleRef ?? run.ref);
+      const visibleRunLabels = runLabels.slice(0, 8);
+      const hiddenRunLabels = runLabels.length - visibleRunLabels.length;
+      const runLabelSummary = `${visibleRunLabels.join(", ")}${
+        hiddenRunLabels > 0 ? `, … ${hiddenRunLabels} more` : ""
+      }`;
       const timeoutSuffix = result.foregroundTimedOut
         ? " Foreground wait expired; active child runs remain detached in the background."
         : "";
@@ -177,7 +182,7 @@ export function registerSparkRunReadyTasksTool(
           {
             type: "text",
             text: runLabels.length
-              ? `Dry-run checked ${result.runs.length} Spark task run(s) with maxConcurrency=${result.maxConcurrency}: ${runLabels.join(", ")}.${timeoutSuffix}`
+              ? `Dry-run checked ${result.runs.length} Spark task run(s) with maxConcurrency=${result.maxConcurrency}: ${runLabelSummary}.${timeoutSuffix}`
               : `Dry-run found 0 ready Spark task(s) with maxConcurrency=${result.maxConcurrency}.${timeoutSuffix}`,
           },
         ],

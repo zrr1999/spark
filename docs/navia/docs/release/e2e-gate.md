@@ -44,7 +44,7 @@ Spark bridge behavior by default, so CI does not need provider credentials. That
 stubbed path still exercises daemon command-handling, log streaming, snapshot,
 artifact-projection, and server ingestion paths.
 
-Legacy standalone real-Pi mode remains documented for compatibility, but the
+Legacy standalone real-Pi mode remains documented as archive context, but the
 preferred product contract is now the Spark runtime bridge: Spark daemon task starts
 must call Spark runtime primitives and then project Spark-owned run/task/artifact
 state back into Navia.

@@ -365,14 +365,12 @@ void test("task role labels prefer active claim, finished attribution, then late
   );
 });
 
-void test("Spark prompt is a one-line mode marker", () => {
+void test("Spark prompt stays short and tool-scoped", () => {
   const prompt = renderSparkActiveSystemPrompt("");
-  assert.match(prompt, /^Spark default research lens\./);
-  assert.match(prompt, /Tools:/);
-  assert.match(
-    prompt,
-    /task_read, task_write, assign, artifact, ask, role, learning, context, recall, workflow, pi-cue, pi-graft/,
-  );
+  assert.equal(prompt.includes("\n"), false);
+  for (const tool of ["task_read", "task_write", "assign", "artifact", "ask", "role"]) {
+    assert.match(prompt, new RegExp(`\\b${tool}\\b`));
+  }
   assert.doesNotMatch(prompt, /workflow, patch/);
   assert.doesNotMatch(prompt, /no guessing: ask unless user says infer\/research/);
   assert.doesNotMatch(prompt, /Spark active/);
@@ -385,11 +383,14 @@ void test("Spark prompt is a one-line mode marker", () => {
   assert.ok(prompt.length < 260, `expected short standing prompt, got ${prompt.length}`);
 });
 
-void test("Spark prompt threads the current session mode into the marker", () => {
+void test("Spark prompt changes when the current session mode changes", () => {
+  const defaultPrompt = renderSparkActiveSystemPrompt("");
   const planPrompt = renderSparkActiveSystemPrompt("", "plan");
-  assert.match(planPrompt, /^Spark mode: plan\./);
   const implementPrompt = renderSparkActiveSystemPrompt("", "implement");
-  assert.match(implementPrompt, /mode: implement/);
+  assert.notEqual(planPrompt, defaultPrompt);
+  assert.notEqual(implementPrompt, planPrompt);
+  assert.match(planPrompt, /\bplan\b/);
+  assert.match(implementPrompt, /\bimplement\b/);
 });
 
 void test("builtin Pi roles report blockers upward instead of asking interactively", () => {

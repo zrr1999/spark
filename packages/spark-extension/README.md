@@ -1,6 +1,6 @@
 # spark
 
-High-level Spark command and policy facade for Pi. User-facing entry points are intent-specific commands plus canonical tools; the legacy generic compatibility command is no longer registered.
+High-level Spark command and policy facade for Pi. User-facing entry points are intent-specific commands plus canonical tools.
 
 It wires together Spark mode/policy code and generic `pi-*` capabilities, while package-specific ownership stays below:
 

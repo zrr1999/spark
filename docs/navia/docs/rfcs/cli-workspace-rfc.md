@@ -392,7 +392,7 @@ Behavior:
   `--all`, those are still shown but with status
   `offline · detached`. v0.1 has no archived state, so `--all`
   has no effect on workspace removal (there is no removal); it
-  exists for forward compatibility.
+  is reserved for a future archived state.
 - Empty registry prints:
    ```text
    no workspaces registered.
@@ -954,7 +954,7 @@ process management when context demands), `connection`, and `server`.
 The terms `Spark daemon`, `binding`, and `runtime` are reserved for
 protocol/database documentation and are not exposed by `ws` output.
 
-## Compatibility with existing protocol/database vocabulary
+## Existing protocol/database vocabulary
 
 This RFC keeps wire/protocol vocabulary unchanged. Server-side API
 routes remain `/api/v1/runtime/*`, server tables remain

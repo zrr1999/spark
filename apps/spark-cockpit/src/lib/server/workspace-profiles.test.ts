@@ -3,9 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { migrate, openMemoryDatabase } from "@zendev-lab/navia-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
-import { gitCommand } from "@zendev-lab/navia-system";
+import { gitCommand } from "@zendev-lab/spark-system";
 import { createWorkspaceWithOwnerBinding } from "./projection-services";
 import {
   builtinFreshWorkspaceProfile,
@@ -213,7 +213,7 @@ describe("workspace profiles", () => {
         sourceKind: "builtin",
         profileId: "builtin:fresh",
         profileName: "Fresh workspace",
-        schemaVersion: "navia.profile/v1",
+        schemaVersion: "spark.profile/v1",
       },
       createdAt: now,
     });
@@ -296,7 +296,7 @@ describe("workspace profiles", () => {
       "repos/paddle.toml",
       "settings.toml",
     ]);
-    expect(files.get("settings.toml")).toContain('schemaVersion = "navia.profile/v1"');
+    expect(files.get("settings.toml")).toContain('schemaVersion = "spark.profile/v1"');
     expect(files.get("agents/reviewer/agent.toml")).toContain('id = "reviewer"');
     expect(files.get("repos/paddle.toml")).toContain('defaultBranch = "develop"');
     expect([...files.keys()].some((path) => path.includes("artifacts"))).toBe(false);
@@ -306,12 +306,12 @@ describe("workspace profiles", () => {
 });
 
 function createProfileRepo() {
-  const dir = mkdtempSync(join(tmpdir(), "navia-profile-"));
+  const dir = mkdtempSync(join(tmpdir(), "spark-profile-"));
   mkdirSync(join(dir, "agents"));
   mkdirSync(join(dir, "repos"));
   writeFileSync(
     join(dir, "settings.toml"),
-    `schemaVersion = "navia.profile/v1"
+    `schemaVersion = "spark.profile/v1"
 
 [profile]
 id = "paddle-dev"

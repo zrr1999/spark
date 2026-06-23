@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
-import { gitCommand, resolveNaviaPaths } from "@zendev-lab/navia-system";
+import { gitCommand, resolveSparkPaths } from "@zendev-lab/spark-system";
 import { main, type CliIo } from "./cli.js";
 import { writeSparkDaemonConfig } from "./config.js";
 import { RegistrationGrantRefusedError } from "./registration.js";
@@ -116,7 +116,7 @@ function testSparkDaemonConfig(
   };
 }
 
-async function workspaceListResultFromDb(paths: ReturnType<typeof resolveNaviaPaths>) {
+async function workspaceListResultFromDb(paths: ReturnType<typeof resolveSparkPaths>) {
   const db = openSparkDaemonDatabase(paths);
   try {
     return {
@@ -182,7 +182,7 @@ describe("Spark daemon CLI", () => {
   it("accepts the workspace registration token environment variable", async () => {
     const registerWorkspaceInService = vi.fn(
       async (
-        _paths: ReturnType<typeof resolveNaviaPaths>,
+        _paths: ReturnType<typeof resolveSparkPaths>,
         options: Parameters<NonNullable<CliIo["registerWorkspaceInService"]>>[1],
       ) => ({
         id: "rtwb_env",
@@ -227,7 +227,7 @@ describe("Spark daemon CLI", () => {
     const capture = createCliIo({ stdin: stdinFrom("spark_wsreg_stdin\n") });
     const registerWorkspaceInService = vi.fn(
       async (
-        _paths: ReturnType<typeof resolveNaviaPaths>,
+        _paths: ReturnType<typeof resolveSparkPaths>,
         options: Parameters<NonNullable<CliIo["registerWorkspaceInService"]>>[1],
       ) => ({
         id: "rtwb_stdin",
@@ -328,7 +328,7 @@ describe("Spark daemon CLI", () => {
     const capture = createCliIo();
 
     await withTempNaviaEnv(async () => {
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
 
       await expect(main(["install"], capture.io)).resolves.toBe(0);
 
@@ -358,7 +358,7 @@ describe("Spark daemon CLI", () => {
       mkdirSync(workspacePath, { recursive: true });
       const realWorkspacePath = realpathSync(workspacePath);
       process.env.INIT_CWD = invocationCwd;
-      writeSparkDaemonConfig(resolveNaviaPaths({ app: "daemon" }), testSparkDaemonConfig());
+      writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
       await expect(
         main(
@@ -484,7 +484,7 @@ describe("Spark daemon CLI", () => {
 
   it("starts an interactive workspace shell from the default spark daemon command on a TTY", async () => {
     await withTempNaviaEnv(async (root) => {
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
       process.env.INIT_CWD = root;
@@ -524,14 +524,14 @@ describe("Spark daemon CLI", () => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       const realWorkspacePath = realpathSync(workspacePath);
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
       process.env.INIT_CWD = root;
       writeSparkDaemonConfig(paths, testSparkDaemonConfig());
       const registerWorkspaceInService = vi.fn(
         async (
-          _paths: ReturnType<typeof resolveNaviaPaths>,
+          _paths: ReturnType<typeof resolveSparkPaths>,
           options: Parameters<NonNullable<CliIo["registerWorkspaceInService"]>>[1],
         ) => {
           expect(options).toMatchObject({
@@ -578,7 +578,7 @@ describe("Spark daemon CLI", () => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       const realWorkspacePath = realpathSync(workspacePath);
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       process.env.INIT_CWD = root;
       writeSparkDaemonConfig(paths, testSparkDaemonConfig());
       const startService = vi.fn(() => ({
@@ -588,7 +588,7 @@ describe("Spark daemon CLI", () => {
       }));
       const registerWorkspaceInService = vi.fn(
         async (
-          _paths: ReturnType<typeof resolveNaviaPaths>,
+          _paths: ReturnType<typeof resolveSparkPaths>,
           options: Parameters<NonNullable<CliIo["registerWorkspaceInService"]>>[1],
         ) => {
           expect(options).toMatchObject({
@@ -635,11 +635,11 @@ describe("Spark daemon CLI", () => {
     await withTempNaviaEnv(async (root) => {
       const realWorkspacePath = realpathSync(root);
       process.env.INIT_CWD = root;
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       writeSparkDaemonConfig(paths, testSparkDaemonConfig());
       const registerWorkspaceInService = vi.fn(
         async (
-          _paths: ReturnType<typeof resolveNaviaPaths>,
+          _paths: ReturnType<typeof resolveSparkPaths>,
           options: Parameters<NonNullable<CliIo["registerWorkspaceInService"]>>[1],
         ) => {
           expect(options).toMatchObject({
@@ -746,7 +746,7 @@ describe("Spark daemon CLI", () => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       writeSparkDaemonConfig(paths, testSparkDaemonConfig());
       await expect(
         main(
@@ -774,7 +774,7 @@ describe("Spark daemon CLI", () => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
       writeSparkDaemonConfig(paths, testSparkDaemonConfig());
@@ -803,7 +803,7 @@ describe("Spark daemon CLI", () => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
       writeSparkDaemonConfig(paths, testSparkDaemonConfig());
@@ -816,7 +816,7 @@ describe("Spark daemon CLI", () => {
       let registerAttempts = 0;
       const registerWorkspaceInService = vi.fn(
         async (
-          requestPaths: ReturnType<typeof resolveNaviaPaths>,
+          requestPaths: ReturnType<typeof resolveSparkPaths>,
           options: Parameters<NonNullable<CliIo["registerWorkspaceInService"]>>[1],
         ) => {
           registerAttempts += 1;
@@ -846,7 +846,7 @@ describe("Spark daemon CLI", () => {
 
   it("reads workspace ls from the local daemon service when it is running", async () => {
     await withTempNaviaEnv(async (root) => {
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
       const listWorkspacesFromService = vi.fn(async () => {
@@ -883,7 +883,7 @@ describe("Spark daemon CLI", () => {
 
   it("reads workspace show from the local daemon service when it is running", async () => {
     await withTempNaviaEnv(async (root) => {
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
       const listWorkspacesFromService = vi.fn(async () => ({
@@ -951,7 +951,7 @@ describe("Spark daemon CLI", () => {
 
   it("reattaches a detached workspace through the local daemon service when it is running", async () => {
     await withTempNaviaEnv(async (root) => {
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
       writeSparkDaemonConfig(paths, testSparkDaemonConfig());
@@ -976,7 +976,7 @@ describe("Spark daemon CLI", () => {
         workspaces: [detachedWorkspace],
       }));
       const attachWorkspaceInService = vi.fn(
-        async (_paths: ReturnType<typeof resolveNaviaPaths>, id: string) => {
+        async (_paths: ReturnType<typeof resolveSparkPaths>, id: string) => {
           expect(id).toBe("rtwb_socket");
           return attachedWorkspace;
         },
@@ -1002,7 +1002,7 @@ describe("Spark daemon CLI", () => {
 
   it("reattaches a detached workspace before showing a targeted workspace", async () => {
     await withTempNaviaEnv(async (root) => {
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
       writeSparkDaemonConfig(paths, testSparkDaemonConfig());
@@ -1044,7 +1044,7 @@ describe("Spark daemon CLI", () => {
 
   it("pauses a workspace through the local daemon service when it is running", async () => {
     await withTempNaviaEnv(async (root) => {
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
       writeSparkDaemonConfig(paths, testSparkDaemonConfig());
@@ -1069,7 +1069,7 @@ describe("Spark daemon CLI", () => {
         workspaces: [workspace],
       }));
       const stopWorkspaceInService = vi.fn(
-        async (_paths: ReturnType<typeof resolveNaviaPaths>, id: string) => {
+        async (_paths: ReturnType<typeof resolveSparkPaths>, id: string) => {
           expect(id).toBe("rtwb_socket");
           return stoppedWorkspace;
         },
@@ -1101,7 +1101,7 @@ describe("Spark daemon CLI", () => {
       mkdirSync(workspacePath, { recursive: true });
       const realWorkspacePath = realpathSync(workspacePath);
       process.env.INIT_CWD = root;
-      writeSparkDaemonConfig(resolveNaviaPaths({ app: "daemon" }), testSparkDaemonConfig());
+      writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
       await expect(
         main(
@@ -1159,7 +1159,7 @@ describe("Spark daemon CLI", () => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       writeSparkDaemonConfig(paths, testSparkDaemonConfig());
 
       await expect(
@@ -1240,7 +1240,7 @@ describe("Spark daemon CLI", () => {
       mkdirSync(workspacePath, { recursive: true });
       const profile = createGitProfile(workspacePath);
       process.env.INIT_CWD = root;
-      writeSparkDaemonConfig(resolveNaviaPaths({ app: "daemon" }), testSparkDaemonConfig());
+      writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
       await expect(
         main(
@@ -1292,7 +1292,7 @@ describe("Spark daemon CLI", () => {
       mkdirSync(workspacePath, { recursive: true });
       const profile = createGitProfile(workspacePath);
       process.env.INIT_CWD = root;
-      writeSparkDaemonConfig(resolveNaviaPaths({ app: "daemon" }), testSparkDaemonConfig());
+      writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
       await expect(main(["ws", "register", "--no-service"], capture.io)).resolves.toBe(0);
 
@@ -1321,7 +1321,7 @@ describe("Spark daemon CLI", () => {
       mkdirSync(workspacePath, { recursive: true });
       createGitProfile(workspacePath);
       process.env.INIT_CWD = root;
-      writeSparkDaemonConfig(resolveNaviaPaths({ app: "daemon" }), testSparkDaemonConfig());
+      writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
       await expect(
         main(
@@ -1358,7 +1358,7 @@ describe("Spark daemon CLI", () => {
         mkdirSync(workspacePath, { recursive: true });
         const realWorkspacePath = realpathSync(workspacePath);
         process.env.INIT_CWD = root;
-        writeSparkDaemonConfig(resolveNaviaPaths({ app: "daemon" }), testSparkDaemonConfig());
+        writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
         await expect(
           main(
@@ -1457,7 +1457,7 @@ describe("Spark daemon CLI", () => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
-      writeSparkDaemonConfig(resolveNaviaPaths({ app: "daemon" }), testSparkDaemonConfig());
+      writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
       await expect(
         main(["ws", "register", "checkout", "--name", "Navia Dev", "--no-service"], capture.io),
@@ -1475,7 +1475,7 @@ describe("Spark daemon CLI", () => {
 
     await withTempNaviaEnv(async (root) => {
       process.env.INIT_CWD = root;
-      writeSparkDaemonConfig(resolveNaviaPaths({ app: "daemon" }), testSparkDaemonConfig());
+      writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
       await expect(
         main(
@@ -1496,7 +1496,7 @@ describe("Spark daemon CLI", () => {
       mkdirSync(first, { recursive: true });
       mkdirSync(second, { recursive: true });
       process.env.INIT_CWD = root;
-      writeSparkDaemonConfig(resolveNaviaPaths({ app: "daemon" }), testSparkDaemonConfig());
+      writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
       await expect(
         main(
@@ -1577,7 +1577,7 @@ describe("Spark daemon CLI", () => {
       const workspacePath = join(root, "workspace");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
-      writeSparkDaemonConfig(resolveNaviaPaths({ app: "daemon" }), testSparkDaemonConfig());
+      writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
       await expect(
         main(
@@ -1608,7 +1608,7 @@ describe("Spark daemon CLI", () => {
       const workspacePath = join(root, "workspace");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
-      writeSparkDaemonConfig(resolveNaviaPaths({ app: "daemon" }), testSparkDaemonConfig());
+      writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
       await expect(
         main(
@@ -1637,7 +1637,7 @@ describe("Spark daemon CLI", () => {
       const workspacePath = join(root, "workspace");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
-      writeSparkDaemonConfig(resolveNaviaPaths({ app: "daemon" }), testSparkDaemonConfig());
+      writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
       await expect(
         main(
@@ -1675,7 +1675,7 @@ describe("Spark daemon CLI", () => {
       const child = join(parent, "child");
       mkdirSync(child, { recursive: true });
       process.env.INIT_CWD = root;
-      writeSparkDaemonConfig(resolveNaviaPaths({ app: "daemon" }), testSparkDaemonConfig());
+      writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
       await expect(
         main(
@@ -1713,7 +1713,7 @@ describe("Spark daemon CLI", () => {
       mkdirSync(first, { recursive: true });
       mkdirSync(second, { recursive: true });
       process.env.INIT_CWD = root;
-      writeSparkDaemonConfig(resolveNaviaPaths({ app: "daemon" }), testSparkDaemonConfig());
+      writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
       await expect(
         main(
@@ -1758,7 +1758,7 @@ describe("Spark daemon CLI", () => {
       const workspacePath = join(root, "workspace");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       writeSparkDaemonConfig(paths, testSparkDaemonConfig());
 
       await expect(
@@ -1819,7 +1819,7 @@ describe("Spark daemon CLI", () => {
       const workspacePath = join(root, "workspace");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       writeSparkDaemonConfig(paths, testSparkDaemonConfig());
 
       await expect(
@@ -1924,7 +1924,7 @@ describe("Spark daemon CLI", () => {
       const workspacePath = join(root, "workspace");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
       const daemonStatusFromService = vi.fn(async () => ({
@@ -1969,7 +1969,7 @@ describe("Spark daemon CLI", () => {
 
   it("reports unreachable daemon status when the Spark daemon cannot be reached", async () => {
     await withTempNaviaEnv(async () => {
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
       const daemonStatusFromService = vi.fn(async () => {
@@ -1989,7 +1989,7 @@ describe("Spark daemon CLI", () => {
 
   it("reads running daemon status summaries from the local daemon service", async () => {
     await withTempNaviaEnv(async () => {
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
       const daemonStatusFromService = vi.fn(async () => ({
@@ -2025,7 +2025,7 @@ describe("Spark daemon CLI", () => {
 
   it("builds legacy status from daemon status instead of direct workspace reads", async () => {
     await withTempNaviaEnv(async () => {
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
       writeSparkDaemonConfig(
@@ -2066,7 +2066,7 @@ describe("Spark daemon CLI", () => {
     const capture = createCliIo();
 
     await withTempNaviaEnv(async () => {
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.logDir, { recursive: true });
       writeFileSync(paths.logFile, "one\ntwo\nthree\nfour\n");
 
@@ -2080,7 +2080,7 @@ describe("Spark daemon CLI", () => {
     const capture = createCliIo();
 
     await withTempNaviaEnv(async () => {
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
 
       await expect(main(["daemon", "logs"], capture.io)).resolves.toBe(0);
       expect(capture.stdout()).toContain(`no logs yet: ${paths.logFile}`);
@@ -2100,7 +2100,7 @@ describe("Spark daemon CLI", () => {
 
   it("requests the local daemon to stop before falling back to process termination", async () => {
     await withTempNaviaEnv(async () => {
-      const paths = resolveNaviaPaths({ app: "daemon" });
+      const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
       const daemonStopFromService = vi.fn(async () => ({

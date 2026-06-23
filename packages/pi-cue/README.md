@@ -22,7 +22,7 @@ When an SSH profile is active, daemon-side paths such as `cwd`, `cue_run.path`, 
 
 Resource-oriented tools:
 
-- `cue_exec` — execute commands and create cue-shell jobs through the active transport profile. Tool/API runs use the current Pi session working directory by default and pipe mode (`pty: false`) by default; with SSH profiles the working directory must be valid on the remote host. Set `pty: true` only when a command genuinely needs terminal semantics. Foreground output is tailed to 16 KiB per stream by default (`tail_bytes: 0` for full output). Pass resource requirements with `needs` (for example `{ gpu: 1, gpu_mem: "24GiB" }`) instead of embedding `:run(need...)` in the command string.
+- `cue_exec` — execute commands and create cue-shell jobs through the active transport profile. Tool/API runs use the current Pi session working directory by default and pipe mode (`pty: false`) by default; with SSH profiles the working directory must be valid on the remote host. Set `pty: true` only when a command genuinely needs terminal semantics. Foreground output is tailed to 16 KiB per stream by default; `tail_bytes` must be positive. Pass resource requirements with `needs` (for example `{ gpu: 1, gpu_mem: "24GiB" }`) instead of embedding `:run(need...)` in the command string.
 - `cue_run` — run a `.cue` file via cue-shell script mode, mirroring `cue run <file.cue>`. Top-level items execute sequentially and fail fast; successful no-output items are summarized instead of expanded one-by-one.
 - `cue_script` — run an inline `.cue` script body. Use this when the script content is generated in the Pi session; prefer `cue_run` when a real `.cue` file exists on disk.
 - `script_run` — run a script file with an explicit `language`. First batch supports `cue-shell` and `python`; `cue-shell` delegates to RunScript, while `python` runs `python3` or the selected `venv` interpreter through cue-shell job execution.
@@ -31,7 +31,7 @@ Resource-oriented tools:
 - `cue_resources` — inspect resource providers and snapshots via `action: "providers"` or `action: "resources"`.
 - `cue_schedule` — add/list/pause/resume/remove scheduled or one-shot jobs. List output is limited to 20 rows by default.
 - `cue_scope` — inspect scopes, HEAD env, or cue-shell config. Scope lists omit env unless requested.
-- `cue_history` — recent history only by default; `limit` and `tail_bytes` are passed to `cued` when supported. Use `limit: 0` and `tail_bytes: 0` for full text.
+- `cue_history` — recent history only by default; `limit` and `tail_bytes` are passed to `cued` when supported and must be positive.
 
 The extension also disables the built-in `bash` tool on session start so command execution goes through cue-shell.
 

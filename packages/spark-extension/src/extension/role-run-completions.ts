@@ -71,7 +71,7 @@ export function formatHiddenRoleRunInbox(input: HiddenRoleRunInbox): string {
   if (input.remaining > 0)
     lines.push(`- ${input.remaining} more unread result(s) remain for a later turn.`);
   lines.push(
-    'Use artifact refs or task_read({ action: "run_status", runAction: "inspect" }) for full details if needed.',
+    'Use artifact refs or task_read({ action: "run_status", runAction: "inspect" }) for bounded details if needed.',
   );
   return lines.join("\n");
 }
@@ -103,9 +103,11 @@ export function appendRecentRoleRunCompletionLines(
 function formatRoleRunCompletionLine(summary: TaskRunCompletionSummary): string {
   const role = summary.roleRef ? ` role=${shortRoleLabel(summary.roleRef)}` : "";
   const runName = summary.runName ? ` name=${summary.runName}` : "";
+  const visibleArtifactRefs = summary.artifactRefs.slice(0, 5);
+  const hiddenArtifactRefs = summary.artifactRefs.length - visibleArtifactRefs.length;
   const artifacts =
     summary.artifactRefs.length > 0
-      ? ` artifacts=${summary.artifactRefs.join(",")}`
+      ? ` artifacts=${visibleArtifactRefs.join(",")}${hiddenArtifactRefs > 0 ? `,…+${hiddenArtifactRefs}` : ""}`
       : " artifacts=none";
   return `- [${summary.status}] task=${summary.taskRef} run=${summary.runRef}${role}${runName} — ${truncateInline(summary.summary, 180)}${artifacts}`;
 }

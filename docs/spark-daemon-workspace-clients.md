@@ -80,7 +80,7 @@ The runtime protocol schemas define the reusable projection shapes:
 - `executor`: `{ state, clientId?, activeInvocationCount, activeAgentCount, lastSeenAt?, unhealthyReason? }`
 - workspace snapshot `control`: `{ mode: "full" | "snapshot_only", reason?, serverMutationAllowed }`
 
-These fields are optional for backward compatibility during migration, but new fixtures exercise them.
+These fields are required in new fixtures; migrations should repair older snapshots explicitly.
 
 ## Mutation policy
 
@@ -109,4 +109,4 @@ Cockpit should mirror this policy for user experience, but correctness must live
 - Daemon store/local RPC tests prove attach/release/heartbeat and borrowed derivation.
 - Daemon command tests prove borrowed mutation rejection and snapshot/cancel exceptions.
 - Cockpit tests prove disabled/rejected server mutations while borrowed or disconnected.
-- Grep cleanup classifies any remaining `runner`, `busy`, or `stale` hits as internal compatibility, TUI-local wording, or historical docs.
+- Grep cleanup classifies any remaining `runner`, `busy`, or `stale` hits as TUI-local wording or historical docs.

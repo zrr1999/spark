@@ -2,7 +2,7 @@
 
 Spark runtime adapter for executing one Spark task with a registered role.
 
-Runtime resolves reusable `RoleSpec`s from `@zendev-lab/pi-roles` and adapts concrete role execution back into Spark task/run/artifact state. Hosts can inject a `SparkRoleInstructionExecutor` for daemon-native execution; without one, the package keeps the legacy `runRole()` Pi child launcher as a compatibility fallback. Graph-level ready-task scheduling and durable workflow-run state live in `@zendev-lab/pi-workflows`; `@zendev-lab/spark-runtime` stays focused on one task execution at a time.
+Runtime resolves reusable `RoleSpec`s from `@zendev-lab/pi-roles` and adapts concrete role execution back into Spark task/run/artifact state. Hosts inject a `SparkRoleInstructionExecutor` for daemon-native execution. Graph-level ready-task scheduling and durable workflow-run state live in `@zendev-lab/pi-workflows`; `@zendev-lab/spark-runtime` stays focused on one task execution at a time.
 
 Responsibilities:
 

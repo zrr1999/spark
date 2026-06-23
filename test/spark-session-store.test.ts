@@ -79,6 +79,34 @@ void test("SparkSessionStore save/load round-trips current Pi JSONL header and e
   }
 });
 
+void test("SparkSessionStore resolves session refs and creates parent-linked forks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-session-fork-"));
+  try {
+    const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
+    const parent = store.createSession({ id: "parent", timestamp: "2026-06-03T01:00:00.000Z" });
+    store.appendMessage(parent, { role: "user", content: "parent prompt" });
+    await store.save(parent);
+
+    assert.equal((await store.findById("parent"))?.path, parent.path);
+    assert.equal((await store.loadByRef("session:parent")).path, parent.path);
+
+    const fork = store.forkSession(parent, {
+      id: "child",
+      timestamp: "2026-06-03T01:01:00.000Z",
+    });
+    assert.equal(fork.header.id, "child");
+    assert.equal(fork.header.parentSession, parent.path);
+    assert.notEqual(fork.entries[0], parent.entries[0]);
+    assert.deepEqual(fork.entries, parent.entries);
+
+    store.appendMessage(fork, { role: "assistant", content: "child answer" });
+    assert.equal(parent.entries.length, 1);
+    assert.equal(fork.entries.length, 2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("SparkSessionStore lists sessions and returns the most recently modified session", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-list-"));
   try {

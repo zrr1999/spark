@@ -74,7 +74,7 @@ import {
   type ServerCommandPayload,
   type serverCommandEnvelopeSchema,
 } from "@zendev-lab/spark-protocol";
-import type { NaviaPaths } from "@zendev-lab/navia-system";
+import type { SparkPaths } from "@zendev-lab/spark-system";
 import type { SparkDaemonWorkspace } from "../store/workspaces.js";
 import {
   artifactProjected,
@@ -92,7 +92,7 @@ export interface SparkDaemonBridgeInput {
   command: ServerCommandEnvelope;
   workspace: SparkDaemonWorkspace;
   route: RouteContext;
-  paths: NaviaPaths;
+  paths: SparkPaths;
   db: DatabaseSync;
   emit(message: unknown): void;
   invocationId?: string;

@@ -15,11 +15,11 @@ Commands:
 Tools:
 
 - `task_read` — read-only project/task/TODO/run graph inspection. Use `action: "task_status" | "project_status" | "workspace_status" | "project_list" | "run_status"` for one-task status, one-project status, broad workspace status, project lists, and workflow-run inspection/reconciliation. Scoped status actions are strict: use `workspace_status` for all-project summaries, `project_status` for one project, and `task_status` with `taskRef`/`task` for one task.
-- `task_write` — project/task/plan-item graph mutations. Use `action: "project_use" | "project_rename" | "project_metadata_update" | "claim" | "plan" | "finish" | "todo_update" | "cache_cleanup"`; Projects are permanent records, so there is no project finish/status lifecycle action. Project mutations are limited to session-local selection/creation plus rename/metadata updates. Creating or claiming a task is plan-locked, and every task must have a bound `task.plan` before claim succeeds. Goal completion is a separate evidence-based request: the main session calls `goal({ action: "complete" })`, the reviewer audits, and Spark applies the approved transition. Planning and claiming sync concrete `task.plan.items` (derived from legacy/import `steps`/`successCriteria` when needed) into active task plan items; use `todo_update` ops `upsert_done` to intentionally create-and-complete one exact item, and strict `done` when a typo should fail.
+- `task_write` — project/task/plan-item graph mutations. Use `action: "project_use" | "project_rename" | "project_metadata_update" | "claim" | "plan" | "finish" | "todo_update" | "cache_cleanup"`; Projects are permanent records, so there is no project finish/status lifecycle action. Project mutations are limited to session-local selection/creation plus rename/metadata updates. Creating or claiming a task is plan-locked, and every task must have a bound `task.plan` before claim succeeds. Goal completion is a separate evidence-based request: the main session calls `goal({ action: "complete" })`, the reviewer audits, and Spark applies the approved transition. Planning and claiming sync concrete `task.plan.items` (derived from imported `steps`/`successCriteria` when needed) into active task plan items; use `todo_update` ops `upsert_done` to intentionally create-and-complete one exact item, and strict `done` when a typo should fail.
 - `assign` — explicit Spark assignment/spawn surface. Use `assign({ dryRun: true })` to inspect the ready frontier and `assign({ dryRun: false })` only when dispatching ready tasks through the workflow runtime; `task_write` does not expose `run_ready`, and public `run_control` is not part of the default tool surface.
 - `goal` — Spark goal facade. Use `action: "status" | "set" | "start" | "pause" | "resume" | "clear" | "edit" | "complete"`. Goals are session-scoped and infer the objective from the current project when no objective is given, so there is no separate read-only infer action. `goal({ action: "status" })` treats durable goal state as authoritative: when no goal is set it says so explicitly, warns that compact/historical summaries are hints only, and reports the current project relationship/recommended next action when a project is selected. Only one goal can be active per session: starting or setting a goal updates the active session goal in place. Active goal turns may use reviewer-backed canonical ask auto-answer for material decisions; this is scoped to goal work and is separate from final completion approval. Goal completion is reviewer-gated: the main session requests completion with `goal({ action: "complete" })`, the reviewer audits and returns a verdict, and Spark applies the approved state transition. Manual/public pause is also reviewer-gated: the reviewer evaluates whether the pause reason justifies stopping without completion, and rejected pause reviews leave the goal active. Blocked `action: "complete"` requests return structured remaining-work details such as `goal_completion_needs_changes`; approved requests persist the completed goal state. `/goal` command policy requires an explicit objective for new command-started goals, does not overwrite existing active/paused goals, uses idle-interval foreground ticks rather than queue/backlog semantics, drops stale goal tick context when the goal pauses/changes, and session reset shutdowns (`reload`, `resume`, `new`, `fork`, `revert`, `reset`) auto-pause active goals before the reset. Generic goal primitives live in `pi-goal`, while Spark owns goal storage, widget integration, reviewer loop policy, and command policy.
 - `ask` — canonical generic ask tool. Use `action: "ask"` for structured asks and `action: "flow"` when the fullscreen multi-question flow renderer is required. Focused and flow implementations are internal behind this public surface, not active public/default tools.
-- `artifact` — canonical generic artifact/evidence tool. Use `action: "list"`, `"read"`, `"record"`, `"link"`, or `"compact"`; reads are truncated by default and full reads are explicit. `kind` classifies what an artifact IS on a single functional axis (origin lives in `provenance.producer`, lifecycle in record `status`): `document` (prose/markdown deliverables), `record` (structured JSON records of decisions/results/events), `trace` (execution output/transcripts), and `knowledge` (reusable learning material). Legacy names are normalized on read (`research`/`plan`/`review`/`verification`/`role-run`/`ask-answer`/`run-trace`/learning lifecycle names, plus older planning/handoff/cue names); the record path accepts only the four canonical kinds and rejects retired names with a directed hint.
+- `artifact` — canonical generic artifact/evidence tool. Use `action: "list"`, `"read"`, `"record"`, `"link"`, or `"compact"`; reads are bounded by `maxChars` and list output is limited by `limit`. `kind` classifies what an artifact IS on a single functional axis (origin lives in `provenance.producer`, lifecycle in record `status`): `document` (prose/markdown deliverables), `record` (structured JSON records of decisions/results/events), `trace` (execution output/transcripts), and `knowledge` (reusable learning material). The record and read paths accept only these four canonical kinds.
 - `learning` — canonical generic evidence-backed learning tool. Use `action: "record" | "search" | "list" | "read" | "mark_stale" | "supersede" | "reject" | "export_markdown" | "import_markdown"`. Learnings remain distinct from recall/memory and use ignored plural local `.learnings/` stores unless explicitly exported.
 - `context` — canonical registered context-provider tool. Use `action: "list"` or `action: "preview"` with optional `providerIds`/`budgetChars`; content must come from registered providers such as `spark.active`, not arbitrary prompt text.
 - `recall` — canonical controlled recall-candidate tool. Use explicit `scope: "user" | "workspace" | "repo"` with `record_candidate`, `list`, `search`, and `reject`; recall candidates are not `.learnings/` and are not automatic memory.
@@ -33,10 +33,10 @@ Naming/render policy:
 
 - Use one canonical `tool({ action })` when the operations share a domain/resource, state, permissions, result envelope, and UI/rendering contract.
 - Use focused `tool_action` names only for independent discoverable capabilities, materially distinct schemas/risk/UI/result shapes, or external public tool contracts that cannot be collapsed safely.
-- Do not keep dual public/default compatibility surfaces. Shared implementation helpers must be named for their owner/domain, not kept as legacy `spark_*` tool configs.
+- Do not keep dual public/default surfaces. Shared implementation helpers must be named for their owner/domain, not kept as old `spark_*` tool configs.
 - Public/default action tools render as `tool action=<value> ...` in TUI call summaries. This includes `task_read`, `task_write`, `artifact`, `learning`, `recall`, `workflow`, `context`, `goal`, `role`, `ask`, `cue_jobs`, `cue_schedule`, `cue_scope`, and `graft_repo`. `assign` and focused graft lifecycle tools render their main argument directly when they have materially distinct schemas or result envelopes.
 
-Retired `spark_*` compatibility tools are not part of the active public or internal tool surface. Spark may keep private helper functions/modules to share implementation code, but canonical tools must not dispatch through legacy `spark_*` tool configs.
+Retired `spark_*` tools are not part of the active public or internal tool surface. Spark may keep private helper functions/modules to share implementation code, but canonical tools must not dispatch through old `spark_*` tool configs.
 
 Automatic behavior:
 
@@ -65,7 +65,7 @@ Automatic behavior:
      language is clear from context
 3. SPARK.md idea-capture workflows are external skills, not Spark product defaults:
    - `.spark/` is local runtime state and is created only when durable state is needed by the host/tool path
-   - compatibility initialization may materialize root `SPARK.md` only when `.git` exists in the current cwd; direct commands and external skills should not rely on that as the default deliverable
+   - initialization may materialize root `SPARK.md` only when `.git` exists in the current cwd; direct commands and external skills should not rely on that as the default deliverable
 4. Natural-language detection follows command guidance:
    - ordinary input stays in default lightweight research/answering unless it explicitly needs durable planning/execution state
    - ordinary coding tasks are not intercepted
@@ -97,7 +97,7 @@ Automatic behavior:
      `TaskGraphStoreConflictError` instead of overwriting newer
      state; use `update()` for locked read/modify/write flows
    - task plan item state is loaded from and saved outside `.spark/projects/`; V2 stores it in canonical SQLite at `.spark/todos/todos.sqlite` to avoid concurrent role-run overwrites
-   - legacy session-scoped snapshots remain import-only compatibility data; new planning should use durable project tasks and task plan items
+   - session-scoped snapshots are import-only data; new planning should use durable project tasks and task plan items
    - expired task claims are swept on active Spark turns and by
      a lightweight background interval; stale claims become
      retryable `pending` tasks, while runtime execution timeouts
@@ -195,7 +195,7 @@ Automatic behavior:
    - no placeholder task content is shown when no task is claimed
    - active Spark turns include SPARK.md as persistent
      project intent in the system prompt
-   - `task_read({ action: "project_status" })` defaults to an active, limited diagnostic view for the current project; use `workspace_status` for broad all-project summaries and full history explicitly when needed
+   - `task_read({ action: "project_status" })` defaults to an active, limited diagnostic view for the current project; use `workspace_status` for broad all-project summaries and targeted run/artifact reads for historical evidence
 7. When Spark is active, a turn hint reminds the model to
    use `task_read`, `task_write`, `assign`, `artifact`, `ask`, `role`, `learning`, `context`, `recall`, `workflow`, `pi-cue`, and `pi-graft` tools.
 8. Spark display-name quality is model-maintained when inspected context
@@ -318,7 +318,7 @@ Shared ask contract:
 
 Resource-oriented tools:
 
-- `cue_exec` — execute commands and create cue-shell jobs. Tool/API runs use the current Pi session working directory by default and pipe mode (`pty: false`) by default; set `pty: true` only for commands that genuinely need terminal semantics. Foreground stdout/stderr are tailed to 16 KiB per stream by default; pass `tail_bytes: 0` for full output.
+- `cue_exec` — execute commands and create cue-shell jobs. Tool/API runs use the current Pi session working directory by default and pipe mode (`pty: false`) by default; set `pty: true` only for commands that genuinely need terminal semantics. Foreground stdout/stderr are tailed to 16 KiB per stream by default; `tail_bytes` must be positive.
 - `cue_run` — run a `.cue` file via cue-shell script mode, mirroring `cue run <file.cue>`. Top-level items execute sequentially and fail fast; per-item stdout/stderr are tailed by default.
 - `cue_script` — run an inline `.cue` script body. Use this when the script content is generated in the Pi session; prefer `cue_run` when a real `.cue` file exists on disk.
 - `script_run` — run a script file with an explicit `language`. First batch supports `cue-shell` and `python`; `cue-shell` delegates to RunScript, while `python` runs `python3` or the selected `venv` interpreter through cue-shell job execution.
@@ -327,7 +327,7 @@ Resource-oriented tools:
 - `cue_resources` — inspect resource providers and snapshots via `action: "providers"` or `action: "resources"`.
 - `cue_schedule` — add/list/pause/resume/remove scheduled or one-shot jobs. List output is limited to 20 rows by default.
 - `cue_scope` — inspect scopes, HEAD env, or cue-shell config. Scope lists are limited to 20 rows by default and omit env unless requested.
-- `cue_history` — show recent cue-shell history. Defaults to recent lines plus 16 KiB byte tail; pass `limit: 0` and `tail_bytes: 0` for full history.
+- `cue_history` — show recent cue-shell history. Defaults to recent lines plus 16 KiB byte tail; `limit` and `tail_bytes` must be positive.
 
 `pi-cue` also disables the built-in `bash` tool on
 session start, matching the old `pi-cue-shell` execution

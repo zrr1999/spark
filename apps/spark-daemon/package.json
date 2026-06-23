@@ -35,9 +35,9 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.79.4",
     "@types/ws": "^8.18.1",
-    "@zendev-lab/navia-db": "workspace:*",
-    "@zendev-lab/navia-system": "workspace:*",
+    "@zendev-lab/spark-db": "workspace:*",
     "@zendev-lab/spark-protocol": "workspace:*",
+    "@zendev-lab/spark-system": "workspace:*",
     "esbuild": "^0.28.0",
     "typescript": "^6.0.3",
     "vitest": "npm:@voidzero-dev/vite-plus-test@latest"

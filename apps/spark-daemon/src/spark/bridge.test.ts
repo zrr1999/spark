@@ -7,14 +7,14 @@ import {
   runtimeProtocolVersion,
   serverCommandEnvelopeSchema,
 } from "@zendev-lab/spark-protocol";
-import { resolveNaviaPaths } from "@zendev-lab/navia-system";
+import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import { openSparkDaemonDatabase } from "../store/schema.js";
 import { addWorkspace } from "../store/workspaces.js";
 import { runSparkCommandBridge } from "./bridge.js";
 
 function setup() {
   const root = mkdtempSync(join(tmpdir(), "spark-daemon-spark-bridge-"));
-  const paths = resolveNaviaPaths({
+  const paths = resolveSparkPaths({
     app: "daemon",
     env: { HOME: root },
     overrides: {

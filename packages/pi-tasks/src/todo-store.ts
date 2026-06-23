@@ -64,7 +64,7 @@ export class TaskTodoStoreFormatError extends Error {
   readonly filePath: string;
 
   constructor(filePath: string, message: string) {
-    super(`invalid task plan-item compatibility store: ${filePath}: ${message}`);
+    super(`invalid task plan-item store: ${filePath}: ${message}`);
     this.name = "TaskTodoStoreFormatError";
     this.filePath = filePath;
   }

@@ -8,16 +8,22 @@ afterEach(() => {
   process.env = { ...originalEnv };
 });
 
-describe("server system paths", () => {
-  it("uses the server XDG cache path for artifact previews", () => {
+describe("Cockpit system paths", () => {
+  it("uses the Spark Cockpit XDG cache path for artifact previews", () => {
     process.env = { HOME: "/Users/example" };
 
     expect(defaultArtifactCacheRoot()).toBe(
-      join("/Users/example", ".cache", "navia", "server", "artifacts"),
+      join("/Users/example", ".cache", "spark", "cockpit", "artifacts"),
     );
   });
 
-  it("honors NAVIA_SERVER_CACHE_DIR for artifact previews", () => {
+  it("honors SPARK_COCKPIT_CACHE_DIR for artifact previews", () => {
+    process.env = { HOME: "/Users/example", SPARK_COCKPIT_CACHE_DIR: "/Users/example/spark-cache" };
+
+    expect(defaultArtifactCacheRoot()).toBe(join("/Users/example/spark-cache", "artifacts"));
+  });
+
+  it("keeps NAVIA_SERVER_CACHE_DIR as a legacy artifact preview alias", () => {
     process.env = { HOME: "/Users/example", NAVIA_SERVER_CACHE_DIR: "/Users/example/navia-cache" };
 
     expect(defaultArtifactCacheRoot()).toBe(join("/Users/example/navia-cache", "artifacts"));

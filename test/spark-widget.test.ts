@@ -15,6 +15,7 @@ import {
   type SparkWidgetTui,
 } from "../packages/spark-extension/src/ui/spark-widget.ts";
 import { SparkWidgetController } from "../packages/spark-extension/src/extension/spark-widget-controller.ts";
+import { defaultSparkDynamicWorkflowEventStore } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-event-store.ts";
 import { setSessionGoal } from "../packages/spark-extension/src/extension/spark-session-goals.ts";
 import { setSessionLoop } from "../packages/spark-extension/src/extension/spark-session-loops.ts";
 import { saveCurrentProjectRef } from "../packages/spark-extension/src/extension/session-state.ts";
@@ -171,6 +172,59 @@ void test("spark widget shows compact workflow-run progress above project detail
 
   assertLineIncludes(lines[0], ["Spark UX redesign", "Tasks(", "total=2", "claimed=0/0"]);
   assertLineIncludes(lines[1], ["Background work:", "1/3", "running", "run:abc"]);
+});
+
+void test("spark widget shows active dynamic workflow snapshot progress", () => {
+  const lines = renderSparkWidgetLines(
+    widgetState({
+      dynamicWorkflowRun: {
+        status: "running",
+        runRef: "run:abcdef12-live",
+        name: "live bridge",
+        completedNodes: 1,
+        totalNodes: 3,
+        active: true,
+      },
+      taskCountTotal: 2,
+    }),
+    { terminal: { columns: 120 }, requestRender() {} },
+    theme,
+  );
+
+  assertLineIncludes(lines[0], ["Spark UX redesign", "Tasks(", "total=2"]);
+  assertLineIncludes(lines[1], [
+    "Dynamic workflow:",
+    "live bridge",
+    "running",
+    "1/3 nodes",
+    "run:abcdef12",
+  ]);
+});
+
+void test("spark widget shows undelivered dynamic workflow result inbox entry", () => {
+  const lines = renderSparkWidgetLines(
+    widgetState({
+      dynamicWorkflowRun: {
+        status: "succeeded",
+        runRef: "run:12345678-result",
+        name: "result bridge",
+        completedNodes: 3,
+        totalNodes: 3,
+        delivery: "result",
+      },
+      taskCountTotal: 1,
+    }),
+    { terminal: { columns: 120 }, requestRender() {} },
+    theme,
+  );
+
+  assertLineIncludes(lines[1], [
+    "Dynamic workflow result:",
+    "result bridge",
+    "succeeded",
+    "3/3 nodes",
+    "run:12345678",
+  ]);
 });
 
 void test("spark widget suppresses duplicate background row when session agent is shown", () => {
@@ -355,6 +409,117 @@ void test("spark widget controller lets active loop replace a completed goal in 
     const lines = component?.render() ?? [];
     assert.match(lines[0] ?? "", /◆ Loop\(●\): Active loop should be visible/);
     assert.doesNotMatch(lines.join("\n"), /Completed old goal/);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("spark widget controller projects active dynamic workflow snapshots", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-widget-dynamic-workflow-"));
+  try {
+    await mkdir(join(dir, ".spark"), { recursive: true });
+    const graph = new TaskGraph();
+    const project = graph.createProject({
+      title: "Dynamic workflow widget project",
+      description: "Exercise active dynamic workflow widget state.",
+      outputLanguage: "en",
+    });
+    await defaultTaskGraphStore(dir).save(graph);
+    await saveCurrentProjectRef(dir, undefined, project.ref);
+    const store = defaultSparkDynamicWorkflowEventStore(dir);
+    const runRef = "run:abcdef12-widget" as const;
+    await store.startRun({
+      runRef,
+      source: { kind: "inline", label: "inline workflow" },
+      script:
+        "export const meta = { name: 'widget live', description: 'widget live workflow' }\nreturn 'ok'",
+      meta: { name: "widget live", description: "widget live workflow" },
+      options: {},
+      now: "2026-06-23T00:00:00.000Z",
+    });
+    await store.appendEvent(runRef, {
+      type: "phase_started",
+      nodeId: "phase:Scan",
+      parentId: "run",
+      nodeKind: "phase",
+      title: "Scan",
+      phase: "Scan",
+      timestamp: "2026-06-23T00:00:01.000Z",
+    });
+
+    let component: ReturnType<NonNullable<SparkWidgetRegistration["cb"]>> | undefined;
+    const controller = new SparkWidgetController();
+    await controller.refresh(dir, {
+      ui: {
+        setWidget(_key: string, cb: SparkWidgetRegistration["cb"] | undefined) {
+          component = cb?.(tui, theme);
+        },
+      },
+    });
+
+    const text = component?.render().join("\n") ?? "";
+    assert.match(text, /Dynamic workflow: widget live · running · 0\/2 nodes · run:abcdef12/);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("spark widget controller projects undelivered dynamic workflow results", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-widget-dynamic-workflow-result-"));
+  try {
+    await mkdir(join(dir, ".spark"), { recursive: true });
+    const graph = new TaskGraph();
+    const project = graph.createProject({
+      title: "Dynamic workflow result widget project",
+      description: "Exercise dynamic workflow result widget state.",
+      outputLanguage: "en",
+    });
+    await defaultTaskGraphStore(dir).save(graph);
+    await saveCurrentProjectRef(dir, undefined, project.ref);
+    const store = defaultSparkDynamicWorkflowEventStore(dir);
+    const run = await store.start({
+      source: { kind: "inline", label: "inline result workflow" },
+      script:
+        "export const meta = { name: 'widget result', description: 'widget result workflow' }\nreturn 'ok'",
+      meta: { name: "widget result", description: "widget result workflow" },
+      options: {},
+      now: "2026-06-23T00:00:00.000Z",
+    });
+    await store.finish(run.ref, {
+      meta: { name: "widget result", description: "widget result workflow" },
+      result: { report: "ready" },
+      phases: [],
+      agentCount: 0,
+      journal: [],
+    });
+
+    let component: ReturnType<NonNullable<SparkWidgetRegistration["cb"]>> | undefined;
+    const controller = new SparkWidgetController();
+    await controller.refresh(dir, {
+      ui: {
+        setWidget(_key: string, cb: SparkWidgetRegistration["cb"] | undefined) {
+          component = cb?.(tui, theme);
+        },
+      },
+    });
+
+    const text = component?.render().join("\n") ?? "";
+    assert.match(
+      text,
+      new RegExp(
+        `Dynamic workflow result: widget result · succeeded · 1/1 nodes · ${run.ref.slice(0, 12)}`,
+      ),
+    );
+
+    await store.acknowledge(run.ref);
+    await controller.refresh(dir, {
+      ui: {
+        setWidget(_key: string, cb: SparkWidgetRegistration["cb"] | undefined) {
+          component = cb?.(tui, theme);
+        },
+      },
+    });
+    assert.doesNotMatch(component?.render().join("\n") ?? "", /Dynamic workflow result:/);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }

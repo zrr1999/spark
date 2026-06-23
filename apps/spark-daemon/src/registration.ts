@@ -6,7 +6,7 @@ import {
   runtimeWorkspaceRegistrationResponseSchema,
   type RuntimeRegistrationResponse,
 } from "@zendev-lab/spark-protocol";
-import type { NaviaPaths } from "@zendev-lab/navia-system";
+import type { SparkPaths } from "@zendev-lab/spark-system";
 import WebSocket from "ws";
 import { readSparkDaemonConfig, writeSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
 import { sparkDaemonSupportedFeatures, sparkDaemonVersion } from "./daemon.js";
@@ -45,7 +45,7 @@ export interface SparkDaemonRegistrationResult {
 }
 
 export async function registerSparkDaemonWithToken(
-  paths: NaviaPaths,
+  paths: SparkPaths,
   input: SparkDaemonRegistrationInput & { registrationToken: string },
 ) {
   const current = readSparkDaemonConfig(paths);
@@ -75,7 +75,7 @@ export async function registerSparkDaemonWithToken(
 }
 
 export async function ensureSparkDaemonRegistrationForWorkspace(
-  paths: NaviaPaths,
+  paths: SparkPaths,
   input: SparkDaemonRegistrationInput,
 ): Promise<SparkDaemonRegistrationResult> {
   let current = readSparkDaemonConfig(paths);

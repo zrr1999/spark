@@ -11,7 +11,11 @@ import {
   processSparkDaemonQueueBatch,
 } from "./queue-worker.ts";
 import type { SparkDaemonPathOptions } from "./paths.ts";
-import type { SparkDaemonActiveTasks, SparkDaemonTaskExecutor } from "./types.ts";
+import type {
+  SparkDaemonActiveTasks,
+  SparkDaemonEventSink,
+  SparkDaemonTaskExecutor,
+} from "./types.ts";
 
 const DEFAULT_IDLE_POLL_INTERVAL_MS = 250;
 
@@ -19,12 +23,14 @@ export interface SparkDaemonWorkerContext {
   queue: SparkDaemonQueue;
   active: SparkDaemonActiveTasks;
   executeTask: SparkDaemonTaskExecutor;
+  emitEvent?: SparkDaemonEventSink;
 }
 
 export interface CreateSparkDaemonWorkerContextOptions extends SparkDaemonPathOptions {
   queue?: SparkDaemonQueue;
   active?: SparkDaemonActiveTasks;
   executeTask?: SparkDaemonTaskExecutor;
+  emitEvent?: SparkDaemonEventSink;
 }
 
 export interface SparkDaemonWorkerLoopOptions {
@@ -43,6 +49,7 @@ export function createSparkDaemonWorkerContext(
     queue: options.queue ?? new SparkDaemonQueue(options),
     active: options.active ?? createSparkDaemonActiveTasks(),
     executeTask: options.executeTask ?? defaultSparkDaemonTaskExecutor,
+    emitEvent: options.emitEvent,
   };
 }
 
@@ -53,6 +60,7 @@ export async function runSparkDaemonWorkerIteration(
     queue: options.context.queue,
     active: options.context.active,
     executeTask: options.context.executeTask,
+    emitEvent: options.context.emitEvent,
     label: options.label,
     limit: options.limit,
     concurrency: options.concurrency,

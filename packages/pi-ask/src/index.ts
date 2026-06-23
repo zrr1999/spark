@@ -1,3 +1,7 @@
+import type {
+  ExtensionInteractionRequest,
+  ExtensionInteractionResponse,
+} from "@zendev-lab/pi-extension-api";
 import { truncateToWidth } from "@zendev-lab/spark-tui/text";
 import { Type } from "typebox";
 
@@ -65,6 +69,7 @@ export interface PiAskUi {
   ) => Promise<{ value?: string; customText?: string } | string | undefined>;
   confirm?: (title: string, message: string) => Promise<boolean>;
   input?: (title: string, defaultValue?: string) => Promise<string | undefined>;
+  interaction?: (request: ExtensionInteractionRequest) => Promise<ExtensionInteractionResponse>;
   notify?: (message: string, level?: "info" | "warning" | "error" | "success") => void;
 }
 
@@ -136,6 +141,9 @@ export function createAskUserRequest(input: PiAskRequest): PiAskRequest {
 export async function askUser(request: PiAskRequest, ui?: PiAskUi): Promise<PiAskResult> {
   const normalized = createAskUserRequest(request);
   if (!ui) return defaultAskUserResult(normalized);
+
+  const interactionResult = await askUserViaInteraction(normalized, ui);
+  if (interactionResult) return interactionResult;
 
   const answers: Record<string, PiAskAnswerEntry> = {};
   for (const question of normalized.questions) {
@@ -295,11 +303,131 @@ function ctxUi(ctx: unknown): PiAskUi | undefined {
       typeof (ui as { input?: unknown }).input === "function"
         ? (ui as { input: PiAskUi["input"] }).input
         : undefined,
+    interaction:
+      typeof (ui as { interaction?: unknown }).interaction === "function"
+        ? (ui as { interaction: PiAskUi["interaction"] }).interaction
+        : undefined,
     notify:
       typeof (ui as { notify?: unknown }).notify === "function"
         ? (ui as { notify: PiAskUi["notify"] }).notify
         : undefined,
   };
+}
+
+async function askUserViaInteraction(
+  request: PiAskRequest,
+  ui: PiAskUi,
+): Promise<PiAskResult | undefined> {
+  if (!ui.interaction) return undefined;
+  try {
+    const response = await ui.interaction(createAskUserInteractionRequest(request));
+    return askUserResultFromInteractionResponse(request, response);
+  } catch (error) {
+    ui.notify?.(`ask_user interaction failed: ${formatUnknownError(error)}`, "warning");
+    return createAskUserResult({ cancelled: true, answers: {}, status: "cancelled" });
+  }
+}
+
+function createAskUserInteractionRequest(request: PiAskRequest): ExtensionInteractionRequest {
+  return {
+    version: "1",
+    kind: "askFlow",
+    requestId: `ask_user:${Date.now().toString(36)}`,
+    title: request.title?.trim() || "Ask user",
+    prompt: request.context,
+    source: "extension",
+    metadata: { tool: "ask_user" },
+    mode: request.mode ?? "clarification",
+    questions: request.questions.map((question) => ({
+      id: question.id,
+      prompt: question.prompt,
+      ...(question.header !== undefined ? { header: question.header } : {}),
+      type: question.type ?? "single",
+      required: question.required === true,
+      defaultValues: question.defaultValues ?? [],
+      options: question.options ?? [],
+    })),
+  };
+}
+
+function askUserResultFromInteractionResponse(
+  request: PiAskRequest,
+  response: ExtensionInteractionResponse,
+): PiAskResult | undefined {
+  if (response.kind !== "askFlow") return undefined;
+  if (response.status === "blocked" || response.status === "error") return undefined;
+  if (response.status === "cancelled") {
+    return createAskUserResult({ cancelled: true, answers: {}, status: "cancelled" });
+  }
+  if (response.status !== "answered") return undefined;
+  return createAskUserResult({
+    cancelled: false,
+    answers: normalizeAskUserInteractionAnswers(request, response.answers),
+    ...(response.nextAction === "block" ? { nextAction: "block" as const } : {}),
+  });
+}
+
+function normalizeAskUserInteractionAnswers(
+  request: PiAskRequest,
+  value: unknown,
+): Record<string, PiAskAnswerEntry> {
+  if (!value || typeof value !== "object") return {};
+  const rawAnswers = value as Record<string, unknown>;
+  const answers: Record<string, PiAskAnswerEntry> = {};
+  for (const question of request.questions) {
+    const raw = rawAnswers[question.id];
+    const answer = normalizeAskUserInteractionAnswer(question, raw);
+    if (answer) answers[question.id] = answer;
+  }
+  return answers;
+}
+
+function normalizeAskUserInteractionAnswer(
+  question: PiAskQuestion,
+  value: unknown,
+): PiAskAnswerEntry | undefined {
+  if (typeof value === "string") {
+    return toAskUserAnswer(
+      parseAskChoice(question.options ?? [], value, question.type ?? "single"),
+    );
+  }
+  if (Array.isArray(value)) {
+    return toAskUserAnswer(
+      parseAskChoice(question.options ?? [], value.join(", "), question.type ?? "multi"),
+    );
+  }
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const values = stringArray(raw.values);
+  const labels = stringArray(raw.labels);
+  const customText = typeof raw.customText === "string" ? raw.customText : undefined;
+  const comment = typeof raw.comment === "string" ? raw.comment : undefined;
+  const notes = typeof raw.notes === "string" ? raw.notes : undefined;
+  const preview = typeof raw.preview === "string" ? raw.preview : undefined;
+  if (values.length === 0 && labels.length === 0 && customText === undefined) return undefined;
+  return {
+    values,
+    labels: labels.length > 0 ? labels : labelsForValues(question, values),
+    ...(customText !== undefined ? { customText } : {}),
+    ...(comment !== undefined ? { comment } : {}),
+    ...(notes !== undefined ? { notes } : {}),
+    ...(preview !== undefined ? { preview } : {}),
+  };
+}
+
+function labelsForValues(question: PiAskQuestion, values: string[]): string[] {
+  const byValue = new Map((question.options ?? []).map((option) => [option.value, option.label]));
+  return values.map((value) => byValue.get(value) ?? value);
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+function formatUnknownError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 interface ResolvedQuestion {

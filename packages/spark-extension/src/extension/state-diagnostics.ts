@@ -200,9 +200,9 @@ async function collectStoreV2DoctorFindings(
       code: "STORE_V2_LEGACY_IMPORT_ONLY_PRESENT",
       severity: "warning",
       path: legacy,
-      message: `Legacy import-only store is still present after V2 cutover: ${legacy}`,
+      message: `Import-only store is still present after V2 cutover: ${legacy}`,
       repair:
-        "Run the migration/doctor apply path after backup verification, or explicitly archive the legacy store once V2 invariants pass.",
+        "Run the migration/doctor apply path after backup verification, or explicitly archive the old store once V2 invariants pass.",
     });
   }
 
@@ -284,7 +284,7 @@ async function collectStoreV2DoctorFindings(
           path: relative(cwd, file.path),
           message: "Subject-owned review record is missing subjectKind or subjectRef.",
           repair:
-            "Recreate the review record from the review artifact or move it to legacy import quarantine.",
+            "Recreate the review record from the review artifact or move it to import quarantine.",
         });
         continue;
       }

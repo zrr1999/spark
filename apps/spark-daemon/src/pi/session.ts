@@ -7,13 +7,13 @@ import {
   SettingsManager,
   type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
-import type { NaviaPaths } from "@zendev-lab/navia-system";
+import type { SparkPaths } from "@zendev-lab/spark-system";
 import { createNaviaResourceLoader } from "./resource-loader.js";
 
 export interface RunPiPromptOptions {
   cwd: string;
   prompt: string;
-  paths: NaviaPaths;
+  paths: SparkPaths;
   tools: string[];
   invocationId: string;
   persistSession?: boolean;

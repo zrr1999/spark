@@ -469,11 +469,26 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     await executeTool(
       requireTool(tools, "task_write"),
       {
+        action: "plan",
+        tasks: [
+          {
+            name: "widget-refresh-task",
+            title: "Widget refresh task",
+            description: "Exercise widget refresh after claim.",
+            kind: "implement",
+            plan: executionReadyPlan("Exercise widget refresh after claim."),
+          },
+        ],
+      },
+      ctx,
+    );
+    renderRequests = 0;
+
+    await executeTool(
+      requireTool(tools, "task_write"),
+      {
         action: "claim",
-        title: "Widget refresh task",
-        description: "Exercise widget refresh after claim.",
-        kind: "implement",
-        plan: executionReadyPlan("Exercise widget refresh after claim."),
+        task: "widget-refresh-task",
       },
       ctx,
     );

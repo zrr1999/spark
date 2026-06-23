@@ -102,6 +102,27 @@ export interface ToolInfo {
 
 export type ExtensionUiNotifyLevel = "info" | "warning" | "error" | "success";
 
+export interface ExtensionInteractionRequest {
+  kind: string;
+  requestId: string;
+  title: string;
+  version?: string | number;
+  prompt?: string;
+  createdAt?: string;
+  source?: "tui" | "web" | "daemon" | "extension" | "runtime" | "test" | (string & {});
+  metadata?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface ExtensionInteractionResponse {
+  kind: string;
+  requestId: string;
+  status: "answered" | "cancelled" | "blocked" | "error" | (string & {});
+  message?: string;
+  metadata?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 export interface ExtensionUi {
   notify?: (message: string, level?: ExtensionUiNotifyLevel) => void;
   confirm?: (title: string, message: string) => Promise<boolean>;
@@ -111,6 +132,13 @@ export interface ExtensionUi {
     title: string,
     input: { options: string[]; customLabel: string },
   ) => Promise<{ value?: string; customText?: string } | string | undefined>;
+  /**
+   * Protocol-shaped interaction bridge for host-rendered UI. Spark hosts pass
+   * Spark interaction protocol payloads here; portable extensions should keep
+   * requests structural and fall back to legacy primitives when a host returns
+   * `blocked` or omits the hook.
+   */
+  interaction?: (request: ExtensionInteractionRequest) => Promise<ExtensionInteractionResponse>;
   setStatus?: (key: string, text: string | undefined) => void;
   setWidget?: (
     key: string,
@@ -457,7 +485,7 @@ export interface TaskClaim {
 export interface TaskAttribution {
   /** Session/main actor identity. Child runs are rendered as sessionId/runName. */
   sessionId?: string;
-  /** Compatibility role spec attribution for hosts that execute tasks through reusable role specs. */
+  /** Role spec attribution for hosts that execute tasks through reusable role specs. */
   roleRef?: RoleRef;
   /** Concrete child run name. Main-session completions should leave this unset. */
   runName?: string;
@@ -491,7 +519,7 @@ export interface TaskPlan {
   nonGoals: string[];
   successCriteria: string[];
   evidenceRequired: string[];
-  /** Active task progress truth. Legacy compatibility rows import into these items. */
+  /** Active task progress truth. */
   items?: TaskPlanItem[];
   /** Legacy/import-only execution-step input retained for old snapshots and callers. */
   steps: string[];

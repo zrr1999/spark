@@ -104,9 +104,57 @@ void test("SparkAgentLoop runs a single-turn stop with one streamed text chunk",
   assert.equal(loop.getState(), "idle");
   assert.equal(host.isIdle(), true);
   assert.equal(loop.getMessages().length, 2, "user + assistant");
-  const types = events.map((event) => event.type);
+  const types = events.filter((event) => event.type !== "view_event").map((event) => event.type);
   assert.deepEqual(types.slice(0, 2), ["user_message", "stream_event"]);
   assert.equal(events.find((event) => event.type === "turn_complete") !== undefined, true);
+});
+
+void test("SparkAgentLoop projects user, streaming, final, and run updates to view-model events", async () => {
+  const viewEvents: unknown[] = [];
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-view-test",
+    ui: { publishView: (event) => viewEvents.push(event) },
+  });
+  const events: SparkAgentLoopEvent[] = [];
+  const finalMessage = buildAssistant([{ type: "text", text: "hello protocol" }]);
+  const fake = makeFakeStream({
+    rounds: [
+      [
+        { type: "start", partial: finalMessage },
+        { type: "text_delta", contentIndex: 0, delta: "hello protocol", partial: finalMessage },
+        { type: "done", reason: "stop", message: finalMessage },
+      ],
+    ],
+  });
+  const loop = new SparkAgentLoop({ host, streamFunction: fake, getModel: () => TEST_MODEL });
+  loop.setViewSessionId("session-view-loop");
+  loop.onEvent((event) => events.push(event));
+
+  await loop.submit("hi");
+
+  const protocolEvents = events.filter((event) => event.type === "view_event");
+  assert.equal(protocolEvents.length, viewEvents.length);
+  assert.equal(
+    viewEvents.some((event: any) => event.type === "run.update" && event.run.status === "running"),
+    true,
+  );
+  assert.equal(
+    viewEvents.some(
+      (event: any) => event.type === "run.update" && event.run.status === "succeeded",
+    ),
+    true,
+  );
+  assert.equal(
+    viewEvents.some(
+      (event: any) =>
+        event.type === "session.message" &&
+        event.sessionId === "session-view-loop" &&
+        event.message.role === "assistant" &&
+        event.message.status === "done" &&
+        event.message.text === "hello protocol",
+    ),
+    true,
+  );
 });
 
 void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", async () => {
@@ -190,7 +238,11 @@ void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", as
 });
 
 void test("SparkAgentLoop dispatches tool calls and feeds tool results back into the next turn", async () => {
-  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-test" });
+  const viewEvents: unknown[] = [];
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-test",
+    ui: { publishView: (event) => viewEvents.push(event) },
+  });
   let toolCalls = 0;
   host.registerTool({
     name: "echo",
@@ -198,7 +250,25 @@ void test("SparkAgentLoop dispatches tool calls and feeds tool results back into
     parameters: { type: "object" },
     async execute(_id, params) {
       toolCalls += 1;
-      return { content: [{ type: "text", text: `echoed:${(params as { x?: string }).x ?? ""}` }] };
+      return {
+        content: [{ type: "text", text: `echoed:${(params as { x?: string }).x ?? ""}` }],
+        details: {
+          task: {
+            ref: "task:echo-1",
+            title: "Echo task",
+            status: "running",
+            projectRef: "proj:echo",
+            outputArtifacts: ["artifact:echo-1"],
+          },
+          artifact: {
+            ref: "artifact:echo-1",
+            title: "Echo artifact",
+            kind: "record",
+            format: "json",
+            producer: "task",
+          },
+        },
+      };
     },
   });
 
@@ -241,6 +311,124 @@ void test("SparkAgentLoop dispatches tool calls and feeds tool results back into
   assert.equal(loop.getState(), "idle");
   const toolResultEvent = events.find((event) => event.type === "tool_result");
   assert.equal(toolResultEvent !== undefined, true);
+  assert.equal(
+    viewEvents.some(
+      (event: any) =>
+        event.type === "session.message" &&
+        event.message.role === "tool" &&
+        event.message.status === "pending" &&
+        event.message.toolName === "echo",
+    ),
+    true,
+  );
+  assert.equal(
+    viewEvents.some(
+      (event: any) =>
+        event.type === "session.message" &&
+        event.message.role === "tool" &&
+        event.message.status === "done" &&
+        event.message.toolName === "echo",
+    ),
+    true,
+  );
+  assert.equal(
+    viewEvents.some(
+      (event: any) =>
+        event.type === "task.update" &&
+        event.task.ref === "task:echo-1" &&
+        event.task.status === "running" &&
+        event.task.artifactRefs.includes("artifact:echo-1") &&
+        event.task.metadata.sourceTool === "echo",
+    ),
+    true,
+  );
+  assert.equal(
+    viewEvents.some(
+      (event: any) =>
+        event.type === "artifact.update" &&
+        event.artifact.ref === "artifact:echo-1" &&
+        event.artifact.kind === "record" &&
+        event.artifact.metadata.sourceTool === "echo",
+    ),
+    true,
+  );
+});
+
+void test("SparkAgentLoop blocks approval-required tools without explicit approval", async () => {
+  const interactionRequests: unknown[] = [];
+  const daemonEvents: unknown[] = [];
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-approval-test",
+    ui: {
+      interaction: async (request) => {
+        interactionRequests.push(request);
+        return {
+          version: 1,
+          kind: "toolApproval",
+          requestId: request.requestId,
+          status: "blocked",
+          approved: false,
+          message: "approval unavailable",
+          metadata: {},
+        };
+      },
+    },
+  });
+  host.onDaemonEvent((event) => daemonEvents.push(event));
+  let toolCalls = 0;
+  host.registerTool({
+    name: "dangerous",
+    description: "requires approval",
+    parameters: { type: "object" },
+    requiresApproval: true,
+    async execute() {
+      toolCalls += 1;
+      return { content: [{ type: "text", text: "should not run" }] };
+    },
+  } as never);
+
+  const toolCallEnvelope: ToolCall = {
+    type: "toolCall",
+    id: "tc-approval",
+    name: "dangerous",
+    arguments: { path: "important.txt" },
+  };
+  const firstAssistant = buildAssistant([toolCallEnvelope], "toolUse");
+  const finalAssistant = buildAssistant([{ type: "text", text: "after blocked tool" }]);
+  const fake = makeFakeStream({
+    rounds: [
+      [{ type: "done", reason: "toolUse", message: firstAssistant }],
+      [{ type: "done", reason: "stop", message: finalAssistant }],
+    ],
+  });
+  const loop = new SparkAgentLoop({ host, streamFunction: fake, getModel: () => TEST_MODEL });
+
+  await loop.submit("try dangerous tool");
+
+  assert.equal(toolCalls, 0);
+  assert.equal((interactionRequests[0] as { kind?: string }).kind, "toolApproval");
+  assert.equal(
+    daemonEvents.some(
+      (event: any) =>
+        event.type === "daemon.interaction.request" &&
+        event.request.kind === "toolApproval" &&
+        event.request.toolName === "dangerous",
+    ),
+    true,
+  );
+  assert.equal(
+    daemonEvents.some(
+      (event: any) =>
+        event.type === "daemon.interaction.response" &&
+        event.response.kind === "toolApproval" &&
+        event.response.status === "blocked",
+    ),
+    true,
+  );
+  const toolResult = loop.getMessages().find((message) => message.role === "toolResult");
+  assert.equal(toolResult !== undefined, true);
+  assert.equal((toolResult as { isError: boolean }).isError, true);
+  assert.match(JSON.stringify(toolResult), /approval unavailable/);
 });
 
 void test("SparkAgentLoop preserves tool-returned isError results", async () => {
@@ -344,11 +532,12 @@ void test("SparkAgentLoop drainOutboxIntoMessages turns sendUserMessage envelope
   assert.equal((messages[3] as AssistantMessage).content[0]!.type, "text");
 });
 
-void test("SparkAgentLoop triggerTurn queues hidden custom messages", async () => {
+void test("SparkAgentLoop triggerTurn queues hidden custom messages without visible user echo", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-trigger-turn-custom-test" });
   const finalAssistant = buildAssistant([{ type: "text", text: "goal tick executed" }]);
   let streamCalls = 0;
   let contextMessages: Message[] = [];
+  const eventTypes: string[] = [];
   const fake: SparkAgentStreamFunction = (_model, context) => {
     streamCalls += 1;
     contextMessages = [...context.messages];
@@ -362,12 +551,13 @@ void test("SparkAgentLoop triggerTurn queues hidden custom messages", async () =
   const loop = new SparkAgentLoop({ host, streamFunction: fake, getModel: () => TEST_MODEL });
   const completed = new Promise<void>((resolve) => {
     loop.onEvent((event) => {
+      eventTypes.push(event.type);
       if (event.type === "turn_complete") resolve();
     });
   });
 
   host.sendMessage(
-    { customType: "spark-goal-request", content: "Spark goal tick", display: false },
+    { customType: "spark-goal-request", content: "queued goal instruction", display: false },
     { deliverAs: "followUp", triggerTurn: true },
   );
 
@@ -378,8 +568,9 @@ void test("SparkAgentLoop triggerTurn queues hidden custom messages", async () =
   assert.equal(contextMessages.length, 1);
   assert.equal(contextMessages[0]?.role, "user");
   assert.match(String(contextMessages[0]?.content), /\[spark-goal-request\]/);
-  assert.match(String(contextMessages[0]?.content), /Spark goal tick/);
+  assert.match(String(contextMessages[0]?.content), /queued goal instruction/);
   assert.match(JSON.stringify(loop.getMessages()), /spark-goal-request/);
+  assert.equal(eventTypes.includes("user_message"), false);
 });
 
 void test("SparkAgentLoop triggerTurn uses queued user instruction without duplicate custom", async () => {
@@ -402,23 +593,24 @@ void test("SparkAgentLoop triggerTurn uses queued user instruction without dupli
     });
   });
 
-  host.sendUserMessage("Spark goal tick", { deliverAs: "followUp" });
+  host.sendUserMessage("queued goal instruction", { deliverAs: "followUp" });
   host.sendMessage(
-    { customType: "spark-goal-request", content: "Spark goal tick", display: false },
+    { customType: "spark-goal-request", content: "queued goal instruction", display: false },
     { deliverAs: "nextTurn", triggerTurn: true },
   );
 
   await completed;
   assert.equal(contextMessages.length, 1);
-  assert.equal(contextMessages[0]?.content, "Spark goal tick");
+  assert.equal(contextMessages[0]?.content, "queued goal instruction");
   assert.doesNotMatch(JSON.stringify(loop.getMessages()), /spark-goal-request/);
 });
 
-void test("SparkAgentLoop triggerTurn runs hidden before_agent_start context", async () => {
+void test("SparkAgentLoop triggerTurn runs hidden before_agent_start context without visible user echo", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-trigger-turn-test" });
   const finalAssistant = buildAssistant([{ type: "text", text: "goal tick executed" }]);
   let streamCalls = 0;
   let contextMessages: Message[] = [];
+  const eventTypes: string[] = [];
   host.on("before_agent_start", () => ({
     message: {
       customType: "spark-mode-context",
@@ -439,12 +631,13 @@ void test("SparkAgentLoop triggerTurn runs hidden before_agent_start context", a
   const loop = new SparkAgentLoop({ host, streamFunction: fake, getModel: () => TEST_MODEL });
   const completed = new Promise<void>((resolve) => {
     loop.onEvent((event) => {
+      eventTypes.push(event.type);
       if (event.type === "turn_complete") resolve();
     });
   });
 
   host.sendMessage(
-    { customType: "spark-goal-request", content: "Spark goal tick", display: false },
+    { customType: "spark-goal-request", content: "queued goal instruction", display: false },
     { deliverAs: "nextTurn", triggerTurn: true },
   );
 
@@ -457,6 +650,7 @@ void test("SparkAgentLoop triggerTurn runs hidden before_agent_start context", a
   assert.match(String(contextMessages[0]?.content), /\[spark-mode-context\]/);
   assert.match(String(contextMessages[0]?.content), /hidden context payload/);
   assert.doesNotMatch(JSON.stringify(loop.getMessages()), /spark-goal-request/);
+  assert.equal(eventTypes.includes("user_message"), false);
 });
 
 void test("SparkAgentLoop abort cancels the in-flight stream and returns to idle", async () => {

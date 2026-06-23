@@ -13,11 +13,7 @@ import type {
   ToolConfig,
   ToolInfo,
 } from "@zendev-lab/pi-extension-api";
-import type {
-  SparkInteractionRequest,
-  SparkInteractionResponse,
-  SparkViewModelEvent,
-} from "@zendev-lab/spark-protocol";
+import type { SparkDaemonEvent, SparkViewModelEvent } from "@zendev-lab/spark-protocol";
 
 export interface RegisteredTool {
   config: ToolConfig;
@@ -82,8 +78,8 @@ export interface SparkHostCustomMessage {
 }
 
 export interface SparkHostUiTransport extends ExtensionUi {
+  setEditorText?: (text: string) => void;
   customMessage?: (message: SparkHostCustomMessage) => void;
-  interaction?: (request: SparkInteractionRequest) => Promise<SparkInteractionResponse>;
   publishView?: (event: SparkViewModelEvent) => void;
 }
 
@@ -100,6 +96,7 @@ export type RegisteredCommandMap = Map<string, RegisteredCommand>;
 export type EventListenerMap = Map<EventName, EventListener[]>;
 
 export type ToolRegistrationListener = (info: ToolInfo) => void;
+export type SparkDaemonEventListener = (event: SparkDaemonEvent) => void;
 
 export interface SparkHostMessageRenderOptions {
   expanded: boolean;

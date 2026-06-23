@@ -16,7 +16,7 @@ What works:
 - Spark daemon-originated human asks can be bridged into Inbox and resumed by answer delivery.
 - Spark daemon-produced task-summary artifacts have canonical content refs, a lazy server content/cache path, and artifact-detail rendering.
 - Resource and agent selections are carried through task start into Spark daemon execution metadata.
-- `pnpm run check` and `pnpm run build` provide repeatable Spark-root gates for the cockpit and Spark daemon bridge. Historical standalone release gates remain documented for compatibility.
+- `pnpm run check` and `pnpm run build` provide repeatable Spark-root gates for the cockpit and Spark daemon bridge. Historical standalone release gates remain documented as archive notes.
 
 What does **not** yet work as a product:
 
@@ -55,7 +55,7 @@ Non-goals for this MVP:
 
 ### P0 — Truth, bootstrap, and resetability
 
-P0 is implemented. In the merged Spark repo, use `pnpm run preview`, `pnpm run check`, and `pnpm run build` from the Spark root. Historical standalone helpers (`pnpm local:start`, `pnpm local:reset`, release gates) remain compatibility references.
+P0 is implemented. In the merged Spark repo, use `pnpm run preview`, `pnpm run check`, and `pnpm run build` from the Spark root. Historical standalone helpers (`pnpm local:start`, `pnpm local:reset`, release gates) remain archive references.
 
 | ID   | Workstream                  | Depends on            | Outcome                                                                                                  | Acceptance evidence                           |
 | ---- | --------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------- |

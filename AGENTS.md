@@ -12,15 +12,15 @@ Target package topology follows type-first names:
 - `apps/spark-cockpit` — Spark Cockpit SvelteKit local web cockpit/projection app. Keep SvelteKit/browser-specific checks isolated from the non-Svelte Spark package checks.
 - `packages/pi-*` — host-neutral Pi-style capabilities and contracts (`pi-extension-api`, `pi-tasks`, `pi-workflows`, `pi-cue`, …). These must not depend on Spark product packages.
 - `packages/spark-extension` — Spark Pi-style extension facade. It owns Spark command/tool policy and depends on `pi-extension-api` instead of concrete host runtimes.
-- `packages/spark-runtime`, `packages/spark-protocol`, and `packages/spark-tui` — Spark shared runtime, protocol/schema, and reusable TUI boundary packages.
-- `packages/spark-cockpit-*` — target names for Cockpit-private implementation packages. The current `packages/navia-*` packages are legacy-named transition packages only.
+- `packages/spark-runtime`, `packages/spark-protocol`, `packages/spark-tui`, `packages/spark-db`, and `packages/spark-system` — Spark shared runtime, protocol/schema, reusable TUI boundary, SQLite/migration, and local-system helper packages.
+- `packages/spark-cockpit-*` — reserved for Cockpit-private implementation packages; do not put daemon/shared helpers behind Cockpit-private names.
 - `docs/navia/` — Historical cockpit product, design, architecture, and release-readiness documentation imported from the standalone Navia repository.
 
 ## Tooling
 
 - **pnpm** — `packageManager` is pinned in root `package.json`; workspaces live in `pnpm-workspace.yaml` (catalog + overrides align Vite / Vite+ / Vitest versions with [sixbones.dev](https://github.com/zrr1999/sixbones.dev)).
 - **Vite+** — Root [`vite.config.ts`](./vite.config.ts) drives `vp fmt`, `vp lint`, and `vp check` (format + lint + type-aware checks). Install the `vp` CLI (see [viteplus.dev](https://viteplus.dev)) for local use; CI installs it via [`voidzero-dev/setup-vp`](https://github.com/voidzero-dev/setup-vp).
-- **TypeScript / tests** — `pnpm run check` is the root validation gate: SvelteKit sync, Pi package boundary guard, `vp check`, root Node tests, workspace package checks, Spark daemon tests, and Navia tests.
+- **TypeScript / tests** — `pnpm run check` is the root validation gate: SvelteKit sync, Pi package boundary guard, `vp check`, root Node tests, workspace package checks, Spark Cockpit tests, and Spark daemon tests.
 - **Focused tests** — Run `node --experimental-strip-types --test test/name.test.ts` for one root Node test file. Package-specific tests can still be run with `pnpm --filter <package> run test`.
 - **Git hooks** — Managed by [prek](https://github.com/j178/prek) from [`prek.toml`](./prek.toml). Run `pnpm exec prek install --hook-type commit-msg --hook-type pre-commit` once if hooks are missing.
 
@@ -31,7 +31,7 @@ Target package topology follows type-first names:
 | `pnpm install`             | Install dependencies                                           |
 | `pnpm run check`           | Run the root validation gate                                   |
 | `pnpm run build`           | Build the Spark daemon CLI and Spark Cockpit web app           |
-| `pnpm run preview`         | Start the local Navia/Spark cockpit dev server                 |
+| `pnpm run preview`         | Start the local Spark Cockpit dev server                       |
 | `pnpm install -g .`        | Link the unified root `spark` CLI                              |
 | `pnpm run publish`         | Validate, build, and publish the selected public npm packages  |
 
@@ -53,8 +53,8 @@ Target package topology follows type-first names:
 
 ## Notes for agents
 
-- Public/default repo-owned tools should use canonical `tool({ action })` surfaces when operations share one domain/state/permission/render/result contract; do not keep fragmented compatibility aliases public, and render action tools as `tool action=<value> ...`.
+- Public/default repo-owned tools should use canonical `tool({ action })` surfaces when operations share one domain/state/permission/render/result contract; do not keep fragmented duplicate aliases public, and render action tools as `tool action=<value> ...`.
 - Prefer `vp fmt` / `vp check` before committing when touching TS/Markdown; pre-commit runs `vp check --fix`.
 - Do not commit secrets or `.env` files.
 - Spark Cockpit local app/projection state currently lives under `.navia/`; Spark runtime state remains under `.spark/`; local learnings remain under `.learnings/`. Treat all three as ignored local state unless explicitly exported or documented.
-- Boundary checks should keep `pi-*` independent from Spark/Cockpit packages, keep Spark shared packages independent from Cockpit/daemon adapter packages, and treat legacy `navia-*` names in active docs as migration-only context until they are renamed or merged away.
+- Boundary checks should keep `pi-*` independent from Spark/Cockpit packages, keep Spark shared packages independent from Cockpit/daemon adapter packages, and treat legacy `navia-*` names in active docs as historical/migration-only context.

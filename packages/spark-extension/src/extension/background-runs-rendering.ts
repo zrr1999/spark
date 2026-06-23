@@ -2,6 +2,19 @@ import type { RoleRunJsonEventsTail, RoleRunTextTail } from "@zendev-lab/spark-r
 import type { SparkBackgroundChildRunView, SparkBackgroundRunsDetails } from "./background-runs.ts";
 import { shortRoleLabel } from "./task-ownership.ts";
 
+const BACKGROUND_ACTIVE_CHILD_LIMIT = 5;
+const BACKGROUND_CHILD_LIST_LIMIT = 10;
+const BACKGROUND_DETAIL_RUN_LIMIT = 5;
+const BACKGROUND_DETAIL_CHILD_LIMIT = 8;
+const BACKGROUND_INLINE_REF_LIMIT = 6;
+
+function formatInlineRefs(refs: readonly string[]): string {
+  if (refs.length === 0) return "none";
+  const visible = refs.slice(0, BACKGROUND_INLINE_REF_LIMIT);
+  const suffix = refs.length > visible.length ? `, … ${refs.length - visible.length} more` : "";
+  return `${visible.join(",")}${suffix}`;
+}
+
 function roleRunTailMetadata(tail: RoleRunTextTail): string {
   const shown = tail.truncated ? `, showing last ${tail.tailBytes} bytes` : "";
   const suffix = tail.truncated ? " (truncated)" : "";
@@ -22,7 +35,9 @@ function appendBackgroundChildSummaryLines(
   if (child.summary) lines.push(`${indent}Summary: ${child.summary}`);
   else if (child.errorMessage) lines.push(`${indent}Error: ${child.errorMessage}`);
   if (child.artifactRefs.length > 0)
-    lines.push(`${indent}Artifacts: ${child.artifactRefs.join(",")}`);
+    lines.push(
+      `${indent}Artifacts: ${child.artifactRefs.length} (${formatInlineRefs(child.artifactRefs)})`,
+    );
   if (child.transcriptRef) lines.push(`${indent}Transcript: ${child.transcriptRef}`);
   if (child.stdoutTail)
     lines.push(`${indent}Stdout tail: ${roleRunTailMetadata(child.stdoutTail)}`);
@@ -49,7 +64,7 @@ function renderBackgroundChildListLine(child: SparkBackgroundChildRunView): stri
 
 export function renderSparkBackgroundRunsText(
   details: SparkBackgroundRunsDetails,
-  options: { includeDetails: boolean },
+  options: { detailed: boolean },
 ): string {
   const lines: string[] = [];
   const activeRunRef = details.summary.activeRunRef;
@@ -103,7 +118,7 @@ export function renderSparkBackgroundRunsText(
       `  Progress: ${details.summary.completed}/${details.summary.scheduled} tasks finished, ${details.summary.activeChildren} active child runs`,
     );
   } else if (problem?.status === "timed_out") {
-    lines.push(`Background work: legacy timeout record ${problem.runRef}`);
+    lines.push(`Background work: historical timeout record ${problem.runRef}`);
     lines.push(
       "  This is an old foreground-wait timeout record; new background runs should stay running while children are active.",
     );
@@ -124,7 +139,7 @@ export function renderSparkBackgroundRunsText(
   const activeChildren = details.childRuns.filter((candidate) => candidate.activeProcess);
   if (activeChildren.length > 0) {
     lines.push("  Active children:");
-    for (const child of activeChildren) {
+    for (const child of activeChildren.slice(0, BACKGROUND_ACTIVE_CHILD_LIMIT)) {
       const taskLabel = child.taskName
         ? ` task=@${child.taskName}`
         : child.taskRef
@@ -136,28 +151,47 @@ export function renderSparkBackgroundRunsText(
         `  - ${child.runRef} ${child.roleRef ? shortRoleLabel(child.roleRef) : "unknown"}${taskLabel}${pidLabel}${summaryLabel}`,
       );
     }
+    if (activeChildren.length > BACKGROUND_ACTIVE_CHILD_LIMIT)
+      lines.push(
+        `  - … ${activeChildren.length - BACKGROUND_ACTIVE_CHILD_LIMIT} more active child run(s); inspect by runRef/taskRef for details`,
+      );
   }
   if (details.action === "list" && details.childRuns.length > 0) {
     lines.push("  Child runs:");
-    for (const child of details.childRuns) lines.push(renderBackgroundChildListLine(child));
-  }
-  if (options.includeDetails) {
-    for (const run of details.runs) {
+    for (const child of details.childRuns.slice(0, BACKGROUND_CHILD_LIST_LIMIT))
+      lines.push(renderBackgroundChildListLine(child));
+    if (details.childRuns.length > BACKGROUND_CHILD_LIST_LIMIT)
       lines.push(
-        `  Workflow run ${run.runRef}: ${run.status} scheduled=${run.scheduled} completed=${run.completed} incomplete=${run.incompleteTaskRefs.join(",") || "none"}`,
+        `  - … ${details.childRuns.length - BACKGROUND_CHILD_LIST_LIMIT} more child run(s); inspect by runRef/taskRef for details`,
+      );
+  }
+  if (options.detailed) {
+    const detailRuns = details.runs.slice(0, BACKGROUND_DETAIL_RUN_LIMIT);
+    for (const run of detailRuns) {
+      lines.push(
+        `  Workflow run ${run.runRef}: ${run.status} scheduled=${run.scheduled} completed=${run.completed} incomplete=${formatInlineRefs(run.incompleteTaskRefs)}`,
       );
       if (run.legacyTimedOut)
         lines.push(
-          "    Legacy timeout record: old foreground-wait timeout; reconcile/inspect before acking.",
+          "    Historical timeout record: old foreground-wait timeout; reconcile/inspect before acking.",
         );
-      for (const action of run.nextActions) lines.push(`    Next: ${action}`);
+      for (const action of run.nextActions.slice(0, 3)) lines.push(`    Next: ${action}`);
+      if (run.nextActions.length > 3)
+        lines.push(`    Next: … ${run.nextActions.length - 3} more action(s)`);
     }
-    for (const child of details.childRuns.filter((candidate) => !candidate.activeProcess)) {
+    if (details.runs.length > detailRuns.length)
+      lines.push(`  … ${details.runs.length - detailRuns.length} more workflow run(s)`);
+    const inactiveChildren = details.childRuns.filter((candidate) => !candidate.activeProcess);
+    for (const child of inactiveChildren.slice(0, BACKGROUND_DETAIL_CHILD_LIMIT)) {
       lines.push(
         `  Child ${child.runRef}: ${child.status}${child.taskName ? ` task=@${child.taskName}` : ""}${child.claimKind ? ` claim=${child.claimKind}` : ""}`,
       );
       appendBackgroundChildSummaryLines(lines, child, "    ");
     }
+    if (inactiveChildren.length > BACKGROUND_DETAIL_CHILD_LIMIT)
+      lines.push(
+        `  … ${inactiveChildren.length - BACKGROUND_DETAIL_CHILD_LIMIT} more inactive child run(s)`,
+      );
   }
   lines.push(`  Next: ${details.summary.nextAction}.`);
   return lines.join("\n");

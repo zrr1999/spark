@@ -24,7 +24,7 @@ The TUI boot path separates presentation from execution:
 
 - `apps/spark-tui/src/cli.ts` parses the TUI command and submits TUI/headless prompts through the daemon client.
 - `apps/spark-tui/src/cli/daemon.ts` starts/wakes the Spark daemon and calls local IPC methods (`daemon.status`, `daemon.queue`, `turn.submit`).
-- `apps/spark-tui/src/native-tui.ts` owns only terminal rendering/input buffering through the `@zendev-lab/spark-tui` compatibility boundary and `apps/spark-tui/src/tui/pi-tui-adapter.ts`.
+- `apps/spark-tui/src/native-tui.ts` owns only terminal rendering/input buffering through the `@zendev-lab/spark-tui` boundary and `apps/spark-tui/src/tui/pi-tui-adapter.ts`.
 - `apps/spark-daemon/src/core/*` owns daemon lock, JSON file queue, worker loop, and queued `session.run` execution.
 - `apps/spark-tui/src/host/*` still contains native host/session helpers used by daemon session execution and tests, but ordinary CLI/TUI entrypoints do not construct them directly.
 

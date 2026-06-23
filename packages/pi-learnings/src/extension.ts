@@ -115,15 +115,12 @@ export function registerPiLearningTool(
       includeCandidates: Type.Optional(Type.Boolean()),
       includeInactive: Type.Optional(Type.Boolean()),
       limit: Type.Optional(Type.Number()),
-      full: Type.Optional(Type.Boolean()),
       maxChars: Type.Optional(Type.Number()),
       reason: Type.Optional(Type.String({ description: "Lifecycle transition reason." })),
       supersededBy: Type.Optional(Type.Array(Type.String())),
       outputPath: Type.Optional(Type.String({ description: "Markdown export output path." })),
       inputPath: Type.Optional(Type.String({ description: "Markdown import input path." })),
       apply: Type.Optional(Type.Boolean()),
-      deleteLegacyAfterVerifiedExport: Type.Optional(Type.Boolean()),
-      verificationExportPath: Type.Optional(Type.String()),
     }),
     renderCall(args, theme) {
       return renderLearningCall(args, theme);

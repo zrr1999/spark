@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { SparkProviderRegistry, type ProviderConfig } from "../apps/spark-tui/src/host/index.ts";
+import {
+  SparkProviderRegistry,
+  createProviderRegistryStreamFunction,
+  type ProviderConfig,
+} from "../apps/spark-tui/src/host/index.ts";
 import registerBaiduOneApiProvider from "../apps/spark-tui/src/baidu-oneapi-provider.ts";
 
 function fakeStream(_model: unknown, _context: unknown, _options?: unknown) {
@@ -118,6 +122,49 @@ void test("SparkProviderRegistry buildActiveModel reuses the active selection", 
   registry.setActive({ providerName: "fake", modelId: "model-a" });
   const model = registry.buildActiveModel();
   assert.equal(model?.id, "model-a");
+});
+
+void test("createProviderRegistryStreamFunction normalizes bare async provider streams", async () => {
+  const registry = new SparkProviderRegistry();
+  const assistant = {
+    role: "assistant",
+    content: [{ type: "text", text: "normalized" }],
+    stopReason: "stop",
+  };
+  registry.registerProvider("fake", {
+    ...fakeProvider,
+    streamSimple: () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "done", reason: "stop", message: assistant };
+      },
+    }),
+  });
+  registry.setActive({ providerName: "fake", modelId: "model-a" });
+
+  const stream = createProviderRegistryStreamFunction(registry)(
+    registry.buildActiveModel() as never,
+    { messages: [], tools: [] } as never,
+  );
+  const events = [];
+  for await (const event of stream) events.push(event);
+
+  assert.deepEqual(events, [{ type: "done", reason: "stop", message: assistant }]);
+  assert.equal(await stream.result(), assistant);
+});
+
+void test("createProviderRegistryStreamFunction rejects non-stream provider outputs", () => {
+  const registry = new SparkProviderRegistry();
+  registry.registerProvider("fake", fakeProvider);
+  registry.setActive({ providerName: "fake", modelId: "model-a" });
+
+  assert.throws(
+    () =>
+      createProviderRegistryStreamFunction(registry)(
+        registry.buildActiveModel() as never,
+        { messages: [], tools: [] } as never,
+      ),
+    /non-async-iterable stream/,
+  );
 });
 
 void test("SparkProviderRegistry accepts the production baidu-oneapi-provider plugin", () => {

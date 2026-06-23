@@ -58,13 +58,10 @@ void test("injectSparkHints injects default research lens without initialized Sp
 
     assert.equal(typeof result, "object");
     const prompt = (result as { systemPrompt?: string }).systemPrompt ?? "";
-    assert.match(prompt, /Spark default research lens\./);
     assert.match(prompt, /<base_system_prompts>/);
     assert.doesNotMatch(prompt, /# Spark/);
     assert.match(prompt, /# pi-cue/);
     assert.match(prompt, /# pi-graft/);
-    assert.doesNotMatch(prompt, /Use the read tool to load a skill's file/);
-    assert.doesNotMatch(prompt, /Active Spark context/);
     assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
   } finally {
     await rm(dir, { recursive: true, force: true });

@@ -336,8 +336,6 @@ function normalizeGoalRetryState(value: unknown, filePath: string): SparkSession
 }
 
 function normalizeGoalStatus(value: unknown, filePath: string): SparkSessionGoalStatus {
-  // Read-side compatibility: the retired budget-limited state collapses to paused.
-  if (value === "budgetLimited") return "paused";
   if (value === "active" || value === "paused" || value === "complete") return value;
   throw new JsonStoreFormatError(filePath, "goal.status must be active, paused, or complete");
 }

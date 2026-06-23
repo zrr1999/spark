@@ -488,15 +488,17 @@ function convertHashlineEdits(value: unknown): JsonValue[] {
   return value.map((edit, index) => convertHashlineEdit(edit, index) as JsonValue);
 }
 
+const DEFAULT_GRAFT_READ_LINE_LIMIT = 200;
+
 function renderHashlineSlice(
   content: string,
   offset?: unknown,
   limit?: unknown,
 ): { text: string; nextOffset?: number } {
   const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
-  const start = typeof offset === "number" && Number.isInteger(offset) && offset > 0 ? offset : 1;
-  const max = typeof limit === "number" && Number.isInteger(limit) && limit > 0 ? limit : undefined;
-  const selected = lines.slice(start - 1, max ? start - 1 + max : undefined);
+  const start = normalizePositiveIntegerParam(offset, "offset") ?? 1;
+  const max = normalizePositiveIntegerParam(limit, "limit") ?? DEFAULT_GRAFT_READ_LINE_LIMIT;
+  const selected = lines.slice(start - 1, start - 1 + max);
   const nextOffset = max && start - 1 + max < lines.length ? start + max : undefined;
   const suffix = nextOffset
     ? `\n\n[Showing lines ${start}-${start + selected.length - 1} of ${lines.length}. Use offset=${nextOffset} to continue.]`
@@ -510,6 +512,13 @@ interface ScratchSourceSelection {
   from?: string;
   envBase?: string;
   usedLastScratch: boolean;
+}
+
+function normalizePositiveIntegerParam(value: unknown, field: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0)
+    throw new Error(`${field} must be a positive integer.`);
+  return value;
 }
 
 function stateForCwd(
@@ -859,7 +868,9 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       offset: Type.Optional(
         Type.Number({ description: "Line number to start reading from (1-indexed)." }),
       ),
-      limit: Type.Optional(Type.Number({ description: "Maximum number of lines to return." })),
+      limit: Type.Optional(
+        Type.Number({ description: "Maximum number of lines to return. Default: 200." }),
+      ),
     }),
     async execute(
       _toolCallId: string,

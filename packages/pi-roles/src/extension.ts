@@ -176,18 +176,11 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
           description: "Also load user roles from ~/.agents/roles. Defaults to false.",
         }),
       ),
-      includePrompt: Type.Optional(
-        Type.Boolean({ description: "Include the full system prompt. Defaults to false." }),
-      ),
     }),
     renderCall(args, theme) {
       return renderToolCall(
         "get_role",
-        [
-          formatStringArg(args.role),
-          args.includePrompt === true ? "include-prompt" : undefined,
-          args.includeUser === true ? "include-user" : undefined,
-        ],
+        [formatStringArg(args.role), args.includeUser === true ? "include-user" : undefined],
         theme,
       );
     },
@@ -201,11 +194,6 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       );
       await hydrateDefaultRoleRegistry(registry, cwd, { includeUser });
       const role = registry.select(normalizeRequiredString(params.role, "get_role role"));
-      const includePrompt = normalizeOptionalBoolean(
-        params.includePrompt,
-        false,
-        "get_role includePrompt",
-      );
       const promptPreview = truncateInline(role.systemPrompt, 240);
       const effectiveModel = await resolveRoleModelForRole(cwd, role);
       const effectiveModelText = effectiveModel
@@ -216,15 +204,12 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         `source: ${role.source}`,
         `description: ${role.description}`,
         `effectiveModel: ${effectiveModelText}`,
-        `systemPrompt: ${role.systemPrompt.length} chars${includePrompt ? "" : `; preview=${JSON.stringify(promptPreview)}`}`,
+        `systemPrompt: ${role.systemPrompt.length} chars; preview=${JSON.stringify(promptPreview)}`,
       ];
-      if (includePrompt) lines.push("", role.systemPrompt);
       return {
         content: [{ type: "text", text: lines.join("\n") }],
         details: {
-          role: includePrompt
-            ? { ...compactRole(role), effectiveModel, systemPrompt: role.systemPrompt }
-            : { ...compactRole(role), effectiveModel },
+          role: { ...compactRole(role), effectiveModel },
         },
       };
     },
@@ -554,9 +539,6 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       role: Type.Optional(Type.String({ description: "Role id or ref for get/call." })),
       source: Type.Optional(Type.String({ description: "builtin | project | user." })),
       includeUser: Type.Optional(Type.Boolean({ description: "Also load user roles." })),
-      includePrompt: Type.Optional(
-        Type.Boolean({ description: "Include full role system prompt." }),
-      ),
       limit: Type.Optional(Type.Number({ description: "Maximum role rows for list." })),
       id: Type.Optional(Type.String({ description: "Stable role id for create." })),
       description: Type.Optional(Type.String({ description: "Role description for create." })),

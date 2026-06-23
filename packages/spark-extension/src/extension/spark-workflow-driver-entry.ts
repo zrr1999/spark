@@ -14,14 +14,14 @@ import {
 } from "./spark-mode-prompts.ts";
 import { discoverSparkSavedWorkflows } from "./spark-workflow-builtins.ts";
 import { listSparkWorkflowRegistry, normalizeSparkWorkflowId } from "./spark-workflow-registry.ts";
+import { defaultSparkDynamicWorkflowEventStore } from "./spark-dynamic-workflow-event-store.ts";
+import { defaultSparkDynamicWorkflowManager } from "./spark-dynamic-workflow-manager.ts";
 import {
-  defaultSparkDynamicWorkflowRunStore,
-  type SparkDynamicWorkflowRunRecord,
-} from "./spark-dynamic-workflow-run-store.ts";
-import {
-  renderSparkDynamicWorkflowRunsText,
-  selectSparkDynamicWorkflowRuns,
+  buildSparkDynamicWorkflowDashboardView,
+  projectSparkDynamicWorkflowRuns,
+  renderSparkDynamicWorkflowDashboardText,
   type SparkDynamicWorkflowRunControlResult,
+  type SparkDynamicWorkflowRunProjection,
 } from "./spark-dynamic-workflow-run-rendering.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
@@ -119,9 +119,25 @@ async function resolveInteractiveWorkflowSelection(
   }
 
   const listing = await listSparkWorkflowRegistry(ctx.cwd);
-  const dynamicStore = defaultSparkDynamicWorkflowRunStore(ctx.cwd);
+  const dynamicStore = defaultSparkDynamicWorkflowEventStore(ctx.cwd);
   await dynamicStore.reconcileStale();
-  const dynamicOptions = dynamicWorkflowNavigatorOptions((await dynamicStore.load()).runs);
+  const dynamicRunViews = await dynamicStore.listRuns();
+  if (dynamicRunViews.length > 0) {
+    ctx.ui?.notify?.(
+      renderSparkDynamicWorkflowDashboardText(
+        buildSparkDynamicWorkflowDashboardView({
+          action: "navigator",
+          runs: dynamicRunViews,
+          includeHistory: true,
+          detailed: false,
+        }),
+      ),
+      "info",
+    );
+  }
+  const dynamicOptions = dynamicWorkflowNavigatorOptions(
+    projectSparkDynamicWorkflowRuns({ runs: dynamicRunViews, includeHistory: true }),
+  );
   const savedOptions = listing.workflows.map((workflow) => workflow.source + ":" + workflow.id);
   const options = [...dynamicOptions, ...savedOptions];
   if (options.length === 0) {
@@ -180,16 +196,16 @@ async function promptWorkflowSelectionWithCustom(
   return undefined;
 }
 
-function dynamicWorkflowNavigatorOptions(runs: SparkDynamicWorkflowRunRecord[]): string[] {
-  return selectSparkDynamicWorkflowRuns({ runs, includeHistory: true }).flatMap((run) =>
+function dynamicWorkflowNavigatorOptions(runs: SparkDynamicWorkflowRunProjection[]): string[] {
+  return runs.flatMap((run) =>
     dynamicWorkflowNavigatorActions(run).map(
-      (action) => `dynamic:${action}:${run.ref} ${run.status} ${run.source.label}`,
+      (action) => `dynamic:${action}:${run.ref} ${run.status} ${run.sourceLabel}`,
     ),
   );
 }
 
 function dynamicWorkflowNavigatorActions(
-  run: SparkDynamicWorkflowRunRecord,
+  run: SparkDynamicWorkflowRunProjection,
 ): SparkWorkflowNavigatorAction[] {
   if (run.status === "running") return ["inspect", "pause", "stop", "save"];
   if (run.status === "paused") return ["inspect", "resume", "stop", "restart", "save"];
@@ -213,9 +229,10 @@ async function executeDynamicWorkflowNavigatorAction(
   deps: SparkModeEntryDeps,
   selection: { dynamicAction: SparkWorkflowNavigatorAction; runRef: RunRef },
 ): Promise<void> {
-  const store = defaultSparkDynamicWorkflowRunStore(ctx.cwd);
+  const store = defaultSparkDynamicWorkflowEventStore(ctx.cwd);
   await store.reconcileStale();
   const existing = await store.get(selection.runRef);
+  const manager = defaultSparkDynamicWorkflowManager();
   let control: SparkDynamicWorkflowRunControlResult | undefined;
   if (!existing) {
     ctx.ui?.notify?.(
@@ -224,16 +241,16 @@ async function executeDynamicWorkflowNavigatorAction(
     );
     return;
   } else if (selection.dynamicAction === "pause") {
-    const run = await store.pause(selection.runRef);
+    const run = await manager.pause(store, selection.runRef);
     control = run ? { action: "pause", run } : { action: "pause", missing: selection.runRef };
   } else if (selection.dynamicAction === "resume") {
-    const run = await store.resume(selection.runRef);
+    const run = await manager.resume(store, selection.runRef);
     control = run ? { action: "resume", run } : { action: "resume", missing: selection.runRef };
   } else if (selection.dynamicAction === "stop") {
-    const run = await store.stop(selection.runRef);
+    const run = await manager.stop(store, selection.runRef);
     control = run ? { action: "stop", run } : { action: "stop", missing: selection.runRef };
   } else if (selection.dynamicAction === "restart") {
-    const run = await store.restart(selection.runRef);
+    const run = await manager.restart(store, selection.runRef);
     control = run ? { action: "restart", run } : { action: "restart", missing: selection.runRef };
   } else if (selection.dynamicAction === "save") {
     const savedWorkflow = await store.saveAsWorkspaceWorkflow({
@@ -249,18 +266,16 @@ async function executeDynamicWorkflowNavigatorAction(
     const acknowledged = await store.acknowledge(selection.runRef);
     control = { action: "ack", acknowledgedRunRefs: acknowledged.runRefs };
   }
-  const snapshot = await store.load();
-  const runs = selectSparkDynamicWorkflowRuns({
-    runs: snapshot.runs,
-    includeHistory: true,
-    targetRunRef: selection.runRef,
-  });
-  const text = renderSparkDynamicWorkflowRunsText({
-    action: selection.dynamicAction,
-    runs,
-    includeDetails: true,
-    control,
-  });
+  const text = renderSparkDynamicWorkflowDashboardText(
+    buildSparkDynamicWorkflowDashboardView({
+      action: selection.dynamicAction,
+      runs: await store.listRuns(),
+      includeHistory: true,
+      detailed: true,
+      targetRunRef: selection.runRef,
+      control,
+    }),
+  );
   ctx.ui?.notify?.(text, selection.dynamicAction === "inspect" ? "info" : "success");
   await deps.refreshSparkWidget(ctx.cwd, ctx);
 }
@@ -291,11 +306,13 @@ async function resolveWorkflowSelector(
   if (!requested) return { selector: "agent:auto" };
 
   const available = listing.workflows.map((workflow) => workflow.source + ":" + workflow.id);
+  const visibleAvailable = available.slice(0, 10);
+  const hiddenAvailable = available.length - visibleAvailable.length;
   const reason = normalizedRequested
     ? "Spark workflow selector not found: " + normalizedRequested + "."
     : "Spark workflow driver needs an explicit saved workflow selector.";
   const suffix = available.length
-    ? " Available workflow(s): " + available.join(", ") + "."
+    ? ` Available workflow(s): ${visibleAvailable.join(", ")}${hiddenAvailable > 0 ? `, … ${hiddenAvailable} more` : ""}.`
     : " Create a saved workspace workflow under .spark/workflows/<name>.js, then run /workflow workspace:<name>.";
   ctx.ui?.notify?.(reason + suffix, "warning");
   return false;

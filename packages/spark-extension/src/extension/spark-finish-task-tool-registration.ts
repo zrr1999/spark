@@ -647,8 +647,16 @@ function renderOpenTaskPlanItemBlockedMessage(
 ): string {
   const issue = readiness.issues.find((entry) => entry.kind === "open_plan_items");
   const items = issue?.openItems ?? [];
-  const list = items.length > 0 ? items.map((label) => `- ${label}`).join("\n") : "- (no detail)";
-  return `Task finish blocked by open task plan items: @${task.name}: ${task.title}\nFinish or disposition (cancel/delete/done) the remaining task plan items before marking the task done.\nOpen plan items:\n${list}\nThe task was not marked done. Update task plan items with task_write({ action: "todo_update", scope: "task", ops: [...] }), then call task_write({ action: "finish" }) again.`;
+  const visible = items.slice(0, 8);
+  const hidden = items.length - visible.length;
+  const list =
+    visible.length > 0
+      ? [
+          ...visible.map((label) => `- ${label}`),
+          ...(hidden > 0 ? [`- … ${hidden} more open plan item(s)`] : []),
+        ].join("\n")
+      : "- (no detail)";
+  return `Task finish blocked by open task plan items: @${task.name}: ${task.title}\nFinish or disposition (cancel/delete/done) the remaining task plan items before marking the task done.\nOpen plan items (${items.length}):\n${list}\nThe task was not marked done. Update task plan items with task_write({ action: "todo_update", scope: "task", ops: [...] }), then call task_write({ action: "finish" }) again.`;
 }
 
 function unknownErrorMessage(error: unknown): string {
@@ -986,9 +994,19 @@ function renderTaskReviewRejectedMessage(
   verdict: TaskReviewVerdict,
   artifactRef: ArtifactRef,
 ): string {
-  const findings = verdict.findings.length ? `\nFindings: ${verdict.findings.join("; ")}` : "";
-  const blockers = verdict.blockers.length ? `\nBlockers: ${verdict.blockers.join("; ")}` : "";
+  const findings = verdict.findings.length
+    ? `\nFindings: ${formatReviewerList(verdict.findings)}`
+    : "";
+  const blockers = verdict.blockers.length
+    ? `\nBlockers: ${formatReviewerList(verdict.blockers)}`
+    : "";
   return `Task finish blocked by reviewer: @${task.name}: ${task.title}\nReview outcome: ${verdict.outcome}\nReview summary: ${verdict.summary}${findings}${blockers}\nReview artifact: ${artifactRef}\nThe task was not marked done. Address the reviewer feedback, keep or update evidence, then call task_write({ action: "finish" }) again.`;
+}
+
+function formatReviewerList(items: readonly string[]): string {
+  const visible = items.slice(0, 5);
+  const hidden = items.length - visible.length;
+  return `${visible.join("; ")}${hidden > 0 ? `; … ${hidden} more` : ""}`;
 }
 
 function renderFinishNextStepSuffix(

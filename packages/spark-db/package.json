@@ -1,7 +1,7 @@
 {
-  "name": "@zendev-lab/navia-db",
+  "name": "@zendev-lab/spark-db",
   "version": "0.1.0",
-  "description": "Navia SQLite migrations, database client, and Node SQLite dialect.",
+  "description": "Spark SQLite migrations, database client, and Node SQLite dialect.",
   "files": [
     "src",
     "!src/**/*.test.ts",
@@ -20,7 +20,7 @@
     "test": "vp test run"
   },
   "dependencies": {
-    "@zendev-lab/navia-system": "workspace:*",
+    "@zendev-lab/spark-system": "workspace:*",
     "kysely": "^0.28.7"
   },
   "devDependencies": {

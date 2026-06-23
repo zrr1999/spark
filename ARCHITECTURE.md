@@ -6,7 +6,7 @@ Use the dependency boundary as the naming boundary:
 
 - `pi-*` packages are reusable Pi infrastructure primitives and must not depend on `spark-*` packages.
 - `spark-*` packages are Spark facade/runtime policy packages and may compose `pi-*` primitives.
-- Historical serialized strings under `.spark/` are schema compatibility, not package ownership. Keep `.spark/`, `.spark/projects.json`, `.spark/workflow-runs.json`, and the historical goal custom-entry marker values stable unless an explicit migration is planned.
+- Historical serialized strings under `.spark/` are on-disk schema data, not package ownership. Keep `.spark/`, `.spark/projects.json`, `.spark/workflow-runs.json`, and the historical goal custom-entry marker values stable unless an explicit migration is planned.
 
 `pi-cue`, `pi-ask`, `pi-roles`, `pi-tasks`, `pi-learnings`, `pi-goal`, `pi-workflows`, `pi-artifacts`, `pi-context`, and `pi-recall` are infrastructure, not Spark-specific workflow logic. Future generic packages should follow the same rule.
 
@@ -38,7 +38,7 @@ Allowed high-level usage:
 - `spark-runtime` adapts one Spark task into a `pi-roles` role run and maps completion back into task status, claims, and artifacts.
 - `pi-tasks` owns durable project/task/TODO graph state, readiness rules, task/run types, claim leases, and the canonical `task({ action })` tool. Optional task `roleRef` values are executor hints, not readiness requirements.
 - `pi-workflows` owns saved workflow discovery/runtime primitives and `.spark/workflow-runs.json` DAG/workflow-run state. Workflow is the generic superset; DAG runs are workflow runs.
-- `pi-goal` owns generic goal primitives while Spark owns project-bound `/goal` command/facade behavior. Historical goal entry marker strings remain stable for compatibility.
+- `pi-goal` owns generic goal primitives while Spark owns project-bound `/goal` command/facade behavior. Historical goal entry marker strings remain stable until an explicit migration changes them.
 - `pi-learnings` owns `.learnings/` evidence-backed learning records and the canonical `learning({ action })` tool.
 - `pi-artifacts` owns artifact metadata/blobs and the canonical `artifact({ action })` tool.
 - `pi-ask` owns ask protocol/UI/result semantics and the canonical public/default `ask({ action })` tool. Focused and flow implementations are internal dispatch targets behind that surface. Spark asks must be context-specific; no canned intake forms.

@@ -13,6 +13,7 @@ import type { CommandConfig, ExtensionCommandContext } from "@zendev-lab/pi-exte
 import type {
   SparkLabelEntry,
   SparkSessionEntry,
+  SparkSessionFileEntry,
   SparkSessionInfo,
   SparkSessionMessageEntry,
   SparkSessionRecord,
@@ -25,6 +26,8 @@ export interface SparkSessionTreeNode {
   label?: string;
   labelTimestamp?: string;
 }
+
+export type SparkSessionExportFormat = "jsonl" | "json" | "text";
 
 export interface SparkSessionTreeRow {
   id: string;
@@ -133,6 +136,29 @@ export function switchSparkSessionLeaf(
   return leafId;
 }
 
+export function exportSparkSessionRecord(
+  record: SparkSessionRecord,
+  options: { format?: SparkSessionExportFormat; leafId?: string | null } = {},
+): string {
+  const format = options.format ?? "jsonl";
+  const entries = entriesForExport(record, options.leafId);
+  if (format === "json") return JSON.stringify({ header: record.header, entries }, null, 2);
+  if (format === "text") return formatSessionReplayEntries(entries);
+  return jsonLines([record.header, ...entries]);
+}
+
+export function formatSessionReplay(
+  record: SparkSessionRecord,
+  leafId: string | null = getSparkSessionLeafId(record),
+): string {
+  return formatSessionReplayEntries(getSparkSessionBranch(record, leafId));
+}
+
+export function readSparkSessionExportFormat(raw: string): SparkSessionExportFormat {
+  if (raw === "jsonl" || raw === "json" || raw === "text") return raw;
+  throw new Error(`invalid session export format: ${raw}`);
+}
+
 export function registerSparkSessionsCommand(
   host: SparkSessionsCommandHost,
   options: SparkSessionsCommandOptions,
@@ -148,7 +174,7 @@ export async function runSparkSessionsCommand(
   ctx: ExtensionCommandContext,
   options: SparkSessionsCommandOptions,
 ): Promise<void> {
-  const [subcommand = "list", maybeLeafId] = args.trim().split(/\s+/).filter(Boolean);
+  const [subcommand = "list", ...rest] = args.trim().split(/\s+/).filter(Boolean);
   if (subcommand === "list") {
     const sessions = await options.store.list();
     notify(ctx, formatSessionList(sessions));
@@ -168,7 +194,7 @@ export async function runSparkSessionsCommand(
   }
 
   if (subcommand === "switch") {
-    const leafId = maybeLeafId === "root" ? null : maybeLeafId;
+    const leafId = parseLeafArg(rest[0]);
     if (leafId === undefined) {
       notify(ctx, "Usage: /sessions switch <entry-id|root>", "warning");
       return;
@@ -183,7 +209,37 @@ export async function runSparkSessionsCommand(
     return;
   }
 
-  notify(ctx, "Usage: /sessions [list|branch|switch <entry-id|root>]", "warning");
+  if (subcommand === "replay") {
+    try {
+      notify(ctx, formatSessionReplay(state.record, parseLeafArg(rest[0], state.activeLeafId)));
+    } catch (error) {
+      notify(ctx, error instanceof Error ? error.message : String(error), "error");
+    }
+    return;
+  }
+
+  if (subcommand === "export") {
+    try {
+      const format = readSparkSessionExportFormat(rest[0] ?? "jsonl");
+      const leafId = parseLeafArg(rest[1]);
+      notify(
+        ctx,
+        exportSparkSessionRecord(state.record, {
+          format,
+          ...(leafId !== undefined ? { leafId } : {}),
+        }),
+      );
+    } catch (error) {
+      notify(ctx, error instanceof Error ? error.message : String(error), "error");
+    }
+    return;
+  }
+
+  notify(
+    ctx,
+    "Usage: /sessions [list|branch|switch <entry-id|root>|replay [entry-id|root]|export [jsonl|json|text] [entry-id|root]]",
+    "warning",
+  );
 }
 
 export function formatSessionList(sessions: SparkSessionInfo[]): string {
@@ -205,6 +261,32 @@ export function formatBranchRows(rows: SparkSessionTreeRow[]): string {
       return `${marker} ${"  ".repeat(row.depth)}${row.id} ${row.label}`;
     })
     .join("\n");
+}
+
+function entriesForExport(
+  record: SparkSessionRecord,
+  leafId: string | null | undefined,
+): SparkSessionEntry[] {
+  return leafId === undefined ? record.entries : getSparkSessionBranch(record, leafId);
+}
+
+function formatSessionReplayEntries(entries: SparkSessionEntry[]): string {
+  if (entries.length === 0) return "Session replay is empty";
+  return entries
+    .map((entry, index) => `${index + 1}. ${entry.id} ${summarizeEntry(entry)}`)
+    .join("\n");
+}
+
+function jsonLines(entries: SparkSessionFileEntry[]): string {
+  return `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+}
+
+function parseLeafArg(
+  raw: string | undefined,
+  fallback?: string | null,
+): string | null | undefined {
+  if (raw === undefined) return fallback;
+  return raw === "root" ? null : raw;
 }
 
 function collectLabels(

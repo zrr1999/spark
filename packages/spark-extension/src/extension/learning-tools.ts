@@ -1,6 +1,4 @@
-import { readdir, readFile, stat } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
-
+import { readFile } from "node:fs/promises";
 import {
   type LearningCategory,
   type LearningRecord,
@@ -9,7 +7,6 @@ import {
   type LearningSearchResult,
   type LearningStatus,
   parseLearningExportMarkdown,
-  parseLegacyCompoundLearningMarkdown,
 } from "@zendev-lab/pi-learnings";
 import type { Artifact } from "@zendev-lab/pi-artifacts";
 
@@ -165,13 +162,20 @@ export function formatLearningLine(
   artifact: Artifact<LearningRecord>,
   location = inferLearningArtifactLocation(artifact),
 ): string {
-  const tags = artifact.body.tags.length ? ` tags=${artifact.body.tags.join(",")}` : "";
+  const tags = formatLearningTags(artifact.body.tags);
   return `- [${artifact.body.status}/${artifact.body.category}/${location}] ${artifact.ref}: ${artifact.body.title}${tags}`;
 }
 
 export function formatLearningSearchLine(result: LearningSearchResult): string {
-  const tags = result.record.tags.length ? ` tags=${result.record.tags.join(",")}` : "";
+  const tags = formatLearningTags(result.record.tags);
   return `- [${result.record.status}/${result.record.category}/${result.location}] ${result.ref}: ${result.record.title} — ${result.snippet}${tags}`;
+}
+
+function formatLearningTags(tags: readonly string[]): string {
+  if (tags.length === 0) return "";
+  const visible = tags.slice(0, 5);
+  const hidden = tags.length - visible.length;
+  return ` tags=${visible.join(",")}${hidden > 0 ? `,…+${hidden}` : ""}`;
 }
 
 function inferLearningArtifactLocation(artifact: Artifact<LearningRecord>): LearningLocation {
@@ -183,69 +187,18 @@ function inferLearningArtifactLocation(artifact: Artifact<LearningRecord>): Lear
 }
 
 export interface ParsedLearningImport {
-  source: "spark-export" | "legacy-compound-learnings";
+  source: "spark-export";
   records: LearningRecord[];
   inputs: LearningRecordInput[];
 }
 
 export async function parseLearningImportPath(
-  cwd: string,
+  _cwd: string,
   inputPath: string,
 ): Promise<ParsedLearningImport> {
-  const inputStat = await stat(inputPath);
-  if (inputStat.isDirectory()) {
-    const files = await collectLegacyLearningMarkdownFiles(inputPath);
-    const inputs = [];
-    for (const file of files)
-      inputs.push(
-        parseLegacyCompoundLearningMarkdown({
-          markdown: await readFile(file, "utf8"),
-          sourcePath: displaySourcePath(cwd, file),
-          relativePath: relative(inputPath, file),
-        }),
-      );
-    return { source: "legacy-compound-learnings", records: [], inputs };
-  }
-
   const markdown = await readFile(inputPath, "utf8");
   const records = parseLearningExportMarkdown(markdown, inputPath);
-  if (records.length > 0) return { source: "spark-export", records, inputs: [] };
-  return {
-    source: "legacy-compound-learnings",
-    records: [],
-    inputs: [
-      parseLegacyCompoundLearningMarkdown({
-        markdown,
-        sourcePath: displaySourcePath(cwd, inputPath),
-        relativePath: relative(dirname(inputPath), inputPath),
-      }),
-    ],
-  };
-}
-
-async function collectLegacyLearningMarkdownFiles(rootPath: string): Promise<string[]> {
-  const categoryDirs = new Set(["patterns", "gotchas", "decisions"]);
-  const files: string[] = [];
-  for (const entry of await readdir(rootPath, { withFileTypes: true }))
-    if (entry.isDirectory() && categoryDirs.has(entry.name))
-      await collectMarkdownFiles(join(rootPath, entry.name), files);
-  return files.sort(compareStrings);
-}
-
-async function collectMarkdownFiles(dir: string, files: string[]): Promise<void> {
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const entryPath = join(dir, entry.name);
-    if (entry.isDirectory()) await collectMarkdownFiles(entryPath, files);
-    else if (entry.isFile() && entry.name.endsWith(".md") && entry.name !== "README.md")
-      files.push(entryPath);
-  }
-}
-
-function compareStrings(left: string, right: string): number {
-  return left.localeCompare(right);
-}
-
-function displaySourcePath(cwd: string, filePath: string): string {
-  const relativePath = relative(cwd, filePath);
-  return relativePath.startsWith("..") ? filePath : relativePath;
+  if (records.length === 0)
+    throw new Error("learning import requires Markdown produced by learning export_markdown");
+  return { source: "spark-export", records, inputs: [] };
 }

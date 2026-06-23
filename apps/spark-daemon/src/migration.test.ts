@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ensureNaviaPathDirs, resolveNaviaPaths } from "@zendev-lab/navia-system";
+import { ensureSparkPathDirs, resolveSparkPaths } from "@zendev-lab/spark-system";
 import { legacySparkDaemonStatePaths, migrateLegacySparkDaemonState } from "./migration.js";
 
 describe("migrateLegacySparkDaemonState", () => {
@@ -16,7 +16,7 @@ describe("migrateLegacySparkDaemonState", () => {
         XDG_CACHE_HOME: join(root, "cache"),
         XDG_STATE_HOME: join(root, "state"),
       };
-      const paths = resolveNaviaPaths({ app: "daemon", env, cwd: "/" });
+      const paths = resolveSparkPaths({ app: "daemon", env, cwd: "/" });
       const legacy = legacySparkDaemonStatePaths(env, "/");
       mkdirSync(join(legacy.configFile, ".."), { recursive: true });
       mkdirSync(legacy.dataDir, { recursive: true });
@@ -32,7 +32,7 @@ describe("migrateLegacySparkDaemonState", () => {
       writeFileSync(legacy.pidFile, "999999999\n");
       writeFileSync(legacy.lockPath, "{}\n");
 
-      ensureNaviaPathDirs(paths);
+      ensureSparkPathDirs(paths);
       const result = migrateLegacySparkDaemonState(paths, {
         env,
         cwd: "/",

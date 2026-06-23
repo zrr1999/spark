@@ -9,6 +9,7 @@ import type {
 } from "./state-housekeeping.ts";
 
 export const SPARK_ROLE_RUN_RETENTION_RENDER_LIMIT = 20;
+export const SPARK_LEGACY_IMPORT_ONLY_RENDER_LIMIT = 5;
 
 export function appendSparkStateHousekeepingLines(
   lines: string[],
@@ -26,9 +27,25 @@ export function appendSparkStateHousekeepingLines(
       `  ${formatSparkProtectedStoreReason(store.reason)}: ${store.files} files, ${formatByteSize(store.bytes)} (${store.path})`,
     );
   }
-  lines.push("Legacy import-only paths:");
-  if (summary.legacyImportOnly.length === 0) lines.push("  none");
-  for (const path of summary.legacyImportOnly) lines.push(`  ${path}`);
+  appendLegacyImportOnlyLines(lines, summary.legacyImportOnly);
+}
+
+export function appendLegacyImportOnlyLines(
+  lines: string[],
+  legacyImportOnly: string[],
+  limit = SPARK_LEGACY_IMPORT_ONLY_RENDER_LIMIT,
+): void {
+  const visible = legacyImportOnly.slice(0, limit);
+  lines.push(
+    `Import-only paths: ${legacyImportOnly.length}${visible.length < legacyImportOnly.length ? ` (showing ${visible.length})` : ""}`,
+  );
+  if (visible.length === 0) {
+    lines.push("  none");
+    return;
+  }
+  for (const path of visible) lines.push(`  ${path}`);
+  if (visible.length < legacyImportOnly.length)
+    lines.push(`  … ${legacyImportOnly.length - visible.length} more import-only path(s)`);
 }
 
 export function appendSparkStateDiagnosticsLines(
@@ -89,7 +106,7 @@ export function appendRoleRunArtifactRetentionLines(
     );
     lines.push(`    replacement: ${candidate.replacementSummary}`);
     lines.push(
-      `    tail: ${formatByteSize(candidate.transcriptTail?.tailBytes ?? 0)} retained${candidate.exportPath ? `; export=${candidate.exportPath}` : ""}${candidate.deleted ? "; full transcript blob deleted" : ""}`,
+      `    tail: ${formatByteSize(candidate.transcriptTail?.tailBytes ?? 0)} retained${candidate.exportPath ? `; export=${candidate.exportPath}` : ""}${candidate.deleted ? "; transcript blob deleted" : ""}`,
     );
   }
   if (visible.length < plan.candidates.length)
@@ -107,8 +124,8 @@ export function appendRoleRunArtifactRetentionLines(
   );
   lines.push(
     plan.dryRun
-      ? "Dry-run only: no metadata was rewritten and no full transcript blobs were deleted. Run with dryRun=false only after reviewing candidates and, if needed, setting exportDir."
-      : "Apply complete: each deleted full transcript blob has replacement summary/tail metadata and optional export path recorded before deletion.",
+      ? "Dry-run only: no metadata was rewritten and no transcript blobs were deleted. Run with dryRun=false only after reviewing candidates and, if needed, setting exportDir."
+      : "Apply complete: each deleted transcript blob has replacement summary/tail metadata and optional export path recorded before deletion.",
   );
 }
 
@@ -237,7 +254,7 @@ export function formatSparkStateCacheKind(kind: SparkStateCacheKind): string {
     case "todo-display-numbers":
       return "todo display numbers";
     case "legacy-task-todos":
-      return "legacy task todos";
+      return "imported task todos";
   }
 }
 

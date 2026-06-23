@@ -17,10 +17,10 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
 - `pi-learnings`
    - generic evidence-backed `learning` / `learning-candidate` / `learning-export` records
    - canonical `learning({ action })` tool
-   - `.learnings/` repo/workspace/user stores, active/candidate/stale/superseded/rejected lifecycle, keyword search, explicit Markdown export/import, and legacy `compound-learnings` import support
+   - `.learnings/` repo/workspace/user stores, active/candidate/stale/superseded/rejected lifecycle, keyword search, and explicit Markdown export/import
 - `pi-goal`
    - generic durable goal primitives and continuation prompt helpers
-   - Spark keeps project-bound `/goal` command/tool facade; historical serialized marker strings remain stable for compatibility
+   - Spark keeps project-bound `/goal` command/tool facade; historical serialized marker strings remain stable until an explicit migration changes them
 - `pi-workflows`
    - canonical `workflow` list/read tool for saved scripts in controlled workspace `.spark/workflows/*.js` and user `~/.agents/workflows/*.js` roots
    - workflow metadata/runtime primitives and `.spark/workflow-runs.json` workflow-run store with scheduling/reconciliation/retention helpers
@@ -52,7 +52,7 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
    - canonical visible tool surface through `task_read`, `task_write`, `assign`, `learning`, `artifact`, `ask`, `context`, `workflow`, `role`, `recall`, and `goal`; retired `spark_*` tool configs are not kept as internal dispatch wiring
    - always-available research-default standing mode, with project-bound context appended only after a graph/current project exists
    - state initialization without generic project-idea intake templates; clarification/decision asks are grounded in inspected context, while SPARK.md idea-capture prompts live in external skills
-   - root `SPARK.md` materialization only during compatibility initialization when `.git` exists in cwd; direct project-bound modes keep intent under `.spark` artifacts
+   - root `SPARK.md` materialization only during bootstrap initialization when `.git` exists in cwd; direct project-bound modes keep intent under `.spark` artifacts
    - role-run registry/TUI integration for active, waiting, replied, failed, stale/interrupted, and completed background roles; reply/steer controls record provenance and refresh visible `spark-role-runs` surfaces; validated against the role TUI audit (`artifact:5a554db7-6438-441f-b525-1f57ba4aef02`), closed the stop-refresh/failed-delivery needs-change review (`artifact:f43da8ee-bf94-41ea-ba72-bb162fa5e138`), and has approved control evidence (`artifact:223c907d-7034-4e18-8818-568c34ab03fa`, review `artifact:c00e9bed-c67d-42f4-90f0-410dad1bb06c`)
    - evidence-gated stale-claim recovery through `task_write({ action: "recover" })` and claim-time recovery through `task_write({ action: "claim" })`, preserving ready-frontier safety without automatic task completion; final evidence `artifact:a1b457f8-796b-471c-ac68-c6eb8e052999` approved by `artifact:7dfac593-f43b-4f04-8660-6d95f59a3d49`
 - `spark-cli`
@@ -64,7 +64,7 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
 - `pi-* -> spark-*` imports/dependencies are forbidden.
 - `scripts/check-pi-boundaries.mjs` scans `packages/pi-*` manifests and source imports for `spark-*` regressions.
 - `pnpm run check` runs the boundary checker, and `prek.toml` wires it directly as `pi-boundary-check`; CI static checks run `prek`, so the guard runs in CI.
-- The guard intentionally checks dependency/import boundaries, not arbitrary historical strings; on-disk/schema compatibility strings such as goal continuation markers remain allowed.
+- The guard intentionally checks dependency/import boundaries, not arbitrary historical strings; on-disk schema marker strings such as goal continuation markers remain allowed until an explicit migration changes them.
 
 ## Current public tool surface
 
@@ -74,7 +74,7 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
 - `learning({ action })` owns evidence-backed reusable learnings.
 - `ask({ action })` owns user-question UX and result semantics.
 - `context({ action })`, `recall`, `workflow({ action })`, `role({ action })`, `pi-cue`, and `pi-graft` tools remain canonical generic surfaces; patcher-style child runs belong to explicit extension roles, not the Spark facade.
-- Public/default action tools render as `tool action=<value> ...`; do not keep fragmented compatibility surfaces public when a canonical action tool owns the domain.
+- Public/default action tools render as `tool action=<value> ...`; do not keep fragmented duplicate surfaces public when a canonical action tool owns the domain.
 
 ## Deferred by design
 

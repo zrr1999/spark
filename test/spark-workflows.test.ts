@@ -7,8 +7,10 @@ import { test } from "node:test";
 import {
   listSavedWorkflows,
   parseWorkflowScript,
+  projectWorkflowRunEvents,
   readSavedWorkflow,
   runWorkflowScript,
+  type WorkflowRunEvent,
   type WorkflowRunOptions,
   type WorkflowRunResult,
 } from "../packages/pi-workflows/src/index.ts";
@@ -28,6 +30,8 @@ import {
   registerSparkWorkflowRunTool,
   workflowAgentTelemetryFromRoleRun,
 } from "../packages/spark-extension/src/extension/spark-workflow-run-tool-registration.ts";
+import { defaultSparkDynamicWorkflowEventStore } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-event-store.ts";
+import { defaultSparkDynamicWorkflowManager } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-manager.ts";
 import { defaultSparkDynamicWorkflowRunStore } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-run-store.ts";
 import { formatSparkDynamicWorkflowRunLine } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-run-rendering.ts";
 
@@ -51,16 +55,16 @@ void test("pi-workflows package stays isolated from runtime execution packages",
   }
 });
 
-void test("Spark production code uses generic pi-workflows imports instead of compatibility aliases", async () => {
+void test("Spark production code uses generic pi-workflows imports instead of removed aliases", async () => {
   const sourceFiles = await listTypeScriptFiles("packages/spark-extension/src");
-  const deprecatedPiWorkflowImports =
+  const removedPiWorkflowImports =
     /import\s+(?:type\s+)?\{[^}]*\b(?:defaultSparkDagRunStore|defaultWorkflowRunStore|workspaceWorkflowDir|SparkDag\w*|SparkWorkflow\w*|sparkDagRunNextSteps|runReadySparkTasks)\b[^}]*\}\s+from\s+["'](?:@zendev-lab\/)?pi-workflows["']/su;
   for (const file of sourceFiles) {
     const source = await readFile(file, "utf8");
     assert.doesNotMatch(
       source,
-      deprecatedPiWorkflowImports,
-      `${file} must import generic Workflow* symbols from pi-workflows; Spark-named aliases are compatibility only`,
+      removedPiWorkflowImports,
+      `${file} must import generic Workflow* symbols from pi-workflows; Spark-named aliases are removed`,
     );
   }
 });
@@ -352,6 +356,206 @@ void test("pi-workflows records explicit phase statuses", async () => {
       finishedAt: "2026-06-09T00:00:02.000Z",
     },
   ]);
+});
+
+void test("pi-workflows emits typed run events and projects snapshots", async () => {
+  const script = `export const meta = { name: 'eventful', description: 'eventful workflow' }
+phase('Plan')
+const web = await webSearch({ query: 'events' })
+const values = await parallel([
+  () => agent('first', { label: 'first' }),
+  () => fetchContent({ url: 'https://example.test/source' }),
+], { concurrency: 2 })
+phase('Plan', { status: 'success' })
+return { web, values }`;
+  const events: WorkflowRunEvent[] = [];
+
+  const run = await runWorkflowScript(script, {
+    agent: async (_prompt, options) => ({ label: options.label, ok: true }),
+    webSearch: (request) => ({ query: request.query, results: [] }),
+    fetchContent: (request) => ({ url: request.url, text: "content" }),
+    onEvent: (event) => {
+      events.push(event);
+    },
+  });
+
+  assert.equal(run.result && typeof run.result === "object", true);
+  assert.deepEqual(
+    events.map((event) => event.type).filter((type) => type !== "parallel_item_succeeded"),
+    [
+      "run_started",
+      "phase_started",
+      "tool_started",
+      "tool_succeeded",
+      "parallel_group_started",
+      "parallel_item_started",
+      "agent_started",
+      "parallel_item_started",
+      "tool_started",
+      "tool_succeeded",
+      "agent_succeeded",
+      "parallel_group_succeeded",
+      "phase_finished",
+      "run_succeeded",
+    ],
+  );
+  assert.ok(events.some((event) => event.type === "parallel_item_succeeded"));
+  const snapshot = projectWorkflowRunEvents(events);
+  assert.equal(snapshot.status, "succeeded");
+  assert.equal(snapshot.meta?.name, "eventful");
+  assert.deepEqual(
+    snapshot.nodes.map((node) => [node.kind, node.label, node.status]),
+    [
+      ["run", "eventful", "succeeded"],
+      ["phase", "Plan", "succeeded"],
+      ["tool", "webSearch", "succeeded"],
+      ["parallel_group", "parallel group 1", "succeeded"],
+      ["parallel_item", "parallel item 1", "succeeded"],
+      ["agent", "first", "succeeded"],
+      ["parallel_item", "parallel item 2", "succeeded"],
+      ["tool", "fetchContent", "succeeded"],
+    ],
+  );
+  assert.deepEqual(
+    snapshot.phases.map((phase) => phase.id),
+    ["phase:Plan"],
+  );
+  assert.deepEqual(snapshot.nodesById["parallel:0"]?.children, [
+    "parallel:0:item:0",
+    "parallel:0:item:1",
+  ]);
+});
+
+void test("pi-workflows projects failed run and node events", async () => {
+  const script = `export const meta = { name: 'failed events', description: 'failed event workflow' }
+phase('Work')
+await agent('explode', { label: 'boom' })`;
+  const events: WorkflowRunEvent[] = [];
+
+  await assert.rejects(
+    () =>
+      runWorkflowScript(script, {
+        agent: async () => {
+          throw new Error("agent exploded");
+        },
+        onEvent: (event) => {
+          events.push(event);
+        },
+      }),
+    /agent exploded/,
+  );
+
+  const snapshot = projectWorkflowRunEvents(events);
+  assert.equal(snapshot.status, "failed");
+  assert.equal(snapshot.errorMessage, "agent exploded");
+  assert.equal(snapshot.nodesById["agent:0"]?.status, "failed");
+  assert.equal(snapshot.nodesById["agent:0"]?.errorMessage, "agent exploded");
+});
+
+void test("pi-workflows projects status-only, artifact, log, nested, cached, and helper error events", async () => {
+  const statusOnlyEvents: WorkflowRunEvent[] = [];
+  await runWorkflowScript(
+    `export const meta = { name: 'status only', description: 'status-only phase' }
+phase('Skipped', { status: 'skip' })
+log('note from workflow')
+return 'ok'`,
+    {
+      agent: async () => "unused",
+      onEvent: (event) => {
+        statusOnlyEvents.push(event);
+      },
+    },
+  );
+  const statusOnly = projectWorkflowRunEvents(statusOnlyEvents);
+  assert.equal(statusOnly.nodesById["phase:Skipped"]?.status, "skipped");
+  assert.ok(
+    statusOnly.eventTail.some(
+      (event) => event.type === "log" && event.message === "note from workflow",
+    ),
+  );
+
+  const artifactEvents: WorkflowRunEvent[] = [];
+  await runWorkflowScript(
+    `export const meta = { name: 'artifact events', description: 'artifact event workflow' }
+return await artifactRecord({ title: 'Brief', body: 'Body' })`,
+    {
+      agent: async () => "unused",
+      artifactRecord: async () => ({ ref: "artifact:brief" }),
+      onEvent: (event) => {
+        artifactEvents.push(event);
+      },
+    },
+  );
+  const artifactSnapshot = projectWorkflowRunEvents(artifactEvents);
+  assert.equal(artifactSnapshot.nodesById["artifact:artifact:brief"]?.kind, "artifact");
+  assert.equal(artifactSnapshot.nodesById["artifact:artifact:brief"]?.status, "succeeded");
+
+  const child = `export const meta = { name: 'child', description: 'child workflow' }
+phase('Child')
+return { child: true }`;
+  const nestedEvents: WorkflowRunEvent[] = [];
+  await runWorkflowScript(
+    `export const meta = { name: 'parent', description: 'parent workflow' }
+const child = await workflow('child')
+return child`,
+    {
+      agent: async () => "unused",
+      loadWorkflowScript: (name) => (name === "child" ? child : undefined),
+      onEvent: (event) => {
+        nestedEvents.push(event);
+      },
+    },
+  );
+  assert.deepEqual(
+    nestedEvents
+      .filter((event) => event.type.startsWith("nested_workflow"))
+      .map((event) => event.type),
+    ["nested_workflow_started", "nested_workflow_succeeded"],
+  );
+  assert.equal(new Set(nestedEvents.map((event) => event.sequence)).size, nestedEvents.length);
+  assert.equal(projectWorkflowRunEvents(nestedEvents).nodesById["workflow:0"]?.status, "succeeded");
+
+  const initial = await runWorkflowScript(
+    `export const meta = { name: 'cache source', description: 'cache source workflow' }
+return await agent('cached', { label: 'cached agent' })`,
+    { agent: async () => "cached-result" },
+  );
+  const cachedEvents: WorkflowRunEvent[] = [];
+  await runWorkflowScript(
+    `export const meta = { name: 'cache source', description: 'cache source workflow' }
+return await agent('cached', { label: 'cached agent' })`,
+    {
+      resumeJournal: new Map(initial.journal.map((entry) => [entry.index, entry])),
+      agent: async () => assert.fail("cached agent should not run"),
+      onEvent: (event) => {
+        cachedEvents.push(event);
+      },
+    },
+  );
+  assert.equal(projectWorkflowRunEvents(cachedEvents).nodesById["agent:0"]?.status, "cached");
+
+  const helperErrorEvents: WorkflowRunEvent[] = [];
+  await assert.rejects(
+    () =>
+      runWorkflowScript(
+        `export const meta = { name: 'helper error', description: 'helper error workflow' }
+return await webSearch({ query: 'boom' })`,
+        {
+          agent: async () => "unused",
+          webSearch: () => {
+            throw new Error("search exploded");
+          },
+          onEvent: (event) => {
+            helperErrorEvents.push(event);
+          },
+        },
+      ),
+    /search exploded/,
+  );
+  const helperError = projectWorkflowRunEvents(helperErrorEvents);
+  assert.equal(helperError.status, "failed");
+  assert.equal(helperError.nodesById["tool:0"]?.status, "failed");
+  assert.equal(helperError.nodesById["tool:0"]?.errorMessage, "search exploded");
 });
 
 void test("pi-workflows applies phase model defaults and per-agent overrides", async () => {
@@ -1013,6 +1217,187 @@ return await agent('child ' + args.value, { label: 'child agent' })`;
   assert.deepEqual(JSON.parse(JSON.stringify(run.result)), { child: "result:child ok" });
 });
 
+void test("Spark dynamic workflow event store appends, tails, lists, and compacts snapshots", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dynamic-workflow-event-store-"));
+  try {
+    const store = defaultSparkDynamicWorkflowEventStore(dir);
+    const script = `export const meta = { name: 'event store', description: 'event store workflow' }
+return 'ok'`;
+    const meta = parseWorkflowScript(script).meta;
+    const runRef = "run:event-store" as const;
+
+    const started = await store.startRun({
+      runRef,
+      source: { kind: "inline", label: "inline workflow" },
+      script,
+      meta,
+      options: { concurrency: 2 },
+      now: "2026-06-23T00:00:00.000Z",
+    });
+    assert.equal(started.status, "running");
+    await store.appendEvent(runRef, {
+      type: "phase_started",
+      nodeId: "phase:Plan",
+      parentId: "run",
+      nodeKind: "phase",
+      title: "Plan",
+      phase: "Plan",
+      timestamp: "2026-06-23T00:00:01.000Z",
+    });
+    await store.appendEvent(runRef, {
+      type: "phase_finished",
+      nodeId: "phase:Plan",
+      nodeKind: "phase",
+      title: "Plan",
+      phase: "Plan",
+      status: "succeeded",
+      timestamp: "2026-06-23T00:00:02.000Z",
+    });
+    const terminal = await store.appendEvent(runRef, {
+      type: "run_succeeded",
+      nodeId: "run",
+      nodeKind: "run",
+      result: { ok: true },
+      timestamp: "2026-06-23T00:00:03.000Z",
+    });
+
+    assert.equal(terminal.status, "succeeded");
+    assert.equal(terminal.runRef, runRef);
+    assert.equal((await store.getSnapshot(runRef))?.nodesById["phase:Plan"]?.status, "succeeded");
+    assert.deepEqual(
+      (await store.tailEvents(runRef, 2)).map((event) => event.type),
+      ["phase_finished", "run_succeeded"],
+    );
+    assert.deepEqual(
+      (await store.listSnapshots()).map((snapshot) => snapshot.runRef),
+      [runRef],
+    );
+    assert.equal((await store.compact(runRef))?.status, "succeeded");
+    assert.deepEqual(
+      (await store.readEvents(runRef)).map((event) => event.sequence),
+      [0, 1, 2, 3],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark dynamic workflow event store migrates v1 dynamic records", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dynamic-workflow-event-migrate-"));
+  try {
+    const oldStore = defaultSparkDynamicWorkflowRunStore(dir);
+    const eventStore = defaultSparkDynamicWorkflowEventStore(dir);
+    const script = `export const meta = { name: 'legacy', description: 'legacy workflow' }
+return 'ok'`;
+    const meta = parseWorkflowScript(script).meta;
+    const legacyRun = await oldStore.start({
+      source: { kind: "inline", label: "legacy inline" },
+      script,
+      meta,
+      options: {},
+      now: "2026-06-23T00:00:00.000Z",
+    });
+    await oldStore.recordPhase(legacyRun.ref, {
+      title: "Legacy phase",
+      status: "success",
+      startedAt: "2026-06-23T00:00:01.000Z",
+      finishedAt: "2026-06-23T00:00:02.000Z",
+    });
+    await oldStore.recordJournal(legacyRun.ref, {
+      index: 0,
+      hash: "hash-0",
+      result: "legacy agent result",
+    });
+    await oldStore.finish(legacyRun.ref, {
+      meta,
+      result: { migrated: true },
+      phases: [
+        {
+          title: "Legacy phase",
+          status: "success",
+          startedAt: "2026-06-23T00:00:01.000Z",
+          finishedAt: "2026-06-23T00:00:02.000Z",
+        },
+      ],
+      agentCount: 1,
+      journal: [{ index: 0, hash: "hash-0", result: "legacy agent result" }],
+    });
+    await oldStore.acknowledge(legacyRun.ref);
+    await oldStore.saveAsWorkspaceWorkflow({
+      cwd: dir,
+      runRef: legacyRun.ref,
+      workflowId: "legacy-migrated",
+    });
+
+    const pausedRun = await oldStore.start({
+      source: { kind: "inline", label: "paused inline" },
+      script,
+      meta,
+      options: {},
+      now: "2026-06-23T00:01:00.000Z",
+    });
+    await oldStore.pause(pausedRun.ref, "pause migration");
+    const stoppedRun = await oldStore.start({
+      source: { kind: "inline", label: "stopped inline" },
+      script,
+      meta,
+      options: {},
+      now: "2026-06-23T00:02:00.000Z",
+    });
+    await oldStore.stop(stoppedRun.ref, "stop migration");
+    const staleRun = await oldStore.start({
+      source: { kind: "inline", label: "stale inline" },
+      script,
+      meta,
+      options: {},
+      now: "2026-06-23T00:03:00.000Z",
+    });
+    await oldStore.reconcileStale({ now: "2026-06-23T00:03:10.000Z", staleAfterMs: 1 });
+
+    const migrated = await eventStore.migrateFromV1Snapshot(await oldStore.load());
+    assert.equal(migrated.length, 4);
+    const snapshot = migrated.find((candidate) => candidate.runRef === legacyRun.ref);
+    assert.ok(snapshot);
+    assert.equal(snapshot.status, "succeeded");
+    assert.equal(snapshot.nodesById["phase:Legacy phase"]?.status, "succeeded");
+    assert.equal(snapshot.nodesById["agent:0"]?.result, "legacy agent result");
+    assert.deepEqual(snapshot.result, { migrated: true });
+    assert.equal((await eventStore.getSnapshot(pausedRun.ref))?.status, "paused");
+    assert.equal((await eventStore.getSnapshot(stoppedRun.ref))?.status, "stopped");
+    assert.equal((await eventStore.getSnapshot(staleRun.ref))?.status, "stale");
+    assert.deepEqual(
+      (await eventStore.readEvents(legacyRun.ref)).map((event) => event.type),
+      ["run_started", "phase_started", "phase_finished", "agent_succeeded", "run_succeeded"],
+    );
+    assert.deepEqual(
+      (await eventStore.readEvents(pausedRun.ref)).map((event) => event.type),
+      ["run_started", "run_paused"],
+    );
+    assert.deepEqual(
+      (await eventStore.readEvents(stoppedRun.ref)).map((event) => event.type),
+      ["run_started", "run_stopped"],
+    );
+    assert.deepEqual(
+      (await eventStore.readEvents(staleRun.ref)).map((event) => event.type),
+      ["run_started", "run_stale"],
+    );
+    const metadata = await eventStore.getMetadata(legacyRun.ref);
+    assert.ok(metadata?.acknowledgedAt);
+    assert.equal(metadata.savedWorkflow?.selector, "workspace:legacy-migrated");
+    const compatible = await eventStore.toDynamicWorkflowRunRecord(legacyRun.ref);
+    assert.ok(compatible);
+    assert.equal(compatible.acknowledgedAt, metadata.acknowledgedAt);
+    assert.equal(compatible.savedWorkflow?.selector, "workspace:legacy-migrated");
+    assert.match(formatSparkDynamicWorkflowRunLine(compatible), /legacy/);
+    const statuses = new Set(
+      (await eventStore.listDynamicWorkflowRunRecords()).map((record) => record.status),
+    );
+    assert.deepEqual(statuses, new Set(["succeeded", "paused", "stopped", "stale"]));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("Spark dynamic workflow run store reconciles stale running records", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dynamic-workflow-stale-"));
   try {
@@ -1086,7 +1471,7 @@ void test("Spark workflow_run tool persists, resumes, and keeps original base me
 return await agent('hello ' + args.suffix, { label: 'hello' })`;
     const first = await tool.execute(
       "tool-call",
-      { script, args: { suffix: "one" } },
+      { script, args: { suffix: "one" }, wait: true },
       new AbortController().signal,
       () => undefined,
       { cwd: dir },
@@ -1104,7 +1489,7 @@ return await agent('hello ' + args.suffix, { label: 'hello' })`;
     assert.equal(firstDetails.workflow.base?.baseState, "state-1");
     assert.deepEqual(agentPrompts, ["hello one"]);
 
-    const store = defaultSparkDynamicWorkflowRunStore(dir);
+    const store = defaultSparkDynamicWorkflowEventStore(dir);
     const stored = await store.get(firstDetails.workflow.runRef as `run:${string}`);
     assert.ok(stored);
     assert.equal(stored.script, script);
@@ -1112,12 +1497,27 @@ return await agent('hello ' + args.suffix, { label: 'hello' })`;
     assert.equal(stored.journal.length, 1);
     assert.equal(stored.result, "result:hello one");
     assert.equal(stored.base?.baseState, "state-1");
+    const eventsBeforeResume = await store.readEvents(stored.ref);
+    assert.deepEqual(
+      eventsBeforeResume.map((event) => event.type),
+      [
+        "run_started",
+        "agent_started",
+        "agent_succeeded",
+        "run_succeeded",
+        "agent_succeeded",
+        "run_succeeded",
+      ],
+    );
+    const metadataBeforeResume = await store.getMetadata(stored.ref);
+    assert.ok(metadataBeforeResume);
+    assert.equal((await defaultSparkDynamicWorkflowRunStore(dir).load()).runs.length, 0);
     assert.deepEqual(agentRunnerBases, ["tree-1"]);
 
     agentPrompts.length = 0;
     const resumed = await tool.execute(
       "tool-call",
-      { runRef: firstDetails.workflow.runRef },
+      { runRef: firstDetails.workflow.runRef, wait: true },
       new AbortController().signal,
       () => undefined,
       { cwd: dir },
@@ -1135,10 +1535,360 @@ return await agent('hello ' + args.suffix, { label: 'hello' })`;
     assert.equal(resumedDetails.workflow.journalEntries, 1);
     assert.equal(resumedDetails.workflow.base?.baseState, "state-1");
     assert.deepEqual(agentPrompts, []);
+    const eventsAfterResume = await store.readEvents(stored.ref);
+    assert.deepEqual(
+      eventsAfterResume.slice(0, eventsBeforeResume.length).map((event) => event.type),
+      eventsBeforeResume.map((event) => event.type),
+    );
+    assert.ok(
+      eventsAfterResume
+        .slice(eventsBeforeResume.length)
+        .some((event) => event.type === "agent_cached"),
+      "expected resume to append cached-agent event without replacing prior events",
+    );
+    assert.equal((await store.getMetadata(stored.ref))?.createdAt, metadataBeforeResume.createdAt);
     assert.deepEqual(agentRunnerBases, ["tree-1", "tree-1"]);
     assert.equal(baseCaptures, 1);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark workflow_run streams live onUpdate events before wait=true completion", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-workflow-live-onupdate-"));
+  try {
+    type TestWorkflowRunTool = {
+      execute: (
+        toolCallId: string,
+        params: Record<string, unknown>,
+        signal: AbortSignal,
+        onUpdate: (update: { content: Array<{ type: "text"; text: string }> }) => void,
+        ctx: { cwd: string },
+      ) => Promise<{
+        content: Array<{ type: "text"; text: string }>;
+        details: Record<string, unknown>;
+      }>;
+    };
+    const tools = new Map<string, TestWorkflowRunTool>();
+    const updates: string[] = [];
+    let refreshes = 0;
+    let releaseAgent!: (value: string) => void;
+    const agentGate = new Promise<string>((resolve) => {
+      releaseAgent = resolve;
+    });
+    registerSparkWorkflowRunTool(
+      (config) => tools.set(config.name, config as unknown as TestWorkflowRunTool),
+      {
+        createAgentRunner: () => async () => agentGate,
+        refreshSparkWidget: async () => {
+          refreshes += 1;
+        },
+      },
+    );
+    const tool = tools.get("workflow_run");
+    assert.ok(tool, "missing workflow_run tool");
+
+    const script = `export const meta = { name: 'live updates', description: 'live update workflow' }
+phase('Live')
+return await agent('wait for update', { label: 'live-child' })`;
+    let completed = false;
+    const running = tool
+      .execute(
+        "tool-call",
+        { script, wait: true },
+        new AbortController().signal,
+        (update) => updates.push(update.content.map((part) => part.text).join("\n")),
+        { cwd: dir },
+      )
+      .finally(() => {
+        completed = true;
+      });
+
+    for (
+      let attempt = 0;
+      attempt < 50 && !updates.some((update) => /agent_started/.test(update));
+      attempt += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(
+      completed,
+      false,
+      "wait=true call should still be open while the agent is blocked",
+    );
+    assert.ok(
+      updates.some((update) => /phase_started Live/.test(update)),
+      updates.join("\n---\n"),
+    );
+    assert.ok(
+      updates.some((update) => /agent_started live-child/.test(update)),
+      updates.join("\n---\n"),
+    );
+    assert.equal(refreshes >= 2, true);
+
+    releaseAgent("live result");
+    const result = await running;
+    assert.match(result.content[0].text, /Workflow run completed: inline workflow/);
+    assert.equal(completed, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("Spark workflow_run returns before background DynamicWorkflowManager completes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-workflow-background-manager-"));
+  try {
+    type TestWorkflowRunTool = {
+      execute: (
+        toolCallId: string,
+        params: Record<string, unknown>,
+        signal: AbortSignal,
+        onUpdate: () => void,
+        ctx: { cwd: string },
+      ) => Promise<{
+        content: Array<{ type: "text"; text: string }>;
+        details: Record<string, unknown>;
+      }>;
+    };
+    const tools = new Map<string, TestWorkflowRunTool>();
+    let releaseAgent!: (value: string) => void;
+    const agentGate = new Promise<string>((resolve) => {
+      releaseAgent = resolve;
+    });
+    registerSparkWorkflowRunTool(
+      (config) => tools.set(config.name, config as unknown as TestWorkflowRunTool),
+      { createAgentRunner: () => async () => agentGate },
+    );
+    const tool = tools.get("workflow_run");
+    assert.ok(tool, "missing workflow_run tool");
+
+    const script = `export const meta = { name: 'background', description: 'background workflow' }
+return await agent('slow child', { label: 'slow-child' })`;
+    const result = await tool.execute(
+      "tool-call",
+      { script },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+    const details = result.details as { workflow: { runRef: `run:${string}`; status: string } };
+    assert.equal(details.workflow.status, "running");
+    assert.match(result.content[0].text, /Workflow run started: inline workflow/);
+    assert.match(result.content[0].text, /background DynamicWorkflowManager/);
+
+    const store = defaultSparkDynamicWorkflowEventStore(dir);
+    assert.equal((await store.get(details.workflow.runRef))?.status, "running");
+    releaseAgent("background result");
+    let completed = await store.get(details.workflow.runRef);
+    let events = await store.readEvents(details.workflow.runRef);
+    for (
+      let attempt = 0;
+      attempt < 50 && (completed?.status !== "succeeded" || events.length < 6);
+      attempt += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      completed = await store.get(details.workflow.runRef);
+      events = await store.readEvents(details.workflow.runRef);
+    }
+    assert.equal(completed?.status, "succeeded");
+    assert.equal(completed?.result, "background result");
+    assert.deepEqual(events.map((event) => event.type).slice(0, 4), [
+      "run_started",
+      "agent_started",
+      "agent_succeeded",
+      "run_succeeded",
+    ]);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("Spark DynamicWorkflowManager applies pause, resume, stop, and restart to active runs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-workflow-real-controls-"));
+  try {
+    type TestWorkflowRunTool = {
+      execute: (
+        toolCallId: string,
+        params: Record<string, unknown>,
+        signal: AbortSignal,
+        onUpdate: () => void,
+        ctx: { cwd: string },
+      ) => Promise<{
+        content: Array<{ type: "text"; text: string }>;
+        details: Record<string, unknown>;
+      }>;
+    };
+    const manager = defaultSparkDynamicWorkflowManager();
+    const tools = new Map<string, TestWorkflowRunTool>();
+    let firstAgentStarted = false;
+    let secondAgentStarted = false;
+    let releaseFirstAgent!: () => void;
+    const firstAgentGate = new Promise<void>((resolve) => {
+      releaseFirstAgent = resolve;
+    });
+    registerSparkWorkflowRunTool(
+      (config) => tools.set(config.name, config as unknown as TestWorkflowRunTool),
+      {
+        createAgentRunner: () => {
+          let calls = 0;
+          return async () => {
+            calls += 1;
+            if (calls === 1) {
+              firstAgentStarted = true;
+              await firstAgentGate;
+              return "first";
+            }
+            secondAgentStarted = true;
+            return "second";
+          };
+        },
+      },
+    );
+    const tool = tools.get("workflow_run");
+    assert.ok(tool, "missing workflow_run tool");
+    const script = `export const meta = { name: 'controls', description: 'pause resume workflow' }
+const first = await agent('first', { label: 'first' })
+const second = await agent('second', { label: 'second' })
+return { first, second }`;
+    const started = await tool.execute(
+      "tool-call",
+      { script },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+    const runRef = (started.details as { workflow: { runRef: `run:${string}` } }).workflow.runRef;
+    const store = defaultSparkDynamicWorkflowEventStore(dir);
+    for (let attempt = 0; attempt < 50 && !firstAgentStarted; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(firstAgentStarted, true);
+    await manager.pause(store, runRef);
+    assert.equal((await store.get(runRef))?.status, "paused");
+    releaseFirstAgent();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(secondAgentStarted, false, "pause should block the next agent checkpoint");
+    await manager.resume(store, runRef);
+    let completed = await store.get(runRef);
+    for (let attempt = 0; attempt < 50 && completed?.status !== "succeeded"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      completed = await store.get(runRef);
+    }
+    assert.equal(secondAgentStarted, true);
+    assert.equal(completed?.status, "succeeded");
+    assert.deepEqual(completed?.result, { first: "first", second: "second" });
+    assert.ok(
+      (await store.readEvents(runRef)).some(
+        (event) => event.type === "control_applied" && event.data && typeof event.data === "object",
+      ),
+      "expected pause/resume controls to record control_applied events",
+    );
+
+    const stopTools = new Map<string, TestWorkflowRunTool>();
+    let stopSignal: AbortSignal | undefined;
+    let stopAgentStarted = false;
+    registerSparkWorkflowRunTool(
+      (config) => stopTools.set(config.name, config as unknown as TestWorkflowRunTool),
+      {
+        createAgentRunner: ({ signal }) => {
+          stopSignal = signal;
+          return async () => {
+            stopAgentStarted = true;
+            await new Promise((_resolve, reject) =>
+              signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }),
+            );
+          };
+        },
+      },
+    );
+    const stopTool = stopTools.get("workflow_run");
+    assert.ok(stopTool, "missing workflow_run tool");
+    const stopStarted = await stopTool.execute(
+      "tool-call",
+      {
+        script: `export const meta = { name: 'stop control', description: 'stop workflow' }
+return await agent('never finishes', { label: 'blocked' })`,
+      },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+    const stopRunRef = (stopStarted.details as { workflow: { runRef: `run:${string}` } }).workflow
+      .runRef;
+    for (let attempt = 0; attempt < 50 && !stopAgentStarted; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(stopAgentStarted, true);
+    await manager.stop(store, stopRunRef);
+    assert.equal(stopSignal?.aborted, true);
+    assert.equal((await store.get(stopRunRef))?.status, "stopped");
+
+    const restartTools = new Map<string, TestWorkflowRunTool>();
+    let restartFactoryCalls = 0;
+    let restartAgentCalls = 0;
+    let firstRestartSignal: AbortSignal | undefined;
+    registerSparkWorkflowRunTool(
+      (config) => restartTools.set(config.name, config as unknown as TestWorkflowRunTool),
+      {
+        createAgentRunner: ({ signal }) => {
+          restartFactoryCalls += 1;
+          if (!firstRestartSignal) firstRestartSignal = signal;
+          return async () => {
+            restartAgentCalls += 1;
+            if (restartAgentCalls === 1) {
+              await new Promise((_resolve, reject) =>
+                signal.addEventListener("abort", () => reject(new Error("restart abort")), {
+                  once: true,
+                }),
+              );
+            }
+            return `restart-result-${restartAgentCalls}`;
+          };
+        },
+      },
+    );
+    const restartTool = restartTools.get("workflow_run");
+    assert.ok(restartTool, "missing workflow_run tool");
+    const restartStarted = await restartTool.execute(
+      "tool-call",
+      {
+        script: `export const meta = { name: 'restart control', description: 'restart workflow' }
+return await agent('restart me', { label: 'restart-child' })`,
+      },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+    const restartRunRef = (restartStarted.details as { workflow: { runRef: `run:${string}` } })
+      .workflow.runRef;
+    for (let attempt = 0; attempt < 50 && restartAgentCalls < 1; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(restartAgentCalls, 1);
+    await manager.restart(store, restartRunRef);
+    assert.equal(firstRestartSignal?.aborted, true);
+    let restartedRun = await store.get(restartRunRef);
+    for (let attempt = 0; attempt < 50 && restartedRun?.status !== "succeeded"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      restartedRun = await store.get(restartRunRef);
+    }
+    assert.equal(restartFactoryCalls >= 2, true);
+    assert.equal(restartAgentCalls >= 2, true);
+    assert.equal(restartedRun?.status, "succeeded");
+    assert.equal(restartedRun?.result, "restart-result-2");
+    assert.ok(
+      (await store.readEvents(restartRunRef)).some(
+        (event) =>
+          event.type === "control_applied" &&
+          Boolean(event.data) &&
+          typeof event.data === "object" &&
+          !Array.isArray(event.data) &&
+          (event.data as { action?: unknown }).action === "restart",
+      ),
+      "expected restart to record control_applied action",
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
 
@@ -1186,13 +1936,13 @@ void test("Spark workflow_run persists and renders real workflow agent telemetry
 return await agent('collect usage', { label: 'usage-agent' })`;
     const result = await tool.execute(
       "tool-call",
-      { script },
+      { script, wait: true },
       new AbortController().signal,
       () => undefined,
       { cwd: dir },
     );
     const runRef = (result.details as { workflow: { runRef: string } }).workflow.runRef;
-    const stored = await defaultSparkDynamicWorkflowRunStore(dir).get(runRef as `run:${string}`);
+    const stored = await defaultSparkDynamicWorkflowEventStore(dir).get(runRef as `run:${string}`);
     assert.ok(stored);
     assert.deepEqual(stored.usageTotals, {
       actualTokens: 15,
@@ -1280,6 +2030,7 @@ return 'inline-result'`,
         args: { focus: "demo" },
         tokenBudget: 50,
         concurrency: 3,
+        wait: true,
       },
       new AbortController().signal,
       () => undefined,
@@ -1291,7 +2042,7 @@ return 'inline-result'`,
     assert.match(inline.content[0].text, /│ controls\s+inspect: task_read/);
     assert.match(
       inline.content[0].text,
-      /╰─ Result \(compact JSON; full value is in details\.workflow\.result\)/,
+      /╰─ Result \(compact JSON; complete value is in details\.workflow\.result\)/,
     );
     const inlineDetails = inline.details as { workflow: { agentCount: number } };
     assert.equal(inlineDetails.workflow.agentCount, 2);
@@ -1303,14 +2054,14 @@ return 'inline-result'`,
 
     await tool.execute(
       "tool-call",
-      { selector: "builtin:research", args: { question: "demo" } },
+      { selector: "builtin:research", args: { question: "demo" }, wait: true },
       new AbortController().signal,
       () => undefined,
       { cwd: dir },
     );
     assert.match(seen[1]?.script ?? "", /name: 'saved'/);
     assert.deepEqual(seen[1]?.args, { question: "demo" });
-    const persisted = await defaultSparkDynamicWorkflowRunStore(dir).load();
+    const persisted = await defaultSparkDynamicWorkflowEventStore(dir).load();
     assert.deepEqual(
       persisted.runs.map((run) => run.source.kind),
       ["inline", "selector"],
@@ -1372,7 +2123,7 @@ return await webSearch({ query: 'approval smoke' })`;
     assert.deepEqual(approvalRiskFlags, ["web_or_fetch"]);
     assert.equal(createdAgent, false);
     assert.equal(ranWorkflow, false);
-    const persisted = await defaultSparkDynamicWorkflowRunStore(dir).load();
+    const persisted = await defaultSparkDynamicWorkflowEventStore(dir).load();
     assert.equal(persisted.runs.length, 0);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -1419,6 +2170,7 @@ void test("Spark workflow_run records scoped approval provenance for risky workf
         script: `export const meta = { name: 'approved web', description: 'web workflow' }
 return await webSearch({ query: args.query })`,
         args: { query: "approval smoke" },
+        wait: true,
       },
       new AbortController().signal,
       () => undefined,
@@ -1427,7 +2179,7 @@ return await webSearch({ query: args.query })`,
 
     assert.equal(approvalSource, "inline workflow");
     const runRef = (result.details as { workflow: { runRef: string } }).workflow.runRef;
-    const stored = await defaultSparkDynamicWorkflowRunStore(dir).get(runRef as `run:${string}`);
+    const stored = await defaultSparkDynamicWorkflowEventStore(dir).get(runRef as `run:${string}`);
     assert.ok(stored);
     assert.equal(stored.approval?.status, "approved");
     assert.equal(stored.approval?.method, "reviewer");
@@ -1489,6 +2241,7 @@ return { draft, verdict, complete }`,
         concurrency: 2,
         maxAgents: 6,
         tokenBudget: 1000,
+        wait: true,
       },
       new AbortController().signal,
       () => undefined,
@@ -1563,7 +2316,7 @@ return { reused: true, args }
     assert.ok(tool, "missing workflow_run tool");
     const result = await tool.execute(
       "tool-call",
-      { selector: second?.selector, args: { rerun: true } },
+      { selector: second?.selector, args: { rerun: true }, wait: true },
       new AbortController().signal,
       () => undefined,
       { cwd: dir },
@@ -1613,6 +2366,7 @@ return { marker: 'saved-child', args }
         script: `export const meta = { name: 'parent', description: 'parent workflow' }
 return await workflow('workspace:child', { focus: args.focus })`,
         args: { focus: "nested-demo" },
+        wait: true,
       },
       new AbortController().signal,
       () => undefined,

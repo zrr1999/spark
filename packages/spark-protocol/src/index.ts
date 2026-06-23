@@ -340,12 +340,55 @@ export const sparkViewModelEventSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
+const sparkDaemonEventBaseSchema = z.object({
+  version: sparkProtocolVersionSchema.default(SPARK_PROTOCOL_VERSION),
+  eventId: z.string().min(1).optional(),
+  emittedAt: sparkIsoDateTimeSchema.optional(),
+  source: z.enum(["daemon", "runtime", "tui", "web", "cockpit", "test"]).default("daemon"),
+  workspaceId: sparkRefSchema.optional(),
+  projectId: sparkRefSchema.optional(),
+  sessionId: z.string().min(1).optional(),
+  invocationId: sparkRefSchema.optional(),
+  metadata: sparkJsonObjectSchema.default({}),
+});
+
+export const sparkDaemonTaskLifecycleEventSchema = sparkDaemonEventBaseSchema.extend({
+  type: z.literal("daemon.task.lifecycle"),
+  taskType: z.string().min(1),
+  taskFileName: z.string().min(1).optional(),
+  status: z.enum(["queued", "running", "succeeded", "failed", "cancelled"]),
+  summary: z.string().optional(),
+});
+
+export const sparkDaemonViewEventSchema = sparkDaemonEventBaseSchema.extend({
+  type: z.literal("daemon.view_event"),
+  view: sparkViewModelEventSchema,
+});
+
+export const sparkDaemonInteractionRequestEventSchema = sparkDaemonEventBaseSchema.extend({
+  type: z.literal("daemon.interaction.request"),
+  request: sparkInteractionRequestSchema,
+});
+
+export const sparkDaemonInteractionResponseEventSchema = sparkDaemonEventBaseSchema.extend({
+  type: z.literal("daemon.interaction.response"),
+  response: sparkInteractionResponseSchema,
+});
+
+export const sparkDaemonEventSchema = z.discriminatedUnion("type", [
+  sparkDaemonTaskLifecycleEventSchema,
+  sparkDaemonViewEventSchema,
+  sparkDaemonInteractionRequestEventSchema,
+  sparkDaemonInteractionResponseEventSchema,
+]);
+
 export type SparkViewModelStatus = z.infer<typeof sparkViewModelStatusSchema>;
 export type SparkMessageRole = z.infer<typeof sparkMessageRoleSchema>;
 export type SparkMessageStatus = z.infer<typeof sparkMessageStatusSchema>;
 export type SparkMessageView = z.infer<typeof sparkMessageViewSchema>;
 export type SparkToolCallView = z.infer<typeof sparkToolCallViewSchema>;
 export type SparkRunView = z.infer<typeof sparkRunViewSchema>;
+export type SparkTaskTodoView = z.infer<typeof sparkTaskTodoViewSchema>;
 export type SparkTaskView = z.infer<typeof sparkTaskViewSchema>;
 export type SparkArtifactView = z.infer<typeof sparkArtifactViewSchema>;
 export type SparkSessionView = z.infer<typeof sparkSessionViewSchema>;
@@ -353,6 +396,15 @@ export type SparkAskQuestionView = z.infer<typeof sparkAskQuestionViewSchema>;
 export type SparkInteractionRequest = z.infer<typeof sparkInteractionRequestSchema>;
 export type SparkInteractionResponse = z.infer<typeof sparkInteractionResponseSchema>;
 export type SparkViewModelEvent = z.infer<typeof sparkViewModelEventSchema>;
+export type SparkDaemonTaskLifecycleEvent = z.infer<typeof sparkDaemonTaskLifecycleEventSchema>;
+export type SparkDaemonViewEvent = z.infer<typeof sparkDaemonViewEventSchema>;
+export type SparkDaemonInteractionRequestEvent = z.infer<
+  typeof sparkDaemonInteractionRequestEventSchema
+>;
+export type SparkDaemonInteractionResponseEvent = z.infer<
+  typeof sparkDaemonInteractionResponseEventSchema
+>;
+export type SparkDaemonEvent = z.infer<typeof sparkDaemonEventSchema>;
 
 export function parseSparkInteractionRequest(value: unknown): SparkInteractionRequest {
   return sparkInteractionRequestSchema.parse(value);
@@ -368,6 +420,10 @@ export function parseSparkSessionView(value: unknown): SparkSessionView {
 
 export function parseSparkViewModelEvent(value: unknown): SparkViewModelEvent {
   return sparkViewModelEventSchema.parse(value);
+}
+
+export function parseSparkDaemonEvent(value: unknown): SparkDaemonEvent {
+  return sparkDaemonEventSchema.parse(value);
 }
 
 export function createBlockedInteractionResponse(

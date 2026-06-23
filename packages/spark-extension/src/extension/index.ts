@@ -161,7 +161,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
   registerSparkWorkflowRunsTool(registerSparkImplementationTool, { refreshSparkWidget });
 
-  registerSparkWorkflowRunTool(registerSparkTool);
+  registerSparkWorkflowRunTool(registerSparkTool, { refreshSparkWidget });
 
   registerSparkAskTools(registerSparkImplementationTool);
 
@@ -328,7 +328,7 @@ function normalizeTaskTodoScope(value: unknown): "task" {
   if (value === undefined || value === null || value === "task") return "task";
   if (value === "session")
     throw new Error(
-      'scope: "session" is deprecated; task_write({ action: "todo_update" }) updates task plan items only. Use durable project tasks for standalone work.',
+      'scope: "session" has been removed; task_write({ action: "todo_update" }) updates task plan items only. Use durable project tasks for standalone work.',
     );
   throw new Error('task.scope must be "task" for todo_update');
 }

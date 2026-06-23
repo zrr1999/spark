@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { resolveNaviaPaths } from "@zendev-lab/navia-system";
+import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import { handleLocalRpcLine } from "./local-rpc.js";
 import { openSparkDaemonDatabase } from "./store/schema.js";
 import { listWorkspaces } from "./store/workspaces.js";
@@ -12,7 +12,7 @@ describe("Spark daemon local RPC", () => {
   it("commits workspace registration only after server grant and websocket verification", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
     const workspacePath = join(root, "workspace");
-    const paths = resolveNaviaPaths({
+    const paths = resolveSparkPaths({
       app: "daemon",
       env: { HOME: root },
       overrides: {
@@ -122,7 +122,7 @@ describe("Spark daemon local RPC", () => {
   it("rolls back workspace registration when websocket verification fails", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
     const workspacePath = join(root, "workspace");
-    const paths = resolveNaviaPaths({
+    const paths = resolveSparkPaths({
       app: "daemon",
       env: { HOME: root },
       overrides: {
@@ -195,7 +195,7 @@ describe("Spark daemon local RPC", () => {
 
   it("handles daemon-local turn queue submit/list/status over local RPC", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
-    const paths = resolveNaviaPaths({
+    const paths = resolveSparkPaths({
       app: "daemon",
       env: { HOME: root },
       overrides: {
@@ -275,7 +275,7 @@ describe("Spark daemon local RPC", () => {
 
   it("ensures implicit local workspaces idempotently before client attach", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
-    const paths = resolveNaviaPaths({
+    const paths = resolveSparkPaths({
       app: "daemon",
       env: { HOME: root },
       overrides: {
@@ -351,7 +351,7 @@ describe("Spark daemon local RPC", () => {
 
   it("attaches, heartbeats, and releases workspace clients over local RPC", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
-    const paths = resolveNaviaPaths({
+    const paths = resolveSparkPaths({
       app: "daemon",
       env: { HOME: root },
       overrides: {
@@ -437,7 +437,7 @@ describe("Spark daemon local RPC", () => {
 
   it("ensures and reuses an executor client over local RPC", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
-    const paths = resolveNaviaPaths({
+    const paths = resolveSparkPaths({
       app: "daemon",
       env: { HOME: root },
       overrides: {
@@ -505,7 +505,7 @@ describe("Spark daemon local RPC", () => {
 
   it("requests daemon shutdown over the local socket", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
-    const paths = resolveNaviaPaths({
+    const paths = resolveSparkPaths({
       app: "daemon",
       env: { HOME: root },
       overrides: {

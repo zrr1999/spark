@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
-import { migrate, openMemoryDatabase } from "@zendev-lab/navia-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
 import {
   createWorkspaceWithOwnerBinding,
   queueCommandForWorkspaceOwner,
@@ -152,6 +152,144 @@ describe("runtime WebSocket handling", () => {
     expect(authenticateRuntimeToken(db, runtimeId, `Bearer ${accessToken}`)).toBe("rttok_access");
     expect(authenticateRuntimeToken(db, runtimeId, `Bearer ${refreshToken}`)).toBeNull();
     expect(authenticateRuntimeToken(db, runtimeId, `Bearer ${expiredToken}`)).toBeNull();
+    db.close();
+  });
+
+  it("ingests daemon.event envelopes into typed Cockpit events", () => {
+    const { db, ws, now, runtimeId, workspaceBindingId } = setupRuntime();
+    const workspace = createWorkspace(db, workspaceBindingId, now);
+    const messageId = createId("msg");
+
+    ws.emitMessage({
+      protocolVersion: runtimeProtocolVersion,
+      messageId,
+      type: "daemon.event",
+      sentAt: now,
+      runtimeId,
+      workspaceBindingId,
+      workspaceId: workspace.id,
+      payload: {
+        type: "daemon.view_event",
+        source: "daemon",
+        sessionId: "session-daemon",
+        view: {
+          type: "session.message",
+          sessionId: "session-daemon",
+          message: { id: "m1", role: "assistant", text: "hello from daemon" },
+        },
+      },
+    });
+
+    const ack = JSON.parse(ws.sent.at(-1) ?? "{}");
+    expect(ack.type).toBe("server.ingest_ack");
+    expect(ack.ackOf).toBe(messageId);
+
+    const row = db
+      .prepare(
+        `SELECT kind,
+                subject_kind AS subjectKind,
+                subject_id AS subjectId,
+                payload_json AS payloadJson
+         FROM events
+         WHERE workspace_id = ? AND kind = 'daemon.view_event'
+         LIMIT 1`,
+      )
+      .get(workspace.id) as {
+      kind: string;
+      subjectKind: string;
+      subjectId: string;
+      payloadJson: string;
+    };
+    expect(row.kind).toBe("daemon.view_event");
+    expect(row.subjectKind).toBe("view_model");
+    expect(row.subjectId).toBe("session-daemon");
+    expect(JSON.parse(row.payloadJson)).toMatchObject({
+      type: "daemon.view_event",
+      view: { type: "session.message", sessionId: "session-daemon" },
+    });
+    db.close();
+  });
+
+  it("ingests daemon-routable interaction request and response events", () => {
+    const { db, ws, now, runtimeId, workspaceBindingId } = setupRuntime();
+    const workspace = createWorkspace(db, workspaceBindingId, now);
+    const requestId = "ask-flow-runtime-1";
+    const requestMessageId = createId("msg");
+    const responseMessageId = createId("msg");
+
+    ws.emitMessage({
+      protocolVersion: runtimeProtocolVersion,
+      messageId: requestMessageId,
+      type: "daemon.event",
+      sentAt: now,
+      runtimeId,
+      workspaceBindingId,
+      workspaceId: workspace.id,
+      payload: {
+        type: "daemon.interaction.request",
+        source: "daemon",
+        sessionId: "session-daemon",
+        request: {
+          kind: "askFlow",
+          requestId,
+          title: "Choose next action",
+          mode: "decision",
+          questions: [{ id: "next", prompt: "What should Spark do next?", type: "single" }],
+        },
+      },
+    });
+    ws.emitMessage({
+      protocolVersion: runtimeProtocolVersion,
+      messageId: responseMessageId,
+      type: "daemon.event",
+      sentAt: now,
+      runtimeId,
+      workspaceBindingId,
+      workspaceId: workspace.id,
+      payload: {
+        type: "daemon.interaction.response",
+        source: "web",
+        sessionId: "session-daemon",
+        response: {
+          kind: "askFlow",
+          requestId,
+          status: "answered",
+          answers: { next: "continue" },
+          nextAction: "resume",
+        },
+      },
+    });
+
+    const rows = db
+      .prepare(
+        `SELECT kind,
+                subject_kind AS subjectKind,
+                subject_id AS subjectId,
+                payload_json AS payloadJson
+         FROM events
+         WHERE workspace_id = ? AND kind LIKE 'daemon.interaction.%'
+         ORDER BY kind`,
+      )
+      .all(workspace.id) as Array<{
+      kind: string;
+      subjectKind: string;
+      subjectId: string;
+      payloadJson: string;
+    }>;
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => [row.kind, row.subjectKind, row.subjectId])).toEqual([
+      ["daemon.interaction.request", "daemon_event", "session-daemon"],
+      ["daemon.interaction.response", "daemon_event", "session-daemon"],
+    ]);
+    expect(JSON.parse(rows[0]!.payloadJson)).toMatchObject({
+      type: "daemon.interaction.request",
+      request: { kind: "askFlow", requestId, questions: [{ id: "next" }] },
+    });
+    expect(JSON.parse(rows[1]!.payloadJson)).toMatchObject({
+      type: "daemon.interaction.response",
+      response: { kind: "askFlow", requestId, status: "answered", answers: { next: "continue" } },
+    });
     db.close();
   });
 

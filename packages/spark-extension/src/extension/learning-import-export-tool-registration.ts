@@ -1,14 +1,13 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 import { Type } from "typebox";
-import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
+import { defaultArtifactStore, type Artifact } from "@zendev-lab/pi-artifacts";
 import {
   defaultLearningStore,
   renderLearningExportMarkdown,
   type LearningRecord,
 } from "@zendev-lab/pi-learnings";
-import type { Artifact } from "@zendev-lab/pi-artifacts";
 import { compactArtifactDetail } from "./artifact-tools.ts";
 import {
   compactLearningDetail,
@@ -93,23 +92,12 @@ export function registerSparkLearningImportExportTools(
     name: "impl_learning_import_markdown",
     label: "Spark Learning Import Markdown",
     description:
-      'Import Markdown produced by learning({ action: "export_markdown" }), or legacy compound-learnings Markdown/.learnings directories. Dry-run by default; set apply=true to persist.',
+      'Import Markdown produced by learning({ action: "export_markdown" }). Dry-run by default; set apply=true to persist.',
     parameters: Type.Object({
       inputPath: Type.String({
-        description:
-          "Path to a Spark learnings export, legacy learning Markdown file, or .learnings directory.",
+        description: "Path to a Spark learnings export Markdown file.",
       }),
       apply: Type.Optional(Type.Boolean({ default: false })),
-      deleteLegacyAfterVerifiedExport: Type.Optional(
-        Type.Boolean({
-          default: false,
-          description:
-            "When importing legacy compound-learnings with apply=true, write a verification export then delete the legacy source path.",
-        }),
-      ),
-      verificationExportPath: Type.Optional(
-        Type.String({ description: "Optional path for the verification export before deletion." }),
-      ),
       location: Type.Optional(Type.String({ description: "user | workspace | repo" })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -119,17 +107,6 @@ export function registerSparkLearningImportExportTools(
         normalizeLearningString(params.inputPath, "inputPath", { required: true }) ?? "",
       );
       const apply = normalizeLearningBoolean(params.apply, false, "apply");
-      const deleteLegacyAfterVerifiedExport = normalizeLearningBoolean(
-        params.deleteLegacyAfterVerifiedExport,
-        false,
-        "deleteLegacyAfterVerifiedExport",
-      );
-      if (deleteLegacyAfterVerifiedExport && !apply)
-        throw new Error("deleteLegacyAfterVerifiedExport requires apply=true");
-      const verificationExportPathValue = normalizeLearningString(
-        params.verificationExportPath,
-        "verificationExportPath",
-      );
       const parsed = await parseLearningImportPath(cwd, inputPath);
       const count = parsed.records.length + parsed.inputs.length;
       const store = defaultLearningStore(cwd, normalizeLearningLocation(params.location));
@@ -138,54 +115,12 @@ export function registerSparkLearningImportExportTools(
         for (const record of parsed.records) imported.push(await store.restore(record));
         for (const input of parsed.inputs) imported.push(await store.record(input));
       }
-      if (deleteLegacyAfterVerifiedExport && parsed.source !== "legacy-compound-learnings")
-        throw new Error(
-          "deleteLegacyAfterVerifiedExport only applies to legacy compound-learnings imports",
-        );
-      if (deleteLegacyAfterVerifiedExport && imported.length !== count)
-        throw new Error(
-          "refusing to delete legacy learnings because import count did not match parsed count",
-        );
-      let verificationExportArtifact: Artifact | undefined;
-      let verificationExportPath: string | undefined;
-      if (deleteLegacyAfterVerifiedExport) {
-        const markdown = renderLearningExportMarkdown(imported.map((artifact) => artifact.body));
-        verificationExportArtifact = await defaultArtifactStore(cwd).put({
-          kind: "document",
-          title: "Legacy compound-learnings import verification export",
-          format: "markdown",
-          body: markdown,
-          provenance: {
-            producer: "task",
-            note: "pi-learning legacy import verification export",
-          },
-          links: imported.map((artifact) => ({
-            to: artifact.ref,
-            relation: "derived-from" as const,
-          })),
-        });
-        verificationExportPath = verificationExportPathValue?.trim()
-          ? resolve(cwd, verificationExportPathValue)
-          : undefined;
-        if (verificationExportPath) {
-          await mkdir(dirname(verificationExportPath), { recursive: true });
-          await writeFile(verificationExportPath, markdown, "utf8");
-        }
-        if (learningStoreRoot(store) === resolve(inputPath)) {
-          await removeLegacyCompoundLearningContents(inputPath);
-        } else {
-          await rm(inputPath, { recursive: true, force: false });
-        }
-      }
       const action = apply ? "Imported" : "Dry-run parsed";
-      const deletionSuffix = deleteLegacyAfterVerifiedExport
-        ? `; verification export ${verificationExportArtifact?.ref}; deleted legacy source`
-        : "";
       return {
         content: [
           {
             type: "text",
-            text: `${action} ${count} learning(s) from ${inputPath} (${parsed.source})${deletionSuffix}`,
+            text: `${action} ${count} learning(s) from ${inputPath} (${parsed.source})`,
           },
         ],
         details: {
@@ -194,11 +129,6 @@ export function registerSparkLearningImportExportTools(
           apply,
           count,
           imported: imported.map((artifact) => compactLearningDetail(artifact, store.location)),
-          deletedLegacySource: deleteLegacyAfterVerifiedExport,
-          verificationExportArtifact: verificationExportArtifact
-            ? compactArtifactDetail(verificationExportArtifact)
-            : undefined,
-          verificationExportPath,
           records: [
             ...parsed.records.map((record) => ({
               id: record.id,
@@ -215,16 +145,4 @@ export function registerSparkLearningImportExportTools(
       };
     },
   });
-}
-
-function learningStoreRoot(store: ReturnType<typeof defaultLearningStore>): string | undefined {
-  const { artifactStore } = store;
-  if ("rootDir" in artifactStore && typeof artifactStore.rootDir === "string")
-    return resolve(artifactStore.rootDir);
-  return undefined;
-}
-
-async function removeLegacyCompoundLearningContents(rootDir: string): Promise<void> {
-  for (const entry of ["patterns", "gotchas", "decisions", "README.md"])
-    await rm(join(rootDir, entry), { recursive: true, force: true });
 }

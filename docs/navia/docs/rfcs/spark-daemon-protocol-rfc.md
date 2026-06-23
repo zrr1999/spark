@@ -49,7 +49,7 @@ Key pivot from the earlier draft:
 - Define the Spark daemon's local workspace layout or cleanup internals.
 - Make the server a full scheduler/orchestrator for Spark execution.
 - Expose Spark daemon as a first-class primary navigation object in the frontend.
-- Provide broad multi-version compatibility before protocol v1.
+- Provide broad multi-version fallback behavior before protocol v1.
 
 ## Product boundary
 
@@ -189,7 +189,7 @@ Rules:
 - Server hello acknowledgement includes accepted features.
 - Additive optional fields are allowed.
 - Removing/renaming required fields requires a protocol version bump and fixture update.
-- Spark daemon compatibility tests should validate JSON fixtures and package boundary rules; future external Spark daemon CI can reuse those fixtures without importing server internals.
+- Spark daemon protocol tests should validate JSON fixtures and package boundary rules; future external Spark daemon CI can reuse those fixtures without importing server internals.
 
 ## Confirmed v0.1 decisions
 
@@ -1169,7 +1169,7 @@ Explicitly out of v0.1 unless required later:
 - HTTP polling-only Spark daemon;
 - OAuth/device-code login;
 - object-storage-only artifact backend;
-- broad multi-version compatibility.
+- broad multi-version fallback behavior.
 
 ## Server data-model implications
 
@@ -1240,7 +1240,7 @@ Fixture rules:
 - Every fixture validates against Zod schemas.
 - OpenAPI generation includes all HTTP endpoints.
 - WS message schemas are documented even if OpenAPI cannot represent them directly.
-- Spark daemon/future compatibility CI can validate fixtures without importing server internals.
+- Spark daemon/future protocol CI can validate fixtures without importing server internals.
 
 ## Minimal implementation slice
 
@@ -1275,7 +1275,7 @@ Defer until after v0.1:
 - server-side provider scheduling;
 - multi-Spark daemon co-management of one workspace;
 - workspace owner binding migration/rebinding;
-- broad multi-version compatibility.
+- broad multi-version fallback behavior.
 
 ## Testing requirements
 
@@ -1338,6 +1338,6 @@ Liveness = server connection status + Spark-runtime reconciliation for execution
 Logs/events = append-only envelopes with sequence/idempotency metadata over WS
 Artifacts = Spark/local canonical content + lazy server projection/cache/proxy under the XDG server artifact cache
 Diagnostics = redacted labels/resource refs/hashes by default
-Compatibility = fail loud on unsupported pre-v1 versions
+Version handling = fail loud on unsupported pre-v1 versions
 Projection persistence = raw snapshots/events + normalized SQLite projection tables for normal UI reads
 ```

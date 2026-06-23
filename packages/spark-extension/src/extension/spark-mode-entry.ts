@@ -53,12 +53,6 @@ export function dispatchSparkAgentInstruction(
   visibleMessage: string,
 ): void {
   const idle = piApi.isIdle?.() ?? false;
-  const sendUserMessage = piApi.sendUserMessage?.bind(piApi);
-  const queuedAsUserMessage = Boolean(sendUserMessage);
-  sendUserMessage?.(instruction, {
-    deliverAs: idle ? "steer" : "followUp",
-    streamingBehavior: "followUp",
-  });
   piApi.sendMessage(
     {
       customType: "spark-mode-request",
@@ -66,11 +60,7 @@ export function dispatchSparkAgentInstruction(
       display: false,
       details: { visible: visibleMessage },
     },
-    queuedAsUserMessage
-      ? { deliverAs: "nextTurn", triggerTurn: true }
-      : idle
-        ? { triggerTurn: true }
-        : { deliverAs: "followUp", triggerTurn: true },
+    idle ? { triggerTurn: true } : { deliverAs: "followUp", triggerTurn: true },
   );
 }
 

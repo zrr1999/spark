@@ -1,3 +1,7 @@
+import type {
+  ExtensionInteractionRequest,
+  ExtensionInteractionResponse,
+} from "@zendev-lab/pi-extension-api";
 import { truncateToWidth } from "@zendev-lab/spark-tui/text";
 import { Type } from "typebox";
 
@@ -64,6 +68,7 @@ interface PiAskFlowToolContext {
   cwd?: string;
   ui?: {
     custom?: unknown;
+    interaction?: unknown;
   };
 }
 
@@ -104,6 +109,8 @@ export async function runPiAskFlow(
   ui?: SelectWithCustomUi,
 ): Promise<PiAskFlowResult> {
   const request = createPiAskFlowRequest(input);
+  const interactionRun = await runPiAskFlowInteraction(request, ui as PiAskFlowToolContext["ui"]);
+  if (interactionRun) return interactionRun.result;
   if (!ui?.select && !ui?.selectWithCustom && !ui?.input) return defaultPiAskFlowResult(request);
 
   const answers: Record<string, PiAskFlowAnswerEntry> = {};
@@ -300,6 +307,33 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
       const context = decodePiAskFlowToolContext(ctx);
       const ui = context.ui;
 
+      const interactionRun = await runPiAskFlowInteraction(request, ui);
+      if (interactionRun) {
+        const normalizedResult = normalizePiAskFlowResult(interactionRun.result, request);
+        if (typeof context.cwd === "string" && context.cwd.trim()) {
+          await payloadStore.save(context.cwd, {
+            request,
+            result: normalizedResult,
+            timestamp: Date.now(),
+          });
+        }
+        return {
+          content: [
+            { type: "text" as const, text: summarizeFlowResult(normalizedResult, request) },
+          ],
+          details: {
+            result: normalizedResult,
+            status: normalizedResult.status,
+            cancelled: normalizedResult.cancelled,
+            mode: normalizedResult.mode,
+            protocolInteraction: true,
+            ...(interactionRun.fallbackReason
+              ? { protocolInteractionFallback: interactionRun.fallbackReason }
+              : {}),
+          },
+        };
+      }
+
       if (typeof ui?.custom !== "function") {
         const result = createCancelledPiAskFlowResult(request);
         return {
@@ -335,6 +369,127 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
 interface PiAskFlowCustomRun {
   result: PiAskFlowResult;
   fallbackReason?: string;
+}
+
+async function runPiAskFlowInteraction(
+  request: PiAskFlowRequest,
+  ui: PiAskFlowToolContext["ui"],
+): Promise<PiAskFlowCustomRun | undefined> {
+  if (typeof ui?.interaction !== "function") return undefined;
+  try {
+    const response = (await (
+      ui.interaction as (
+        request: ExtensionInteractionRequest,
+      ) => Promise<ExtensionInteractionResponse>
+    )(createPiAskFlowInteractionRequest(request))) as ExtensionInteractionResponse | undefined;
+    if (!response || response.kind !== "askFlow") return undefined;
+    if (response.status === "blocked" || response.status === "error") return undefined;
+    if (response.status === "cancelled") return { result: createCancelledPiAskFlowResult(request) };
+    if (response.status !== "answered") return undefined;
+    return { result: piAskFlowResultFromInteractionResponse(request, response) };
+  } catch (error) {
+    return {
+      result: createCancelledPiAskFlowResult(request),
+      fallbackReason: `interaction failed: ${formatUnknownError(error)}`,
+    };
+  }
+}
+
+function createPiAskFlowInteractionRequest(request: PiAskFlowRequest): ExtensionInteractionRequest {
+  return {
+    version: "1",
+    kind: "askFlow",
+    requestId: `ask_flow:${Date.now().toString(36)}`,
+    title: request.title?.trim() || "Ask flow",
+    prompt: request.context,
+    source: "extension",
+    metadata: { tool: "ask_flow" },
+    mode: request.mode ?? "clarification",
+    ...(request.flow ? { flow: request.flow } : {}),
+    questions: (request.questions ?? []).map((question) => ({
+      id: question.id,
+      prompt: question.prompt,
+      ...(question.header !== undefined ? { header: question.header } : {}),
+      type: question.type ?? "single",
+      required: question.required === true,
+      defaultValues: question.defaultValues ?? [],
+      options: question.options ?? [],
+    })),
+    allowElaborate: request.behaviour?.allowElaborate,
+  };
+}
+
+function piAskFlowResultFromInteractionResponse(
+  request: PiAskFlowRequest,
+  response: ExtensionInteractionResponse,
+): PiAskFlowResult {
+  return createPiAskFlowResult({
+    answers: normalizePiAskFlowInteractionAnswers(request, response.answers),
+    flow: request.flow,
+    mode: "submit",
+    cancelled: false,
+    ...(response.nextAction === "block" ? { nextAction: "block" as const } : {}),
+  });
+}
+
+function normalizePiAskFlowInteractionAnswers(
+  request: PiAskFlowRequest,
+  value: unknown,
+): Record<string, PiAskFlowAnswerEntry> {
+  if (!value || typeof value !== "object") return {};
+  const rawAnswers = value as Record<string, unknown>;
+  const answers: Record<string, PiAskFlowAnswerEntry> = {};
+  for (const question of request.questions ?? []) {
+    const answer = normalizePiAskFlowInteractionAnswer(question, rawAnswers[question.id]);
+    if (answer) answers[question.id] = answer;
+  }
+  return answers;
+}
+
+function normalizePiAskFlowInteractionAnswer(
+  question: PiAskFlowQuestion,
+  value: unknown,
+): PiAskFlowAnswerEntry | undefined {
+  if (typeof value === "string")
+    return toFlowAnswer(question.id, parseAskChoice(question.options ?? [], value, question.type));
+  if (Array.isArray(value)) {
+    return toFlowAnswer(
+      question.id,
+      parseAskChoice(question.options ?? [], value.join(", "), question.type ?? "multi"),
+    );
+  }
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const values = stringArray(raw.values);
+  const labels = stringArray(raw.labels);
+  const customText = typeof raw.customText === "string" ? raw.customText : undefined;
+  const notes = typeof raw.notes === "string" ? raw.notes : undefined;
+  const preview = typeof raw.preview === "string" ? raw.preview : undefined;
+  if (values.length === 0 && labels.length === 0 && customText === undefined) return undefined;
+  return {
+    questionId: question.id,
+    kind: customText !== undefined ? "custom" : question.type === "multi" ? "multi" : "option",
+    values,
+    ...(labels.length > 0
+      ? { labels }
+      : values.length > 0
+        ? { labels: labelsForValues(question, values) }
+        : {}),
+    ...(customText !== undefined ? { customText } : {}),
+    ...(notes !== undefined ? { notes } : {}),
+    ...(preview !== undefined ? { preview } : {}),
+  };
+}
+
+function labelsForValues(question: PiAskFlowQuestion, values: string[]): string[] {
+  const byValue = new Map((question.options ?? []).map((option) => [option.value, option.label]));
+  return values.map((value) => byValue.get(value) ?? value);
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }
 
 async function runPiAskFlowCustomUi(

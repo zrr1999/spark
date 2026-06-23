@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
-import { writePrivateFile, type NaviaPaths } from "@zendev-lab/navia-system";
+import { writePrivateFile, type SparkPaths } from "@zendev-lab/spark-system";
 
 export interface SparkDaemonConfig {
   installationId: string;
@@ -22,7 +22,7 @@ export function defaultSparkDaemonConfig(): SparkDaemonConfig {
   };
 }
 
-export function readSparkDaemonConfig(paths: NaviaPaths): SparkDaemonConfig {
+export function readSparkDaemonConfig(paths: SparkPaths): SparkDaemonConfig {
   if (!existsSync(paths.configFile)) {
     return defaultSparkDaemonConfig();
   }
@@ -33,7 +33,7 @@ export function readSparkDaemonConfig(paths: NaviaPaths): SparkDaemonConfig {
   };
 }
 
-export function writeSparkDaemonConfig(paths: NaviaPaths, config: SparkDaemonConfig): void {
+export function writeSparkDaemonConfig(paths: SparkPaths, config: SparkDaemonConfig): void {
   writePrivateFile(paths.configFile, serializeTomlSubset(config));
 }
 

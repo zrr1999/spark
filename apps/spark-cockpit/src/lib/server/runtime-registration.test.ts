@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { migrate, openMemoryDatabase } from "@zendev-lab/navia-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
 import {
   runtimeProtocolVersion,
   type RuntimeRegistrationRequest,

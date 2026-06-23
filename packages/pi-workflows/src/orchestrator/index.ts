@@ -610,7 +610,6 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-/** @deprecated Compatibility default path for existing workflow run stores. Prefer explicit WorkflowRunStore paths or host-owned path injection. */
 export function defaultWorkflowRunStore(cwd: string): WorkflowRunStore {
   return new WorkflowRunStore(join(cwd, ".spark", "workflow-runs.json"));
 }

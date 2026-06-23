@@ -146,12 +146,6 @@ function sendSparkRuntimeInstruction(
   visible: string,
   details: Record<string, unknown> = {},
 ): void {
-  const sendUserMessage = piApi.sendUserMessage?.bind(piApi);
-  const queuedAsUserMessage = Boolean(sendUserMessage);
-  sendUserMessage?.(instruction, {
-    deliverAs: "followUp",
-    streamingBehavior: "followUp",
-  });
   piApi.sendMessage(
     {
       customType,
@@ -159,7 +153,7 @@ function sendSparkRuntimeInstruction(
       display: false,
       details: { ...details, visible },
     },
-    { deliverAs: queuedAsUserMessage ? "nextTurn" : "followUp", triggerTurn: true },
+    { deliverAs: "followUp", triggerTurn: true },
   );
 }
 
@@ -261,7 +255,8 @@ export function registerSparkCommands(
   });
 
   pi.registerCommand("workflows", {
-    description: "Open the blocking Spark workflow navigator without requiring project state.",
+    description:
+      "Open the Spark workflow dashboard/navigator without requiring project state; shows dynamic runs and explicit controls.",
     async handler(args, ctx) {
       await handleSparkWorkflowCommand(pi, ctx, {
         focus: args.trim(),
@@ -1255,12 +1250,6 @@ export function registerSparkCommands(
     if (ready.length === 0) return;
     const visible = renderSparkModeVisibleMessage("implement", project.title, focus);
     const instruction = renderSparkImplementationModePrompt(graph, project.ref, focus);
-    const sendUserMessage = piApi.sendUserMessage?.bind(piApi);
-    const queuedAsUserMessage = Boolean(sendUserMessage);
-    sendUserMessage?.(instruction, {
-      deliverAs: "followUp",
-      streamingBehavior: "followUp",
-    });
     piApi.sendMessage(
       {
         customType: "spark-mode-request",
@@ -1268,7 +1257,7 @@ export function registerSparkCommands(
         display: false,
         details: { visible },
       },
-      { deliverAs: queuedAsUserMessage ? "nextTurn" : "followUp", triggerTurn: true },
+      { deliverAs: "followUp", triggerTurn: true },
     );
     markForegroundImplementAwaitingTurn(piApi, ctx, focus);
   }

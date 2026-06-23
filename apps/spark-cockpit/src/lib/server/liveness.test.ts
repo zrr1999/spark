@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
-import { migrate, openMemoryDatabase } from "@zendev-lab/navia-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
 import { sweepStaleRuntimeConnections } from "./liveness";
 
 describe("runtime liveness", () => {

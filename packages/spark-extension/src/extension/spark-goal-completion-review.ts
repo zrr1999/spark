@@ -220,8 +220,10 @@ function goalCompletionDeterministicBlocker(
   const readyTasks = (projectStatus?.readyTasks ?? []).filter((task) =>
     blockingTaskRefs.size === 0 ? true : blockingTaskRefs.has(task.ref),
   );
+  const visibleReadyTasks = readyTasks.slice(0, 5);
+  const hiddenReadyTasks = readyTasks.length - visibleReadyTasks.length;
   const readyText = readyTasks.length
-    ? readyTasks.map((task) => `@${task.name ?? task.ref}: ${task.title}`).join("; ")
+    ? `${visibleReadyTasks.map((task) => `@${task.name ?? task.ref}: ${task.title}`).join("; ")}${hiddenReadyTasks > 0 ? `; … ${hiddenReadyTasks} more` : ""}`
     : "no ready task; inspect dependencies";
   const blockedCount = blockingTasks.length || unfinished;
   const reason = `Goal completion blocked by ${blockedCount} unfinished project task(s).`;

@@ -38,6 +38,16 @@ export interface SparkWorkflowRunWidgetEntry {
   active?: boolean;
 }
 
+export interface SparkDynamicWorkflowRunWidgetEntry {
+  status: "running" | "paused" | "succeeded" | "failed" | "stale" | "stopped";
+  runRef: string;
+  name: string;
+  completedNodes: number;
+  totalNodes: number;
+  active?: boolean;
+  delivery?: "result" | "error";
+}
+
 export interface SparkGoalWidgetEntry {
   kind?: "goal" | "loop";
   status: "active" | "paused" | "complete";
@@ -53,6 +63,7 @@ export interface SparkWidgetState {
   projectTitle?: string;
   activeLens?: SparkWidgetActiveLens;
   workflowRun?: SparkWorkflowRunWidgetEntry;
+  dynamicWorkflowRun?: SparkDynamicWorkflowRunWidgetEntry;
   goal?: SparkGoalWidgetEntry;
   tasks: TaskEntry[];
   independentTodos: SessionTodoEntry[];
@@ -134,7 +145,12 @@ function isVisibleTaskTodo(todo: SessionTodoEntry): boolean {
 
 function hasWidgetContent(state: SparkWidgetState | undefined): state is SparkWidgetState {
   return Boolean(
-    state && (state.projectTitle || state.workflowRun || state.goal || state.tasks.length > 0),
+    state &&
+    (state.projectTitle ||
+      state.workflowRun ||
+      state.dynamicWorkflowRun ||
+      state.goal ||
+      state.tasks.length > 0),
   );
 }
 
@@ -159,7 +175,13 @@ export function renderSparkWidgetLines(
   tui: SparkWidgetTui,
   theme: SparkWidgetTheme,
 ): string[] {
-  if (!state.projectTitle && !state.workflowRun && !state.goal && state.tasks.length === 0)
+  if (
+    !state.projectTitle &&
+    !state.workflowRun &&
+    !state.dynamicWorkflowRun &&
+    !state.goal &&
+    state.tasks.length === 0
+  )
     return [];
 
   const l = L[state.outputLanguage] ?? L.en;
@@ -174,13 +196,16 @@ export function renderSparkWidgetLines(
   const backgroundLine = hasSessionRunningAgent(visibleTasks)
     ? undefined
     : formatBackgroundLine(state.workflowRun, theme);
+  const dynamicWorkflowLine = formatDynamicWorkflowLine(state.dynamicWorkflowRun, theme);
 
   const tasks = visibleTasks.map((task) => ({
     ...task,
     animationFrame: task.animationFrame ?? state.animationFrame ?? 0,
   }));
   const projectRows = flattenTaskRows(tasks);
-  const fixedLineCount = [goalLine, projectHeaderLine, backgroundLine].filter(Boolean).length;
+  const fixedLineCount = [goalLine, projectHeaderLine, backgroundLine, dynamicWorkflowLine].filter(
+    Boolean,
+  ).length;
   const budget = Math.max(0, MAX_WIDGET_LINES - fixedLineCount);
   const visibleProjectRows = projectRows.slice(0, budget);
   const hidden = projectRows.length - visibleProjectRows.length;
@@ -188,6 +213,7 @@ export function renderSparkWidgetLines(
   if (goalLine) lines.push(trunc(goalLine));
   if (projectHeaderLine) lines.push(trunc(projectHeaderLine));
   if (backgroundLine) lines.push(trunc(backgroundLine));
+  if (dynamicWorkflowLine) lines.push(trunc(dynamicWorkflowLine));
   appendFormattedRows(lines, visibleProjectRows, hidden > 0, theme, trunc);
   if (hidden > 0) {
     lines.push(trunc(`${theme.fg("dim", "└─")} ${theme.fg("dim", `+${hidden} ${l.more}`)}`));
@@ -253,6 +279,28 @@ function formatBackgroundStatusLabel(status: SparkWorkflowRunWidgetEntry["status
   if (status === "succeeded") return "done";
   if (status === "timed_out") return "timed out";
   return status;
+}
+
+function formatDynamicWorkflowLine(
+  workflowRun: SparkDynamicWorkflowRunWidgetEntry | undefined,
+  theme: SparkWidgetTheme,
+): string | undefined {
+  if (!workflowRun) return undefined;
+  const status = workflowRun.active ? "running" : workflowRun.status;
+  const progress =
+    workflowRun.totalNodes > 0
+      ? `${workflowRun.completedNodes}/${workflowRun.totalNodes} nodes`
+      : "no nodes";
+  const label =
+    workflowRun.delivery === "result"
+      ? "Dynamic workflow result"
+      : workflowRun.delivery === "error"
+        ? "Dynamic workflow error"
+        : "Dynamic workflow";
+  return `${theme.fg("accent", "◆")} ${theme.fg(
+    "dim",
+    `${label}: ${workflowRun.name} · ${status} · ${progress} · ${shortRunRef(workflowRun.runRef)}`,
+  )}`;
 }
 
 function shortRunRef(runRef: string): string {

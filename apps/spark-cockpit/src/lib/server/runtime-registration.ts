@@ -5,7 +5,7 @@ import {
   type RuntimeRegistrationRequest,
   type RuntimeWorkspaceRegistrationRequest,
 } from "@zendev-lab/spark-protocol";
-import { asciiSlug } from "@zendev-lab/navia-system";
+import { asciiSlug } from "@zendev-lab/spark-system";
 import { hashSecret } from "./auth";
 import type { DatabaseSync } from "node:sqlite";
 

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveNaviaPaths } from "@zendev-lab/navia-system";
+import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import { openSparkDaemonDatabase } from "./schema.js";
 import {
   addWorkspace,
@@ -31,7 +31,7 @@ function withSparkDaemonWorkspaceStore<T>(
   run: (context: { db: ReturnType<typeof openSparkDaemonDatabase>; root: string }) => T,
 ): T {
   const root = mkdtempSync(join(tmpdir(), "spark-daemon-store-"));
-  const paths = resolveNaviaPaths({
+  const paths = resolveSparkPaths({
     app: "daemon",
     env: { HOME: root },
     overrides: {

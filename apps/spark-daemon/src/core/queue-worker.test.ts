@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { SPARK_PROTOCOL_VERSION, type SparkDaemonEvent } from "@zendev-lab/spark-protocol";
 import { SparkDaemonQueue } from "./queue.js";
 import {
   DEFAULT_SPARK_DAEMON_QUEUE_CONCURRENCY,
@@ -45,6 +46,98 @@ describe("Spark daemon executor queue fan-out", () => {
       await expect(queue.list("processed")).resolves.toHaveLength(2);
     } finally {
       gate.resolve();
+      await waitForSparkDaemonActiveTasks(active).catch(() => undefined);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("emits shared daemon lifecycle and view-model events from queue execution", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-queue-events-"));
+    const queue = new SparkDaemonQueue({ daemonRoot: root });
+    const active = createSparkDaemonActiveTasks();
+    const emitted: SparkDaemonEvent[] = [];
+    const executeTask: SparkDaemonTaskExecutor = async (task) => ({
+      ok: true,
+      sessionId: task.sessionId,
+      jsonEvents: [
+        {
+          type: "view_event",
+          event: {
+            version: SPARK_PROTOCOL_VERSION,
+            type: "session.message",
+            sessionId: task.sessionId,
+            message: {
+              version: SPARK_PROTOCOL_VERSION,
+              id: "assistant-1",
+              role: "assistant",
+              text: "done from daemon",
+              status: "done",
+              metadata: {},
+            },
+          },
+        },
+        {
+          type: "daemon_event",
+          event: {
+            version: SPARK_PROTOCOL_VERSION,
+            type: "daemon.interaction.request",
+            source: "runtime",
+            request: {
+              version: SPARK_PROTOCOL_VERSION,
+              kind: "confirmation",
+              requestId: "confirm-daemon-1",
+              title: "Confirm daemon action",
+              prompt: "Continue?",
+              severity: "info",
+              confirmLabel: "Confirm",
+              cancelLabel: "Cancel",
+              metadata: {},
+            },
+            metadata: {},
+          },
+        },
+      ],
+    });
+
+    try {
+      await queue.enqueue({ type: "session.run", sessionId: "session-events", prompt: "go" });
+
+      await expect(
+        processSparkDaemonQueueBatch({
+          queue,
+          active,
+          executeTask,
+          emitEvent: (event) => {
+            emitted.push(event);
+          },
+        }),
+      ).resolves.toBe(true);
+      await waitForSparkDaemonActiveTasks(active);
+
+      expect(emitted.map((event) => event.type)).toEqual([
+        "daemon.task.lifecycle",
+        "daemon.task.lifecycle",
+        "daemon.view_event",
+        "daemon.interaction.request",
+      ]);
+      expect(emitted[0]).toMatchObject({
+        type: "daemon.task.lifecycle",
+        status: "running",
+        sessionId: "session-events",
+      });
+      expect(emitted[1]).toMatchObject({ type: "daemon.task.lifecycle", status: "succeeded" });
+      expect(emitted[2]).toMatchObject({
+        type: "daemon.view_event",
+        sessionId: "session-events",
+        view: { type: "session.message", sessionId: "session-events" },
+      });
+      expect(emitted[3]).toMatchObject({
+        type: "daemon.interaction.request",
+        sessionId: "session-events",
+        invocationId: expect.any(String),
+        request: { kind: "confirmation", requestId: "confirm-daemon-1" },
+      });
+    } finally {
       await waitForSparkDaemonActiveTasks(active).catch(() => undefined);
       rmSync(root, { recursive: true, force: true });
     }

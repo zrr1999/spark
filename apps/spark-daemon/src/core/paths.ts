@@ -2,13 +2,13 @@
 
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { NaviaPaths } from "@zendev-lab/navia-system";
+import type { SparkPaths } from "@zendev-lab/spark-system";
 
 export interface SparkDaemonPathOptions {
   sparkHome?: string;
   daemonRoot?: string;
   runtimeDir?: string;
-  paths?: Pick<NaviaPaths, "dataDir" | "runtimeDir">;
+  paths?: Pick<SparkPaths, "dataDir" | "runtimeDir">;
 }
 
 export function defaultSparkHome(sparkHome?: string): string {

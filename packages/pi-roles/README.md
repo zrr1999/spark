@@ -24,13 +24,13 @@ Primary Markdown role paths:
 
 Extension roles are registered by loaded extension packages at runtime and are not writable Markdown store entries.
 
-Legacy agent-shaped paths and refs are not compatibility inputs. Repair stale
+Agent-shaped paths and refs are not accepted inputs. Repair stale
 local state explicitly before loading it; new writes use Markdown role files.
 
 Role specs do not carry model policy. Markdown frontmatter with `model` or
 `defaultModel` is rejected; store model choices separately instead:
 
-- project: host-owned `RoleModelSettingsStore` path; the exported default still reads `.spark/role-model-settings.json` for compatibility
+- project: host-owned `RoleModelSettingsStore` path; the exported default reads `.spark/role-model-settings.json`
 - user: `~/.agents/role-model-settings.json`
 
 Resolution order is explicit run model, then project settings, then user

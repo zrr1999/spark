@@ -28,22 +28,28 @@ export function registerSparkProjectTools(
     label: "Spark List Projects",
     description:
       'List Spark projects as structured JSON without parsing task_read({ action: "workspace_status" }) text. Projects are permanent; status filters are not supported. Example output item: { ref, title, taskCounts: { total, active, done, cancelled }, currentForSession }.',
-    parameters: Type.Object({}),
-    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+    parameters: Type.Object({
+      limit: Type.Optional(
+        Type.Number({ description: "Maximum project rows to show. Default: 20." }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd;
       const graph = await loadSparkGraph(cwd, ctx);
+      const limit = normalizeProjectListLimit(params.limit);
       if (!graph) {
-        const details = { found: false, projects: [] };
-        return { content: [{ type: "text", text: JSON.stringify([], null, 2) }], details };
+        const details = { found: false, count: 0, shown: 0, projects: [] };
+        return { content: [{ type: "text", text: renderProjectListJson([]) }], details };
       }
       const currentProject = await currentSparkProject(cwd, ctx, graph);
       const projects = collectSparkProjectSummaries({
         graph,
         currentProjectRef: currentProject?.ref,
       });
+      const visible = projects.slice(0, limit);
       return {
-        content: [{ type: "text", text: JSON.stringify(projects, null, 2) }],
-        details: { found: true, projects },
+        content: [{ type: "text", text: renderProjectListJson(visible) }],
+        details: { found: true, count: projects.length, shown: visible.length, projects: visible },
       };
     },
   });
@@ -54,11 +60,9 @@ export function registerSparkProjectTools(
     description:
       "Internal implementation for task_write project_rename/project_metadata_update. Defaults to this session's current project.",
     parameters: Type.Object({
-      intent: Type.Optional(
-        Type.String({
-          description: "rename | metadata_update. Internal facade selector.",
-        }),
-      ),
+      intent: Type.String({
+        description: "rename | metadata_update. Internal facade selector.",
+      }),
       project: Type.Optional(
         Type.String({
           description: "Existing project ref or title/title prefix. Defaults to current project.",
@@ -222,7 +226,7 @@ export function registerSparkProjectTools(
   });
 }
 
-type SparkProjectMutationIntent = "rename" | "metadata_update" | "legacy_update";
+type SparkProjectMutationIntent = "rename" | "metadata_update";
 
 type SparkProjectIntentPatchResult =
   | { ok: true; patch: ReturnType<typeof normalizeSparkProjectPatch> }
@@ -241,7 +245,6 @@ interface ProjectMutationDetails {
 }
 
 function normalizeSparkProjectMutationIntent(value: unknown): SparkProjectMutationIntent {
-  if (value === undefined || value === null) return "legacy_update";
   if (value === "rename" || value === "metadata_update") return value;
   throw new Error("project mutation intent must be rename or metadata_update");
 }
@@ -257,16 +260,6 @@ function normalizeSparkProjectIntentPatch(
       error: "project_status_removed",
       message: "Project.status lifecycle has been removed; Projects are permanent records.",
     };
-  if (intent === "legacy_update") {
-    if (!hasLegacySparkProjectPatch(patch))
-      return {
-        ok: false,
-        error: "missing_project_patch",
-        message:
-          "Provide title, description, purpose, or outputLanguage to update the Spark project.",
-      };
-    return { ok: true, patch };
-  }
   if (intent === "rename") {
     if (!patch.title)
       return {
@@ -310,10 +303,6 @@ function normalizeSparkProjectIntentPatch(
   };
 }
 
-function hasLegacySparkProjectPatch(patch: ReturnType<typeof normalizeSparkProjectPatch>): boolean {
-  return Boolean(patch.title || patch.description || patch.purpose || patch.outputLanguage);
-}
-
 function renderProjectMutationDetails(input: {
   intent: SparkProjectMutationIntent;
   before: NonNullable<ReturnType<TaskGraph["projects"]>[number]>;
@@ -343,14 +332,23 @@ function projectChangedFields(
   return fields.filter((field) => before[field] !== after[field]);
 }
 
+function renderProjectListJson(projects: Array<Record<string, unknown>>): string {
+  return JSON.stringify(projects, null, 2);
+}
+
+function normalizeProjectListLimit(value: unknown): number {
+  if (value === undefined || value === null) return 20;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0)
+    throw new Error("project_list limit must be a positive integer");
+  return value;
+}
+
 function renderProjectMutationText(details: ProjectMutationDetails): string {
   switch (details.intent) {
     case "rename":
       return `Renamed Spark project: ${details.titleBefore} -> ${details.titleAfter} (${details.projectRef})`;
     case "metadata_update":
       return `Updated Spark project metadata: ${details.title} (${details.projectRef}) fields=${details.changedFields?.join(",") || "none"}`;
-    case "legacy_update":
-      return `Updated Spark project: ${details.title} (${details.projectRef}) fields=${details.changedFields?.join(",") || "none"}`;
   }
 }
 

@@ -135,7 +135,7 @@ Rules:
 - `messageId` is unique per send attempt.
 - `idempotencyKey` is stable across retries for state-changing messages.
 - Unsupported `protocolVersion` returns/records `unsupported_protocol_version` and closes or rejects the flow loudly.
-- The server does not maintain broad pre-v1 compatibility shims.
+- The server does not maintain broad pre-v1 shims.
 
 ## Data persistence stance
 

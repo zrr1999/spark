@@ -24,13 +24,19 @@ import { renderSparkBackgroundRunsText } from "./background-runs-rendering.ts";
 import { appendSparkWorkflowRunPruneLines } from "./state-housekeeping-rendering.ts";
 import { activeSparkRoleRunProcessesForCwd } from "./background-runs.ts";
 import {
-  defaultSparkDynamicWorkflowRunStore,
-  type SparkDynamicWorkflowRunRecord,
-} from "./spark-dynamic-workflow-run-store.ts";
+  defaultSparkDynamicWorkflowEventStore,
+  type SparkDynamicWorkflowEventStore,
+} from "./spark-dynamic-workflow-event-store.ts";
+import { defaultSparkDynamicWorkflowManager } from "./spark-dynamic-workflow-manager.ts";
+import type { SparkDynamicWorkflowRunRecord } from "./spark-dynamic-workflow-run-store.ts";
 import {
+  buildSparkDynamicWorkflowDashboardView,
+  projectSparkDynamicWorkflowRuns,
+  renderSparkDynamicWorkflowDashboardText,
   renderSparkDynamicWorkflowRunsText,
   selectSparkDynamicWorkflowRuns,
   type SparkDynamicWorkflowRunControlResult,
+  type SparkDynamicWorkflowRunProjection,
 } from "./spark-dynamic-workflow-run-rendering.ts";
 import { currentSparkProject, loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
@@ -41,7 +47,6 @@ interface SparkWorkflowRunsParams {
   taskRef?: unknown;
   projectRef?: unknown;
   includeHistory?: unknown;
-  includeDetails?: unknown;
   signal?: unknown;
   forceAfterMs?: unknown;
   all?: unknown;
@@ -106,9 +111,10 @@ function buildDynamicWorkflowRunDetails(input: {
   action: string;
   runs: SparkDynamicWorkflowRunRecord[];
   includeHistory: boolean;
-  includeDetails: boolean;
+  detailed: boolean;
   targetRunRef?: RunRef;
   control?: SparkDynamicWorkflowRunControlResult;
+  projection?: SparkDynamicWorkflowRunProjection[];
 }) {
   const runs = selectSparkDynamicWorkflowRuns({
     runs: input.runs,
@@ -119,15 +125,52 @@ function buildDynamicWorkflowRunDetails(input: {
     text: renderSparkDynamicWorkflowRunsText({
       action: input.action,
       runs,
-      includeDetails: input.includeDetails,
+      detailed: input.detailed,
       control: input.control,
     }),
     details: {
       action: input.action,
       runs,
+      projection: input.projection,
       selected: runs.map((run) => run.ref),
       control: input.control,
     },
+  };
+}
+
+async function buildDynamicWorkflowRunDetailsFromStore(input: {
+  store: SparkDynamicWorkflowEventStore;
+  action: string;
+  includeHistory: boolean;
+  detailed: boolean;
+  targetRunRef?: RunRef;
+  control?: SparkDynamicWorkflowRunControlResult;
+}) {
+  const [snapshot, views] = await Promise.all([input.store.load(), input.store.listRuns()]);
+  const legacy = buildDynamicWorkflowRunDetails({
+    action: input.action,
+    runs: snapshot.runs,
+    includeHistory: input.includeHistory,
+    detailed: input.detailed,
+    targetRunRef: input.targetRunRef,
+    control: input.control,
+    projection: projectSparkDynamicWorkflowRuns({
+      runs: views,
+      includeHistory: input.includeHistory,
+      targetRunRef: input.targetRunRef,
+    }),
+  });
+  const dashboard = buildSparkDynamicWorkflowDashboardView({
+    action: input.action,
+    runs: views,
+    includeHistory: input.includeHistory,
+    detailed: input.detailed,
+    targetRunRef: input.targetRunRef,
+    control: input.control,
+  });
+  return {
+    text: `${legacy.text}\n${renderSparkDynamicWorkflowDashboardText(dashboard)}`,
+    details: { ...legacy.details, dashboard },
   };
 }
 
@@ -167,9 +210,6 @@ export function registerSparkWorkflowRunsTool(
         Type.Boolean({
           description: "Include acknowledged and terminal recent runs in list/status output.",
         }),
-      ),
-      includeDetails: Type.Optional(
-        Type.Boolean({ description: "Expand task/run records in text output." }),
       ),
       signal: Type.Optional(Type.String({ description: "Kill only; default SIGTERM." })),
       forceAfterMs: Type.Optional(
@@ -234,11 +274,7 @@ export function registerSparkWorkflowRunsTool(
         false,
         "task_read run_status includeHistory",
       );
-      const includeDetails = normalizeSparkBackgroundBoolean(
-        p.includeDetails,
-        false,
-        "task_read run_status includeDetails",
-      );
+      const detailed = action === "inspect";
       const all = normalizeSparkBackgroundBoolean(p.all, false, "task_read run_status all");
       const requestedProjectRef = normalizeOptionalProjectRef(
         p.projectRef,
@@ -261,7 +297,7 @@ export function registerSparkWorkflowRunsTool(
         };
       }
       const runStore = defaultSparkWorkflowRunStore(cwd);
-      const dynamicRunStore = defaultSparkDynamicWorkflowRunStore(cwd);
+      const dynamicRunStore = defaultSparkDynamicWorkflowEventStore(cwd);
       await dynamicRunStore.reconcileStale();
       const currentProject = await currentSparkProject(cwd, ctx, graph);
       const currentProjectRef = currentProject?.ref;
@@ -305,12 +341,11 @@ export function registerSparkWorkflowRunsTool(
         action === "save"
       ) {
         if (!runRef) {
-          const snapshot = await dynamicRunStore.load();
-          const dynamicWorkflowRuns = buildDynamicWorkflowRunDetails({
+          const dynamicWorkflowRuns = await buildDynamicWorkflowRunDetailsFromStore({
+            store: dynamicRunStore,
             action,
-            runs: snapshot.runs,
             includeHistory: true,
-            includeDetails: true,
+            detailed: false,
           });
           return {
             content: [
@@ -334,28 +369,28 @@ export function registerSparkWorkflowRunsTool(
                 scope: normalizeWorkflowSaveScope(p.workflowScope),
               })
             : undefined;
+        const dynamicManager = defaultSparkDynamicWorkflowManager();
         const updated = existingDynamicRun
           ? action === "pause"
-            ? await dynamicRunStore.pause(runRef)
+            ? await dynamicManager.pause(dynamicRunStore, runRef)
             : action === "resume"
-              ? await dynamicRunStore.resume(runRef)
+              ? await dynamicManager.resume(dynamicRunStore, runRef)
               : action === "stop"
-                ? await dynamicRunStore.stop(runRef)
+                ? await dynamicManager.stop(dynamicRunStore, runRef)
                 : action === "restart"
-                  ? await dynamicRunStore.restart(runRef)
+                  ? await dynamicManager.restart(dynamicRunStore, runRef)
                   : await dynamicRunStore.get(runRef)
           : undefined;
-        const snapshot = await dynamicRunStore.load();
         const control: SparkDynamicWorkflowRunControlResult = updated
           ? savedWorkflow
             ? { action, run: updated, savedWorkflow }
             : { action, run: updated }
           : { action, missing: runRef };
-        const dynamicWorkflowRuns = buildDynamicWorkflowRunDetails({
+        const dynamicWorkflowRuns = await buildDynamicWorkflowRunDetailsFromStore({
+          store: dynamicRunStore,
           action,
-          runs: snapshot.runs,
           includeHistory: true,
-          includeDetails: true,
+          detailed: true,
           targetRunRef: runRef,
           control,
         });
@@ -405,7 +440,7 @@ export function registerSparkWorkflowRunsTool(
         });
         return {
           content: [
-            { type: "text", text: renderSparkBackgroundRunsText(background, { includeDetails }) },
+            { type: "text", text: renderSparkBackgroundRunsText(background, { detailed }) },
           ],
           details: { background },
         };
@@ -439,7 +474,7 @@ export function registerSparkWorkflowRunsTool(
         });
         return {
           content: [
-            { type: "text", text: renderSparkBackgroundRunsText(background, { includeDetails }) },
+            { type: "text", text: renderSparkBackgroundRunsText(background, { detailed }) },
           ],
           details: { background },
         };
@@ -450,7 +485,7 @@ export function registerSparkWorkflowRunsTool(
       if (action === "reconcile") {
         const before = await runStore.load();
         await reconcileSparkWorkflowRunsWithActiveProcesses(runStore, graph, cwd);
-        const dynamicSnapshot = await dynamicRunStore.reconcileStale();
+        await dynamicRunStore.reconcileStale();
         const after = await runStore.load();
         const changed = after.runs.filter((run) => {
           const previous = before.runs.find((candidate) => candidate.ref === run.ref);
@@ -470,14 +505,14 @@ export function registerSparkWorkflowRunsTool(
           targetRunRef: runRef,
           targetTaskRef: taskRef,
         });
-        const dynamicWorkflowRuns = buildDynamicWorkflowRunDetails({
+        const dynamicWorkflowRuns = await buildDynamicWorkflowRunDetailsFromStore({
+          store: dynamicRunStore,
           action,
-          runs: dynamicSnapshot.runs,
           includeHistory: true,
-          includeDetails,
+          detailed,
           targetRunRef: runRef,
         });
-        const text = `${renderSparkBackgroundRunsText(background, { includeDetails })}\nReconciled workflow records changed: ${changed.length}\n${dynamicWorkflowRuns.text}`;
+        const text = `${renderSparkBackgroundRunsText(background, { detailed })}\nReconciled workflow records changed: ${changed.length}\n${dynamicWorkflowRuns.text}`;
         return {
           content: [{ type: "text", text }],
           details: {
@@ -569,7 +604,7 @@ export function registerSparkWorkflowRunsTool(
         });
         return {
           content: [
-            { type: "text", text: renderSparkBackgroundRunsText(background, { includeDetails }) },
+            { type: "text", text: renderSparkBackgroundRunsText(background, { detailed }) },
           ],
           details: { background },
         };
@@ -693,7 +728,7 @@ export function registerSparkWorkflowRunsTool(
           `Spark background role-run ${action}: ${delivered ? "sent" : "not delivered"} to ${target.runRef}`,
           `Control artifact: ${artifact.ref}`,
           ...sendErrors.map((error) => `Error: ${error}`),
-          renderSparkBackgroundRunsText(background, { includeDetails: true }),
+          renderSparkBackgroundRunsText(background, { detailed: false }),
         ].join("\n");
         return {
           content: [{ type: "text", text }],
@@ -711,16 +746,15 @@ export function registerSparkWorkflowRunsTool(
           runRef,
         });
         const dynamicAck = await dynamicRunStore.acknowledge(runRef);
-        const dynamicSnapshot = await dynamicRunStore.load();
         const dynamicControl: SparkDynamicWorkflowRunControlResult = {
           action,
           acknowledgedRunRefs: dynamicAck.runRefs,
         };
-        const dynamicWorkflowRuns = buildDynamicWorkflowRunDetails({
+        const dynamicWorkflowRuns = await buildDynamicWorkflowRunDetailsFromStore({
+          store: dynamicRunStore,
           action,
-          runs: dynamicSnapshot.runs,
           includeHistory: true,
-          includeDetails: true,
+          detailed: Boolean(runRef),
           targetRunRef: runRef,
           control: dynamicControl,
         });
@@ -741,7 +775,7 @@ export function registerSparkWorkflowRunsTool(
           content: [
             {
               type: "text",
-              text: `${renderSparkBackgroundRunsText(background, { includeDetails })}\n${dynamicWorkflowRuns.text}`,
+              text: `${renderSparkBackgroundRunsText(background, { detailed })}\n${dynamicWorkflowRuns.text}`,
             },
           ],
           details: { background, dynamicWorkflowRuns: dynamicWorkflowRuns.details },
@@ -759,12 +793,11 @@ export function registerSparkWorkflowRunsTool(
         targetRunRef: runRef,
         targetTaskRef: taskRef,
       });
-      const dynamicSnapshot = await dynamicRunStore.load();
-      const dynamicWorkflowRuns = buildDynamicWorkflowRunDetails({
+      const dynamicWorkflowRuns = await buildDynamicWorkflowRunDetailsFromStore({
+        store: dynamicRunStore,
         action,
-        runs: dynamicSnapshot.runs,
         includeHistory: includeHistory || action === "inspect" || action === "list",
-        includeDetails: includeDetails || action === "inspect",
+        detailed,
         targetRunRef: runRef,
       });
       return {
@@ -772,7 +805,7 @@ export function registerSparkWorkflowRunsTool(
           {
             type: "text",
             text: `${renderSparkBackgroundRunsText(background, {
-              includeDetails: includeDetails || action === "inspect",
+              detailed,
             })}\n${dynamicWorkflowRuns.text}`,
           },
         ],

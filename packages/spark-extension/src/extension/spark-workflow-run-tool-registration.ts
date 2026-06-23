@@ -26,14 +26,20 @@ import {
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import { sessionModelName } from "./session-model.ts";
 import {
+  defaultSparkDynamicWorkflowManager,
+  type SparkDynamicWorkflowManagerRunInput,
+} from "./spark-dynamic-workflow-manager.ts";
+import {
+  defaultSparkDynamicWorkflowEventStore,
+  type SparkDynamicWorkflowEventStore,
+} from "./spark-dynamic-workflow-event-store.ts";
+import {
   captureSparkWorkflowBaseMetadata,
-  defaultSparkDynamicWorkflowRunStore,
   hashWorkflowScript,
   type SparkDynamicWorkflowRunApproval,
   type SparkDynamicWorkflowRunBaseMetadata,
   type SparkDynamicWorkflowRunRecord,
   type SparkDynamicWorkflowRunSource,
-  type SparkDynamicWorkflowRunStore,
 } from "./spark-dynamic-workflow-run-store.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 
@@ -75,6 +81,7 @@ interface SparkWorkflowRunParams {
   tokenBudget?: unknown;
   runRef?: unknown;
   resumeRunRef?: unknown;
+  wait?: unknown;
 }
 
 export interface SparkWorkflowRunToolDeps {
@@ -100,7 +107,7 @@ export interface SparkWorkflowRunToolDeps {
     ctx: SparkToolContext;
     summary: SparkWorkflowRunApprovalSummary;
   }) => Promise<SparkWorkflowRunApprovalDecision> | SparkWorkflowRunApprovalDecision;
-  dynamicRunStore?: (cwd: string) => SparkDynamicWorkflowRunStore;
+  dynamicRunStore?: (cwd: string) => SparkDynamicWorkflowEventStore;
   captureBase?: (input: {
     cwd: string;
   }) =>
@@ -108,6 +115,7 @@ export interface SparkWorkflowRunToolDeps {
     | SparkDynamicWorkflowRunBaseMetadata
     | undefined;
   now?: () => string;
+  refreshSparkWidget?: (cwd: string, ctx: SparkToolContext) => Promise<void>;
 }
 
 export function registerSparkWorkflowRunTool(
@@ -128,6 +136,7 @@ export function registerSparkWorkflowRunTool(
       "Prefer quality helpers: verify for adversarial checks, judgePanel for best-of-N, loopUntilDry for exhaustive discovery, and completenessCheck before final synthesis.",
       "Use tokenBudget/maxAgents/concurrency when the user asks for spend/time bounds or the fan-out is large.",
       "Use agent(prompt, { isolation: 'graft' }) only for code-editing agents that should work through Graft scratch/candidate tools; Spark injects GRAFT_BASE_REF from persisted workflow base metadata and narrows tools to Graft operations.",
+      "workflow_run starts managed background dynamic workflow runs by default and returns a runRef quickly; pass wait=true only when an explicitly synchronous result is required.",
       "workflow_run persists script body/hash, args, phases, journal, result/error, and base metadata; use runRef/resumeRunRef to resume a prior dynamic workflow run.",
     ],
     parameters: Type.Object({
@@ -157,19 +166,26 @@ export function registerSparkWorkflowRunTool(
       resumeRunRef: Type.Optional(
         Type.String({ description: "Alias for runRef when resuming a dynamic workflow run." }),
       ),
+      wait: Type.Optional(
+        Type.Boolean({
+          description:
+            "Wait for workflow completion before returning. Defaults to false: return runRef immediately and continue in the DynamicWorkflowManager background runner.",
+        }),
+      ),
     }),
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const p = params as SparkWorkflowRunParams;
       const cwd = ctx.cwd;
       const scriptInput = normalizeOptionalWorkflowString(p.script, "script");
       const selector = normalizeOptionalWorkflowString(p.selector, "selector");
       const resumeRunRef = normalizeOptionalRunRef(p.resumeRunRef ?? p.runRef, "runRef");
+      const waitForCompletion = normalizeOptionalWorkflowBoolean(p.wait, "wait") ?? false;
       if (scriptInput && selector)
         throw new Error("workflow_run accepts selector or script, not both");
       if (!scriptInput && !selector && !resumeRunRef)
         throw new Error("workflow_run requires selector, script, or runRef");
 
-      const dynamicStore = (deps.dynamicRunStore ?? defaultSparkDynamicWorkflowRunStore)(cwd);
+      const dynamicStore = (deps.dynamicRunStore ?? defaultSparkDynamicWorkflowEventStore)(cwd);
       await dynamicStore.reconcileStale({ now: deps.now?.() });
       const existingRun = resumeRunRef ? await dynamicStore.get(resumeRunRef) : undefined;
       if (resumeRunRef && !existingRun)
@@ -214,62 +230,128 @@ export function registerSparkWorkflowRunTool(
         options,
         base,
         approval,
-        resumeRunRef,
+        ...(resumeRunRef ? { runRef: resumeRunRef, resumeRunRef, resumedFrom: resumeRunRef } : {}),
         now: deps.now?.(),
       });
-      const runWorkflow = deps.runWorkflow ?? runWorkflowScript;
-      const agent = await (deps.createAgentRunner ?? createSparkWorkflowAgentRunner)({
-        cwd,
-        ctx,
-        signal,
-        base,
-      });
-      const webSearchAdapter =
-        deps.webSearch ?? (await createSparkWorkflowWebSearchAdapter({ cwd, ctx, signal }));
-      const fetchContentAdapter =
-        deps.fetchContent ?? (await createSparkWorkflowFetchContentAdapter({ cwd, ctx, signal }));
-      try {
-        const result = await runWorkflow(source.script, {
-          args,
-          agent,
-          concurrency: options.concurrency,
-          maxAgents: options.maxAgents,
-          tokenBudget: options.tokenBudget,
-          resumeJournal: new Map(dynamicRun.journal.map((entry) => [entry.index, entry])),
-          artifactRecord: (record) => recordWorkflowArtifact(cwd, record, deps),
-          webSearch: (request) => webSearchAdapter({ cwd, request }),
-          fetchContent: (request) => fetchContentAdapter({ cwd, request }),
-          loadWorkflowScript: (selector) => resolveNestedWorkflowScript(cwd, selector),
-          onAgentJournal: (entry) => dynamicStore.recordJournal(dynamicRun.ref, entry),
-          onPhase: (phase) => void dynamicStore.recordPhase(dynamicRun.ref, phase),
-          onTokenUsage: (usage) => dynamicStore.recordTokenUsage(dynamicRun.ref, usage.spent),
-          onAgentTelemetry: (telemetry) =>
-            dynamicStore.recordAgentTelemetry(dynamicRun.ref, telemetry),
+      const createManagerRunInput = async (
+        run: SparkDynamicWorkflowRunRecord,
+        abortController: AbortController,
+        resumeJournal: SparkDynamicWorkflowRunRecord["journal"],
+      ): Promise<SparkDynamicWorkflowManagerRunInput> => {
+        const agent = await (deps.createAgentRunner ?? createSparkWorkflowAgentRunner)({
+          cwd,
+          ctx,
+          signal: abortController.signal,
+          base,
         });
-        const finishedRun = await dynamicStore.finish(dynamicRun.ref, result);
-        const text = renderWorkflowRunResultText(source.label, result, finishedRun ?? dynamicRun);
+        const webSearchAdapter =
+          deps.webSearch ??
+          (await createSparkWorkflowWebSearchAdapter({
+            cwd,
+            ctx,
+            signal: abortController.signal,
+          }));
+        const fetchContentAdapter =
+          deps.fetchContent ??
+          (await createSparkWorkflowFetchContentAdapter({
+            cwd,
+            ctx,
+            signal: abortController.signal,
+          }));
+        return {
+          store: dynamicStore,
+          run,
+          abortController,
+          script: source.script,
+          args,
+          options,
+          resumeJournal,
+          agent,
+          runWorkflow: deps.runWorkflow ?? runWorkflowScript,
+          artifactRecord: (record: WorkflowArtifactRecordInput) =>
+            recordWorkflowArtifact(cwd, record, deps),
+          webSearch: (request: WorkflowWebSearchInput) => webSearchAdapter({ cwd, request }),
+          fetchContent: (request: WorkflowFetchContentInput) =>
+            fetchContentAdapter({ cwd, request }),
+          loadWorkflowScript: (selector: string) => resolveNestedWorkflowScript(cwd, selector),
+          restartInput: ({
+            abortController: nextAbortController,
+            run: nextRun,
+          }: {
+            abortController: AbortController;
+            run: SparkDynamicWorkflowRunRecord;
+          }) => createManagerRunInput(nextRun, nextAbortController, []),
+          onLiveUpdate: async (update) => {
+            await refreshSparkWorkflowWidgetSafely(deps, cwd, ctx);
+            if (!waitForCompletion) return;
+            onUpdate({
+              content: [
+                {
+                  type: "text",
+                  text: renderWorkflowRunLiveUpdateText(
+                    source.label,
+                    update.run ?? run,
+                    update.event,
+                  ),
+                },
+              ],
+            });
+          },
+        };
+      };
+      const handle = defaultSparkDynamicWorkflowManager().start(
+        await createManagerRunInput(
+          dynamicRun,
+          new AbortController(),
+          existingRun?.journal ?? dynamicRun.journal,
+        ),
+      );
+      if (!waitForCompletion) {
+        const text = renderWorkflowRunStartedText(source.label, dynamicRun);
         return {
           content: [{ type: "text", text }],
           details: {
             workflow: {
               runRef: dynamicRun.ref,
-              status: finishedRun?.status ?? "succeeded",
+              status: "running",
+              background: true,
               source: source.label,
-              scriptHash: finishedRun?.scriptHash ?? dynamicRun.scriptHash,
-              base: finishedRun?.base ?? dynamicRun.base,
-              approval: finishedRun?.approval ?? dynamicRun.approval,
-              meta: result.meta,
-              phases: result.phases,
-              agentCount: result.agentCount,
-              journalEntries: result.journal.length,
-              result: jsonSafe(result.result),
+              scriptHash: dynamicRun.scriptHash,
+              base: dynamicRun.base,
+              approval: dynamicRun.approval,
+              meta,
+              phases: dynamicRun.phases,
+              agentCount: dynamicRun.agentCount,
+              journalEntries: dynamicRun.journal.length,
+              result: null,
             },
           },
         };
-      } catch (error) {
-        await dynamicStore.fail(dynamicRun.ref, error);
-        throw error;
       }
+      const completion = await handle.completion;
+      if (completion.status === "failed") throw completion.error;
+      const result = completion.result;
+      const finishedRun = completion.run ?? (await dynamicStore.get(dynamicRun.ref)) ?? dynamicRun;
+      const text = renderWorkflowRunResultText(source.label, result, finishedRun);
+      return {
+        content: [{ type: "text", text }],
+        details: {
+          workflow: {
+            runRef: dynamicRun.ref,
+            status: finishedRun.status,
+            background: true,
+            source: source.label,
+            scriptHash: finishedRun.scriptHash,
+            base: finishedRun.base,
+            approval: finishedRun.approval,
+            meta: result.meta,
+            phases: result.phases,
+            agentCount: result.agentCount,
+            journalEntries: result.journal.length,
+            result: jsonSafe(result.result),
+          },
+        },
+      };
     },
   });
 }
@@ -534,18 +616,23 @@ function approvalRecordSummary(
 }
 
 function formatWorkflowApprovalSummary(summary: SparkWorkflowRunApprovalSummary): string {
+  const compactList = (items: readonly unknown[], limit = 8): string => {
+    const visible = items.slice(0, limit).map(String);
+    const suffix = items.length > visible.length ? `, … ${items.length - visible.length} more` : "";
+    return `${visible.join(", ")}${suffix}`;
+  };
   const lines = [
     `Workflow: ${summary.workflowName}`,
     `Source: ${summary.source}`,
     `Script hash: ${summary.scriptHash.slice(0, 12)}`,
-    `Risks: ${summary.riskFlags.join(", ")}`,
-    summary.reasons.length ? `Reasons: ${summary.reasons.join("; ")}` : undefined,
+    `Risks: ${compactList(summary.riskFlags)}`,
+    summary.reasons.length ? `Reasons: ${compactList(summary.reasons, 5)}` : undefined,
     `Resources: phases=${summary.resources.phaseCount}, agentCallSites=${summary.resources.agentCallSites}${summary.resources.concurrency ? `, concurrency=${summary.resources.concurrency}` : ""}${summary.resources.maxAgents ? `, maxAgents=${summary.resources.maxAgents}` : ""}${summary.resources.tokenBudget ? `, tokenBudget=${summary.resources.tokenBudget}` : ""}`,
     summary.resources.timeoutMs.length
-      ? `Timeouts: ${summary.resources.timeoutMs.join(", ")}ms`
+      ? `Timeouts: ${compactList(summary.resources.timeoutMs)}ms`
       : undefined,
-    summary.tools.length ? `Allowed tools: ${summary.tools.join(", ")}` : undefined,
-    summary.isolation.length ? `Isolation: ${summary.isolation.join(", ")}` : undefined,
+    summary.tools.length ? `Allowed tools: ${compactList(summary.tools)}` : undefined,
+    summary.isolation.length ? `Isolation: ${compactList(summary.isolation)}` : undefined,
     summary.base?.baseRef
       ? `Base: ref=${summary.base.baseRef} state=${summary.base.baseState ?? "unknown"} tree=${summary.base.baseTree ?? "unknown"}`
       : undefined,
@@ -555,7 +642,9 @@ function formatWorkflowApprovalSummary(summary: SparkWorkflowRunApprovalSummary)
 }
 
 function formatWorkflowApprovalSummaryLine(summary: SparkWorkflowRunApprovalSummary): string {
-  return `${summary.workflowName} ${summary.scriptHash.slice(0, 12)} risks=${summary.riskFlags.join(",") || "none"}`;
+  const risks = summary.riskFlags.slice(0, 5).join(",") || "none";
+  const suffix = summary.riskFlags.length > 5 ? `,+${summary.riskFlags.length - 5}` : "";
+  return `${summary.workflowName} ${summary.scriptHash.slice(0, 12)} risks=${risks}${suffix}`;
 }
 
 function extractWorkflowAllowedTools(script: string): string[] {
@@ -800,6 +889,62 @@ async function recordWorkflowArtifact(
   return { ref: artifact.ref };
 }
 
+async function refreshSparkWorkflowWidgetSafely(
+  deps: SparkWorkflowRunToolDeps,
+  cwd: string,
+  ctx: SparkToolContext,
+): Promise<void> {
+  try {
+    await deps.refreshSparkWidget?.(cwd, ctx);
+  } catch (error) {
+    ctx.ui?.notify?.(
+      `Spark dynamic workflow widget refresh failed: ${errorText(error)}`,
+      "warning",
+    );
+  }
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function renderWorkflowRunLiveUpdateText(
+  source: string,
+  run: SparkDynamicWorkflowRunRecord,
+  event?: {
+    type: string;
+    label?: string;
+    title?: string;
+    toolName?: string;
+    workflowName?: string;
+  },
+): string {
+  const eventLabel = event
+    ? ` · ${event.type}${event.label ? ` ${event.label}` : event.title ? ` ${event.title}` : event.toolName ? ` ${event.toolName}` : event.workflowName ? ` ${event.workflowName}` : ""}`
+    : "";
+  return [
+    `Workflow run update: ${source}`,
+    `run=${run.ref} status=${run.status} phases=${run.phases.length} agents=${run.agentCount || run.journal.length}${eventLabel}`,
+  ].join("\n");
+}
+
+function renderWorkflowRunStartedText(source: string, run: SparkDynamicWorkflowRunRecord): string {
+  const controlHint = `inspect: task_read({ action: "run_status", runAction: "inspect", runRef: "${run.ref}" }) · controls: pause/resume/stop/restart/save via task_read run_status`;
+  return [
+    `Workflow run started: ${source}`,
+    `╭─ Workflow ${run.meta.name} [running]`,
+    `│ run        ${run.ref}`,
+    `│ source     ${source}`,
+    `│ script     ${run.scriptHash.slice(0, 12)}`,
+    run.base?.baseRef ? `│ base       ${run.base.baseRef}` : undefined,
+    `│ mode       background DynamicWorkflowManager`,
+    `│ controls   ${controlHint}`,
+    `╰─ Result will be delivered by persisted workflow events; inspect the runRef for live state.`,
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+}
+
 function renderWorkflowRunResultText(
   source: string,
   result: WorkflowRunResult,
@@ -808,10 +953,10 @@ function renderWorkflowRunResultText(
     "ref" | "scriptHash" | "base" | "usageTotals" | "spentTokens"
   >,
 ): string {
-  const body = result.result === undefined ? "undefined" : JSON.stringify(result.result, null, 2);
+  const body = workflowRunResultPreview(result.result);
   const usage = workflowRunUsageText(run);
   const phaseTimeline = workflowRunPhaseTimeline(result.phases);
-  const controlHint = `inspect: task_read({ action: "run_status", runRef: "${run.ref}", includeDetails: true }) · save: task_read({ action: "run_status", runAction: "save", runRef: "${run.ref}" }) · ack: task_read({ action: "run_status", runAction: "ack", runRef: "${run.ref}" })`;
+  const controlHint = `inspect: task_read({ action: "run_status", runAction: "inspect", runRef: "${run.ref}" }) · save/ack from the workflow run navigator when needed`;
   return [
     `Workflow run completed: ${source}`,
     `╭─ Workflow ${result.meta.name} [succeeded]`,
@@ -823,8 +968,8 @@ function renderWorkflowRunResultText(
     usage ? `│ usage      ${usage.replace(/^Usage: /u, "")}` : undefined,
     `│ phases     ${phaseTimeline}`,
     `│ controls   ${controlHint}`,
-    `╰─ Result (${result.result === undefined ? "undefined" : "compact JSON"}; full value is in details.workflow.result)`,
-    body,
+    `╰─ Result (${body.truncated ? "preview" : result.result === undefined ? "undefined" : "compact JSON"}; complete value is in details.workflow.result)`,
+    body.text,
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
@@ -832,7 +977,38 @@ function renderWorkflowRunResultText(
 
 function workflowRunPhaseTimeline(phases: WorkflowRunResult["phases"]): string {
   if (phases.length === 0) return "no phases recorded";
-  return phases.map((phase) => `${workflowPhaseIcon(phase.status)} ${phase.title}`).join(" → ");
+  const visible = phases.slice(0, 8);
+  const suffix = phases.length > visible.length ? ` → … +${phases.length - visible.length}` : "";
+  return `${visible.map((phase) => `${workflowPhaseIcon(phase.status)} ${phase.title}`).join(" → ")}${suffix}`;
+}
+
+function workflowRunResultPreview(result: unknown): { text: string; truncated: boolean } {
+  if (result === undefined) return { text: "undefined", truncated: false };
+  let text: string;
+  try {
+    text = JSON.stringify(result, null, 2);
+  } catch {
+    text = unserializableWorkflowResultPreview(result);
+  }
+  const maxChars = 2_000;
+  if (text.length <= maxChars) return { text, truncated: false };
+  return {
+    text: `${text.slice(0, maxChars - 1)}…\n… truncated ${text.length - maxChars + 1} char(s)`,
+    truncated: true,
+  };
+}
+
+function unserializableWorkflowResultPreview(result: unknown): string {
+  if (result === null) return "null";
+  if (result === undefined) return "undefined";
+  if (typeof result === "string") return result;
+  if (typeof result === "number" || typeof result === "boolean" || typeof result === "bigint") {
+    return `${result}`;
+  }
+  if (typeof result === "symbol")
+    return result.description ? `Symbol(${result.description})` : "Symbol()";
+  if (typeof result === "function") return `[function ${result.name || "anonymous"}]`;
+  return "[unserializable workflow result object]";
 }
 
 function workflowPhaseIcon(status: WorkflowRunResult["phases"][number]["status"]): string {
@@ -1056,6 +1232,12 @@ function normalizeOptionalPositiveInteger(value: unknown, field: string): number
     throw new Error(`workflow_run.${field} must be a positive number`);
   }
   return Math.trunc(value);
+}
+
+function normalizeOptionalWorkflowBoolean(value: unknown, field: string): boolean | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "boolean") throw new Error(`workflow_run.${field} must be a boolean`);
+  return value;
 }
 
 function jsonSafe(value: unknown): unknown {

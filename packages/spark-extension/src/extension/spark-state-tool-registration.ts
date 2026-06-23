@@ -22,6 +22,7 @@ import {
 import { activeSparkRoleRunProcessesForCwd } from "./background-runs.ts";
 import {
   SPARK_ROLE_RUN_RETENTION_RENDER_LIMIT,
+  appendLegacyImportOnlyLines,
   appendRoleRunArtifactRetentionLines,
   appendSparkWorkflowRunPruneLines,
   appendSparkStateCleanupPlanLines,
@@ -87,13 +88,13 @@ export function registerSparkStateTool(
     name: "impl_state",
     label: "Spark State",
     description:
-      "Inspect, doctor, migrate, or explicitly clean Spark state through domain-specific actions. action=state_status and action=state_doctor are read-only; action=store_v2_migrate previews or applies explicit V2 legacy imports with backups; action=cache_cleanup defaults to dryRun=true and never deletes canonical stores; action=workflow_run_prune handles workflow-run retention; action=role_run_artifact_compact previews or applies historical role-run transcript blob replacement and defaults to dry-run.",
+      "Inspect, doctor, migrate, or explicitly clean Spark state through domain-specific actions. action=state_status and action=state_doctor are read-only; action=store_v2_migrate previews or applies explicit V2 imports with backups; action=cache_cleanup defaults to dryRun=true and never deletes canonical stores; action=workflow_run_prune handles workflow-run retention; action=role_run_artifact_compact previews or applies historical role-run transcript blob replacement and defaults to dry-run.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({
           default: "state_status",
           description:
-            "state_status | state_doctor | store_v2_migrate | cache_cleanup | workflow_run_prune | role_run_artifact_compact. state_status summarizes canonical/import-only state; state_doctor reports protected-store and migration findings read-only; store_v2_migrate previews/applies explicit legacy imports with backups; cache_cleanup previews/deletes safe cache files; workflow_run_prune previews/applies typed workflow-run retention; role_run_artifact_compact previews/applies role-run transcript blob replacement.",
+            "state_status | state_doctor | store_v2_migrate | cache_cleanup | workflow_run_prune | role_run_artifact_compact. state_status summarizes canonical/import-only state; state_doctor reports protected-store and migration findings read-only; store_v2_migrate previews/applies explicit imports with backups; cache_cleanup previews/deletes safe cache files; workflow_run_prune previews/applies typed workflow-run retention; role_run_artifact_compact previews/applies role-run transcript blob replacement.",
         }),
       ),
       dryRun: Type.Optional(
@@ -133,7 +134,7 @@ export function registerSparkStateTool(
       exportDir: Type.Optional(
         Type.String({
           description:
-            "For action=role_run_artifact_compact apply, copy each full transcript blob to this directory before deleting the in-store blob.",
+            "For action=role_run_artifact_compact apply, copy each transcript blob to this directory before deleting the in-store blob.",
         }),
       ),
       limit: Type.Optional(
@@ -211,8 +212,7 @@ export function registerSparkStateTool(
         const lines = [`Spark store V2 migration ${dryRun ? "dry-run" : "apply"}:`];
         lines.push(`Actions: ${migration.actions.length}`);
         if (migration.backupDir) lines.push(`Backup: ${migration.backupDir}`);
-        if (migration.legacyImportOnly.length)
-          lines.push(`Legacy import-only: ${migration.legacyImportOnly.join(", ")}`);
+        appendLegacyImportOnlyLines(lines, migration.legacyImportOnly);
         for (const item of migration.actions.slice(0, limit)) {
           const target = item.target ? ` -> ${item.target}` : "";
           const imported = item.imported === undefined ? "" : ` imported=${item.imported}`;

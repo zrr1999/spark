@@ -10,7 +10,7 @@ import {
   type WorkspaceClientKind,
   type WorkspaceClientProjection,
 } from "@zendev-lab/spark-protocol";
-import { asciiSlug } from "@zendev-lab/navia-system";
+import { asciiSlug } from "@zendev-lab/spark-system";
 
 export interface WorkspaceProfileRegistration {
   sourceKind: "builtin" | "git";
