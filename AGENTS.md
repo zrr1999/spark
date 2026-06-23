@@ -20,20 +20,24 @@ Target package topology follows type-first names:
 
 - **pnpm** — `packageManager` is pinned in root `package.json`; workspaces live in `pnpm-workspace.yaml` (catalog + overrides align Vite / Vite+ / Vitest versions with [sixbones.dev](https://github.com/zrr1999/sixbones.dev)).
 - **Vite+** — Root [`vite.config.ts`](./vite.config.ts) drives `vp fmt`, `vp lint`, and `vp check` (format + lint + type-aware checks). Install the `vp` CLI (see [viteplus.dev](https://viteplus.dev)) for local use; CI installs it via [`voidzero-dev/setup-vp`](https://github.com/voidzero-dev/setup-vp).
-- **TypeScript / tests** — `pnpm run check` is the root validation gate: SvelteKit sync, Pi package boundary guard, `vp check`, root Node tests, workspace package checks, Spark Cockpit tests, and Spark daemon tests.
-- **Focused tests** — Run `node --experimental-strip-types --test test/name.test.ts` for one root Node test file. Package-specific tests can still be run with `pnpm --filter <package> run test`.
-- **Git hooks** — Managed by [prek](https://github.com/j178/prek) from [`prek.toml`](./prek.toml). Run `pnpm exec prek install --hook-type commit-msg --hook-type pre-commit` once if hooks are missing.
+- **TypeScript / tests** — `pnpm run check` is the root validation gate: SvelteKit sync, Pi package boundary guard, `vp check`, root Node tests, workspace package checks, Spark Cockpit tests, and Spark daemon tests. Use `pnpm run check:tsc` for typecheck-only validation.
+- **Focused tests** — `pnpm test` uses Node’s built-in runner (`node --test`) with `--experimental-strip-types` for the full `test/*.test.ts` suite. Use `pnpm run test:file -- test/name.test.ts` for one root Node test file; passing a path to `pnpm test` appends to the full-suite script instead of replacing it. Package-specific tests can still be run with `pnpm --filter <package> run test`.
+- **Git hooks** — Managed by [prek](https://github.com/j178/prek) from [`prek.toml`](./prek.toml). After clone, `pnpm install` runs `prepare` → `prek install`; run `prek install-hooks` once if hooks are missing.
 
 ## Useful commands
 
-| Command                    | Purpose                                                        |
-| -------------------------- | -------------------------------------------------------------- |
-| `pnpm install`             | Install dependencies                                           |
-| `pnpm run check`           | Run the root validation gate                                   |
-| `pnpm run build`           | Build the Spark daemon CLI and Spark Cockpit web app           |
-| `pnpm run preview`         | Start the local Spark Cockpit dev server                       |
-| `pnpm install -g .`        | Link the unified root `spark` CLI                              |
-| `pnpm run publish`         | Validate, build, and publish the selected public npm packages  |
+| Command                                  | Purpose                                                          |
+| ---------------------------------------- | ---------------------------------------------------------------- |
+| `pnpm install`                           | Install dependencies                                             |
+| `pnpm run check`                         | Run the root validation gate                                     |
+| `vp check`                               | Format + lint + type check (same path CI expects via pre-commit) |
+| `pnpm run verify`                        | Run the root validation gate, then root Node tests               |
+| `pnpm run check:tsc`                     | Typecheck only (`tsc --noEmit`)                                  |
+| `pnpm run test:file -- test/foo.test.ts` | Run one Node test file without also running the full suite       |
+| `pnpm run build`                         | Build the Spark daemon CLI and Spark Cockpit web app             |
+| `pnpm run preview`                       | Start the local Spark Cockpit dev server                         |
+| `pnpm install -g .`                      | Link the unified root `spark` CLI                                |
+| `pnpm run publish`                       | Validate, build, and publish the selected public npm packages    |
 
 ## CI
 
