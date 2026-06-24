@@ -5,6 +5,8 @@ import registerBaiduOneApiProvider, {
   remapBaiduOneApiPayload,
   resolveBaiduOneApiKey,
   streamBaiduOneApi,
+  streamBaiduOneApiAnthropic,
+  streamBaiduOneApiOpenAIResponses,
 } from "../apps/spark-tui/src/baidu-oneapi-provider.ts";
 import { parseSparkCliArgs } from "../apps/spark-tui/src/cli.ts";
 import { SparkNativeSession } from "../apps/spark-tui/src/native-tui.ts";
@@ -151,6 +153,40 @@ void test("Baidu OneAPI key resolver uses only dedicated auth identity", () => {
 
     if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousOpenAiKey;
+  }
+});
+
+void test("Baidu OneAPI adapters use upstream transport APIs but report baidu-oneapi", async () => {
+  const context = { messages: [], tools: [] };
+  const baseModel = {
+    name: "Baidu test model",
+    api: "baidu-oneapi",
+    provider: "baidu-oneapi",
+    baseUrl: "https://oneapi-comate.baidu-int.com",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1000,
+    maxTokens: 1000,
+  };
+
+  for (const stream of [
+    streamBaiduOneApiAnthropic({ ...baseModel, id: "claude-opus-4.8" } as never, context as never, {
+      apiKey: "",
+    }),
+    streamBaiduOneApiOpenAIResponses(
+      { ...baseModel, id: "gpt-5.5", baseUrl: "https://oneapi-comate.baidu-int.com/v1" } as never,
+      context as never,
+      { apiKey: "" },
+    ),
+  ]) {
+    for await (const _event of stream) void _event;
+    const result = await stream.result();
+    assert.equal(result.api, "baidu-oneapi");
+    assert.equal(result.provider, "baidu-oneapi");
+    assert.equal(result.stopReason, "error");
+    assert.match(result.errorMessage ?? "", /No API key for provider: baidu-oneapi/);
+    assert.doesNotMatch(result.errorMessage ?? "", /Mismatched api/);
   }
 });
 

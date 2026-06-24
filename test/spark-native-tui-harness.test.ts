@@ -1,15 +1,21 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { SPARK_PROTOCOL_VERSION } from "../packages/spark-protocol/src/index.ts";
 import {
   SparkHostRuntime,
+  SparkKeybindings,
   SparkModelSelector,
   SparkProviderRegistry,
+  SparkSessionStore,
   type ProviderConfig,
   type ProviderModelDefinition,
 } from "../apps/spark-tui/src/host/index.ts";
 import { createSparkNativeRuntimeSlashCommands } from "../apps/spark-tui/src/native-tui.ts";
+import { createSparkPiParitySlashCommands } from "../apps/spark-tui/src/cli/pi-parity-commands.ts";
 import { createSparkNativeTuiHarness } from "./support/spark-native-tui-harness.ts";
 
 void test("Spark native TUI harness submits input and drives exit keys without a real terminal", async () => {
@@ -142,6 +148,95 @@ void test("Spark native TUI routes /model through native slash command and model
   assert.doesNotMatch(harness.render(), /Unknown command: \/model/);
 });
 
+void test("Spark native Pi parity slash commands are discoverable and route representative side effects", async () => {
+  const registry = new SparkProviderRegistry();
+  registry.registerProvider("fake", fakeProvider("fake", [fakeModel("model-a")]));
+  registry.setActive({ providerName: "fake", modelId: "model-a" });
+  const selector = new SparkModelSelector({
+    registry,
+    config: { extensions: ["ext-a"], providers: ["provider-a"], activeThinkingLevel: "low" },
+    saveConfig: () => undefined,
+  });
+  const keybindings = new SparkKeybindings();
+  const dir = "/tmp/spark-native-pi-parity-commands";
+  const slashCommands = createSparkPiParitySlashCommands({
+    cwd: dir,
+    config: { extensions: ["ext-a"], providers: ["provider-a"], activeThinkingLevel: "low" },
+    runtime: new SparkHostRuntime({ cwd: dir, hasUI: true, keybindings }),
+    keybindings,
+    providerRegistry: registry,
+    modelSelector: selector,
+    sessionStore: new SparkSessionStore({
+      cwd: dir,
+      sessionsRoot: "/tmp/spark-native-pi-parity-sessions",
+    }),
+    skillResolver: {} as never,
+    agentLoop: {} as never,
+    extensionLoadResult: { outcomes: [] } as never,
+    providerLoadResult: { outcomes: [] } as never,
+    diagnostics: [],
+  });
+  const harness = createSparkNativeTuiHarness({ slashCommands, autocompleteBasePath: dir });
+  harness.session.appendAssistantChunk("assistant reply to copy");
+  harness.session.finishAssistantMessage();
+
+  await typeEditorText(harness, "/s");
+  await harness.flush();
+  assert.equal(harness.app.isShowingAutocomplete(), true);
+  assert.match(harness.render(), /settings\s+\[set thinking/);
+  harness.app.setEditorText("");
+
+  await submitEditorText(harness, "/help");
+  for (const command of [
+    "settings",
+    "scoped-models",
+    "export",
+    "import",
+    "share",
+    "copy",
+    "name",
+    "session",
+    "changelog",
+    "hotkeys",
+    "fork",
+    "clone",
+    "tree",
+    "trust",
+    "login",
+    "logout",
+    "new",
+    "compact",
+    "resume",
+    "reload",
+  ]) {
+    assert.match(harness.render(), new RegExp(`/${command} —`, "u"));
+  }
+
+  await submitEditorText(harness, "/settings");
+  assert.match(harness.render(), /Spark settings:/);
+  assert.match(harness.render(), /active model: fake\/model-a/);
+
+  await submitEditorText(harness, "/settings set thinking high");
+  assert.match(harness.render(), /thinking level set.*high/i);
+
+  await submitEditorText(harness, "/scoped-models");
+  assert.match(harness.render(), /fake/);
+  assert.match(harness.render(), /model-a/);
+
+  await submitEditorText(harness, "/name parity session");
+  assert.match(harness.render(), /Session name set: parity session/);
+
+  await submitEditorText(harness, "/copy");
+  assert.match(harness.render(), /assistant reply to copy/);
+
+  await submitEditorText(harness, "/hotkeys");
+  assert.match(harness.render(), /app.exit/);
+
+  await submitEditorText(harness, "/new");
+  assert.match(harness.render(), /Started a new Spark native transcript/);
+  assert.doesNotMatch(harness.render(), /Unknown command: \/settings/);
+});
+
 void test("Spark native runtime slash bridge preserves editor helpers and deterministic command errors", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-native-slash-bridge", hasUI: true });
   const sent: string[] = [];
@@ -210,12 +305,12 @@ void test("Spark native TUI surfaces command availability, queued work, stop, an
   assert.equal(await harness.submit("second"), "queued");
   await harness.flush();
   assert.match(harness.render(), /native pi-tui host • busy • 1 follow-up queued/);
-  assert.match(harness.render(), /Queued follow-up #1\. Use \/stop to clear queued work/);
+  assert.match(harness.render(), /Queued steering message #1\. Use \/stop to clear queued work/);
 
   assert.equal(await harness.submit("/stop dogfood"), "command");
   assert.match(
     harness.render(),
-    /Stopped current Spark turn \(dogfood\)\. Cleared 1 queued follow-up/,
+    /Stopped current Spark turn \(dogfood\)\. Restored 1 queued input\(s\) to the editor/,
   );
   releaseFirst?.("late response ignored");
   await harness.flush();
@@ -227,6 +322,110 @@ void test("Spark native TUI surfaces command availability, queued work, stop, an
     harness.render(),
     /system> Spark turn failed: daemon unavailable\. Use \/retry to resubmit or \/status to inspect the\s+daemon\./,
   );
+});
+
+void test("Spark native editor expands @file/image refs and bang commands through real submit path", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-native-editor-input-"));
+  try {
+    await writeFile(join(dir, "note.txt"), "file body from @ reference", "utf8");
+    await writeFile(join(dir, "screen.png"), "not-a-real-png-but-path-reference-is-enough", "utf8");
+    const submitted: string[] = [];
+    const harness = createSparkNativeTuiHarness({
+      autocompleteBasePath: dir,
+      responder: (input) => {
+        submitted.push(input);
+        return `ack:${input}`;
+      },
+    });
+
+    await submitEditorText(harness, "Read @note.txt");
+    await harness.flush();
+    assert.match(
+      submitted.at(-1) ?? "",
+      /<file name=".*note\.txt">\nfile body from @ reference\n<\/file>/s,
+    );
+
+    await submitEditorText(harness, "Read @note.txt and @screen.png");
+    await harness.flush();
+    assert.match(
+      submitted.at(-1) ?? "",
+      /<file name=".*note\.txt">\nfile body from @ reference\n<\/file>/s,
+    );
+    assert.match(
+      submitted.at(-1) ?? "",
+      /<file name=".*screen\.png">\[Image attached: png\]<\/file>/s,
+    );
+
+    await submitEditorText(harness, `Dragged ${join(dir, "screen.png")}`);
+    await harness.flush();
+    assert.match(
+      submitted.at(-1) ?? "",
+      /Dragged <file name=".*screen\.png">\[Image attached: png\]<\/file>/s,
+    );
+
+    await submitEditorText(harness, "!printf spark-bang");
+    await harness.flush();
+    assert.match(submitted.at(-1) ?? "", /\$ printf spark-bang\nexit: 0\nspark-bang/);
+
+    const beforeHidden = submitted.length;
+    await submitEditorText(harness, "!!printf hidden-bang");
+    await harness.flush();
+    assert.equal(submitted.length, beforeHidden);
+    assert.match(harness.render(), /tool:shell \[success\]/);
+    harness.app.toggleTools();
+    assert.match(harness.render(), /\[hidden shell command completed\]/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark native editor supports multiline and Pi-style busy queue restore keys", async () => {
+  let releaseFirst: ((value: string) => void) | undefined;
+  const submitted: string[] = [];
+  const harness = createSparkNativeTuiHarness({
+    responder: (input) => {
+      submitted.push(input);
+      if (input === "first") {
+        return new Promise<string>((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
+      return `ack:${input}`;
+    },
+  });
+
+  await typeEditorText(harness, "line one");
+  await harness.press("\u001b[13;2u");
+  await typeEditorText(harness, "line two");
+  await harness.press("\r");
+  await harness.flush();
+  assert.equal(submitted.at(-1), "line one\nline two");
+
+  await submitEditorText(harness, "first");
+  await harness.flush();
+  harness.app.setEditorText("follow-up text");
+  await harness.press("\u001b\r");
+  await harness.flush();
+  assert.match(harness.render(), /Queued follow-up #1/);
+
+  await harness.press("\u001bp");
+  await harness.flush();
+  assert.match(harness.render(), /Restored queued input to the editor/);
+  assert.match(harness.render(), /follow-up text/);
+
+  harness.app.setEditorText("steer then escape");
+  await harness.press("\r");
+  await harness.flush();
+  assert.match(harness.render(), /Queued steering message #1/);
+  await harness.press("\u001b");
+  await harness.flush();
+  assert.match(
+    harness.render(),
+    /Stopped current Spark turn \(escape\)\. Restored 1 queued input\(s\) to the editor/,
+  );
+  assert.match(harness.render(), /steer then escape/);
+  releaseFirst?.("done");
+  await harness.flush();
 });
 
 void test("Spark native TUI harness captures resize-safe golden render sections", () => {
@@ -589,6 +788,12 @@ async function submitEditorText(
 ): Promise<void> {
   harness.app.setEditorText(text);
   await harness.press("\r");
+  await waitForNativeTimers();
+  await harness.flush();
+}
+
+async function waitForNativeTimers(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 40));
 }
 
 const fakeStream: ProviderConfig["streamSimple"] = () => ({}) as unknown;

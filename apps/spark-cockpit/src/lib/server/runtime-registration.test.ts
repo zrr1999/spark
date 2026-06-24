@@ -25,6 +25,8 @@ const registrationRequest = {
   labels: { test: "true" },
 } satisfies RuntimeRegistrationRequest;
 
+const durableEnrollmentTtlMs = 100 * 365 * 24 * 60 * 60 * 1000;
+
 describe("runtime registration", () => {
   it("stores workspace registration token hashes only", () => {
     const db = openMemoryDatabase();
@@ -107,7 +109,7 @@ describe("runtime registration", () => {
     const enrollment = createRuntimeEnrollmentToken(db, {
       label: "Test enrollment",
       createdAt: "2026-05-25T00:00:00.000Z",
-      ttlMs: 30 * 24 * 60 * 60 * 1000,
+      ttlMs: durableEnrollmentTtlMs,
     });
 
     const registered = registerRuntime(db, registrationRequest, enrollment.refreshToken);
@@ -175,7 +177,7 @@ describe("runtime registration", () => {
       workspaceName: "Navia Dev",
       workspaceSlug: "navia-dev",
       createdAt: "2026-05-25T00:00:00.000Z",
-      ttlMs: 30 * 24 * 60 * 60 * 1000,
+      ttlMs: durableEnrollmentTtlMs,
     });
 
     const registered = registerRuntime(
@@ -267,7 +269,7 @@ describe("runtime registration", () => {
       workspaceName: "Navia Dev",
       workspaceSlug: "navia-dev",
       createdAt: "2026-05-25T00:00:00.000Z",
-      ttlMs: 30 * 24 * 60 * 60 * 1000,
+      ttlMs: durableEnrollmentTtlMs,
     });
     const registered = registerRuntime(
       db,
@@ -285,7 +287,7 @@ describe("runtime registration", () => {
       workspaceName: "Spore",
       workspaceSlug: "spore",
       createdAt: "2026-05-25T00:01:00.000Z",
-      ttlMs: 30 * 24 * 60 * 60 * 1000,
+      ttlMs: durableEnrollmentTtlMs,
     });
 
     const workspace = registerRuntimeWorkspace(
@@ -378,7 +380,7 @@ describe("runtime registration", () => {
     const enrollment = createRuntimeEnrollmentToken(db, {
       label: "Test enrollment",
       createdAt: "2026-05-25T00:00:00.000Z",
-      ttlMs: 30 * 24 * 60 * 60 * 1000,
+      ttlMs: durableEnrollmentTtlMs,
     });
     const registered = registerRuntime(db, registrationRequest, enrollment.refreshToken);
 

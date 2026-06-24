@@ -54,7 +54,6 @@ export interface GoalNotificationStrings {
   continuing: (objective: string, projectLabel: string) => string;
   paused: (objective: string) => string;
   pauseBlocked: (objective: string) => string;
-  pauseRetryExhausted: (failure: string) => string;
   pauseAfterAbort: (failure: string) => string;
   noActiveGoal: string;
   inferDispatched: string;
@@ -122,7 +121,6 @@ const NOTIFICATIONS: Record<SparkLanguage, GoalNotificationStrings> = {
     continuing: (objective, label) => `${CONTINUING_LABEL.en}${label} · ${objective}`,
     paused: (objective) => `${PAUSED_LABEL.en} · goal: ${objective}`,
     pauseBlocked: (objective) => `${PAUSE_BLOCKED_LABEL.en} · goal: ${objective}`,
-    pauseRetryExhausted: (failure) => `Spark goal paused after retry budget exhausted: ${failure}`,
     pauseAfterAbort: (failure) =>
       `Spark goal paused after manual abort; resume with /goal when ready: ${failure}`,
     noActiveGoal: "Spark has no active goal; main agent will infer one from the current context.",
@@ -139,7 +137,6 @@ const NOTIFICATIONS: Record<SparkLanguage, GoalNotificationStrings> = {
     continuing: (objective, label) => `${CONTINUING_LABEL.zh}${label} · ${objective}`,
     paused: (objective) => `${PAUSED_LABEL.zh} · 目标：${objective}`,
     pauseBlocked: (objective) => `${PAUSE_BLOCKED_LABEL.zh} · 目标：${objective}`,
-    pauseRetryExhausted: (failure) => `Spark 目标在多次失败后已暂停：${failure}`,
     pauseAfterAbort: (failure) => `Spark 目标因手动中止而暂停，准备好后用 /goal 继续：${failure}`,
     noActiveGoal: "Spark 当前没有活动目标；主 agent 会基于当前上下文自行推断。",
     inferDispatched: "需要设置 Spark 目标；agent 现在会自行推断。",

@@ -340,15 +340,39 @@ void test("Spark TUI and headless print attach and release workspace clients", a
           ({
             cwd: dir,
             runtime,
+            config: { extensions: [], providers: [], activeThinkingLevel: "medium" },
             providerRegistry: { listProviders: () => [] },
             modelSelector: {
               getActive: () => undefined,
               openPicker: async () => undefined,
               select: async () => ({ providerName: "fake", modelId: "model" }),
               getPickerState: () => ({ providers: [], items: [], active: undefined }),
+              listProviderGroups: () => [],
             },
-            sessionStore: { list: async () => [] },
-            keybindings: undefined,
+            sessionStore: {
+              list: async () => [],
+              loadByRef: async () => {
+                throw new Error("not implemented in test stub");
+              },
+              load: async () => {
+                throw new Error("not implemented in test stub");
+              },
+              createSession: () => ({
+                header: {
+                  type: "session" as const,
+                  version: 3,
+                  id: "stub-session",
+                  timestamp: "2026-06-19T00:00:00.000Z",
+                  cwd: dir,
+                },
+                path: join(dir, "stub-session.jsonl"),
+                entries: [],
+              }),
+              appendMessage: () => "entry-1",
+              save: async () => undefined,
+            },
+            keybindings: { snapshot: () => ({ bindings: [] }) },
+            diagnostics: [],
           }) as never,
         runTui: async (input) => {
           capturedTuiOptions = input;
@@ -368,6 +392,30 @@ void test("Spark TUI and headless print attach and release workspace clients", a
     assert.equal(Boolean(slashCommands?.model), true, "native /model command is wired");
     assert.equal(Boolean(slashCommands?.sessions), true, "host /sessions command is wired");
     assert.equal(Boolean(slashCommands?.status), true, "daemon /status command is preserved");
+    for (const command of [
+      "settings",
+      "scoped-models",
+      "export",
+      "import",
+      "share",
+      "copy",
+      "name",
+      "session",
+      "changelog",
+      "hotkeys",
+      "fork",
+      "clone",
+      "tree",
+      "trust",
+      "login",
+      "logout",
+      "new",
+      "compact",
+      "resume",
+      "reload",
+    ]) {
+      assert.equal(Boolean(slashCommands?.[command]), true, `Pi parity /${command} is wired`);
+    }
     assert.equal(
       (capturedTuiOptions as { autocompleteBasePath?: string }).autocompleteBasePath,
       dir,

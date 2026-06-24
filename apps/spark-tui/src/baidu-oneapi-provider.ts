@@ -1,6 +1,8 @@
 import {
   type AnthropicEffort,
   type Api,
+  type AssistantMessage,
+  type AssistantMessageEvent,
   type Context,
   type Model,
   type SimpleStreamOptions,
@@ -22,6 +24,11 @@ const GATEWAY_MODEL_BY_ID: Record<string, string> = {
   "gpt-5.5-coding-plan": "gpt-5.5-coding-plan",
 };
 const BAIDU_ONEAPI_OPENAI_RESPONSES_MODEL_IDS = new Set(["gpt-5.5", "gpt-5.5-coding-plan"]);
+
+type BaiduOneApiTransportApi = "anthropic-messages" | "openai-responses";
+type BaiduOneApiStream = AsyncIterable<AssistantMessageEvent> & {
+  result(): Promise<AssistantMessage>;
+};
 
 const GPT_5_5_COST = { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 };
 const GPT_5_5_THINKING_LEVEL_MAP = { minimal: "low", xhigh: "xhigh" };
@@ -61,6 +68,34 @@ function mapThinkingEffort(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function withBaiduOneApiTransportApi<TApi extends BaiduOneApiTransportApi>(
+  model: Model<Api>,
+  api: TApi,
+): Model<TApi> {
+  return { ...model, api } as Model<TApi>;
+}
+
+function retagBaiduOneApiMessage(message: AssistantMessage): AssistantMessage {
+  return { ...message, api: BAIDU_ONEAPI_API };
+}
+
+function retagBaiduOneApiEvent(event: AssistantMessageEvent): AssistantMessageEvent {
+  if (event.type === "done") return { ...event, message: retagBaiduOneApiMessage(event.message) };
+  if (event.type === "error") return { ...event, error: retagBaiduOneApiMessage(event.error) };
+  return { ...event, partial: retagBaiduOneApiMessage(event.partial) };
+}
+
+function retagBaiduOneApiStream(stream: BaiduOneApiStream): BaiduOneApiStream {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for await (const event of stream) yield retagBaiduOneApiEvent(event);
+    },
+    async result() {
+      return retagBaiduOneApiMessage(await stream.result());
+    },
+  };
 }
 
 export function resolveBaiduOneApiKey(apiKey: string | undefined): string | undefined {
@@ -105,21 +140,24 @@ export function streamBaiduOneApiAnthropic(
 ) {
   const gatewayModel = GATEWAY_MODEL_BY_ID[model.id] ?? model.id;
   const apiKey = resolveBaiduOneApiKey(options?.apiKey);
+  const transportModel = withBaiduOneApiTransportApi(model, "anthropic-messages");
 
-  return streamAnthropic(model as Model<"anthropic-messages">, context, {
-    ...options,
-    apiKey,
-    thinkingEnabled: options?.reasoning !== undefined,
-    effort: mapThinkingEffort(model, options?.reasoning),
-    async onPayload(payload, payloadModel) {
-      const remapped = remapBaiduOneApiPayload(
-        payload,
-        gatewayModel,
-        mapThinkingEffort(model, options?.reasoning),
-      );
-      return (await options?.onPayload?.(remapped, payloadModel)) ?? remapped;
-    },
-  });
+  return retagBaiduOneApiStream(
+    streamAnthropic(transportModel, context, {
+      ...options,
+      apiKey,
+      thinkingEnabled: options?.reasoning !== undefined,
+      effort: mapThinkingEffort(model, options?.reasoning),
+      async onPayload(payload) {
+        const remapped = remapBaiduOneApiPayload(
+          payload,
+          gatewayModel,
+          mapThinkingEffort(model, options?.reasoning),
+        );
+        return (await options?.onPayload?.(remapped, model)) ?? remapped;
+      },
+    }),
+  );
 }
 
 export function streamBaiduOneApi(
@@ -140,15 +178,18 @@ export function streamBaiduOneApiOpenAIResponses(
 ) {
   const gatewayModel = GATEWAY_MODEL_BY_ID[model.id] ?? model.id;
   const apiKey = resolveBaiduOneApiKey(options?.apiKey);
+  const transportModel = withBaiduOneApiTransportApi(model, "openai-responses");
 
-  return streamSimpleOpenAIResponses(model as Model<"openai-responses">, context, {
-    ...options,
-    apiKey,
-    async onPayload(payload, payloadModel) {
-      const remapped = remapOpenAIResponsesModel(payload, gatewayModel);
-      return (await options?.onPayload?.(remapped, payloadModel)) ?? remapped;
-    },
-  });
+  return retagBaiduOneApiStream(
+    streamSimpleOpenAIResponses(transportModel, context, {
+      ...options,
+      apiKey,
+      async onPayload(payload) {
+        const remapped = remapOpenAIResponsesModel(payload, gatewayModel);
+        return (await options?.onPayload?.(remapped, model)) ?? remapped;
+      },
+    }),
+  );
 }
 
 function remapOpenAIResponsesModel(payload: unknown, gatewayModel: string): unknown {

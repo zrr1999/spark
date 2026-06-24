@@ -1948,7 +1948,7 @@ void test("/loop stop and pause aliases all persist paused state", async () => {
   }
 });
 
-void test("/loop foreground driver retries failures and pauses after retry budget", async () => {
+void test("/loop foreground driver keeps retrying failures with capped backoff", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-loop-retry-budget-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -1998,24 +1998,20 @@ void test("/loop foreground driver retries failures and pauses after retry budge
     assert.ok(loopCommand, "missing /loop command");
     await loopCommand.handler("Retry failing loop turn", ctx);
 
-    for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const expectedDelays = [30_000, 60_000, 120_000, 120_000, 120_000, 120_000];
+    for (let attempt = 1; attempt <= expectedDelays.length; attempt += 1) {
       for (const handler of run.eventHandlers.get("agent_end") ?? []) {
         await handler({ errorMessage: `loop failure ${attempt}`, messages: [] }, ctx);
       }
       const loop = await loadSessionLoop(dir, ctx);
       assert.equal(reviewerCalls, 0);
-      if (attempt < 5) {
-        assert.equal(loop?.status, "active");
-        assert.equal(loop?.retryState?.consecutiveFailures, attempt);
-        assert.equal(timers.at(-1)?.delay, [30_000, 60_000, 120_000, 120_000][attempt - 1]);
+      assert.equal(loop?.status, "active");
+      assert.equal(loop?.retryState?.consecutiveFailures, attempt);
+      assert.equal(timers.at(-1)?.delay, expectedDelays[attempt - 1]);
+      if (attempt < expectedDelays.length) {
         timers.at(-1)?.callback();
         await flushAsyncWork();
         assert.equal(run.customMessages.at(-1)?.customType, "spark-loop-request");
-      } else {
-        assert.equal(loop?.status, "paused");
-        assert.equal(loop?.retryState?.consecutiveFailures, 5);
-        assert.ok(loop?.retryState?.exhaustedAt);
-        assert.match(loop?.pauseReason ?? "", /retry budget exhausted/);
       }
     }
   } finally {
@@ -3150,7 +3146,7 @@ void test("goal reviewer state machine covers restart, idle review, and task fin
   }
 });
 
-void test("/goal foreground loop backs off and pauses after retry budget", async () => {
+void test("/goal foreground loop keeps retrying with capped backoff", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-retry-budget-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -3201,7 +3197,7 @@ void test("/goal foreground loop backs off and pauses after retry budget", async
     }
     assert.equal(timers.length, 1);
 
-    const expectedDelays = [30_000, 60_000, 120_000, 120_000];
+    const expectedDelays = [30_000, 60_000, 120_000, 120_000, 120_000];
     for (let failureIndex = 0; failureIndex < 5; failureIndex += 1) {
       timers.at(-1)?.callback();
       await flushAsyncWork();
@@ -3231,9 +3227,7 @@ void test("/goal foreground loop backs off and pauses after retry budget", async
           ctx,
         );
       }
-      if (failureIndex < expectedDelays.length) {
-        assert.equal(timers.at(-1)?.delay, expectedDelays[failureIndex]);
-      }
+      assert.equal(timers.at(-1)?.delay, expectedDelays[failureIndex]);
     }
 
     const goalStatePath = sessionGoalPath(dir, ctx);
@@ -3241,7 +3235,7 @@ void test("/goal foreground loop backs off and pauses after retry budget", async
       const state = JSON.parse(await readFile(goalStatePath, "utf8")) as {
         goal?: { status?: string; retryState?: { consecutiveFailures?: number } };
       };
-      return state.goal?.status === "paused" && state.goal.retryState?.consecutiveFailures === 5;
+      return state.goal?.status === "active" && state.goal.retryState?.consecutiveFailures === 5;
     });
     const failedGoalState = JSON.parse(await readFile(goalStatePath, "utf8")) as {
       goal?: {
@@ -3250,18 +3244,21 @@ void test("/goal foreground loop backs off and pauses after retry budget", async
         retryState?: { consecutiveFailures?: number; exhaustedAt?: string };
       };
     };
-    assert.equal(failedGoalState.goal?.status, "paused");
-    assert.match(failedGoalState.goal?.pauseReason ?? "", /retry budget exhausted/);
+    assert.equal(failedGoalState.goal?.status, "active");
+    assert.equal(failedGoalState.goal?.pauseReason, undefined);
     assert.equal(failedGoalState.goal?.retryState?.consecutiveFailures, 5);
-    assert.ok(failedGoalState.goal?.retryState?.exhaustedAt);
+    assert.equal(failedGoalState.goal?.retryState?.exhaustedAt, undefined);
     assert.equal(
       ctx.notifications.some((notification) => /retry 1\/5/.test(notification.message)),
       false,
     );
-    assert.ok(
-      ctx.notifications.some((notification) => /retry budget exhausted/.test(notification.message)),
+    assert.equal(
+      ctx.notifications.some((notification) =>
+        /retry budget exhausted|多次失败|已暂停/.test(notification.message),
+      ),
+      false,
     );
-    assert.equal(timers.length, 5);
+    assert.equal(timers.length, 6);
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;

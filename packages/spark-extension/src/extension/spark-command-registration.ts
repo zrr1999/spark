@@ -116,7 +116,6 @@ interface SparkCommandRegistrationDeps extends SparkEntryApplicationDeps {
 
 const FOREGROUND_GOAL_LOOP_INTERVAL_MS = 30_000;
 const FOREGROUND_GOAL_RETRY_BACKOFF_MS = [30_000, 60_000, 120_000, 120_000, 120_000] as const;
-const FOREGROUND_GOAL_RETRY_BUDGET = 5;
 const FOREGROUND_COMPACTION_GATE_STALE_MS = 30 * 60_000;
 const foregroundGoalTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const foregroundGoalAwaitingTurns = new Map<string, ForegroundGoalAwaitingTurn>();
@@ -1215,7 +1214,7 @@ export function registerSparkCommands(
           continue;
         }
         const retry = await recordForegroundGoalFailedTurn(awaiting.ctx, awaiting.goalId, failure);
-        if (!retry.paused)
+        if (retry.shouldRetry)
           scheduleForegroundGoalLoop(awaiting.piApi ?? piApi, awaiting.ctx, retry.delayMs, {
             goalId: awaiting.goalId,
           });
@@ -1258,7 +1257,7 @@ export function registerSparkCommands(
           continue;
         }
         const retry = await recordForegroundLoopFailedTurn(awaiting.ctx, awaiting.loopId, failure);
-        if (!retry.paused)
+        if (retry.shouldRetry)
           scheduleForegroundLoop(awaiting.piApi ?? piApi, awaiting.ctx, retry.delayMs, {
             loopId: awaiting.loopId,
           });
@@ -1386,10 +1385,10 @@ export function registerSparkCommands(
     ctx: SparkGoalLoopContext,
     goalId: string,
     failure: string,
-  ): Promise<{ paused: boolean; delayMs: number }> {
+  ): Promise<{ shouldRetry: boolean; delayMs: number }> {
     const existing = await loadSessionGoal(ctx.cwd, ctx);
     if (!existing || existing.status !== "active" || existing.goalId !== goalId) {
-      return { paused: true, delayMs: FOREGROUND_GOAL_LOOP_INTERVAL_MS };
+      return { shouldRetry: false, delayMs: FOREGROUND_GOAL_LOOP_INTERVAL_MS };
     }
     const consecutiveFailures = (existing.retryState?.consecutiveFailures ?? 0) + 1;
     const reviewedAt = nowIso();
@@ -1402,36 +1401,18 @@ export function registerSparkCommands(
       achieved: false,
       confidence: "turn-failed",
       reason: `Foreground goal loop turn failed; foreground goal turn will retry: ${failure}`,
-      remainingWork:
-        consecutiveFailures >= FOREGROUND_GOAL_RETRY_BUDGET
-          ? "Automatic goal review paused because the retry budget was exhausted."
-          : "Automatic goal review remains active and will retry on the next tick.",
+      remainingWork: "Automatic goal review remains active and will retry on the next tick.",
       blockers: [failure],
       reviewedAt,
     };
-    const exhausted = consecutiveFailures >= FOREGROUND_GOAL_RETRY_BUDGET;
-    const goal = await updateSessionGoalStatus(ctx.cwd, ctx, exhausted ? "paused" : "active", {
-      reason: exhausted
-        ? `retry budget exhausted after ${consecutiveFailures} failed foreground goal turn(s): ${failure}`
-        : undefined,
+    const goal = await updateSessionGoalStatus(ctx.cwd, ctx, "active", {
       review,
-      retryState: exhausted ? { ...retryState, exhaustedAt: reviewedAt } : retryState,
+      retryState,
       expectedGoalId: goalId,
     });
-    if (!goal) return { paused: true, delayMs: FOREGROUND_GOAL_LOOP_INTERVAL_MS };
+    if (!goal) return { shouldRetry: false, delayMs: FOREGROUND_GOAL_LOOP_INTERVAL_MS };
     await deps.refreshSparkWidget(ctx.cwd, ctx);
-    if (exhausted) {
-      const active = await loadActiveForegroundGoal(ctx);
-      const language = sparkLanguageForProject({
-        project: active?.project,
-        goal,
-        fallbackText: failure,
-      });
-      const notifications = goalNotifications(language);
-      ctx.ui?.notify?.(notifications.pauseRetryExhausted(compactInline(failure)), "warning");
-      return { paused: true, delayMs: retryState.nextDelayMs };
-    }
-    return { paused: false, delayMs: retryState.nextDelayMs };
+    return { shouldRetry: true, delayMs: retryState.nextDelayMs };
   }
 
   async function recordForegroundGoalSuccessfulTurn(ctx: SparkGoalLoopContext): Promise<{
@@ -1484,11 +1465,11 @@ export function registerSparkCommands(
   async function recordForegroundLoopFailedTurn(
     ctx: SparkGoalLoopContext,
     loopId: string,
-    failure: string,
-  ): Promise<{ paused: boolean; delayMs: number }> {
+    _failure: string,
+  ): Promise<{ shouldRetry: boolean; delayMs: number }> {
     const existing = await loadSessionLoop(ctx.cwd, ctx);
     if (!existing || existing.status !== "active" || existing.loopId !== loopId) {
-      return { paused: true, delayMs: FOREGROUND_GOAL_LOOP_INTERVAL_MS };
+      return { shouldRetry: false, delayMs: FOREGROUND_GOAL_LOOP_INTERVAL_MS };
     }
     const consecutiveFailures = (existing.retryState?.consecutiveFailures ?? 0) + 1;
     const failedAt = nowIso();
@@ -1497,24 +1478,13 @@ export function registerSparkCommands(
       lastFailureAt: failedAt,
       nextDelayMs: foregroundGoalRetryDelayMs(consecutiveFailures),
     };
-    const exhausted = consecutiveFailures >= FOREGROUND_GOAL_RETRY_BUDGET;
-    const loop = await updateSessionLoopStatus(ctx.cwd, ctx, exhausted ? "paused" : "active", {
-      reason: exhausted
-        ? `retry budget exhausted after ${consecutiveFailures} failed foreground loop turn(s): ${failure}`
-        : undefined,
-      retryState: exhausted ? { ...retryState, exhaustedAt: failedAt } : retryState,
+    const loop = await updateSessionLoopStatus(ctx.cwd, ctx, "active", {
+      retryState,
       expectedLoopId: loopId,
     });
-    if (!loop) return { paused: true, delayMs: FOREGROUND_GOAL_LOOP_INTERVAL_MS };
+    if (!loop) return { shouldRetry: false, delayMs: FOREGROUND_GOAL_LOOP_INTERVAL_MS };
     await deps.refreshSparkWidget(ctx.cwd, ctx);
-    if (exhausted) {
-      ctx.ui?.notify?.(
-        `Spark loop paused after retry budget was exhausted: ${compactInline(failure)}`,
-        "warning",
-      );
-      return { paused: true, delayMs: retryState.nextDelayMs };
-    }
-    return { paused: false, delayMs: retryState.nextDelayMs };
+    return { shouldRetry: true, delayMs: retryState.nextDelayMs };
   }
 
   async function resetForegroundLoopRetryState(

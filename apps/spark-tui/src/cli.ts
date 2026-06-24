@@ -18,6 +18,10 @@ import {
   type SparkNativeSlashCommandMap,
 } from "./native-tui.ts";
 import {
+  createSparkPiParitySlashCommands,
+  PI_PARITY_COMMAND_NAMES,
+} from "./cli/pi-parity-commands.ts";
+import {
   createSparkCliHostServices,
   formatSparkModelSelection,
   registerSparkSessionsCommand,
@@ -253,9 +257,14 @@ function createSparkNativeSlashCommands(
 ): SparkNativeSlashCommandMap {
   registerSparkNativeModelCommand(services);
   const daemonCommands = createSparkDaemonNativeCommands(daemonClient);
+  const piParityCommands = createSparkPiParitySlashCommands(services);
   const commandSessionId = `spark-native-command-${Date.now().toString(36)}`;
   const runtimeCommands = createSparkNativeRuntimeSlashCommands(services.runtime, {
-    exclude: [...NATIVE_SLASH_COMMAND_EXCLUSIONS, ...Object.keys(daemonCommands)],
+    exclude: [
+      ...NATIVE_SLASH_COMMAND_EXCLUSIONS,
+      ...Object.keys(daemonCommands),
+      ...PI_PARITY_COMMAND_NAMES,
+    ],
     sendUserMessage: async (content) => {
       const prompt = content.trim();
       if (!prompt) return;
@@ -270,7 +279,7 @@ function createSparkNativeSlashCommands(
       );
     },
   });
-  return { ...runtimeCommands, ...daemonCommands };
+  return { ...runtimeCommands, ...daemonCommands, ...piParityCommands };
 }
 
 function printHelp(): void {

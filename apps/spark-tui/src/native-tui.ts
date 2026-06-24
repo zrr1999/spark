@@ -1,3 +1,9 @@
+import { spawn } from "node:child_process";
+import { readFile, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { extname, isAbsolute, resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import {
   CombinedAutocompleteProvider,
   Editor,
@@ -51,6 +57,7 @@ export type SparkNativeMessageRole =
   | "thinking";
 
 export type SparkNativeToolStatus = "pending" | "success" | "error";
+export type SparkNativeQueueMode = "steer" | "followUp";
 
 export interface SparkNativeMessage {
   role: SparkNativeMessageRole;
@@ -91,9 +98,15 @@ export type SparkNativeResponder = (
   context: SparkNativeResponderContext,
 ) => string | Promise<string>;
 
+interface SparkNativeQueuedInput {
+  text: string;
+  mode: SparkNativeQueueMode;
+}
+
 export interface SparkNativeAbortResult {
   aborted: boolean;
   clearedQueued: number;
+  restoredText?: string;
 }
 
 export interface SparkNativeSlashCommandContext {
@@ -229,7 +242,7 @@ function createSparkNativeCockpitState(): SparkNativeCockpitState {
 
 export class SparkNativeSession {
   readonly messages: SparkNativeMessage[] = [];
-  private readonly queuedFollowUps: string[] = [];
+  private readonly queuedFollowUps: SparkNativeQueuedInput[] = [];
   private readonly responder: SparkNativeResponder;
   private lastSubmittedInput: string | undefined;
   private processing = false;
@@ -256,17 +269,24 @@ export class SparkNativeSession {
     return this.queuedFollowUps.length;
   }
 
-  async submit(input: string): Promise<"started" | "queued" | "ignored"> {
+  async submit(
+    input: string,
+    options: { mode?: SparkNativeQueueMode } = {},
+  ): Promise<"started" | "queued" | "ignored"> {
     const text = input.trim();
     if (!text) return "ignored";
     this.lastSubmittedInput = text;
 
     if (this.processing) {
-      this.queuedFollowUps.push(text);
-      this.pushMessage({ role: "user", text, queued: true });
+      const mode = options.mode ?? "steer";
+      this.queuedFollowUps.push({ text, mode });
+      this.pushMessage({ role: "user", text, queued: true, details: { queueMode: mode } });
       this.pushMessage({
         role: "system",
-        text: `Queued follow-up #${this.queuedFollowUps.length}. Use /stop to clear queued work or stop the current turn.`,
+        text:
+          mode === "followUp"
+            ? `Queued follow-up #${this.queuedFollowUps.length}. Use /stop to clear queued work or stop the current turn; Alt+Up restores queued input.`
+            : `Queued steering message #${this.queuedFollowUps.length}. Use /stop to clear queued work or stop the current turn; Alt+Up restores queued input.`,
       });
       return "queued";
     }
@@ -331,13 +351,16 @@ export class SparkNativeSession {
   }
 
   abort(reason: string = "user stop"): SparkNativeAbortResult {
-    const clearedQueued = this.queuedFollowUps.length;
-    this.queuedFollowUps.splice(0, this.queuedFollowUps.length);
+    const restoredText = this.restoreQueuedText();
+    const clearedQueued = restoredText ? restoredText.split("\n\n").length : 0;
     if (!this.processing) {
       if (clearedQueued > 0) {
-        this.pushMessage({ role: "system", text: `Cleared ${clearedQueued} queued follow-up(s).` });
+        this.pushMessage({
+          role: "system",
+          text: `Restored ${clearedQueued} queued input(s) to the editor.`,
+        });
       }
-      return { aborted: false, clearedQueued };
+      return { aborted: false, clearedQueued, restoredText };
     }
 
     this.activeTurnId += 1;
@@ -348,9 +371,16 @@ export class SparkNativeSession {
       role: "system",
       text:
         `Stopped current Spark turn (${reason}).` +
-        (clearedQueued > 0 ? ` Cleared ${clearedQueued} queued follow-up(s).` : ""),
+        (clearedQueued > 0 ? ` Restored ${clearedQueued} queued input(s) to the editor.` : ""),
     });
-    return { aborted: true, clearedQueued };
+    return { aborted: true, clearedQueued, restoredText };
+  }
+
+  restoreQueuedText(): string | undefined {
+    if (this.queuedFollowUps.length === 0) return undefined;
+    const restored = this.queuedFollowUps.map((entry) => entry.text).join("\n\n");
+    this.queuedFollowUps.splice(0, this.queuedFollowUps.length);
+    return restored;
   }
 
   addCustomMessage(input: SparkNativeCustomMessageInput): void {
@@ -433,7 +463,7 @@ export class SparkNativeSession {
 
     const next = this.queuedFollowUps.shift();
     if (next !== undefined) {
-      void this.process(next);
+      void this.process(next.text);
     }
   }
 
@@ -722,6 +752,145 @@ function widgetTuiColumns(tui: TUI): number {
   return terminal?.columns ?? terminal?.cols ?? 80;
 }
 
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+const AT_FILE_TOKEN = /(^|\s)@("[^"]+"|\S+)/gu;
+const RAW_IMAGE_TOKEN =
+  /(^|\s)((?:file:\/\/|~\/|\.\.?\/|\/)?\S+\.(?:png|jpe?g|gif|webp))(?=\s|$)/giu;
+
+async function prepareSparkNativeEditorInput(input: string, basePath: string): Promise<string> {
+  const bang = parseBangCommand(input);
+  if (bang) return await runSparkNativeBangCommand(bang.command, bang.hidden, basePath);
+
+  const replacements: Array<{ start: number; end: number; text: string }> = [];
+  for (const match of input.matchAll(AT_FILE_TOKEN)) {
+    const leading = match[1] ?? "";
+    const raw = match[2];
+    if (!raw) continue;
+    const tokenStart = (match.index ?? 0) + leading.length;
+    const tokenEnd = tokenStart + raw.length + 1;
+    const pathText = raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
+    const expanded = await expandSparkNativeFileReference(pathText, basePath);
+    replacements.push({ start: tokenStart, end: tokenEnd, text: expanded });
+  }
+  for (const match of input.matchAll(RAW_IMAGE_TOKEN)) {
+    const leading = match[1] ?? "";
+    const raw = match[2];
+    if (!raw || raw.startsWith("@")) continue;
+    const tokenStart = (match.index ?? 0) + leading.length;
+    if (tokenStart > 0 && input[tokenStart - 1] === "@") continue;
+    const tokenEnd = tokenStart + raw.length;
+    if (replacements.some((replacement) => rangesOverlap(tokenStart, tokenEnd, replacement))) {
+      continue;
+    }
+    const expanded = await expandSparkNativeImageReferenceIfExists(raw, basePath);
+    if (expanded) replacements.push({ start: tokenStart, end: tokenEnd, text: expanded });
+  }
+  if (replacements.length === 0) return input;
+  replacements.sort((left, right) => left.start - right.start);
+
+  let output = "";
+  let cursor = 0;
+  for (const replacement of replacements) {
+    output += input.slice(cursor, replacement.start);
+    output += replacement.text;
+    cursor = replacement.end;
+  }
+  output += input.slice(cursor);
+  return output;
+}
+
+function parseBangCommand(input: string): { command: string; hidden: boolean } | undefined {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith("!")) return undefined;
+  const hidden = trimmed.startsWith("!!");
+  const command = trimmed.slice(hidden ? 2 : 1).trim();
+  if (!command) throw new Error("Bang command requires a shell command after ! or !!");
+  return { command, hidden };
+}
+
+async function runSparkNativeBangCommand(
+  command: string,
+  hidden: boolean,
+  cwd: string,
+): Promise<string> {
+  const result = await runShellCapture(command, cwd);
+  if (hidden) {
+    return `[hidden shell command completed]\ncommand: ${command}\nexit: ${result.code}`;
+  }
+  const output = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n");
+  return [`$ ${command}`, `exit: ${result.code}`, output || "(no output)"].join("\n");
+}
+
+async function runShellCapture(
+  command: string,
+  cwd: string,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return await new Promise((resolvePromise) => {
+    const child = spawn(process.env.SHELL ?? "/bin/sh", ["-lc", command], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      resolvePromise({ code: 1, stdout, stderr: error.message });
+    });
+    child.on("close", (code) => {
+      resolvePromise({ code, stdout: stdout.slice(0, 20_000), stderr: stderr.slice(0, 20_000) });
+    });
+  });
+}
+
+async function expandSparkNativeFileReference(pathText: string, basePath: string): Promise<string> {
+  const absolutePath = resolveSparkNativeInputPath(pathText, basePath);
+  const stats = await stat(absolutePath);
+  if (stats.isDirectory()) return `<file name="${absolutePath}">[Directory reference]</file>`;
+  const extension = extname(absolutePath).toLowerCase();
+  if (IMAGE_EXTENSIONS.has(extension)) {
+    return `<file name="${absolutePath}">[Image attached: ${extension.slice(1)}]</file>`;
+  }
+  const content = await readFile(absolutePath, "utf8");
+  return `<file name="${absolutePath}">\n${content}\n</file>`;
+}
+
+async function expandSparkNativeImageReferenceIfExists(
+  pathText: string,
+  basePath: string,
+): Promise<string | undefined> {
+  const absolutePath = resolveSparkNativeInputPath(pathText, basePath);
+  try {
+    const stats = await stat(absolutePath);
+    if (!stats.isFile()) return undefined;
+  } catch {
+    return undefined;
+  }
+  const extension = extname(absolutePath).toLowerCase();
+  if (!IMAGE_EXTENSIONS.has(extension)) return undefined;
+  return `<file name="${absolutePath}">[Image attached: ${extension.slice(1)}]</file>`;
+}
+
+function rangesOverlap(
+  start: number,
+  end: number,
+  replacement: { start: number; end: number },
+): boolean {
+  return start < replacement.end && end > replacement.start;
+}
+
+function resolveSparkNativeInputPath(pathText: string, basePath: string): string {
+  if (pathText.startsWith("file://")) return fileURLToPath(pathText);
+  const expanded = pathText === "~" ? homedir() : pathText.replace(/^~(?=\/|$)/u, homedir());
+  return isAbsolute(expanded) ? expanded : resolvePath(basePath, expanded);
+}
+
 export interface SparkNativeTuiAppOptions {
   keybindings?: SparkKeybindings;
   keybindingContext?: SparkKeybindingContext;
@@ -742,6 +911,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
   private readonly keybindingContext: SparkKeybindingContext;
   private readonly slashCommands: SparkNativeSlashCommandMap;
   private readonly interactionHandler?: SparkNativeInteractionHandler;
+  private readonly inputBasePath: string;
   private cachedWidth?: number;
   private cachedLines?: string[];
   private readonly statuses = new Map<string, string>();
@@ -766,16 +936,12 @@ export class SparkNativeTuiApp implements Component, Focusable {
     this.keybindingContext = options.keybindingContext ?? { hasUI: true };
     this.slashCommands = options.slashCommands ?? {};
     this.interactionHandler = options.interactionHandler;
+    this.inputBasePath = options.autocompleteBasePath ?? process.cwd();
     this.registerToggleKeybindings(options.keybindings);
     this.editor = new Editor(tui, createEditorTheme(), { paddingX: 1 });
     this.installAutocompleteProvider(options);
     this.editor.onSubmit = (text) => {
-      const expandedText = text;
-      this.editor.addToHistory(expandedText);
-      this.editor.setText("");
-      void this.submitInput(expandedText);
-      this.invalidate();
-      this.tui.requestRender();
+      void this.submitEditorText(text, { mode: "steer" });
     };
     this.session.onChange = () => {
       this.invalidate();
@@ -803,18 +969,75 @@ export class SparkNativeTuiApp implements Component, Focusable {
   }
 
   async submitInput(input: string): Promise<"started" | "queued" | "ignored" | "command"> {
+    return await this.submitPreparedInput(input, { mode: "steer" });
+  }
+
+  private async submitEditorText(
+    input: string,
+    options: { mode: SparkNativeQueueMode },
+  ): Promise<"started" | "queued" | "ignored" | "command"> {
+    this.editor.addToHistory(input);
+    this.editor.setText("");
+    const result = await this.submitPreparedInput(input, options);
+    this.invalidate();
+    this.tui.requestRender();
+    return result;
+  }
+
+  private async submitPreparedInput(
+    input: string,
+    options: { mode: SparkNativeQueueMode },
+  ): Promise<"started" | "queued" | "ignored" | "command"> {
     const text = input.trim();
-    if (!text) return await this.session.submit(input);
-    if (text.startsWith("/")) {
+    if (!text) return await this.session.submit(input, options);
+    if (text.startsWith("/") && !text.startsWith("//")) {
       await this.runSlashCommand(text);
       this.invalidate();
       this.tui.requestRender();
       return "command";
     }
-    return await this.session.submit(input);
+    const bang = parseBangCommand(input);
+    if (bang?.hidden) {
+      const hiddenResult = await runSparkNativeBangCommand(bang.command, true, this.inputBasePath);
+      this.session.addToolMessage({ toolName: "shell", text: hiddenResult, status: "success" });
+      return "ignored";
+    }
+    try {
+      const prepared = await prepareSparkNativeEditorInput(input, this.inputBasePath);
+      return await this.session.submit(prepared, options);
+    } catch (error) {
+      this.session.addSystemMessage(
+        `Input preparation failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return "ignored";
+    }
   }
 
   handleInput(data: string): void {
+    if (matchesKey(data, Key.alt("enter"))) {
+      void this.submitEditorText(this.editor.getExpandedText(), { mode: "followUp" });
+      return;
+    }
+    if (this.handleCockpitPanelInput(data)) return;
+    if (matchesKey(data, Key.escape)) {
+      const restoredText = this.session.abort("escape").restoredText;
+      if (restoredText) this.editor.setText(restoredText);
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
+    if (matchesKey(data, Key.alt("up"))) {
+      const restoredText = this.session.restoreQueuedText();
+      if (restoredText) {
+        this.editor.setText(restoredText);
+        this.session.addSystemMessage("Restored queued input to the editor.");
+      } else {
+        this.session.addSystemMessage("No queued input to restore.");
+      }
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
     if (this.handleSparkKeybinding(data)) return;
     if (matchesKey(data, Key.ctrl("c")) || matchesKey(data, Key.ctrl("d"))) {
       this.onExit();
@@ -828,7 +1051,6 @@ export class SparkNativeTuiApp implements Component, Focusable {
       this.toggleThinking();
       return;
     }
-    if (this.handleCockpitPanelInput(data)) return;
     this.editor.handleInput(data);
     this.invalidate();
     this.tui.requestRender();
@@ -1636,9 +1858,10 @@ export class SparkNativeTuiApp implements Component, Focusable {
         return false;
       case "stop": {
         const result = this.session.abort(args.trim() || "user stop");
+        if (result.restoredText) this.editor.setText(result.restoredText);
         if (result.aborted) return false;
         return result.clearedQueued > 0
-          ? `Cleared ${result.clearedQueued} queued follow-up(s).`
+          ? `Restored ${result.clearedQueued} queued input(s) to the editor.`
           : "No Spark turn is currently running.";
       }
       case "retry":
@@ -1699,7 +1922,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
     const builtIns = [
       "/help — show native TUI commands",
       "/clear — clear the visible transcript",
-      "/stop [reason] — stop the current Spark turn and clear queued follow-ups",
+      "/stop [reason] — stop the current Spark turn and restore queued inputs to the editor",
       "/retry — resubmit the previous user prompt",
       "/cockpit [overview|workflows|runs|tasks|artifacts|reviews|graft|off] — show Spark cockpit panels",
       "/workflows, /runs, /tasks, /artifacts, /reviews, /graft — open a focused cockpit panel",
