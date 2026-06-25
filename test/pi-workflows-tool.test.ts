@@ -31,7 +31,7 @@ void test("workflow tool lists builtins and reads saved workspace scripts from c
       `export const meta = {
         name: "Release Check",
         description: "Check release readiness.",
-        phases: [{ title: "Inspect" }, { title: "Verify" }],
+        stages: [{ title: "Inspect" }, { title: "Verify" }],
       };
       throw new Error("discovery must not execute workflow bodies");`,
       "utf8",

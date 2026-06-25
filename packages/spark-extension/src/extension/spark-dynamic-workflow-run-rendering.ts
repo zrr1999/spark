@@ -444,7 +444,7 @@ export function renderSparkDynamicWorkflowRunsText(input: {
 }
 
 export function formatSparkDynamicWorkflowRunLine(run: SparkDynamicWorkflowRunRecord): string {
-  const phaseSummary = formatPhaseSummary(run);
+  const stageSummary = formatStageSummary(run);
   const base = run.base?.baseRef ? ` base=${run.base.baseRef}` : "";
   const tokens = formatWorkflowUsageInline(run);
   const agents = ` agents=${run.agentCount || run.journal.length}`;
@@ -454,7 +454,7 @@ export function formatSparkDynamicWorkflowRunLine(run: SparkDynamicWorkflowRunRe
     ? ` approval=${run.approval.method}:${run.approval.summary.riskFlags.join("+")}`
     : "";
   const error = run.errorMessage ? ` error=${compact(run.errorMessage, 80)}` : "";
-  return `${run.ref} [${run.status}] ${run.source.label} phases=${phaseSummary}${agents}${tokens}${base}${saved}${approval}${acknowledged} updated=${run.updatedAt}${error}`;
+  return `${run.ref} [${run.status}] ${run.source.label} stages=${stageSummary}${agents}${tokens}${base}${saved}${approval}${acknowledged} updated=${run.updatedAt}${error}`;
 }
 
 function appendSparkDynamicWorkflowRunDetails(
@@ -475,7 +475,7 @@ function appendSparkDynamicWorkflowRunDetails(
     );
   const usage = formatWorkflowUsageDetails(run);
   if (usage) lines.push(`${indent}Usage: ${usage}`);
-  lines.push(`${indent}Timeline: ${formatPhaseTimeline(run)}`);
+  lines.push(`${indent}Timeline: ${formatStageTimeline(run)}`);
   lines.push(`${indent}Controls: ${formatDynamicWorkflowControls(run)}`);
   if ((run.agentTelemetry ?? []).length > 0) {
     const tail = (run.agentTelemetry ?? []).slice(-5);
@@ -486,12 +486,12 @@ function appendSparkDynamicWorkflowRunDetails(
   }
   if (run.phases.length > 0) {
     const phases = run.phases.slice(0, DYNAMIC_WORKFLOW_PHASE_DETAIL_LIMIT);
-    lines.push(`${indent}Phases (${phases.length}/${run.phases.length}):`);
+    lines.push(`${indent}Stages (${phases.length}/${run.phases.length}):`);
     for (const phase of phases) {
       lines.push(`${indent}  - ${phase.title}: ${phase.status ?? "running"}`);
     }
     if (run.phases.length > phases.length)
-      lines.push(`${indent}  - … ${run.phases.length - phases.length} more phase(s)`);
+      lines.push(`${indent}  - … ${run.phases.length - phases.length} more stage(s)`);
   }
   if (run.journal.length > 0) {
     const tail = run.journal.slice(-5);
@@ -556,7 +556,7 @@ function formatAgentTelemetry(
   return parts.join(" ");
 }
 
-function formatPhaseSummary(run: SparkDynamicWorkflowRunRecord): string {
+function formatStageSummary(run: SparkDynamicWorkflowRunRecord): string {
   if (run.phases.length === 0) return "0";
   const phases = run.phases.slice(0, DYNAMIC_WORKFLOW_PHASE_SUMMARY_LIMIT);
   const suffix = run.phases.length > phases.length ? `,+${run.phases.length - phases.length}` : "";
@@ -565,8 +565,8 @@ function formatPhaseSummary(run: SparkDynamicWorkflowRunRecord): string {
     .join(",")}${suffix}`;
 }
 
-function formatPhaseTimeline(run: SparkDynamicWorkflowRunRecord): string {
-  if (run.phases.length === 0) return "no phases recorded";
+function formatStageTimeline(run: SparkDynamicWorkflowRunRecord): string {
+  if (run.phases.length === 0) return "no stages recorded";
   const phases = run.phases.slice(0, DYNAMIC_WORKFLOW_PHASE_SUMMARY_LIMIT);
   const suffix =
     run.phases.length > phases.length ? ` → … +${run.phases.length - phases.length}` : "";

@@ -7,7 +7,7 @@ This document is the acceptance contract for turning Spark dynamic workflows fro
 The current implementation has useful runtime primitives, persistence, Graft isolation, saved workflows, and a better completion card, but the user-visible system is still not dynamic enough:
 
 - `workflow_run` executes the script synchronously in one tool call and awaits `runWorkflow(...)` before returning (`packages/spark-extension/src/extension/spark-workflow-run-tool-registration.ts`).
-- The tool execution callback receives `_onUpdate`, but live phase/agent updates are not streamed to the host UI.
+- The tool execution callback receives `_onUpdate`, but live stage/agent updates are not streamed to the host UI.
 - Persisted dynamic workflow state is a snapshot JSON store, not a live event stream.
 - Pause/resume/stop/restart controls mostly mutate stored status; they do not yet control the active runtime scheduler or child role runs.
 - Spark has two run concepts: legacy/background workflow runs and dynamic workflow runs. The widget still reads the legacy store, while `/workflows` mixes old and new concepts.
@@ -62,7 +62,7 @@ While the run is active, the user can inspect `/workflows` or `task_read({ actio
 
 Controls must affect the active execution, not only the stored status:
 
-- `pause`: stop scheduling new phase/agent/parallel/helper work at cooperative checkpoints; active child calls may finish unless explicitly stopped.
+- `pause`: stop scheduling new stage/agent/parallel/helper work at cooperative checkpoints; active child calls may finish unless explicitly stopped.
 - `resume`: continue from the persisted journal/checkpoint without repeating completed unchanged agent work.
 - `stop`: abort the manager and active child role runs/web/fetch calls; terminal state is `stopped`.
 - `restart`: reset the active snapshot/journal according to policy and start a new manager-owned execution without requiring a second manual `workflow_run({ runRef })` call unless explicitly dry-run.
@@ -100,7 +100,7 @@ Minimum event families:
 | --- | --- | --- |
 | run lifecycle | `run_started`, `run_resumed`, `run_succeeded`, `run_failed`, `run_stopped`, `run_stale` | terminal status and recovery |
 | control | `control_requested`, `control_applied`, `control_rejected` | prove controls affect runtime |
-| phase | `phase_started`, `phase_succeeded`, `phase_failed`, `phase_skipped` | phase timeline/tree |
+| stage | `stage_started`, `stage_finished` with status | stage timeline/tree |
 | execution node | `node_started`, `node_succeeded`, `node_failed`, `node_skipped` with `nodeKind` | generic tree for parallel/helper/nested/agent/tool work |
 | parallel | `parallel_group_started`, `parallel_item_started`, `parallel_item_finished` | show fan-out even without agents |
 | agent | `agent_started`, `agent_telemetry`, `agent_succeeded`, `agent_failed` | child run refs, usage, liveness |
@@ -139,6 +139,8 @@ interface WorkflowRunSnapshot {
   updatedAt: string;
   finishedAt?: string;
   controls: Array<"pause" | "resume" | "stop" | "restart" | "save" | "ack">;
+  stages: WorkflowRunNode[];
+  /** @deprecated Use stages. */
   phases: WorkflowRunNode[];
   nodesById: Record<string, WorkflowRunNode>;
   eventTail: WorkflowRunEvent[];
@@ -149,7 +151,7 @@ interface WorkflowRunSnapshot {
 }
 ```
 
-`WorkflowRunNode` should represent phases, parallel groups, parallel items, agents, helper/tool calls, nested workflows, artifacts, and Graft provenance nodes with a common status/timing/result/error/children interface.
+`WorkflowRunNode` should represent stages, parallel groups, parallel items, agents, helper/tool calls, nested workflows, artifacts, and Graft provenance nodes with a common status/timing/result/error/children interface.
 
 ## Storage layout
 
@@ -221,7 +223,7 @@ A new `DynamicWorkflowManager` in `spark-extension` should own lifecycle:
 │ run      run:...
 │ source   inline workflow
 │ script   <hash>
-│ phases   Plan → Search → Synthesize
+│ stages   Plan → Search → Synthesize
 │ controls inspect · pause · stop
 ╰─ Live: /workflows or task_read({ action: "run_status", runAction: "inspect", runRef: "..." })
 ```
@@ -251,7 +253,7 @@ The Spark widget should read dynamic workflow snapshots, not only legacy backgro
 | P0 | Unified live state | widget/status/dashboard read one dynamic workflow snapshot projection | `@workflow-live-ui-bridge` |
 | P0 | Event store | append/replay/compact event log with migration from current JSON store | `@workflow-event-store-v2` |
 | P1 | Fan-out tree | `parallel()` and helper calls appear in UI even with `agentCount=0` | `@workflow-fanout-tree-telemetry` |
-| P1 | Dashboard | `/workflows` exposes run list, phase/agent tree, details, logs, controls | `@workflow-dashboard-tui` |
+| P1 | Dashboard | `/workflows` exposes run list, stage/agent tree, details, logs, controls | `@workflow-dashboard-tui` |
 | P1 | Result delivery | background completion creates deliverable result/error until ack | `@workflow-result-inbox-delivery` |
 | P1 | Graft provenance | isolated agents show scratch/candidate/patch/validation refs | `@workflow-graft-provenance-ui` |
 | P2 | Approval review UX | script/risk/resource review is integrated into workflow run view | covered across dashboard/control tasks |

@@ -18,6 +18,7 @@ import {
   formatHiddenRoleRunInbox,
   markHiddenRoleRunInboxDelivered,
 } from "./role-run-completions.ts";
+import { sparkActiveLensPhase } from "./spark-drive-state.ts";
 import type { SparkModeMessageApi } from "./spark-mode-entry.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
@@ -165,7 +166,7 @@ async function syncGoalAskAutoAnswerPolicy(
   ctx: SparkToolContext,
   deps: SparkExtensionEventDeps,
 ): Promise<void> {
-  if (ctx.sparkActiveLens?.mode === "implement") {
+  if (sparkActiveLensPhase(ctx.sparkActiveLens) === "implement") {
     delete ctx.askAutoAnswer;
     delete ctx.askAutoAnswerResolver;
     return;

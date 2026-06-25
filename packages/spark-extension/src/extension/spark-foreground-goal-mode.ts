@@ -1,18 +1,18 @@
 import type { ProjectRef, Task } from "@zendev-lab/pi-extension-api";
 import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
-import type { SparkEntryMode } from "./spark-entry.ts";
+import type { SparkEntryPhase } from "./spark-entry.ts";
 
-export function suggestForegroundGoalMode(
+export function suggestForegroundGoalPhase(
   graph: TaskGraph,
   selectedProjectRef: ProjectRef | undefined,
   objective: string,
-): SparkEntryMode {
+): SparkEntryPhase {
   const normalized = objective.trim();
   if (!selectedProjectRef) return "plan";
 
   const frontier = selectedProjectForegroundState(graph, selectedProjectRef);
   if (frontier.ready > 0) return "implement";
-  if (frontier.unfinished > 0) return foregroundUnfinishedTaskMode(frontier.unfinishedTasks);
+  if (frontier.unfinished > 0) return foregroundUnfinishedTaskPhase(frontier.unfinishedTasks);
   if (emptyFrontierNeedsPlanning(normalized)) return "plan";
 
   if (foregroundPlanIntent(normalized)) return "plan";
@@ -41,7 +41,9 @@ function selectedProjectForegroundState(
   };
 }
 
-export function foregroundUnfinishedTaskMode(tasks: readonly Pick<Task, "kind">[]): SparkEntryMode {
+export function foregroundUnfinishedTaskPhase(
+  tasks: readonly Pick<Task, "kind">[],
+): SparkEntryPhase {
   if (tasks.length === 0) return "implement";
   if (tasks.some((task) => task.kind === "implement" || task.kind === "generic")) {
     return "implement";
@@ -72,6 +74,12 @@ function foregroundImplementIntent(objective: string): boolean {
     objective,
   );
 }
+
+/** @deprecated Use suggestForegroundGoalPhase. */
+export const suggestForegroundGoalMode = suggestForegroundGoalPhase;
+
+/** @deprecated Use foregroundUnfinishedTaskPhase. */
+export const foregroundUnfinishedTaskMode = foregroundUnfinishedTaskPhase;
 
 function foregroundProgressOrCreationIntent(objective: string): boolean {
   return /(不断|持续|继续|推进|优化|改进|完善|创建|拆分|任务|完成(任务|它们|这些|全部|所有|队列)|ongoing|continue|progress|optimise|optimize|improve|create|task|finish (tasks|queue|them|all)|complete (tasks|queue|them|all))/iu.test(

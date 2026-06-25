@@ -1,7 +1,12 @@
 {
-  "name": "@zendev-lab/pi-models",
+  "name": "@zendev-lab/pi-files",
   "version": "0.1.0",
-  "description": "Model catalog inspection tool for Pi sessions.",
+  "description": "Working-tree file tools (read/edit/write/grep/find/ls) for Pi sessions, with Pi-parity truncation and diff semantics.",
+  "keywords": [
+    "file-tools",
+    "pi-extension",
+    "pi-package"
+  ],
   "license": "MIT",
   "author": "zrr1999",
   "files": [
@@ -21,6 +26,9 @@
   },
   "dependencies": {
     "@zendev-lab/pi-extension-api": "workspace:^",
+    "diff": "^8.0.4",
+    "ignore": "^7.0.5",
+    "minimatch": "^10.2.5",
     "typebox": "^1.2.13"
   },
   "pi": {

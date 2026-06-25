@@ -7,8 +7,11 @@ import type {
   TaskStatus,
 } from "@zendev-lab/pi-extension-api";
 import type { WorkflowRunControl, WorkflowRunStatusSummary } from "@zendev-lab/pi-workflows";
+import { renderSparkProjectKindDisplay } from "./project-kind-registry.ts";
 import { appendRecentRoleRunCompletionLines } from "./role-run-completions.ts";
+import type { SparkDriveMode } from "./spark-drive-state.ts";
 import type { SparkSessionGoal } from "./spark-session-goals.ts";
+import type { SparkSessionLoop } from "./spark-session-loops.ts";
 import { sparkRunStrategyForMaxConcurrency } from "./session-state.ts";
 import {
   appendCompactSparkWorkflowRunStatusLines,
@@ -63,7 +66,9 @@ export interface SparkStatusRenderInput {
   workflowRunStatus: WorkflowRunStatusSummary;
   dynamicWorkflowRuns?: SparkDynamicWorkflowEventRunView[];
   runControl?: WorkflowRunControl;
+  driveMode?: SparkDriveMode;
   sessionGoal?: SparkSessionGoal;
+  sessionLoop?: SparkSessionLoop;
   recentRoleRunCompletions: TaskRunCompletionSummary[];
   state?: SparkStateHousekeepingSummary;
 }
@@ -78,6 +83,7 @@ export function renderSparkStatus(input: SparkStatusRenderInput): {
   const lines = [
     `Spark ${scope === "workspace" ? "tasks" : `${scope} status`} (${input.view} view${typeof input.taskLimit === "number" ? `, limit=${input.taskLimit}` : ""}):`,
   ];
+  if (input.driveMode) lines.push(`Mode: ${input.driveMode} (derived from active drive state).`);
   if (includeWorkspaceSummary && input.runControl)
     lines.push(sparkRunControlStatusLine(input.runControl));
   if (includeWorkspaceSummary)
@@ -123,7 +129,9 @@ export function renderSparkStatus(input: SparkStatusRenderInput): {
       ? { dynamicWorkflowRuns: compactDynamicWorkflowRuns(input.dynamicWorkflowRuns) }
       : {}),
     ...(includeWorkspaceSummary ? { runControl: input.runControl } : {}),
+    driveMode: input.driveMode,
     sessionGoal: input.sessionGoal,
+    sessionLoop: input.sessionLoop,
     ...(includeWorkspaceSummary
       ? { recentRoleRunCompletions: input.recentRoleRunCompletions }
       : {}),
@@ -201,10 +209,18 @@ function compactSparkStatusDetails(
             : undefined,
         }
       : {}),
+    driveMode: input.driveMode,
     sessionGoal: input.sessionGoal
       ? {
           status: input.sessionGoal.status,
           objective: truncateInline(input.sessionGoal.objective, 180),
+        }
+      : undefined,
+    sessionLoop: input.sessionLoop
+      ? {
+          status: input.sessionLoop.status,
+          objective: truncateInline(input.sessionLoop.objective, 180),
+          nextRunAt: input.sessionLoop.schedule?.nextRunAt,
         }
       : undefined,
     hints: [
@@ -225,6 +241,10 @@ function compactProjectDecisionDetail(
   return {
     ref: input.currentProject?.ref,
     title: input.currentProject?.title,
+    kind: input.currentProject?.kind ?? "generic",
+    kindDisplay: input.currentProject
+      ? renderSparkProjectKindDisplay(input.currentProject)
+      : undefined,
     taskCounts: {
       total: tasks.length,
       unfinished: tasks.filter((task) => isUnfinishedTaskStatus(task.status)).length,
@@ -244,6 +264,8 @@ function compactRenderedProjectDecisionDetail(
     ref: project.ref,
     title: project.title,
     current: project.current,
+    kind: project.kind,
+    kindDisplay: project.kindDisplay,
     taskCounts: taskCounts
       ? {
           total: taskCounts.total,
@@ -457,11 +479,16 @@ function renderProjectLines(
     const hiddenByLimit = allVisibleTasks.length - visibleTasks.length;
     const currentSuffix = project.ref === input.currentProject?.ref ? " [current]" : "";
     const isCurrent = project.ref === input.currentProject?.ref;
+    const projectKind = renderSparkProjectKindDisplay(project);
     const projectPrefix = input.view === "active" ? "Project" : `Project ${project.ref}:`;
-    lines.push(`\n${projectPrefix} ${project.title}${currentSuffix}`);
+    const kindSuffix = projectKind.badge ? ` [${projectKind.badge}]` : "";
+    lines.push(`\n${projectPrefix} ${project.title}${kindSuffix}${currentSuffix}`);
     lines.push(
       `  Tasks: ${tasks.length} total | ${claimed.length} claimed | ${sessionClaimed.length} current_session_claimed | ready_frontier=${readyTasks.length} | ${formatTaskStatusCounts(statusCounts)}`,
     );
+    for (const panel of projectKind.panels) {
+      lines.push(`  ${panel.label}: ${truncateInline(panel.text, 160)}`);
+    }
     const workflowIdle =
       input.workflowRunStatus.running === 0 && !input.workflowRunStatus.activeRun;
     const claimRecoveryHints = tasks.flatMap((task) => {
@@ -500,6 +527,14 @@ function renderProjectLines(
         '  Session goal: none in durable session state; historical compact summaries are hints only. Use goal({ action: "start" }) to bind a goal to this project when needed.',
       );
     }
+    if (isCurrent && input.sessionLoop) {
+      const nextRun = input.sessionLoop.schedule?.nextRunAt
+        ? ` | next=${input.sessionLoop.schedule.nextRunAt}`
+        : "";
+      lines.push(
+        `  Session loop: ${input.sessionLoop.status} | ${truncateInline(input.sessionLoop.objective, 180)}${nextRun}`,
+      );
+    }
     if (hiddenByView > 0)
       lines.push(`  Completed tasks: ${formatCompletedTaskCounts(statusCounts)}`);
     if (hiddenByLimit > 0)
@@ -510,6 +545,8 @@ function renderProjectLines(
       ref: project.ref,
       title: project.title,
       current: isCurrent,
+      kind: project.kind ?? "generic",
+      kindDisplay: projectKind,
       taskCounts: {
         total: tasks.length,
         unfinished: tasks.filter((task) => isUnfinishedTaskStatus(task.status)).length,

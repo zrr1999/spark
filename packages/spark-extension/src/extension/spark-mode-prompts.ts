@@ -1,6 +1,6 @@
 import type { ProjectRef } from "@zendev-lab/pi-extension-api";
 import type { TaskGraph } from "@zendev-lab/pi-tasks";
-import type { SparkEntryMode } from "./spark-entry.ts";
+import type { SparkEntryPhase } from "./spark-entry.ts";
 import {
   ASK_BEFORE_GUESSING,
   PARALLEL_EXECUTION_WORKFLOW_STRATEGY,
@@ -33,27 +33,30 @@ export function renderSparkWorkflowDriverPrompt(
   return renderStandaloneWorkflowDriverPrompt(focus, requirements);
 }
 
-export function renderSparkGoalDriverModePrompt(
+export function renderSparkGoalDriverPhasePrompt(
   graph: TaskGraph,
   selectedProjectRef: ProjectRef | undefined,
   focus: string | undefined,
-  mode: SparkEntryMode,
+  phase: SparkEntryPhase,
 ): string {
-  const modePrompt =
-    mode === "research"
+  const phasePrompt =
+    phase === "research"
       ? renderSparkResearchModePrompt(graph, selectedProjectRef, focus)
-      : mode === "plan"
+      : phase === "plan"
         ? renderSparkPlanningModePrompt(graph, selectedProjectRef, focus, "auto")
         : renderSparkGoalModePrompt(graph, selectedProjectRef, focus);
-  return [modePrompt, renderGoalDriverGuidance(focus)].join("\n\n");
+  return [phasePrompt, renderGoalDriverGuidance(focus)].join("\n\n");
 }
+
+/** @deprecated Use renderSparkGoalDriverPhasePrompt. */
+export const renderSparkGoalDriverModePrompt = renderSparkGoalDriverPhasePrompt;
 
 function renderGoalDriverGuidance(focus: string | undefined): string {
   const goal = focus?.trim() || "the active Spark goal";
   return [
     "## Goal driver guidance",
     `- Active goal objective: ${goal}`,
-    "- Work toward the objective using the selected mode's concrete tool policy. The main session requests completion, the reviewer audits, and Spark applies any approved state transition.",
+    "- Work toward the objective using the selected phase's concrete tool policy. The main session requests completion, the reviewer audits, and Spark applies any approved state transition.",
     "- Goal turns may use canonical ask only with reviewer auto-answer; if the reviewer cannot answer, record or report the blocker and keep the objective unchanged.",
     '- Request goal({ action: "complete" }) only after evidence covers every requirement in the objective.',
   ].join("\n");
@@ -90,7 +93,7 @@ function renderGoalAction(hasExplicitGoal: boolean): string {
     ? "Use the explicit goal focus as the target objective."
     : "Infer the target objective from the current project purpose, description, title, task plans, required evidence, recent artifacts, and blockers.";
   return (
-    'Run Spark goal mode: read the current project/task plan and inspect ready tasks with task_read({ action: "project_status" }). ' +
+    'Run the Spark goal drive using the selected phase: read the current project/task plan and inspect ready tasks with task_read({ action: "project_status" }). ' +
     goalSource +
     ' If the inspected state identifies a single next goal, state that derived goal briefly and work toward it by claiming one ready concrete task at a time with task_write({ action: "claim" }), executing it, verifying required evidence, and calling task_write({ action: "finish" }). Continue to the next ready task after each successful finish until the goal is complete, no ready task remains, validation fails, or a required decision cannot be resolved by reviewer auto-answer.'
   );
@@ -108,7 +111,7 @@ function renderStandaloneWorkflowDriverPrompt(
   requirements: readonly string[],
 ): string {
   return [
-    "## Workflow driver mode requirements",
+    "## Workflow driver requirements",
     focus?.trim() ? `Focus: ${focus.trim()}` : undefined,
     ...requirements.map((line) => "- " + line),
   ]
@@ -124,7 +127,7 @@ export function renderSparkUltracodeWorkflowPrompt(
     "Ultracode high-effort workflow generation is explicitly requested. Do not trigger this path for ordinary prompts; it is opt-in only.",
     'If an existing saved workflow clearly satisfies the request, run it with workflow_run({ selector, args }) after reading/previewing it through workflow({ action: "read" }).',
     "If no saved workflow fits, generate one metadata-first JavaScript workflow script and execute it with workflow_run({ script, args, concurrency, maxAgents, tokenBudget }). Do not run ad hoc shell/filesystem steps outside workflow_run.",
-    "Use bounded defaults unless the user explicitly asks otherwise: concurrency <= 4, maxAgents <= 12, clear phases, and a visible tokenBudget when the workflow may fan out.",
+    "Use bounded defaults unless the user explicitly asks otherwise: concurrency <= 4, maxAgents <= 12, clear stages, and a visible tokenBudget when the workflow may fan out.",
     "Generated scripts should use quality helpers such as verify, judgePanel, completenessCheck, retry, gate, and artifactRecord where they improve confidence, and should synthesize a compact final result.",
     "Reuse workflow_run approval, persistence, resume, telemetry, and Graft isolation paths; do not duplicate approval or run-manager state.",
     "Keep workflow output standalone unless the user explicitly asks to attach results to Spark project/task state.",

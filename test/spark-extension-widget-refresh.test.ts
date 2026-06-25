@@ -95,7 +95,7 @@ async function executeTool(
   return tool.execute("tool-call", params, new AbortController().signal, () => {}, ctx);
 }
 
-void test("Spark extension widget hides acknowledged DAG history and shows actionable failures", async () => {
+void test("Spark extension widget hides acknowledged and actionable DAG history", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-extension-widget-dag-history-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -176,10 +176,7 @@ void test("Spark extension widget hides acknowledged DAG history and shows actio
       timedOut: false,
     });
     await handlers.get("session_tree")?.({}, ctx);
-    assert.match(
-      widgetComponent.render().join("\n"),
-      /Background work: 1\/2 tasks finished · failed · run:/,
-    );
+    assert.doesNotMatch(widgetComponent.render().join("\n"), /Background work:/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -255,10 +252,7 @@ void test("Spark extension widget reconciles stale DAG records when an owned chi
     await dagStore.recordSchedule(dagRun.ref, { taskRef: task.ref, scheduled: 1 });
     await dagStore.reconcile({ graph, activeRunRefs: [] });
     await handlers.get("session_tree")?.({}, ctx);
-    assert.match(
-      widgetComponent.render().join("\n"),
-      /Background work: 0\/1 tasks finished · stale/,
-    );
+    assert.doesNotMatch(widgetComponent.render().join("\n"), /Background work:/);
 
     const fakePi = join(dir, "fake-pi.mjs");
     await writeFile(

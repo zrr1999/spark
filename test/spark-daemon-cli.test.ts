@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { parseSparkCliCommand, runSparkCli } from "../apps/spark-tui/src/cli.ts";
+import {
+  handleSparkRpcLine,
+  parseSparkCliCommand,
+  runSparkCli,
+} from "../apps/spark-tui/src/cli.ts";
 import { SparkHostRuntime } from "../apps/spark-tui/src/host/runtime.ts";
 import {
   createSparkDaemonNativeResponder,
@@ -31,6 +35,37 @@ void test("parseSparkCliCommand routes daemon and print commands without changin
   assert.deepEqual(parseSparkCliCommand(["daemon", "workspace", "ls", "--json"]), {
     kind: "daemon",
     command: { action: "service", argv: ["workspace", "ls", "--json"] },
+  });
+});
+
+void test("parseSparkCliCommand parses Pi-compatible global modes and resource commands", () => {
+  assert.deepEqual(parseSparkCliCommand(["--mode", "json", "--print", "hello"]), {
+    kind: "print",
+    prompt: "hello",
+    mode: "json",
+    options: { mode: "json" },
+  });
+  assert.deepEqual(parseSparkCliCommand(["--direct", "--mode", "json", "--print", "hello"]), {
+    kind: "print",
+    prompt: "hello",
+    mode: "json",
+    options: { direct: true, mode: "json" },
+  });
+  assert.deepEqual(parseSparkCliCommand(["--mode", "rpc", "--session-id", "s1"]), {
+    kind: "rpc",
+    options: { mode: "rpc", sessionId: "s1" },
+  });
+  assert.deepEqual(parseSparkCliCommand(["--list-models", "opus", "--provider", "p1"]), {
+    kind: "list-models",
+    query: "opus",
+    options: { provider: "p1" },
+  });
+  assert.deepEqual(parseSparkCliCommand(["install", "./my-skill", "--skill", "--json"]), {
+    kind: "resources",
+    action: "install",
+    source: "./my-skill",
+    resourceKind: "skill",
+    json: true,
   });
 });
 
@@ -246,6 +281,98 @@ function testDaemonPaths(root: string) {
   };
 }
 
+void test("runSparkCli supports explicit direct --print and JSON lifecycle", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-direct-print-"));
+  const originalLog = console.log;
+  const logs: string[] = [];
+  console.log = (value?: unknown) => {
+    logs.push(String(value));
+  };
+  try {
+    assert.equal(
+      await runSparkCli(["--direct", "--print", "direct prompt"], {
+        createHostServices: async () => fakeDirectCliServices(dir, "direct answer"),
+        daemonClient: failIfDaemonClientUsed(),
+      }),
+      0,
+    );
+    assert.equal(
+      await runSparkCli(["--direct", "--mode", "json", "--print", "json direct"], {
+        createHostServices: async () => fakeDirectCliServices(dir, "json answer"),
+        daemonClient: failIfDaemonClientUsed(),
+      }),
+      0,
+    );
+  } finally {
+    console.log = originalLog;
+    await rm(dir, { recursive: true, force: true });
+  }
+
+  assert.match(logs[0] ?? "", /direct-submit/);
+  const jsonLines = logs.filter((line) => line.startsWith("{"));
+  const turnEnd = JSON.parse(jsonLines.at(-2) ?? "{}") as {
+    type?: string;
+    message?: { content?: Array<{ text?: string }> };
+  };
+  assert.equal(turnEnd.type, "turn_end");
+  assert.equal(turnEnd.message?.content?.[0]?.text, "json answer");
+});
+
+void test("handleSparkRpcLine supports explicit direct in-process RPC mode", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-direct-rpc-"));
+  try {
+    const writes: Record<string, unknown>[] = [];
+    const services = fakeDirectCliServices(dir, "rpc answer");
+    await handleSparkRpcLine(
+      JSON.stringify({ id: "1", type: "prompt", message: "hello rpc" }),
+      failIfDaemonClientUsed(),
+      { direct: true, sessionId: "rpc-direct" },
+      services,
+      (value) => writes.push(value),
+    );
+    await handleSparkRpcLine(
+      JSON.stringify({ id: "2", type: "get_state" }),
+      failIfDaemonClientUsed(),
+      { direct: true },
+      services,
+      (value) => writes.push(value),
+    );
+    await handleSparkRpcLine(
+      JSON.stringify({ id: "3", type: "get_messages" }),
+      failIfDaemonClientUsed(),
+      { direct: true },
+      services,
+      (value) => writes.push(value),
+    );
+    await handleSparkRpcLine(
+      JSON.stringify({ id: "4", type: "abort" }),
+      failIfDaemonClientUsed(),
+      { direct: true },
+      services,
+      (value) => writes.push(value),
+    );
+    await handleSparkRpcLine(
+      JSON.stringify({ id: "5", type: "new_session" }),
+      failIfDaemonClientUsed(),
+      { direct: true },
+      services,
+      (value) => writes.push(value),
+    );
+
+    assert.equal((writes[0]?.data as { action?: string } | undefined)?.action, "direct-submit");
+    assert.equal((writes[0]?.data as { text?: string } | undefined)?.text, "rpc answer");
+    assert.deepEqual(writes[1]?.data, { mode: "direct", state: "idle" });
+    assert.equal(
+      ((writes[2]?.data as { messages?: unknown[] } | undefined)?.messages ?? []).length >= 2,
+      true,
+    );
+    assert.deepEqual(writes[3]?.data, { mode: "direct", aborted: true });
+    assert.deepEqual((writes[4]?.data as { messages?: unknown[] } | undefined)?.messages, []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("Spark TUI and headless print attach and release workspace clients", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-workspace-client-"));
   try {
@@ -323,9 +450,19 @@ void test("Spark TUI and headless print attach and release workspace clients", a
     };
     try {
       assert.equal(await runSparkCli(["--print", "headless prompt"], { daemonClient }), 0);
+      assert.equal(
+        await runSparkCli(["--mode", "json", "--print", "json prompt", "--session-id", "json-s1"], {
+          daemonClient,
+        }),
+        0,
+      );
     } finally {
       console.log = originalLog;
     }
+    const jsonLines = logs.filter((line) => line.startsWith("{"));
+    assert.equal(JSON.parse(jsonLines.at(-6) ?? "{}").type, "session");
+    assert.equal(JSON.parse(jsonLines.at(-3) ?? "{}").type, "queue_update");
+    assert.equal(JSON.parse(jsonLines.at(-3) ?? "{}").followUp[0], "json prompt");
 
     const runtime = new SparkHostRuntime({ cwd: dir, hasUI: true });
     runtime.registerCommand("plan", {
@@ -424,14 +561,14 @@ void test("Spark TUI and headless print attach and release workspace clients", a
 
     assert.deepEqual(
       attaches.map((attach) => attach.kind),
-      ["headless", "interactive"],
+      ["headless", "headless", "interactive"],
     );
     assert.deepEqual(
       attaches.map((attach) => attach.workspaceId),
-      [workspace.id, workspace.id],
+      [workspace.id, workspace.id, workspace.id],
     );
-    assert.deepEqual(releases, ["wcl-headless-1", "wcl-interactive-2"]);
-    assert.equal(ensures.length, 2);
+    assert.deepEqual(releases, ["wcl-headless-1", "wcl-headless-2", "wcl-interactive-3"]);
+    assert.equal(ensures.length, 3);
     assert.equal(submitted[0]?.prompt, "headless prompt");
     assert.match(logs.join("\n"), /turn\.json/u);
   } finally {
@@ -472,3 +609,40 @@ void test("Spark native responder submits prompts through daemon IPC", async () 
     { sessionId: "native-session", prompt: "follow-up through daemon" },
   ]);
 });
+
+function fakeDirectCliServices(dir: string, answer: string) {
+  const messages: unknown[] = [];
+  return {
+    cwd: dir,
+    sessionStore: { sessionDir: join(dir, "sessions") },
+    agentLoop: {
+      async submit(content: string) {
+        messages.push({ role: "user", content, timestamp: Date.now() });
+        const message = {
+          role: "assistant",
+          content: [{ type: "text", text: answer }],
+          stopReason: "stop",
+        };
+        messages.push(message);
+        return message;
+      },
+      getMessages: () => messages,
+      getState: () => "idle",
+      abort: () => undefined,
+      replaceMessages: (next: readonly unknown[]) => {
+        messages.splice(0, messages.length, ...next);
+      },
+    },
+  } as never;
+}
+
+function failIfDaemonClientUsed(): SparkDaemonClientOptions {
+  return {
+    startService: () => {
+      throw new Error("daemon client should not be used in direct mode");
+    },
+    turnSubmit: async () => {
+      throw new Error("daemon submit should not be used in direct mode");
+    },
+  };
+}

@@ -64,12 +64,13 @@ Spark has two host targets that share extension packages through `pi-extension-a
 
 - Usually reached through the `apps/spark-cli/bin/spark` dispatcher, which routes `spark tui ...` to `spark-tui`; direct TUI boot starts with `apps/spark-tui/bin/spark-tui` and `apps/spark-tui/src/cli.ts`.
 - Constructs `SparkHostRuntime` and native host services in `src/host/bootstrap.ts`.
-- Loads retained builtin extensions through explicit imports in `SparkExtensionLoader`; it does not call Pi SDK discovery or `loadPiSdk`.
+- Loads retained builtin extensions through explicit imports in `SparkExtensionLoader`; it does not call Pi SDK discovery or `loadPiSdk`. The default builtin set is `@zendev-lab/pi-ask`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-files`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-graft`, and `@zendev-lab/spark-extension`.
+- Registers working-tree file tools (`read`/`write`/`edit`/`ls`/`grep`/`find`) natively through the `@zendev-lab/pi-files` extension. `cue_exec` remains the shell surface; there is no `bash` tool (pi-cue disables bash by policy).
 - Registers providers through `SparkProviderRegistry` and runs turns through `SparkAgentLoop` / `SparkAgentSession` on top of `@earendil-works/pi-ai`.
 - Owns terminal UI components through the `@zendev-lab/spark-tui` boundary and app-local `pi-tui` adapter.
 - Stores native sessions as Pi-compatible JSONL v3 files under `~/.spark/sessions/<workspaceHash>/`.
 - Owns a local daemon-only queue under `~/.spark/daemon/` plus `~/.spark/runtime/daemon.lock` for detached `session.run` execution.
-- Resolves workspace and user skills from `<cwd>/.spark/skills/**` and `~/.spark/skills/**`. The Spark product no longer bundles project-idea/SPARK.md workflow prompts under `packages/spark-extension/skills/**`; those live in external skill repositories such as `zrr1999/skills`.
+- Resolves workspace and user skills from `<cwd>/.spark/skills/**` and `~/.spark/skills/**`. Resolves prompt templates from `<cwd>/.spark/prompts/*.md`, `~/.spark/prompts/*.md`, and configured `promptTemplates` paths, then registers non-colliding templates as native slash commands. The Spark product no longer bundles project-idea/SPARK.md workflow prompts under `packages/spark-extension/skills/**`; those live in external skill repositories such as `zrr1999/skills`.
 
 ## Boundary rules
 

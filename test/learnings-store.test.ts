@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -72,12 +72,18 @@ void test("learning store hydrates compacted artifact metadata for list and sear
   }
 });
 
-void test("learning store rejects malformed persisted learning artifacts", async () => {
+void test("learning store skips malformed persisted learning artifacts with diagnostics", async () => {
   const malformedDir = await mkdtemp(join(tmpdir(), "spark-learnings-malformed-"));
   const mismatchDir = await mkdtemp(join(tmpdir(), "spark-learnings-kind-mismatch-"));
   try {
     const malformedArtifactStore = new ArtifactStore({ rootDir: malformedDir });
     const malformedStore = new LearningStore({ artifactStore: malformedArtifactStore });
+    const valid = await malformedStore.record({
+      id: "valid-learning-survives",
+      title: "Valid learning survives",
+      statement: "Learning list and search should keep valid records when neighbors are bad.",
+      tags: ["resilient"],
+    });
     await malformedArtifactStore.put({
       ref: newRef("artifact", "malformed-learning"),
       kind: "knowledge",
@@ -86,10 +92,47 @@ void test("learning store rejects malformed persisted learning artifacts", async
       body: { status: "active" },
       provenance: { producer: "task" },
     });
-    await assert.rejects(
-      () => malformedStore.list(),
-      /invalid learning artifact artifact:malformed-learning: learning id must be a string/,
+    const invalidKindRef = newRef("artifact", "invalid-kind-learning");
+    await writeFile(
+      malformedArtifactStore.pathFor(invalidKindRef),
+      JSON.stringify(
+        {
+          ref: invalidKindRef,
+          kind: "not-a-valid-kind",
+          title: "Invalid artifact kind",
+          format: "json",
+          body: {},
+          links: [],
+          provenance: { producer: "task" },
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        },
+        null,
+        2,
+      ),
     );
+
+    const listed = await malformedStore.listDetailed();
+    assert.deepEqual(
+      listed.artifacts.map((artifact) => artifact.ref),
+      [valid.ref],
+    );
+    assert.equal(listed.diagnostics.length, 2);
+    assert.match(
+      listed.diagnostics.map((diagnostic) => diagnostic.message).join("\n"),
+      /learning id must be a string/,
+    );
+    assert.match(
+      listed.diagnostics.map((diagnostic) => diagnostic.message).join("\n"),
+      /kind must be a valid artifact kind/,
+    );
+
+    const searched = await malformedStore.searchDetailed({ query: "valid records" });
+    assert.deepEqual(
+      searched.results.map((result) => result.ref),
+      [valid.ref],
+    );
+    assert.equal(searched.diagnostics.length, 2);
 
     const mismatchArtifactStore = new ArtifactStore({ rootDir: mismatchDir });
     const mismatchStore = new LearningStore({ artifactStore: mismatchArtifactStore });
@@ -100,7 +143,7 @@ void test("learning store rejects malformed persisted learning artifacts", async
       status: "candidate",
     });
     // A non-knowledge artifact in the same store is not a learning artifact: the
-    // learning store filters by kind=knowledge and must ignore it, not choke on it.
+    // learning store filters by kind=knowledge and must ignore it, not warn or choke on it.
     await mismatchArtifactStore.put({
       ref: newRef("artifact", "unrelated-document"),
       kind: "document",
@@ -109,10 +152,12 @@ void test("learning store rejects malformed persisted learning artifacts", async
       body: candidate.body,
       provenance: { producer: "task" },
     });
+    const listedCandidates = await mismatchStore.listDetailed({ includeCandidates: true });
     assert.deepEqual(
-      (await mismatchStore.list({ includeCandidates: true })).map((artifact) => artifact.ref),
+      listedCandidates.artifacts.map((artifact) => artifact.ref),
       [candidate.ref],
     );
+    assert.deepEqual(listedCandidates.diagnostics, []);
   } finally {
     await rm(malformedDir, { recursive: true, force: true });
     await rm(mismatchDir, { recursive: true, force: true });

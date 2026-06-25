@@ -8,6 +8,7 @@ import {
   type ArtifactFormat,
   type ArtifactKind,
   type ArtifactLink,
+  type ArtifactListDiagnostic,
   type Provenance,
 } from "@zendev-lab/pi-artifacts";
 import {
@@ -93,6 +94,23 @@ export interface LearningSearchResult {
   evidenceSummary: string;
 }
 
+export interface LearningStoreDiagnostic {
+  filePath?: string;
+  ref?: ArtifactRef;
+  message: string;
+  source: "artifact-metadata" | "artifact-body" | "learning-record";
+}
+
+export interface LearningListResult {
+  artifacts: Array<Artifact<LearningRecord>>;
+  diagnostics: LearningStoreDiagnostic[];
+}
+
+export interface LearningSearchResultSet {
+  results: LearningSearchResult[];
+  diagnostics: LearningStoreDiagnostic[];
+}
+
 export interface LearningStoreOptions {
   artifactStore: LearningArtifactStore;
   location?: LearningLocation;
@@ -105,6 +123,10 @@ export interface LearningArtifactStore {
     ref: ArtifactRef,
   ): Promise<Artifact<T> | null>;
   list(filter?: { kind?: ArtifactKind }): Promise<Artifact[]>;
+  listWithDiagnostics?(filter?: { kind?: ArtifactKind }): Promise<{
+    artifacts: Artifact[];
+    diagnostics: ArtifactListDiagnostic[];
+  }>;
 }
 
 export interface LearningPutArtifactInput<T extends JsonValue | string = JsonValue | string> {
@@ -267,27 +289,53 @@ export class LearningStore {
   }
 
   async list(filter: LearningListFilter = {}): Promise<Array<Artifact<LearningRecord>>> {
-    const artifacts = await hydrateLearningArtifacts(
-      [...(await this.artifactStore.list({ kind: "knowledge" }))],
+    return (await this.listDetailed(filter)).artifacts;
+  }
+
+  async listDetailed(filter: LearningListFilter = {}): Promise<LearningListResult> {
+    const listed = await listLearningArtifactsWithDiagnostics(this.artifactStore);
+    const hydrated = await hydrateLearningArtifactsWithDiagnostics(
+      listed.artifacts,
       this.artifactStore,
     );
-    return artifacts
-      .map(normalizeLearningArtifact)
-      .filter((artifact) => matchesLearningFilter(artifact.body, filter))
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    const diagnostics = [...listed.diagnostics, ...hydrated.diagnostics];
+    const artifacts: Array<Artifact<LearningRecord>> = [];
+    for (const artifact of hydrated.artifacts) {
+      let normalized: Artifact<LearningRecord>;
+      try {
+        normalized = normalizeLearningArtifact(artifact);
+      } catch (error) {
+        diagnostics.push({
+          ref: artifact.ref,
+          message: `invalid learning artifact ${artifact.ref}: ${unknownErrorMessage(error)}`,
+          source: "learning-record",
+        });
+        continue;
+      }
+      if (matchesLearningFilter(normalized.body, filter)) artifacts.push(normalized);
+    }
+    return {
+      artifacts: artifacts.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+      diagnostics,
+    };
   }
 
   async search(filter: LearningSearchFilter): Promise<LearningSearchResult[]> {
+    return (await this.searchDetailed(filter)).results;
+  }
+
+  async searchDetailed(filter: LearningSearchFilter): Promise<LearningSearchResultSet> {
     const query = filter.query.trim();
-    const artifacts = await this.list(filter);
-    const results = artifacts
+    const listed = await this.listDetailed(filter);
+    const results = listed.artifacts
       .map((artifact) => scoreLearning(artifact, query, this.location))
       .filter((result) => result.score > 0 || !query)
       .sort((left, right) => {
         if (right.score !== left.score) return right.score - left.score;
         return right.record.updatedAt.localeCompare(left.record.updatedAt);
-      });
-    return results.slice(0, filter.limit ?? 10);
+      })
+      .slice(0, filter.limit ?? 10);
+    return { results, diagnostics: listed.diagnostics };
   }
 
   async activate(refOrId: string): Promise<Artifact<LearningRecord>> {
@@ -414,16 +462,45 @@ function findGitRoot(cwd: string): string | undefined {
   }
 }
 
-async function hydrateLearningArtifacts(
+async function listLearningArtifactsWithDiagnostics(
+  store: LearningArtifactStore,
+): Promise<{ artifacts: Artifact[]; diagnostics: LearningStoreDiagnostic[] }> {
+  if (store.listWithDiagnostics) {
+    const result = await store.listWithDiagnostics({ kind: "knowledge" });
+    return {
+      artifacts: result.artifacts,
+      diagnostics: result.diagnostics.map((diagnostic) => ({
+        filePath: diagnostic.filePath,
+        message: diagnostic.message,
+        source: "artifact-metadata" as const,
+      })),
+    };
+  }
+  return { artifacts: await store.list({ kind: "knowledge" }), diagnostics: [] };
+}
+
+async function hydrateLearningArtifactsWithDiagnostics(
   artifacts: Artifact[],
   store: LearningArtifactStore,
-): Promise<Artifact[]> {
+): Promise<{ artifacts: Artifact[]; diagnostics: LearningStoreDiagnostic[] }> {
   const hydrated: Artifact[] = [];
+  const diagnostics: LearningStoreDiagnostic[] = [];
   for (const artifact of artifacts) {
-    if (artifact.bodyTruncated) hydrated.push(await store.get(artifact.ref));
-    else hydrated.push(artifact);
+    if (!artifact.bodyTruncated) {
+      hydrated.push(artifact);
+      continue;
+    }
+    try {
+      hydrated.push(await store.get(artifact.ref));
+    } catch (error) {
+      diagnostics.push({
+        ref: artifact.ref,
+        message: `cannot hydrate learning artifact ${artifact.ref}: ${unknownErrorMessage(error)}`,
+        source: "artifact-body",
+      });
+    }
   }
-  return hydrated;
+  return { artifacts: hydrated, diagnostics };
 }
 
 function normalizeLearningArtifact(artifact: Artifact): Artifact<LearningRecord> {

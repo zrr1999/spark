@@ -26,6 +26,7 @@ import {
   type SparkDynamicWorkflowRunControlResult,
   type SparkDynamicWorkflowRunProjection,
 } from "./spark-dynamic-workflow-run-rendering.ts";
+import { sparkActiveLens } from "./spark-drive-state.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
 export type SparkWorkflowNavigatorAction =
@@ -86,7 +87,7 @@ export async function enterSparkWorkflowDriver(
   const workflowSelector = workflow.selector;
   await deps.refreshSparkWidget(ctx.cwd, ctx);
   if (workflow.descriptor?.mode === "research") {
-    ctx.sparkActiveLens = { mode: "research", driver: "workflow" };
+    ctx.sparkActiveLens = sparkActiveLens("research", "workflow");
     ctx.ui?.notify?.("Builtin workflow selected.", "info");
     dispatchSparkAgentInstruction(
       piApi,

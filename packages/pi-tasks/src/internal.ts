@@ -217,6 +217,8 @@ export function normalizeProject(project: Project): Project {
     description: project.description,
     purpose: typeof rawPurpose === "string" ? rawPurpose.trim() || undefined : undefined,
     outputLanguage: project.outputLanguage,
+    kind: normalizeProjectKind(project.kind),
+    ...(project.kindState !== undefined ? { kindState: project.kindState } : {}),
     currentTaskRef: project.currentTaskRef,
     roadmap: project.roadmap
       ? normalizeProjectRoadmap(project.roadmap, `project(${project.ref}).roadmap`)
@@ -224,6 +226,10 @@ export function normalizeProject(project: Project): Project {
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
   };
+}
+
+function normalizeProjectKind(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value.trim() : "generic";
 }
 
 export function normalizeTask(task: Task): Task {

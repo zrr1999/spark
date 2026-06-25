@@ -39,6 +39,7 @@ export interface SparkSkillResolverOptions {
   builtinDirs?: string[];
   workspaceDir?: string;
   userDir?: string;
+  skillDirs?: string[];
 }
 
 export interface SparkSkillResolveResult {
@@ -57,6 +58,7 @@ export class SparkSkillResolver {
   readonly builtinDirs: string[];
   readonly workspaceDir: string;
   readonly userDir: string;
+  readonly configuredSkillDirs: string[];
 
   constructor(options: SparkSkillResolverOptions) {
     this.cwd = resolve(options.cwd);
@@ -71,6 +73,7 @@ export class SparkSkillResolver {
       options.userDir ?? defaultUserSkillsDir(options.sparkHome),
       this.cwd,
     );
+    this.configuredSkillDirs = options.skillDirs?.map((dir) => resolvePath(dir, this.cwd)) ?? [];
   }
 
   async resolve(): Promise<SparkSkillResolveResult> {
@@ -297,7 +300,7 @@ function skillLayerSpecs(
 ): Array<{ layer: SparkSkillLayer; dirs: string[] }> {
   return [
     { layer: "builtin", dirs: resolver.builtinDirs },
-    { layer: "workspace", dirs: [resolver.workspaceDir] },
+    { layer: "workspace", dirs: [resolver.workspaceDir, ...resolver.configuredSkillDirs] },
     { layer: "user", dirs: [resolver.userDir] },
   ];
 }

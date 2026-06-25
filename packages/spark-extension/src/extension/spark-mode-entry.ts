@@ -1,7 +1,7 @@
 import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import {
   renderSparkImplementationModePrompt,
-  renderSparkModeVisibleMessage,
+  renderSparkPhaseVisibleMessage,
   renderSparkPlanningModePrompt,
   renderSparkResearchModePrompt,
 } from "./mode/index.ts";
@@ -9,10 +9,11 @@ import { roadmapPlanningContext } from "../flows/roadmap-flow.ts";
 import {
   clearCurrentProjectRef,
   currentSparkProject,
-  saveCurrentProjectRef,
   saveSparkGraphAndTodos,
+  saveSparkPhase,
   type SparkPlanningModeSource,
 } from "./session-state.ts";
+import { sparkActiveLens } from "./spark-drive-state.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
 export interface SparkModeMessageApi {
@@ -72,9 +73,12 @@ export async function enterSparkResearchMode(
   focus?: string,
 ): Promise<void> {
   const project = await currentSparkProject(ctx.cwd, ctx, graph);
-  ctx.sparkActiveLens = { mode: "research", driver: "interactive" };
-  if (project) await saveCurrentProjectRef(ctx.cwd, ctx, project.ref);
-  else await clearCurrentProjectRef(ctx.cwd, ctx);
+  ctx.sparkActiveLens = sparkActiveLens("research", "assist");
+  if (project) await saveSparkPhase(ctx.cwd, ctx, { phase: "research", projectRef: project.ref });
+  else {
+    await saveSparkPhase(ctx.cwd, ctx, { phase: "research" });
+    await clearCurrentProjectRef(ctx.cwd, ctx);
+  }
   await deps.refreshSparkWidget(ctx.cwd, ctx);
   ctx.ui?.notify?.("Spark default research: investigate without changing tasks.", "info");
   dispatchSparkAgentInstruction(
@@ -82,7 +86,7 @@ export async function enterSparkResearchMode(
     deps,
     ctx,
     renderSparkResearchModePrompt(graph, project?.ref, focus),
-    renderSparkModeVisibleMessage("research", project?.title, focus),
+    renderSparkPhaseVisibleMessage("research", project?.title, focus),
   );
 }
 
@@ -96,18 +100,21 @@ export async function enterSparkPlanningMode(
 ): Promise<void> {
   const project = await currentSparkProject(ctx.cwd, ctx, graph);
   const roadmapResult = project ? roadmapPlanningContext(graph, project.ref, focus) : undefined;
-  ctx.sparkActiveLens = { mode: "plan", driver: "interactive" };
-  if (project) await saveCurrentProjectRef(ctx.cwd, ctx, project.ref);
-  else await clearCurrentProjectRef(ctx.cwd, ctx);
+  ctx.sparkActiveLens = sparkActiveLens("plan", "assist");
+  if (project) await saveSparkPhase(ctx.cwd, ctx, { phase: "plan", projectRef: project.ref });
+  else {
+    await saveSparkPhase(ctx.cwd, ctx, { phase: "plan" });
+    await clearCurrentProjectRef(ctx.cwd, ctx);
+  }
   if (roadmapResult?.mutated) await saveSparkGraphAndTodos(ctx.cwd, graph, ctx);
   await deps.refreshSparkWidget(ctx.cwd, ctx);
-  ctx.ui?.notify?.("Spark planning mode: research, clarify, and add projects/tasks.", "info");
+  ctx.ui?.notify?.("Spark planning phase: research, clarify, and add projects/tasks.", "info");
   dispatchSparkAgentInstruction(
     piApi,
     deps,
     ctx,
     renderSparkPlanningModePrompt(graph, project?.ref, focus, source, roadmapResult?.context),
-    renderSparkModeVisibleMessage("plan", project?.title, focus),
+    renderSparkPhaseVisibleMessage("plan", project?.title, focus),
   );
 }
 
@@ -119,16 +126,19 @@ export async function enterSparkImplementationMode(
   focus?: string,
 ): Promise<void> {
   const project = await currentSparkProject(ctx.cwd, ctx, graph);
-  ctx.sparkActiveLens = { mode: "implement", driver: "interactive" };
-  if (project) await saveCurrentProjectRef(ctx.cwd, ctx, project.ref);
-  else await clearCurrentProjectRef(ctx.cwd, ctx);
+  ctx.sparkActiveLens = sparkActiveLens("implement", "assist");
+  if (project) await saveSparkPhase(ctx.cwd, ctx, { phase: "implement", projectRef: project.ref });
+  else {
+    await saveSparkPhase(ctx.cwd, ctx, { phase: "implement" });
+    await clearCurrentProjectRef(ctx.cwd, ctx);
+  }
   await deps.refreshSparkWidget(ctx.cwd, ctx);
-  ctx.ui?.notify?.("Spark implement mode: work until the next blocker.", "info");
+  ctx.ui?.notify?.("Spark implement phase: work until the next blocker.", "info");
   dispatchSparkAgentInstruction(
     piApi,
     deps,
     ctx,
     renderSparkImplementationModePrompt(graph, project?.ref, focus),
-    renderSparkModeVisibleMessage("implement", project?.title, focus),
+    renderSparkPhaseVisibleMessage("implement", project?.title, focus),
   );
 }

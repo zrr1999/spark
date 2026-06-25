@@ -4,10 +4,9 @@
   "private": true,
   "description": "Spark suite for Pi: project/task orchestration with controlled agents, artifacts, review, ask, and cue execution primitives.",
   "keywords": [
-    "agentic-workflow",
-    "pi",
-    "pi-package",
-    "spark"
+    "Agentic Workflow",
+    "Coding Agent",
+    "Spark"
   ],
   "license": "MIT",
   "author": "zrr1999",
@@ -23,19 +22,13 @@
   "type": "module",
   "scripts": {
     "check": "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && node scripts/check-pi-boundaries.mjs && vp check && node --experimental-strip-types --test \"test/*.test.ts\" && pnpm -r --filter './packages/*' --filter './apps/*' run check && pnpm --filter @zendev-lab/spark-cockpit run test && pnpm --filter @zendev-lab/spark-daemon run test",
-    "check:boundaries": "node scripts/check-pi-boundaries.mjs",
     "check:tsc": "tsc -p tsconfig.json --noEmit",
-    "check:packages": "pnpm -r --filter './packages/*' run check",
     "format": "vp fmt . --write",
-    "format:check": "vp fmt . --check",
-    "lint": "vp lint . --fix",
-    "lint:check": "vp lint .",
     "test": "node --experimental-strip-types --test \"test/*.test.ts\"",
     "test:file": "node --experimental-strip-types --test",
     "build": "pnpm --filter @zendev-lab/spark-daemon run build && pnpm --filter @zendev-lab/spark-cockpit run build",
     "preview": "pnpm --filter @zendev-lab/spark-cockpit run dev",
-    "verify": "pnpm run check && pnpm test",
-    "publish": "pnpm run check && pnpm run build && pnpm -r --filter @zendev-lab/spark-protocol --filter @zendev-lab/spark-system --filter @zendev-lab/spark-db --filter @zendev-lab/spark-daemon publish --access public",
+    "publish": "pnpm run check && pnpm run build && pnpm -r --filter './apps/*' --filter @zendev-lab/spark-extension publish --access public",
     "prepare": "pnpx @j178/prek install --hook-type commit-msg --hook-type pre-commit"
   },
   "dependencies": {
@@ -45,6 +38,7 @@
     "@zendev-lab/pi-context": "workspace:^",
     "@zendev-lab/pi-cue": "workspace:^",
     "@zendev-lab/pi-extension-api": "workspace:^",
+    "@zendev-lab/pi-files": "workspace:^",
     "@zendev-lab/pi-goal": "workspace:^",
     "@zendev-lab/pi-graft": "workspace:^",
     "@zendev-lab/pi-learnings": "workspace:^",
@@ -52,19 +46,20 @@
     "@zendev-lab/pi-roles": "workspace:^",
     "@zendev-lab/pi-tasks": "workspace:^",
     "@zendev-lab/pi-workflows": "workspace:^",
+    "@zendev-lab/spark-ai": "workspace:^",
     "@zendev-lab/spark-protocol": "workspace:^",
     "@zendev-lab/spark-runtime": "workspace:^",
     "@zendev-lab/spark-tui": "workspace:^",
     "typebox": "^1.2.13"
   },
   "devDependencies": {
-    "@types/node": "^25.9.3",
+    "@types/node": "^26.0.1",
     "@zendev-lab/spark-system": "workspace:*",
     "oxlint": "1.70.0",
     "typescript": "^6.0.3",
     "vite": "catalog:",
     "vite-plus": "catalog:",
-    "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+    "vitest": "catalog:"
   },
   "engines": {
     "node": ">=26.0.0 <27",
@@ -77,12 +72,13 @@
       "./packages/pi-artifacts/src/extension-entry.ts",
       "./packages/pi-btw/extensions/btw.ts",
       "./packages/pi-cue/src/extension/index.ts",
-      "./packages/pi-models/src/extension-entry.ts",
+      "./packages/pi-files/src/extension-entry.ts",
+      "./packages/spark-ai/src/models-extension.ts",
       "./packages/pi-roles/src/extension-entry.ts",
       "./packages/pi-recall/src/extension-entry.ts",
       "./packages/pi-workflows/src/extension-entry.ts",
       "./packages/pi-graft/src/extension-entry.ts",
-      "./apps/spark-tui/src/baidu-oneapi-provider.ts",
+      "./packages/spark-ai/src/baidu-oneapi-provider.ts",
       "./packages/spark-extension/src/extension/index.ts"
     ],
     "skills": [

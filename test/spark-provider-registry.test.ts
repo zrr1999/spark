@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { SparkHostModelRegistry } from "../apps/spark-tui/src/host/model-registry.ts";
 import {
   SparkProviderRegistry,
   createProviderRegistryStreamFunction,
+  registerBaiduOneApiProvider,
   type ProviderConfig,
-} from "../apps/spark-tui/src/host/index.ts";
-import registerBaiduOneApiProvider from "../apps/spark-tui/src/baidu-oneapi-provider.ts";
+} from "../packages/spark-ai/src/index.ts";
 
 function fakeStream(_model: unknown, _context: unknown, _options?: unknown) {
   return {} as unknown;
@@ -85,6 +86,26 @@ void test("SparkProviderRegistry setActive validates provider + model existence"
   assert.deepEqual(registry.getActive(), { providerName: "fake", modelId: "model-b" });
 });
 
+void test("SparkHostModelRegistry adapts provider models and filters env-auth availability", () => {
+  const registry = new SparkProviderRegistry();
+  registry.registerProvider("fake", fakeProvider);
+
+  const withoutEnv = new SparkHostModelRegistry(registry, { env: {} });
+  assert.deepEqual(
+    withoutEnv.getAll().map((model) => `${model.provider}/${model.id}`),
+    ["fake/model-a", "fake/model-b"],
+  );
+  assert.deepEqual(withoutEnv.getAvailable(), []);
+  assert.equal(withoutEnv.hasConfiguredAuth(withoutEnv.getAll()[0]!), false);
+
+  const withEnv = new SparkHostModelRegistry(registry, { env: { FAKE_KEY: "secret" } });
+  assert.deepEqual(
+    withEnv.getAvailable().map((model) => `${model.provider}/${model.id}`),
+    ["fake/model-a", "fake/model-b"],
+  );
+  assert.equal(withEnv.hasConfiguredAuth(withEnv.getAll()[0]!), true);
+});
+
 void test("SparkProviderRegistry buildModel returns a pi-ai compatible Model<Api>", () => {
   const registry = new SparkProviderRegistry();
   registry.registerProvider("fake", fakeProvider);
@@ -148,8 +169,14 @@ void test("createProviderRegistryStreamFunction normalizes bare async provider s
   const events = [];
   for await (const event of stream) events.push(event);
 
-  assert.deepEqual(events, [{ type: "done", reason: "stop", message: assistant }]);
-  assert.equal(await stream.result(), assistant);
+  const retaggedAssistant = {
+    ...assistant,
+    api: "anthropic-messages",
+    provider: "fake",
+    model: "model-a",
+  };
+  assert.deepEqual(events, [{ type: "done", reason: "stop", message: retaggedAssistant }]);
+  assert.deepEqual(await stream.result(), retaggedAssistant);
 });
 
 void test("createProviderRegistryStreamFunction rejects non-stream provider outputs", () => {
@@ -203,4 +230,15 @@ void test("SparkProviderRegistry accepts the production baidu-oneapi-provider pl
   assert.equal(gptModel.baseUrl, "https://oneapi-comate.baidu-int.com/v1");
   assert.equal(gptModel.contextWindow, 258_000);
   assert.equal(gptModel.maxTokens, 32_768);
+
+  const opusProfile = registry.buildProfile("baidu-oneapi", "claude-opus-4.8");
+  assert.equal(opusProfile.id, "baidu-oneapi/claude-opus-4.8");
+  assert.equal(opusProfile.identity?.api, "baidu-oneapi");
+  assert.equal(opusProfile.identity?.model, "claude-opus-4.8");
+  assert.equal(opusProfile.routes[0]?.transportApi, "anthropic-messages");
+  assert.equal(opusProfile.routes[0]?.transportModelId, "Opus 4.8 Coding Plan");
+
+  const gptProfile = registry.buildProfile("baidu-oneapi", "gpt-5.5");
+  assert.equal(gptProfile.routes[0]?.transportApi, "openai-responses");
+  assert.equal(gptProfile.routes[0]?.transportModelId, "gpt-5.5-coding-plan");
 });

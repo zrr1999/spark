@@ -57,20 +57,20 @@ void test("resolveActiveMode honors explicit > suggested > fallback precedence",
   assert.deepEqual(
     resolveActiveMode({
       registry,
-      driver: "interactive",
+      driver: "assist",
       explicitSelection: "plan",
       suggest: "implement",
     }),
-    { mode: "plan", driver: "interactive", source: "explicit" },
+    { mode: "plan", driver: "assist", source: "explicit" },
   );
   assert.deepEqual(resolveActiveMode({ registry, driver: "goal", suggest: "implement" }), {
     mode: "implement",
     driver: "goal",
     source: "suggested",
   });
-  assert.deepEqual(resolveActiveMode({ registry, driver: "interactive" }), {
+  assert.deepEqual(resolveActiveMode({ registry, driver: "assist" }), {
     mode: "research",
-    driver: "interactive",
+    driver: "assist",
     source: "fallback",
   });
 });
@@ -80,15 +80,15 @@ void test("resolveActiveMode ignores unknown explicit/suggested ids and falls th
   assert.deepEqual(
     resolveActiveMode({
       registry,
-      driver: "interactive",
+      driver: "assist",
       explicitSelection: "bogus",
       suggest: "plan",
     }),
-    { mode: "plan", driver: "interactive", source: "suggested" },
+    { mode: "plan", driver: "assist", source: "suggested" },
   );
-  assert.deepEqual(resolveActiveMode({ registry, driver: "interactive", suggest: "bogus" }), {
+  assert.deepEqual(resolveActiveMode({ registry, driver: "assist", suggest: "bogus" }), {
     mode: "research",
-    driver: "interactive",
+    driver: "assist",
     source: "fallback",
   });
 });
@@ -97,22 +97,23 @@ void test("resolveActiveMode uses first registered mode when fallback is unregis
   const registry = createModeRegistry({
     definitions: [{ id: "only", title: "Only", renderRequirements: () => "x" }],
   });
-  assert.deepEqual(resolveActiveMode({ registry, driver: "interactive" }), {
+  assert.deepEqual(resolveActiveMode({ registry, driver: "assist" }), {
     mode: "only",
-    driver: "interactive",
+    driver: "assist",
     source: "fallback",
   });
 });
 
 void test("resolveActiveMode throws on an empty registry", () => {
   const registry = createModeRegistry();
-  assert.throws(() => resolveActiveMode({ registry, driver: "interactive" }), /registry is empty/u);
+  assert.throws(() => resolveActiveMode({ registry, driver: "assist" }), /registry is empty/u);
 });
 
-void test("resolveTurnDriver prefers workflow over goal over interactive", () => {
+void test("resolveTurnDriver prefers workflow over goal over loop over assist", () => {
   assert.equal(resolveTurnDriver({ workflowRunActive: true, goalLoopActive: true }), "workflow");
   assert.equal(resolveTurnDriver({ goalLoopActive: true }), "goal");
-  assert.equal(resolveTurnDriver({}), "interactive");
+  assert.equal(resolveTurnDriver({ loopActive: true }), "loop");
+  assert.equal(resolveTurnDriver({}), "assist");
 });
 
 void test("createModeTool exposes registry ids plus status as actions", () => {
@@ -136,7 +137,7 @@ void test("runModeToolAction reports status without switching and switches other
     action: MODE_TOOL_STATUS_ACTION,
     registry,
     currentMode: "plan",
-    context: { driver: "interactive" },
+    context: { driver: "assist" },
   });
   assert.equal(status.statusOnly, true);
   assert.equal(status.mode, "plan");
@@ -155,14 +156,17 @@ void test("runModeToolAction reports status without switching and switches other
   assert.match(switched.text, /focus=ship/u);
 });
 
-void test("renderModeMarker suppresses the trivial research/interactive combination", () => {
-  assert.equal(renderModeMarker({ mode: "research", driver: "interactive" }), undefined);
+void test("renderModeMarker suppresses the trivial research/assist combination", () => {
+  assert.equal(renderModeMarker({ mode: "research", driver: "assist" }), undefined);
   assert.equal(
-    renderModeMarker({ mode: "research", driver: "interactive", toolsHint: "Tools: x" }),
+    renderModeMarker({ mode: "research", driver: "assist", toolsHint: "Tools: x" }),
     "Tools: x",
   );
-  assert.equal(renderModeMarker({ mode: "plan", driver: "interactive" }), "Mode: plan.");
-  assert.equal(renderModeMarker({ mode: "implement", driver: "goal" }), "Mode: implement · goal.");
+  assert.equal(renderModeMarker({ mode: "plan", driver: "assist" }), "Phase: plan.");
+  assert.equal(
+    renderModeMarker({ mode: "implement", driver: "goal" }),
+    "Phase: implement · Mode: goal.",
+  );
 });
 
 void test("assembleModeSystemPrompt joins non-empty sections in order", () => {
@@ -171,19 +175,19 @@ void test("assembleModeSystemPrompt joins non-empty sections in order", () => {
     basePrompt: "BASE",
     registry,
     mode: "plan",
-    context: { driver: "interactive" },
-    marker: "Mode: plan.",
+    context: { driver: "assist" },
+    marker: "Phase: plan.",
     trailingContext: "## Project summary",
   });
   assert.equal(
     prompt,
-    "BASE\n\nMode: plan.\n\n## plan requirements\n- driver=interactive\n\n## Project summary",
+    "BASE\n\nPhase: plan.\n\n## plan requirements\n- driver=assist\n\n## Project summary",
   );
 
   const minimal = assembleModeSystemPrompt({
     registry,
     mode: "research",
-    context: { driver: "interactive" },
+    context: { driver: "assist" },
   });
-  assert.equal(minimal, "## research requirements\n- driver=interactive");
+  assert.equal(minimal, "## research requirements\n- driver=assist");
 });

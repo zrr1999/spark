@@ -356,15 +356,25 @@ export function renderReviewerInstruction(input: ReviewInput): string {
           evidencePreviews: input.evidencePreviews,
           sessionKey: input.sessionKey,
         };
+  const transitionGuidance =
+    input.targetKind === "task"
+      ? [
+          "For targetKind=task, review only the selected task's requestedStatus, task plan/scope, summary, and evidenceRefs.",
+          "Do not reject a task finish merely because sibling, downstream, or final-integration tasks in the same project are unfinished; dependency chains require scoped leaf tasks to close before downstream work can run.",
+          "Reject a task finish when the selected task's own plan items, scope, or evidence remain incomplete, or when the evidence defers work that belongs to the selected task rather than to an explicitly separate downstream task.",
+        ]
+      : [
+          "For requestedStatus=complete, approve only when the objective is achieved; set achieved accordingly.",
+          'For requestedStatus=complete, a goal may complete without a current project only when evidenceRefs/projectStatus directly cover the objective. Otherwise, currentProjectSelected=false or projectEvidenceSource=project_evidence_fallback means the next step is research/plan: create/select a project with task_write({ action: "project_use", title, description }) and plan concrete tasks with task_write({ action: "plan" }); never use "no current project", "project cleared", or "all historical tasks are done" as the completion rationale.',
+          "If projectStatus.taskCounts.unfinished > 0, default to needs_changes unless the objective explicitly says this is planning-only/readiness-only and does not ask for project/task implementation completion.",
+          "When unfinished project work remains, include concrete remainingWork using projectStatus.readyTasks and unfinishedTasks instead of treating planning evidence as implementation completion.",
+          "For requestedStatus=paused, reject main-agent autonomous pauses; blockers should be resolved by doing or planning blocking work, not by pausing the goal.",
+          "For requestedStatus=edited, approve only when the proposed objective corrects a material description error or wrong direction in the current objective and does not reduce difficulty, remove required outcomes, narrow scope, or turn implementation work into planning-only/readiness-only work.",
+        ];
   return [
     "Review this Spark state transition request.",
     "Approve only if the provided evidence and current packet satisfy the requested state transition.",
-    "For requestedStatus=complete, approve only when the objective is achieved; set achieved accordingly.",
-    'For requestedStatus=complete, a goal may complete without a current project only when evidenceRefs/projectStatus directly cover the objective. Otherwise, currentProjectSelected=false or projectEvidenceSource=project_evidence_fallback means the next step is research/plan: create/select a project with task_write({ action: "project_use", title, description }) and plan concrete tasks with task_write({ action: "plan" }); never use "no current project", "project cleared", or "all historical tasks are done" as the completion rationale.',
-    "If projectStatus.taskCounts.unfinished > 0, default to needs_changes unless the objective explicitly says this is planning-only/readiness-only and does not ask for project/task implementation completion.",
-    "When unfinished project work remains, include concrete remainingWork using projectStatus.readyTasks and unfinishedTasks instead of treating planning evidence as implementation completion.",
-    "For requestedStatus=paused, reject main-agent autonomous pauses; blockers should be resolved by doing or planning blocking work, not by pausing the goal.",
-    "For requestedStatus=edited, approve only when the proposed objective corrects a material description error or wrong direction in the current objective and does not reduce difficulty, remove required outcomes, narrow scope, or turn implementation work into planning-only/readiness-only work.",
+    ...transitionGuidance,
     "If work remains or the requested transition is not justified, use outcome=needs_changes and list concrete blockers/findings.",
     "Always return the required compact JSON verdict, even when rejecting.",
     "Review packet:",

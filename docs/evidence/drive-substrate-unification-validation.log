@@ -1,0 +1,35 @@
+Drive substrate unification validation transcript excerpts
+
+Command:
+pnpm exec node --experimental-strip-types --test test/spark-drive-substrate.test.ts test/spark-tools.test.ts test/spark-widget.test.ts
+
+Key output:
+✔ SparkForegroundDriveSubstrate cancels stale generations per drive
+✔ SparkForegroundDriveSubstrate clears timers without affecting other drives
+✔ scheduledDriveDelayMs supports absent, invalid, past, and future schedules
+...
+ℹ tests 211
+ℹ suites 0
+ℹ pass 211
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+
+Command:
+pnpm exec tsc -p tsconfig.json --noEmit
+
+Result:
+pass (exit 0)
+
+Command:
+pnpm exec vp check --fix
+
+Key output:
+pass: Formatting completed for checked files (2.1s)
+pass: Found no warnings, lint errors, or type errors in 501 files (1.5s, 10 threads)
+
+Code verification pointers:
+- packages/spark-extension/src/extension/spark-drive-substrate.ts defines SparkForegroundDriveSubstrate with schedule(), clearTimer(), nextGeneration(), currentGeneration(), and drive discriminator type "goal" | "loop" | "workflow" | "implement".
+- packages/spark-extension/src/extension/spark-command-registration.ts declares one foregroundDriveSubstrate and calls foregroundDriveSubstrate.schedule({ drive: "goal", ... }) and foregroundDriveSubstrate.schedule({ drive: "loop", ... }).
+- Grep after refactor found no remaining direct foregroundGoalTimers/foregroundLoopTimers/foregroundGoalLoopGenerations/foregroundLoopGenerations references.

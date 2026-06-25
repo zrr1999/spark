@@ -17,6 +17,7 @@ export function projectWorkflowRunEvents(
     status: "queued",
     nodes: [],
     nodesById,
+    stages: [],
     phases: [],
     eventTail: sorted.slice(-(options.eventTailLimit ?? 50)),
   };
@@ -67,6 +68,7 @@ export function projectWorkflowRunEvents(
         snapshot.finishedAt = event.timestamp;
         if (event.nodeId) finishNode(nodesById, nodeOrder, event.nodeId, "stale", event);
         break;
+      case "stage_started":
       case "phase_started":
       case "parallel_group_started":
       case "parallel_item_started":
@@ -81,7 +83,8 @@ export function projectWorkflowRunEvents(
               event.label ?? event.title ?? event.toolName ?? event.workflowName ?? event.nodeId,
             status: "running",
             parentId: event.parentId,
-            phase: event.phase,
+            stage: event.stage ?? event.phase,
+            phase: event.stage ?? event.phase,
             startedAt: event.timestamp,
             updatedAt: event.timestamp,
             data: event.data,
@@ -89,6 +92,7 @@ export function projectWorkflowRunEvents(
           linkParent(nodesById, event.parentId, event.nodeId);
         }
         break;
+      case "stage_finished":
       case "phase_finished":
         if (event.nodeId)
           finishNode(nodesById, nodeOrder, event.nodeId, event.status ?? "succeeded", event);
@@ -118,7 +122,8 @@ export function projectWorkflowRunEvents(
             label: event.label ?? "artifact",
             status: "succeeded",
             parentId: event.parentId,
-            phase: event.phase,
+            stage: event.stage ?? event.phase,
+            phase: event.stage ?? event.phase,
             startedAt: event.timestamp,
             updatedAt: event.timestamp,
             finishedAt: event.timestamp,
@@ -134,7 +139,8 @@ export function projectWorkflowRunEvents(
   }
 
   snapshot.nodes = nodeOrder.map((id) => nodesById[id]!).filter(Boolean);
-  snapshot.phases = snapshot.nodes.filter((node) => node.kind === "phase");
+  snapshot.stages = snapshot.nodes.filter((node) => node.kind === "stage" || node.kind === "phase");
+  snapshot.phases = snapshot.stages;
   return snapshot;
 }
 
@@ -172,8 +178,9 @@ function finishNode(
       label: event.label ?? event.title ?? event.toolName ?? event.workflowName ?? nodeId,
       status: "running",
       parentId: event.parentId,
-      phase: event.phase,
-      startedAt: event.phaseRun?.startedAt ?? event.timestamp,
+      stage: event.stage ?? event.phase,
+      phase: event.stage ?? event.phase,
+      startedAt: event.stageRun?.startedAt ?? event.phaseRun?.startedAt ?? event.timestamp,
       updatedAt: event.timestamp,
       data: event.data,
     });
@@ -200,6 +207,7 @@ function linkParent(
 }
 
 function nodeKindFromEvent(type: WorkflowRunEvent["type"]): WorkflowRunNodeKind {
+  if (type.startsWith("stage_")) return "stage";
   if (type.startsWith("phase_")) return "phase";
   if (type.startsWith("parallel_group_")) return "parallel_group";
   if (type.startsWith("parallel_item_")) return "parallel_item";

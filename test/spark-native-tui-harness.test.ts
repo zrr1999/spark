@@ -18,6 +18,12 @@ import { createSparkNativeRuntimeSlashCommands } from "../apps/spark-tui/src/nat
 import { createSparkPiParitySlashCommands } from "../apps/spark-tui/src/cli/pi-parity-commands.ts";
 import { createSparkNativeTuiHarness } from "./support/spark-native-tui-harness.ts";
 
+const ESC = String.fromCharCode(27);
+const ANSI_PATTERN = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, "gu");
+function stripAnsi(text: string): string {
+  return text.replace(ANSI_PATTERN, "");
+}
+
 void test("Spark native TUI harness submits input and drives exit keys without a real terminal", async () => {
   const harness = createSparkNativeTuiHarness({
     responder: (input) => `ack:${input}`,
@@ -36,7 +42,7 @@ void test("Spark native TUI harness submits input and drives exit keys without a
     ),
     true,
   );
-  assert.match(harness.render(), /spark> ack:hello Spark/);
+  assert.match(stripAnsi(harness.render()), /spark> ack:hello Spark/);
 
   await harness.press("\x03");
   assert.equal(harness.state.exited, true);
@@ -68,17 +74,20 @@ void test("Spark native TUI editor path submits slash commands from real keystro
   await typeEditorText(harness, "/");
   await harness.flush();
   assert.equal(harness.app.isShowingAutocomplete(), true);
-  assert.match(harness.render(), /plan\s+Enter Spark plan mode for the current project/);
-  assert.match(harness.render(), /goal\s+Set or inspect the current Spark goal/);
+  assert.match(stripAnsi(harness.render()), /plan\s+Enter Spark plan mode for the current project/);
+  assert.match(stripAnsi(harness.render()), /goal\s+Set or inspect the current Spark goal/);
   harness.app.setEditorText("");
 
   await submitEditorText(harness, "/help");
-  assert.match(harness.render(), /\/plan — Enter Spark plan mode for the current project/);
-  assert.match(harness.render(), /\/goal — Set or inspect the current Spark goal/);
+  assert.match(
+    stripAnsi(harness.render()),
+    /\/plan — Enter Spark plan mode for the current project/,
+  );
+  assert.match(stripAnsi(harness.render()), /\/goal — Set or inspect the current Spark goal/);
 
   await submitEditorText(harness, "/plan close slash gap");
   assert.deepEqual(invoked, [{ name: "plan", args: "close slash gap" }]);
-  assert.match(harness.render(), /system> info:planned:close slash gap/);
+  assert.match(stripAnsi(harness.render()), /system> info:planned:close slash gap/);
 });
 
 void test("Spark native TUI routes /model through native slash command and model selector overlay", async () => {
@@ -100,13 +109,13 @@ void test("Spark native TUI routes /model through native slash command and model
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-native-model-command", hasUI: true });
   host.registerCommand("model", {
     description: "Switch or inspect the active Spark model",
-    argumentHint: "[provider/model|model-id]",
+    argumentHint: "[model-id]",
     getArgumentCompletions: (prefix) =>
       selector
         .getPickerState()
         .items.map((item) => ({
-          value: `${item.providerName}/${item.modelId}`,
-          label: `${item.providerName}/${item.modelId}${item.active ? " (active)" : ""}`,
+          value: item.value,
+          label: `${item.modelLabel}${item.active ? " (active)" : ""}`,
           description: item.description,
         }))
         .filter((item) => item.value.includes(prefix)),
@@ -136,16 +145,17 @@ void test("Spark native TUI routes /model through native slash command and model
   await typeEditorText(harness, "/model ");
   await harness.flush();
   assert.equal(harness.app.isShowingAutocomplete(), true);
-  assert.match(harness.render(), /fake\/model-a/);
+  assert.match(stripAnsi(harness.render()), /model-a \(active\)/);
+  assert.match(stripAnsi(harness.render()), /route fake/);
   harness.app.setEditorText("");
 
   await submitEditorText(harness, "/model");
   assert.deepEqual(registry.getActive(), { providerName: "fake", modelId: "model-b" });
-  assert.match(harness.render(), /system> info:Model: fake\/model-b/);
+  assert.match(stripAnsi(harness.render()), /system> info:Model: fake\/model-b/);
 
   await submitEditorText(harness, "/model fake/model-a");
   assert.deepEqual(registry.getActive(), { providerName: "fake", modelId: "model-a" });
-  assert.doesNotMatch(harness.render(), /Unknown command: \/model/);
+  assert.doesNotMatch(stripAnsi(harness.render()), /Unknown command: \/model/);
 });
 
 void test("Spark native Pi parity slash commands are discoverable and route representative side effects", async () => {
@@ -155,13 +165,14 @@ void test("Spark native Pi parity slash commands are discoverable and route repr
   const selector = new SparkModelSelector({
     registry,
     config: { extensions: ["ext-a"], providers: ["provider-a"], activeThinkingLevel: "low" },
-    saveConfig: () => undefined,
+    saveConfig: async () => undefined,
   });
   const keybindings = new SparkKeybindings();
   const dir = "/tmp/spark-native-pi-parity-commands";
   const slashCommands = createSparkPiParitySlashCommands({
     cwd: dir,
     config: { extensions: ["ext-a"], providers: ["provider-a"], activeThinkingLevel: "low" },
+    saveConfig: async () => undefined,
     runtime: new SparkHostRuntime({ cwd: dir, hasUI: true, keybindings }),
     keybindings,
     providerRegistry: registry,
@@ -183,7 +194,7 @@ void test("Spark native Pi parity slash commands are discoverable and route repr
   await typeEditorText(harness, "/s");
   await harness.flush();
   assert.equal(harness.app.isShowingAutocomplete(), true);
-  assert.match(harness.render(), /settings\s+\[set thinking/);
+  assert.match(stripAnsi(harness.render()), /settings\s+\[set thinking/);
   harness.app.setEditorText("");
 
   await submitEditorText(harness, "/help");
@@ -209,32 +220,32 @@ void test("Spark native Pi parity slash commands are discoverable and route repr
     "resume",
     "reload",
   ]) {
-    assert.match(harness.render(), new RegExp(`/${command} —`, "u"));
+    assert.match(stripAnsi(harness.render()), new RegExp(`/${command} —`, "u"));
   }
 
   await submitEditorText(harness, "/settings");
-  assert.match(harness.render(), /Spark settings:/);
-  assert.match(harness.render(), /active model: fake\/model-a/);
+  assert.match(stripAnsi(harness.render()), /Spark settings:/);
+  assert.match(stripAnsi(harness.render()), /active model: fake\/model-a/);
 
   await submitEditorText(harness, "/settings set thinking high");
-  assert.match(harness.render(), /thinking level set.*high/i);
+  assert.match(stripAnsi(harness.render()), /thinking level set.*high/i);
 
   await submitEditorText(harness, "/scoped-models");
-  assert.match(harness.render(), /fake/);
-  assert.match(harness.render(), /model-a/);
+  assert.match(stripAnsi(harness.render()), /fake/);
+  assert.match(stripAnsi(harness.render()), /model-a/);
 
   await submitEditorText(harness, "/name parity session");
-  assert.match(harness.render(), /Session name set: parity session/);
+  assert.match(stripAnsi(harness.render()), /Session name set: parity session/);
 
   await submitEditorText(harness, "/copy");
-  assert.match(harness.render(), /assistant reply to copy/);
+  assert.match(stripAnsi(harness.render()), /assistant reply to copy/);
 
   await submitEditorText(harness, "/hotkeys");
-  assert.match(harness.render(), /app.exit/);
+  assert.match(stripAnsi(harness.render()), /app.exit/);
 
   await submitEditorText(harness, "/new");
-  assert.match(harness.render(), /Started a new Spark native transcript/);
-  assert.doesNotMatch(harness.render(), /Unknown command: \/settings/);
+  assert.match(stripAnsi(harness.render()), /Started a new Spark native transcript/);
+  assert.doesNotMatch(stripAnsi(harness.render()), /Unknown command: \/settings/);
 });
 
 void test("Spark native runtime slash bridge preserves editor helpers and deterministic command errors", async () => {
@@ -271,11 +282,11 @@ void test("Spark native runtime slash bridge preserves editor helpers and determ
   assert.deepEqual(sent, ["implement:task frontier"]);
 
   await submitEditorText(harness, "/prompt");
-  assert.match(harness.render(), /\/plan /);
+  assert.match(stripAnsi(harness.render()), /\/plan /);
   harness.app.setEditorText("");
 
   await submitEditorText(harness, "/explode");
-  assert.match(harness.render(), /Command \/explode failed: boom/);
+  assert.match(stripAnsi(harness.render()), /Command \/explode failed: boom/);
 });
 
 void test("Spark native TUI surfaces command availability, queued work, stop, and turn errors", async () => {
@@ -296,30 +307,33 @@ void test("Spark native TUI surfaces command availability, queued work, stop, an
     },
   });
 
-  assert.match(harness.render(), /native pi-tui host • idle • 2 registered commands/);
+  assert.match(stripAnsi(harness.render()), /native pi-tui host • idle • 2 registered commands/);
   assert.equal(await harness.submit("/help"), "command");
-  assert.match(harness.render(), /2 registered host\/daemon commands available/);
+  assert.match(stripAnsi(harness.render()), /2 registered host\/daemon commands available/);
 
   assert.equal(await harness.submit("first"), "started");
   await harness.flush();
   assert.equal(await harness.submit("second"), "queued");
   await harness.flush();
-  assert.match(harness.render(), /native pi-tui host • busy • 1 follow-up queued/);
-  assert.match(harness.render(), /Queued steering message #1\. Use \/stop to clear queued work/);
+  assert.match(stripAnsi(harness.render()), /native pi-tui host • busy • 1 follow-up queued/);
+  assert.match(
+    stripAnsi(harness.render()),
+    /Queued steering message #1\. Use \/stop to clear queued work/,
+  );
 
   assert.equal(await harness.submit("/stop dogfood"), "command");
   assert.match(
-    harness.render(),
+    stripAnsi(harness.render()),
     /Stopped current Spark turn \(dogfood\)\. Restored 1 queued input\(s\) to the editor/,
   );
   releaseFirst?.("late response ignored");
   await harness.flush();
-  assert.doesNotMatch(harness.render(), /late response ignored/);
+  assert.doesNotMatch(stripAnsi(harness.render()), /late response ignored/);
 
   assert.equal(await harness.submit("fail"), "started");
   await harness.flush();
   assert.match(
-    harness.render(),
+    stripAnsi(harness.render()),
     /system> Spark turn failed: daemon unavailable\. Use \/retry to resubmit or \/status to inspect the\s+daemon\./,
   );
 });
@@ -353,15 +367,27 @@ void test("Spark native editor expands @file/image refs and bang commands throug
     );
     assert.match(
       submitted.at(-1) ?? "",
-      /<file name=".*screen\.png">\[Image attached: png\]<\/file>/s,
+      /<image name=".*screen\.png" mime="image\/png" bytes="\d+">data:image\/png;base64,/s,
     );
+    assert.match(stripAnsi(harness.render()), /\[inline image data omitted\]/);
 
     await submitEditorText(harness, `Dragged ${join(dir, "screen.png")}`);
     await harness.flush();
     assert.match(
       submitted.at(-1) ?? "",
-      /Dragged <file name=".*screen\.png">\[Image attached: png\]<\/file>/s,
+      /Dragged <image name=".*screen\.png" mime="image\/png" bytes="\d+">data:image\/png;base64,/s,
     );
+
+    const tooWidePng = Buffer.alloc(24);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(tooWidePng, 0);
+    tooWidePng.writeUInt32BE(5000, 16);
+    tooWidePng.writeUInt32BE(1, 20);
+    await writeFile(join(dir, "too-wide.png"), tooWidePng);
+    const beforeTooWide = submitted.length;
+    await submitEditorText(harness, "Inspect @too-wide.png");
+    await harness.flush();
+    assert.equal(submitted.length, beforeTooWide);
+    assert.match(stripAnsi(harness.render()), /max dimension is 4096px/);
 
     await submitEditorText(harness, "!printf spark-bang");
     await harness.flush();
@@ -371,9 +397,9 @@ void test("Spark native editor expands @file/image refs and bang commands throug
     await submitEditorText(harness, "!!printf hidden-bang");
     await harness.flush();
     assert.equal(submitted.length, beforeHidden);
-    assert.match(harness.render(), /tool:shell \[success\]/);
+    assert.match(stripAnsi(harness.render()), /tool:shell \[success\]/);
     harness.app.toggleTools();
-    assert.match(harness.render(), /\[hidden shell command completed\]/);
+    assert.match(stripAnsi(harness.render()), /\[hidden shell command completed\]/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -406,26 +432,60 @@ void test("Spark native editor supports multiline and Pi-style busy queue restor
   harness.app.setEditorText("follow-up text");
   await harness.press("\u001b\r");
   await harness.flush();
-  assert.match(harness.render(), /Queued follow-up #1/);
+  assert.match(stripAnsi(harness.render()), /Queued follow-up #1/);
 
   await harness.press("\u001bp");
   await harness.flush();
-  assert.match(harness.render(), /Restored queued input to the editor/);
-  assert.match(harness.render(), /follow-up text/);
+  assert.match(stripAnsi(harness.render()), /Restored queued input to the editor/);
+  assert.match(stripAnsi(harness.render()), /follow-up text/);
 
   harness.app.setEditorText("steer then escape");
   await harness.press("\r");
   await harness.flush();
-  assert.match(harness.render(), /Queued steering message #1/);
+  assert.match(stripAnsi(harness.render()), /Queued steering message #1/);
   await harness.press("\u001b");
   await harness.flush();
   assert.match(
-    harness.render(),
+    stripAnsi(harness.render()),
     /Stopped current Spark turn \(escape\)\. Restored 1 queued input\(s\) to the editor/,
   );
-  assert.match(harness.render(), /steer then escape/);
+  assert.match(stripAnsi(harness.render()), /steer then escape/);
   releaseFirst?.("done");
   await harness.flush();
+});
+
+void test("Spark native busy queue delivers steering separately from follow-up turns", async () => {
+  let releaseFirst: ((value: string) => void) | undefined;
+  const submitted: string[] = [];
+  const harness = createSparkNativeTuiHarness({
+    responder: (input) => {
+      submitted.push(input);
+      if (input === "first") {
+        return new Promise<string>((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
+      return `ack:${input}`;
+    },
+  });
+
+  await submitEditorText(harness, "first");
+  harness.app.setEditorText("steer one");
+  await harness.press("\r");
+  await harness.flush();
+  harness.app.setEditorText("follow next");
+  await harness.press("\u001b\r");
+  await harness.flush();
+
+  releaseFirst?.("done");
+  await waitForNativeTimers();
+  await waitForNativeTimers();
+  await harness.flush();
+
+  assert.equal(submitted[0], "first");
+  assert.match(submitted[1] ?? "", /^Steering update for the previous Spark turn\./);
+  assert.match(submitted[1] ?? "", /Steering 1:\nsteer one/);
+  assert.equal(submitted[2], "follow next");
 });
 
 void test("Spark native TUI harness captures resize-safe golden render sections", () => {
@@ -447,14 +507,14 @@ void test("Spark native TUI harness captures resize-safe golden render sections"
     true,
     "narrow render should respect the requested width",
   );
-  assert.match(narrowLines.join("\n"), /spark> streaming response/);
-  assert.match(narrowLines.join("\n"), /tool:read \[success\] • folded/);
-  assert.match(narrowLines.join("\n"), /thinking • hidden/);
+  assert.match(stripAnsi(narrowLines.join("\n")), /spark> streaming response/);
+  assert.match(stripAnsi(narrowLines.join("\n")), /tool:read \[success\] • folded/);
+  assert.match(stripAnsi(narrowLines.join("\n")), /thinking • hidden/);
 
   harness.app.toggleTools();
   harness.app.toggleThinking();
   const wideLines = harness.renderLines(88);
-  const wideText = wideLines.join("\n");
+  const wideText = stripAnsi(wideLines.join("\n"));
   assert.equal(
     wideLines.every((line) => visibleWidth(line) <= 88),
     true,
@@ -574,50 +634,59 @@ void test("Spark cockpit renders shared workflow, run, task, artifact, review, a
   });
 
   assert.equal(harness.app.toggleCockpitPanel("overview"), true);
-  assert.match(harness.render(), /Workflow picker\/progress: 1 option\(s\), 1 workflow run\(s\)/);
-  assert.match(harness.render(), /Role-run board: 1 role run\(s\), 0 interaction\(s\)/);
+  assert.match(
+    stripAnsi(harness.render()),
+    /Workflow picker\/progress: 1 option\(s\), 1 workflow run\(s\)/,
+  );
+  assert.match(stripAnsi(harness.render()), /Role-run board: 1 role run\(s\), 0 interaction\(s\)/);
 
   assert.equal(await harness.submit("/runs"), "command");
   assert.equal(harness.app.cockpitSnapshot().activePanel, "runs");
-  assert.match(harness.render(), /role role:reviewer \[running\] 40% artifacts=1 Reviewer pass/);
   assert.match(
-    harness.render(),
+    stripAnsi(harness.render()),
+    /role role:reviewer \[running\] 40% artifacts=1 Reviewer pass/,
+  );
+  assert.match(
+    stripAnsi(harness.render()),
     /workflow run:release-readiness \[running\] 50% Release readiness workflow/,
   );
-  assert.match(harness.render(), /Actions: \/workflow-inspect run:release-readiness/);
-  assert.match(harness.render(), /\/workflow-pause run:release-readiness/);
-  assert.match(harness.render(), /\/workflow-stop run:release-readiness/);
-  assert.match(harness.render(), /\/workflow-save run:release-readiness/);
+  assert.match(stripAnsi(harness.render()), /Actions: \/workflow-inspect run:release-readiness/);
+  assert.match(stripAnsi(harness.render()), /\/workflow-pause run:release-readiness/);
+  assert.match(stripAnsi(harness.render()), /\/workflow-stop run:release-readiness/);
+  assert.match(stripAnsi(harness.render()), /\/workflow-save run:release-readiness/);
 
   assert.equal(await harness.submit("/tasks"), "command");
   assert.match(
-    harness.render(),
+    stripAnsi(harness.render()),
     /task:spark-cockpit-superpowers \[running\] todos=1\/2 evidence=1 Spark cockpit superpowers/,
   );
 
   assert.equal(await harness.submit("/artifacts"), "command");
   assert.match(
-    harness.render(),
+    stripAnsi(harness.render()),
     /artifact:review-ok \[record\/json\] producer=review status=approved Reviewer verdict/,
   );
   assert.match(
-    harness.render(),
+    stripAnsi(harness.render()),
     /artifact:graft-patch \[record\/json\] producer=task status=admitted Graft patch provenance/,
   );
 
   assert.equal(await harness.submit("/reviews"), "command");
   assert.match(
-    harness.render(),
+    stripAnsi(harness.render()),
     /artifact:review-ok \[approved\] Reviewer verdict for cockpit task/,
   );
-  assert.match(harness.render(), /role:role:reviewer \[approved\] Reviewer pass/);
+  assert.match(stripAnsi(harness.render()), /role:role:reviewer \[approved\] Reviewer pass/);
 
   assert.equal(await harness.submit("/graft"), "command");
   assert.match(
-    harness.render(),
+    stripAnsi(harness.render()),
     /artifact:graft-patch patch=patch:abc candidate=candidate:abc status=admitted/,
   );
-  assert.match(harness.render(), /task:task:graft-apply patch=patch:abc status=admitted/);
+  assert.match(
+    stripAnsi(harness.render()),
+    /task:task:graft-apply patch=patch:abc status=admitted/,
+  );
 });
 
 void test("Spark cockpit supports selectable workflow run keyboard controls", async () => {
@@ -673,13 +742,16 @@ void test("Spark cockpit supports selectable workflow run keyboard controls", as
   });
 
   assert.equal(await harness.submit("/runs"), "command");
-  assert.match(harness.render(), /▸─ workflow run:first \[running\] 25% First workflow/);
-  assert.match(harness.render(), /Keys: ↑\/↓ or j\/k select workflow run/);
+  assert.match(stripAnsi(harness.render()), /▸─ workflow run:first \[running\] 25% First workflow/);
+  assert.match(stripAnsi(harness.render()), /Keys: ↑\/↓ or j\/k select workflow run/);
 
   await harness.press("j");
-  assert.match(harness.render(), /Selected: run:second \[paused\]/);
-  assert.match(harness.render(), /▸─ workflow run:second \[paused\] 75% Second workflow/);
-  assert.match(harness.render(), /\/workflow-resume run:second/);
+  assert.match(stripAnsi(harness.render()), /Selected: run:second \[paused\]/);
+  assert.match(
+    stripAnsi(harness.render()),
+    /▸─ workflow run:second \[paused\] 75% Second workflow/,
+  );
+  assert.match(stripAnsi(harness.render()), /\/workflow-resume run:second/);
 
   await harness.press("i");
   assert.deepEqual(invoked.at(-1), { name: "workflow-inspect", args: "run:second" });
@@ -689,7 +761,7 @@ void test("Spark cockpit supports selectable workflow run keyboard controls", as
   assert.deepEqual(invoked.at(-1), { name: "workflow-stop", args: "run:second" });
 
   await harness.press("k");
-  assert.match(harness.render(), /Selected: run:first \[running\]/);
+  assert.match(stripAnsi(harness.render()), /Selected: run:first \[running\]/);
   await harness.press("p");
   assert.deepEqual(invoked.at(-1), { name: "workflow-pause", args: "run:first" });
   await harness.press("r");
@@ -766,11 +838,11 @@ void test("Spark cockpit records workflow picker requests and exposes slash comm
 
   assert.equal(await harness.submit("/help"), "command");
   assert.match(
-    harness.render(),
+    stripAnsi(harness.render()),
     /\/cockpit \[overview\|workflows\|runs\|tasks\|artifacts\|reviews\|graft\|off\]/,
   );
   assert.match(
-    harness.render(),
+    stripAnsi(harness.render()),
     /Ctrl\+K — toggle Spark cockpit overview; Shift\+Ctrl\+K — cycle cockpit panels/,
   );
 });

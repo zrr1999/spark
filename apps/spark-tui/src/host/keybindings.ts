@@ -113,13 +113,13 @@ const DEFAULT_BINDINGS: SparkKeybindingDefinition[] = [
   {
     id: "app.modelCycle.next",
     defaultKey: "ctrl+p",
-    description: "Cycle to the next model for the active provider",
+    description: "Cycle to the next Spark model",
     handler: () => undefined,
   },
   {
     id: "app.modelCycle.prev",
     defaultKey: "shift+ctrl+p",
-    description: "Cycle to the previous model for the active provider",
+    description: "Cycle to the previous Spark model",
     handler: () => undefined,
   },
   {

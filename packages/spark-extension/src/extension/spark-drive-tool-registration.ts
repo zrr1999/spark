@@ -1,0 +1,239 @@
+import { Type } from "typebox";
+import type { Project } from "@zendev-lab/pi-extension-api";
+import type { TaskGraph } from "@zendev-lab/pi-tasks";
+import { currentSparkProject, loadSparkGraph } from "./session-state.ts";
+import {
+  deriveSparkDriveMode,
+  normalizeSparkDriveMode,
+  sparkActiveLens,
+  type SparkDriveMode,
+} from "./spark-drive-state.ts";
+import {
+  clearSessionGoal,
+  inferSessionGoalObjective,
+  loadSessionGoal,
+  setSessionGoal,
+} from "./spark-session-goals.ts";
+import { clearSessionLoop, loadSessionLoop, setSessionLoop } from "./spark-session-loops.ts";
+import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
+
+interface SparkDriveToolDeps {
+  ensureSparkStateForActiveWorkspace: (cwd: string, ctx?: SparkToolContext) => Promise<unknown>;
+  refreshSparkWidget?: (cwd: string, ctx?: SparkToolContext) => Promise<void>;
+}
+
+export function registerSparkDriveTool(
+  registerSparkTool: SparkToolRegistrar,
+  deps: SparkDriveToolDeps,
+): void {
+  registerSparkTool({
+    name: "drive",
+    label: "Spark Drive",
+    description:
+      "Inspect or control the current session drive. Mode is read-only and derived from drive state: assist, loop, goal, or workflow. Use action=status for the projection; use start/switch/stop with drive=assist|goal|loop for explicit foreground control. Workflow drive starts through workflow_run or /workflow, because it needs a workflow selector/script.",
+    promptGuidelines: [
+      "Use drive action=status when you need the read-only derived mode/drive projection.",
+      "Do not set mode directly; start/switch/stop a drive instead.",
+      "Use drive=goal for reviewer-gated autonomous completion and drive=loop for open-ended recurring ticks.",
+      "Use workflow_run or /workflow to enter workflow drive; drive does not synthesize workflow selectors or scripts.",
+    ],
+    parameters: Type.Object({
+      action: Type.Optional(
+        Type.String({
+          default: "status",
+          description:
+            "status | start | switch | stop. start and switch are equivalent explicit drive selection operations.",
+        }),
+      ),
+      drive: Type.Optional(
+        Type.String({
+          description:
+            "assist | loop | goal | workflow. Required for start/switch/stop unless stopping the currently derived drive.",
+        }),
+      ),
+      objective: Type.Optional(
+        Type.String({
+          description:
+            "Objective for goal or loop drives. If omitted, Spark tries to infer a project-backed objective from current task state.",
+        }),
+      ),
+      reason: Type.Optional(
+        Type.String({ description: "Optional reason for switching/stopping." }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = ctx.cwd;
+      await deps.ensureSparkStateForActiveWorkspace(cwd, ctx);
+      const action = normalizeDriveAction(params.action);
+      const graph = await loadSparkGraph(cwd, ctx);
+      const project = graph ? await currentSparkProject(cwd, ctx, graph) : undefined;
+      const before = await driveSnapshot(cwd, ctx);
+      const requestedDrive = normalizeRequestedDrive(params.drive, action, before.mode);
+
+      if (action === "status") return driveStatusResult(before, project);
+
+      if (requestedDrive === "workflow") {
+        const text =
+          'Workflow drive is controlled by workflow_run or /workflow because a workflow selector/script is required. Use drive({ action: "status" }) to inspect the derived mode projection.';
+        return {
+          content: [{ type: "text", text }],
+          details: { action, requestedDrive, currentMode: before.mode, supportedControl: false },
+          isError: true,
+        };
+      }
+
+      if (action === "stop") {
+        const stoppedDrive = requestedDrive ?? before.mode;
+        if (stoppedDrive === "goal") await clearSessionGoal(cwd, ctx);
+        if (stoppedDrive === "loop") await clearSessionLoop(cwd, ctx);
+        if (stoppedDrive === "assist") {
+          // Stopping assist is a no-op; assist is the default when no foreground drive is active.
+        }
+        const after = await driveSnapshot(cwd, ctx, { ignoreActiveLens: true });
+        ctx.sparkActiveLens = sparkActiveLens(ctx.sparkActiveLens?.phase ?? "research", after.mode);
+        await deps.refreshSparkWidget?.(cwd, ctx);
+        return driveMutationResult("stopped", stoppedDrive, after, project);
+      }
+
+      if (!requestedDrive) throw new Error("drive is required for start/switch");
+
+      if (requestedDrive === "assist") {
+        await clearSessionGoal(cwd, ctx);
+        await clearSessionLoop(cwd, ctx);
+      } else if (requestedDrive === "goal") {
+        const objective = resolveDriveObjective(params.objective, graph, project, "goal");
+        await clearSessionLoop(cwd, ctx);
+        await setSessionGoal(cwd, ctx, { objective, source: "explicit", status: "active" });
+      } else if (requestedDrive === "loop") {
+        const objective = resolveDriveObjective(params.objective, graph, project, "loop");
+        await clearSessionGoal(cwd, ctx);
+        await setSessionLoop(cwd, ctx, { objective, source: "explicit", status: "active" });
+      }
+
+      const after = await driveSnapshot(cwd, ctx, { ignoreActiveLens: true });
+      ctx.sparkActiveLens = sparkActiveLens(ctx.sparkActiveLens?.phase ?? "research", after.mode);
+      await deps.refreshSparkWidget?.(cwd, ctx);
+      return driveMutationResult(
+        action === "switch" ? "switched" : "started",
+        requestedDrive,
+        after,
+        project,
+      );
+    },
+  });
+}
+
+function normalizeDriveAction(value: unknown): "status" | "start" | "switch" | "stop" {
+  if (value === undefined || value === null || value === "") return "status";
+  if (value === "status" || value === "start" || value === "switch" || value === "stop")
+    return value;
+  throw new Error("drive action must be status, start, switch, or stop");
+}
+
+function normalizeRequestedDrive(
+  value: unknown,
+  action: "status" | "start" | "switch" | "stop",
+  currentMode: SparkDriveMode,
+): SparkDriveMode | undefined {
+  const requested = normalizeSparkDriveMode(value);
+  if (requested) return requested;
+  if (value === undefined || value === null || value === "") {
+    if (action === "stop") return currentMode;
+    return undefined;
+  }
+  throw new Error("drive must be assist, loop, goal, or workflow");
+}
+
+async function driveSnapshot(
+  cwd: string,
+  ctx: SparkToolContext,
+  options: { ignoreActiveLens?: boolean } = {},
+): Promise<{
+  mode: SparkDriveMode;
+  goal: Awaited<ReturnType<typeof loadSessionGoal>>;
+  loop: Awaited<ReturnType<typeof loadSessionLoop>>;
+}> {
+  const [goal, loop] = await Promise.all([loadSessionGoal(cwd, ctx), loadSessionLoop(cwd, ctx)]);
+  return {
+    mode: deriveSparkDriveMode({
+      activeLens: options.ignoreActiveLens ? undefined : ctx.sparkActiveLens,
+      goal,
+      loop,
+    }),
+    goal,
+    loop,
+  };
+}
+
+function resolveDriveObjective(
+  explicit: unknown,
+  graph: TaskGraph | null,
+  project: Project | undefined,
+  drive: "goal" | "loop",
+): string {
+  if (typeof explicit === "string" && explicit.trim()) return explicit.trim();
+  if (explicit !== undefined && explicit !== null)
+    throw new Error("drive objective must be a string");
+  const inferred = graph ? inferSessionGoalObjective(graph, project) : undefined;
+  if (inferred) return inferred;
+  throw new Error(
+    `${drive} drive requires objective when Spark cannot infer one from the current project`,
+  );
+}
+
+function driveStatusResult(
+  snapshot: Awaited<ReturnType<typeof driveSnapshot>>,
+  project: Project | undefined,
+): {
+  content: Array<{ type: "text"; text: string }>;
+  details: Record<string, unknown>;
+} {
+  const lines = [`Mode: ${snapshot.mode} (derived from active drive state).`];
+  if (project) lines.push(`Current project: ${project.title}`);
+  if (snapshot.goal) lines.push(`Goal drive: ${snapshot.goal.status} | ${snapshot.goal.objective}`);
+  if (snapshot.loop) lines.push(`Loop drive: ${snapshot.loop.status} | ${snapshot.loop.objective}`);
+  if (!snapshot.goal && !snapshot.loop && snapshot.mode === "assist")
+    lines.push("No foreground goal or loop drive is active; assist is the default.");
+  return {
+    content: [{ type: "text", text: lines.join("\n") }],
+    details: driveDetails(snapshot, project),
+  };
+}
+
+function driveMutationResult(
+  verb: "started" | "switched" | "stopped",
+  drive: SparkDriveMode,
+  snapshot: Awaited<ReturnType<typeof driveSnapshot>>,
+  project: Project | undefined,
+): {
+  content: Array<{ type: "text"; text: string }>;
+  details: Record<string, unknown>;
+} {
+  const text = `Drive ${verb}: ${drive}. Mode is now ${snapshot.mode}.`;
+  return { content: [{ type: "text", text }], details: driveDetails(snapshot, project) };
+}
+
+function driveDetails(
+  snapshot: Awaited<ReturnType<typeof driveSnapshot>>,
+  project: Project | undefined,
+): Record<string, unknown> {
+  return {
+    mode: snapshot.mode,
+    drive: snapshot.mode,
+    currentProjectRef: project?.ref,
+    goal: snapshot.goal
+      ? {
+          status: snapshot.goal.status,
+          objective: snapshot.goal.objective,
+          goalId: snapshot.goal.goalId,
+        }
+      : undefined,
+    loop: snapshot.loop
+      ? {
+          status: snapshot.loop.status,
+          objective: snapshot.loop.objective,
+          loopId: snapshot.loop.loopId,
+        }
+      : undefined,
+  };
+}

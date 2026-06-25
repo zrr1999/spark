@@ -209,7 +209,14 @@ export interface RequestEnvelope {
 export type RequestPayload =
   | { Eval: { input: string; mode: Mode } }
   | { RunScript: { path: string; input: string } }
-  | { Handshake: { session_id: string; cwd: string; env: Record<string, string> } }
+  | {
+      Handshake: {
+        session_id: string;
+        cwd: string;
+        env: Record<string, string>;
+        refresh?: boolean;
+      };
+    }
   | { Subscribe: { channels: string[] } }
   | { Unsubscribe: { channels: string[] } }
   | { ListJobs: { limit?: number | null } }
@@ -284,6 +291,8 @@ export interface CueSessionOptions {
   sessionId?: string;
   cwd?: string;
   env?: Record<string, string | undefined>;
+  /** Explicitly refresh an existing cue-shell session from this cwd/env snapshot. */
+  refresh?: boolean;
 }
 
 export interface JobCreatedPayload {
@@ -569,7 +578,12 @@ function normalizeCueSessionOptions(
 ): Required<CueSessionOptions> {
   const cwd = options?.cwd?.trim() || process.cwd();
   const sessionId = options?.sessionId?.trim() || `${PROCESS_SESSION_ID}:${stableHash(cwd)}`;
-  return { sessionId, cwd, env: normalizeSessionEnv(options?.env) };
+  return {
+    sessionId,
+    cwd,
+    env: normalizeSessionEnv(options?.env),
+    refresh: options?.refresh ?? false,
+  };
 }
 
 async function connectUnixCueClient(path: string, session?: CueSessionOptions): Promise<CueClient> {
@@ -838,6 +852,7 @@ export class CueClient {
           session_id: session.sessionId,
           cwd: session.cwd,
           env: normalizeSessionEnv(session.env),
+          refresh: session.refresh,
         },
       });
       response = await this.#waitForResponse(id);
@@ -1671,6 +1686,15 @@ export class CueClient {
   async setEnv(assignments: Record<string, string>): Promise<ScopeCreatedPayload> {
     const parts = Object.entries(assignments).map(([key, value]) => `${key}=${value}`);
     const response = await this.#rawEvalAndWait(`:env set ${parts.join(" ")}`);
+    const ok = okRecord(response);
+    const scope = scopeCreatedFromOk(ok);
+    if (scope) return scope;
+    throw new CueError("UNEXPECTED_RESPONSE", "expected ScopeCreated response");
+  }
+
+  /** Remove keys from the current session environment with `:env unset KEY ...`. */
+  async unsetEnv(keys: string[]): Promise<ScopeCreatedPayload> {
+    const response = await this.#rawEvalAndWait(`:env unset ${keys.join(" ")}`);
     const ok = okRecord(response);
     const scope = scopeCreatedFromOk(ok);
     if (scope) return scope;

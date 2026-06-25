@@ -8,6 +8,7 @@ import {
   CombinedAutocompleteProvider,
   Editor,
   Key,
+  Markdown,
   matchesKey,
   parseKey,
   ProcessTerminal,
@@ -15,6 +16,7 @@ import {
   truncateToWidth,
   wrapTextWithAnsi,
   type Component,
+  type DefaultTextStyle,
   type Focusable,
   type OverlayOptions,
   type SelectListTheme,
@@ -39,6 +41,14 @@ import {
 import type { ExtensionCommandContext } from "@zendev-lab/pi-extension-api";
 
 import type { SparkKeybindingContext, SparkKeybindings } from "./host/keybindings.ts";
+import {
+  BUILTIN_SPARK_THEMES,
+  createSparkHostRenderTheme,
+  createSparkMarkdownTheme,
+  styleSparkDiffLine,
+  styleSparkRoleLine,
+  type SparkTheme,
+} from "./host/theme.ts";
 import type {
   RegisteredCommand,
   SparkHostCustomMessage,
@@ -257,7 +267,7 @@ export class SparkNativeSession {
       role: "system",
       text:
         "Spark native TUI is running through the Spark pi-tui adapter boundary. " +
-        "Messages are queued as follow-ups while Spark is busy.",
+        "Enter queues steering updates while Spark is busy; Alt+Enter queues follow-up turns.",
     });
   }
 
@@ -280,7 +290,12 @@ export class SparkNativeSession {
     if (this.processing) {
       const mode = options.mode ?? "steer";
       this.queuedFollowUps.push({ text, mode });
-      this.pushMessage({ role: "user", text, queued: true, details: { queueMode: mode } });
+      this.pushMessage({
+        role: "user",
+        text: displayNativeSubmittedInput(text),
+        queued: true,
+        details: { queueMode: mode },
+      });
       this.pushMessage({
         role: "system",
         text:
@@ -351,8 +366,8 @@ export class SparkNativeSession {
   }
 
   abort(reason: string = "user stop"): SparkNativeAbortResult {
+    const clearedQueued = this.queuedFollowUps.length;
     const restoredText = this.restoreQueuedText();
-    const clearedQueued = restoredText ? restoredText.split("\n\n").length : 0;
     if (!this.processing) {
       if (clearedQueued > 0) {
         this.pushMessage({
@@ -437,7 +452,7 @@ export class SparkNativeSession {
     const turnId = ++this.activeTurnId;
     const abortController = new AbortController();
     this.currentAbort = abortController;
-    this.pushMessage({ role: "user", text: input });
+    this.pushMessage({ role: "user", text: displayNativeSubmittedInput(input) });
 
     try {
       const response = await this.responder(input, {
@@ -461,10 +476,25 @@ export class SparkNativeSession {
       }
     }
 
-    const next = this.queuedFollowUps.shift();
+    const next = this.nextQueuedSubmission();
     if (next !== undefined) {
       void this.process(next.text);
     }
+  }
+
+  private nextQueuedSubmission(): SparkNativeQueuedInput | undefined {
+    const next = this.queuedFollowUps.shift();
+    if (!next) return undefined;
+    if (next.mode === "followUp") return next;
+
+    const steeringInputs = [next.text];
+    while (this.queuedFollowUps[0]?.mode === "steer") {
+      steeringInputs.push(this.queuedFollowUps.shift()?.text ?? "");
+    }
+    return {
+      mode: "steer",
+      text: formatSteeringSubmission(steeringInputs),
+    };
   }
 
   private trimTranscript(): void {
@@ -475,6 +505,11 @@ export class SparkNativeSession {
   private emitChange(): void {
     this.onChange?.();
   }
+}
+
+function formatSteeringSubmission(inputs: string[]): string {
+  const body = inputs.map((input, index) => `Steering ${index + 1}:\n${input.trim()}`).join("\n\n");
+  return `Steering update for the previous Spark turn. Use this to adjust or correct the in-progress response before continuing.\n\n${body}`;
 }
 
 export function defaultSparkNativeResponder(input: string): string {
@@ -494,7 +529,7 @@ export function defaultSparkNativeResponder(input: string): string {
   return `Captured Spark intent: ${input}\n\nNative Spark agent/runtime wiring will live here on top of pi-tui and Spark packages, not Pi's SDK TUI wrapper.`;
 }
 
-const plain = (text: string): string => text;
+const DEFAULT_NATIVE_THEME = BUILTIN_SPARK_THEMES.find((theme) => theme.id === "dark")!;
 const SPARK_APP_KEYS = new Set([
   "ctrl+k",
   "shift+ctrl+k",
@@ -504,22 +539,17 @@ const SPARK_APP_KEYS = new Set([
   "ctrl+o",
   "ctrl+t",
 ]);
-const plainRenderTheme: SparkHostRenderTheme = {
-  fg: (_color, text) => text,
-  bg: (_color, text) => text,
-  bold: (text) => text,
-};
-const editorSelectListTheme: SelectListTheme = {
-  selectedPrefix: plain,
-  selectedText: plain,
-  description: plain,
-  scrollInfo: plain,
-  noMatch: plain,
-};
-
-function createEditorTheme() {
+function createEditorTheme(theme: SparkTheme) {
+  const renderTheme = createSparkHostRenderTheme(theme);
+  const editorSelectListTheme: SelectListTheme = {
+    selectedPrefix: (text) => renderTheme.fg("accent", text),
+    selectedText: (text) => renderTheme.fg("foreground", text),
+    description: (text) => renderTheme.fg("muted", text),
+    scrollInfo: (text) => renderTheme.fg("muted", text),
+    noMatch: (text) => renderTheme.fg("warning", text),
+  };
   return {
-    borderColor: plain,
+    borderColor: (text: string) => renderTheme.fg("border", text),
     selectList: editorSelectListTheme,
   };
 }
@@ -703,20 +733,30 @@ function toIterable<T>(value: Iterable<T> | undefined): Iterable<T> {
   return value ?? [];
 }
 
-function normalizeNativeWidgetLines(key: string, content: unknown, tui: TUI): string[] {
+function normalizeNativeWidgetLines(
+  key: string,
+  content: unknown,
+  tui: TUI,
+  theme: SparkHostRenderTheme,
+): string[] {
   if (content === undefined || content === null || content === false) return [];
-  const rawLines = nativeWidgetContentToLines(key, content, tui);
+  const rawLines = nativeWidgetContentToLines(key, content, tui, theme);
   return rawLines
     .map((line) => line.trimEnd())
     .filter(Boolean)
     .slice(0, MAX_NATIVE_WIDGET_LINES);
 }
 
-function nativeWidgetContentToLines(_key: string, content: unknown, tui: TUI): string[] {
+function nativeWidgetContentToLines(
+  _key: string,
+  content: unknown,
+  tui: TUI,
+  theme: SparkHostRenderTheme,
+): string[] {
   if (Array.isArray(content)) return content.flatMap((line) => String(line).split("\n"));
   if (typeof content === "string") return content.split("\n");
   if (typeof content === "function")
-    return renderNativeWidgetFactory(content as NativeWidgetFactory, tui);
+    return renderNativeWidgetFactory(content as NativeWidgetFactory, tui, theme);
   return [JSON.stringify(content) ?? Object.prototype.toString.call(content)];
 }
 
@@ -725,9 +765,13 @@ type NativeWidgetFactory = (
   theme: SparkHostRenderTheme,
 ) => Component | { render(width?: number): string[]; invalidate?(): void } | undefined;
 
-function renderNativeWidgetFactory(content: NativeWidgetFactory, tui: TUI): string[] {
+function renderNativeWidgetFactory(
+  content: NativeWidgetFactory,
+  tui: TUI,
+  theme: SparkHostRenderTheme,
+): string[] {
   try {
-    const component = content(createNativeWidgetTui(tui), plainRenderTheme);
+    const component = content(createNativeWidgetTui(tui), theme);
     if (!component || typeof component.render !== "function") return [];
     const width = Math.max(1, widgetTuiColumns(tui));
     return component.render(width).flatMap((line) => String(line).split("\n"));
@@ -753,11 +797,16 @@ function widgetTuiColumns(tui: TUI): number {
 }
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+const MAX_NATIVE_IMAGE_BYTES = 256 * 1024;
+const MAX_NATIVE_IMAGE_DIMENSION = 4096;
 const AT_FILE_TOKEN = /(^|\s)@("[^"]+"|\S+)/gu;
 const RAW_IMAGE_TOKEN =
   /(^|\s)((?:file:\/\/|~\/|\.\.?\/|\/)?\S+\.(?:png|jpe?g|gif|webp))(?=\s|$)/giu;
 
-async function prepareSparkNativeEditorInput(input: string, basePath: string): Promise<string> {
+export async function prepareSparkNativeEditorInput(
+  input: string,
+  basePath: string,
+): Promise<string> {
   const bang = parseBangCommand(input);
   if (bang) return await runSparkNativeBangCommand(bang.command, bang.hidden, basePath);
 
@@ -797,6 +846,13 @@ async function prepareSparkNativeEditorInput(input: string, basePath: string): P
   }
   output += input.slice(cursor);
   return output;
+}
+
+function displayNativeSubmittedInput(input: string): string {
+  return input.replace(
+    /<image\b([^>]*)>data:[^<]+<\/image>/gu,
+    (_match, attrs: string) => `<image${attrs}>[inline image data omitted]</image>`,
+  );
 }
 
 function parseBangCommand(input: string): { command: string; hidden: boolean } | undefined {
@@ -854,9 +910,7 @@ async function expandSparkNativeFileReference(pathText: string, basePath: string
   const stats = await stat(absolutePath);
   if (stats.isDirectory()) return `<file name="${absolutePath}">[Directory reference]</file>`;
   const extension = extname(absolutePath).toLowerCase();
-  if (IMAGE_EXTENSIONS.has(extension)) {
-    return `<file name="${absolutePath}">[Image attached: ${extension.slice(1)}]</file>`;
-  }
+  if (IMAGE_EXTENSIONS.has(extension)) return await expandSparkNativeImageReference(absolutePath);
   const content = await readFile(absolutePath, "utf8");
   return `<file name="${absolutePath}">\n${content}\n</file>`;
 }
@@ -874,7 +928,87 @@ async function expandSparkNativeImageReferenceIfExists(
   }
   const extension = extname(absolutePath).toLowerCase();
   if (!IMAGE_EXTENSIONS.has(extension)) return undefined;
-  return `<file name="${absolutePath}">[Image attached: ${extension.slice(1)}]</file>`;
+  return await expandSparkNativeImageReference(absolutePath);
+}
+
+async function expandSparkNativeImageReference(absolutePath: string): Promise<string> {
+  const stats = await stat(absolutePath);
+  if (stats.size > MAX_NATIVE_IMAGE_BYTES) {
+    throw new Error(
+      `Image ${absolutePath} is ${stats.size} bytes; max inline image size is ${MAX_NATIVE_IMAGE_BYTES} bytes. Resize or compress it before submitting.`,
+    );
+  }
+  const extension = extname(absolutePath).toLowerCase();
+  const data = await readFile(absolutePath);
+  const dimensions = detectImageDimensions(data, extension);
+  if (
+    dimensions &&
+    (dimensions.width > MAX_NATIVE_IMAGE_DIMENSION ||
+      dimensions.height > MAX_NATIVE_IMAGE_DIMENSION)
+  ) {
+    throw new Error(
+      `Image ${absolutePath} is ${dimensions.width}x${dimensions.height}; max dimension is ${MAX_NATIVE_IMAGE_DIMENSION}px. Resize it before submitting.`,
+    );
+  }
+  const mime = imageMimeType(extension);
+  const dimensionAttrs = dimensions
+    ? ` width="${dimensions.width}" height="${dimensions.height}"`
+    : "";
+  return `<image name="${escapeXmlAttribute(absolutePath)}" mime="${mime}" bytes="${stats.size}"${dimensionAttrs}>data:${mime};base64,${data.toString("base64")}</image>`;
+}
+
+function detectImageDimensions(
+  data: Buffer,
+  extension: string,
+): { width: number; height: number } | undefined {
+  if (extension === ".png" && data.length >= 24 && data.subarray(0, 8).equals(PNG_SIGNATURE)) {
+    return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) };
+  }
+  if (extension === ".gif" && data.length >= 10) {
+    return { width: data.readUInt16LE(6), height: data.readUInt16LE(8) };
+  }
+  if ((extension === ".jpg" || extension === ".jpeg") && data.length >= 4) {
+    return detectJpegDimensions(data);
+  }
+  return undefined;
+}
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function detectJpegDimensions(data: Buffer): { width: number; height: number } | undefined {
+  let offset = 2;
+  while (offset + 8 < data.length) {
+    if (data[offset] !== 0xff) return undefined;
+    const marker = data[offset + 1];
+    const length = data.readUInt16BE(offset + 2);
+    if (!length || offset + 2 + length > data.length) return undefined;
+    if (
+      marker !== undefined &&
+      ((marker >= 0xc0 && marker <= 0xc3) ||
+        (marker >= 0xc5 && marker <= 0xc7) ||
+        (marker >= 0xc9 && marker <= 0xcb) ||
+        (marker >= 0xcd && marker <= 0xcf))
+    ) {
+      return { height: data.readUInt16BE(offset + 5), width: data.readUInt16BE(offset + 7) };
+    }
+    offset += 2 + length;
+  }
+  return undefined;
+}
+
+function imageMimeType(extension: string): string {
+  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
+  if (extension === ".gif") return "image/gif";
+  if (extension === ".webp") return "image/webp";
+  return "image/png";
+}
+
+function escapeXmlAttribute(value: string): string {
+  return value
+    .replace(/&/gu, "&amp;")
+    .replace(/"/gu, "&quot;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;");
 }
 
 function rangesOverlap(
@@ -896,6 +1030,7 @@ export interface SparkNativeTuiAppOptions {
   keybindingContext?: SparkKeybindingContext;
   messageRenderers?: ReadonlyMap<string, SparkHostMessageRenderer>;
   slashCommands?: SparkNativeSlashCommandMap;
+  theme?: SparkTheme;
   autocompleteBasePath?: string;
   autocompleteFdPath?: string | null;
   interactionHandler?: SparkNativeInteractionHandler;
@@ -912,6 +1047,8 @@ export class SparkNativeTuiApp implements Component, Focusable {
   private readonly slashCommands: SparkNativeSlashCommandMap;
   private readonly interactionHandler?: SparkNativeInteractionHandler;
   private readonly inputBasePath: string;
+  private readonly theme: SparkTheme;
+  private readonly renderTheme: SparkHostRenderTheme;
   private cachedWidth?: number;
   private cachedLines?: string[];
   private readonly statuses = new Map<string, string>();
@@ -937,8 +1074,10 @@ export class SparkNativeTuiApp implements Component, Focusable {
     this.slashCommands = options.slashCommands ?? {};
     this.interactionHandler = options.interactionHandler;
     this.inputBasePath = options.autocompleteBasePath ?? process.cwd();
+    this.theme = options.theme ?? DEFAULT_NATIVE_THEME;
+    this.renderTheme = createSparkHostRenderTheme(this.theme);
     this.registerToggleKeybindings(options.keybindings);
-    this.editor = new Editor(tui, createEditorTheme(), { paddingX: 1 });
+    this.editor = new Editor(tui, createEditorTheme(this.theme), { paddingX: 1 });
     this.installAutocompleteProvider(options);
     this.editor.onSubmit = (text) => {
       void this.submitEditorText(text, { mode: "steer" });
@@ -1070,7 +1209,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
     options?: { placement?: "aboveEditor" | "belowEditor" },
   ): void {
     if (!key) return;
-    const lines = normalizeNativeWidgetLines(key, content, this.tui);
+    const lines = normalizeNativeWidgetLines(key, content, this.tui, this.renderTheme);
     if (lines.length === 0) this.widgets.delete(key);
     else {
       this.widgets.set(key, {
@@ -1227,7 +1366,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
       };
       const component = factory(
         { requestRender: () => this.tui.requestRender() },
-        plainRenderTheme,
+        this.renderTheme,
         this.keybindings,
         done,
       );
@@ -1512,7 +1651,15 @@ export class SparkNativeTuiApp implements Component, Focusable {
     const prefix = this.messagePrefix(message);
     const body = message.text || " ";
     const suffix = message.streaming ? " ▋" : "";
-    return this.renderPrefixedBlock(prefix, `${body}${suffix}`, width);
+    const lines =
+      message.role === "assistant"
+        ? this.renderPrefixedLines(
+            prefix,
+            this.renderMarkdownBlock(`${body}${suffix}`, width),
+            width,
+          )
+        : this.renderPrefixedBlock(prefix, `${body}${suffix}`, width);
+    return this.styleRoleLines(message.role, lines);
   }
 
   private renderToolMessage(message: SparkNativeMessage, width: number): string[] {
@@ -1520,17 +1667,25 @@ export class SparkNativeTuiApp implements Component, Focusable {
     const status = message.toolStatus ?? "success";
     const header = `tool:${toolName} [${status}]`;
     if (!this.toolsExpanded) {
-      return [truncateToWidth(`${header} • folded (Ctrl+O to expand)`, width)];
+      return this.styleRoleLines("tool", [
+        truncateToWidth(`${header} • folded (Ctrl+O to expand)`, width),
+      ]);
     }
     const id = message.toolCallId ? ` (${message.toolCallId})` : "";
-    return this.renderPrefixedBlock(`${header}${id}> `, message.text || " ", width);
+    const body = this.renderToolBody(message.text || " ");
+    return this.styleRoleLines("tool", this.renderPrefixedBlock(`${header}${id}> `, body, width));
   }
 
   private renderThinkingMessage(message: SparkNativeMessage, width: number): string[] {
     if (!this.thinkingExpanded) {
-      return [truncateToWidth("thinking • hidden (Ctrl+T to show)", width)];
+      return this.styleRoleLines("thinking", [
+        truncateToWidth("thinking • hidden (Ctrl+T to show)", width),
+      ]);
     }
-    return this.renderPrefixedBlock("thinking> ", message.text || " ", width);
+    return this.styleRoleLines(
+      "thinking",
+      this.renderPrefixedBlock("thinking> ", message.text || " ", width),
+    );
   }
 
   private renderCustomMessage(message: SparkNativeMessage, width: number): string[] {
@@ -1540,11 +1695,52 @@ export class SparkNativeTuiApp implements Component, Focusable {
       const component = renderer(
         this.toCustomMessage(message, customType),
         { expanded: true },
-        plainRenderTheme,
+        this.renderTheme,
       );
       if (component) return component.render(width).map((line) => truncateToWidth(line, width));
     }
-    return this.renderPrefixedBlock(`custom:${customType}> `, message.text || " ", width);
+    return this.styleRoleLines(
+      "custom",
+      this.renderPrefixedBlock(`custom:${customType}> `, message.text || " ", width),
+    );
+  }
+
+  private renderMarkdownBlock(body: string, width: number): string[] {
+    const markdown = new Markdown(
+      body,
+      0,
+      0,
+      createSparkMarkdownTheme(this.theme),
+      this.markdownDefaultTextStyle(),
+      { preserveOrderedListMarkers: true },
+    );
+    return markdown.render(
+      Math.max(1, width - this.messagePrefix({ role: "assistant", text: "" }).length),
+    );
+  }
+
+  private markdownDefaultTextStyle(): DefaultTextStyle {
+    return { color: (text) => this.renderTheme.fg("assistant", text) };
+  }
+
+  private renderToolBody(body: string): string {
+    return body
+      .split("\n")
+      .map((line) => styleSparkDiffLine(this.theme, line))
+      .join("\n");
+  }
+
+  private styleRoleLines(role: SparkNativeMessageRole, lines: string[]): string[] {
+    return lines.map((line) => styleSparkRoleLine(this.theme, role, line));
+  }
+
+  private renderPrefixedLines(prefix: string, bodyLines: string[], width: number): string[] {
+    const lines: string[] = [];
+    for (const [index, line] of bodyLines.entries()) {
+      const label = index === 0 ? prefix : " ".repeat(prefix.length);
+      lines.push(...wrapTextWithAnsi(`${label}${line}`, Math.max(1, width)));
+    }
+    return lines;
   }
 
   private renderPrefixedBlock(prefix: string, body: string, width: number): string[] {
@@ -1999,6 +2195,7 @@ export interface RunNativeSparkTuiOptions {
   keybindings?: SparkKeybindings;
   keybindingContext?: SparkKeybindingContext;
   messageRenderers?: ReadonlyMap<string, SparkHostMessageRenderer>;
+  theme?: SparkTheme;
   configureApp?: (app: SparkNativeTuiApp, session: SparkNativeSession) => void | Promise<void>;
 }
 
@@ -2022,6 +2219,7 @@ export async function runNativeSparkTui(input?: string | RunNativeSparkTuiOption
     keybindings: options.keybindings,
     keybindingContext: options.keybindingContext,
     messageRenderers: options.messageRenderers,
+    theme: options.theme,
   });
   await options.configureApp?.(app, session);
   tui.addChild(app);

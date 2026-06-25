@@ -8,15 +8,20 @@ import {
   DEFAULT_SPARK_COMPACTION_SETTINGS,
   SparkSessionStore,
   compactSparkSessionRecord,
+  compactSparkVisibleTranscript,
   entriesToMessages,
   estimateSparkContextTokens,
   estimateSparkTokens,
+  navigateSparkSessionBranchWithSummary,
   prepareSparkCompaction,
   sessionEntriesToAgentMessages,
   shouldSparkCompact,
   type SparkCompactionSettings,
+  type SparkCliHostServices,
   type SparkSessionRecord,
 } from "../apps/spark-tui/src/host/index.ts";
+import { createSparkPiParitySlashCommands } from "../apps/spark-tui/src/cli/pi-parity-commands.ts";
+import { SparkNativeSession } from "../apps/spark-tui/src/native-tui.ts";
 
 function compactableRecord(store: SparkSessionStore): SparkSessionRecord {
   const record = store.createSession({ id: "compact", timestamp: "2026-06-03T06:00:00.000Z" });
@@ -25,6 +30,10 @@ function compactableRecord(store: SparkSessionStore): SparkSessionRecord {
   store.appendMessage(record, { role: "user", content: "recent request" });
   store.appendMessage(record, { role: "assistant", content: "recent answer" });
   return record;
+}
+
+function testContentText(content: unknown): string {
+  return typeof content === "string" ? content : JSON.stringify(content);
 }
 
 const tinyKeepSettings: SparkCompactionSettings = {
@@ -140,6 +149,142 @@ void test("sessionEntriesToAgentMessages rebuilds compacted context with summary
       ["user", "assistant", "user"],
     );
     assert.equal(resumed[2]?.content, "after compact");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("compactSparkVisibleTranscript persists a compaction entry and returns kept messages", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-visible-compact-"));
+  try {
+    const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
+    const result = await compactSparkVisibleTranscript(store, [
+      { role: "system", text: "welcome banner", display: false },
+      { role: "user", text: "Original request " + "a".repeat(200) },
+      { role: "assistant", text: "Early work " + "b".repeat(200) },
+      { role: "user", text: "Recent request" },
+      { role: "assistant", text: "Recent answer" },
+    ]);
+
+    assert.ok(result);
+    assert.equal(result.entry.type, "compaction");
+    assert.match(result.entry.summary, /Conversation summary:/);
+    assert.match(result.entry.summary, /Original request/);
+    assert.equal(result.keptMessages.at(-1)?.content, "Recent answer");
+
+    const saved = await store.loadByRef(result.record.header.id);
+    assert.equal(saved.entries.at(-1)?.type, "compaction");
+    const context = sessionEntriesToAgentMessages(saved.entries);
+    assert.equal(context[0]?.role, "user");
+    assert.match(
+      testContentText(context[0]?.content),
+      /conversation history before this point was compacted/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("navigateSparkSessionBranchWithSummary appends Pi-style branch summary at target", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-branch-summary-"));
+  try {
+    const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
+    const record = store.createSession({ id: "branchy", timestamp: "2026-06-03T08:00:00.000Z" });
+    store.appendMessage(record, { role: "user", content: "root request" });
+    const baseId = store.appendMessage(record, { role: "assistant", content: "base answer" });
+    const targetId = "target-answer";
+    record.entries.push({
+      type: "message",
+      id: "target-user",
+      parentId: baseId,
+      timestamp: "2026-06-03T08:00:01.000Z",
+      message: { role: "user", content: "target branch request" },
+    });
+    record.entries.push({
+      type: "message",
+      id: targetId,
+      parentId: "target-user",
+      timestamp: "2026-06-03T08:00:02.000Z",
+      message: { role: "assistant", content: "target branch answer" },
+    });
+    record.entries.push({
+      type: "message",
+      id: "old-branch-user",
+      parentId: baseId,
+      timestamp: "2026-06-03T08:00:03.000Z",
+      message: { role: "user", content: "old branch request" },
+    });
+    record.entries.push({
+      type: "message",
+      id: "old-branch-answer",
+      parentId: "old-branch-user",
+      timestamp: "2026-06-03T08:00:04.000Z",
+      message: { role: "assistant", content: "old branch answer" },
+    });
+
+    const result = navigateSparkSessionBranchWithSummary(record, targetId, {
+      summarize: true,
+      customInstructions: "focus on abandoned work",
+    });
+
+    assert.ok(result.summaryEntry);
+    assert.equal(result.summaryEntry.parentId, targetId);
+    assert.equal(result.activeLeafId, result.summaryEntry.id);
+    assert.match(result.summaryEntry.summary, /old branch request/);
+    assert.match(result.summaryEntry.summary, /Custom focus: focus on abandoned work/);
+    assert.doesNotMatch(result.summaryEntry.summary, /target branch answer/);
+    const context = sessionEntriesToAgentMessages(record.entries);
+    assert.deepEqual(
+      context.map((message) => message.role),
+      ["user", "assistant", "user", "assistant", "user"],
+    );
+    assert.match(testContentText(context.at(-1)?.content), /summary of a branch/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("native /compact and /tree summarize commands use persisted compaction helpers", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-compact-slash-"));
+  try {
+    const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
+    const services = {
+      cwd: join(dir, "repo"),
+      sessionStore: store,
+    } as unknown as SparkCliHostServices;
+    const commands = createSparkPiParitySlashCommands(services);
+    const session = new SparkNativeSession(async () => "unused");
+    session.addSystemMessage("banner");
+    session.messages.push({ role: "user", text: "First prompt " + "x".repeat(200) });
+    session.appendAssistantChunk("First answer " + "y".repeat(200));
+    session.finishAssistantMessage();
+    session.messages.push({ role: "user", text: "Recent prompt" });
+    session.appendAssistantChunk("Recent answer");
+    session.finishAssistantMessage();
+
+    const compacted = await commands.compact!.handler("focus", {
+      app: {} as never,
+      session,
+      exit: () => undefined,
+    });
+    assert.match(String(compacted), /Compacted visible Spark transcript into session/);
+    assert.equal((await store.list()).length, 1);
+    assert.match(
+      session.messages.map((message) => message.text).join("\n"),
+      /Compacted visible transcript summary/,
+    );
+
+    const record = compactableRecord(store);
+    await store.save(record);
+    const target = record.entries[1]!.id;
+    const tree = await commands.tree!.handler(`${record.header.id} summarize ${target}`, {
+      app: {} as never,
+      session,
+      exit: () => undefined,
+    });
+    assert.match(String(tree), /Branch summary appended:/);
+    const summarized = await store.loadByRef(record.header.id);
+    assert.equal(summarized.entries.at(-1)?.type, "branch_summary");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

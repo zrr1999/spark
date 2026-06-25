@@ -14,7 +14,7 @@
   ],
   "type": "module",
   "exports": {
-    "./baidu-oneapi-provider": "./src/baidu-oneapi-provider.ts",
+    ".": "./src/index.ts",
     "./headless-role-executor": "./src/headless-role-executor.ts"
   },
   "publishConfig": {
@@ -26,6 +26,8 @@
   "dependencies": {
     "@earendil-works/pi-ai": "^0.79.4",
     "@zendev-lab/pi-extension-api": "workspace:^",
+    "@zendev-lab/pi-files": "workspace:^",
+    "@zendev-lab/spark-ai": "workspace:^",
     "@zendev-lab/spark-protocol": "workspace:^",
     "@zendev-lab/spark-tui": "workspace:^"
   }

@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { basename } from "node:path";
+import { basename, dirname } from "node:path";
+import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
 
-import type { SparkNativeMessage, SparkNativeSlashCommandMap } from "../native-tui.ts";
+import type {
+  SparkNativeMessage,
+  SparkNativeSlashCommandContext,
+  SparkNativeSlashCommandMap,
+} from "../native-tui.ts";
 import {
   exportSparkSessionRecord,
   formatBranchRows,
@@ -10,8 +15,19 @@ import {
   getSparkSessionLeafId,
   readSparkSessionExportFormat,
 } from "../host/session-navigation.ts";
+import {
+  sparkSessionRecordToHtmlMessages,
+  writeSparkTranscriptHtml,
+  type SparkHtmlTranscriptMessage,
+} from "../host/html-export.ts";
+import {
+  compactSparkVisibleTranscript,
+  navigateSparkSessionBranchWithSummary,
+} from "../host/compaction.ts";
+import { listOAuthProviderSummaries } from "../host/auth.ts";
 import type { SparkCliHostServices } from "../host/index.ts";
 import type { SparkConfig } from "../host/config.ts";
+import type { SparkSessionMessage, SparkSessionRecord } from "../host/session-store.ts";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 
@@ -48,7 +64,7 @@ export function createSparkPiParitySlashCommands(
   return {
     settings: {
       description: "show Spark settings and provider/session configuration",
-      argumentHint: "[set thinking <off|minimal|low|medium|high|xhigh>]",
+      argumentHint: "[set thinking <off|minimal|low|medium|high|xhigh>|set theme <id>]",
       getArgumentCompletions: (prefix) => settingsCompletions(prefix),
       handler: async (args) => handleSettingsCommand(services, args),
     },
@@ -58,7 +74,7 @@ export function createSparkPiParitySlashCommands(
     },
     export: {
       description: "export visible Spark transcript or a persisted session",
-      argumentHint: "[json|jsonl|text] [session-id|path]",
+      argumentHint: "[json|jsonl|text|html] [session-id|path] [output.html]",
       getArgumentCompletions: (prefix) => exportCompletions(prefix),
       handler: async (args, ctx) => handleExportCommand(services, args, ctx.session.messages),
     },
@@ -68,9 +84,9 @@ export function createSparkPiParitySlashCommands(
       handler: async (args) => handleImportCommand(services, args),
     },
     share: {
-      description: "prepare a share-safe session export through Spark artifact workflow",
-      handler: () =>
-        "Spark share is daemon-first: use /export json or /export text, then record/share via the artifact tool or cockpit. Secret Gist upload is intentionally not automatic.",
+      description: "write a share-safe local HTML transcript export (no secret upload)",
+      argumentHint: "[session-id|path] [output.html]",
+      handler: async (args, ctx) => handleShareCommand(services, args, ctx.session.messages),
     },
     copy: {
       description: "copy/show the last Spark assistant message",
@@ -110,7 +126,8 @@ export function createSparkPiParitySlashCommands(
       handler: async (_args, ctx) => cloneVisibleTranscript(services, ctx.session.messages),
     },
     tree: {
-      description: "show the active persisted session tree or recent sessions",
+      description: "show persisted session tree or append a branch summary",
+      argumentHint: "[session-id|path] [summarize <entry-id> [instructions]]",
       handler: async (args) => handleTreeCommand(services, args),
     },
     trust: {
@@ -119,18 +136,16 @@ export function createSparkPiParitySlashCommands(
         `Spark trusts this workspace only through explicit config and tool-approval flows. cwd=${services.cwd}`,
     },
     login: {
-      description: "show provider authentication setup for Spark providers",
-      handler: () =>
-        [
-          "Spark provider authentication is provider-plugin based.",
-          "Configure API keys through provider environment variables or ~/.spark/config.json provider plugins, then /reload.",
-          renderProviderSummary(services),
-        ].join("\n"),
+      description: "log in to a supported Spark OAuth provider or show auth status",
+      argumentHint: "[oauth-provider]",
+      getArgumentCompletions: (prefix) => oauthProviderCompletions(prefix),
+      handler: async (args, ctx) => handleLoginCommand(services, args, ctx),
     },
     logout: {
-      description: "show provider credential removal guidance",
-      handler: () =>
-        "Remove the provider credential from its environment/config source, then run /reload. Spark does not delete secrets implicitly.",
+      description: "remove a stored Spark OAuth/API credential",
+      argumentHint: "<provider>",
+      getArgumentCompletions: (prefix) => storedCredentialCompletions(services, prefix),
+      handler: async (args) => handleLogoutCommand(services, args),
     },
     new: {
       description: "start a new visible Spark transcript",
@@ -140,7 +155,8 @@ export function createSparkPiParitySlashCommands(
     },
     compact: {
       description: "summarize visible Spark transcript and clear older context",
-      handler: (_args, ctx) => compactVisibleTranscript(ctx.session.messages),
+      argumentHint: "[custom instructions]",
+      handler: async (args, ctx) => handleCompactCommand(services, args, ctx.session.messages),
     },
     resume: {
       description: "list or preview a persisted Spark session for resume",
@@ -163,12 +179,34 @@ function settingsCompletions(prefix: string): Array<{ value: string; label: stri
     "set thinking medium",
     "set thinking high",
     "set thinking xhigh",
+    "set theme dark",
+    "set theme light",
   ];
   return filterValues(options, prefix).map((value) => ({ value, label: value }));
 }
 
 function exportCompletions(prefix: string): Array<{ value: string; label: string }> {
-  return filterValues(["json", "jsonl", "text"], prefix).map((value) => ({ value, label: value }));
+  return filterValues(["json", "jsonl", "text", "html"], prefix).map((value) => ({
+    value,
+    label: value,
+  }));
+}
+
+function oauthProviderCompletions(prefix: string): Array<{ value: string; label: string }> {
+  return filterValues(
+    listOAuthProviderSummaries().map((provider) => provider.id),
+    prefix,
+  ).map((value) => ({ value, label: value }));
+}
+
+function storedCredentialCompletions(
+  services: SparkCliHostServices,
+  prefix: string,
+): Array<{ value: string; label: string }> {
+  return filterValues(services.authStore?.listProviders() ?? [], prefix).map((value) => ({
+    value,
+    label: value,
+  }));
 }
 
 function filterValues(values: readonly string[], prefix: string): string[] {
@@ -187,7 +225,18 @@ async function handleSettingsCommand(
       return `Usage: /settings set thinking ${THINKING_LEVELS.join("|")}`;
     }
     services.config.activeThinkingLevel = level;
-    return `Spark thinking level set for this session: ${level}. Persisted config updates are handled by the provider/settings parity task.`;
+    await services.saveConfig?.(services.config);
+    return `Spark thinking level set for this session: ${level}.`;
+  }
+  if (tokens[0] === "set" && tokens[1] === "theme") {
+    const themeId = tokens[2];
+    const themes = services.themeCatalog?.themes ?? [];
+    if (!themeId || !themes.some((theme) => theme.id === themeId)) {
+      return `Usage: /settings set theme <${themes.map((theme) => theme.id).join("|") || "dark|light"}>`;
+    }
+    services.config.activeTheme = themeId;
+    await services.saveConfig?.(services.config);
+    return `Spark theme set: ${themeId}. Restart or /reload to apply it to the active TUI.`;
   }
 
   const active = services.modelSelector.getActive();
@@ -196,8 +245,10 @@ async function handleSettingsCommand(
     `cwd: ${services.cwd}`,
     `active model: ${active ? `${active.providerName}/${active.modelId}` : "none"}`,
     `thinking level: ${services.config.activeThinkingLevel ?? "default"}`,
+    `theme: ${services.theme?.id ?? services.config.activeTheme ?? "dark"}`,
     `extensions: ${services.config.extensions.length}`,
     `providers: ${services.providerRegistry.listProviders().length}`,
+    `prompt templates: ${services.promptTemplates?.templates.length ?? 0}`,
   ];
   if (services.diagnostics.length) {
     lines.push("diagnostics:");
@@ -212,14 +263,10 @@ function isThinkingLevel(value: string | undefined): value is SparkThinkingLevel
 }
 
 function renderScopedModels(services: SparkCliHostServices): string {
-  const groups = services.modelSelector.listProviderGroups();
-  if (groups.length === 0) return "No Spark providers/models are registered.";
-  return groups
-    .map((group) => {
-      const header = `${group.active ? "*" : " "} ${group.providerName}`;
-      const models = group.models.map((model) => `  ${model.active ? "*" : " "} ${model.modelId}`);
-      return [header, ...models].join("\n");
-    })
+  const items = services.modelSelector.getPickerState().items;
+  if (items.length === 0) return "No Spark models are registered.";
+  return items
+    .map((model) => `${model.active ? "*" : " "} ${model.value} — ${model.description}`)
     .join("\n");
 }
 
@@ -228,9 +275,17 @@ async function handleExportCommand(
   args: string,
   messages: readonly SparkNativeMessage[],
 ): Promise<string> {
-  const [first, second] = args.trim().split(/\s+/u).filter(Boolean);
-  const format = first === "json" || first === "jsonl" || first === "text" ? first : undefined;
-  const sessionRef = format ? second : first;
+  const tokens = args.trim().split(/\s+/u).filter(Boolean);
+  const first = tokens[0];
+  const format =
+    first === "json" || first === "jsonl" || first === "text" || first === "html"
+      ? first
+      : undefined;
+  if (format === "html") {
+    return await handleHtmlExportCommand(services, tokens.slice(1), messages, "export");
+  }
+
+  const sessionRef = format ? tokens[1] : first;
   if (sessionRef) {
     const record = await services.sessionStore.loadByRef(sessionRef);
     return exportSparkSessionRecord(record, {
@@ -244,6 +299,70 @@ async function handleExportCommand(
     null,
     2,
   );
+}
+
+async function handleShareCommand(
+  services: SparkCliHostServices,
+  args: string,
+  messages: readonly SparkNativeMessage[],
+): Promise<string> {
+  const result = await handleHtmlExportCommand(
+    services,
+    args.trim().split(/\s+/u).filter(Boolean),
+    messages,
+    "share",
+  );
+  return [
+    result.replace(/^Exported HTML:/u, "Share-safe HTML export:"),
+    "No external upload was performed. Review the file before sharing it outside this machine.",
+  ].join("\n");
+}
+
+async function handleHtmlExportCommand(
+  services: SparkCliHostServices,
+  tokens: readonly string[],
+  messages: readonly SparkNativeMessage[],
+  kind: "export" | "share",
+): Promise<string> {
+  const target = parseHtmlExportTarget(tokens);
+  if (target.sessionRef) {
+    const record = await services.sessionStore.loadByRef(target.sessionRef);
+    const result = await writeSparkTranscriptHtml(
+      {
+        title: `Spark session ${record.header.id}`,
+        cwd: record.header.cwd,
+        sessionId: record.header.id,
+        messages: sparkSessionRecordToHtmlMessages(record),
+        theme: services.theme,
+      },
+      {
+        cwd: services.cwd,
+        sparkHome: sparkHomeForExports(services),
+        kind,
+        outputPath: target.outputPath,
+        filenameStem: `spark-${kind}-${record.header.id}`,
+      },
+    );
+    return `Exported HTML: ${result.path}`;
+  }
+
+  const result = await writeSparkTranscriptHtml(
+    {
+      title: "Spark visible transcript",
+      cwd: services.cwd,
+      sessionId: `visible-${Date.now().toString(36)}`,
+      messages: visibleTranscriptHtmlMessages(messages),
+      theme: services.theme,
+    },
+    {
+      cwd: services.cwd,
+      sparkHome: sparkHomeForExports(services),
+      kind,
+      outputPath: target.outputPath,
+      filenameStem: `spark-${kind}-visible-${Date.now().toString(36)}`,
+    },
+  );
+  return `Exported HTML: ${result.path}`;
 }
 
 async function handleImportCommand(services: SparkCliHostServices, args: string): Promise<string> {
@@ -313,35 +432,64 @@ async function cloneVisibleTranscript(
 }
 
 async function handleTreeCommand(services: SparkCliHostServices, args: string): Promise<string> {
-  const sessionRef = args.trim();
+  const tokens = args.trim().split(/\s+/u).filter(Boolean);
+  const sessionRef = tokens[0];
   if (!sessionRef) return formatSessionList(await services.sessionStore.list());
   const record = await services.sessionStore.loadByRef(sessionRef);
-  return formatBranchRows(
-    record.entries.length === 0
-      ? []
-      : record.entries.map((entry, index) => ({
-          id: entry.id,
-          depth: entry.parentId ? 1 : 0,
-          active: entry.id === getSparkSessionLeafId(record),
-          label: `${index + 1}. ${entry.type}`,
-          description: entry.timestamp,
-          entry,
-        })),
-  );
+  if (tokens[1] === "summarize" || tokens[1] === "summary") {
+    const targetId = tokens[2];
+    if (!targetId)
+      return "Usage: /tree <session-id|path> summarize <entry-id> [custom instructions]";
+    const result = navigateSparkSessionBranchWithSummary(record, targetId, {
+      summarize: true,
+      customInstructions: tokens.slice(3).join(" ") || undefined,
+    });
+    await services.sessionStore.save(record);
+    return [
+      `Branch summary appended: ${result.summaryEntry?.id ?? "none"}`,
+      `Active branch: ${result.activeLeafId ?? "root"}`,
+      formatBranchRows(branchRowsForRecord(record)),
+    ].join("\n");
+  }
+  return formatBranchRows(branchRowsForRecord(record));
 }
 
-function compactVisibleTranscript(messages: SparkNativeMessage[]): string {
-  const exportable = exportableMessages(messages);
-  if (exportable.length === 0) return "No visible transcript messages to compact.";
-  const summary = exportable
-    .slice(-8)
-    .map((message) => `${message.role}: ${message.text.replace(/\s+/gu, " ").slice(0, 120)}`)
-    .join("\n");
-  messages.splice(1, Math.max(0, messages.length - 2), {
-    role: "system",
-    text: `Compacted visible transcript summary:\n${summary}`,
+async function handleCompactCommand(
+  services: SparkCliHostServices,
+  args: string,
+  messages: SparkNativeMessage[],
+): Promise<string> {
+  const result = await compactSparkVisibleTranscript(services.sessionStore, messages, {
+    customInstructions: args.trim() || undefined,
   });
-  return "Compacted visible Spark transcript into a summary message.";
+  if (!result) return "Nothing to compact (visible transcript is too small).";
+
+  const firstMessageIndex = messages.findIndex(
+    (message) => message.display !== false && message.text.trim().length > 0,
+  );
+  const deleteStart = firstMessageIndex < 0 ? 0 : firstMessageIndex;
+  messages.splice(deleteStart, messages.length - deleteStart, {
+    role: "custom",
+    customType: "compactionSummary",
+    text: `Compacted visible transcript summary:\n${result.entry.summary}`,
+  });
+  for (const kept of result.keptMessages) {
+    messages.push({ role: normalizeSessionMessageRole(kept.role), text: sessionMessageText(kept) });
+  }
+  return `Compacted visible Spark transcript into session ${result.record.header.id} (${result.entry.tokensBefore} estimated tokens before compaction).`;
+}
+
+function branchRowsForRecord(record: SparkSessionRecord) {
+  return record.entries.length === 0
+    ? []
+    : record.entries.map((entry, index) => ({
+        id: entry.id,
+        depth: entry.parentId ? 1 : 0,
+        active: entry.id === getSparkSessionLeafId(record),
+        label: `${index + 1}. ${entry.type}${entry.type === "branch_summary" ? ` — ${entry.summary.slice(0, 80)}` : ""}`,
+        description: entry.timestamp,
+        entry,
+      }));
 }
 
 async function handleResumeCommand(services: SparkCliHostServices, args: string): Promise<string> {
@@ -353,6 +501,29 @@ async function handleResumeCommand(services: SparkCliHostServices, args: string)
     formatSessionReplay(record),
     "Submit a new prompt to continue this Spark daemon session, or use /tree to inspect branches.",
   ].join("\n");
+}
+
+function normalizeSessionMessageRole(role: string): SparkNativeMessage["role"] {
+  if (role === "user" || role === "assistant" || role === "system") return role;
+  if (role === "toolResult") return "tool";
+  return "custom";
+}
+
+function sessionMessageText(message: SparkSessionMessage): string {
+  const content = message.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return JSON.stringify(content ?? "");
+  return content
+    .map((block) => {
+      if (!block || typeof block !== "object") return "";
+      const record = block as Record<string, unknown>;
+      if (record.type === "text" && typeof record.text === "string") return record.text;
+      if (record.type === "thinking" && typeof record.thinking === "string") return record.thinking;
+      if (record.type === "image") return "[image]";
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
 }
 
 function visibleTranscriptText(messages: readonly SparkNativeMessage[]): string {
@@ -387,12 +558,184 @@ function exportableMessages(messages: readonly SparkNativeMessage[]): SparkNativ
   return messages.filter((message) => message.display !== false && message.text.trim().length > 0);
 }
 
+function visibleTranscriptHtmlMessages(
+  messages: readonly SparkNativeMessage[],
+): SparkHtmlTranscriptMessage[] {
+  return exportableMessages(messages).map((message) => ({
+    role: message.role,
+    label: htmlMessageLabel(message),
+    text: message.text,
+    details: htmlMessageDetails(message),
+  }));
+}
+
+function htmlMessageLabel(message: SparkNativeMessage): string {
+  if (message.role === "tool") return `tool:${message.toolName ?? "tool"}`;
+  if (message.role === "custom") return message.customType ?? "custom";
+  return message.role;
+}
+
+function htmlMessageDetails(message: SparkNativeMessage): Record<string, unknown> | undefined {
+  const details: Record<string, unknown> = {};
+  if (message.toolCallId) details.toolCallId = message.toolCallId;
+  if (message.toolStatus) details.status = message.toolStatus;
+  if (message.details && typeof message.details === "object") details.details = message.details;
+  return Object.keys(details).length ? details : undefined;
+}
+
+function parseHtmlExportTarget(tokens: readonly string[]): {
+  sessionRef?: string;
+  outputPath?: string;
+} {
+  const [first, second] = tokens;
+  if (!first) return {};
+  if (isHtmlPath(first)) return { outputPath: first };
+  return { sessionRef: first, ...(second ? { outputPath: second } : {}) };
+}
+
+function isHtmlPath(value: string): boolean {
+  return value.toLowerCase().endsWith(".html") || value.toLowerCase().endsWith(".htm");
+}
+
+function sparkHomeForExports(services: SparkCliHostServices): string | undefined {
+  const root = services.sessionStore.sessionsRoot;
+  return basename(root) === "sessions" ? dirname(root) : undefined;
+}
+
 function lastAssistantMessage(messages: readonly SparkNativeMessage[]): string | undefined {
   return [...messages].reverse().find((message) => message.role === "assistant")?.text;
+}
+
+async function handleLoginCommand(
+  services: SparkCliHostServices,
+  args: string,
+  ctx: SparkNativeSlashCommandContext,
+): Promise<string> {
+  if (!services.authStore) return "Spark auth store is not available in this host.";
+  const providerId = args.trim();
+  if (!providerId) return renderAuthSummary(services);
+
+  const supported = listOAuthProviderSummaries();
+  if (!supported.some((provider) => provider.id === providerId)) {
+    return [
+      `Unknown OAuth provider: ${providerId}`,
+      `Supported OAuth providers: ${supported.map((provider) => provider.id).join(", ") || "none"}`,
+      renderProviderSummary(services),
+    ].join("\n");
+  }
+
+  const progress: string[] = [];
+  const callbacks = createOAuthLoginCallbacks(services, ctx, progress);
+  await services.authStore.loginOAuth(providerId, callbacks);
+  return [`Logged in OAuth provider: ${providerId}`, ...progress].join("\n");
+}
+
+async function handleLogoutCommand(services: SparkCliHostServices, args: string): Promise<string> {
+  if (!services.authStore) return "Spark auth store is not available in this host.";
+  const providerId = args.trim();
+  if (!providerId) {
+    const stored = services.authStore.listProviders();
+    return stored.length
+      ? `Stored Spark credentials: ${stored.join(", ")}\nUsage: /logout <provider>`
+      : "No Spark credentials are stored. Usage: /logout <provider>";
+  }
+
+  const provider = services.providerRegistry.getProvider(providerId);
+  const status = provider && services.authResolver?.status(provider);
+  if (status && status.kind !== "oauth" && !services.authStore.has(providerId)) {
+    return `Provider ${providerId} uses ${status.kind} auth${status.ref ? ` (${status.ref})` : ""}; remove it from its environment/config source instead of Spark auth.json.`;
+  }
+
+  const removed = await services.authStore.remove(providerId);
+  return removed
+    ? `Removed stored Spark credential for ${providerId}.`
+    : `No stored Spark credential for ${providerId}.`;
+}
+
+function createOAuthLoginCallbacks(
+  services: SparkCliHostServices,
+  ctx: SparkNativeSlashCommandContext,
+  progress: string[],
+): OAuthLoginCallbacks {
+  const push = (message: string) => {
+    progress.push(message);
+    ctx.session.addSystemMessage(message);
+  };
+  return {
+    onAuth: (info) => {
+      push(
+        [
+          `Open OAuth authorization URL: ${info.url}`,
+          info.instructions ? `Instructions: ${info.instructions}` : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+    },
+    onDeviceCode: (info) => {
+      push(
+        [
+          `OAuth device code: ${info.userCode}`,
+          `Verification URL: ${info.verificationUri}`,
+          info.expiresInSeconds ? `Expires in: ${info.expiresInSeconds}s` : undefined,
+          info.intervalSeconds ? `Polling interval: ${info.intervalSeconds}s` : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+    },
+    onProgress: (message) => push(`OAuth: ${message}`),
+    onPrompt: async (prompt) => {
+      const value = await services.runtime
+        .makeContext()
+        .ui?.input?.(prompt.message, prompt.placeholder);
+      if (value !== undefined) return value;
+      if (prompt.allowEmpty) return "";
+      throw new Error(`OAuth provider requested interactive input: ${prompt.message}`);
+    },
+    onManualCodeInput: async () => {
+      const value = await services.runtime
+        .makeContext()
+        .ui?.input?.("Enter OAuth callback code", undefined);
+      if (value !== undefined) return value;
+      throw new Error("OAuth provider requested manual code input, but this UI cannot collect it.");
+    },
+    onSelect: async (prompt) => {
+      const selected = await services.runtime.makeContext().ui?.select?.(
+        prompt.message,
+        prompt.options.map((option) => option.id),
+      );
+      return selected ?? prompt.options[0]?.id;
+    },
+  };
+}
+
+function renderAuthSummary(services: SparkCliHostServices): string {
+  const oauthProviders = listOAuthProviderSummaries();
+  const lines = [
+    "Spark provider authentication:",
+    `auth store: ${services.authStore?.path ?? "unavailable"}`,
+    `supported OAuth providers: ${oauthProviders.map((provider) => provider.id).join(", ") || "none"}`,
+    renderProviderSummary(services),
+  ];
+  const stored = services.authStore?.listProviders() ?? [];
+  lines.push(
+    stored.length
+      ? `stored Spark credentials: ${stored.join(", ")}`
+      : "stored Spark credentials: none",
+  );
+  return lines.join("\n");
 }
 
 function renderProviderSummary(services: SparkCliHostServices): string {
   const providers = services.providerRegistry.listProviders();
   if (providers.length === 0) return "No providers registered.";
-  return `Registered providers: ${providers.map((provider) => provider.name).join(", ")}`;
+  const rendered = providers.map((provider) => {
+    const status = services.authResolver?.status(provider);
+    const auth = status
+      ? `${status.kind}${status.ref ? `:${status.ref}` : ""}=${status.configured ? "configured" : "missing"}`
+      : "auth=unknown";
+    return `${provider.name} (${auth})`;
+  });
+  return `Registered providers: ${rendered.join(", ")}`;
 }

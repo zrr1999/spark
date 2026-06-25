@@ -1,5 +1,6 @@
 import type {
   ArtifactRef,
+  JsonValue,
   Project,
   ProjectRef,
   RoleRef,
@@ -24,6 +25,8 @@ export interface CreateProjectInput {
   description: string;
   purpose?: string;
   outputLanguage?: "zh" | "en";
+  kind?: string;
+  kindState?: JsonValue;
 }
 
 export interface CreateTaskTodoInput {

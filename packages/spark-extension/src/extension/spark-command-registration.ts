@@ -7,14 +7,14 @@ import {
 import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
 import { listBuiltinWorkflows } from "@zendev-lab/pi-workflows";
 import { nowIso, type ProjectRef, type RunRef } from "@zendev-lab/pi-extension-api";
-import type { SparkEntryIntent, SparkEntryMode } from "./spark-entry.ts";
+import type { SparkEntryIntent, SparkEntryPhase } from "./spark-entry.ts";
 import {
   applySparkEntryResolution,
   type SparkEntryApplicationDeps,
 } from "./spark-entry-application.ts";
 import { detectSparkProjectState, resolveSparkEntry } from "./spark-entry-resolution.ts";
 import { currentSparkProject, loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
-import { suggestForegroundGoalMode } from "./spark-foreground-goal-mode.ts";
+import { suggestForegroundGoalPhase } from "./spark-foreground-goal-mode.ts";
 import {
   requestGoalCompletionReview,
   type GoalCompletionReviewOutcome,
@@ -28,6 +28,7 @@ import {
 } from "./spark-session-goals.ts";
 import {
   clearSessionLoop,
+  clearSessionLoopSchedule,
   loadSessionLoop,
   setSessionLoop,
   updateSessionLoopStatus,
@@ -41,12 +42,12 @@ import {
   type SparkLanguage,
 } from "./spark-i18n.ts";
 import {
-  defaultSparkModeRegistry,
+  defaultSparkPhaseRegistry,
   renderSparkImplementationModePrompt,
   renderSparkModeVisibleMessage,
   resolveActiveMode,
 } from "./mode/index.ts";
-import { renderSparkGoalDriverModePrompt } from "./spark-mode-prompts.ts";
+import { renderSparkGoalDriverPhasePrompt } from "./spark-mode-prompts.ts";
 import {
   enterSparkUltracodeDriver,
   enterSparkWorkflowDriver,
@@ -55,6 +56,8 @@ import {
   type SparkWorkflowNavigatorAction,
 } from "./spark-workflow-driver-entry.ts";
 import { defaultSparkDynamicWorkflowEventStore } from "./spark-dynamic-workflow-event-store.ts";
+import { SparkForegroundDriveSubstrate, scheduledDriveDelayMs } from "./spark-drive-substrate.ts";
+import { sparkActiveLens } from "./spark-drive-state.ts";
 import {
   buildSparkDynamicWorkflowDashboardView,
   renderSparkDynamicWorkflowDashboardText,
@@ -114,15 +117,12 @@ interface SparkCommandRegistrationDeps extends SparkEntryApplicationDeps {
   ) => ReviewerRunner | Promise<ReviewerRunner>;
 }
 
-const FOREGROUND_GOAL_LOOP_INTERVAL_MS = 30_000;
+const FOREGROUND_GOAL_IDLE_DELAY_MS = 30_000;
 const FOREGROUND_GOAL_RETRY_BACKOFF_MS = [30_000, 60_000, 120_000, 120_000, 120_000] as const;
 const FOREGROUND_COMPACTION_GATE_STALE_MS = 30 * 60_000;
-const foregroundGoalTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const foregroundDriveSubstrate = new SparkForegroundDriveSubstrate();
 const foregroundGoalAwaitingTurns = new Map<string, ForegroundGoalAwaitingTurn>();
-const foregroundGoalLoopGenerations = new Map<string, number>();
-const foregroundLoopTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const foregroundLoopAwaitingTurns = new Map<string, ForegroundLoopAwaitingTurn>();
-const foregroundLoopGenerations = new Map<string, number>();
 const foregroundCompactionGates = new Map<string, { startedAtMs: number }>();
 const foregroundImplementAwaitingTurns = new Map<string, ForegroundImplementAwaitingTurn>();
 const foregroundImplementGenerations = new Map<string, number>();
@@ -172,19 +172,45 @@ function sendSparkRuntimeInstruction(
   );
 }
 
+function isGoalToolDeactivationEvent(event: unknown): boolean {
+  if (!event || typeof event !== "object") return false;
+  const toolEvent = event as { toolName?: unknown; isError?: unknown; params?: unknown };
+  if (toolEvent.toolName !== "goal" || toolEvent.isError === true) return false;
+  if (!toolEvent.params || typeof toolEvent.params !== "object") return false;
+  const action = (toolEvent.params as { action?: unknown }).action;
+  return action === "pause" || action === "clear";
+}
+
+function isLoopToolDeactivationEvent(event: unknown): boolean {
+  if (!event || typeof event !== "object") return false;
+  const toolEvent = event as { toolName?: unknown; isError?: unknown; params?: unknown };
+  if (toolEvent.toolName !== "loop" || toolEvent.isError === true) return false;
+  if (!toolEvent.params || typeof toolEvent.params !== "object") return false;
+  return (toolEvent.params as { action?: unknown }).action === "clear";
+}
+
+function isLoopToolScheduleEvent(event: unknown): boolean {
+  if (!event || typeof event !== "object") return false;
+  const toolEvent = event as { toolName?: unknown; isError?: unknown; params?: unknown };
+  if (toolEvent.toolName !== "loop" || toolEvent.isError === true) return false;
+  if (!toolEvent.params || typeof toolEvent.params !== "object") return false;
+  return (toolEvent.params as { action?: unknown }).action === "schedule";
+}
+
 export function registerSparkCommands(
   pi: SparkCommandApi,
   deps: SparkCommandRegistrationDeps,
 ): void {
   pi.on?.("session_start", async (_event, ctx) => {
     await clearStaleForegroundGoalRetryState(ctx);
+    await clearLegacyPausedForegroundLoop(ctx);
     if (await loadActiveForegroundGoal(ctx)) {
       clearForegroundLoop(ctx.cwd, ctx);
       await scheduleForegroundGoalLoopIfActive(pi, ctx);
       return;
     }
     clearForegroundGoalLoop(ctx.cwd, ctx);
-    await scheduleForegroundLoopIfActive(pi, ctx);
+    await scheduleForegroundLoopIfActive(pi, ctx, { ifUnscheduled: "immediate" });
   });
   pi.on?.("session_before_compact", (event, ctx) => {
     markForegroundCompactionGate(pi, ctx, event);
@@ -219,15 +245,17 @@ export function registerSparkCommands(
   });
   pi.on?.("tool_execution_end", async (event, ctx) => {
     if (isGoalToolDeactivationEvent(event)) clearForegroundGoalLoop(ctx.cwd, ctx);
+    if (isLoopToolDeactivationEvent(event)) clearForegroundLoop(ctx.cwd, ctx);
+    if (isLoopToolScheduleEvent(event)) await scheduleForegroundLoopIfActive(pi, ctx);
   });
 
   pi.registerCommand("plan", {
     description:
-      "Enter Spark plan mode directly, or initialize an existing non-empty project into plan mode.",
+      "Set the Spark session phase to plan directly, or initialize an existing non-empty project into the plan phase.",
     async handler(args, ctx) {
       await handleSparkEntryCommand(pi, ctx, {
         kind: "direct",
-        mode: "plan",
+        phase: "plan",
         prompt: args.trim(),
       });
     },
@@ -235,11 +263,11 @@ export function registerSparkCommands(
 
   pi.registerCommand("implement", {
     description:
-      "Enter Spark implement mode: keep working through ready project tasks until blocked.",
+      "Set the Spark session phase to implement: keep working through ready project tasks until blocked.",
     async handler(args, ctx) {
       await handleSparkEntryCommand(pi, ctx, {
         kind: "direct",
-        mode: "implement",
+        phase: "implement",
         prompt: args.trim(),
       });
     },
@@ -379,11 +407,14 @@ export function registerSparkCommands(
 
   function parseLoopCommandAction(
     args: string,
-  ): { action: "continue"; objective: string } | { action: "pause" } {
+  ): { action: "continue"; objective: string } | { action: "clear" } | { action: "removed" } {
     const trimmed = args.trim();
     const normalized = trimmed.toLocaleLowerCase();
-    if (["stop", "pause", "halt", "停止", "暂停", "停下"].includes(normalized)) {
-      return { action: "pause" };
+    if (["stop", "halt", "停止", "停下"].includes(normalized)) {
+      return { action: "clear" };
+    }
+    if (["pause", "暂停"].includes(normalized)) {
+      return { action: "removed" };
     }
     return { action: "continue", objective: trimmed };
   }
@@ -420,8 +451,8 @@ export function registerSparkCommands(
     await applySparkEntryResolution(piApi, deps, ctx, graph, resolution);
     if (
       intent.kind === "direct" &&
-      intent.mode === "implement" &&
-      resolution.action === "enter_mode"
+      (intent.phase ?? intent.mode) === "implement" &&
+      (resolution.action === "enter_phase" || resolution.action === "enter_mode")
     ) {
       clearForegroundGoalLoop(ctx.cwd, ctx);
       delete ctx.askAutoAnswer;
@@ -462,23 +493,24 @@ export function registerSparkCommands(
   ): Promise<void> {
     clearForegroundImplement(ctx.cwd, ctx);
     const loopAction = parseLoopCommandAction(rawArgs);
-    const existingLoop = await loadSessionLoop(ctx.cwd, ctx);
-    if (loopAction.action === "pause") {
+    let existingLoop = await loadSessionLoop(ctx.cwd, ctx);
+    if (existingLoop?.status === "paused") {
+      await clearSessionLoop(ctx.cwd, ctx);
+      existingLoop = undefined;
+    }
+    if (loopAction.action === "clear") {
       if (!existingLoop) {
         ctx.ui?.notify?.("No Spark loop is active.", "info");
         return;
       }
       clearForegroundLoop(ctx.cwd, ctx);
-      const paused = await updateSessionLoopStatus(ctx.cwd, ctx, "paused", {
-        reason: "Paused by /loop stop.",
-        retryState: null,
-        expectedLoopId: existingLoop.loopId,
-      });
+      await clearSessionLoop(ctx.cwd, ctx);
       await deps.refreshSparkWidget(ctx.cwd, ctx);
-      ctx.ui?.notify?.(
-        `Spark loop paused: ${compactInline((paused ?? existingLoop).objective)}`,
-        "info",
-      );
+      ctx.ui?.notify?.(`Spark loop stopped: ${compactInline(existingLoop.objective)}`, "info");
+      return;
+    }
+    if (loopAction.action === "removed") {
+      ctx.ui?.notify?.("/loop pause was removed; use /loop stop to clear a plain loop.", "info");
       return;
     }
 
@@ -502,6 +534,7 @@ export function registerSparkCommands(
       existingLoop && !explicitObjective
         ? await updateSessionLoopStatus(ctx.cwd, ctx, "active", {
             retryState: null,
+            schedule: null,
             expectedLoopId: existingLoop.loopId,
           })
         : await setSessionLoop(ctx.cwd, ctx, {
@@ -731,8 +764,8 @@ export function registerSparkCommands(
     const graph = await loadSparkGraph(ctx.cwd, ctx);
     const project = graph ? await currentSparkProject(ctx.cwd, ctx, graph) : undefined;
     const instructions = goalInstructions(language);
-    const selectedMode = graph
-      ? resolveForegroundGoalMode(graph, project?.ref, goal.objective)
+    const selectedPhase = graph
+      ? resolveForegroundGoalPhase(graph, project?.ref, goal.objective)
       : "plan";
     const instruction = [
       instructions.goalActiveHeader,
@@ -741,18 +774,18 @@ export function registerSparkCommands(
       instructions.pauseLineForeground,
       instructions.loopModeDecisionContract,
       instructions.loopReviewerOwnership,
-      graph ? renderForegroundGoalModePrompt(graph, project?.ref, goal.objective) : undefined,
+      graph ? renderForegroundGoalPhasePrompt(graph, project?.ref, goal.objective) : undefined,
     ]
       .filter((line): line is string => Boolean(line))
       .join("\n");
     sendSparkRuntimeInstruction(piApi, "spark-goal-request", instruction, visible, {
       goalId: goal.goalId,
       purpose: "foreground-goal-start",
-      selectedMode,
+      selectedPhase,
     });
     markForegroundGoalAwaitingTurn(piApi, ctx, goal.goalId);
     if (!piApi.on)
-      scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+      scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_IDLE_DELAY_MS, {
         goalId: goal.goalId,
       });
   }
@@ -767,7 +800,7 @@ export function registerSparkCommands(
       return;
     }
     clearForegroundGoalLoop(ctx.cwd, ctx);
-    await scheduleForegroundLoopIfActive(piApi, ctx);
+    await scheduleForegroundLoopIfActive(piApi, ctx, { ifUnscheduled: "immediate" });
   }
 
   function markForegroundCompactionGate(
@@ -787,7 +820,9 @@ export function registerSparkCommands(
       "abort",
       () => {
         clearForegroundCompactionGate(ctx.cwd, ctx);
-        void scheduleForegroundDriverIfActive(piApi, ctx).catch(reportGoalLoopError);
+        void scheduleForegroundDriverIfActive(piApi, ctx).catch((error: unknown) =>
+          reportForegroundDriverError(ctx, "driver", error),
+        );
       },
       { once: true },
     );
@@ -820,7 +855,7 @@ export function registerSparkCommands(
     const key = foregroundGoalLoopKey(ctx.cwd, ctx);
     const awaiting = foregroundGoalAwaitingTurns.get(key);
     if (awaiting?.goalId === active.goal.goalId) return;
-    scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+    scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_IDLE_DELAY_MS, {
       goalId: active.goal.goalId,
     });
   }
@@ -828,28 +863,26 @@ export function registerSparkCommands(
   function scheduleForegroundGoalLoop(
     piApi: SparkCommandApi,
     ctx: SparkGoalLoopContext,
-    delayMs = FOREGROUND_GOAL_LOOP_INTERVAL_MS,
+    delayMs = FOREGROUND_GOAL_IDLE_DELAY_MS,
     options: { idleGateSatisfied?: boolean; goalId?: string } = {},
   ): void {
     const key = foregroundGoalLoopKey(ctx.cwd, ctx);
-    const generation = nextForegroundGoalLoopGeneration(key);
     clearForegroundGoalLoop(ctx.cwd, ctx, { preserveGeneration: true });
-    const timer = setTimeout(() => {
-      if (foregroundGoalLoopGenerations.get(key) !== generation) return;
-      foregroundGoalTimers.delete(key);
-      void runForegroundGoalLoopTick(piApi, ctx, { ...options, generation }).catch(
-        reportGoalLoopError,
-      );
-    }, delayMs);
-    timer.unref?.();
-    foregroundGoalTimers.set(key, timer);
+    foregroundDriveSubstrate.schedule({
+      drive: "goal",
+      baseKey: key,
+      delayMs,
+      run: (generation) => {
+        void runForegroundGoalLoopTick(piApi, ctx, { ...options, generation }).catch(
+          (error: unknown) => reportForegroundDriverError(ctx, "goal loop", error),
+        );
+      },
+    });
   }
 
   function clearForegroundGoalTimer(cwd: string, ctx: SparkGoalLoopContext): void {
     const key = foregroundGoalLoopKey(cwd, ctx);
-    const timer = foregroundGoalTimers.get(key);
-    if (timer) clearTimeout(timer);
-    foregroundGoalTimers.delete(key);
+    foregroundDriveSubstrate.clearTimer("goal", key);
   }
 
   function clearForegroundGoalLoop(
@@ -866,6 +899,7 @@ export function registerSparkCommands(
   async function scheduleForegroundLoopIfActive(
     piApi: SparkCommandApi,
     ctx: SparkGoalLoopContext,
+    options: { ifUnscheduled?: "skip" | "immediate" } = {},
   ): Promise<void> {
     const active = await loadActiveForegroundLoop(ctx);
     if (!active) {
@@ -875,7 +909,13 @@ export function registerSparkCommands(
     const key = foregroundGoalLoopKey(ctx.cwd, ctx);
     const awaiting = foregroundLoopAwaitingTurns.get(key);
     if (awaiting?.loopId === active.loop.loopId) return;
-    scheduleForegroundLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+    const delayMs = scheduledDriveDelayMs(active.loop.schedule);
+    if (delayMs === undefined) {
+      if (options.ifUnscheduled === "immediate")
+        scheduleForegroundLoop(piApi, ctx, 0, { loopId: active.loop.loopId });
+      return;
+    }
+    scheduleForegroundLoop(piApi, ctx, delayMs, {
       loopId: active.loop.loopId,
     });
   }
@@ -883,26 +923,26 @@ export function registerSparkCommands(
   function scheduleForegroundLoop(
     piApi: SparkCommandApi,
     ctx: SparkGoalLoopContext,
-    delayMs = FOREGROUND_GOAL_LOOP_INTERVAL_MS,
+    delayMs: number,
     options: { idleGateSatisfied?: boolean; loopId?: string } = {},
   ): void {
     const key = foregroundGoalLoopKey(ctx.cwd, ctx);
-    const generation = nextForegroundLoopGeneration(key);
     clearForegroundLoop(ctx.cwd, ctx, { preserveGeneration: true });
-    const timer = setTimeout(() => {
-      if (foregroundLoopGenerations.get(key) !== generation) return;
-      foregroundLoopTimers.delete(key);
-      void runForegroundLoopTick(piApi, ctx, { ...options, generation }).catch(reportGoalLoopError);
-    }, delayMs);
-    timer.unref?.();
-    foregroundLoopTimers.set(key, timer);
+    foregroundDriveSubstrate.schedule({
+      drive: "loop",
+      baseKey: key,
+      delayMs,
+      run: (generation) => {
+        void runForegroundLoopTick(piApi, ctx, { ...options, generation }).catch((error: unknown) =>
+          reportForegroundDriverError(ctx, "loop", error),
+        );
+      },
+    });
   }
 
   function clearForegroundLoopTimer(cwd: string, ctx: SparkGoalLoopContext): void {
     const key = foregroundGoalLoopKey(cwd, ctx);
-    const timer = foregroundLoopTimers.get(key);
-    if (timer) clearTimeout(timer);
-    foregroundLoopTimers.delete(key);
+    foregroundDriveSubstrate.clearTimer("loop", key);
   }
 
   function clearForegroundLoop(
@@ -916,25 +956,12 @@ export function registerSparkCommands(
     if (!options.preserveGeneration) nextForegroundLoopGeneration(key);
   }
 
-  function isGoalToolDeactivationEvent(event: unknown): boolean {
-    if (!event || typeof event !== "object") return false;
-    const toolEvent = event as { toolName?: unknown; isError?: unknown; params?: unknown };
-    if (toolEvent.toolName !== "goal" || toolEvent.isError === true) return false;
-    if (!toolEvent.params || typeof toolEvent.params !== "object") return false;
-    const action = (toolEvent.params as { action?: unknown }).action;
-    return action === "pause" || action === "clear";
-  }
-
   function nextForegroundGoalLoopGeneration(key: string): number {
-    const generation = (foregroundGoalLoopGenerations.get(key) ?? 0) + 1;
-    foregroundGoalLoopGenerations.set(key, generation);
-    return generation;
+    return foregroundDriveSubstrate.nextGeneration("goal", key);
   }
 
   function nextForegroundLoopGeneration(key: string): number {
-    const generation = (foregroundLoopGenerations.get(key) ?? 0) + 1;
-    foregroundLoopGenerations.set(key, generation);
-    return generation;
+    return foregroundDriveSubstrate.nextGeneration("loop", key);
   }
 
   function nextForegroundImplementGeneration(key: string): number {
@@ -955,9 +982,7 @@ export function registerSparkCommands(
     goalId: string,
   ): void {
     const key = foregroundGoalLoopKey(ctx.cwd, ctx);
-    const timer = foregroundGoalTimers.get(key);
-    if (timer) clearTimeout(timer);
-    foregroundGoalTimers.delete(key);
+    foregroundDriveSubstrate.clearTimer("goal", key);
     const generation = nextForegroundGoalLoopGeneration(key);
     ctx.sparkAutonomousGoalTurn = { goalId };
     foregroundGoalAwaitingTurns.set(key, {
@@ -975,9 +1000,7 @@ export function registerSparkCommands(
     loopId: string,
   ): void {
     const key = foregroundGoalLoopKey(ctx.cwd, ctx);
-    const timer = foregroundLoopTimers.get(key);
-    if (timer) clearTimeout(timer);
-    foregroundLoopTimers.delete(key);
+    foregroundDriveSubstrate.clearTimer("loop", key);
     const generation = nextForegroundLoopGeneration(key);
     foregroundLoopAwaitingTurns.set(key, {
       piApi,
@@ -1012,13 +1035,13 @@ export function registerSparkCommands(
     const key = foregroundGoalLoopKey(ctx.cwd, ctx);
     if (
       options.generation !== undefined &&
-      foregroundGoalLoopGenerations.get(key) !== options.generation
+      foregroundDriveSubstrate.currentGeneration("goal", key) !== options.generation
     )
       return;
     const initial = await loadActiveForegroundGoal(ctx);
     if (!initial || (options.goalId && initial.goal.goalId !== options.goalId)) return;
     if (isForegroundCompactionGateActive(ctx.cwd, ctx)) {
-      scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+      scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_IDLE_DELAY_MS, {
         goalId: initial.goal.goalId,
       });
       return;
@@ -1027,7 +1050,7 @@ export function registerSparkCommands(
       await ctx.waitForIdle();
       const active = await loadActiveForegroundGoal(ctx);
       if (active && (!options.goalId || active.goal.goalId === options.goalId)) {
-        scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+        scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_IDLE_DELAY_MS, {
           idleGateSatisfied: true,
           goalId: active.goal.goalId,
         });
@@ -1035,14 +1058,14 @@ export function registerSparkCommands(
       return;
     }
     if (ctx.isIdle?.() === false) {
-      scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+      scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_IDLE_DELAY_MS, {
         idleGateSatisfied: false,
         goalId: initial.goal.goalId,
       });
       return;
     }
     if (isForegroundCompactionGateActive(ctx.cwd, ctx)) {
-      scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+      scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_IDLE_DELAY_MS, {
         goalId: initial.goal.goalId,
       });
       return;
@@ -1050,7 +1073,7 @@ export function registerSparkCommands(
     const active = await loadActiveForegroundGoal(ctx);
     if (!active || (options.goalId && active.goal.goalId !== options.goalId)) return;
     if (isSparkReviewerLeaseActive(ctx.cwd, ctx)) {
-      scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+      scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_IDLE_DELAY_MS, {
         goalId: active.goal.goalId,
       });
       return;
@@ -1064,7 +1087,7 @@ export function registerSparkCommands(
     const shouldContinue = await reviewActiveForegroundGoal(ctx, active);
     if (!shouldContinue) return;
     if (isForegroundCompactionGateActive(ctx.cwd, ctx)) {
-      scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+      scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_IDLE_DELAY_MS, {
         goalId: active.goal.goalId,
       });
       return;
@@ -1073,10 +1096,10 @@ export function registerSparkCommands(
     const language = sparkLanguageForProject({ project, goal });
     const notifications = goalNotifications(language);
     const visible = notifications.goalTickHeader(compactInline(goal.objective), projectLabel);
-    const selectedMode = active.graph
-      ? resolveForegroundGoalMode(active.graph, project?.ref, goal.objective)
+    const selectedPhase = active.graph
+      ? resolveForegroundGoalPhase(active.graph, project?.ref, goal.objective)
       : "plan";
-    ctx.sparkActiveLens = { mode: selectedMode, driver: "goal" };
+    ctx.sparkActiveLens = sparkActiveLens(selectedPhase, "goal");
     const instruction = renderForegroundGoalTickInstruction(
       project?.title,
       goal.objective,
@@ -1088,7 +1111,7 @@ export function registerSparkCommands(
     sendSparkRuntimeInstruction(piApi, "spark-goal-request", instruction, visible, {
       goalId: goal.goalId,
       purpose: "foreground-goal-tick",
-      selectedMode,
+      selectedPhase,
     });
     markForegroundGoalAwaitingTurn(piApi, ctx, goal.goalId);
   }
@@ -1101,13 +1124,13 @@ export function registerSparkCommands(
     const key = foregroundGoalLoopKey(ctx.cwd, ctx);
     if (
       options.generation !== undefined &&
-      foregroundLoopGenerations.get(key) !== options.generation
+      foregroundDriveSubstrate.currentGeneration("loop", key) !== options.generation
     )
       return;
     const initial = await loadActiveForegroundLoop(ctx);
     if (!initial || (options.loopId && initial.loop.loopId !== options.loopId)) return;
     if (isForegroundCompactionGateActive(ctx.cwd, ctx)) {
-      scheduleForegroundLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+      scheduleForegroundLoop(piApi, ctx, FOREGROUND_GOAL_IDLE_DELAY_MS, {
         loopId: initial.loop.loopId,
       });
       return;
@@ -1116,7 +1139,7 @@ export function registerSparkCommands(
       await ctx.waitForIdle();
       const active = await loadActiveForegroundLoop(ctx);
       if (active && (!options.loopId || active.loop.loopId === options.loopId)) {
-        scheduleForegroundLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+        scheduleForegroundLoop(piApi, ctx, FOREGROUND_GOAL_IDLE_DELAY_MS, {
           idleGateSatisfied: true,
           loopId: active.loop.loopId,
         });
@@ -1124,14 +1147,14 @@ export function registerSparkCommands(
       return;
     }
     if (ctx.isIdle?.() === false) {
-      scheduleForegroundLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+      scheduleForegroundLoop(piApi, ctx, FOREGROUND_GOAL_IDLE_DELAY_MS, {
         idleGateSatisfied: false,
         loopId: initial.loop.loopId,
       });
       return;
     }
     if (isForegroundCompactionGateActive(ctx.cwd, ctx)) {
-      scheduleForegroundLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+      scheduleForegroundLoop(piApi, ctx, FOREGROUND_GOAL_IDLE_DELAY_MS, {
         loopId: initial.loop.loopId,
       });
       return;
@@ -1145,17 +1168,18 @@ export function registerSparkCommands(
       return;
     }
     if (isForegroundCompactionGateActive(ctx.cwd, ctx)) {
-      scheduleForegroundLoop(piApi, ctx, FOREGROUND_GOAL_LOOP_INTERVAL_MS, {
+      scheduleForegroundLoop(piApi, ctx, FOREGROUND_GOAL_IDLE_DELAY_MS, {
         loopId: active.loop.loopId,
       });
       return;
     }
+    await clearSessionLoopSchedule(ctx.cwd, ctx, { expectedLoopId: loop.loopId });
     const projectLabel = project ? ` · project: ${project.title}` : "";
     const visible = `Spark loop tick: ${compactInline(loop.objective)}${projectLabel}`;
-    const selectedMode = active.graph
-      ? resolveForegroundGoalMode(active.graph, project?.ref, loop.objective)
+    const selectedPhase = active.graph
+      ? resolveForegroundGoalPhase(active.graph, project?.ref, loop.objective, "loop")
       : "plan";
-    ctx.sparkActiveLens = { mode: selectedMode, driver: "goal" };
+    ctx.sparkActiveLens = sparkActiveLens(selectedPhase, "loop");
     const instruction = renderSparkLoopInstruction(
       loop.objective,
       active.graph,
@@ -1165,7 +1189,7 @@ export function registerSparkCommands(
     sendSparkRuntimeInstruction(piApi, "spark-loop-request", instruction, visible, {
       loopId: loop.loopId,
       purpose: "foreground-loop-tick",
-      selectedMode,
+      selectedPhase,
     });
     markForegroundLoopAwaitingTurn(piApi, ctx, loop.loopId);
   }
@@ -1202,7 +1226,7 @@ export function registerSparkCommands(
       foregroundGoalAwaitingTurns.delete(key);
       if (awaiting.ctx.sparkAutonomousGoalTurn?.goalId === awaiting.goalId)
         delete awaiting.ctx.sparkAutonomousGoalTurn;
-      if (foregroundGoalLoopGenerations.get(key) !== awaiting.generation) continue;
+      if (foregroundDriveSubstrate.currentGeneration("goal", key) !== awaiting.generation) continue;
       const active = await loadActiveForegroundGoal(awaiting.ctx);
       if (!active || active.goal.goalId !== awaiting.goalId) continue;
       const agentOutcome = foregroundGoalAgentOutcome(event);
@@ -1225,7 +1249,7 @@ export function registerSparkCommands(
       scheduleForegroundGoalLoop(
         awaiting.piApi ?? piApi,
         awaiting.ctx,
-        FOREGROUND_GOAL_LOOP_INTERVAL_MS,
+        FOREGROUND_GOAL_IDLE_DELAY_MS,
         { goalId: awaiting.goalId },
       );
     }
@@ -1245,7 +1269,7 @@ export function registerSparkCommands(
     }
     for (const [key, awaiting] of pending) {
       foregroundLoopAwaitingTurns.delete(key);
-      if (foregroundLoopGenerations.get(key) !== awaiting.generation) continue;
+      if (foregroundDriveSubstrate.currentGeneration("loop", key) !== awaiting.generation) continue;
       const active = await loadActiveForegroundLoop(awaiting.ctx);
       if (!active || active.loop.loopId !== awaiting.loopId) continue;
       const agentOutcome = foregroundGoalAgentOutcome(event);
@@ -1264,12 +1288,19 @@ export function registerSparkCommands(
         continue;
       }
       await resetForegroundLoopRetryState(awaiting.ctx, active.loop);
-      scheduleForegroundLoop(
-        awaiting.piApi ?? piApi,
-        awaiting.ctx,
-        FOREGROUND_GOAL_LOOP_INTERVAL_MS,
-        { loopId: awaiting.loopId },
-      );
+      const scheduled = await loadActiveForegroundLoop(awaiting.ctx);
+      if (!scheduled || scheduled.loop.loopId !== awaiting.loopId) continue;
+      const delayMs = scheduledDriveDelayMs(scheduled.loop.schedule);
+      if (delayMs === undefined) {
+        awaiting.ctx.ui?.notify?.(
+          "Spark loop tick completed without a next schedule; call loop action=schedule or /loop again to continue.",
+          "info",
+        );
+        continue;
+      }
+      scheduleForegroundLoop(awaiting.piApi ?? piApi, awaiting.ctx, delayMs, {
+        loopId: awaiting.loopId,
+      });
     }
   }
 
@@ -1388,7 +1419,7 @@ export function registerSparkCommands(
   ): Promise<{ shouldRetry: boolean; delayMs: number }> {
     const existing = await loadSessionGoal(ctx.cwd, ctx);
     if (!existing || existing.status !== "active" || existing.goalId !== goalId) {
-      return { shouldRetry: false, delayMs: FOREGROUND_GOAL_LOOP_INTERVAL_MS };
+      return { shouldRetry: false, delayMs: FOREGROUND_GOAL_IDLE_DELAY_MS };
     }
     const consecutiveFailures = (existing.retryState?.consecutiveFailures ?? 0) + 1;
     const reviewedAt = nowIso();
@@ -1410,7 +1441,7 @@ export function registerSparkCommands(
       retryState,
       expectedGoalId: goalId,
     });
-    if (!goal) return { shouldRetry: false, delayMs: FOREGROUND_GOAL_LOOP_INTERVAL_MS };
+    if (!goal) return { shouldRetry: false, delayMs: FOREGROUND_GOAL_IDLE_DELAY_MS };
     await deps.refreshSparkWidget(ctx.cwd, ctx);
     return { shouldRetry: true, delayMs: retryState.nextDelayMs };
   }
@@ -1447,6 +1478,14 @@ export function registerSparkCommands(
     await deps.refreshSparkWidget(ctx.cwd, ctx);
   }
 
+  async function clearLegacyPausedForegroundLoop(ctx: SparkGoalLoopContext): Promise<void> {
+    const loop = await loadSessionLoop(ctx.cwd, ctx);
+    if (loop?.status !== "paused") return;
+    clearForegroundLoop(ctx.cwd, ctx);
+    await clearSessionLoop(ctx.cwd, ctx);
+    await deps.refreshSparkWidget(ctx.cwd, ctx);
+  }
+
   async function recordForegroundLoopAbortedTurn(
     ctx: SparkGoalLoopContext,
     loopId: string,
@@ -1454,12 +1493,9 @@ export function registerSparkCommands(
   ): Promise<void> {
     const existing = await loadSessionLoop(ctx.cwd, ctx);
     if (!existing || existing.status !== "active" || existing.loopId !== loopId) return;
-    await updateSessionLoopStatus(ctx.cwd, ctx, "paused", {
-      reason: `foreground loop paused after manual abort: ${failure}`,
-      retryState: null,
-      expectedLoopId: loopId,
-    });
+    await clearSessionLoop(ctx.cwd, ctx);
     await deps.refreshSparkWidget(ctx.cwd, ctx);
+    ctx.ui?.notify?.(`Spark loop stopped after manual abort: ${failure}`, "info");
   }
 
   async function recordForegroundLoopFailedTurn(
@@ -1469,7 +1505,7 @@ export function registerSparkCommands(
   ): Promise<{ shouldRetry: boolean; delayMs: number }> {
     const existing = await loadSessionLoop(ctx.cwd, ctx);
     if (!existing || existing.status !== "active" || existing.loopId !== loopId) {
-      return { shouldRetry: false, delayMs: FOREGROUND_GOAL_LOOP_INTERVAL_MS };
+      return { shouldRetry: false, delayMs: FOREGROUND_GOAL_IDLE_DELAY_MS };
     }
     const consecutiveFailures = (existing.retryState?.consecutiveFailures ?? 0) + 1;
     const failedAt = nowIso();
@@ -1480,9 +1516,10 @@ export function registerSparkCommands(
     };
     const loop = await updateSessionLoopStatus(ctx.cwd, ctx, "active", {
       retryState,
+      schedule: null,
       expectedLoopId: loopId,
     });
-    if (!loop) return { shouldRetry: false, delayMs: FOREGROUND_GOAL_LOOP_INTERVAL_MS };
+    if (!loop) return { shouldRetry: false, delayMs: FOREGROUND_GOAL_IDLE_DELAY_MS };
     await deps.refreshSparkWidget(ctx.cwd, ctx);
     return { shouldRetry: true, delayMs: retryState.nextDelayMs };
   }
@@ -1511,7 +1548,7 @@ export function registerSparkCommands(
       Math.max(0, consecutiveFailures - 1),
       FOREGROUND_GOAL_RETRY_BACKOFF_MS.length - 1,
     );
-    return FOREGROUND_GOAL_RETRY_BACKOFF_MS[index] ?? FOREGROUND_GOAL_LOOP_INTERVAL_MS;
+    return FOREGROUND_GOAL_RETRY_BACKOFF_MS[index] ?? FOREGROUND_GOAL_IDLE_DELAY_MS;
   }
 
   function foregroundGoalAgentOutcome(event: unknown): {
@@ -1655,24 +1692,28 @@ export function registerSparkCommands(
       status,
       LOOP_COMPLETION_BOUNDARY_GUIDANCE,
       "For reviewer-gated goal completion, start or continue /goal instead of this open-ended loop.",
-      renderSparkLoopModePrompt(graph, project?.ref, objective),
+      'Before ending this /loop tick, call loop({ action: "schedule", delayMs, reason }) to choose the next tick time; there is no fixed default interval. If cadence/cost/urgency is a material user preference, call ask before scheduling.',
+      renderSparkLoopPhasePrompt(graph, project?.ref, objective),
     ]
       .filter((line): line is string => Boolean(line))
       .join("\n");
   }
 
-  function renderSparkLoopModePrompt(
+  function renderSparkLoopPhasePrompt(
     graph: TaskGraph | null | undefined,
     selectedProjectRef: ProjectRef | undefined,
     objective: string,
   ): string {
-    const mode = graph ? resolveForegroundGoalMode(graph, selectedProjectRef, objective) : "plan";
+    const phase = graph
+      ? resolveForegroundGoalPhase(graph, selectedProjectRef, objective, "loop")
+      : "plan";
     return [
-      `Selected Spark mode for loop driver: ${mode}.`,
+      `Selected Spark phase for loop driver: ${phase}.`,
       "Loop driver requirements:",
-      "- Use the selected mode's tool policy for this turn: research, plan, or implement.",
+      "- Use the selected phase's tool policy for this turn: research, plan, or implement.",
       "- Continue one concrete low-risk step; block on human decisions or report external blockers instead of lowering scope.",
       "- Use /goal when the user wants evidence-audited completion with reviewer gating.",
+      "- End the turn by scheduling the next tick with the loop tool, unless you cleared the loop or reported a blocker that prevents scheduling.",
     ].join("\n");
   }
 
@@ -1713,7 +1754,7 @@ export function registerSparkCommands(
       renderForegroundGoalLoopLayer(loop),
       instructions.loopModeDecisionContract,
       instructions.loopReviewerOwnership,
-      graph ? renderForegroundGoalModePrompt(graph, project?.ref, objective) : undefined,
+      graph ? renderForegroundGoalPhasePrompt(graph, project?.ref, objective) : undefined,
     ]
       .filter((line): line is string => Boolean(line))
       .join("\n");
@@ -1726,35 +1767,36 @@ export function registerSparkCommands(
     ].join("\n");
   }
 
-  function renderForegroundGoalModePrompt(
+  function renderForegroundGoalPhasePrompt(
     graph: TaskGraph,
     selectedProjectRef: ProjectRef | undefined,
     objective: string,
   ): string {
-    const mode = resolveForegroundGoalMode(graph, selectedProjectRef, objective);
+    const phase = resolveForegroundGoalPhase(graph, selectedProjectRef, objective, "goal");
     return [
-      `Selected Spark mode for goal driver: ${mode}.`,
-      renderSparkGoalDriverModePrompt(graph, selectedProjectRef, objective, mode),
+      `Selected Spark phase for goal drive: ${phase}.`,
+      renderSparkGoalDriverPhasePrompt(graph, selectedProjectRef, objective, phase),
     ].join("\n\n");
   }
 
-  function resolveForegroundGoalMode(
+  function resolveForegroundGoalPhase(
     graph: TaskGraph,
     selectedProjectRef: ProjectRef | undefined,
     objective: string,
-  ): SparkEntryMode {
-    const suggested = suggestForegroundGoalMode(graph, selectedProjectRef, objective);
+    drive: "goal" | "loop" = "goal",
+  ): SparkEntryPhase {
+    const suggested = suggestForegroundGoalPhase(graph, selectedProjectRef, objective);
     const resolved = resolveActiveMode({
-      registry: defaultSparkModeRegistry(),
-      driver: "goal",
+      registry: defaultSparkPhaseRegistry(),
+      driver: drive,
       suggest: suggested,
       fallback: "implement",
     });
-    return isSparkEntryMode(resolved.mode) ? resolved.mode : "implement";
+    return isSparkEntryPhase(resolved.mode) ? resolved.mode : "implement";
   }
 
-  function isSparkEntryMode(mode: string): mode is SparkEntryMode {
-    return mode === "research" || mode === "plan" || mode === "implement";
+  function isSparkEntryPhase(phase: string): phase is SparkEntryPhase {
+    return phase === "research" || phase === "plan" || phase === "implement";
   }
 
   function renderForegroundGoalTickStatus(
@@ -1786,9 +1828,32 @@ export function registerSparkCommands(
   }
 }
 
-function reportGoalLoopError(error: unknown): void {
-  console.warn(
-    `Spark foreground goal loop failed: ${error instanceof Error ? error.message : String(error)}`,
+type ForegroundDriverErrorScope = "driver" | "goal loop" | "loop";
+
+function renderForegroundDriverSafeErrorMessage(scope: ForegroundDriverErrorScope): string {
+  return `Spark foreground ${scope} hit an internal error. The raw error was hidden; check debug logs for details.`;
+}
+
+function reportForegroundDriverError(
+  ctx: SparkToolContext | undefined,
+  scope: ForegroundDriverErrorScope,
+  error: unknown,
+): void {
+  const message = renderForegroundDriverSafeErrorMessage(scope);
+  if (ctx?.ui?.notify) ctx.ui.notify(message, "warning");
+  else console.warn(message);
+  if (shouldLogForegroundDriverDebugErrors()) {
+    console.debug(
+      `Spark foreground ${scope} internal error: ${
+        error instanceof Error ? error.stack || error.message : String(error)
+      }`,
+    );
+  }
+}
+
+function shouldLogForegroundDriverDebugErrors(): boolean {
+  return (
+    process.env.SPARK_DEBUG_FOREGROUND_DRIVER_ERRORS === "1" || process.env.SPARK_DEBUG === "1"
   );
 }
 

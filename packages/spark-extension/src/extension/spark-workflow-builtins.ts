@@ -10,6 +10,8 @@ export interface SparkSavedWorkflowDescriptor {
   title: string;
   description: string;
   path: string;
+  stages: string[];
+  /** @deprecated Use stages. */
   phases: string[];
 }
 
@@ -93,7 +95,8 @@ function toSparkSavedWorkflowDescriptor(
     title: workflow.title,
     description: workflow.description,
     path: workflow.path,
-    phases: workflow.phases,
+    stages: workflow.stages,
+    phases: workflow.stages,
   };
 }
 
@@ -113,7 +116,7 @@ function renderSavedWorkflowCatalog(saved: SparkSavedWorkflowDiscovery): string 
           item.description +
           " (title: " +
           item.title +
-          (item.phases.length ? "; phases: " + item.phases.join(", ") : "") +
+          (item.stages.length ? "; stages: " + item.stages.join(", ") : "") +
           "; path: " +
           item.path +
           ")",

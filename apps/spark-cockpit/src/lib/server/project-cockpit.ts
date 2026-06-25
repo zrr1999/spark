@@ -1,6 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import { loadWorkspaceServerControl } from "./projection-services";
 
+function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
+  if (!value) return {};
+  const parsed = JSON.parse(value) as unknown;
+  return isRecord(parsed) ? parsed : {};
+}
+
 function parseJsonArray(value: string | null): string[] {
   if (!value) {
     return [];
@@ -9,6 +15,33 @@ function parseJsonArray(value: string | null): string[] {
   return Array.isArray(parsed)
     ? parsed.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+function normalizeProjectCockpitKindDisplay(value: unknown): ProjectCockpitKindDisplay | null {
+  if (!isRecord(value)) return null;
+  const kind = typeof value.kind === "string" && value.kind.trim() ? value.kind.trim() : "generic";
+  const title = typeof value.title === "string" && value.title.trim() ? value.title.trim() : kind;
+  const badge =
+    typeof value.badge === "string" && value.badge.trim() ? value.badge.trim() : undefined;
+  const panels = Array.isArray(value.panels)
+    ? value.panels.flatMap((panel): ProjectCockpitKindPanel[] => {
+        if (!isRecord(panel)) return [];
+        const label = typeof panel.label === "string" ? panel.label.trim() : "";
+        const text = typeof panel.text === "string" ? panel.text.trim() : "";
+        const render = panel.render;
+        if (!label || !text || !isProjectKindRender(render)) return [];
+        return [{ label, text, render }];
+      })
+    : [];
+  return { kind, title, ...(badge ? { badge } : {}), panels };
+}
+
+function isProjectKindRender(value: unknown): value is ProjectCockpitKindPanel["render"] {
+  return value === "text" || value === "progress" || value === "counts" || value === "list";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function normalizeTaskStatus(status: string) {
@@ -46,6 +79,19 @@ export interface ProjectCockpitInvocationLink {
   agentName: string | null;
   status: string;
   updatedAt: string;
+}
+
+export interface ProjectCockpitKindPanel {
+  label: string;
+  render: "text" | "progress" | "counts" | "list";
+  text: string;
+}
+
+export interface ProjectCockpitKindDisplay {
+  kind: string;
+  title: string;
+  badge?: string;
+  panels: ProjectCockpitKindPanel[];
 }
 
 export interface ProjectCockpitTask {
@@ -162,6 +208,7 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
               runtime_workspace_binding_id AS runtimeWorkspaceBindingId,
               runtime_snapshot_id AS runtimeSnapshotId,
               snapshot_version AS snapshotVersion,
+              payload_json AS payloadJson,
               received_at AS receivedAt
        FROM task_graph_snapshots
        WHERE project_id = ?
@@ -174,9 +221,15 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
         runtimeWorkspaceBindingId: string;
         runtimeSnapshotId: string;
         snapshotVersion: number;
+        payloadJson: string;
         receivedAt: string;
       }
     | undefined;
+
+  const latestSnapshotPayload = parseJsonObject(latestSnapshot?.payloadJson);
+  const projectKind = normalizeProjectCockpitKindDisplay(
+    isRecord(latestSnapshotPayload.payload) ? latestSnapshotPayload.payload.projectKind : undefined,
+  );
 
   const taskRows = latestSnapshot
     ? (db
@@ -404,6 +457,7 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
     ownerBinding,
     workspaceControl: loadWorkspaceServerControl(db, project.workspaceId),
     latestSnapshot: latestSnapshot ?? null,
+    projectKind,
     tasks,
     taskSummary,
     inboxItems,

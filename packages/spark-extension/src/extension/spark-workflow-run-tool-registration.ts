@@ -58,6 +58,8 @@ export interface SparkWorkflowRunApprovalSummary {
     concurrency?: number;
     maxAgents?: number;
     tokenBudget?: number;
+    stageCount: number;
+    /** @deprecated Use stageCount. */
     phaseCount: number;
     agentCallSites: number;
     timeoutMs: number[];
@@ -127,18 +129,18 @@ export function registerSparkWorkflowRunTool(
     name: "workflow_run",
     label: "Workflow Run",
     description:
-      "Execute a generated or saved JavaScript workflow through Spark workflow runtime primitives. Use for explicit dynamic workflow/fan-out requests after the script has metadata and clear phases.",
+      "Execute a generated or saved JavaScript workflow through Spark workflow runtime primitives. Use for explicit dynamic workflow/fan-out requests after the script has metadata and clear stages.",
     promptGuidelines: [
       "Use workflow_run only when the user explicitly asks for workflow, workflows, ultracode, fan-out, or multi-agent orchestration; do not use it for a single quick tool call.",
-      "workflow_run accepts either selector (builtin:<id>, workspace:<id>, user:<id>) or raw script, never both. Raw scripts must be trusted/generated for this request and must start with export const meta = { name, description, phases? }.",
+      "workflow_run accepts either selector (builtin:<id>, workspace:<id>, user:<id>) or raw script, never both. Raw scripts must be trusted/generated for this request and must start with export const meta = { name, description, stages? }. Deprecated meta.phases is accepted only for old saved workflows.",
       "Generated/risky workflows require scoped approval before execution; Spark summarizes fan-out, web/fetch, write/isolation, shell, long-running, resource, and base metadata risks before any child agents run.",
-      "For workflow_run scripts, available globals include agent(prompt, opts), parallel(thunks), pipeline(items, ...stages), workflow(name,args), phase(title,{budget?}), budget, verify, judgePanel, loopUntilDry, completenessCheck, retry, gate, artifactRecord, webSearch, fetchContent, and args.",
+      "For workflow_run scripts, available globals include agent(prompt, opts), parallel(thunks), pipeline(items, ...stages), workflow(name,args), stage(title,{budget?}), budget, verify, judgePanel, loopUntilDry, completenessCheck, retry, gate, artifactRecord, webSearch, fetchContent, and args. Deprecated phase(title) is accepted only for old saved workflows.",
       "Every agent() prompt must include enough context; intermediate values stay in workflow variables and only the compact final result returns to the conversation.",
       "Prefer quality helpers: verify for adversarial checks, judgePanel for best-of-N, loopUntilDry for exhaustive discovery, and completenessCheck before final synthesis.",
       "Use tokenBudget/maxAgents/concurrency when the user asks for spend/time bounds or the fan-out is large.",
       "Use agent(prompt, { isolation: 'graft' }) only for code-editing agents that should work through Graft scratch/candidate tools; Spark injects GRAFT_BASE_REF from persisted workflow base metadata and narrows tools to Graft operations.",
       "workflow_run starts managed background dynamic workflow runs by default and returns a runRef quickly; pass wait=true only when an explicitly synchronous result is required.",
-      "workflow_run persists script body/hash, args, phases, journal, result/error, and base metadata; use runRef/resumeRunRef to resume a prior dynamic workflow run.",
+      "workflow_run persists script body/hash, args, stages, journal, result/error, and base metadata; use runRef/resumeRunRef to resume a prior dynamic workflow run.",
     ],
     parameters: Type.Object({
       selector: Type.Optional(
@@ -507,7 +509,8 @@ function buildWorkflowApprovalSummary(input: {
       ...(input.options.concurrency ? { concurrency: input.options.concurrency } : {}),
       ...(input.options.maxAgents ? { maxAgents: input.options.maxAgents } : {}),
       ...(input.options.tokenBudget ? { tokenBudget: input.options.tokenBudget } : {}),
-      phaseCount: input.meta.phases?.length ?? 0,
+      stageCount: (input.meta.stages ?? input.meta.phases)?.length ?? 0,
+      phaseCount: (input.meta.stages ?? input.meta.phases)?.length ?? 0,
       agentCallSites,
       timeoutMs,
     },
@@ -630,7 +633,7 @@ function formatWorkflowApprovalSummary(summary: SparkWorkflowRunApprovalSummary)
     `Script hash: ${summary.scriptHash.slice(0, 12)}`,
     `Risks: ${compactList(summary.riskFlags)}`,
     summary.reasons.length ? `Reasons: ${compactList(summary.reasons, 5)}` : undefined,
-    `Resources: phases=${summary.resources.phaseCount}, agentCallSites=${summary.resources.agentCallSites}${summary.resources.concurrency ? `, concurrency=${summary.resources.concurrency}` : ""}${summary.resources.maxAgents ? `, maxAgents=${summary.resources.maxAgents}` : ""}${summary.resources.tokenBudget ? `, tokenBudget=${summary.resources.tokenBudget}` : ""}`,
+    `Resources: stages=${summary.resources.stageCount}, agentCallSites=${summary.resources.agentCallSites}${summary.resources.concurrency ? `, concurrency=${summary.resources.concurrency}` : ""}${summary.resources.maxAgents ? `, maxAgents=${summary.resources.maxAgents}` : ""}${summary.resources.tokenBudget ? `, tokenBudget=${summary.resources.tokenBudget}` : ""}`,
     summary.resources.timeoutMs.length
       ? `Timeouts: ${compactList(summary.resources.timeoutMs)}ms`
       : undefined,
@@ -751,7 +754,9 @@ async function createSparkWorkflowAgentRunner(input: {
   const runModel = async (request: SparkWorkflowModelRunRequest) => {
     const instruction = [
       "You are a Spark workflow model agent. Answer the workflow prompt directly.",
-      request.phase ? `Workflow phase: ${request.phase}` : undefined,
+      (request.stage ?? request.phase)
+        ? `Workflow stage: ${request.stage ?? request.phase}`
+        : undefined,
       "",
       request.prompt,
     ]
@@ -927,7 +932,7 @@ function renderWorkflowRunLiveUpdateText(
     : "";
   return [
     `Workflow run update: ${source}`,
-    `run=${run.ref} status=${run.status} phases=${run.phases.length} agents=${run.agentCount || run.journal.length}${eventLabel}`,
+    `run=${run.ref} status=${run.status} stages=${run.phases.length} agents=${run.agentCount || run.journal.length}${eventLabel}`,
   ].join("\n");
 }
 
@@ -958,7 +963,7 @@ function renderWorkflowRunResultText(
 ): string {
   const body = workflowRunResultPreview(result.result);
   const usage = workflowRunUsageText(run);
-  const phaseTimeline = workflowRunPhaseTimeline(result.phases);
+  const stageTimeline = workflowRunStageTimeline(result.stages ?? result.phases);
   const controlHint = `inspect: task_read({ action: "run_status", runAction: "inspect", runRef: "${run.ref}" }) · save/ack from the workflow run navigator when needed`;
   return [
     `Workflow run completed: ${source}`,
@@ -969,7 +974,7 @@ function renderWorkflowRunResultText(
     run.base?.baseRef ? `│ base       ${run.base.baseRef}` : undefined,
     `│ agents     ${result.agentCount} (${result.journal.length} journal entr${result.journal.length === 1 ? "y" : "ies"})`,
     usage ? `│ usage      ${usage.replace(/^Usage: /u, "")}` : undefined,
-    `│ phases     ${phaseTimeline}`,
+    `│ stages     ${stageTimeline}`,
     `│ controls   ${controlHint}`,
     `╰─ Result (${body.truncated ? "preview" : result.result === undefined ? "undefined" : "compact JSON"}; complete value is in details.workflow.result)`,
     body.text,
@@ -978,11 +983,11 @@ function renderWorkflowRunResultText(
     .join("\n");
 }
 
-function workflowRunPhaseTimeline(phases: WorkflowRunResult["phases"]): string {
-  if (phases.length === 0) return "no phases recorded";
-  const visible = phases.slice(0, 8);
-  const suffix = phases.length > visible.length ? ` → … +${phases.length - visible.length}` : "";
-  return `${visible.map((phase) => `${workflowPhaseIcon(phase.status)} ${phase.title}`).join(" → ")}${suffix}`;
+function workflowRunStageTimeline(stages: NonNullable<WorkflowRunResult["stages"]>): string {
+  if (stages.length === 0) return "no stages recorded";
+  const visible = stages.slice(0, 8);
+  const suffix = stages.length > visible.length ? ` → … +${stages.length - visible.length}` : "";
+  return `${visible.map((stage) => `${workflowStageIcon(stage.status)} ${stage.title}`).join(" → ")}${suffix}`;
 }
 
 function workflowRunResultPreview(result: unknown): { text: string; truncated: boolean } {
@@ -1014,7 +1019,7 @@ function unserializableWorkflowResultPreview(result: unknown): string {
   return "[unserializable workflow result object]";
 }
 
-function workflowPhaseIcon(status: WorkflowRunResult["phases"][number]["status"]): string {
+function workflowStageIcon(status: WorkflowRunResult["phases"][number]["status"]): string {
   if (status === "fail") return "✗";
   if (status === "skip") return "↷";
   return "✓";

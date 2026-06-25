@@ -40,7 +40,7 @@
     "@zendev-lab/spark-system": "workspace:*",
     "esbuild": "^0.28.0",
     "typescript": "^6.0.3",
-    "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+    "vitest": "catalog:"
   },
   "engines": {
     "node": ">=26.0.0 <27"

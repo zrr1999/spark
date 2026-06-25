@@ -40,11 +40,15 @@ export interface SparkWorkflowRoleRunRequest {
   roleRef: RoleRef;
   instruction: string;
   label: string;
+  stage?: string;
+  /** @deprecated Use stage. */
   phase?: string;
   model?: string;
   metadata: {
     workflowAgent: true;
     label: string;
+    stage?: string;
+    /** @deprecated Use stage. */
     phase?: string;
     model?: string;
     agentType?: string;
@@ -69,11 +73,15 @@ export interface SparkWorkflowRoleRunResponse {
 export interface SparkWorkflowModelRunRequest {
   prompt: string;
   label: string;
+  stage?: string;
+  /** @deprecated Use stage. */
   phase?: string;
   model?: string;
   metadata: {
     workflowAgent: true;
     label: string;
+    stage?: string;
+    /** @deprecated Use stage. */
     phase?: string;
     model?: string;
     agentType: "model";
@@ -111,15 +119,18 @@ export function createSparkWorkflowRoleRunAdapter(
       if (!deps.runModelInstruction) {
         throw new Error("workflow model agent runner is not configured");
       }
+      const stage = effectiveOptions.stage ?? effectiveOptions.phase;
       const response = await deps.runModelInstruction({
         prompt,
         label,
-        phase: effectiveOptions.phase,
+        stage,
+        phase: stage,
         model: effectiveOptions.model,
         metadata: {
           workflowAgent: true,
           label,
-          phase: effectiveOptions.phase,
+          stage,
+          phase: stage,
           model: effectiveOptions.model,
           agentType: "model",
           isolation: effectiveOptions.isolation,
@@ -136,16 +147,19 @@ export function createSparkWorkflowRoleRunAdapter(
       reportWorkflowAgentTelemetry(options, response, graftRefsFromResult(result));
       return result;
     }
+    const stage = effectiveOptions.stage ?? effectiveOptions.phase;
     const request: SparkWorkflowRoleRunRequest = {
       roleRef: deps.roleRef,
       instruction: renderSparkWorkflowAgentInstruction(prompt, effectiveOptions, label),
       label,
-      phase: effectiveOptions.phase,
+      stage,
+      phase: stage,
       model: effectiveOptions.model,
       metadata: {
         workflowAgent: true,
         label,
-        phase: effectiveOptions.phase,
+        stage,
+        phase: stage,
         model: effectiveOptions.model,
         agentType: effectiveOptions.agentType,
         isolation: effectiveOptions.isolation,
@@ -174,7 +188,7 @@ export function normalizedWorkflowAgentLabel(
 
 export function renderSparkWorkflowAgentInstruction(
   prompt: string,
-  options: WorkflowAgentOptions & { index: number; phase?: string },
+  options: WorkflowAgentOptions & { index: number; stage?: string; phase?: string },
   label = normalizedWorkflowAgentLabel(options),
 ): string {
   const lines = [
@@ -184,7 +198,8 @@ export function renderSparkWorkflowAgentInstruction(
     "- Agent index: " + options.index,
     "- Label: " + label,
   ];
-  if (options.phase) lines.push("- Phase: " + options.phase);
+  const stage = options.stage ?? options.phase;
+  if (stage) lines.push("- Stage: " + stage);
   if (options.model) lines.push("- Requested model: " + options.model);
   if (options.agentType) lines.push("- Agent type: " + options.agentType);
   if (options.isolation) lines.push("- Isolation: " + options.isolation);

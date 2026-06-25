@@ -1,6 +1,12 @@
 import { truncateToWidth } from "@zendev-lab/spark-tui/text";
 
 import type { SessionTodoEntry, SessionTodoStatus } from "@zendev-lab/pi-tasks";
+import {
+  sparkActiveLensDriveMode,
+  sparkActiveLensPhase,
+  type SparkDriveMode,
+  type SparkDriveModeInput,
+} from "../extension/spark-drive-state.ts";
 
 export type { SessionTodoEntry, SessionTodoStatus } from "@zendev-lab/pi-tasks";
 
@@ -11,7 +17,7 @@ export type { SessionTodoEntry, SessionTodoStatus } from "@zendev-lab/pi-tasks";
  * Display model:
  *   ◆ Goal(●): active objective
  *   ◆ Loop(●): active objective
- *   ◆ Project title · Tasks(running=2 pending=1 failed=1): @agent-a, @agent-b
+ *   ◆ Project title · Phase: implement
  *   ├─ ◐ @me/worker role-run task title
  *   │  ├─ ✓ #7 task plan item
  *   │  └─ ○ #12 task plan item
@@ -48,15 +54,43 @@ export interface SparkDynamicWorkflowRunWidgetEntry {
   delivery?: "result" | "error";
 }
 
+export interface SparkLoopScheduleWidgetEntry {
+  label: string;
+  scheduledAtMs: number;
+  nextRunAtMs: number;
+}
+
 export interface SparkGoalWidgetEntry {
-  kind?: "goal" | "loop";
   status: "active" | "paused" | "complete";
   objective: string;
 }
 
+export interface SparkLoopWidgetEntry {
+  status: "active";
+  objective: string;
+  schedule?: SparkLoopScheduleWidgetEntry;
+}
+
+export interface SparkProjectKindWidgetPanel {
+  label: string;
+  render: "text" | "progress" | "counts" | "list";
+  text: string;
+}
+
+export interface SparkProjectKindWidgetEntry {
+  kind: string;
+  title: string;
+  badge?: string;
+  panels: SparkProjectKindWidgetPanel[];
+}
+
 export interface SparkWidgetActiveLens {
-  mode: "research" | "plan" | "implement";
-  driver?: "interactive" | "goal" | "workflow";
+  phase: "research" | "plan" | "implement";
+  /** Read-only derived drive mode. */
+  mode?: SparkDriveMode | "research" | "plan" | "implement";
+  drive?: SparkDriveModeInput;
+  /** @deprecated Use drive/mode. */
+  driver?: SparkDriveModeInput;
 }
 
 export interface SparkWidgetState {
@@ -65,6 +99,8 @@ export interface SparkWidgetState {
   workflowRun?: SparkWorkflowRunWidgetEntry;
   dynamicWorkflowRun?: SparkDynamicWorkflowRunWidgetEntry;
   goal?: SparkGoalWidgetEntry;
+  loop?: SparkLoopWidgetEntry;
+  projectKind?: SparkProjectKindWidgetEntry;
   tasks: TaskEntry[];
   independentTodos: SessionTodoEntry[];
   taskCountTotal: number;
@@ -147,15 +183,21 @@ function hasWidgetContent(state: SparkWidgetState | undefined): state is SparkWi
   return Boolean(
     state &&
     (state.projectTitle ||
-      state.workflowRun ||
+      isRunningBackgroundRun(state.workflowRun) ||
       state.dynamicWorkflowRun ||
       state.goal ||
+      state.loop ||
+      (state.projectKind?.panels.length ?? 0) > 0 ||
       state.tasks.length > 0),
   );
 }
 
 function hasAnimatedWidgetContent(state: SparkWidgetState | undefined): boolean {
-  return Boolean(state?.goal?.status === "active" || hasAnimatedRunningTask(state));
+  return Boolean(
+    state?.goal?.status === "active" ||
+    state?.loop?.status === "active" ||
+    hasAnimatedRunningTask(state),
+  );
 }
 
 function hasAnimatedRunningTask(state: SparkWidgetState | undefined): boolean {
@@ -177,9 +219,11 @@ export function renderSparkWidgetLines(
 ): string[] {
   if (
     !state.projectTitle &&
-    !state.workflowRun &&
+    !isRunningBackgroundRun(state.workflowRun) &&
     !state.dynamicWorkflowRun &&
     !state.goal &&
+    !state.loop &&
+    (state.projectKind?.panels.length ?? 0) === 0 &&
     state.tasks.length === 0
   )
     return [];
@@ -191,8 +235,14 @@ export function renderSparkWidgetLines(
   const lines: string[] = [];
   const visibleTasks = state.tasks.filter(isVisibleTaskEntry);
 
-  const goalLine = formatGoalLine(state.goal, theme, state.animationFrame ?? 0);
-  const projectHeaderLine = formatProjectHeaderLine(state, visibleTasks, l.tasks, theme);
+  const goalLine = formatForegroundDriverLine(
+    state.goal,
+    state.loop,
+    theme,
+    state.animationFrame ?? 0,
+  );
+  const projectHeaderLine = formatProjectHeaderLine(state, theme);
+  const projectKindLines = formatProjectKindLines(state.projectKind, theme);
   const backgroundLine = hasSessionRunningAgent(visibleTasks)
     ? undefined
     : formatBackgroundLine(state.workflowRun, theme);
@@ -203,15 +253,16 @@ export function renderSparkWidgetLines(
     animationFrame: task.animationFrame ?? state.animationFrame ?? 0,
   }));
   const projectRows = flattenTaskRows(tasks);
-  const fixedLineCount = [goalLine, projectHeaderLine, backgroundLine, dynamicWorkflowLine].filter(
-    Boolean,
-  ).length;
+  const fixedLineCount =
+    [goalLine, projectHeaderLine, backgroundLine, dynamicWorkflowLine].filter(Boolean).length +
+    projectKindLines.length;
   const budget = Math.max(0, MAX_WIDGET_LINES - fixedLineCount);
   const visibleProjectRows = projectRows.slice(0, budget);
   const hidden = projectRows.length - visibleProjectRows.length;
 
   if (goalLine) lines.push(trunc(goalLine));
   if (projectHeaderLine) lines.push(trunc(projectHeaderLine));
+  for (const line of projectKindLines) lines.push(trunc(line));
   if (backgroundLine) lines.push(trunc(backgroundLine));
   if (dynamicWorkflowLine) lines.push(trunc(dynamicWorkflowLine));
   appendFormattedRows(lines, visibleProjectRows, hidden > 0, theme, trunc);
@@ -229,6 +280,16 @@ function hasSessionRunningAgent(tasks: TaskEntry[]): boolean {
   );
 }
 
+function formatForegroundDriverLine(
+  goal: SparkGoalWidgetEntry | undefined,
+  loop: SparkLoopWidgetEntry | undefined,
+  theme: SparkWidgetTheme,
+  animationFrame: number,
+): string | undefined {
+  if (loop) return formatLoopLine(loop, theme, animationFrame);
+  return formatGoalLine(goal, theme, animationFrame);
+}
+
 function formatGoalLine(
   goal: SparkGoalWidgetEntry | undefined,
   theme: SparkWidgetTheme,
@@ -239,9 +300,30 @@ function formatGoalLine(
     goalStatusColor(goal.status),
     goalStatusSymbol(goal.status, animationFrame),
   );
-  const label = goal.kind === "loop" ? "Loop" : "Goal";
-  const summary = `${theme.fg("dim", `${label}(`)}${status}${theme.fg("dim", `): ${goal.objective}`)}`;
+  const summary = `${theme.fg("dim", "Goal(")}${status}${theme.fg("dim", `): ${goal.objective}`)}`;
   return `${theme.fg("accent", "◆")} ${summary}`;
+}
+
+function formatLoopLine(
+  loop: SparkLoopWidgetEntry,
+  theme: SparkWidgetTheme,
+  animationFrame: number,
+): string {
+  const statusContent =
+    loop.status === "active" && loop.schedule
+      ? loopScheduleProgress(loop.schedule)
+      : goalStatusSymbol(loop.status, animationFrame);
+  const status = theme.fg(goalStatusColor(loop.status), statusContent);
+  const summary = `${theme.fg("dim", "Loop(")}${status}${theme.fg("dim", `): ${loop.objective}`)}`;
+  return `${theme.fg("accent", "◆")} ${summary}`;
+}
+
+function loopScheduleProgress(schedule: SparkLoopScheduleWidgetEntry): string {
+  const total = Math.max(1, schedule.nextRunAtMs - schedule.scheduledAtMs);
+  const elapsed = Math.min(total, Math.max(0, Date.now() - schedule.scheduledAtMs));
+  const segments = 5;
+  const filled = Math.min(segments, Math.max(0, Math.floor((elapsed / total) * segments)));
+  return `${"▰".repeat(filled)}${"▱".repeat(segments - filled)} ${schedule.label}`;
 }
 
 function goalStatusSymbol(status: SparkGoalWidgetEntry["status"], animationFrame: number): string {
@@ -263,9 +345,15 @@ function formatBackgroundLine(
   workflowRun: SparkWorkflowRunWidgetEntry | undefined,
   theme: SparkWidgetTheme,
 ): string | undefined {
-  if (!workflowRun) return undefined;
+  if (!isRunningBackgroundRun(workflowRun)) return undefined;
   const body = formatBackgroundRunSummary(workflowRun);
   return `${theme.fg("accent", "◆")} ${theme.fg("dim", body)}`;
+}
+
+function isRunningBackgroundRun(
+  workflowRun: SparkWorkflowRunWidgetEntry | undefined,
+): workflowRun is SparkWorkflowRunWidgetEntry {
+  return workflowRun?.status === "running" && workflowRun.active === true;
 }
 
 function formatBackgroundRunSummary(workflowRun: SparkWorkflowRunWidgetEntry): string {
@@ -310,13 +398,11 @@ function shortRunRef(runRef: string): string {
 
 function formatProjectHeaderLine(
   state: SparkWidgetState,
-  visibleTasks: TaskEntry[],
-  tasksLabel: string,
   theme: SparkWidgetTheme,
 ): string | undefined {
-  const taskSummary = formatTaskSummaryHeader(state, visibleTasks, tasksLabel);
-  const lensSummary = formatActiveLensSummary(state.activeLens);
-  const summaries = [lensSummary, taskSummary].filter((part): part is string => Boolean(part));
+  const phaseSummary = formatPhaseSummary(state.activeLens);
+  const kindSummary = state.projectKind?.badge ? `Kind: ${state.projectKind.badge}` : undefined;
+  const summaries = [phaseSummary, kindSummary].filter((part): part is string => Boolean(part));
   const suffix = summaries
     .map((summary) => `${theme.fg("dim", "·")} ${theme.fg("dim", summary)}`)
     .join(" ");
@@ -328,63 +414,25 @@ function formatProjectHeaderLine(
   return `${theme.fg("accent", "◆")} ${theme.bold(state.projectTitle)}${suffix ? ` ${suffix}` : ""}`;
 }
 
-function formatActiveLensSummary(lens: SparkWidgetActiveLens | undefined): string | undefined {
-  if (!lens) return undefined;
-  const driver = lens.driver ?? "interactive";
-  if (lens.mode === "research" && driver === "interactive") return undefined;
-  const driverSuffix = driver === "interactive" ? "" : ` · ${driver}`;
-  return `Lens: ${lens.mode}${driverSuffix}`;
+function formatPhaseSummary(lens: SparkWidgetActiveLens | undefined): string {
+  const phase = sparkActiveLensPhase(lens);
+  const mode = sparkActiveLensDriveMode(lens);
+  const modeSuffix = mode === "assist" ? "" : ` · Mode: ${mode}`;
+  return `Phase: ${phase}${modeSuffix}`;
 }
 
-function formatTaskSummaryHeader(
-  state: SparkWidgetState,
-  visibleTasks: TaskEntry[],
-  tasksLabel: string,
-): string | undefined {
-  if (state.taskCountTotal === 0 && visibleTasks.length === 0) return undefined;
-  if (visibleTasks.length === 0 && state.tasks.length > 0) return undefined;
-  const taskSummary = formatTaskSummary(state, visibleTasks);
-  const agentSummary = formatRunningAgentSummary(visibleTasks);
-  const suffix = agentSummary ? `${taskSummary}: ${agentSummary}` : taskSummary;
-  return `${tasksLabel}(${suffix})`;
-}
-
-function formatTaskSummary(state: SparkWidgetState, visibleTasks: TaskEntry[]): string {
-  const activeTasks = visibleTasks.filter((task) =>
-    ["running", "pending", "blocked", "failed"].includes(task.status),
-  );
-  if (activeTasks.length === 0) {
-    return `total=${state.taskCountTotal} claimed=${state.taskCountClaimed}/${state.taskCountClaimedBySession}`;
-  }
-  const counts = new Map<TaskEntry["status"], number>();
-  for (const task of activeTasks) counts.set(task.status, (counts.get(task.status) ?? 0) + 1);
-  return (["running", "pending", "blocked", "failed"] as const)
-    .map((status) => {
-      const count = counts.get(status) ?? 0;
-      return count > 0 ? `${status}=${count}` : undefined;
-    })
-    .filter((part): part is string => Boolean(part))
-    .join(" ");
-}
-
-function formatRunningAgentSummary(tasks: TaskEntry[]): string | undefined {
-  const runningRoles = tasks
-    .filter(
-      (task) =>
-        task.status === "running" &&
-        task.claim === "role-run" &&
-        task.backgroundOwner === "session",
-    )
-    .map(taskAgentRoleLabel);
-  if (runningRoles.length === 0) return undefined;
-  const counts = new Map<string, number>();
-  for (const role of runningRoles) counts.set(role, (counts.get(role) ?? 0) + 1);
-  const shown = [...counts]
-    .slice(0, 4)
-    .map(([role, count]) => (count > 1 ? `${role}×${count}` : role))
-    .join(", ");
-  const hidden = counts.size > 4 ? ` +${counts.size - 4}` : "";
-  return `agents ${shown}${hidden}`;
+function formatProjectKindLines(
+  projectKind: SparkProjectKindWidgetEntry | undefined,
+  theme: SparkWidgetTheme,
+): string[] {
+  if (!projectKind || projectKind.panels.length === 0) return [];
+  return projectKind.panels.map((panel) => {
+    const badge = projectKind.badge ? `[${projectKind.badge}] ` : "";
+    return `${theme.fg("dim", "◇")} ${theme.fg("dim", badge)}${theme.fg(
+      "dim",
+      `${panel.label}: ${panel.text}`,
+    )}`;
+  });
 }
 
 function isVisibleTaskEntry(task: TaskEntry): boolean {
@@ -415,11 +463,6 @@ function compactTaskAgentLabel(label: string): string {
   const role = parts.pop();
   if (!role) return compactRoleRunName(label);
   return [...parts, compactRoleRunName(role)].join("/");
-}
-
-function taskAgentRoleLabel(task: TaskEntry): string {
-  const label = compactTaskAgentLabel(taskAgentLabel(task));
-  return label.split("/").pop() || label;
 }
 
 function taskIcon(task: TaskEntry, theme: SparkWidgetTheme): string {

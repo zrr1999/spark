@@ -87,6 +87,8 @@ export interface SparkDynamicWorkflowRunApproval {
       concurrency?: number;
       maxAgents?: number;
       tokenBudget?: number;
+      stageCount: number;
+      /** @deprecated Use stageCount. */
       phaseCount: number;
       agentCallSites: number;
       timeoutMs: number[];
@@ -666,11 +668,18 @@ function normalizeWorkflowApproval(value: unknown): SparkDynamicWorkflowRunAppro
             concurrency: numberField(summary.resources, "concurrency"),
             maxAgents: numberField(summary.resources, "maxAgents"),
             tokenBudget: numberField(summary.resources, "tokenBudget"),
-            phaseCount: numberField(summary.resources, "phaseCount") ?? 0,
+            stageCount:
+              numberField(summary.resources, "stageCount") ??
+              numberField(summary.resources, "phaseCount") ??
+              0,
+            phaseCount:
+              numberField(summary.resources, "phaseCount") ??
+              numberField(summary.resources, "stageCount") ??
+              0,
             agentCallSites: numberField(summary.resources, "agentCallSites") ?? 0,
             timeoutMs: numberArray(summary.resources.timeoutMs),
           }
-        : { phaseCount: 0, agentCallSites: 0, timeoutMs: [] },
+        : { stageCount: 0, phaseCount: 0, agentCallSites: 0, timeoutMs: [] },
       tools: stringArray(summary.tools),
       isolation: stringArray(summary.isolation),
       ...(isRecord(summary.base)

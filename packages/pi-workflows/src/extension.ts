@@ -112,7 +112,7 @@ function renderWorkflowList(workflows: WorkflowDescriptor[], total: number): str
     `Workflows: ${total}${workflows.length < total ? ` (showing ${workflows.length})` : ""}`,
     ...workflows.map(
       (workflow) =>
-        `- ${workflow.selector}: ${workflow.title} (${workflow.phases.length} phase(s))`,
+        `- ${workflow.selector}: ${workflow.title} (${workflow.stages.length} stage(s))`,
     ),
   ];
   if (workflows.length < total)

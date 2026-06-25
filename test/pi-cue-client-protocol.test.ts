@@ -169,6 +169,22 @@ void test("CueClient.connect sends session Handshake before protocol Ping", asyn
       session_id: "test-session",
       cwd: "/workspace/project",
       env: { PATH: "/bin" },
+      refresh: false,
+    });
+
+    await client.handshake({
+      sessionId: "test-session",
+      cwd: "/workspace/project-node26",
+      env: { PATH: "/node26/bin" },
+      refresh: true,
+    });
+    assert.equal(server.handshakes.length, 2);
+    const refresh = requestPayload(server.handshakes[1]!);
+    assert.deepEqual(refresh.Handshake, {
+      session_id: "test-session",
+      cwd: "/workspace/project-node26",
+      env: { PATH: "/node26/bin" },
+      refresh: true,
     });
   } finally {
     client.close();
@@ -726,7 +742,7 @@ void test("cue_scope mutates session env, PATH, and cwd", async () => {
         });
       }
     },
-    async (client) => {
+    async (client, _requests, handshakes) => {
       const tools = registerCueToolsForProtocolTest();
       const scopeTool = tools.get("cue_scope");
       assert.ok(scopeTool);
@@ -736,10 +752,24 @@ void test("cue_scope mutates session env, PATH, and cwd", async () => {
         .join("\n");
       assert.match(rendered ?? "", /action=path_prepend/);
       assert.match(rendered ?? "", /path=\/node26\/bin/);
-      const ctx = { cwd: "/work", cueClient: client };
+      const initialSessionId = (requestPayload(handshakes[0]!).Handshake as { session_id: string })
+        .session_id;
+      const ctx = {
+        cwd: "/work",
+        cueClient: client,
+        sessionId: initialSessionId,
+        env: { PATH: "/node26/bin:/usr/bin", NODE_VERSION: "26" },
+      };
       const envSet = await scopeTool.execute(
         "env-set",
         { action: "env_set", key: "FOO", value: "bar" },
+        new AbortController().signal,
+        () => undefined,
+        ctx,
+      );
+      const envUnset = await scopeTool.execute(
+        "env-unset",
+        { action: "env_unset", key: "FOO" },
         new AbortController().signal,
         () => undefined,
         ctx,
@@ -758,6 +788,13 @@ void test("cue_scope mutates session env, PATH, and cwd", async () => {
         () => undefined,
         ctx,
       );
+      const refresh = await scopeTool.execute(
+        "refresh",
+        { action: "refresh", tail_bytes: 80 },
+        new AbortController().signal,
+        () => undefined,
+        ctx,
+      );
       const status = await scopeTool.execute(
         "status",
         { action: "status", tail_bytes: 80 },
@@ -768,11 +805,21 @@ void test("cue_scope mutates session env, PATH, and cwd", async () => {
 
       assert.deepEqual(evals, [
         ":env set FOO=bar",
+        ":env unset FOO",
         ":env set PATH=/node26/bin:/usr/bin",
         ":cd /tmp",
       ]);
       assert.match(envSet.content[0]?.text ?? "", /Set FOO/);
+      assert.match(envUnset.content[0]?.text ?? "", /Unset FOO/);
       assert.match(cd.content[0]?.text ?? "", /Changed cue session cwd/);
+      assert.match(refresh.content[0]?.text ?? "", /Refreshed cue session/);
+      const refreshHandshake = requestPayload(handshakes.at(-1)!);
+      assert.deepEqual(refreshHandshake.Handshake, {
+        session_id: initialSessionId,
+        cwd: "/work",
+        env: { PATH: "/node26/bin:/usr/bin", NODE_VERSION: "26" },
+        refresh: true,
+      });
       assert.match(status.content[0]?.text ?? "", /cwd=\/tmp/);
       assert.match(status.content[0]?.text ?? "", /PATH=\/node26\/bin:\/usr\/bin/);
     },

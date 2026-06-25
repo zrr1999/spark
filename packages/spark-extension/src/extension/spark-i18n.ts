@@ -156,7 +156,7 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
     goalLine: (objective) => `Goal: ${objective}`,
     loopTickHeader: "Spark foreground goal loop tick.",
     loopModeDecisionContract:
-      "Foreground goal tick uses exactly one main session mode: research, plan, or implement. The host selects the starting mode for this turn; state whether you follow it or switch, with a brief reason. Use workflow, subagent role, and role-run only as tools inside that mode.",
+      "Foreground goal tick uses exactly one main session phase: research, plan, or implement. The host selects the starting phase for this turn; state whether you follow it or switch, with a brief reason. Use workflow, subagent role, and role-run only as tools inside that phase.",
     loopReviewerOwnership:
       "Goal supplies the objective, idle tick cadence, and reviewer-gated completion flow: the main session requests completion, the reviewer audits, and Spark applies the approved state transition. When blocked, resolve the blocking work instead of pausing or weakening the goal.",
     emptyGoalNotSet: "Spark session goal is not set.",
@@ -176,7 +176,7 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
     goalLine: (objective) => `目标：${objective}`,
     loopTickHeader: "Spark 前台目标循环节拍。",
     loopModeDecisionContract:
-      "前台 goal tick 只使用一个主 session mode：research、plan 或 implement。host 会为本 turn 选择起始 mode；说明你是遵循它还是需要切换，并给出简短理由。workflow、subagent role、role-run 只作为该 mode 内的工具使用。",
+      "前台 goal tick 只使用一个主 session phase：research、plan 或 implement。host 会为本 turn 选择起始 phase；说明你是遵循它还是需要切换，并给出简短理由。workflow、subagent role、role-run 只作为该 phase 内的工具使用。",
     loopReviewerOwnership:
       "goal 提供目标、空闲节拍循环与 reviewer-gated completion 流程：主 session 发起完成请求，reviewer 审核裁决，Spark 应用通过后的状态转换。遇到阻塞时先解决阻塞工作，不要自主暂停或降低目标难度。",
     emptyGoalNotSet: "尚未设置 Spark 会话目标。",

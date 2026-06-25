@@ -1,5 +1,6 @@
 import type { Task, TaskStatus, ProjectRef } from "@zendev-lab/pi-extension-api";
 import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
+import { renderSparkProjectKindDisplay } from "./project-kind-registry.ts";
 import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 
 export type SparkStatusView = "active" | "summary";
@@ -108,6 +109,8 @@ export function compactProjectSummaries(graph: TaskGraph, sessionKey: string) {
     return {
       ref: project.ref,
       title: project.title,
+      kind: project.kind ?? "generic",
+      kindDisplay: renderSparkProjectKindDisplay(project),
       tasks: tasks.length,
       unfinished: tasks.filter((task) => isUnfinishedTaskStatus(task.status)).length,
       claimed: claimed.length,

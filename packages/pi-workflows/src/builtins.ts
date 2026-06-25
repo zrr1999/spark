@@ -38,7 +38,7 @@ export function researchWorkflowScript(): string {
   return `export const meta = {
   name: 'research',
   description: 'Deep research workflow with query planning, web search, source fetching, verification, and cited synthesis',
-  phases: [
+  stages: [
     { title: 'Plan' },
     { title: 'Search' },
     { title: 'Fetch' },
@@ -123,7 +123,7 @@ function unique(values) {
   return Array.from(new Set(values.filter(Boolean)))
 }
 
-phase('Plan')
+stage('Plan')
 const plan = await agent([
   'Plan a deep research approach.',
   'Return concise bullets covering search angles, likely source types, and verification risks.',
@@ -132,7 +132,7 @@ const plan = await agent([
   question,
 ].join('\\n'), { label: 'research plan', model: input.plannerModel })
 
-phase('Search')
+stage('Search')
 const rawSearches = await parallel(queries.map((query) => async () => ({
   query,
   result: await webSearch({
@@ -153,7 +153,7 @@ const urls = unique([
   ...collectUrls(searches),
 ]).slice(0, fetchTopN)
 
-phase('Fetch')
+stage('Fetch')
 const rawFetchedSources = urls.length === 0 ? [] : await parallel(urls.map((url) => async () => ({
   url,
   content: await fetchContent({
@@ -179,7 +179,7 @@ const sourceBrief = [
   compact(fetchedSources, 6000),
 ].join('\\n')
 
-phase('Verify')
+stage('Verify')
 const panelResults = await parallel(panel.map((item, index) => async () => {
   const model = typeof item === 'string'
     ? item
@@ -214,7 +214,7 @@ const verified = await agent([
   compact(normalizedPanel, 6000),
 ].join('\\n'), { label: 'cross-check sources', model: input.verifierModel })
 
-phase('Report')
+stage('Report')
 const report = await agent([
   'Write the final user-facing deep research report.',
   'Requirements:',
@@ -243,7 +243,7 @@ export function reviewWorkflowScript(): string {
   return `export const meta = {
   name: 'review',
   description: 'Adversarial review workflow with critique, rebuttal, and verdict synthesis',
-  phases: [{ title: 'Investigate' }, { title: 'Critique' }, { title: 'Rebut' }, { title: 'Verdict' }],
+  stages: [{ title: 'Investigate' }, { title: 'Critique' }, { title: 'Rebut' }, { title: 'Verdict' }],
 }
 
 const input = args || {}
@@ -273,7 +273,7 @@ function normalizeParallel(results, labels) {
   })
 }
 
-phase('Investigate')
+stage('Investigate')
 const search = input.skipSearch ? { skipped: true } : await webSearch({
   query: task,
   numResults: input.numResults || 5,
@@ -290,7 +290,7 @@ const findings = await agent([
   compact(search, 4000),
 ].join('\\n'), { label: 'investigate findings', model: input.investigatorModel })
 
-phase('Critique')
+stage('Critique')
 const criticLabels = Array.from({ length: criticCount }, (_, index) => 'skeptic ' + (index + 1))
 const rawCritiques = await parallel(criticLabels.map((label, index) => async () => ({
   label,
@@ -316,7 +316,7 @@ const rawCritiques = await parallel(criticLabels.map((label, index) => async () 
 })
 const critiques = normalizeParallel(rawCritiques, criticLabels)
 
-phase('Rebut')
+stage('Rebut')
 const rebuttal = await agent([
   'Respond to the adversarial critiques without hand-waving.',
   'Mark each finding as survives, revised, or rejected. Cite source URLs from search data when available.',
@@ -331,7 +331,7 @@ const rebuttal = await agent([
   compact(critiques, 6000),
 ].join('\\n'), { label: 'rebut critiques', model: input.rebuttalModel })
 
-phase('Verdict')
+stage('Verdict')
 const report = await agent([
   'Write the final adversarial review verdict.',
   'Include:',
@@ -359,7 +359,7 @@ export function fanOutWithBriefWorkflowScript(): string {
   return `export const meta = {
   name: 'fan_out_with_brief',
   description: 'Fan out multiple agents from one shared briefing artifact and collect their outputs',
-  phases: [{ title: 'Brief' }, { title: 'Fan out' }, { title: 'Fan in' }],
+  stages: [{ title: 'Brief' }, { title: 'Fan out' }, { title: 'Fan in' }],
 }
 
 const briefBody = args && typeof args.briefBody === 'string' ? args.briefBody : ''
@@ -367,16 +367,16 @@ const agents = Array.isArray(args && args.agents) ? args.agents : []
 if (!briefBody.trim()) throw new Error('fan_out_with_brief requires args.briefBody')
 if (agents.length === 0) throw new Error('fan_out_with_brief requires args.agents[]')
 
-phase('Brief')
+stage('Brief')
 const brief = await artifactRecord({
   title: args.briefTitle || 'Workflow briefing',
   kind: 'research',
   format: 'markdown',
   body: briefBody,
 })
-phase('Brief', { status: 'success' })
+stage('Brief', { status: 'success' })
 
-phase('Fan out')
+stage('Fan out')
 const outputs = await parallel(agents.map((item, index) => async () => {
   const name = item && (item.name || item.label) ? String(item.name || item.label) : 'agent-' + (index + 1)
   const prompt = item && item.prompt ? String(item.prompt) : ''
@@ -396,8 +396,8 @@ const outputs = await parallel(agents.map((item, index) => async () => {
   retry: args && args.retry,
   onError: args && args.onError,
 })
-phase('Fan out', { status: 'success' })
+stage('Fan out', { status: 'success' })
 
-phase('Fan in')
+stage('Fan in')
 return { briefRef: brief.ref, outputs }`;
 }

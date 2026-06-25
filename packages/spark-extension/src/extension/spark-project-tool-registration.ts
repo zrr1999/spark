@@ -4,6 +4,7 @@ import { clarifyProjectPurposeIfNeeded } from "../flows/project-purpose-flow.ts"
 import { currentSparkProject, loadSparkGraph, saveCurrentProjectRef } from "./session-state.ts";
 import { ensureLocalSparkDirectory } from "./spark-activation.ts";
 import { sparkAskUi } from "./spark-ask-ui.ts";
+import { requireKnownSparkProjectKind } from "./project-kind-registry.ts";
 import {
   collectSparkProjectSummaries,
   findDuplicateSparkProjects,
@@ -77,6 +78,10 @@ export function registerSparkProjectTools(
         Type.String({ description: "Durable project purpose for project_metadata_update." }),
       ),
       outputLanguage: Type.Optional(Type.String({ description: "zh | en" })),
+      kind: Type.Optional(Type.String({ description: "Project kind id, e.g. generic." })),
+      kindState: Type.Optional(
+        Type.Any({ description: "Project-kind-specific JSON state for declarative display." }),
+      ),
       text: Type.Optional(Type.String({ description: "Reason/details for metadata updates." })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -87,6 +92,8 @@ export function registerSparkProjectTools(
         "project",
       );
       const patchResult = normalizeSparkProjectIntentPatch(params, intent);
+      if (patchResult.ok && patchResult.patch.kind)
+        requireKnownSparkProjectKind(patchResult.patch.kind);
       if (!patchResult.ok)
         return {
           content: [{ type: "text", text: patchResult.message }],
@@ -151,6 +158,12 @@ export function registerSparkProjectTools(
       outputLanguage: Type.Optional(
         Type.String({ description: "zh | en for a newly created project." }),
       ),
+      kind: Type.Optional(
+        Type.String({ description: "Project kind id for a newly created project." }),
+      ),
+      kindState: Type.Optional(
+        Type.Any({ description: "Project-kind-specific JSON state for declarative display." }),
+      ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx.cwd;
@@ -159,8 +172,10 @@ export function registerSparkProjectTools(
       let graph = await loadSparkGraph(cwd, ctx);
       graph ??= new TaskGraph();
       const input = normalizeSparkNewProjectInput(params);
+      if (input.kind) requireKnownSparkProjectKind(input.kind);
       let project = resolveSparkProject(graph, input.project);
       let created = false;
+      let mutated = false;
       if (!project) {
         if (!input.title)
           return {
@@ -206,11 +221,22 @@ export function registerSparkProjectTools(
           description,
           purpose: input.purpose,
           outputLanguage: input.outputLanguage,
+          kind: input.kind,
+          kindState: input.kindState,
         });
         created = true;
-        await store.save(graph);
         await saveProjectPurposeTrace(cwd, project.ref, clarification);
+      } else if (input.kind && input.kind !== (project.kind ?? "generic")) {
+        project = graph.updateProject(project.ref, {
+          kind: input.kind,
+          kindState: input.kindState,
+        });
+        mutated = true;
+      } else if (input.kindState !== undefined) {
+        project = graph.updateProject(project.ref, { kindState: input.kindState });
+        mutated = true;
       }
+      if (created || mutated) await store.save(graph);
       await saveCurrentProjectRef(cwd, ctx, project.ref);
       await deps.refreshSparkWidget(cwd, ctx);
       return {
@@ -220,7 +246,11 @@ export function registerSparkProjectTools(
             text: `${created ? "Created new" : "Selected existing"} Spark project for this session: ${project.title} (${project.ref})`,
           },
         ],
-        details: { created, project: project as unknown as Record<string, unknown> },
+        details: {
+          created,
+          kindChanged: mutated,
+          project: project as unknown as Record<string, unknown>,
+        },
       };
     },
   });
@@ -267,7 +297,7 @@ function normalizeSparkProjectIntentPatch(
         error: "missing_project_title",
         message: "project_rename requires title.",
       };
-    const invalid = ["description", "purpose", "outputLanguage"].filter(
+    const invalid = ["description", "purpose", "outputLanguage", "kind", "kindState"].filter(
       (field) => params[field] !== undefined && params[field] !== null,
     );
     if (invalid.length > 0)
@@ -287,11 +317,17 @@ function normalizeSparkProjectIntentPatch(
       error: "invalid_project_metadata_patch",
       message: `project_metadata_update does not accept ${invalid.join(", ")}; use project_rename for title changes.`,
     };
-  if (!patch.description && !patch.purpose && !patch.outputLanguage)
+  if (
+    !patch.description &&
+    !patch.purpose &&
+    !patch.outputLanguage &&
+    !patch.kind &&
+    patch.kindState === undefined
+  )
     return {
       ok: false,
       error: "missing_project_metadata_patch",
-      message: "Provide description, purpose, or outputLanguage to update project metadata.",
+      message: "Provide description, purpose, outputLanguage, or kind to update project metadata.",
     };
   return {
     ok: true,
@@ -299,6 +335,8 @@ function normalizeSparkProjectIntentPatch(
       description: patch.description,
       purpose: patch.purpose,
       outputLanguage: patch.outputLanguage,
+      kind: patch.kind,
+      kindState: patch.kindState,
     },
   };
 }
@@ -328,8 +366,11 @@ function projectChangedFields(
   before: NonNullable<ReturnType<TaskGraph["projects"]>[number]>,
   after: NonNullable<ReturnType<TaskGraph["projects"]>[number]>,
 ): string[] {
-  const fields = ["title", "description", "purpose", "outputLanguage"] as const;
-  return fields.filter((field) => before[field] !== after[field]);
+  const fields = ["title", "description", "purpose", "outputLanguage", "kind"] as const;
+  const changed: string[] = fields.filter((field) => before[field] !== after[field]);
+  if (JSON.stringify(before.kindState) !== JSON.stringify(after.kindState))
+    changed.push("kindState");
+  return changed;
 }
 
 function renderProjectListJson(projects: Array<Record<string, unknown>>): string {

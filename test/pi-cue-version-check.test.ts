@@ -30,7 +30,8 @@ void test("compareSemver orders release tags numerically", () => {
   ];
 
   for (const [left, right, expected, message] of cases) {
-    assert.equal(compareSemver(left, right), expected, message);
+    if (message) assert.equal(compareSemver(left, right), expected, message);
+    else assert.equal(compareSemver(left, right), expected);
   }
 });
 

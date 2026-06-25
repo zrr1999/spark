@@ -8,7 +8,9 @@ import { normalizeArtifactLimit, truncateBlock } from "./artifact-tools.ts";
 import { registerSparkLearningImportExportTools } from "./learning-import-export-tool-registration.ts";
 import {
   compactLearningDetail,
+  compactLearningDiagnostic,
   compactLearningSearchResult,
+  formatLearningDiagnostics,
   formatLearningLine,
   formatLearningSearchLine,
   normalizeLearningArtifactRef,
@@ -119,8 +121,10 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
         includeInactive: normalizeLearningBoolean(params.includeInactive, false, "includeInactive"),
         limit,
       };
-      const results = (await Promise.all(stores.map((store) => store.search(query))))
-        .flat()
+      const searched = await Promise.all(stores.map((store) => store.searchDetailed(query)));
+      const diagnostics = searched.flatMap((result) => result.diagnostics);
+      const results = searched
+        .flatMap((result) => result.results)
         .sort((left, right) => {
           if (right.score !== left.score) return right.score - left.score;
           return right.record.updatedAt.localeCompare(left.record.updatedAt);
@@ -129,11 +133,16 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
       const lines = [
         `Spark learnings: ${results.length} result(s)`,
         ...results.map(formatLearningSearchLine),
+        ...formatLearningDiagnostics(diagnostics),
       ];
       if (results.length === 0) lines.push("- No matching learnings.");
       return {
         content: [{ type: "text", text: lines.join("\n") }],
-        details: { count: results.length, results: results.map(compactLearningSearchResult) },
+        details: {
+          count: results.length,
+          results: results.map(compactLearningSearchResult),
+          warnings: diagnostics.map(compactLearningDiagnostic),
+        },
       };
     },
   });
@@ -172,19 +181,20 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
         ),
         includeInactive: normalizeLearningBoolean(params.includeInactive, false, "includeInactive"),
       };
-      const artifacts = (
-        await Promise.all(
-          stores.map(async (store) =>
-            (await store.list(filter)).map((artifact) => ({ artifact, location: store.location })),
-          ),
+      const listed = await Promise.all(
+        stores.map(async (store) => ({ store, result: await store.listDetailed(filter) })),
+      );
+      const diagnostics = listed.flatMap(({ result }) => result.diagnostics);
+      const artifacts = listed
+        .flatMap(({ store, result }) =>
+          result.artifacts.map((artifact) => ({ artifact, location: store.location })),
         )
-      )
-        .flat()
         .sort((left, right) => right.artifact.updatedAt.localeCompare(left.artifact.updatedAt));
       const visible = artifacts.slice(0, limit);
       const lines = [
         `Spark learnings: ${artifacts.length}${visible.length < artifacts.length ? ` (showing ${visible.length})` : ""}`,
         ...visible.map(({ artifact, location }) => formatLearningLine(artifact, location)),
+        ...formatLearningDiagnostics(diagnostics),
       ];
       if (visible.length === 0) lines.push("- No learnings.");
       if (visible.length < artifacts.length)
@@ -197,6 +207,7 @@ export function registerSparkLearningTools(registerSparkTool: SparkToolRegistrar
           learnings: visible.map(({ artifact, location }) =>
             compactLearningDetail(artifact, location),
           ),
+          warnings: diagnostics.map(compactLearningDiagnostic),
         },
       };
     },

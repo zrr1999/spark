@@ -3,10 +3,10 @@ import { basename, join } from "node:path";
 import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
 import { hasNonSparkProjectFiles } from "./spark-activation.ts";
 import {
-  analyzeSparkEntryMode,
+  analyzeSparkEntryPhase,
   type SparkCommandProjectState,
   type SparkEntryIntent,
-  type SparkEntryModeChoice,
+  type SparkEntryPhaseChoice,
   type SparkEntryResolution,
 } from "./spark-entry.ts";
 import { currentSparkProject } from "./session-state.ts";
@@ -49,22 +49,22 @@ export async function resolveSparkEntry(
 ): Promise<SparkEntryResolution> {
   if (!graph) return resolveSparkEntryWithoutGraph(ctx, intent, projectState);
 
-  const mode =
+  const phase =
     intent.kind === "direct"
-      ? intent.mode
-      : await chooseInitializedSparkMode(ctx, graph, projectState, intent.prompt);
-  if (!mode) return { action: "none" };
-  if (mode === "new_project") {
+      ? (intent.phase ?? intent.mode)
+      : await chooseInitializedSparkPhase(ctx, graph, projectState, intent.prompt);
+  if (!phase) return { action: "none" };
+  if (phase === "new_project") {
     const idea = intent.prompt || (await promptSparkNewProjectIdea(ctx));
     return idea
       ? { action: "initialize_new_project", idea, enterPlanning: true, planningSource: "auto" }
       : { action: "none" };
   }
   return {
-    action: "enter_mode",
-    mode,
+    action: "enter_phase",
+    phase,
     focus: intent.prompt || undefined,
-    planningSource: intent.kind === "direct" && mode === "plan" ? "direct" : "auto",
+    planningSource: intent.kind === "direct" && phase === "plan" ? "direct" : "auto",
   };
 }
 
@@ -78,7 +78,7 @@ async function resolveSparkEntryWithoutGraph(
     return idea
       ? {
           action: "initialize_new_project",
-          idea: directModeBootstrapIdea(intent, idea),
+          idea: directPhaseBootstrapIdea(intent, idea),
           enterPlanning: intent.kind === "direct",
           planningSource: intent.kind === "direct" ? "direct" : "auto",
         }
@@ -89,30 +89,30 @@ async function resolveSparkEntryWithoutGraph(
   return idea
     ? {
         action: "initialize_existing_project",
-        idea: directModeBootstrapIdea(intent, idea),
+        idea: directPhaseBootstrapIdea(intent, idea),
         planningSource: intent.kind === "direct" ? "direct" : "auto",
       }
     : { action: "none" };
 }
 
-function directModeBootstrapIdea(intent: SparkEntryIntent, idea: string): string {
+function directPhaseBootstrapIdea(intent: SparkEntryIntent, idea: string): string {
   if (intent.kind !== "direct") return idea;
   return [
     idea,
     "",
-    `Requested Spark mode: ${intent.mode}.`,
+    `Requested Spark phase: ${intent.phase ?? intent.mode}.`,
     "No current Spark project state was available, so first create/select the project and plan concrete tasks. If the project identity, scope, or acceptance criteria are ambiguous, ask for human review before narrowing the plan.",
   ].join("\n");
 }
 
-async function chooseInitializedSparkMode(
+async function chooseInitializedSparkPhase(
   ctx: SparkEntryResolutionContext,
   graph: TaskGraph,
   projectState: SparkCommandProjectState,
   prompt: string,
-): Promise<SparkEntryModeChoice | undefined> {
+): Promise<SparkEntryPhaseChoice | undefined> {
   const project = await currentSparkProject(ctx.cwd, ctx, graph);
-  const analysis = analyzeSparkEntryMode(graph, projectState, prompt, project);
+  const analysis = analyzeSparkEntryPhase(graph, projectState, prompt, project);
   return analysis.recommendation;
 }
 
@@ -284,7 +284,7 @@ async function promptSparkNewProjectIdea(
   const trimmed = idea?.trim();
   if (trimmed) return trimmed;
   ctx.ui?.notify?.(
-    "Spark new-project mode needs an idea; provide a concrete project title or description before initializing.",
+    "Spark new-project phase needs an idea; provide a concrete project title or description before initializing.",
     "warning",
   );
   return undefined;

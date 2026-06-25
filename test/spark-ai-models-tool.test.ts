@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { registerPiModelsTool } from "../packages/pi-models/src/extension.ts";
+import { registerSparkModelsTool } from "../packages/spark-ai/src/models-extension.ts";
 import type { ToolConfig } from "@zendev-lab/pi-extension-api";
 
 interface FakeModel {
@@ -54,7 +54,7 @@ function fakeRegistry() {
 
 function registerTools(): Map<string, ToolConfig> {
   const tools = new Map<string, ToolConfig>();
-  registerPiModelsTool({ registerTool: (config) => tools.set(config.name, config) });
+  registerSparkModelsTool({ registerTool: (config) => tools.set(config.name, config) });
   return tools;
 }
 
@@ -116,6 +116,6 @@ void test("models reports a clear host capability error when modelRegistry is mi
         () => undefined,
         {} as Parameters<ToolConfig["execute"]>[4],
       ),
-    /models requires ctx\.modelRegistry from the pi-coding-agent host/,
+    /models requires ctx\.modelRegistry from the host context/,
   );
 });

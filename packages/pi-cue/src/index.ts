@@ -24,6 +24,8 @@
  */
 
 import type { ExtensionAPI } from "@zendev-lab/pi-extension-api";
+import { accessSync, constants } from "node:fs";
+import { execFileSync } from "node:child_process";
 import * as nodePath from "node:path";
 import { truncateToWidth } from "@zendev-lab/spark-tui/text";
 import { Type } from "typebox";
@@ -152,7 +154,7 @@ function cueErrorDetail(error: unknown): string {
 function cueSessionOptionsFromContext(ctx?: PiCueToolContext): Required<CueSessionOptions> {
   const cwd = resolveCueWorkingDirectory(undefined, ctx?.cwd);
   const sessionId = cueSessionIdFromContext(ctx, cwd);
-  return { sessionId, cwd, env: ctx?.env ?? process.env };
+  return { sessionId, cwd, env: ctx?.env ?? process.env, refresh: false };
 }
 
 function cueSessionIdFromContext(ctx: PiCueToolContext | undefined, cwd: string): string {
@@ -384,8 +386,10 @@ const CUE_SCOPE_ACTIONS = [
   "env",
   "config",
   "env_set",
+  "env_unset",
   "path_prepend",
   "cd",
+  "refresh",
   "status",
 ] as const;
 const SCRIPT_LANGUAGES = ["cue-shell", "python"] as const;
@@ -921,13 +925,14 @@ async function runPythonScriptJob(
     tailBytes: number;
     cwd: string;
     venv?: string;
+    env?: Record<string, string | undefined>;
   },
 ) {
-  const python = pythonExecutableForVenv(options.venv);
+  const python = resolvePythonInterpreter({ venv: options.venv, env: options.env });
   const target = options.inlineScript
     ? `-c ${quoteCueWord(options.inlineScript)}`
     : quoteCueWord(options.path ?? "");
-  const result = await cued.runJob(`${quoteCueWord(python)} ${target}`, {
+  const result = await cued.runJob(`${quoteCueWord(python.executable)} ${target}`, {
     timeout: options.timeout,
     cwd: options.cwd,
   });
@@ -955,6 +960,7 @@ async function runPythonScriptJob(
     exitCode: result.exitCode,
     timedOut: result.timedOut,
     warnings: result.warnings,
+    pythonInterpreter: python,
     ...(options.venv ? { venv: options.venv } : {}),
   };
   if (result.status === "Failed" && !result.timedOut) {
@@ -965,8 +971,79 @@ async function runPythonScriptJob(
   return { content: [{ type: "text" as const, text: lines.join("\n") }], details };
 }
 
-function pythonExecutableForVenv(venv: string | undefined): string {
-  return venv ? `${venv.replace(/\/+$/u, "")}/bin/python` : "python3";
+const PYTHON_INTERPRETER_CANDIDATES = ["python3.13", "python3.12", "python3"] as const;
+
+export interface PythonInterpreterResolution {
+  executable: string;
+  source: "venv" | "path" | "fallback";
+  candidates: string[];
+  version?: string;
+  note?: string;
+}
+
+export function resolvePythonInterpreter(
+  options: {
+    venv?: string;
+    env?: Record<string, string | undefined>;
+  } = {},
+): PythonInterpreterResolution {
+  if (options.venv) {
+    const executable = `${options.venv.replace(/\/+$/u, "")}/bin/python`;
+    return {
+      executable,
+      source: "venv",
+      candidates: [executable],
+      version: pythonVersion(executable),
+    };
+  }
+
+  for (const candidate of PYTHON_INTERPRETER_CANDIDATES) {
+    const executable = findExecutableOnPath(candidate, options.env?.PATH ?? process.env.PATH);
+    if (!executable) continue;
+    return {
+      executable,
+      source: candidate === "python3" ? "fallback" : "path",
+      candidates: [...PYTHON_INTERPRETER_CANDIDATES],
+      version: pythonVersion(executable),
+      ...(candidate === "python3"
+        ? { note: "python3.12+ was not found on PATH; fell back to python3." }
+        : {}),
+    };
+  }
+
+  return {
+    executable: "python3",
+    source: "fallback",
+    candidates: [...PYTHON_INTERPRETER_CANDIDATES],
+    note: "python3.12+ was not found on the host PATH; cue-shell will resolve python3 in the daemon/session PATH.",
+  };
+}
+
+function findExecutableOnPath(name: string, pathValue: string | undefined): string | undefined {
+  for (const dir of (pathValue ?? "").split(nodePath.delimiter)) {
+    if (!dir) continue;
+    const executable = nodePath.join(dir, name);
+    try {
+      accessSync(executable, constants.X_OK);
+      return executable;
+    } catch {
+      // Continue scanning PATH.
+    }
+  }
+  return undefined;
+}
+
+function pythonVersion(executable: string): string | undefined {
+  try {
+    const output = execFileSync(executable, ["--version"], {
+      encoding: "utf8",
+      timeout: 1_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return output.trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function rejectRemovedCueParam(
@@ -1508,7 +1585,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     description:
       "Run a script file with an explicit language runner. " +
       "Supported languages in this version: cue-shell and python. " +
-      "For cue-shell this delegates to RunScript and mirrors cue_run; for python it runs python3 or the selected venv interpreter through cue-shell job execution.",
+      "For cue-shell this delegates to RunScript and mirrors cue_run; for python it uses the selected venv interpreter, otherwise prefers python3.12+ before falling back to python3, and reports the resolved interpreter in details.",
     parameters: Type.Object({
       path: Type.String({ description: "Path to the script file to run." }),
       language: Type.String({ description: "Script language. Required: cue-shell or python." }),
@@ -1605,6 +1682,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         tailBytes,
         cwd: baseCwd,
         venv,
+        env: ctx.env,
       });
     },
   });
@@ -1615,7 +1693,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     description:
       "Run an inline script body with an explicit language runner. " +
       "Supported languages in this version: cue-shell and python. " +
-      "Inline Python is executed with python -c through cue-shell, using python3 or the selected venv interpreter.",
+      "Inline Python is executed with python -c through cue-shell, using the selected venv interpreter, otherwise preferring python3.12+ before falling back to python3, and reporting the resolved interpreter in details.",
     parameters: Type.Object({
       script: Type.String({ description: "Inline script body to run." }),
       language: Type.String({ description: "Script language. Required: cue-shell or python." }),
@@ -1709,6 +1787,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         tailBytes,
         cwd: baseCwd,
         venv,
+        env: ctx.env,
       });
     },
   });
@@ -2027,12 +2106,30 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       const cued = await getClient(ctx);
       const command = action === "providers" ? ":providers" : ":resources";
       const text = await cued.evalText(command);
+      const hint = cueResourceProviderHint(text);
+      const rendered = hint ? `${text.trimEnd()}\n\n${hint}` : text;
       return {
-        content: [{ type: "text" as const, text }],
-        details: { action, command },
+        content: [{ type: "text" as const, text: rendered }],
+        details: { action, command, ...(hint ? { hint } : {}) },
       };
     },
   });
+
+  function cueResourceProviderHint(text: string): string | undefined {
+    const normalized = text.trim().toLowerCase();
+    if (
+      !normalized ||
+      /no .*resource .*providers|no .*providers|providers:\s*0|registered providers:\s*0/u.test(
+        normalized,
+      )
+    ) {
+      return [
+        "Hint: no cue-shell resource provider is registered for this session.",
+        '  next: run cue_resources({ action: "providers" }) to confirm provider routing, remove needs={...} from cue_exec when no gated resource is required, or start/register a cue-shell resource provider for keys such as gpu/gpu_mem before submitting resource-gated jobs.',
+      ].join("\n");
+    }
+    return undefined;
+  }
 
   // ═══════════════════════════════════════════════════════════════════
   //  cue_schedule — unified schedule management
@@ -2237,12 +2334,12 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     name: "cue_scope",
     label: "Cue Scope",
     description:
-      "Inspect or mutate cue-shell session state. action='list' lists scopes, 'env' shows session env, 'config' shows config, 'env_set' sets KEY=VALUE, 'path_prepend' prepends PATH, 'cd' changes session cwd, and 'status' shows bounded cwd/PATH status.",
+      "Inspect or mutate cue-shell session state. action='list' lists scopes, 'env' shows session env, 'config' shows config, 'env_set' sets KEY=VALUE, 'env_unset' removes KEY, 'path_prepend' prepends PATH, 'cd' changes session cwd, 'refresh' explicitly refreshes the session from host cwd/env, and 'status' shows bounded cwd/PATH status.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({
           description:
-            "Action: list, env, config, env_set, path_prepend, cd, or status. Default: list.",
+            "Action: list, env, config, env_set, env_unset, path_prepend, cd, refresh, or status. Default: list.",
         }),
       ),
       limit: Type.Optional(
@@ -2260,7 +2357,9 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         }),
       ),
       key: Type.Optional(
-        Type.String({ description: "Environment variable name for action='env_set'." }),
+        Type.String({
+          description: "Environment variable name for action='env_set' or 'env_unset'.",
+        }),
       ),
       value: Type.Optional(
         Type.String({ description: "Environment variable value for action='env_set'." }),
@@ -2316,6 +2415,20 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         };
       }
 
+      if (action === "env_unset") {
+        const key = normalizeCueEnvKey(params.key, "cue_scope key");
+        const scope = await cued.unsetEnv([key]);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Unset ${key} for this cue session.\n${scope.summary}`,
+            },
+          ],
+          details: { action, key, scope },
+        };
+      }
+
       if (action === "path_prepend") {
         const path = normalizeCueSessionPath(params.path, "cue_scope path");
         const envText = await cued.showEnv();
@@ -2339,6 +2452,34 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         return {
           content: [{ type: "text" as const, text: `Changed cue session cwd.\n${scope.summary}` }],
           details: { action, path, scope },
+        };
+      }
+
+      if (action === "refresh") {
+        const session = { ...cueSessionOptionsFromContext(ctx), refresh: true };
+        await cued.handshake(session);
+        const envText = await cued.showEnv();
+        const cwdLine = envText.split(/\r?\n/u).find((line) => line.startsWith("cwd=")) ?? "cwd=?";
+        const pathValue = parseCueEnvValue(envText, "PATH") ?? "";
+        const pathPreview = tailStr(pathValue, Math.min(tailBytes, DEFAULT_CUE_TAIL_BYTES));
+        const lines = [
+          "Refreshed cue session from host cwd/env.",
+          cwdLine,
+          `PATH=${pathPreview.text}`,
+        ];
+        if (pathPreview.truncated)
+          lines.push("[PATH truncated — use action=status/env with a larger tail_bytes value]");
+        return {
+          content: [{ type: "text" as const, text: lines.join("\n") }],
+          details: {
+            action,
+            sessionId: session.sessionId,
+            cwd: session.cwd,
+            envKeys: Object.keys(session.env).length,
+            pathChars: pathValue.length,
+            shownPathChars: pathPreview.text.length,
+            truncated: pathPreview.truncated,
+          },
         };
       }
 

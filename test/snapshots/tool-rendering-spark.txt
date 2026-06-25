@@ -13,5 +13,5 @@ assign dry-run max=2
 # goal
 goal action=status
 
-# mode
-mode action=plan focus=tighten tasks
+# phase
+phase action=plan focus=tighten tasks

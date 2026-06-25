@@ -4,15 +4,19 @@ import type { ExtensionAPI } from "@zendev-lab/pi-extension-api";
 
 import piAskExtension from "../../../../packages/pi-ask/src/extension.ts";
 import piCueExtension from "../../../../packages/pi-cue/src/index.ts";
+import piFilesExtension from "../../../../packages/pi-files/src/extension.ts";
 import piGraftExtension from "../../../../packages/pi-graft/src/extension.ts";
 import piRolesExtension from "../../../../packages/pi-roles/src/extension.ts";
+import sparkModelsExtension from "../../../../packages/spark-ai/src/models-extension.ts";
 import sparkExtension from "../../../../packages/spark-extension/src/extension/index.ts";
 
 export type SparkBuiltinExtensionName =
   | "@zendev-lab/pi-ask"
   | "@zendev-lab/pi-cue"
+  | "@zendev-lab/pi-files"
   | "@zendev-lab/pi-graft"
   | "@zendev-lab/pi-roles"
+  | "@zendev-lab/spark-ai"
   | "spark";
 
 export type SparkExtensionFactory = (api: ExtensionAPI) => void | Promise<void>;
@@ -44,6 +48,8 @@ export interface SparkExtensionLoaderOptions {
 export const DEFAULT_SPARK_EXTENSION_SPECS = [
   "@zendev-lab/pi-ask/extension",
   "@zendev-lab/pi-cue/extension",
+  "@zendev-lab/pi-files/extension",
+  "@zendev-lab/spark-ai/models-extension",
   "@zendev-lab/pi-roles/extension",
   "@zendev-lab/pi-graft/extension",
   "@zendev-lab/spark-extension/extension",
@@ -59,6 +65,16 @@ const BUILTIN_EXTENSION_FACTORIES: readonly SparkBuiltinExtensionFactory[] = [
     name: "@zendev-lab/pi-cue",
     specifier: "@zendev-lab/pi-cue/extension",
     factory: piCueExtension as SparkExtensionFactory,
+  },
+  {
+    name: "@zendev-lab/pi-files",
+    specifier: "@zendev-lab/pi-files/extension",
+    factory: piFilesExtension as SparkExtensionFactory,
+  },
+  {
+    name: "@zendev-lab/spark-ai",
+    specifier: "@zendev-lab/spark-ai/models-extension",
+    factory: sparkModelsExtension as SparkExtensionFactory,
   },
   {
     name: "@zendev-lab/pi-roles",

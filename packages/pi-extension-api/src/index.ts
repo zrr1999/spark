@@ -226,7 +226,7 @@ export class PiError extends Error {
     super(message);
     this.name = "PiError";
     this.code = code;
-    this.details = details;
+    if (details !== undefined) this.details = details;
   }
 }
 
@@ -260,8 +260,8 @@ export function newRef<K extends RefKind>(kind: K, id: string = randomUUID()): R
 }
 
 export function refKind(ref: string): RefKind {
-  const [kind] = ref.split(":", 1);
-  if (!isRefKind(kind)) throw new PiError("INVALID_REF", `unknown ref kind: ${ref}`);
+  const kind = ref.split(":", 1)[0];
+  if (!kind || !isRefKind(kind)) throw new PiError("INVALID_REF", `unknown ref kind: ${ref}`);
   return kind;
 }
 
@@ -468,6 +468,10 @@ export interface Project {
   /** Durable project purpose; distinct from session goal pursuit. */
   purpose?: string;
   outputLanguage?: "zh" | "en";
+  /** Project workflow/display kind. Defaults to generic when omitted by older snapshots. */
+  kind?: string;
+  /** Kind-specific structured state consumed by the kind registry. */
+  kindState?: JsonValue;
   currentTaskRef?: TaskRef;
   roadmap: ProjectRoadmap;
   createdAt: string;

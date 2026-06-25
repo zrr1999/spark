@@ -53,6 +53,7 @@ import {
   type SparkKeybindingsOptions,
 } from "./keybindings.ts";
 
+import type { SparkHostModelRegistryLike } from "./model-registry.ts";
 import type {
   EventListener,
   EventListenerMap,
@@ -74,6 +75,7 @@ export interface SparkHostRuntimeOptions {
   hasUI?: boolean;
   ui?: SparkHostUiTransport;
   sessionManager?: SparkHostSessionManagerStub;
+  modelRegistry?: SparkHostModelRegistryLike;
   keybindings?: SparkKeybindings | SparkKeybindingsOptions;
 }
 
@@ -96,6 +98,7 @@ export class SparkHostRuntime implements ExtensionAPI {
   private readonly daemonEventListeners = new Set<SparkDaemonEventListener>();
   private uiTransport: SparkHostUiTransport;
   private sessionManager: SparkHostSessionManagerStub;
+  private modelRegistry: SparkHostModelRegistryLike | undefined;
   private idle = true;
   private readonly keybindings: SparkKeybindings;
 
@@ -104,6 +107,7 @@ export class SparkHostRuntime implements ExtensionAPI {
     this.hasUI = options.hasUI ?? false;
     this.uiTransport = options.ui ?? {};
     this.sessionManager = options.sessionManager ?? {};
+    this.modelRegistry = options.modelRegistry;
     this.keybindings =
       options.keybindings instanceof SparkKeybindings
         ? options.keybindings
@@ -234,6 +238,10 @@ export class SparkHostRuntime implements ExtensionAPI {
     this.sessionManager = sessionManager;
   }
 
+  setModelRegistry(modelRegistry: SparkHostModelRegistryLike | undefined): void {
+    this.modelRegistry = modelRegistry;
+  }
+
   /** Snapshot of currently registered tools (active or not). */
   listTools(): RegisteredTool[] {
     return [...this.tools.values()];
@@ -339,6 +347,7 @@ export class SparkHostRuntime implements ExtensionAPI {
    */
   makeContext(extra: Partial<ExtensionContext> = {}): ExtensionContext & {
     sessionManager?: SparkHostSessionManagerStub;
+    modelRegistry?: SparkHostModelRegistryLike;
   } {
     return {
       cwd: this.cwd,
@@ -346,6 +355,7 @@ export class SparkHostRuntime implements ExtensionAPI {
       ui: this.uiTransport as ExtensionUi,
       isIdle: () => this.isIdle(),
       sessionManager: this.sessionManager,
+      ...(this.modelRegistry ? { modelRegistry: this.modelRegistry } : {}),
       ...extra,
     };
   }

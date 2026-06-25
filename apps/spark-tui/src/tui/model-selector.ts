@@ -161,7 +161,7 @@ const MODEL_SELECTOR_LAYOUT: SelectListLayoutOptions = {
 };
 
 function toSelectItem(item: SparkModelSelectorItem): SelectItem {
-  const label = `${item.providerLabel} / ${item.modelLabel}${item.active ? " (active)" : ""}`;
+  const label = `${item.modelLabel}${item.active ? " (active)" : ""}`;
   return {
     value: item.value,
     label,

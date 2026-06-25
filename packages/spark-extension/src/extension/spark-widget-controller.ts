@@ -19,6 +19,7 @@ import { activeSparkRoleRunProcessesForCwd } from "./background-runs.ts";
 import {
   currentSparkProject,
   loadSparkGraph,
+  loadSparkPhase,
   saveSparkGraphAndTodos,
   sparkSessionKey,
   sparkSessionOwnerKey,
@@ -30,9 +31,11 @@ import {
   saveTodoDisplayNumberState,
   taskTodoDisplayKey,
 } from "./session-todos.ts";
+import { renderSparkProjectKindDisplay } from "./project-kind-registry.ts";
+import { deriveSparkDriveMode, sparkActiveLens } from "./spark-drive-state.ts";
 import { ensureSparkGraphInvariants, isPlaceholderProjectTitle } from "./spark-graph-invariants.ts";
 import { loadSessionGoal } from "./spark-session-goals.ts";
-import { loadSessionLoop } from "./spark-session-loops.ts";
+import { clearSessionLoop, loadSessionLoop, type SparkSessionLoop } from "./spark-session-loops.ts";
 import { latestRunsByTaskRef, taskPlanSummary } from "./task-display.ts";
 import { deriveTaskRoleLabel, isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 
@@ -84,13 +87,27 @@ export class SparkWidgetController {
     const todoDisplayNumbers = await loadTodoDisplayNumberState(cwd, ctx);
     const project = graph ? await currentSparkProject(cwd, ctx, graph) : undefined;
     const sessionGoal = await loadSessionGoal(cwd, ctx);
-    const sessionLoop = await loadSessionLoop(cwd, ctx);
+    let sessionLoop = await loadSessionLoop(cwd, ctx);
+    if (sessionLoop?.status === "paused") {
+      await clearSessionLoop(cwd, ctx);
+      sessionLoop = undefined;
+    }
+    const foregroundDriver = sparkForegroundDriverWidgetEntries(sessionGoal, sessionLoop);
+    const phase = (await loadSparkPhase(cwd, ctx)).phase;
+    const activeLens = sparkActiveLens(
+      phase,
+      deriveSparkDriveMode({
+        activeLens: ctx?.sparkActiveLens,
+        goal: sessionGoal,
+        loop: sessionLoop,
+      }),
+    );
     if (!graph || !project) {
       this.state = {
         workflowRun: sparkWorkflowRunWidgetEntry(workflowRunStatus),
         dynamicWorkflowRun,
-        goal: sparkGoalWidgetEntry(sessionGoal, sessionLoop),
-        activeLens: ctx?.sparkActiveLens,
+        ...foregroundDriver,
+        activeLens,
         tasks: [],
         independentTodos: [],
         taskCountTotal: 0,
@@ -113,8 +130,9 @@ export class SparkWidgetController {
       projectTitle: isPlaceholderProjectTitle(project.title) ? undefined : project.title,
       workflowRun: sparkWorkflowRunWidgetEntry(workflowRunStatus, project.ref),
       dynamicWorkflowRun,
-      goal: sparkGoalWidgetEntry(sessionGoal, sessionLoop),
-      activeLens: ctx?.sparkActiveLens,
+      ...foregroundDriver,
+      projectKind: renderSparkProjectKindDisplay(project),
+      activeLens,
       tasks: allTasks.map((task) => {
         const backgroundOwner =
           task.claim?.kind === "role-run" &&
@@ -207,31 +225,57 @@ function mapTodoStatus(status: string): SessionTodoEntry["status"] {
   }
 }
 
-function sparkGoalWidgetEntry(
+function sparkForegroundDriverWidgetEntries(
   sessionGoal: Awaited<ReturnType<typeof loadSessionGoal>>,
   sessionLoop: Awaited<ReturnType<typeof loadSessionLoop>>,
-) {
+): Pick<SparkWidgetState, "goal" | "loop"> {
   if (sessionGoal && sessionGoal.status !== "complete") {
     return {
-      kind: "goal" as const,
-      status: sessionGoal.status,
-      objective: compactGoalObjective(sessionGoal.objective),
+      goal: {
+        status: sessionGoal.status,
+        objective: compactGoalObjective(sessionGoal.objective),
+      },
     };
   }
-  if (sessionLoop) {
+  if (sessionLoop?.status === "active") {
     return {
-      kind: "loop" as const,
-      status: sessionLoop.status,
-      objective: compactGoalObjective(sessionLoop.objective),
+      loop: {
+        status: sessionLoop.status,
+        objective: compactGoalObjective(sessionLoop.objective),
+        schedule: sessionLoop.schedule
+          ? sparkLoopScheduleWidgetEntry(sessionLoop.schedule)
+          : undefined,
+      },
     };
   }
   return sessionGoal
     ? {
-        kind: "goal" as const,
-        status: sessionGoal.status,
-        objective: compactGoalObjective(sessionGoal.objective),
+        goal: {
+          status: sessionGoal.status,
+          objective: compactGoalObjective(sessionGoal.objective),
+        },
       }
-    : undefined;
+    : {};
+}
+
+function sparkLoopScheduleWidgetEntry(schedule: NonNullable<SparkSessionLoop["schedule"]>) {
+  const scheduledAtMs = Date.parse(schedule.scheduledAt);
+  const nextRunAtMs = Date.parse(schedule.nextRunAt);
+  if (!Number.isFinite(scheduledAtMs) || !Number.isFinite(nextRunAtMs)) return undefined;
+  return {
+    label: formatLoopScheduleLabel(schedule.delayMs),
+    scheduledAtMs,
+    nextRunAtMs,
+  };
+}
+
+function formatLoopScheduleLabel(delayMs: number): string {
+  if (delayMs >= 24 * 60 * 60_000 && delayMs % (24 * 60 * 60_000) === 0)
+    return `${delayMs / (24 * 60 * 60_000)}d`;
+  if (delayMs >= 3_600_000 && delayMs % 3_600_000 === 0) return `${delayMs / 3_600_000}h`;
+  if (delayMs >= 60_000 && delayMs % 60_000 === 0) return `${delayMs / 60_000}m`;
+  if (delayMs >= 1_000 && delayMs % 1_000 === 0) return `${delayMs / 1_000}s`;
+  return `${delayMs}ms`;
 }
 
 function compactGoalObjective(objective: string): string {
@@ -268,23 +312,17 @@ function sparkWorkflowRunWidgetEntry(
   projectRef?: ProjectRef,
 ): SparkWidgetState["workflowRun"] {
   const activeRun = workflowRunStatus.activeRun;
-  if (activeRun && (!projectRef || activeRun.projectRef === projectRef)) {
-    return {
-      status: activeRun.status,
-      runRef: activeRun.ref,
-      scheduled: activeRun.scheduled,
-      completed: activeRun.completed,
-      active: true,
-    };
-  }
-  const actionableRun = workflowRunStatus.actionableRun;
-  if (actionableRun && (!projectRef || actionableRun.projectRef === projectRef)) {
-    return {
-      status: actionableRun.status,
-      runRef: actionableRun.ref,
-      scheduled: actionableRun.scheduled,
-      completed: actionableRun.completed,
-    };
-  }
-  return undefined;
+  if (
+    !activeRun ||
+    activeRun.status !== "running" ||
+    (projectRef && activeRun.projectRef !== projectRef)
+  )
+    return undefined;
+  return {
+    status: activeRun.status,
+    runRef: activeRun.ref,
+    scheduled: activeRun.scheduled,
+    completed: activeRun.completed,
+    active: true,
+  };
 }

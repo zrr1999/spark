@@ -223,6 +223,204 @@ void test("pi-graft registers the final high-frequency direct tool set and exten
   );
 });
 
+void test("pi-graft lifecycle prerequisite errors point to the next tool", async () => {
+  const { pi, tools } = createFakePi();
+  registerPiGraftExtension(pi);
+  const ctx = { cwd: "/tmp/pi-graft-lifecycle-errors" };
+
+  await assert.rejects(
+    () =>
+      executeTool(tools.get("graft_validate"), "graft_validate", { target: "scratch:abc" }, ctx),
+    /graft_validate accepts candidate:\/patch: refs[\s\S]*next: run graft_candidate_from_scratch[\s\S]*graft_validate/,
+  );
+  await assert.rejects(
+    () => executeTool(tools.get("graft_validate"), "graft_validate", { target: "tree:abc" }, ctx),
+    /graft_validate accepts candidate:\/patch: refs[\s\S]*create one from a scratch with graft_candidate_from_scratch/,
+  );
+  await assert.rejects(
+    () => executeTool(tools.get("graft_materialize"), "graft_materialize", {}, ctx),
+    /graft_materialize requires patch[\s\S]*next: run graft_admit[\s\S]*patch: ref/,
+  );
+  await assert.rejects(
+    () =>
+      executeTool(
+        tools.get("graft_materialize"),
+        "graft_materialize",
+        { patch: "candidate:abc" },
+        ctx,
+      ),
+    /graft_materialize requires an admitted patch: ref[\s\S]*next: run graft_admit\(\{ candidate: "candidate:abc" \}\)/,
+  );
+  await assert.rejects(
+    () => executeTool(tools.get("graft_admit"), "graft_admit", { candidate: "scratch:abc" }, ctx),
+    /graft_admit accepts candidate: refs[\s\S]*next: run graft_candidate_from_scratch/,
+  );
+  await assert.rejects(
+    () => executeTool(tools.get("graft_show"), "graft_show", {}, ctx),
+    /graft_show requires target[\s\S]*next: pass a candidate:\/patch: ref/,
+  );
+  await assert.rejects(
+    () =>
+      executeTool(tools.get("graft_evidence"), "graft_evidence", { subject: "scratch:abc" }, ctx),
+    /graft_evidence accepts candidate:\/patch: refs[\s\S]*next: run graft_candidate_from_scratch/,
+  );
+});
+
+envTest("graft_ps renders a bounded workspace sample with an expansion hint", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graft-ps-bounded-"));
+  const previousGraftBin = process.env.GRAFT_BIN;
+  const envelope = {
+    status: "ok",
+    message: null,
+    view: {
+      type: "ps",
+      data: {
+        daemon: {
+          graft_home: "/tmp/graft-home",
+          socket: "/tmp/graft-home/run/daemon.sock",
+          socket_state: "missing",
+          socket_exists: false,
+          pid_file: "/tmp/graft-home/run/daemon.pid",
+          pid: null,
+        },
+        registry: {
+          workspaces: 3,
+          workspaces_hidden_missing: 1,
+          routes: 2,
+          routes_hidden_stale: 1,
+          repo_paths: 0,
+          repo_paths_hidden_missing: 0,
+        },
+        workspaces: [
+          { id: "ws:one", kind: "Local", root: "/tmp/one" },
+          { id: "ws:two", kind: "Local", root: "/tmp/two" },
+          { id: "ws:three", kind: "Local", root: "/tmp/three" },
+        ],
+      },
+    },
+  };
+  process.env.GRAFT_BIN = await writeMockGraft(
+    dir,
+    `cat <<'JSON'\n${JSON.stringify(envelope)}\nJSON`,
+  );
+
+  try {
+    const { pi, tools } = createFakePi();
+    registerPiGraftExtension(pi);
+    const bounded = await executeTool(
+      tools.get("graft_ps"),
+      "graft_ps",
+      { limit: 2 },
+      { cwd: dir },
+    );
+    assert.match(bounded.content[0].text, /graft workspace ps/);
+    assert.match(bounded.content[0].text, /socket_state: missing/);
+    assert.match(bounded.content[0].text, /workspaces_hidden_missing: 1/);
+    assert.match(bounded.content[0].text, /workspaces: showing 2 of 3/);
+    assert.match(bounded.content[0].text, /ws:one \(Local\) \/tmp\/one/);
+    assert.match(bounded.content[0].text, /ws:two \(Local\) \/tmp\/two/);
+    assert.doesNotMatch(bounded.content[0].text, /ws:three/);
+    assert.match(bounded.content[0].text, /includeAll=true/);
+    assert.deepEqual(bounded.details?.psSummary, {
+      kind: "ps",
+      parsed: true,
+      limit: 2,
+      includeAll: false,
+      workspacesTotal: 3,
+      workspacesShown: 2,
+      truncated: true,
+    });
+
+    const expanded = await executeTool(
+      tools.get("graft_ps"),
+      "graft_ps",
+      { limit: 1, includeAll: true },
+      { cwd: dir },
+    );
+    assert.match(expanded.content[0].text, /workspaces: showing 3 of 3/);
+    assert.match(expanded.content[0].text, /ws:three \(Local\) \/tmp\/three/);
+    assert.doesNotMatch(expanded.content[0].text, /more workspace\(s\) hidden/);
+    const expandedSummary = expanded.details?.psSummary;
+    assert.ok(isRecord(expandedSummary));
+    assert.equal(expandedSummary.truncated, false);
+  } finally {
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+envTest("graft_doctor buckets problems and samples each class", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-graft-doctor-bounded-"));
+  const previousGraftBin = process.env.GRAFT_BIN;
+  const envelope = {
+    status: "ok",
+    message: [
+      "registry\t/tmp/graft-home/registry.toml",
+      "workspaces\t4",
+      "routes\t1",
+      "repo_paths\t1",
+      "status\t5 problem(s)",
+      "problem\tmissing workspace root: ws:a -> /tmp/a",
+      "problem\tmissing workspace root: ws:b -> /tmp/b",
+      "problem\tmissing workspace root: ws:c -> /tmp/c",
+      "problem\troute points to unknown workspace: /tmp/cwd -> ws:missing",
+      "problem\tmissing repo path: repo:one -> /tmp/repo-one",
+    ].join("\n"),
+  };
+  process.env.GRAFT_BIN = await writeMockGraft(
+    dir,
+    `cat <<'JSON'\n${JSON.stringify(envelope)}\nJSON`,
+  );
+
+  try {
+    const { pi, tools } = createFakePi();
+    registerPiGraftExtension(pi);
+    const bounded = await executeTool(
+      tools.get("graft_doctor"),
+      "graft_doctor",
+      { limit: 1 },
+      { cwd: dir },
+    );
+    assert.match(bounded.content[0].text, /graft workspace doctor/);
+    assert.match(bounded.content[0].text, /registry: \/tmp\/graft-home\/registry\.toml/);
+    assert.match(bounded.content[0].text, /problems: 5 total across 3 class\(es\)/);
+    assert.match(bounded.content[0].text, /missing-workspace-root: 3/);
+    assert.match(bounded.content[0].text, /missing workspace root: ws:a -> \/tmp\/a/);
+    assert.doesNotMatch(bounded.content[0].text, /ws:b -> \/tmp\/b/);
+    assert.match(bounded.content[0].text, /route-points-to-unknown-workspace: 1/);
+    assert.match(bounded.content[0].text, /missing-repo-path: 1/);
+    assert.match(bounded.content[0].text, /default output is bucketed and sampled/);
+    const summary = bounded.details?.doctorSummary as {
+      totalProblems?: unknown;
+      bucketCount?: unknown;
+      buckets?: Array<{ problemClass: string; count: number; hidden: number }>;
+    };
+    assert.equal(summary.totalProblems, 5);
+    assert.equal(summary.bucketCount, 3);
+    assert.deepEqual(summary.buckets?.[0], {
+      problemClass: "missing-workspace-root",
+      count: 3,
+      samples: ["missing workspace root: ws:a -> /tmp/a"],
+      hidden: 2,
+    });
+
+    const expanded = await executeTool(
+      tools.get("graft_doctor"),
+      "graft_doctor",
+      { limit: 1, includeAll: true },
+      { cwd: dir },
+    );
+    assert.match(expanded.content[0].text, /ws:b -> \/tmp\/b/);
+    assert.match(expanded.content[0].text, /ws:c -> \/tmp\/c/);
+    assert.doesNotMatch(expanded.content[0].text, /more in missing-workspace-root/);
+  } finally {
+    if (previousGraftBin === undefined) delete process.env.GRAFT_BIN;
+    else process.env.GRAFT_BIN = previousGraftBin;
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
 envTest("graft_help defaults to the maintained agent workflow topic", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-graft-help-"));
   const argvFile = join(dir, "argv.txt");

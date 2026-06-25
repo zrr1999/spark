@@ -28,6 +28,16 @@ void test("parseSparkDispatcherArgs routes default, tui, daemon, and print comma
     target: "tui",
     argv: ["--print", "hello"],
   });
+  assert.deepEqual(parseSparkDispatcherArgs(["--mode", "json", "--print", "hello"]), {
+    kind: "dispatch",
+    target: "tui",
+    argv: ["--mode", "json", "--print", "hello"],
+  });
+  assert.deepEqual(parseSparkDispatcherArgs(["install", "./skill", "--skill"]), {
+    kind: "dispatch",
+    target: "tui",
+    argv: ["install", "./skill", "--skill"],
+  });
 });
 
 void test("parseSparkDispatcherArgs keeps help/version local and rejects unknown subcommands", () => {

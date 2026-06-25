@@ -44,6 +44,8 @@ export const PI_GRAFT_PATCHER_ALLOWED_TOOLS = [
   "graft_cli_exec",
 ] as const;
 const GRAFT_REPO_ACTIONS = ["add", "list", "sync", "lock", "update"] as const;
+const DEFAULT_GRAFT_LIST_LIMIT = 10;
+const DEFAULT_GRAFT_DOCTOR_SAMPLE_LIMIT = 3;
 
 export function createPiGraftPatcherRoleSpec(): RoleSpec {
   return createExtensionRoleSpec({
@@ -185,6 +187,78 @@ function compactError(error: unknown): string {
   return String(error);
 }
 
+function lifecycleError(message: string, next: string): Error {
+  return new Error(
+    `${message}\n  next: ${next}\n  workflow: graft_scratch_open/read/edit/write/delete -> graft_candidate_from_scratch -> graft_validate -> graft_admit -> graft_materialize`,
+  );
+}
+
+function isCandidateRef(value: string): boolean {
+  return value.startsWith("candidate:");
+}
+
+function isPatchRef(value: string): boolean {
+  return value.startsWith("patch:");
+}
+
+function isScratchRef(value: string): boolean {
+  return value.startsWith("scratch:");
+}
+
+function requireCandidateOrPatchTarget(toolName: string, target: string): void {
+  if (isCandidateRef(target) || isPatchRef(target)) return;
+  if (isScratchRef(target)) {
+    throw lifecycleError(
+      `${toolName} accepts candidate:/patch: refs, not scratch refs (${target}).`,
+      `run graft_candidate_from_scratch({ scratch: "${target}" }) first, then pass the returned candidate: ref to ${toolName}.`,
+    );
+  }
+  throw lifecycleError(
+    `${toolName} accepts candidate:/patch: refs, received ${target}.`,
+    `pass a candidate:/patch: ref, or create one from a scratch with graft_candidate_from_scratch before calling ${toolName}.`,
+  );
+}
+
+function requireCandidateTarget(toolName: string, candidate: string): void {
+  if (isCandidateRef(candidate)) return;
+  if (isPatchRef(candidate)) {
+    throw lifecycleError(
+      `${toolName} accepts candidate: refs, not admitted patch refs (${candidate}).`,
+      `pass the original candidate: ref, or use graft_show/graft_materialize for patch refs.`,
+    );
+  }
+  if (isScratchRef(candidate)) {
+    throw lifecycleError(
+      `${toolName} accepts candidate: refs, not scratch refs (${candidate}).`,
+      `run graft_candidate_from_scratch({ scratch: "${candidate}" }) first, then pass the returned candidate: ref to ${toolName}.`,
+    );
+  }
+  throw lifecycleError(
+    `${toolName} accepts candidate: refs, received ${candidate}.`,
+    `create a candidate with graft_candidate_from_scratch, then call ${toolName} with the returned candidate: ref.`,
+  );
+}
+
+function requirePatchTarget(toolName: string, patch: string): void {
+  if (isPatchRef(patch)) return;
+  if (isCandidateRef(patch)) {
+    throw lifecycleError(
+      `${toolName} requires an admitted patch: ref, not candidate refs (${patch}).`,
+      `run graft_admit({ candidate: "${patch}" }) first, then pass the returned patch: ref to ${toolName}.`,
+    );
+  }
+  if (isScratchRef(patch)) {
+    throw lifecycleError(
+      `${toolName} requires an admitted patch: ref, not scratch refs (${patch}).`,
+      `run graft_candidate_from_scratch({ scratch: "${patch}" }), then graft_admit, then ${toolName}.`,
+    );
+  }
+  throw lifecycleError(
+    `${toolName} requires an admitted patch: ref, received ${patch}.`,
+    `run graft_admit on a candidate: ref, then pass the returned patch: ref to ${toolName}.`,
+  );
+}
+
 function workspaceIdFromEnvelope(envelope: JsonRecord | undefined): string | undefined {
   const direct = stringField(envelope, "workspace_id");
   if (direct?.startsWith("ws:")) return direct;
@@ -269,6 +343,19 @@ function optionalBooleanParam(
   const value = params[field];
   if (value === undefined) return defaultValue;
   if (typeof value !== "boolean") throw new Error(`${field} must be a boolean.`);
+  return value;
+}
+
+function optionalPositiveIntegerParam(
+  params: Record<string, unknown>,
+  field: string,
+  defaultValue: number,
+): number {
+  const value = params[field];
+  if (value === undefined) return defaultValue;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw new Error(`${field} must be an integer >= 1.`);
+  }
   return value;
 }
 
@@ -407,6 +494,200 @@ function envelopeToolResult(
   return {
     content: [{ type: "text", text: formatEnvelope(envelope) }],
     details: { envelope, ...details },
+  };
+}
+
+function recordField(value: unknown, field: string): JsonRecord | undefined {
+  if (!isRecord(value)) return undefined;
+  const fieldValue = value[field];
+  return isRecord(fieldValue) ? (fieldValue as JsonRecord) : undefined;
+}
+
+function arrayField(value: unknown, field: string): JsonValue[] | undefined {
+  if (!isRecord(value)) return undefined;
+  const fieldValue = value[field];
+  return Array.isArray(fieldValue) ? (fieldValue as JsonValue[]) : undefined;
+}
+
+function scalarText(value: unknown): string {
+  if (value === null || value === undefined) return "<none>";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+function pushRecordFields(
+  lines: string[],
+  label: string,
+  record: JsonRecord | undefined,
+  fields: string[],
+): void {
+  if (!record) return;
+  lines.push(`${label}:`);
+  for (const field of fields) {
+    if (field in record) lines.push(`  ${field}: ${scalarText(record[field])}`);
+  }
+}
+
+function workspaceSummary(workspace: JsonValue): string {
+  if (!isRecord(workspace)) return scalarText(workspace);
+  const id = stringField(workspace, "id") ?? "<unknown-workspace>";
+  const kind = stringField(workspace, "kind") ?? "workspace";
+  const root = stringField(workspace, "root") ?? "<unknown-root>";
+  return `${id} (${kind}) ${root}`;
+}
+
+interface BoundedOutputOptions {
+  limit: number;
+  includeAll: boolean;
+}
+
+function formatGraftPsEnvelope(
+  envelope: JsonRecord,
+  options: BoundedOutputOptions,
+): { text: string; summary: Record<string, unknown> } {
+  const view = recordField(envelope, "view");
+  if (stringField(view, "type") !== "ps") {
+    return {
+      text: formatEnvelope(envelope),
+      summary: { kind: "ps", parsed: false, reason: "missing ps view" },
+    };
+  }
+  const data = recordField(view, "data");
+  const daemon = recordField(data, "daemon");
+  const registry = recordField(data, "registry");
+  const workspaces = arrayField(data, "workspaces") ?? [];
+  const shownWorkspaces = options.includeAll ? workspaces : workspaces.slice(0, options.limit);
+  const truncated = shownWorkspaces.length < workspaces.length;
+  const lines = ["graft workspace ps"];
+  pushRecordFields(lines, "daemon", daemon, [
+    "graft_home",
+    "socket_state",
+    "socket_exists",
+    "socket",
+    "pid_file",
+    "pid",
+  ]);
+  pushRecordFields(lines, "registry", registry, [
+    "workspaces",
+    "workspaces_hidden_missing",
+    "routes",
+    "routes_hidden_stale",
+    "repo_paths",
+    "repo_paths_hidden_missing",
+  ]);
+  lines.push(`workspaces: showing ${shownWorkspaces.length} of ${workspaces.length}`);
+  for (const workspace of shownWorkspaces) lines.push(`  - ${workspaceSummary(workspace)}`);
+  if (truncated) {
+    lines.push(
+      `Hint: ${workspaces.length - shownWorkspaces.length} more workspace(s) hidden; pass includeAll=true or increase limit to inspect all registry workspaces.`,
+    );
+  }
+  return {
+    text: lines.join("\n"),
+    summary: {
+      kind: "ps",
+      parsed: true,
+      limit: options.limit,
+      includeAll: options.includeAll,
+      workspacesTotal: workspaces.length,
+      workspacesShown: shownWorkspaces.length,
+      truncated,
+    },
+  };
+}
+
+function doctorProblemClass(problem: string): string {
+  if (problem.startsWith("missing workspace root:")) return "missing-workspace-root";
+  if (problem.startsWith("missing route cwd:")) return "missing-route-cwd";
+  if (problem.startsWith("route points to unknown workspace:")) {
+    return "route-points-to-unknown-workspace";
+  }
+  if (problem.startsWith("missing repo path:")) return "missing-repo-path";
+  const prefix = problem.split(":", 1)[0]?.trim().toLowerCase() ?? "";
+  return prefix.replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, "") || "other";
+}
+
+function formatDoctorMetaLine(line: string): string {
+  const tabIndex = line.indexOf("\t");
+  if (tabIndex < 0) return line;
+  return `${line.slice(0, tabIndex)}: ${line.slice(tabIndex + 1)}`;
+}
+
+function formatGraftDoctorEnvelope(
+  envelope: JsonRecord,
+  options: BoundedOutputOptions,
+): { text: string; summary: Record<string, unknown> } {
+  const message = stringField(envelope, "message");
+  if (!message) {
+    return {
+      text: formatEnvelope(envelope),
+      summary: { kind: "doctor", parsed: false, reason: "missing doctor message" },
+    };
+  }
+  const metaLines: string[] = [];
+  const problems: string[] = [];
+  for (const line of message.split(/\r?\n/u)) {
+    if (line.startsWith("problem\t")) problems.push(line.slice("problem\t".length));
+    else if (line.trim()) metaLines.push(line);
+  }
+
+  const lines = [
+    "graft workspace doctor",
+    ...metaLines.map((line) => `  ${formatDoctorMetaLine(line)}`),
+  ];
+  if (problems.length === 0) {
+    lines.push("problems: 0");
+    return {
+      text: lines.join("\n"),
+      summary: { kind: "doctor", parsed: true, totalProblems: 0, buckets: [] },
+    };
+  }
+
+  const grouped = new Map<string, string[]>();
+  for (const problem of problems) {
+    const problemClass = doctorProblemClass(problem);
+    grouped.set(problemClass, [...(grouped.get(problemClass) ?? []), problem]);
+  }
+  const buckets = [...grouped.entries()].sort((left, right) => {
+    const countDelta = right[1].length - left[1].length;
+    return countDelta === 0 ? left[0].localeCompare(right[0]) : countDelta;
+  });
+
+  lines.push(`problems: ${problems.length} total across ${buckets.length} class(es)`);
+  const bucketSummaries = buckets.map(([problemClass, bucketProblems]) => {
+    const samples = options.includeAll ? bucketProblems : bucketProblems.slice(0, options.limit);
+    const hidden = bucketProblems.length - samples.length;
+    lines.push(`  ${problemClass}: ${bucketProblems.length}`);
+    for (const sample of samples) lines.push(`    - ${sample}`);
+    if (hidden > 0) {
+      lines.push(
+        `    … ${hidden} more in ${problemClass}; pass includeAll=true or increase limit.`,
+      );
+    }
+    return {
+      problemClass,
+      count: bucketProblems.length,
+      samples,
+      hidden,
+    };
+  });
+  if (!options.includeAll && bucketSummaries.some((bucket) => bucket.hidden > 0)) {
+    lines.push(
+      "Hint: default output is bucketed and sampled; pass includeAll=true or limit=<n> to expand.",
+    );
+  }
+  return {
+    text: lines.join("\n"),
+    summary: {
+      kind: "doctor",
+      parsed: true,
+      limit: options.limit,
+      includeAll: options.includeAll,
+      totalProblems: problems.length,
+      bucketCount: buckets.length,
+      buckets: bucketSummaries,
+    },
   };
 }
 
@@ -849,28 +1130,52 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
   pi.registerTool({
     name: "graft_ps",
     label: "Graft Ps",
-    description: "Show global daemon and registry status.",
-    parameters: Type.Object({}),
+    description:
+      "Show global daemon and registry status. Defaults to a bounded workspace sample; pass limit or includeAll to expand.",
+    parameters: Type.Object({
+      limit: Type.Optional(
+        Type.Number({ description: "Maximum workspace rows to show by default. Default: 10." }),
+      ),
+      includeAll: Type.Optional(
+        Type.Boolean({ description: "Show all workspace rows instead of the bounded sample." }),
+      ),
+    }),
     async execute(
       _toolCallId: string,
-      _params: Record<string, unknown>,
+      params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
       ctx?: PiGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const { envelope, execution } = await directCliJson(cwd, ["--json", "workspace", "ps"]);
-      return envelopeToolResult(envelope, { execution });
+      const ps = formatGraftPsEnvelope(envelope, {
+        limit: optionalPositiveIntegerParam(params, "limit", DEFAULT_GRAFT_LIST_LIMIT),
+        includeAll: optionalBooleanParam(params, "includeAll"),
+      });
+      return {
+        content: [{ type: "text", text: ps.text }],
+        details: { envelope, execution, psSummary: ps.summary },
+      };
     },
   });
 
   pi.registerTool({
     name: "graft_doctor",
     label: "Graft Doctor",
-    description: "Diagnose or repair the Graft registry.",
+    description:
+      "Diagnose or repair the Graft registry. Defaults to a bucketed problem summary; pass limit or includeAll to expand samples.",
     parameters: Type.Object({
       rebuildRegistry: Type.Optional(
         Type.Boolean({ description: "Rebuild missing registry entries." }),
+      ),
+      limit: Type.Optional(
+        Type.Number({
+          description: "Maximum problem samples per bucket to show by default. Default: 3.",
+        }),
+      ),
+      includeAll: Type.Optional(
+        Type.Boolean({ description: "Show every problem row instead of bucketed samples." }),
       ),
     }),
     async execute(
@@ -884,7 +1189,14 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const argv = ["--json", "workspace", "doctor"];
       if (optionalBooleanParam(params, "rebuildRegistry")) argv.push("--rebuild-registry");
       const { envelope, execution } = await directCliJson(cwd, argv);
-      return envelopeToolResult(envelope, { execution });
+      const doctor = formatGraftDoctorEnvelope(envelope, {
+        limit: optionalPositiveIntegerParam(params, "limit", DEFAULT_GRAFT_DOCTOR_SAMPLE_LIMIT),
+        includeAll: optionalBooleanParam(params, "includeAll"),
+      });
+      return {
+        content: [{ type: "text", text: doctor.text }],
+        details: { envelope, execution, doctorSummary: doctor.summary },
+      };
     },
   });
 
@@ -1372,9 +1684,11 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const state = stateForCwd(activeState, cwd);
       const target = optionalStringParam(params, "target") ?? state?.lastCandidate;
       if (!target)
-        throw new Error(
+        throw lifecycleError(
           "graft_validate requires target or a previous graft_candidate_from_scratch candidate.",
+          "run graft_candidate_from_scratch on a scratch first, or pass an existing candidate:/patch: ref as target.",
         );
+      requireCandidateOrPatchTarget("graft_validate", target);
       const argv = ["patch", "validate", target];
       for (const expected of normalizeStringList(params.expected)) argv.push("--expect", expected);
       const { envelope, execution } = await runGraftJson(cwd, argv);
@@ -1410,9 +1724,11 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const state = stateForCwd(activeState, cwd);
       const candidate = optionalStringParam(params, "candidate") ?? state?.lastCandidate;
       if (!candidate)
-        throw new Error(
+        throw lifecycleError(
           "graft_admit requires candidate or a previous graft_candidate_from_scratch candidate.",
+          "run graft_candidate_from_scratch first, then graft_validate, then graft_admit with the returned candidate: ref.",
         );
+      requireCandidateTarget("graft_admit", candidate);
       const argv = ["patch", "admit", candidate];
       for (const required of normalizeStringList(params.required)) argv.push("--require", required);
       const { envelope, execution } = await runGraftJson(cwd, argv);
@@ -1449,7 +1765,12 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const state = stateForCwd(activeState, cwd);
       const target =
         optionalStringParam(params, "target") ?? state?.lastPatch ?? state?.lastCandidate;
-      if (!target) throw new Error("graft_show requires target or a previous candidate/patch.");
+      if (!target)
+        throw lifecycleError(
+          "graft_show requires target or a previous candidate/patch.",
+          "pass a candidate:/patch: ref, or create one with graft_candidate_from_scratch before showing it.",
+        );
+      requireCandidateOrPatchTarget("graft_show", target);
       const argv = ["--json", "patch", "show", target];
       if (optionalBooleanParam(params, "evidence")) argv.push("--evidence");
       if (optionalBooleanParam(params, "change")) argv.push("--change");
@@ -1477,7 +1798,11 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const subject =
         optionalStringParam(params, "subject") ?? state?.lastPatch ?? state?.lastCandidate;
       if (!subject)
-        throw new Error("graft_evidence requires subject or a previous candidate/patch.");
+        throw lifecycleError(
+          "graft_evidence requires subject or a previous candidate/patch.",
+          "pass a candidate:/patch: ref, or create one with graft_candidate_from_scratch before listing evidence.",
+        );
+      requireCandidateOrPatchTarget("graft_evidence", subject);
       const { text, details } = await executeCliArgv(cwd, ["--json", "evidence", subject]);
       return { content: [{ type: "text", text }], details: { state, ...details } };
     },
@@ -1572,7 +1897,12 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const state = stateForCwd(activeState, cwd);
       const patch = optionalStringParam(params, "patch") ?? state?.lastPatch;
-      if (!patch) throw new Error("graft_materialize requires patch or a previous admitted patch.");
+      if (!patch)
+        throw lifecycleError(
+          "graft_materialize requires patch or a previous admitted patch.",
+          "run graft_admit on a validated candidate first, then pass the returned patch: ref to graft_materialize.",
+        );
+      requirePatchTarget("graft_materialize", patch);
       // graft routes `materialize` as a Local command (not a daemon cli_exec write),
       // so run it through the direct CLI path instead of the daemon write path.
       const argv = ["--json", "patch", "materialize", patch];

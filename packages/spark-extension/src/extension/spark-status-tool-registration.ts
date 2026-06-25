@@ -17,7 +17,9 @@ import {
   renderSparkStatus,
 } from "./spark-status-rendering.ts";
 import { ensureSparkGraphInvariants } from "./spark-graph-invariants.ts";
+import { deriveSparkDriveMode } from "./spark-drive-state.ts";
 import { loadSessionGoal } from "./spark-session-goals.ts";
+import { loadSessionLoop } from "./spark-session-loops.ts";
 import {
   normalizeSparkStatusFormat,
   normalizeSparkStatusLimit,
@@ -146,6 +148,12 @@ export function registerSparkStatusTool(
         "includeStateSummary",
       );
       const sessionGoal = await loadSessionGoal(cwd, ctx);
+      const sessionLoop = await loadSessionLoop(cwd, ctx);
+      const driveMode = deriveSparkDriveMode({
+        activeLens: ctx.sparkActiveLens,
+        goal: sessionGoal,
+        loop: sessionLoop,
+      });
       const recentRoleRunCompletions =
         view === "summary"
           ? []
@@ -170,7 +178,9 @@ export function registerSparkStatusTool(
         workflowRunStatus,
         dynamicWorkflowRuns,
         runControl,
+        driveMode,
         sessionGoal,
+        sessionLoop,
         recentRoleRunCompletions,
         state,
       });

@@ -108,6 +108,12 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
       "---\nname: workspace-skill\ndescription: Use when bootstrapping Spark CLI tests\n---\n\n# Workspace Skill\n",
       "utf8",
     );
+    await mkdir(join(cwd, ".spark", "prompts"), { recursive: true });
+    await writeFile(
+      join(cwd, ".spark", "prompts", "bootstrap.md"),
+      '---\ndescription: Bootstrap prompt\nargument-hint: "<topic>"\n---\nBootstrap $1\n',
+      "utf8",
+    );
     await mkdir(join(sparkHome, "agent"), { recursive: true });
     await writeFile(
       join(sparkHome, "agent", "keybindings.json"),
@@ -151,12 +157,18 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
       ),
       true,
     );
+    assert.equal(
+      services.promptTemplates?.templates.some(
+        (template) => template.name === "bootstrap" && template.argumentHint === "<topic>",
+      ),
+      true,
+    );
 
     const response = await submitToSparkAgent(services, "hello");
     assert.equal(response, "boot ok:1");
     assert.match(captured.systemPrompt ?? "", /native spark-tui host/);
     assert.doesNotMatch(captured.systemPrompt ?? "", /You are Spark,/);
-    assert.match(captured.systemPrompt ?? "", /Spark default research lens\./);
+    assert.match(captured.systemPrompt ?? "", /Spark default research phase\./);
     assert.match(captured.systemPrompt ?? "", /Tools: task_read, task_write, assign/);
     assert.match(captured.systemPrompt ?? "", /<base_system_prompts>/);
     assert.doesNotMatch(captured.systemPrompt ?? "", /# Spark/);
@@ -164,6 +176,106 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
     assert.match(captured.systemPrompt ?? "", /# pi-graft/);
     assert.doesNotMatch(captured.systemPrompt ?? "", /at most one unfinished claimed task/);
     assert.match(captured.systemPrompt ?? "", /workspace-skill/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("native host registers pi-files working-tree tools via the builtin extension set", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-pi-files-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(sparkHome, { recursive: true });
+    const services = await createSparkCliHostServices({
+      cwd,
+      sparkHome,
+      config: { extensions: ["@zendev-lab/pi-files/extension"], providers: ["fake-provider"] },
+      extensions: ["@zendev-lab/pi-files/extension"],
+      providers: ["fake-provider"],
+      providerImporter: async () => fakeProviderModule(),
+    });
+
+    const fileToolNames = services.runtime.getAllTools().map((tool) => tool.name);
+    for (const name of ["read", "write", "edit", "ls", "grep", "find"]) {
+      assert.equal(
+        fileToolNames.includes(name),
+        true,
+        `expected file tool ${name} to be registered`,
+      );
+    }
+    assert.equal(
+      services.extensionLoadResult.outcomes.find(
+        (outcome) => outcome.specifier === "@zendev-lab/pi-files/extension",
+      )?.ok,
+      true,
+    );
+
+    await mkdir(cwd, { recursive: true });
+    await writeFile(join(cwd, "sample.txt"), "alpha\nbeta\n", "utf8");
+    const readTool = services.runtime.getTool("read");
+    assert.ok(readTool);
+    const result = await readTool!.config.execute(
+      "call-1",
+      { path: "sample.txt" },
+      new AbortController().signal,
+      () => undefined,
+      services.runtime.makeContext(),
+    );
+    assert.equal(result.content.map((part) => part.text).join("\n"), "alpha\nbeta\n");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("native host registers spark-ai models tool and exposes Spark model registry context", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-spark-ai-models-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(sparkHome, { recursive: true });
+    const services = await createSparkCliHostServices({
+      cwd,
+      sparkHome,
+      config: {
+        extensions: ["@zendev-lab/spark-ai/models-extension"],
+        providers: ["fake-provider"],
+      },
+      extensions: ["@zendev-lab/spark-ai/models-extension"],
+      providers: ["fake-provider"],
+      providerImporter: async () => fakeProviderModule(),
+    });
+
+    assert.equal(
+      services.extensionLoadResult.outcomes.find(
+        (outcome) => outcome.specifier === "@zendev-lab/spark-ai/models-extension",
+      )?.ok,
+      true,
+    );
+    const modelsTool = services.runtime.getTool("models");
+    assert.ok(modelsTool);
+    const result = await modelsTool!.config.execute(
+      "call-models",
+      {},
+      new AbortController().signal,
+      () => undefined,
+      services.runtime.makeContext(),
+    );
+    const text = result.content.map((part) => part.text).join("\n");
+    assert.match(text, /Available models \(1\)/);
+    assert.match(text, /fake-provider\s+fake-model/);
+    assert.deepEqual(result.details?.models, [
+      {
+        provider: "fake-provider",
+        id: "fake-model",
+        name: "Fake Model",
+        contextWindow: 8192,
+        maxTokens: 4096,
+        thinking: false,
+        images: false,
+        available: true,
+      },
+    ]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -114,6 +114,30 @@
     <span class="status-pill {data.project.status}">{statusLabel(data.project.status)}</span>
   </header>
 
+  {#if data.projectKind && (data.projectKind.badge || data.projectKind.panels.length > 0)}
+    <section class="panel kind-panel" aria-label="Project kind">
+      <div class="kind-heading">
+        <div>
+          <p class="panel-kicker">Project kind</p>
+          <h2>{data.projectKind.title}</h2>
+        </div>
+        {#if data.projectKind.badge}
+          <span class="panel-badge">{data.projectKind.badge}</span>
+        {/if}
+      </div>
+      {#if data.projectKind.panels.length > 0}
+        <div class="kind-panels">
+          {#each data.projectKind.panels as panel}
+            <article>
+              <span>{panel.label}</span>
+              <strong>{panel.text}</strong>
+            </article>
+          {/each}
+        </div>
+      {/if}
+    </section>
+  {/if}
+
   <section class="metrics" aria-label={t.metrics.aria}>
     <article>
       <span>{t.metrics.pendingInbox}</span>
@@ -476,6 +500,47 @@
 
   .metrics {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .kind-heading,
+  .kind-panels {
+    display: flex;
+    gap: 16px;
+  }
+
+  .kind-heading {
+    align-items: center;
+    justify-content: space-between;
+    padding: 22px 24px 0;
+  }
+
+  .kind-heading h2 {
+    margin: 0;
+  }
+
+  .kind-panels {
+    flex-wrap: wrap;
+    padding: 18px 24px 24px;
+  }
+
+  .kind-panels article {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--color-border);
+    border-radius: 16px;
+    min-width: 180px;
+    padding: 14px 16px;
+  }
+
+  .kind-panels span {
+    color: var(--color-ink-subtle);
+    display: block;
+    font-size: 12px;
+    text-transform: uppercase;
+  }
+
+  .kind-panels strong {
+    display: block;
+    margin-top: 6px;
   }
 
   .metrics article,
@@ -899,6 +964,7 @@
       grid-template-columns: 1fr;
     }
 
+    .kind-heading,
     .task-heading {
       flex-direction: column;
     }

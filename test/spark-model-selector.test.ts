@@ -64,7 +64,7 @@ function registryWithModels(): SparkProviderRegistry {
   return registry;
 }
 
-void test("SparkModelSelector cycles next/prev within the active provider with wraparound", async () => {
+void test("SparkModelSelector cycles next/prev across Spark model ids with wraparound", async () => {
   const registry = registryWithModels();
   registry.setActive({ providerName: "fake", modelId: "model-a" });
   const saved: SparkConfig[] = [];
@@ -76,13 +76,13 @@ void test("SparkModelSelector cycles next/prev within the active provider with w
 
   assert.deepEqual(await selector.cycle("next"), { providerName: "fake", modelId: "model-b" });
   assert.deepEqual(await selector.cycle("next"), { providerName: "fake", modelId: "model-c" });
-  assert.deepEqual(await selector.cycle("next"), { providerName: "fake", modelId: "model-a" });
+  assert.deepEqual(await selector.cycle("next"), { providerName: "other", modelId: "model-z" });
   assert.deepEqual(await selector.cycle("prev"), { providerName: "fake", modelId: "model-c" });
 
   assert.deepEqual(registry.getActive(), { providerName: "fake", modelId: "model-c" });
   assert.deepEqual(
-    saved.map((entry) => `${entry.activeProvider}/${entry.activeModel}`),
-    ["fake/model-b", "fake/model-c", "fake/model-a", "fake/model-c"],
+    saved.map((entry) => entry.activeModelId),
+    ["fake/model-b", "fake/model-c", "other/model-z", "fake/model-c"],
   );
 });
 
@@ -104,14 +104,14 @@ void test("SparkModelSelector select validates through registry and persists Spa
   const selection = await selector.select({ providerName: "other", modelId: "model-z" });
   assert.deepEqual(selection, { providerName: "other", modelId: "model-z" });
   assert.deepEqual(registry.getActive(), selection);
-  assert.equal(config.activeProvider, "other");
-  assert.equal(config.activeModel, "model-z");
+  assert.equal(config.activeModelId, "other/model-z");
+  assert.equal(config.activeProvider, undefined);
+  assert.equal(config.activeModel, undefined);
   assert.deepEqual(saved, [
     {
       extensions: ["@zendev-lab/spark-extension/extension"],
       providers: ["fake-provider"],
-      activeProvider: "other",
-      activeModel: "model-z",
+      activeModelId: "other/model-z",
     },
   ]);
 });
@@ -137,6 +137,7 @@ void test("SparkModelSelector openPicker passes active state and persists the ch
     saveConfig: (config) => void saved.push(cloneConfig(config)),
     picker: (state) => {
       sawActive =
+        state.activeModelId === "fake/model-a" &&
         state.active?.providerName === "fake" &&
         state.active.modelId === "model-a" &&
         state.providers.some(
@@ -154,8 +155,8 @@ void test("SparkModelSelector openPicker passes active state and persists the ch
   assert.equal(sawActive, true);
   assert.deepEqual(selection, { providerName: "fake", modelId: "model-b" });
   assert.deepEqual(
-    saved.map((entry) => entry.activeModel),
-    ["model-b"],
+    saved.map((entry) => entry.activeModelId),
+    ["fake/model-b"],
   );
 });
 
@@ -180,13 +181,13 @@ void test("registerSparkModelSelectorKeybindings wires picker and cycle actions"
   assert.deepEqual(registry.getActive(), { providerName: "fake", modelId: "model-c" });
 
   assert.equal(await keybindings.executeKey("ctrl+p", {}), true);
-  assert.deepEqual(registry.getActive(), { providerName: "fake", modelId: "model-a" });
+  assert.deepEqual(registry.getActive(), { providerName: "other", modelId: "model-z" });
 
   assert.equal(await keybindings.executeKey("shift+ctrl+p", {}), true);
   assert.deepEqual(registry.getActive(), { providerName: "fake", modelId: "model-c" });
   assert.deepEqual(
-    saved.map((entry) => entry.activeModel),
-    ["model-c", "model-a", "model-c"],
+    saved.map((entry) => entry.activeModelId),
+    ["fake/model-c", "other/model-z", "fake/model-c"],
   );
 });
 

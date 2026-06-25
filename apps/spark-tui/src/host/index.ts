@@ -12,6 +12,22 @@
 export { SparkHostRuntime, createSparkHostRuntime } from "./runtime.ts";
 export type { SparkHostRuntimeOptions } from "./runtime.ts";
 export { SparkAgentLoop } from "./agent-loop.ts";
+export {
+  SparkAuthStore,
+  SparkProviderAuthResolver,
+  defaultSparkAuthPath,
+  listOAuthProviderSummaries,
+  registerSparkOAuthProvider,
+  resetSparkOAuthProviders,
+} from "./auth.ts";
+export type {
+  SparkAuthFile,
+  SparkAuthStoreOptions,
+  SparkProviderAuthResolverOptions,
+  SparkOAuthProviderInterface,
+  SparkProviderAuthStatus,
+  SparkStoredCredential,
+} from "./auth.ts";
 export type {
   SparkAgentLoopEvent,
   SparkAgentLoopOptions,
@@ -45,6 +61,13 @@ export type {
   ProviderRegistrationAPI,
   SparkActiveSelection,
 } from "./provider-registry.ts";
+export { SparkHostModelRegistry } from "./model-registry.ts";
+export type {
+  SparkHostModelAuthResolver,
+  SparkHostModelRegistryLike,
+  SparkHostModelRegistryOptions,
+  SparkHostRegistryModel,
+} from "./model-registry.ts";
 export {
   SPARK_MODEL_CYCLE_NEXT_BINDING_ID,
   SPARK_MODEL_CYCLE_PREV_BINDING_ID,
@@ -52,6 +75,7 @@ export {
   SparkModelSelector,
   formatSelection as formatSparkModelSelection,
   registerSparkModelSelectorKeybindings,
+  resolveSparkModelSelectionById,
   sparkModelSelectionFromValue,
   sparkModelSelectionValue,
 } from "./model-selector.ts";
@@ -84,12 +108,17 @@ export {
 } from "./config.ts";
 export {
   DEFAULT_SPARK_COMPACTION_SETTINGS,
+  appendSparkBranchSummary,
+  collectSparkBranchEntriesToSummarize,
   compactSparkSessionRecord,
+  compactSparkVisibleTranscript,
+  deterministicSparkCompactionSummary,
   entriesToMessages,
   estimateSparkContextTokens,
   estimateSparkTokens,
   findSparkCompactionCutPoint,
   findSparkTurnStartIndex,
+  navigateSparkSessionBranchWithSummary,
   prepareSparkCompaction,
   shouldSparkCompact,
 } from "./compaction.ts";
@@ -101,6 +130,40 @@ export {
   loadBuiltinExtensionFactories,
   loadSparkExtensions,
 } from "./extension-loader.ts";
+export {
+  BUILTIN_SPARK_THEMES,
+  DEFAULT_SPARK_THEME_ID,
+  createSparkHostRenderTheme,
+  createSparkMarkdownTheme,
+  loadSparkThemeCatalog,
+  styleSparkDiffLine,
+  styleSparkRoleLine,
+} from "./theme.ts";
+export type {
+  SparkTheme,
+  SparkThemeCatalog,
+  SparkThemeColors,
+  SparkThemeDiagnostic,
+  SparkThemeLoadOptions,
+} from "./theme.ts";
+export {
+  defaultSparkHtmlExportDir,
+  defaultSparkShareDir,
+  renderSparkTranscriptHtml,
+  sparkSessionRecordToHtmlMessages,
+  writeSparkTranscriptHtml,
+} from "./html-export.ts";
+export {
+  SparkPromptTemplateResolver,
+  defaultSparkPromptTemplatesDir,
+  defaultSparkPromptTemplatesRoot,
+  expandSparkPromptTemplate,
+  loadPromptTemplateFromFile,
+  loadPromptTemplatesFromDir,
+  loadPromptTemplatesFromPath,
+  parseSparkPromptTemplateArgs,
+  substituteSparkPromptTemplateArgs,
+} from "./prompt-templates.ts";
 export {
   SparkSkillResolver,
   defaultBuiltinSkillsDir,
@@ -123,9 +186,12 @@ export type {
   SparkCompactionPreparation,
   SparkCompactionSettings,
   SparkCompactionSummarizer,
+  SparkBranchNavigationSummaryResult,
   SparkCompactionSummaryResult,
   SparkContextUsageEstimate,
   SparkCutPointResult,
+  SparkTranscriptMessageForCompaction,
+  SparkVisibleTranscriptCompactionResult,
 } from "./compaction.ts";
 export type {
   SparkBuiltinExtensionFactory,
@@ -135,6 +201,20 @@ export type {
   SparkExtensionLoadResult,
   SparkExtensionLoaderOptions,
 } from "./extension-loader.ts";
+export type {
+  SparkHtmlExportInput,
+  SparkHtmlTranscriptMessage,
+  SparkHtmlWriteOptions,
+  SparkHtmlWriteResult,
+} from "./html-export.ts";
+export type {
+  SparkPromptTemplate,
+  SparkPromptTemplateDiagnostic,
+  SparkPromptTemplateExpansion,
+  SparkPromptTemplateLayer,
+  SparkPromptTemplateResolveResult,
+  SparkPromptTemplateResolverOptions,
+} from "./prompt-templates.ts";
 export type {
   SparkSkill,
   SparkSkillDiagnostic,

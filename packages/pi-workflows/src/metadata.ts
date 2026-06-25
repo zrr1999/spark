@@ -296,14 +296,15 @@ export function normalizeWorkflowMeta(value: unknown): WorkflowMeta {
   const meta: WorkflowMeta = { name: raw.name.trim(), description: raw.description.trim() };
   if (typeof raw.whenToUse === "string" && raw.whenToUse.trim())
     meta.whenToUse = raw.whenToUse.trim();
-  if (raw.phases !== undefined) {
-    if (!Array.isArray(raw.phases)) throw new Error("workflow meta.phases must be an array");
-    meta.phases = Array.from(raw.phases).map((phase, index) => {
-      if (!phase || typeof phase !== "object")
-        throw new Error("workflow meta.phases[" + index + "] must be an object");
-      const candidate = phase as Record<string, unknown>;
+  const rawStages = raw.stages ?? raw.phases;
+  if (rawStages !== undefined) {
+    if (!Array.isArray(rawStages)) throw new Error("workflow meta.stages must be an array");
+    const stages = Array.from(rawStages).map((stage, index) => {
+      if (!stage || typeof stage !== "object")
+        throw new Error("workflow meta.stages[" + index + "] must be an object");
+      const candidate = stage as Record<string, unknown>;
       if (typeof candidate.title !== "string" || !candidate.title.trim())
-        throw new Error("workflow meta.phases[" + index + "].title must be a non-empty string");
+        throw new Error("workflow meta.stages[" + index + "].title must be a non-empty string");
       return {
         title: candidate.title.trim(),
         ...(typeof candidate.detail === "string" && candidate.detail.trim()
@@ -314,6 +315,8 @@ export function normalizeWorkflowMeta(value: unknown): WorkflowMeta {
           : {}),
       };
     });
+    meta.stages = stages;
+    meta.phases = stages;
   }
   return meta;
 }

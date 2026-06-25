@@ -16,6 +16,8 @@ import { registerSparkClaimTaskTool } from "./spark-claim-task-tool-registration
 import { registerSparkRecoverTaskClaimTool } from "./spark-recover-task-claim-tool-registration.ts";
 import { registerSparkRunReadyTasksTool } from "./spark-run-ready-tasks-tool-registration.ts";
 import { registerSparkGoalTool } from "./spark-goal-tool-registration.ts";
+import { registerSparkLoopTool } from "./spark-loop-tool-registration.ts";
+import { registerSparkDriveTool } from "./spark-drive-tool-registration.ts";
 import { registerSparkStatusTool } from "./spark-status-tool-registration.ts";
 import { registerSparkPlanTasksTool } from "./spark-plan-tasks-tool-registration.ts";
 import { registerSparkProjectTools } from "./spark-project-tool-registration.ts";
@@ -29,7 +31,7 @@ import { sessionModelName } from "./session-model.ts";
 import { withSparkToolOperationalNotes } from "./spark-tool-operational-notes.ts";
 import { SparkWorkflowRunManagerController } from "./spark-workflow-run-manager.ts";
 import { registerSparkModeCycleShortcut } from "./spark-mode-shortcut.ts";
-import { registerSparkModeTool } from "./mode/index.ts";
+import { registerSparkPhaseTool } from "./mode/index.ts";
 import { sparkSessionKey } from "./session-state.ts";
 import type { SparkRegisteredToolConfig, SparkToolContext } from "./spark-tool-registration.ts";
 import { SparkWidgetController } from "./spark-widget-controller.ts";
@@ -153,7 +155,14 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
   registerSparkGoalTool(registerSparkTool, { refreshSparkWidget, createReviewerRunner });
 
-  registerSparkModeTool(registerSparkTool);
+  registerSparkLoopTool(registerSparkTool, { refreshSparkWidget });
+
+  registerSparkDriveTool(registerSparkTool, {
+    ensureSparkStateForActiveWorkspace,
+    refreshSparkWidget,
+  });
+
+  registerSparkPhaseTool(registerSparkTool);
 
   registerSparkRunReadyTasksTool(registerSparkImplementationTool, {
     ensureWorkflowRunManager: (cwd, ctx) => workflowRunManagerController.ensure(cwd, ctx),

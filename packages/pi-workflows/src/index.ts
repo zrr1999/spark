@@ -18,6 +18,8 @@ export interface WorkflowDescriptor {
   title: string;
   description: string;
   path: string;
+  stages: string[];
+  /** @deprecated Use stages. */
   phases: string[];
   mode?: BuiltinWorkflowMode;
 }
@@ -99,7 +101,8 @@ export async function readSavedWorkflow(input: {
         title: meta.name,
         description: meta.description,
         path: workflowSelector("builtin", selector.id),
-        phases: meta.phases?.map((phase) => phase.title) ?? [],
+        stages: workflowStageTitles(meta),
+        phases: workflowStageTitles(meta),
         mode: definition.mode,
       },
       script,
@@ -124,7 +127,8 @@ export async function readSavedWorkflow(input: {
       title: meta.name,
       description: meta.description,
       path,
-      phases: meta.phases?.map((phase) => phase.title) ?? [],
+      stages: workflowStageTitles(meta),
+      phases: workflowStageTitles(meta),
     },
     script,
   };
@@ -157,7 +161,8 @@ function discoverBuiltinWorkflows(): WorkflowRegistryListing {
         title: meta.name,
         description: meta.description,
         path: workflowSelector("builtin", id),
-        phases: meta.phases?.map((phase) => phase.title) ?? [],
+        stages: workflowStageTitles(meta),
+        phases: workflowStageTitles(meta),
         mode: definition.mode,
       });
     } catch (error) {
@@ -197,13 +202,21 @@ async function discoverWorkflowDir(
         title: meta.name,
         description: meta.description,
         path,
-        phases: meta.phases?.map((phase) => phase.title) ?? [],
+        stages: workflowStageTitles(meta),
+        phases: workflowStageTitles(meta),
       });
     } catch (error) {
       errors.push({ source, path, error: error instanceof Error ? error.message : String(error) });
     }
   }
   return { workflows, errors };
+}
+
+function workflowStageTitles(meta: {
+  stages?: Array<{ title: string }>;
+  phases?: Array<{ title: string }>;
+}): string[] {
+  return (meta.stages ?? meta.phases ?? []).map((stage) => stage.title);
 }
 
 function isNodeErrorCode(error: unknown, code: string): boolean {

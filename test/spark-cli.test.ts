@@ -7,7 +7,7 @@ import registerBaiduOneApiProvider, {
   streamBaiduOneApi,
   streamBaiduOneApiAnthropic,
   streamBaiduOneApiOpenAIResponses,
-} from "../apps/spark-tui/src/baidu-oneapi-provider.ts";
+} from "../packages/spark-ai/src/baidu-oneapi-provider.ts";
 import { parseSparkCliArgs } from "../apps/spark-tui/src/cli.ts";
 import { SparkNativeSession } from "../apps/spark-tui/src/native-tui.ts";
 import sparkCliHostExtension from "../apps/spark-tui/src/spark-host-extension.ts";
@@ -201,7 +201,7 @@ void test("Spark CLI host lets ordinary input reach the agent without /spark wra
   assert.deepEqual(result, { action: "continue" });
 });
 
-void test("Spark native session queues follow-ups while processing", async () => {
+void test("Spark native session queues steering updates while processing", async () => {
   let releaseFirst: ((value: string) => void) | undefined;
   const calls: string[] = [];
   const session = new SparkNativeSession(async (input) => {
@@ -228,7 +228,9 @@ void test("Spark native session queues follow-ups while processing", async () =>
 
   assert.equal(session.isProcessing, false);
   assert.equal(session.queuedCount, 0);
-  assert.deepEqual(calls, ["first", "second"]);
+  assert.equal(calls[0], "first");
+  assert.match(calls[1] ?? "", /^Steering update for the previous Spark turn\./);
+  assert.match(calls[1] ?? "", /Steering 1:\nsecond/);
 });
 
 void test("Spark CLI host preserves slash commands and shell input", () => {

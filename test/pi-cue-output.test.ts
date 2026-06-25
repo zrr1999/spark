@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -400,6 +400,34 @@ void test("pi-cue tools validate bad parameters before connecting to cued", asyn
   );
 });
 
+void test("cue_resources explains empty provider state", async () => {
+  const tools = registerCueToolsForTest();
+  const resourceTool = tools.get("cue_resources");
+  assert.ok(resourceTool);
+  const result = await resourceTool.execute(
+    "call-resources",
+    { action: "providers" },
+    new AbortController().signal,
+    () => undefined,
+    {
+      cwd: "/work",
+      cueClient: {
+        isClosed: false,
+        async evalText(command: string) {
+          assert.equal(command, ":providers");
+          return "No resource providers registered.\n";
+        },
+      },
+    } as unknown as PiCueToolContext,
+  );
+
+  assert.match(result.content[0].text, /No resource providers registered/);
+  assert.match(result.content[0].text, /Hint: no cue-shell resource provider/);
+  assert.match(result.content[0].text, /remove needs=\{\.\.\.\}/);
+  assert.match(result.content[0].text, /gpu\/gpu_mem/);
+  assert.match(String((result.details as { hint?: unknown }).hint), /resource provider/);
+});
+
 void test("script_eval renders a bounded inline code preview", () => {
   const tools = registerCueToolsForTest();
   const evalTool = tools.get("script_eval");
@@ -422,12 +450,16 @@ void test("script_eval renders a bounded inline code preview", () => {
   assert.doesNotMatch(rendered ?? "", /print\('sixth'\)/);
 });
 
-void test("script_run and script_eval route venv only to python", async () => {
+void test("script_run and script_eval choose and report python interpreters", async () => {
   const tools = registerCueToolsForTest();
   const runTool = tools.get("script_run");
   const evalTool = tools.get("script_eval");
   assert.ok(runTool);
   assert.ok(evalTool);
+  const dir = await mkdtemp(join(tmpdir(), "pi-cue-python-path-"));
+  const python312 = join(dir, "python3.12");
+  await writeFile(python312, "#!/bin/sh\necho 'Python 3.12.9'\n");
+  await chmod(python312, 0o755);
   const commands: string[] = [];
   const fakeClient = {
     isClosed: false,
@@ -444,7 +476,29 @@ void test("script_run and script_eval route venv only to python", async () => {
       };
     },
   };
-  const ctx = { cwd: "/work", cueClient: fakeClient } as unknown as PiCueToolContext;
+  const ctx = {
+    cwd: "/work",
+    cueClient: fakeClient,
+    env: { PATH: dir },
+  } as unknown as PiCueToolContext;
+
+  const defaultEval = await evalTool.execute(
+    "call-default-python",
+    {
+      language: "python",
+      script: "print('modern')",
+    },
+    new AbortController().signal,
+    () => undefined,
+    ctx,
+  );
+  assert.equal(commands[0], `${python312} -c "print('modern')"`);
+  assert.deepEqual((defaultEval.details as { pythonInterpreter?: unknown }).pythonInterpreter, {
+    executable: python312,
+    source: "path",
+    candidates: ["python3.13", "python3.12", "python3"],
+    version: "Python 3.12.9",
+  });
 
   const fileResult = await runTool.execute(
     "call-venv-run",
@@ -453,7 +507,7 @@ void test("script_run and script_eval route venv only to python", async () => {
     () => undefined,
     ctx,
   );
-  assert.equal(commands[0], "/work/.venv/bin/python /work/tools/check.py");
+  assert.equal(commands[1], "/work/.venv/bin/python /work/tools/check.py");
   assert.equal((fileResult.details as { venv?: string }).venv, "/work/.venv");
 
   const evalResult = await evalTool.execute(
@@ -467,7 +521,7 @@ void test("script_run and script_eval route venv only to python", async () => {
     () => undefined,
     ctx,
   );
-  assert.equal(commands[1], "/opt/venv/bin/python -c \"print('ok')\"");
+  assert.equal(commands[2], "/opt/venv/bin/python -c \"print('ok')\"");
   assert.equal((evalResult.details as { venv?: string }).venv, "/opt/venv");
 
   await assert.rejects(

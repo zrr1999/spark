@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-system",
   "version": "0.1.0",
+  "private": true,
   "description": "Spark filesystem path, permission, command, and local runtime helpers.",
   "files": [
     "src",
@@ -21,7 +22,7 @@
   },
   "devDependencies": {
     "typescript": "^6.0.3",
-    "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+    "vitest": "catalog:"
   },
   "engines": {
     "node": ">=26.0.0 <27"

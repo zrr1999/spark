@@ -243,6 +243,17 @@ export interface ArtifactMetadataCompactionResult {
   reclaimableBytes: number;
 }
 
+export interface ArtifactListDiagnostic {
+  filePath: string;
+  message: string;
+  reason?: string;
+}
+
+export interface ArtifactListWithDiagnosticsResult {
+  artifacts: Artifact[];
+  diagnostics: ArtifactListDiagnostic[];
+}
+
 type ArtifactStoreFormatReason = "invalid_json" | "invalid_metadata";
 
 export class ArtifactValidationError extends Error {
@@ -402,6 +413,32 @@ export class ArtifactStore {
     return artifacts.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
+  async listWithDiagnostics(
+    filter: ArtifactQuery = {},
+  ): Promise<ArtifactListWithDiagnosticsResult> {
+    await mkdir(this.rootDir, { recursive: true });
+    const entries = await readdir(this.rootDir, { withFileTypes: true });
+    const artifacts: Artifact[] = [];
+    const diagnostics: ArtifactListDiagnostic[] = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const filePath = join(this.rootDir, entry.name);
+      let artifact: Artifact;
+      try {
+        artifact = await readArtifactMetadataFile(filePath);
+      } catch (error) {
+        diagnostics.push(artifactListDiagnostic(filePath, error));
+        continue;
+      }
+      if (!matchesQuery(artifact, filter)) continue;
+      artifacts.push(artifact);
+    }
+    return {
+      artifacts: artifacts.sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+      diagnostics,
+    };
+  }
+
   async linksTo(targetRef: string): Promise<ArtifactLink[]> {
     const artifacts = await this.list({ linkedTo: targetRef });
     return artifacts.flatMap((artifact) => artifact.links.filter((link) => link.to === targetRef));
@@ -439,6 +476,13 @@ export class ArtifactStore {
   ): Promise<Artifact<T>> {
     return (await readArtifactMetadataFile(this.pathFor(ref))) as Artifact<T>;
   }
+}
+
+function artifactListDiagnostic(filePath: string, error: unknown): ArtifactListDiagnostic {
+  if (error instanceof ArtifactStoreFormatError) {
+    return { filePath: error.filePath, reason: error.reason, message: error.message };
+  }
+  return { filePath, message: unknownErrorMessage(error) };
 }
 
 export function defaultArtifactStore(cwd: string): ArtifactStore {

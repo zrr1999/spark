@@ -20,7 +20,7 @@ void test("Spark workflow registry lists workspace and user workflows", async ()
     `export const meta = {
       name: "Release Check",
       description: "Check release readiness.",
-      phases: [{ title: "Inspect" }, { title: "Verify" }],
+      stages: [{ title: "Inspect" }, { title: "Verify" }],
     };
     throw new Error("discovery must not execute workflow bodies");`,
   );
@@ -50,6 +50,7 @@ void test("Spark workflow registry lists workspace and user workflows", async ()
     (workflow) => workflow.ref === "workflow:workspace-release-check",
   );
   assert.equal(workspace?.source, "workspace");
+  assert.deepEqual(workspace?.stages, ["Inspect", "Verify"]);
   assert.deepEqual(workspace?.phases, ["Inspect", "Verify"]);
 });
 

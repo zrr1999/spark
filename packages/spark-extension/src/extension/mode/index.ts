@@ -1,9 +1,13 @@
 export { resolveActiveMode } from "@zendev-lab/pi-modes";
 export {
   createSparkModeRegistry,
+  createSparkPhaseRegistry,
   defaultSparkModeRegistry,
+  defaultSparkPhaseRegistry,
   registerSparkModeTool,
+  registerSparkPhaseTool,
   renderSparkModeSystemPrompt,
+  renderSparkPhaseSystemPrompt,
 } from "./spark-mode-layer.ts";
 export {
   ASK_BEFORE_GUESSING,
@@ -12,6 +16,7 @@ export {
   renderModePrompt,
   renderSparkImplementationModePrompt,
   renderSparkModeVisibleMessage,
+  renderSparkPhaseVisibleMessage,
   renderSparkPlanningModePrompt,
   renderSparkResearchModePrompt,
 } from "./spark-mode-renderers.ts";

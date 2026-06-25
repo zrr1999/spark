@@ -1,11 +1,11 @@
-import { Type } from "typebox";
 import type {
   ToolConfig,
   ToolRenderComponent,
   ToolRenderTheme,
 } from "@zendev-lab/pi-extension-api";
+import { Type } from "typebox";
 
-export interface PiModelsExtensionApi {
+export interface SparkModelsExtensionApi {
   registerTool(config: ToolConfig): void;
 }
 
@@ -61,12 +61,12 @@ class ToolCallText implements ToolRenderComponent {
   }
 }
 
-export function registerPiModelsTool(pi: PiModelsExtensionApi): void {
+export function registerSparkModelsTool(pi: SparkModelsExtensionApi): void {
   pi.registerTool({
     name: "models",
     label: "Models",
     description:
-      "List models known to the active Pi model registry. Defaults to models with configured credentials.",
+      "List models known to the active Spark model registry. Defaults to models with configured credentials.",
     promptGuidelines: [
       "Use models when you need concrete model ids before setting role or session model choices.",
       "By default, models lists only currently usable models with configured credentials.",
@@ -142,16 +142,14 @@ export function registerPiModelsTool(pi: PiModelsExtensionApi): void {
   });
 }
 
-export default function piModelsExtension(pi: PiModelsExtensionApi): void {
-  registerPiModelsTool(pi);
+export default function sparkModelsExtension(pi: SparkModelsExtensionApi): void {
+  registerSparkModelsTool(pi);
 }
 
 function requireModelRegistry(ctx: unknown): ModelRegistryLike {
   const registry = (ctx as { modelRegistry?: unknown } | undefined)?.modelRegistry;
   if (!isModelRegistryLike(registry)) {
-    throw new Error(
-      "models requires ctx.modelRegistry from the pi-coding-agent host; Spark TUI native host support is not wired yet.",
-    );
+    throw new Error("models requires ctx.modelRegistry from the host context.");
   }
   return registry;
 }
@@ -260,7 +258,7 @@ function renderTable(entries: ModelEntry[], includeAuthColumn: boolean): string 
       maxOut: formatTokenCount(entry.maxTokens),
       thinking: entry.thinking ? "yes" : "no",
       images: entry.images ? "yes" : "no",
-      auth: includeAuthColumn ? (entry.available ? "yes" : "no") : undefined,
+      ...(includeAuthColumn ? { auth: entry.available ? "yes" : "no" } : {}),
     }),
   );
   const columns = includeAuthColumn

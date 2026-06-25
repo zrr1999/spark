@@ -267,6 +267,35 @@ void test("task graph store persists task plan items without an active sidecar",
   }
 });
 
+void test("task graph normalizes project kind and preserves project kindState", () => {
+  const graph = new TaskGraph();
+  const created = graph.createProject({
+    title: "Kinded project",
+    description: "Kind infrastructure",
+    kind: "custom-kind",
+    kindState: { gate: "custom" },
+  });
+  assert.equal(created.kind, "custom-kind");
+  assert.deepEqual(created.kindState, { gate: "custom" });
+
+  const legacy = TaskGraph.fromSnapshot({
+    projects: [
+      {
+        ...created,
+        ref: newRef("proj") as typeof created.ref,
+        kind: "",
+        kindState: { migrated: true },
+      },
+    ],
+    tasks: [],
+    runs: [],
+    dependencies: [],
+  });
+  const [legacyProject] = legacy.projects();
+  assert.equal(legacyProject?.kind, "generic");
+  assert.deepEqual(legacyProject?.kindState, { migrated: true });
+});
+
 void test("default task graph store writes V2 project/task file tree without legacy projects.json", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-task-graph-v2-"));
   try {

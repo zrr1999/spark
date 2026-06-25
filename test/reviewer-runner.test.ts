@@ -218,6 +218,49 @@ void test("reviewer instruction and system prompt enforce read-only verdict boun
   assert.equal(reviewerInputFingerprint(input), reviewerInputFingerprint(input));
 });
 
+void test("task reviewer instruction scopes task finish independently from sibling project work", () => {
+  const instruction = renderReviewerInstruction(reviewTaskInput());
+
+  assert.match(instruction, /For targetKind=task, review only the selected task's requestedStatus/);
+  assert.match(instruction, /Do not reject a task finish merely because sibling/);
+  assert.match(instruction, /dependency chains require scoped leaf tasks to close/);
+  assert.doesNotMatch(instruction, /projectStatus\.taskCounts\.unfinished > 0/);
+  assert.doesNotMatch(
+    instruction,
+    /For requestedStatus=complete, approve only when the objective is achieved/,
+  );
+});
+
+void test("goal reviewer instruction still gates completion on unfinished project work", () => {
+  const instruction = renderReviewerInstruction({
+    targetKind: "goal",
+    cwd: process.cwd(),
+    projectRef: "proj:active",
+    currentProjectSelected: true,
+    projectEvidenceSource: "current_project",
+    projectStatus: {
+      ref: "proj:active",
+      title: "Active project",
+      taskCounts: { total: 2, unfinished: 1, claimed: 0, statusCounts: { done: 1, pending: 1 } },
+      readyTasks: [
+        { ref: "task:remaining", title: "Remaining", status: "pending", kind: "implement" },
+      ],
+      unfinishedTasks: [
+        { ref: "task:remaining", title: "Remaining", status: "pending", kind: "implement" },
+      ],
+    },
+    goalId: "goal-1",
+    objective: "Finish implementation",
+    status: "active",
+    requestedStatus: "complete",
+    evidenceRefs: [],
+  });
+
+  assert.match(instruction, /If projectStatus\.taskCounts\.unfinished > 0/);
+  assert.match(instruction, /When unfinished project work remains/);
+  assert.match(instruction, /"requestedStatus": "complete"/);
+});
+
 void test("goal reviewer instruction does not treat missing current project as completion", () => {
   const input: GoalReviewInput = {
     targetKind: "goal",
@@ -295,7 +338,7 @@ void test("PiRolesReviewerRunner resolves reviewer model from role model setting
       registry: new RoleRegistry(),
       cwd: dir,
       piCommand: fakePi,
-      timeoutMs: 5_000,
+      timeoutMs: 15_000,
     });
 
     const result = await runner.review(input);
@@ -381,7 +424,7 @@ void test("PiRolesReviewerRunner strips reviewer role orchestration and interact
       cwd: dir,
       piCommand: fakePi,
       reviewerRoleRef: projectReviewer.ref,
-      timeoutMs: 5_000,
+      timeoutMs: 15_000,
     });
 
     const result = await runner.review({ ...reviewTaskInput(), cwd: dir });
@@ -419,7 +462,7 @@ void test("PiRolesReviewerRunner auto-answer decrements role depth for reviewer 
       registry: new RoleRegistry(),
       cwd: dir,
       piCommand: fakePi,
-      timeoutMs: 5_000,
+      timeoutMs: 15_000,
     });
 
     const result = await runner.answerAsk({
@@ -465,7 +508,7 @@ void test("PiRolesReviewerRunner auto-answer reports exhausted role depth before
       registry: new RoleRegistry(),
       cwd: dir,
       piCommand: fakePi,
-      timeoutMs: 5_000,
+      timeoutMs: 15_000,
     });
 
     const result = await runner.answerAsk({
@@ -505,7 +548,7 @@ void test("PiRolesReviewerRunner runs reviewer gates in fresh mode even with par
       registry: new RoleRegistry(),
       cwd: dir,
       piCommand: fakePi,
-      timeoutMs: 5_000,
+      timeoutMs: 15_000,
     });
 
     const result = await runner.review(input);

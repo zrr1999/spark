@@ -1,14 +1,19 @@
-export interface WorkflowPhase {
+export interface WorkflowStage {
   title: string;
   detail?: string;
   model?: string;
 }
 
+/** @deprecated Use WorkflowStage. */
+export type WorkflowPhase = WorkflowStage;
+
 export interface WorkflowMeta {
   name: string;
   description: string;
   whenToUse?: string;
-  phases?: WorkflowPhase[];
+  stages?: WorkflowStage[];
+  /** @deprecated Use stages. */
+  phases?: WorkflowStage[];
 }
 
 export interface WorkflowJournalEntry {
@@ -17,23 +22,31 @@ export interface WorkflowJournalEntry {
   result: unknown;
 }
 
-export type WorkflowPhaseStatus = "success" | "fail" | "skip";
+export type WorkflowStageStatus = "success" | "fail" | "skip";
+/** @deprecated Use WorkflowStageStatus. */
+export type WorkflowPhaseStatus = WorkflowStageStatus;
 
-export interface WorkflowPhaseOptions {
-  status?: WorkflowPhaseStatus;
-  /** Soft token ceiling for work started while this phase is current. */
+export interface WorkflowStageOptions {
+  status?: WorkflowStageStatus;
+  /** Soft token ceiling for work started while this stage is current. */
   budget?: number;
 }
+/** @deprecated Use WorkflowStageOptions. */
+export type WorkflowPhaseOptions = WorkflowStageOptions;
 
-export interface WorkflowPhaseRun {
+export interface WorkflowStageRun {
   title: string;
-  status?: WorkflowPhaseStatus;
+  status?: WorkflowStageStatus;
   startedAt: string;
   finishedAt?: string;
 }
+/** @deprecated Use WorkflowStageRun. */
+export type WorkflowPhaseRun = WorkflowStageRun;
 
 export interface WorkflowAgentOptions {
   label?: string;
+  stage?: string;
+  /** @deprecated Use stage. */
   phase?: string;
   schema?: unknown;
   model?: string;
@@ -106,6 +119,8 @@ export type WorkflowFetchContentAdapter = (input: WorkflowFetchContentInput) => 
 export interface WorkflowAgentEvent {
   index: number;
   label: string;
+  stage?: string;
+  /** @deprecated Use stage. */
   phase?: string;
   prompt: string;
   model?: string;
@@ -141,6 +156,8 @@ export type WorkflowAgentTelemetryStatus = "running" | "succeeded" | "failed" | 
 export interface WorkflowAgentTelemetry {
   index: number;
   label: string;
+  stage?: string;
+  /** @deprecated Use stage. */
   phase?: string;
   model?: string;
   status: WorkflowAgentTelemetryStatus;
@@ -168,6 +185,7 @@ export type WorkflowRunEventStatus =
 
 export type WorkflowRunNodeKind =
   | "run"
+  | "stage"
   | "phase"
   | "parallel_group"
   | "parallel_item"
@@ -183,6 +201,8 @@ export type WorkflowRunEventType =
   | "run_paused"
   | "run_stopped"
   | "run_stale"
+  | "stage_started"
+  | "stage_finished"
   | "phase_started"
   | "phase_finished"
   | "parallel_group_started"
@@ -214,6 +234,8 @@ export interface WorkflowRunEvent {
   nodeId?: string;
   parentId?: string;
   nodeKind?: WorkflowRunNodeKind;
+  stage?: string;
+  /** @deprecated Use stage. */
   phase?: string;
   title?: string;
   label?: string;
@@ -221,7 +243,9 @@ export interface WorkflowRunEvent {
   toolName?: string;
   workflowName?: string;
   meta?: WorkflowMeta;
-  phaseRun?: WorkflowPhaseRun;
+  stageRun?: WorkflowStageRun;
+  /** @deprecated Use stageRun. */
+  phaseRun?: WorkflowStageRun;
   telemetry?: WorkflowAgentTelemetry;
   usage?: WorkflowAgentTokenUsage;
   errorMessage?: string;
@@ -236,6 +260,8 @@ export interface WorkflowRunNode {
   label: string;
   status: WorkflowRunEventStatus;
   parentId?: string;
+  stage?: string;
+  /** @deprecated Use stage. */
   phase?: string;
   startedAt?: string;
   updatedAt?: string;
@@ -257,6 +283,8 @@ export interface WorkflowRunSnapshot {
   finishedAt?: string;
   nodes: WorkflowRunNode[];
   nodesById: Record<string, WorkflowRunNode>;
+  stages: WorkflowRunNode[];
+  /** @deprecated Use stages. */
   phases: WorkflowRunNode[];
   eventTail: WorkflowRunEvent[];
   result?: unknown;
@@ -265,6 +293,8 @@ export interface WorkflowRunSnapshot {
 
 export interface WorkflowAgentRuntimeOptions extends WorkflowAgentOptions {
   index: number;
+  stage?: string;
+  /** @deprecated Use stage. */
   phase?: string;
   reportTelemetry?: (telemetry: WorkflowAgentReportedTelemetry) => void;
 }
@@ -290,12 +320,16 @@ export interface WorkflowRunOptions {
   /** Resolve workflow('name', args) for one-level nested workflow composition. */
   loadWorkflowScript?: (name: string) => string | undefined | Promise<string | undefined>;
   onAgentJournal?: (entry: WorkflowJournalEntry) => void | Promise<void>;
-  onPhase?: (phase: WorkflowPhaseRun) => void;
+  onStage?: (stage: WorkflowStageRun) => void;
+  /** @deprecated Use onStage. */
+  onPhase?: (stage: WorkflowStageRun) => void;
   onLog?: (message: string) => void;
   onTokenUsage?: (usage: {
     spent: number;
     tokens: number;
     index: number;
+    stage?: string;
+    /** @deprecated Use stage. */
     phase?: string;
     usage: WorkflowAgentTokenUsage;
   }) => void | Promise<void>;
@@ -309,7 +343,10 @@ export interface WorkflowRunOptions {
 export interface WorkflowRunResult<T = unknown> {
   meta: WorkflowMeta;
   result: T;
-  phases: WorkflowPhaseRun[];
+  /** New runtimes populate stages; optional to preserve compatibility with legacy phase-only results. */
+  stages?: WorkflowStageRun[];
+  /** @deprecated Use stages. */
+  phases: WorkflowStageRun[];
   agentCount: number;
   journal: WorkflowJournalEntry[];
 }

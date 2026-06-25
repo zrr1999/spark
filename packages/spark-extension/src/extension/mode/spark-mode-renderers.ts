@@ -2,7 +2,7 @@ import type { ProjectRef } from "@zendev-lab/pi-extension-api";
 import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import type { RoadmapPlanningContext } from "../../flows/roadmap-flow.ts";
 import { renderRoadmapPlanningContext } from "../../flows/roadmap-flow.ts";
-import type { SparkEntryMode } from "../spark-entry.ts";
+import type { SparkEntryPhase } from "../spark-entry.ts";
 import type { SparkPlanningModeSource } from "../session-state.ts";
 
 const PLANNING_AFFECTING_CHOICES =
@@ -17,10 +17,10 @@ const NO_CANNED_ASKS =
   "Keep asks dynamic and grounded in inspected context; do not use canned intake templates or ask questions whose answers would not change the task plan.";
 
 export const WORKFLOW_AND_SUBAGENT_ARE_TOOLS =
-  "Workflow and subagent role runs are execution tools, not session modes. First select the governing mode (research, plan, or implement), then use role/workflow only within that mode's responsibility and evidence boundaries.";
+  "Workflow and subagent role runs are execution tools, not session phases. First select the governing phase (research, plan, or implement), then use role/workflow only within that phase's responsibility and evidence boundaries.";
 
 export const DURABLE_STATE_AUTHORITY =
-  'Compact summaries, restored conversation history, and hidden mode text are historical hints only. Before planning, claiming, finishing, or deciding a goal/project transition, verify durable state with scoped tools: task_read({ action: "project_status" }) for the selected project, task_read({ action: "workspace_status" }) or task_read({ action: "project_list" }) before selecting a project, and goal({ action: "status" }) before relying on a goal.';
+  'Compact summaries, restored conversation history, and hidden phase text are historical hints only. Before planning, claiming, finishing, or deciding a goal/project transition, verify durable state with scoped tools: task_read({ action: "project_status" }) for the selected project, task_read({ action: "workspace_status" }) or task_read({ action: "project_list" }) before selecting a project, and goal({ action: "status" }) before relying on a goal.';
 
 const RESEARCH_SUBAGENT_STRATEGY =
   'Default lightweight research should use subagent role calls plus main-agent synthesis when parallel inspection, cross-checking, or specialist review materially improves coverage. Call role({ action: "call", role, instruction, launch: "fresh" | "forked" }) with focused read-only research briefs; the main agent remains responsible for summarizing, reconciling, and qualifying the findings.';
@@ -101,7 +101,7 @@ export function renderSparkImplementationModePrompt(
   const requirements = selectedProjectRef
     ? [
         'Read the current project/task plan and inspect ready tasks with task_read({ action: "project_status" }). Claim one concrete ready task at a time with task_write({ action: "claim" }), execute it, verify the required evidence with artifact/learning/context as needed, then call task_write({ action: "finish" }). After each successful finish, inspect project_status again and continue with the next ready task until no ready task remains, validation fails, review/ask approval is pending, or a real blocker requires user input or external action. Projects are permanent records; do not use a Project finish/status lifecycle or request goal completion from /implement.',
-        "Implementation mode is human-blocking: use canonical ask for material user decisions and wait for the answer; do not auto-answer asks, do not make goal-style autonomous policy decisions, and do not request reviewer-gated goal completion from /implement.",
+        "Implementation phase is human-blocking: use canonical ask for material user decisions and wait for the answer; do not auto-answer asks, do not make goal-style autonomous policy decisions, and do not request reviewer-gated goal completion from /implement.",
         WORKFLOW_AND_SUBAGENT_ARE_TOOLS,
         PARALLEL_EXECUTION_WORKFLOW_STRATEGY,
         "If work becomes open-ended with no natural completion condition, suggest /loop. If the user wants autonomous completion with auto-decision policy and reviewer-gated completion, suggest /goal. If the user wants a scripted saved workflow, suggest /workflow.",
@@ -119,29 +119,29 @@ export function renderModePrompt(
   graph: TaskGraph,
   selectedProjectRef: ProjectRef | undefined,
   focus: string | undefined,
-  mode: "Default research" | "Planning" | "Implementation" | "Workflow driver",
+  phase: "Default research" | "Planning" | "Implementation" | "Workflow driver",
   requirements: string[],
   extraContext?: string,
 ): string {
   const scopedRequirements = [DURABLE_STATE_AUTHORITY, ...requirements];
   const sections = [
     renderSparkProjectSummary(graph, selectedProjectRef),
-    renderModeFocus(mode, focus),
+    renderPhaseFocus(phase, focus),
     extraContext?.trim() || undefined,
     [
-      mode === "Default research"
+      phase === "Default research"
         ? "## Default research requirements"
-        : `## ${mode} mode requirements`,
+        : `## ${phase} phase requirements`,
       ...scopedRequirements.map((item) => `- ${item}`),
     ].join("\n"),
   ].filter((section): section is string => Boolean(section));
   return sections.join("\n\n");
 }
 
-function renderModeFocus(mode: string, focus: string | undefined): string | undefined {
+function renderPhaseFocus(phase: string, focus: string | undefined): string | undefined {
   const trimmed = focus?.trim();
   if (!trimmed) return undefined;
-  return `## ${mode} focus\n${trimmed}`;
+  return `## ${phase} focus\n${trimmed}`;
 }
 
 function renderSparkProjectSummary(graph: TaskGraph, selectedProjectRef?: ProjectRef): string {
@@ -175,19 +175,22 @@ function renderSparkProjectSummary(graph: TaskGraph, selectedProjectRef?: Projec
     .join("\n");
 }
 
-export function renderSparkModeVisibleMessage(
-  mode: SparkEntryMode,
+export function renderSparkPhaseVisibleMessage(
+  phase: SparkEntryPhase,
   projectTitle: string | undefined,
   focus: string | undefined,
 ): string {
   const title =
-    mode === "research"
-      ? "Spark default research requested"
-      : mode === "plan"
-        ? "Spark plan mode requested"
-        : "Spark implement mode requested";
+    phase === "research"
+      ? "Spark default research phase requested"
+      : phase === "plan"
+        ? "Spark plan phase requested"
+        : "Spark implement phase requested";
   const parts = [title];
   if (projectTitle?.trim()) parts.push(`project: ${projectTitle.trim()}`);
   if (focus?.trim()) parts.push(`focus: ${focus.trim()}`);
   return parts.join(" · ");
 }
+
+/** @deprecated Use renderSparkPhaseVisibleMessage. */
+export const renderSparkModeVisibleMessage = renderSparkPhaseVisibleMessage;

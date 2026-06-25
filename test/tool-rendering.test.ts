@@ -55,7 +55,7 @@ void test("Spark extension canonical facade tools render parameter-aware tool ca
       },
       { name: "assign", args: { dryRun: true, maxConcurrency: 2 } },
       { name: "goal", args: { action: "status" } },
-      { name: "mode", args: { action: "plan", focus: "tighten tasks" } },
+      { name: "phase", args: { action: "plan", focus: "tighten tasks" } },
     ]),
     join(snapshotDir, "tool-rendering-spark.txt"),
     textSnapshot,

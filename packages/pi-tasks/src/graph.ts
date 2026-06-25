@@ -101,6 +101,8 @@ export class TaskGraph {
       description: input.description,
       purpose: input.purpose?.trim() || undefined,
       outputLanguage: input.outputLanguage,
+      kind: input.kind?.trim() || "generic",
+      kindState: input.kindState,
       roadmap: createDefaultProjectRoadmap(input.title, now),
       createdAt: now,
       updatedAt: now,
@@ -682,7 +684,9 @@ export class TaskGraph {
 
   updateProject(
     projectRef: ProjectRef,
-    patch: Partial<Pick<Project, "title" | "description" | "purpose" | "outputLanguage">>,
+    patch: Partial<
+      Pick<Project, "title" | "description" | "purpose" | "outputLanguage" | "kind" | "kindState">
+    >,
   ): Project {
     const project = this.getProject(projectRef);
     const title = patch.title ?? project.title;
@@ -695,6 +699,8 @@ export class TaskGraph {
       description,
       purpose: patch.purpose !== undefined ? patch.purpose.trim() || undefined : project.purpose,
       outputLanguage: patch.outputLanguage ?? project.outputLanguage,
+      kind: patch.kind !== undefined ? patch.kind.trim() || "generic" : project.kind,
+      kindState: patch.kindState !== undefined ? patch.kindState : project.kindState,
       updatedAt: nowIso(),
     };
     this.#projects.set(projectRef, updated);

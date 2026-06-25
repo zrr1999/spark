@@ -89,7 +89,7 @@ void test("pi-workflows parses metadata without executing expressions", () => {
   const parsed = parseWorkflowScript(`export const meta = {
   name: 'demo { literal }',
   description: "Demo // workflow",
-  phases: [
+  stages: [
     // braces in comments should not terminate metadata: { }
     { title: 'Scan' },
   ],
@@ -98,6 +98,7 @@ return 'ok'`);
 
   assert.equal(parsed.meta.name, "demo { literal }");
   assert.equal(parsed.meta.description, "Demo // workflow");
+  assert.deepEqual(parsed.meta.stages, [{ title: "Scan" }]);
   assert.deepEqual(parsed.meta.phases, [{ title: "Scan" }]);
   assert.equal(parsed.body, "return 'ok'");
 });
@@ -106,12 +107,12 @@ void test("pi-workflows parses metadata and runs sandbox primitives with journal
   const script = `export const meta = {
   name: 'demo',
   description: 'Demo workflow',
-  phases: [{ title: 'Scan' }, { title: 'Report' }],
+  stages: [{ title: 'Scan' }, { title: 'Report' }],
 }
 
-phase('Scan')
+stage('Scan')
 const scan = await agent('scan repo', { label: 'scan' })
-phase('Report')
+stage('Report')
 const [a, b] = await parallel([
   () => agent('check a', { label: 'a' }),
   () => agent('check b', { label: 'b' }),
@@ -121,7 +122,7 @@ return { scan, a, b }`;
   const parsed = parseWorkflowScript(script);
   assert.equal(parsed.meta.name, "demo");
   assert.deepEqual(
-    parsed.meta.phases?.map((phase) => phase.title),
+    parsed.meta.stages?.map((stage) => stage.title),
     ["Scan", "Report"],
   );
 
@@ -134,7 +135,11 @@ return { scan, a, b }`;
   });
   assert.deepEqual(prompts, ["scan repo", "check a", "check b"]);
   assert.deepEqual(
-    result.phases.map((phase) => phase.title),
+    result.stages?.map((stage) => stage.title),
+    ["Scan", "Report"],
+  );
+  assert.deepEqual(
+    result.phases.map((stage) => stage.title),
     ["Scan", "Report"],
   );
   assert.equal(result.agentCount, 3);
@@ -184,6 +189,7 @@ void test("pi-workflows lists and reads builtin workflows without frontmatter mo
   assert.equal(descriptor.source, "builtin");
   assert.equal(descriptor.mode, "research");
   assert.equal(descriptor.path, "builtin:research");
+  assert.deepEqual(descriptor.stages, ["Plan", "Search", "Fetch", "Verify", "Report"]);
   assert.deepEqual(descriptor.phases, ["Plan", "Search", "Fetch", "Verify", "Report"]);
   assert.match(script, /export const meta/);
   const parsed = parseWorkflowScript(script);
@@ -208,6 +214,7 @@ void test("pi-workflows research builtin fans out with collected errors and repo
   });
   assert.equal(descriptor.source, "builtin");
   assert.equal(descriptor.mode, "research");
+  assert.deepEqual(descriptor.stages, ["Plan", "Search", "Fetch", "Verify", "Report"]);
   assert.deepEqual(descriptor.phases, ["Plan", "Search", "Fetch", "Verify", "Report"]);
 
   const parsed = parseWorkflowScript(script);
@@ -245,7 +252,7 @@ void test("pi-workflows research builtin fans out with collected errors and repo
 
   assert.equal(run.agentCount, 5);
   assert.deepEqual(
-    run.phases.map((phase) => phase.title),
+    run.stages?.map((stage) => stage.title),
     ["Plan", "Search", "Fetch", "Verify", "Report"],
   );
   assert.deepEqual(
@@ -268,21 +275,21 @@ void test("pi-workflows exposes and runs workflow script factories", async () =>
   const research = parseWorkflowScript(researchWorkflowScript());
   assert.equal(research.meta.name, "research");
   assert.deepEqual(
-    research.meta.phases?.map((phase) => phase.title),
+    research.meta.stages?.map((stage) => stage.title),
     ["Plan", "Search", "Fetch", "Verify", "Report"],
   );
 
   const review = parseWorkflowScript(reviewWorkflowScript());
   assert.equal(review.meta.name, "review");
   assert.deepEqual(
-    review.meta.phases?.map((phase) => phase.title),
+    review.meta.stages?.map((stage) => stage.title),
     ["Investigate", "Critique", "Rebut", "Verdict"],
   );
 
   const fanOut = parseWorkflowScript(fanOutWithBriefWorkflowScript());
   assert.equal(fanOut.meta.name, "fan_out_with_brief");
   assert.deepEqual(
-    fanOut.meta.phases?.map((phase) => phase.title),
+    fanOut.meta.stages?.map((stage) => stage.title),
     ["Brief", "Fan out", "Fan in"],
   );
 
@@ -292,7 +299,7 @@ void test("pi-workflows exposes and runs workflow script factories", async () =>
   });
   assert.equal(researchRun.agentCount, 5);
   assert.deepEqual(
-    researchRun.phases.map((phase) => phase.title),
+    researchRun.stages?.map((stage) => stage.title),
     ["Plan", "Search", "Fetch", "Verify", "Report"],
   );
 
@@ -302,24 +309,24 @@ void test("pi-workflows exposes and runs workflow script factories", async () =>
   });
   assert.equal(reviewRun.agentCount, 5);
   assert.deepEqual(
-    reviewRun.phases.map((phase) => phase.title),
+    reviewRun.stages?.map((stage) => stage.title),
     ["Investigate", "Critique", "Rebut", "Verdict"],
   );
 });
 
-void test("pi-workflows records explicit phase statuses", async () => {
+void test("pi-workflows records explicit stage statuses", async () => {
   const script = `export const meta = {
-    name: 'phase status',
-    description: 'Phase status workflow',
+    name: 'stage status',
+    description: 'Stage status workflow',
   }
 
-  phase('Scan')
+  stage('Scan')
   await agent('scan work', { label: 'scan' })
-  phase('Scan', { status: 'success' })
-  phase('Skipped', { status: 'skip' })
+  stage('Scan', { status: 'success' })
+  stage('Skipped', { status: 'skip' })
   return 'done'`;
 
-  const phaseEvents: Array<{
+  const stageEvents: Array<{
     title: string;
     status?: string;
     startedAt: string;
@@ -330,11 +337,11 @@ void test("pi-workflows records explicit phase statuses", async () => {
       let tick = 0;
       return () => `2026-06-09T00:00:0${tick++}.000Z`;
     })(),
-    agent: async (_prompt, options) => options.phase ?? "none",
-    onPhase: (event) => phaseEvents.push(event),
+    agent: async (_prompt, options) => options.stage ?? "none",
+    onStage: (event) => stageEvents.push(event),
   });
 
-  assert.deepEqual(run.phases, [
+  assert.deepEqual(run.stages, [
     {
       title: "Scan",
       status: "success",
@@ -348,7 +355,7 @@ void test("pi-workflows records explicit phase statuses", async () => {
       finishedAt: "2026-06-09T00:00:02.000Z",
     },
   ]);
-  assert.deepEqual(phaseEvents, [
+  assert.deepEqual(stageEvents, [
     { title: "Scan", startedAt: "2026-06-09T00:00:00.000Z" },
     {
       title: "Scan",
@@ -367,13 +374,13 @@ void test("pi-workflows records explicit phase statuses", async () => {
 
 void test("pi-workflows emits typed run events and projects snapshots", async () => {
   const script = `export const meta = { name: 'eventful', description: 'eventful workflow' }
-phase('Plan')
+stage('Plan')
 const web = await webSearch({ query: 'events' })
 const values = await parallel([
   () => agent('first', { label: 'first' }),
   () => fetchContent({ url: 'https://example.test/source' }),
 ], { concurrency: 2 })
-phase('Plan', { status: 'success' })
+stage('Plan', { status: 'success' })
 return { web, values }`;
   const events: WorkflowRunEvent[] = [];
 
@@ -391,7 +398,7 @@ return { web, values }`;
     events.map((event) => event.type).filter((type) => type !== "parallel_item_succeeded"),
     [
       "run_started",
-      "phase_started",
+      "stage_started",
       "tool_started",
       "tool_succeeded",
       "parallel_group_started",
@@ -402,7 +409,7 @@ return { web, values }`;
       "tool_succeeded",
       "agent_succeeded",
       "parallel_group_succeeded",
-      "phase_finished",
+      "stage_finished",
       "run_succeeded",
     ],
   );
@@ -414,7 +421,7 @@ return { web, values }`;
     snapshot.nodes.map((node) => [node.kind, node.label, node.status]),
     [
       ["run", "eventful", "succeeded"],
-      ["phase", "Plan", "succeeded"],
+      ["stage", "Plan", "succeeded"],
       ["tool", "webSearch", "succeeded"],
       ["parallel_group", "parallel group 1", "succeeded"],
       ["parallel_item", "parallel item 1", "succeeded"],
@@ -424,28 +431,32 @@ return { web, values }`;
     ],
   );
   assert.deepEqual(
-    snapshot.phases.map((phase) => phase.id),
-    ["phase:Plan"],
+    snapshot.stages.map((stage) => stage.id),
+    ["stage:Plan"],
+  );
+  assert.deepEqual(
+    snapshot.phases.map((stage) => stage.id),
+    ["stage:Plan"],
   );
   assert.deepEqual(snapshot.nodesById["parallel:0"]?.children, [
     "parallel:0:item:0",
     "parallel:0:item:1",
   ]);
-  assert.equal(snapshot.nodesById["parallel:0"]?.parentId, "phase:Plan");
+  assert.equal(snapshot.nodesById["parallel:0"]?.parentId, "stage:Plan");
   assert.equal(snapshot.nodesById["agent:0"]?.parentId, "parallel:0:item:0");
   assert.equal(snapshot.nodesById["tool:1"]?.parentId, "parallel:0:item:1");
 });
 
 void test("pi-workflows projects zero-agent parallel helper work into dashboard tree", async () => {
   const script = `export const meta = { name: 'zero agent fanout', description: 'zero agent fanout workflow' }
-phase('Fanout')
+stage('Fanout')
 const results = await parallel([
   () => webSearch({ query: 'fanout' }),
   () => fetchContent({ url: 'https://example.test/facts' }),
   () => artifactRecord({ title: 'Brief', body: 'Body' }),
   () => workflow('child', { marker: 'nested' }),
 ], { concurrency: 2 })
-phase('Fanout', { status: 'success' })
+stage('Fanout', { status: 'success' })
 return results`;
   const child = `export const meta = { name: 'child', description: 'child workflow' }
 return { child: true }`;
@@ -519,7 +530,7 @@ return { child: true }`;
 
 void test("pi-workflows projects failed run and node events", async () => {
   const script = `export const meta = { name: 'failed events', description: 'failed event workflow' }
-phase('Work')
+stage('Work')
 await agent('explode', { label: 'boom' })`;
   const events: WorkflowRunEvent[] = [];
 
@@ -546,8 +557,8 @@ await agent('explode', { label: 'boom' })`;
 void test("pi-workflows projects status-only, artifact, log, nested, cached, and helper error events", async () => {
   const statusOnlyEvents: WorkflowRunEvent[] = [];
   await runWorkflowScript(
-    `export const meta = { name: 'status only', description: 'status-only phase' }
-phase('Skipped', { status: 'skip' })
+    `export const meta = { name: 'status only', description: 'status-only stage' }
+stage('Skipped', { status: 'skip' })
 log('note from workflow')
 return 'ok'`,
     {
@@ -558,7 +569,7 @@ return 'ok'`,
     },
   );
   const statusOnly = projectWorkflowRunEvents(statusOnlyEvents);
-  assert.equal(statusOnly.nodesById["phase:Skipped"]?.status, "skipped");
+  assert.equal(statusOnly.nodesById["stage:Skipped"]?.status, "skipped");
   assert.ok(
     statusOnly.eventTail.some(
       (event) => event.type === "log" && event.message === "note from workflow",
@@ -582,7 +593,7 @@ return await artifactRecord({ title: 'Brief', body: 'Body' })`,
   assert.equal(artifactSnapshot.nodesById["artifact:artifact:brief"]?.status, "succeeded");
 
   const child = `export const meta = { name: 'child', description: 'child workflow' }
-phase('Child')
+stage('Child')
 return { child: true }`;
   const nestedEvents: WorkflowRunEvent[] = [];
   await runWorkflowScript(
@@ -649,15 +660,15 @@ return await webSearch({ query: 'boom' })`,
   assert.equal(helperError.nodesById["tool:0"]?.errorMessage, "search exploded");
 });
 
-void test("pi-workflows applies phase model defaults and per-agent overrides", async () => {
+void test("pi-workflows applies stage model defaults and per-agent overrides", async () => {
   const script = `export const meta = {
     name: 'model routing',
     description: 'Model routing workflow',
-    phases: [{ title: 'Scan', model: 'provider/phase-model' }],
+    stages: [{ title: 'Scan', model: 'provider/stage-model' }],
   }
 
-  phase('Scan')
-  await agent('phase default', { label: 'default' })
+  stage('Scan')
+  await agent('stage default', { label: 'default' })
   await agent('agent override', { label: 'override', model: 'provider/agent-model' })`;
 
   const models: Array<string | undefined> = [];
@@ -668,7 +679,7 @@ void test("pi-workflows applies phase model defaults and per-agent overrides", a
     },
   });
 
-  assert.deepEqual(models, ["provider/phase-model", "provider/agent-model"]);
+  assert.deepEqual(models, ["provider/stage-model", "provider/agent-model"]);
 });
 
 void test("pi-workflows role-run adapter sends model agents through model runner hook", async () => {
@@ -689,7 +700,7 @@ void test("pi-workflows role-run adapter sends model agents through model runner
   const result = await agent("Compare model answers", {
     index: 1,
     label: "panel 1",
-    phase: "Panel",
+    stage: "Panel",
     model: "provider/model",
     agentType: "model",
     timeoutMs: 250,
@@ -702,12 +713,14 @@ void test("pi-workflows role-run adapter sends model agents through model runner
   const request = modelRequests[0] as {
     prompt: string;
     label: string;
+    stage?: string;
     phase?: string;
     model?: string;
     metadata: Record<string, unknown>;
   };
   assert.equal(request.prompt, "Compare model answers");
   assert.equal(request.label, "panel 1");
+  assert.equal(request.stage, "Panel");
   assert.equal(request.phase, "Panel");
   assert.equal(request.model, "provider/model");
   assert.equal(request.metadata.workflowAgent, true);
@@ -832,7 +845,7 @@ void test("pi-workflows role-run adapter maps workflow agents to Spark dependenc
   const result = (await agent("Inspect auth routes", {
     index: 2,
     label: "auth reviewer",
-    phase: "Review",
+    stage: "Review",
     model: "provider/model",
     agentType: "reviewer",
     isolation: "graft",
@@ -863,6 +876,7 @@ void test("pi-workflows role-run adapter maps workflow agents to Spark dependenc
   assert.equal(requests.length, 1);
   const request = requests[0] as SparkWorkflowRoleRunRequest;
   assert.equal(request.label, "auth reviewer");
+  assert.equal(request.stage, "Review");
   assert.equal(request.phase, "Review");
   assert.equal(request.model, "provider/model");
   assert.equal(request.metadata.workflowAgent, true);
@@ -878,7 +892,7 @@ void test("pi-workflows role-run adapter maps workflow agents to Spark dependenc
   assert.equal(request.allowedTools?.includes("edit"), false);
   assert.match(request.instruction, /Spark workflow child run/);
   assert.match(request.instruction, /Inspect auth routes/);
-  assert.match(request.instruction, /Phase: Review/);
+  assert.match(request.instruction, /Stage: Review/);
   assert.match(request.instruction, /Isolation: graft/);
   assert.match(request.instruction, /Briefing artifact: artifact:brief-123/);
   assert.match(request.instruction, /Environment keys: GRAFT_BASE_REF/);
@@ -889,9 +903,9 @@ void test("pi-workflows role-run adapter maps workflow agents to Spark dependenc
 
 void test("Spark dynamic workflow dashboard renders isolated Graft agent provenance", async () => {
   const script = `export const meta = { name: 'graft ui', description: 'graft UI workflow' }
-phase('Edit')
+stage('Edit')
 const result = await agent('edit file', { label: 'isolated editor', isolation: 'graft' })
-phase('Edit', { status: 'success' })
+stage('Edit', { status: 'success' })
 return result`;
   const events: WorkflowRunEvent[] = [];
   const agent = createSparkWorkflowRoleRunAdapter({
@@ -998,7 +1012,7 @@ void test("pi-workflows fan_out_with_brief records one brief and fans out with a
   ]);
   assert.equal(run.agentCount, 2);
   assert.deepEqual(
-    run.phases.map((phase) => `${phase.title}:${phase.status ?? "open"}`),
+    run.stages?.map((stage) => `${stage.title}:${stage.status ?? "open"}`),
     ["Brief:success", "Fan out:success", "Fan in:open"],
   );
   assert.match(prompts[0] ?? "", /CONTEXT_BUNDLE: read artifact ref artifact:brief-xyz/);
@@ -1318,7 +1332,7 @@ return { verdict, best, found, piped, retried, gated }`;
   );
 });
 
-void test("pi-workflows enforces run and phase token budgets between agent calls", async () => {
+void test("pi-workflows enforces run and stage token budgets between agent calls", async () => {
   const runBudgetScript = `export const meta = { name: 'run budget', description: 'run budget test' }
 await agent('first', { label: 'first' })
 await agent('second', { label: 'second' })`;
@@ -1331,13 +1345,13 @@ await agent('second', { label: 'second' })`;
     /workflow token budget exhausted/,
   );
 
-  const phaseBudgetScript = `export const meta = { name: 'phase budget', description: 'phase budget test' }
-phase('Scan', { budget: 1 })
+  const stageBudgetScript = `export const meta = { name: 'stage budget', description: 'stage budget test' }
+stage('Scan', { budget: 1 })
 await agent('first', { label: 'first' })
 await agent('second', { label: 'second' })`;
   await assert.rejects(
-    () => runWorkflowScript(phaseBudgetScript, { agent: async () => "a long enough output" }),
-    /workflow phase budget exhausted: Scan/,
+    () => runWorkflowScript(stageBudgetScript, { agent: async () => "a long enough output" }),
+    /workflow stage budget exhausted: Scan/,
   );
 });
 
@@ -1440,20 +1454,20 @@ return 'ok'`;
     });
     assert.equal(started.status, "running");
     await store.appendEvent(runRef, {
-      type: "phase_started",
-      nodeId: "phase:Plan",
+      type: "stage_started",
+      nodeId: "stage:Plan",
       parentId: "run",
-      nodeKind: "phase",
+      nodeKind: "stage",
       title: "Plan",
-      phase: "Plan",
+      stage: "Plan",
       timestamp: "2026-06-23T00:00:01.000Z",
     });
     await store.appendEvent(runRef, {
-      type: "phase_finished",
-      nodeId: "phase:Plan",
-      nodeKind: "phase",
+      type: "stage_finished",
+      nodeId: "stage:Plan",
+      nodeKind: "stage",
       title: "Plan",
-      phase: "Plan",
+      stage: "Plan",
       status: "succeeded",
       timestamp: "2026-06-23T00:00:02.000Z",
     });
@@ -1467,10 +1481,10 @@ return 'ok'`;
 
     assert.equal(terminal.status, "succeeded");
     assert.equal(terminal.runRef, runRef);
-    assert.equal((await store.getSnapshot(runRef))?.nodesById["phase:Plan"]?.status, "succeeded");
+    assert.equal((await store.getSnapshot(runRef))?.nodesById["stage:Plan"]?.status, "succeeded");
     assert.deepEqual(
       (await store.tailEvents(runRef, 2)).map((event) => event.type),
-      ["phase_finished", "run_succeeded"],
+      ["stage_finished", "run_succeeded"],
     );
     assert.deepEqual(
       (await store.listSnapshots()).map((snapshot) => snapshot.runRef),
@@ -1804,7 +1818,7 @@ void test("Spark workflow_run streams live onUpdate events before wait=true comp
     assert.ok(tool, "missing workflow_run tool");
 
     const script = `export const meta = { name: 'live updates', description: 'live update workflow' }
-phase('Live')
+stage('Live')
 return await agent('wait for update', { label: 'live-child' })`;
     let completed = false;
     const running = tool
@@ -1832,7 +1846,7 @@ return await agent('wait for update', { label: 'live-child' })`;
       "wait=true call should still be open while the agent is blocked",
     );
     assert.ok(
-      updates.some((update) => /phase_started Live/.test(update)),
+      updates.some((update) => /stage_started Live/.test(update)),
       updates.join("\n---\n"),
     );
     assert.ok(
@@ -2231,10 +2245,14 @@ return 'saved-result'`,
             hasFetchContent: typeof options.fetchContent === "function",
             hasLoadWorkflowScript: typeof options.loadWorkflowScript === "function",
           });
+          const stages = [
+            { title: "Done", startedAt: "2026-06-18T00:00:00.000Z", status: "success" },
+          ] as WorkflowRunResult<T>["phases"];
           return {
             meta: parseWorkflowScript(script).meta,
             result: { ok: true, args: options.args } as T,
-            phases: [{ title: "Done", startedAt: "2026-06-18T00:00:00.000Z", status: "success" }],
+            stages,
+            phases: stages,
             agentCount: 2,
             journal: [],
           };
@@ -2260,7 +2278,7 @@ return 'inline-result'`,
     );
     assert.match(inline.content[0].text, /Workflow run completed: inline workflow/);
     assert.match(inline.content[0].text, /╭─ Workflow inline \[succeeded\]/);
-    assert.match(inline.content[0].text, /│ phases\s+✓ Done/);
+    assert.match(inline.content[0].text, /│ stages\s+✓ Done/);
     assert.match(inline.content[0].text, /│ controls\s+inspect: task_read/);
     assert.match(
       inline.content[0].text,
@@ -2375,6 +2393,7 @@ void test("Spark workflow_run records scoped approval provenance for risky workf
         approveRun: ({ summary }) => {
           approvalSource = summary.source;
           assert.deepEqual(summary.riskFlags, ["web_or_fetch"]);
+          assert.equal(summary.resources.stageCount, 0);
           assert.equal(summary.resources.phaseCount, 0);
           return { approved: true, method: "reviewer", reason: "safe bounded web lookup" };
         },
@@ -2451,13 +2470,13 @@ void test("Spark workflow_run executes an ultracode-style generated workflow scr
     const result = await tool.execute(
       "tool-call",
       {
-        script: `export const meta = { name: 'ultracode smoke', description: 'bounded generated workflow', phases: [{ title: 'Plan' }, { title: 'Verify' }, { title: 'Synthesize' }] }
-phase('Plan')
+        script: `export const meta = { name: 'ultracode smoke', description: 'bounded generated workflow', stages: [{ title: 'Plan' }, { title: 'Verify' }, { title: 'Synthesize' }] }
+stage('Plan')
 const draft = await agent('Draft a short execution plan for ' + args.focus, { label: 'planner' })
-phase('Verify')
+stage('Verify')
 const verdict = await verify(draft, { reviewers: 2, threshold: 0.5 })
 const complete = await completenessCheck(args, { draft, verdict })
-phase('Synthesize', { status: 'success' })
+stage('Synthesize', { status: 'success' })
 return { draft, verdict, complete }`,
         args: { focus: "workflow parity" },
         concurrency: 2,

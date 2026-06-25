@@ -15,6 +15,12 @@ import {
   SparkNativeTuiApp,
 } from "../apps/spark-tui/src/native-tui.ts";
 
+const ESC = String.fromCharCode(27);
+const ANSI_PATTERN = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, "gu");
+function stripAnsi(text: string): string {
+  return text.replace(ANSI_PATTERN, "");
+}
+
 function fakeTui(): TUI {
   return {
     requestRender: () => undefined,
@@ -641,7 +647,7 @@ void test("native UI transport consumes view model events without concrete TUI p
     },
   });
 
-  const rendered = app.render(100).join("\n");
+  const rendered = stripAnsi(app.render(100).join("\n"));
   assert.match(rendered, /spark> hello from event/);
   assert.match(rendered, /custom:run-view> daemon:run:1 \[running\] processing/);
 });
@@ -665,7 +671,10 @@ void test("native UI transport returns blocked protocol responses without handle
   assert.equal(response?.status, "blocked");
   assert.equal(response?.kind, "toolApproval");
   assert.equal(response && "approved" in response ? response.approved : undefined, false);
-  assert.match(app.render(100).join("\n"), /custom:interaction-request> toolApproval: Run edit\?/);
+  assert.match(
+    stripAnsi(app.render(100).join("\n")),
+    /custom:interaction-request> toolApproval: Run edit\?/,
+  );
 });
 
 void test("SparkNativeTuiApp /retry resubmits the previous user prompt", async () => {

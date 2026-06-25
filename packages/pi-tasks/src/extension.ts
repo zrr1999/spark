@@ -171,7 +171,12 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
       kind: Type.Optional(
         Type.String({
           description:
-            "Optional task executor hint: research | implement | review. Omit for normal work.",
+            "Project kind id for project_use/project_metadata_update, or optional task executor hint: research | implement | review. Omit for normal work.",
+        }),
+      ),
+      kindState: Type.Optional(
+        Type.Any({
+          description: "Project-kind-specific JSON state for project_use/project_metadata_update.",
         }),
       ),
       status: Type.Optional(

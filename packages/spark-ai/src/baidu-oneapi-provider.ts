@@ -10,6 +10,8 @@ import {
   streamSimpleOpenAIResponses,
 } from "@earendil-works/pi-ai";
 
+import type { ProviderRegistrationAPI } from "./provider-registry.ts";
+
 const BAIDU_ONEAPI_PROVIDER = "baidu-oneapi";
 const BAIDU_ONEAPI_API = "baidu-oneapi";
 const BAIDU_ONEAPI_BASE_URL = "https://oneapi-comate.baidu-int.com";
@@ -39,10 +41,6 @@ const CLAUDE_OPUS_4_6_COST = {
   cacheRead: 0.55,
   cacheWrite: 6.875,
 };
-
-export interface ProviderRegistrationAPI {
-  registerProvider(name: string, config: unknown): void;
-}
 
 function mapThinkingEffort(
   model: Model<Api>,
@@ -78,7 +76,7 @@ function withBaiduOneApiTransportApi<TApi extends BaiduOneApiTransportApi>(
 }
 
 function retagBaiduOneApiMessage(message: AssistantMessage): AssistantMessage {
-  return { ...message, api: BAIDU_ONEAPI_API };
+  return { ...message, api: BAIDU_ONEAPI_API, provider: BAIDU_ONEAPI_PROVIDER };
 }
 
 function retagBaiduOneApiEvent(event: AssistantMessageEvent): AssistantMessageEvent {
@@ -141,19 +139,16 @@ export function streamBaiduOneApiAnthropic(
   const gatewayModel = GATEWAY_MODEL_BY_ID[model.id] ?? model.id;
   const apiKey = resolveBaiduOneApiKey(options?.apiKey);
   const transportModel = withBaiduOneApiTransportApi(model, "anthropic-messages");
+  const effort = mapThinkingEffort(model, options?.reasoning);
 
   return retagBaiduOneApiStream(
     streamAnthropic(transportModel, context, {
       ...options,
-      apiKey,
+      ...(apiKey !== undefined ? { apiKey } : {}),
       thinkingEnabled: options?.reasoning !== undefined,
-      effort: mapThinkingEffort(model, options?.reasoning),
+      ...(effort !== undefined ? { effort } : {}),
       async onPayload(payload) {
-        const remapped = remapBaiduOneApiPayload(
-          payload,
-          gatewayModel,
-          mapThinkingEffort(model, options?.reasoning),
-        );
+        const remapped = remapBaiduOneApiPayload(payload, gatewayModel, effort);
         return (await options?.onPayload?.(remapped, model)) ?? remapped;
       },
     }),
@@ -183,7 +178,7 @@ export function streamBaiduOneApiOpenAIResponses(
   return retagBaiduOneApiStream(
     streamSimpleOpenAIResponses(transportModel, context, {
       ...options,
-      apiKey,
+      ...(apiKey !== undefined ? { apiKey } : {}),
       async onPayload(payload) {
         const remapped = remapOpenAIResponsesModel(payload, gatewayModel);
         return (await options?.onPayload?.(remapped, model)) ?? remapped;
@@ -207,6 +202,8 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
       {
         id: "claude-opus-4.6",
         name: "Claude Opus 4.6 (Baidu OneAPI)",
+        transportApi: "anthropic-messages",
+        transportModelId: "Claude Opus 4.6",
         reasoning: true,
         thinkingLevelMap: {
           minimal: "low",
@@ -223,6 +220,8 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
       {
         id: "claude-opus-4.7",
         name: "Claude Opus 4.7 (Baidu OneAPI)",
+        transportApi: "anthropic-messages",
+        transportModelId: "Claude Opus 4.7",
         reasoning: true,
         thinkingLevelMap: {
           minimal: "low",
@@ -239,6 +238,8 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
       {
         id: "claude-opus-4.8",
         name: "Opus 4.8 Coding Plan (Baidu OneAPI)",
+        transportApi: "anthropic-messages",
+        transportModelId: "Opus 4.8 Coding Plan",
         reasoning: true,
         thinkingLevelMap: {
           minimal: null,
@@ -255,6 +256,8 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
       {
         id: "claude-fable-5",
         name: "Fable 5 (Baidu OneAPI)",
+        transportApi: "anthropic-messages",
+        transportModelId: "Fable 5",
         reasoning: true,
         thinkingLevelMap: {
           minimal: "low",
@@ -272,6 +275,8 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
         id: "gpt-5.5",
         name: "GPT-5.5 Coding Plan (Baidu OneAPI)",
         baseUrl: process.env.BAIDU_ONEAPI_OPENAI_BASE_URL ?? BAIDU_ONEAPI_OPENAI_BASE_URL,
+        transportApi: "openai-responses",
+        transportModelId: "gpt-5.5-coding-plan",
         reasoning: true,
         thinkingLevelMap: GPT_5_5_THINKING_LEVEL_MAP,
         input: ["text", "image"],
@@ -283,6 +288,8 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
         id: "gpt-5.5-coding-plan",
         name: "GPT-5.5 Coding Plan (Baidu OneAPI)",
         baseUrl: process.env.BAIDU_ONEAPI_OPENAI_BASE_URL ?? BAIDU_ONEAPI_OPENAI_BASE_URL,
+        transportApi: "openai-responses",
+        transportModelId: "gpt-5.5-coding-plan",
         reasoning: true,
         thinkingLevelMap: GPT_5_5_THINKING_LEVEL_MAP,
         input: ["text", "image"],

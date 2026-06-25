@@ -1,4 +1,5 @@
 import type { ToolCallComponent, ToolCallRenderTheme } from "./tool-rendering.ts";
+import type { SparkDriveMode, SparkDriveModeInput } from "./spark-drive-state.ts";
 
 export interface SparkRegisteredToolConfig {
   name: string;
@@ -35,8 +36,13 @@ export interface SparkToolContext {
   cwd: string;
   model?: SparkSessionModelRef;
   sparkActiveLens?: {
-    mode: "research" | "plan" | "implement";
-    driver?: "interactive" | "goal" | "workflow";
+    phase: "research" | "plan" | "implement";
+    /** Read-only derived drive mode. */
+    mode?: SparkDriveMode;
+    /** Canonical drive value. */
+    drive?: SparkDriveModeInput;
+    /** @deprecated Use drive/mode. */
+    driver?: SparkDriveModeInput;
   };
   isIdle?: () => boolean;
   sessionManager?: {

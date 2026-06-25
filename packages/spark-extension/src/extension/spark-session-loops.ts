@@ -19,6 +19,13 @@ export interface SparkSessionLoopRetryState {
   exhaustedAt?: string;
 }
 
+export interface SparkSessionLoopScheduleState {
+  nextRunAt: string;
+  delayMs: number;
+  scheduledAt: string;
+  reason?: string;
+}
+
 export interface SparkSessionLoop {
   version: 1;
   loopId: string;
@@ -28,6 +35,7 @@ export interface SparkSessionLoop {
   source: SparkSessionLoopSource;
   pauseReason?: string;
   retryState?: SparkSessionLoopRetryState;
+  schedule?: SparkSessionLoopScheduleState;
   createdAt: string;
   updatedAt: string;
 }
@@ -94,6 +102,7 @@ export async function updateSessionLoopStatus(
   options: {
     reason?: string;
     retryState?: SparkSessionLoopRetryState | null;
+    schedule?: SparkSessionLoopScheduleState | null;
     expectedLoopId?: string;
   } = {},
 ): Promise<SparkSessionLoop | undefined> {
@@ -107,10 +116,69 @@ export async function updateSessionLoopStatus(
     pauseReason: status === "paused" ? normalizeOptionalReason(options.reason) : undefined,
     retryState:
       options.retryState === undefined ? existing.retryState : (options.retryState ?? undefined),
+    schedule:
+      status === "paused"
+        ? undefined
+        : options.schedule === undefined
+          ? existing.schedule
+          : (options.schedule ?? undefined),
     updatedAt: nowIso(),
   };
   await saveSessionLoopSnapshot(cwd, ctx, { version: 1, loop });
   return loop;
+}
+
+export async function scheduleSessionLoopTick(
+  cwd: string,
+  ctx: SparkSessionContext | undefined,
+  input: { delayMs: number; reason?: string; expectedLoopId?: string },
+): Promise<SparkSessionLoop | undefined> {
+  const snapshot = await loadSessionLoopSnapshot(cwd, ctx);
+  const existing = snapshot.loop;
+  if (!existing) return undefined;
+  if (input.expectedLoopId && existing.loopId !== input.expectedLoopId) return undefined;
+  const delayMs = normalizeLoopDelayMs(input.delayMs);
+  const scheduledAtMs = Date.now();
+  const schedule: SparkSessionLoopScheduleState = {
+    delayMs,
+    scheduledAt: new Date(scheduledAtMs).toISOString(),
+    nextRunAt: new Date(scheduledAtMs + delayMs).toISOString(),
+    reason: normalizeOptionalReason(input.reason),
+  };
+  const loop: SparkSessionLoop = {
+    ...existing,
+    status: "active",
+    pauseReason: undefined,
+    schedule,
+    updatedAt: nowIso(),
+  };
+  await saveSessionLoopSnapshot(cwd, ctx, { version: 1, loop });
+  return loop;
+}
+
+export async function clearSessionLoopSchedule(
+  cwd: string,
+  ctx: SparkSessionContext | undefined,
+  options: { expectedLoopId?: string } = {},
+): Promise<SparkSessionLoop | undefined> {
+  const snapshot = await loadSessionLoopSnapshot(cwd, ctx);
+  const existing = snapshot.loop;
+  if (!existing) return undefined;
+  if (options.expectedLoopId && existing.loopId !== options.expectedLoopId) return undefined;
+  if (!existing.schedule) return existing;
+  const loop: SparkSessionLoop = { ...existing, schedule: undefined, updatedAt: nowIso() };
+  await saveSessionLoopSnapshot(cwd, ctx, { version: 1, loop });
+  return loop;
+}
+
+export function normalizeLoopDelayMs(value: unknown): number {
+  const numeric = typeof value === "string" ? Number(value.trim()) : value;
+  if (typeof numeric !== "number" || !Number.isFinite(numeric))
+    throw new Error("loop delayMs must be a finite number");
+  const delayMs = Math.trunc(numeric);
+  if (delayMs < 1_000) throw new Error("loop delayMs must be at least 1000");
+  if (delayMs > 7 * 24 * 60 * 60_000) throw new Error("loop delayMs must be 604800000 or fewer");
+  return delayMs;
 }
 
 export function normalizeLoopObjective(value: unknown): string {
@@ -182,6 +250,10 @@ function normalizeSessionLoop(
       value.retryState === undefined
         ? undefined
         : normalizeLoopRetryState(value.retryState, filePath),
+    schedule:
+      value.schedule === undefined
+        ? undefined
+        : normalizeLoopScheduleState(value.schedule, filePath),
     createdAt: requireString(value.createdAt, filePath, "loop.createdAt"),
     updatedAt: requireString(value.updatedAt, filePath, "loop.updatedAt"),
   };
@@ -208,6 +280,19 @@ function normalizeLoopRetryState(value: unknown, filePath: string): SparkSession
     lastFailureAt: optionalString(value.lastFailureAt, filePath, "loop.retryState.lastFailureAt"),
     nextDelayMs: optionalNumber(value.nextDelayMs, filePath, "loop.retryState.nextDelayMs"),
     exhaustedAt: optionalString(value.exhaustedAt, filePath, "loop.retryState.exhaustedAt"),
+  };
+}
+
+function normalizeLoopScheduleState(
+  value: unknown,
+  filePath: string,
+): SparkSessionLoopScheduleState {
+  if (!isRecord(value)) throw new JsonStoreFormatError(filePath, "loop.schedule must be object");
+  return {
+    nextRunAt: requireString(value.nextRunAt, filePath, "loop.schedule.nextRunAt"),
+    delayMs: normalizeLoopDelayMs(value.delayMs),
+    scheduledAt: requireString(value.scheduledAt, filePath, "loop.schedule.scheduledAt"),
+    reason: optionalString(value.reason, filePath, "loop.schedule.reason"),
   };
 }
 

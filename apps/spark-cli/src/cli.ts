@@ -28,9 +28,7 @@ export function parseSparkDispatcherArgs(argv: string[]): SparkDispatcherCommand
   if (first === "version" || first === "--version" || first === "-v") return { kind: "version" };
   if (first === "tui") return { kind: "dispatch", target: "tui", argv: rest };
   if (first === "daemon") return { kind: "dispatch", target: "daemon", argv: rest };
-  if (first === "--print" || first === "-p") {
-    return { kind: "dispatch", target: "tui", argv };
-  }
+  if (isSparkTuiCompatibilityCommand(first)) return { kind: "dispatch", target: "tui", argv };
   return {
     kind: "error",
     message: `Unknown spark subcommand: ${first}\nRun "spark --help" for available subcommands. Use "spark tui ${argv.join(" ")}" to send text to the interactive TUI.`,
@@ -61,7 +59,22 @@ export async function runSparkDispatcher(
 }
 
 export function helpText(): string {
-  return `spark - Spark command dispatcher\n\nUsage:\n  spark\n  spark tui [initial message]\n  spark --print <prompt>\n  spark daemon <command> [args...]\n  spark --help\n  spark --version\n\nDispatches to Spark surfaces:\n  spark tui      interactive terminal UI\n  spark daemon   daemon administration\n\nUnknown subcommands fail loudly instead of being interpreted as prompts. Use "spark tui ..." for interactive TUI input.\n`;
+  return `spark - Spark command dispatcher\n\nUsage:\n  spark\n  spark tui [initial message]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <command> [args...]\n  spark --help\n  spark --version\n\nDispatches to Spark surfaces:\n  spark tui      interactive terminal UI and Pi-compatible CLI/resource shims\n  spark daemon   daemon administration\n\nUnknown subcommands fail loudly instead of being interpreted as prompts. Use "spark tui ..." for interactive TUI input.\n`;
+}
+
+function isSparkTuiCompatibilityCommand(first: string): boolean {
+  return (
+    first === "--print" ||
+    first === "-p" ||
+    first === "--mode" ||
+    first === "--list-models" ||
+    first === "install" ||
+    first === "remove" ||
+    first === "uninstall" ||
+    first === "update" ||
+    first === "list" ||
+    first === "config"
+  );
 }
 
 const defaultLauncher: SparkDispatcherLauncher = {

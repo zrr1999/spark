@@ -14,9 +14,9 @@ import type {
   WorkflowJournalEntry,
   WorkflowParallelOptions,
   WorkflowParallelSettledResult,
-  WorkflowPhaseOptions,
-  WorkflowPhaseRun,
-  WorkflowPhaseStatus,
+  WorkflowStageOptions,
+  WorkflowStageRun,
+  WorkflowStageStatus,
   WorkflowFetchContentInput,
   WorkflowRunEvent,
   WorkflowRunOptions,
@@ -51,7 +51,7 @@ interface WorkflowSharedRuntime {
   depth: number;
 }
 
-interface WorkflowPhaseBudget {
+interface WorkflowStageBudget {
   budget: number;
   startSpent: number;
   warned: boolean;
@@ -59,13 +59,14 @@ interface WorkflowPhaseBudget {
 
 export function workflowCallHash(input: {
   prompt: string;
+  stage?: string;
+  /** @deprecated Use stage. */
   phase?: string;
   options?: WorkflowAgentOptions;
 }): string {
+  const stage = input.stage ?? input.phase;
   return createHash("sha256")
-    .update(
-      JSON.stringify({ prompt: input.prompt, phase: input.phase, options: input.options ?? {} }),
-    )
+    .update(JSON.stringify({ prompt: input.prompt, stage, options: input.options ?? {} }))
     .digest("hex");
 }
 
@@ -74,17 +75,18 @@ export async function runWorkflowScript<T = unknown>(
   options: WorkflowRunOptions,
 ): Promise<WorkflowRunResult<T>> {
   const parsed = parseWorkflowScript(script);
-  const phases: WorkflowPhaseRun[] = [];
-  const phaseByTitle = new Map<string, WorkflowPhaseRun>();
-  const phaseBudgets = new Map<string, WorkflowPhaseBudget>();
+  const stages: WorkflowStageRun[] = [];
+  const stageByTitle = new Map<string, WorkflowStageRun>();
+  const stageBudgets = new Map<string, WorkflowStageBudget>();
   const journal: WorkflowJournalEntry[] = [];
   const resume = options.resumeJournal ?? new Map<number, WorkflowJournalEntry>();
   const maxAgents = options.maxAgents ?? 1000;
-  let currentPhase: string | undefined;
-  const phaseModelByTitle = new Map(
-    (parsed.meta.phases ?? [])
-      .filter((phase) => phase.model)
-      .map((phase) => [phase.title, phase.model as string]),
+  let currentStage: string | undefined;
+  const workflowStages = parsed.meta.stages ?? parsed.meta.phases ?? [];
+  const stageModelByTitle = new Map(
+    workflowStages
+      .filter((stage) => stage.model)
+      .map((stage) => [stage.title, stage.model as string]),
   );
   let callIndex = 0;
   let firstResumeMiss = Number.POSITIVE_INFINITY;
@@ -117,10 +119,10 @@ export async function runWorkflowScript<T = unknown>(
       ...event,
     });
   };
-  const phaseNodeId = (phaseTitle: string | undefined) =>
-    phaseTitle ? `phase:${phaseTitle}` : undefined;
-  const currentParentNodeId = (phaseTitle: string | undefined = currentPhase) =>
-    nodeContext.getStore()?.parentNodeId ?? phaseNodeId(phaseTitle) ?? "run";
+  const stageNodeId = (stageTitle: string | undefined) =>
+    stageTitle ? `stage:${stageTitle}` : undefined;
+  const currentParentNodeId = (stageTitle: string | undefined = currentStage) =>
+    nodeContext.getStore()?.parentNodeId ?? stageNodeId(stageTitle) ?? "run";
   const withWorkflowParent = <T>(parentNodeId: string, thunk: () => Promise<T> | T) =>
     nodeContext.run({ parentNodeId }, thunk);
   const emitToolStarted = (toolName: string, data?: unknown) => {
@@ -129,7 +131,8 @@ export async function runWorkflowScript<T = unknown>(
       nodeId,
       parentId: currentParentNodeId(),
       nodeKind: "tool",
-      phase: currentPhase,
+      stage: currentStage,
+      phase: currentStage,
       toolName,
       label: toolName,
       data,
@@ -144,21 +147,21 @@ export async function runWorkflowScript<T = unknown>(
     meta: parsed.meta,
   });
 
-  const phase = (title: string, phaseOptions: WorkflowPhaseOptions = {}) => {
-    const phaseTitle = String(title);
-    const status = normalizeWorkflowPhaseStatus(phaseOptions.status);
+  const stage = (title: string, stageOptions: WorkflowStageOptions = {}) => {
+    const stageTitle = String(title);
+    const status = normalizeWorkflowStageStatus(stageOptions.status);
     const timestamp = now();
-    let record = phaseByTitle.get(phaseTitle);
-    const isNewPhase = !record;
+    let record = stageByTitle.get(stageTitle);
+    const isNewStage = !record;
     if (!record) {
-      record = { title: phaseTitle, startedAt: timestamp };
-      phaseByTitle.set(phaseTitle, record);
-      phases.push(record);
+      record = { title: stageTitle, startedAt: timestamp };
+      stageByTitle.set(stageTitle, record);
+      stages.push(record);
     }
-    if (typeof phaseOptions.budget === "number" && Number.isFinite(phaseOptions.budget)) {
-      if (phaseOptions.budget <= 0) throw new Error("workflow phase budget must be > 0");
-      phaseBudgets.set(phaseTitle, {
-        budget: Math.trunc(phaseOptions.budget),
+    if (typeof stageOptions.budget === "number" && Number.isFinite(stageOptions.budget)) {
+      if (stageOptions.budget <= 0) throw new Error("workflow stage budget must be > 0");
+      stageBudgets.set(stageTitle, {
+        budget: Math.trunc(stageOptions.budget),
         startSpent: shared.spentTokens,
         warned: false,
       });
@@ -166,30 +169,38 @@ export async function runWorkflowScript<T = unknown>(
     if (status) {
       record.status = status;
       record.finishedAt = timestamp;
-      emitWorkflowEvent("phase_finished", {
-        nodeId: phaseNodeId(phaseTitle),
-        nodeKind: "phase",
-        title: phaseTitle,
-        phase: phaseTitle,
+      emitWorkflowEvent("stage_finished", {
+        nodeId: stageNodeId(stageTitle),
+        nodeKind: "stage",
+        title: stageTitle,
+        stage: stageTitle,
+        phase: stageTitle,
+        stageRun: { ...record },
         phaseRun: { ...record },
         status: status === "fail" ? "failed" : status === "skip" ? "skipped" : "succeeded",
       });
-      if (currentPhase === phaseTitle) currentPhase = undefined;
+      if (currentStage === stageTitle) currentStage = undefined;
     } else {
-      currentPhase = phaseTitle;
-      if (isNewPhase) {
-        emitWorkflowEvent("phase_started", {
-          nodeId: phaseNodeId(phaseTitle),
+      currentStage = stageTitle;
+      if (isNewStage) {
+        emitWorkflowEvent("stage_started", {
+          nodeId: stageNodeId(stageTitle),
           parentId: "run",
-          nodeKind: "phase",
-          title: phaseTitle,
-          phase: phaseTitle,
+          nodeKind: "stage",
+          title: stageTitle,
+          stage: stageTitle,
+          phase: stageTitle,
+          stageRun: { ...record },
           phaseRun: { ...record },
         });
       }
     }
+    options.onStage?.({ ...record });
     options.onPhase?.({ ...record });
   };
+
+  /** @deprecated Use stage(). */
+  const phase = stage;
 
   const budget = Object.freeze({
     total: tokenBudget,
@@ -200,21 +211,21 @@ export async function runWorkflowScript<T = unknown>(
         : Math.max(0, tokenBudget - shared.spentTokens),
   });
 
-  const assertBudgetBeforeAgent = (phaseName: string | undefined) => {
+  const assertBudgetBeforeAgent = (stageName: string | undefined) => {
     if (tokenBudget !== null && shared.spentTokens >= tokenBudget) {
       throw new Error("workflow token budget exhausted");
     }
-    if (!phaseName) return;
-    const phaseBudget = phaseBudgets.get(phaseName);
-    if (!phaseBudget) return;
-    const spent = shared.spentTokens - phaseBudget.startSpent;
-    if (spent >= phaseBudget.budget) {
-      throw new Error(`workflow phase budget exhausted: ${phaseName}`);
+    if (!stageName) return;
+    const stageBudget = stageBudgets.get(stageName);
+    if (!stageBudget) return;
+    const spent = shared.spentTokens - stageBudget.startSpent;
+    if (spent >= stageBudget.budget) {
+      throw new Error(`workflow stage budget exhausted: ${stageName}`);
     }
-    if (!phaseBudget.warned && spent >= phaseBudget.budget * 0.8) {
-      phaseBudget.warned = true;
+    if (!stageBudget.warned && spent >= stageBudget.budget * 0.8) {
+      stageBudget.warned = true;
       options.onLog?.(
-        `workflow phase ${phaseName} has used ${Math.round((spent / phaseBudget.budget) * 100)}% of its token budget`,
+        `workflow stage ${stageName} has used ${Math.round((spent / stageBudget.budget) * 100)}% of its token budget`,
       );
     }
   };
@@ -223,25 +234,26 @@ export async function runWorkflowScript<T = unknown>(
     const normalizedAgentOptions = normalizeWorkflowAgentOptions(agentOptions);
     if (shared.agentCount >= maxAgents) throw new Error("workflow agent limit exceeded");
     const index = callIndex++;
-    const phaseName = normalizedAgentOptions.phase ?? currentPhase;
-    assertBudgetBeforeAgent(phaseName);
-    const effectiveAgentOptions = applyWorkflowPhaseModel(
+    const stageName = normalizedAgentOptions.stage ?? normalizedAgentOptions.phase ?? currentStage;
+    assertBudgetBeforeAgent(stageName);
+    const effectiveAgentOptions = applyWorkflowStageModel(
       normalizedAgentOptions,
-      phaseName ? phaseModelByTitle.get(phaseName) : undefined,
+      stageName ? stageModelByTitle.get(stageName) : undefined,
     );
     const effectivePrompt = renderWorkflowAgentPrompt(prompt, effectiveAgentOptions);
     const hash = workflowCallHash({
       prompt: effectivePrompt,
-      phase: phaseName,
+      stage: stageName,
       options: effectiveAgentOptions,
     });
     const cached = resume.get(index);
     if (cached?.hash === hash && index < firstResumeMiss) {
       emitWorkflowEvent("agent_cached", {
         nodeId: `agent:${index}`,
-        parentId: currentParentNodeId(phaseName),
+        parentId: currentParentNodeId(stageName),
         nodeKind: "agent",
-        phase: phaseName,
+        stage: stageName,
+        phase: stageName,
         index,
         label: effectiveAgentOptions.label ?? "agent " + (index + 1),
         result: cached.result,
@@ -255,7 +267,8 @@ export async function runWorkflowScript<T = unknown>(
     const event = {
       index,
       label: effectiveAgentOptions.label ?? "agent " + (index + 1),
-      phase: phaseName,
+      stage: stageName,
+      phase: stageName,
       prompt: effectivePrompt,
       model: effectiveAgentOptions.model,
     };
@@ -264,9 +277,10 @@ export async function runWorkflowScript<T = unknown>(
     let reportedTelemetry: WorkflowAgentReportedTelemetry | undefined;
     emitWorkflowEvent("agent_started", {
       nodeId: `agent:${index}`,
-      parentId: currentParentNodeId(phaseName),
+      parentId: currentParentNodeId(stageName),
       nodeKind: "agent",
-      phase: phaseName,
+      stage: stageName,
+      phase: stageName,
       index,
       label: event.label,
       data: { model: event.model },
@@ -284,7 +298,8 @@ export async function runWorkflowScript<T = unknown>(
         options.agent(effectivePrompt, {
           ...effectiveAgentOptions,
           index,
-          phase: phaseName,
+          stage: stageName,
+          phase: stageName,
           reportTelemetry: (telemetry) => {
             reportedTelemetry = mergeWorkflowAgentReportedTelemetry(reportedTelemetry, telemetry);
           },
@@ -304,7 +319,8 @@ export async function runWorkflowScript<T = unknown>(
       emitWorkflowEvent("agent_failed", {
         nodeId: `agent:${index}`,
         nodeKind: "agent",
-        phase: phaseName,
+        stage: stageName,
+        phase: stageName,
         index,
         label: event.label,
         telemetry,
@@ -337,7 +353,8 @@ export async function runWorkflowScript<T = unknown>(
     emitWorkflowEvent("agent_succeeded", {
       nodeId: `agent:${index}`,
       nodeKind: "agent",
-      phase: phaseName,
+      stage: stageName,
+      phase: stageName,
       index,
       label: event.label,
       telemetry,
@@ -349,7 +366,8 @@ export async function runWorkflowScript<T = unknown>(
       spent: shared.spentTokens,
       tokens: usage.totalTokens,
       index,
-      phase: phaseName,
+      stage: stageName,
+      phase: stageName,
       usage,
     });
     const entry = { index, hash, result };
@@ -388,7 +406,8 @@ export async function runWorkflowScript<T = unknown>(
         nodeId: `artifact:${recorded.ref}`,
         parentId: nodeId,
         nodeKind: "artifact",
-        phase: currentPhase,
+        stage: currentStage,
+        phase: currentStage,
         label: recorded.ref,
         result: recorded,
         data: normalized,
@@ -493,7 +512,8 @@ export async function runWorkflowScript<T = unknown>(
       nodeId: groupNodeId,
       parentId: currentParentNodeId(),
       nodeKind: "parallel_group",
-      phase: currentPhase,
+      stage: currentStage,
+      phase: currentStage,
       label: `parallel group ${groupIndex + 1}`,
       data: {
         items: items.length,
@@ -507,7 +527,8 @@ export async function runWorkflowScript<T = unknown>(
         nodeId: itemNodeId,
         parentId: groupNodeId,
         nodeKind: "parallel_item",
-        phase: currentPhase,
+        stage: currentStage,
+        phase: currentStage,
         index: itemIndex,
         label: `parallel item ${itemIndex + 1}`,
       });
@@ -516,7 +537,8 @@ export async function runWorkflowScript<T = unknown>(
         emitWorkflowEvent("parallel_item_failed", {
           nodeId: itemNodeId,
           nodeKind: "parallel_item",
-          phase: currentPhase,
+          stage: currentStage,
+          phase: currentStage,
           index: itemIndex,
           errorMessage: error.message,
         });
@@ -527,7 +549,8 @@ export async function runWorkflowScript<T = unknown>(
         emitWorkflowEvent("parallel_item_succeeded", {
           nodeId: itemNodeId,
           nodeKind: "parallel_item",
-          phase: currentPhase,
+          stage: currentStage,
+          phase: currentStage,
           index: itemIndex,
           result: value,
         });
@@ -536,7 +559,8 @@ export async function runWorkflowScript<T = unknown>(
         emitWorkflowEvent("parallel_item_failed", {
           nodeId: itemNodeId,
           nodeKind: "parallel_item",
-          phase: currentPhase,
+          stage: currentStage,
+          phase: currentStage,
           index: itemIndex,
           errorMessage: errorText(error),
         });
@@ -557,7 +581,8 @@ export async function runWorkflowScript<T = unknown>(
       emitWorkflowEvent(failed.length > 0 ? "parallel_group_failed" : "parallel_group_succeeded", {
         nodeId: groupNodeId,
         nodeKind: "parallel_group",
-        phase: currentPhase,
+        stage: currentStage,
+        phase: currentStage,
         result,
         errorMessage: failed.length > 0 ? `${failed.length} parallel item(s) failed` : undefined,
       });
@@ -566,7 +591,8 @@ export async function runWorkflowScript<T = unknown>(
       emitWorkflowEvent("parallel_group_failed", {
         nodeId: groupNodeId,
         nodeKind: "parallel_group",
-        phase: currentPhase,
+        stage: currentStage,
+        phase: currentStage,
         errorMessage: errorText(error),
       });
       throw error;
@@ -581,7 +607,8 @@ export async function runWorkflowScript<T = unknown>(
       nodeId,
       parentId: currentParentNodeId(),
       nodeKind: "nested_workflow",
-      phase: currentPhase,
+      stage: currentStage,
+      phase: currentStage,
       workflowName: requested,
       label: requested,
       data: childArgs,
@@ -602,7 +629,8 @@ export async function runWorkflowScript<T = unknown>(
       emitWorkflowEvent("nested_workflow_succeeded", {
         nodeId,
         nodeKind: "nested_workflow",
-        phase: currentPhase,
+        stage: currentStage,
+        phase: currentStage,
         workflowName: requested,
         result: child.result,
       });
@@ -611,7 +639,8 @@ export async function runWorkflowScript<T = unknown>(
       emitWorkflowEvent("nested_workflow_failed", {
         nodeId,
         nodeKind: "nested_workflow",
-        phase: currentPhase,
+        stage: currentStage,
+        phase: currentStage,
         workflowName: requested,
         errorMessage: errorText(error),
       });
@@ -813,6 +842,7 @@ export async function runWorkflowScript<T = unknown>(
     loopUntilDry,
     parallel,
     pipeline,
+    stage,
     phase,
     retry,
     verify,
@@ -823,7 +853,7 @@ export async function runWorkflowScript<T = unknown>(
   try {
     const result = (await runTrustedWorkflowScriptInVm<T>(parsed.body, context)) as T;
     emitWorkflowEvent("run_succeeded", { nodeId: "run", nodeKind: "run", result });
-    return { meta: parsed.meta, result, phases, agentCount: callIndex, journal };
+    return { meta: parsed.meta, result, stages, phases: stages, agentCount: callIndex, journal };
   } catch (error) {
     emitWorkflowEvent("run_failed", {
       nodeId: "run",
@@ -855,13 +885,16 @@ export function normalizeWorkflowAgentOptions(options: WorkflowAgentOptions): Wo
   return options;
 }
 
-export function applyWorkflowPhaseModel(
+export function applyWorkflowStageModel(
   options: WorkflowAgentOptions,
-  phaseModel: string | undefined,
+  stageModel: string | undefined,
 ): WorkflowAgentOptions {
-  if (options.model || !phaseModel) return options;
-  return { ...options, model: phaseModel };
+  if (options.model || !stageModel) return options;
+  return { ...options, model: stageModel };
 }
+
+/** @deprecated Use applyWorkflowStageModel. */
+export const applyWorkflowPhaseModel = applyWorkflowStageModel;
 
 export function normalizeWorkflowArtifactRecordInput(
   input: WorkflowArtifactRecordInput,
@@ -930,33 +963,38 @@ function normalizeOptionalPositiveInteger(value: unknown, field: string): number
   return Math.trunc(value);
 }
 
-export function normalizeWorkflowPhaseStatus(
-  status: WorkflowPhaseOptions["status"],
-): WorkflowPhaseStatus | undefined {
+export function normalizeWorkflowStageStatus(
+  status: WorkflowStageOptions["status"],
+): WorkflowStageStatus | undefined {
   if (status === undefined) return undefined;
   if (status === "success" || status === "fail" || status === "skip") return status;
-  throw new Error("workflow phase status must be success, fail, or skip");
+  throw new Error("workflow stage status must be success, fail, or skip");
 }
+
+/** @deprecated Use normalizeWorkflowStageStatus. */
+export const normalizeWorkflowPhaseStatus = normalizeWorkflowStageStatus;
 
 function workflowTelemetryTimestamp(): string {
   return new Date().toISOString();
 }
 
 function agentTelemetryBase(
-  event: { index: number; label: string; phase?: string; model?: string },
+  event: { index: number; label: string; stage?: string; phase?: string; model?: string },
   startedAt: string,
 ): Omit<WorkflowAgentTelemetry, "status"> {
+  const stage = event.stage ?? event.phase;
   return {
     index: event.index,
     label: event.label,
-    phase: event.phase,
+    stage,
+    phase: stage,
     model: event.model,
     startedAt,
   };
 }
 
 function agentTelemetryFromRuntime(input: {
-  event: { index: number; label: string; phase?: string; model?: string };
+  event: { index: number; label: string; stage?: string; phase?: string; model?: string };
   status: WorkflowAgentTelemetry["status"];
   startedAt: string;
   finishedAt: string;

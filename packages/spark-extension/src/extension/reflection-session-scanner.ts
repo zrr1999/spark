@@ -287,8 +287,8 @@ export function isLikelyReflectionHarnessText(text: string): boolean {
     (/^Return ONLY /u.test(compact) && /Review this Spark goal completion packet/u.test(compact)) ||
     /^Spark role-run ask policy:/u.test(compact) ||
     /^Spark role-run interaction policy:/u.test(compact) ||
-    /## (Implementation|Planning|Research) mode requirements/u.test(compact) ||
-    /Selected Spark mode for (goal|loop|workflow) driver:/u.test(compact)
+    /## (Implementation|Planning|Research) (?:phase|mode) requirements/u.test(compact) ||
+    /Selected Spark (?:phase|mode) for (goal|loop|workflow) driver:/u.test(compact)
   );
 }
 

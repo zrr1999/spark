@@ -6,9 +6,9 @@ import type { Mode, TurnDriver } from "./types.ts";
  *
  * Precedence (highest first):
  * 1. `explicitSelection` — a slash command or `mode` tool call this turn.
- * 2. `suggest` — the driver/host's per-turn classification (e.g. a regex +
- *    project-state heuristic for the interactive driver, or a goal/workflow
- *    driver's own per-tick choice).
+ * 2. `suggest` — the drive/host's per-turn classification (e.g. a regex +
+ *    project-state heuristic for the assist drive, or a goal/loop/workflow
+ *    drive's own per-tick choice).
  * 3. `fallback` — the standing default lens (defaults to `"research"`).
  *
  * A selection or suggestion is only honored when it names a registered mode;
@@ -50,15 +50,19 @@ export function resolveActiveMode(input: ResolveActiveModeInput): ResolvedActive
 
 /**
  * Derive the active turn driver from concurrent foreground signals. Precedence:
- * active workflow run > active goal loop > interactive. This mirrors the
- * "foreground driver" axis; the background workflow slot is tracked separately
- * by the host and does not change the foreground mode.
+ * active workflow run > active goal > active loop > assist. This mirrors the
+ * foreground drive axis; background workflow slots are tracked separately by the
+ * host and do not change the foreground mode.
  */
 export function resolveTurnDriver(input: {
   workflowRunActive?: boolean;
+  goalActive?: boolean;
+  /** @deprecated Use goalActive. */
   goalLoopActive?: boolean;
+  loopActive?: boolean;
 }): TurnDriver {
   if (input.workflowRunActive) return "workflow";
-  if (input.goalLoopActive) return "goal";
-  return "interactive";
+  if (input.goalActive ?? input.goalLoopActive) return "goal";
+  if (input.loopActive) return "loop";
+  return "assist";
 }

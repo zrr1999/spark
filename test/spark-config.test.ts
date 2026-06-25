@@ -18,6 +18,7 @@ void test("loadSparkConfig returns default config when file is missing", async (
     const config = await loadSparkConfig(path);
     assert.deepEqual(config.extensions, DEFAULT_SPARK_CONFIG.extensions);
     assert.deepEqual(config.providers, DEFAULT_SPARK_CONFIG.providers);
+    assert.equal(config.activeModelId, undefined);
     assert.equal(config.activeProvider, undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -43,9 +44,8 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
     await saveSparkConfig(
       {
         extensions: ["@zendev-lab/spark-extension/extension", "@zendev-lab/pi-cue", "my-extension"],
-        providers: ["@zendev-lab/spark-tui-app/baidu-oneapi-provider", "my-provider"],
-        activeProvider: "baidu-oneapi",
-        activeModel: "claude-opus-4.7",
+        providers: ["@zendev-lab/spark-ai/baidu-oneapi-provider", "my-provider"],
+        activeModelId: "baidu-oneapi/claude-opus-4.7",
         activeThinkingLevel: "medium",
       },
       path,
@@ -57,11 +57,12 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
       "my-extension",
     ]);
     assert.deepEqual(config.providers, [
-      "@zendev-lab/spark-tui-app/baidu-oneapi-provider",
+      "@zendev-lab/spark-ai/baidu-oneapi-provider",
       "my-provider",
     ]);
-    assert.equal(config.activeProvider, "baidu-oneapi");
-    assert.equal(config.activeModel, "claude-opus-4.7");
+    assert.equal(config.activeModelId, "baidu-oneapi/claude-opus-4.7");
+    assert.equal(config.activeProvider, undefined);
+    assert.equal(config.activeModel, undefined);
     assert.equal(config.activeThinkingLevel, "medium");
     assert.equal("fusion" in config, false);
 
@@ -71,6 +72,17 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+void test("mergeSparkConfigWithDefault migrates legacy activeProvider/activeModel to activeModelId", () => {
+  const merged = mergeSparkConfigWithDefault({
+    activeProvider: "baidu-oneapi",
+    activeModel: "claude-opus-4.8",
+  });
+
+  assert.equal(merged.activeModelId, "baidu-oneapi/claude-opus-4.8");
+  assert.equal(merged.activeProvider, "baidu-oneapi");
+  assert.equal(merged.activeModel, "claude-opus-4.8");
 });
 
 void test("mergeSparkConfigWithDefault tolerates missing keys, partial inputs, and bogus arrays", () => {
@@ -89,6 +101,7 @@ void test("mergeSparkConfigWithDefault tolerates missing keys, partial inputs, a
   // 42 and "" are filtered out because the schema only accepts non-empty strings
   assert.deepEqual(merged.extensions, ["@zendev-lab/pi-cue"]);
   assert.deepEqual(merged.providers, DEFAULT_SPARK_CONFIG.providers);
+  assert.equal(merged.activeModelId, "claude-opus-4.6");
   assert.equal(merged.activeProvider, undefined);
   assert.equal(merged.activeModel, "claude-opus-4.6");
   assert.equal(merged.activeThinkingLevel, undefined);

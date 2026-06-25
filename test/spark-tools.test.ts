@@ -374,6 +374,8 @@ void test("Spark tool normalizer groups reject invalid explicit parameters inste
           description: undefined,
           purpose: "Ship v0",
           outputLanguage: undefined,
+          kind: undefined,
+          kindState: undefined,
         },
       ],
       [
@@ -389,6 +391,8 @@ void test("Spark tool normalizer groups reject invalid explicit parameters inste
           description: undefined,
           purpose: "Ship v0",
           outputLanguage: undefined,
+          kind: undefined,
+          kindState: undefined,
         },
       ],
       [
@@ -398,6 +402,19 @@ void test("Spark tool normalizer groups reject invalid explicit parameters inste
           description: undefined,
           purpose: undefined,
           outputLanguage: undefined,
+          kind: undefined,
+          kindState: undefined,
+        },
+      ],
+      [
+        () => normalizeSparkProjectPatch({ kind: " generic ", kindState: { target: "demo" } }),
+        {
+          title: undefined,
+          description: undefined,
+          purpose: undefined,
+          outputLanguage: undefined,
+          kind: "generic",
+          kindState: { target: "demo" },
         },
       ],
     ],
@@ -407,6 +424,7 @@ void test("Spark tool normalizer groups reject invalid explicit parameters inste
       [() => normalizeSparkProjectOutputLanguage("fr"), /outputLanguage must be zh or en/],
       [() => normalizeSparkProjectPatch({ title: "" }), /title must be/],
       [() => normalizeSparkProjectPatch({ outputLanguage: "jp" }), /outputLanguage/],
+      [() => normalizeSparkProjectPatch({ kindState: () => undefined }), /kindState/],
       [() => normalizeSparkNewProjectInput({ project: "" }), /project must be/],
     ],
   );
@@ -643,8 +661,10 @@ type TestSparkContext = {
   editorText?: string;
   askAutoAnswer?: "reviewer";
   sparkActiveLens?: {
-    mode: "research" | "plan" | "implement";
-    driver?: "interactive" | "goal" | "workflow";
+    phase: "research" | "plan" | "implement";
+    mode?: "assist" | "loop" | "goal" | "workflow";
+    drive?: "assist" | "loop" | "goal" | "workflow" | "interactive";
+    driver?: "assist" | "loop" | "goal" | "workflow" | "interactive";
   };
   ui: {
     notify: (message: string, level?: "info" | "warning" | "error" | "success") => void;
@@ -699,7 +719,7 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
     assert.equal(existingRun.messages.length, 0);
     assert.equal(existingRun.customMessages.length, 1);
     assert.equal(existingRun.customMessages.at(-1)?.customType, "spark-mode-request");
-    assert.equal(existingCtx.sparkActiveLens?.mode, "plan");
+    assert.equal(existingCtx.sparkActiveLens?.phase, "plan");
 
     await writeEmptySparkProject(initializedDir);
     const initializedCtx = testSparkContext(initializedDir, "main");
@@ -726,7 +746,11 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
     await executeCommand.handler("Finish the direct execution task", initializedCtx);
     assert.equal(initializedRun.messages.length, 0);
     assert.equal(initializedRun.customMessages.at(-1)?.customType, "spark-mode-request");
-    assert.deepEqual(initializedCtx.sparkActiveLens, { mode: "implement", driver: "interactive" });
+    assert.deepEqual(initializedCtx.sparkActiveLens, {
+      phase: "implement",
+      mode: "assist",
+      drive: "assist",
+    });
 
     initializedCtx.ui.select = async () =>
       assert.fail("/implement should not open a canned implement-strategy ask");
@@ -780,19 +804,15 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
     assert.equal(activeLoop?.status, "active");
     assert.equal(await loadSessionGoal(initializedDir, initializedCtx), undefined);
     await loopCommand.handler("停止", initializedCtx);
-    const pausedLoop = await loadSessionLoop(initializedDir, initializedCtx);
-    assert.equal(pausedLoop?.loopId, activeLoop?.loopId);
-    assert.equal(pausedLoop?.status, "paused");
-    assert.equal(pausedLoop?.retryState, undefined);
-    assert.match(pausedLoop?.pauseReason ?? "", /Paused by \/loop stop/);
+    assert.equal(await loadSessionLoop(initializedDir, initializedCtx), undefined);
 
     await mkdir(join(initializedDir, ".spark", "workflows"), { recursive: true });
     await writeFile(
       join(initializedDir, ".spark", "workflows", "triage.js"),
       `export const meta = {
         name: "Triage Workflow",
-        description: "Triage incidents with specialist phases.",
-        phases: [{ title: "Collect" }, { title: "Decide" }],
+        description: "Triage incidents with specialist stages.",
+        stages: [{ title: "Collect" }, { title: "Decide" }],
       };
       export default async function workflow() { return "not run during discovery"; }`,
     );
@@ -812,14 +832,22 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
 
     await workflowCommand.handler("builtin:research Compare design options", initializedCtx);
     assert.equal(initializedRun.customMessages.at(-1)?.customType, "spark-mode-request");
-    assert.deepEqual(initializedCtx.sparkActiveLens, { mode: "research", driver: "workflow" });
+    assert.deepEqual(initializedCtx.sparkActiveLens, {
+      phase: "research",
+      mode: "workflow",
+      drive: "workflow",
+    });
 
     await researchWorkflowCommand.handler(
       "Compare default panel and judge behavior",
       initializedCtx,
     );
     assert.equal(initializedRun.customMessages.at(-1)?.customType, "spark-mode-request");
-    assert.deepEqual(initializedCtx.sparkActiveLens, { mode: "research", driver: "workflow" });
+    assert.deepEqual(initializedCtx.sparkActiveLens, {
+      phase: "research",
+      mode: "workflow",
+      drive: "workflow",
+    });
 
     let workflowNavigatorOptions: string[] = [];
     initializedCtx.ui.select = async (_title, options) => {
@@ -879,7 +907,7 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
         "export const meta = {\n" +
         '  name: "Inline Cleanup",\n' +
         '  description: "Clean up temporary files with a one-shot workflow.",\n' +
-        '  phases: [{ title: "Inspect" }, { title: "Remove" }],\n' +
+        '  stages: [{ title: "Inspect" }, { title: "Remove" }],\n' +
         "};\n" +
         'export default async function workflow() { throw new Error("not run during discovery"); }\n' +
         "```",
@@ -936,8 +964,9 @@ void test("latest direct Spark mode replaces older pending hidden mode context",
 
     const hiddenMessage = run.customMessages.at(-1);
     assert.equal(hiddenMessage?.customType, "spark-mode-request");
-    assert.equal(ctx.sparkActiveLens?.mode, "plan");
-    assert.equal(ctx.sparkActiveLens?.driver, "interactive");
+    assert.equal(ctx.sparkActiveLens?.phase, "plan");
+    assert.equal(ctx.sparkActiveLens?.mode, "assist");
+    assert.equal(ctx.sparkActiveLens?.drive, "assist");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -979,7 +1008,7 @@ void test("/plan includes active roadmap item context and matches focus to an ex
 
     assert.equal(run.messages.length, 0);
     assert.equal(run.customMessages.at(-1)?.customType, "spark-mode-request");
-    assert.deepEqual(ctx.sparkActiveLens, { mode: "plan", driver: "interactive" });
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", mode: "assist", drive: "assist" });
     const graph = await defaultTaskGraphStore(dir).load();
     const project = graph?.projects()[0];
     assert.ok(project?.roadmap);
@@ -1390,7 +1419,11 @@ void test("/implement continues by prompting for the next ready task without aut
     assert.ok(executeCommand, "missing /implement command");
     await executeCommand.handler("work through the ready queue", ctx);
     assert.equal(run.customMessages.at(-1)?.customType, "spark-mode-request");
-    assert.deepEqual(ctx.sparkActiveLens, { mode: "implement", driver: "interactive" });
+    assert.deepEqual(ctx.sparkActiveLens, {
+      phase: "implement",
+      mode: "assist",
+      drive: "assist",
+    });
 
     await executeSparkTool(run.tools, "impl_claim_task", ctx, {
       name: "first-ready",
@@ -1410,10 +1443,10 @@ void test("/implement continues by prompting for the next ready task without aut
     });
 
     const text = finished.content.map((item) => item.text).join("\n");
-    assert.match(text, /Implementation mode can continue/);
+    assert.match(text, /Implementation phase can continue/);
     assert.match(text, /Next ready task: @second-ready/);
     assert.match(text, /claim the next ready task, and continue until blocked/);
-    assert.doesNotMatch(text, /Implementation mode stopped after one task/);
+    assert.doesNotMatch(text, /Implementation phase stopped after one task/);
     assert.doesNotMatch(text, /auto-claimed next ready task/);
     assert.equal((finished.details as { autoClaimedTask?: unknown }).autoClaimedTask, undefined);
     assert.ok((finished.details as { nextReadyTask?: unknown }).nextReadyTask);
@@ -1435,7 +1468,11 @@ void test("/implement continues by prompting for the next ready task without aut
     }
     assert.equal(run.customMessages.at(-1)?.customType, "spark-mode-request");
     assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
-    assert.deepEqual(ctx.sparkActiveLens, { mode: "implement", driver: "interactive" });
+    assert.deepEqual(ctx.sparkActiveLens, {
+      phase: "implement",
+      mode: "assist",
+      drive: "assist",
+    });
 
     const graph = await defaultTaskGraphStore(dir).load();
     const next = graph?.tasks().find((task) => task.name === "second-ready");
@@ -1499,13 +1536,13 @@ void test("foreground drivers plan empty-frontier research-progress objectives",
     assert.ok(goalCommand, "missing /goal command");
     await goalCommand.handler(objective, ctx);
     assert.equal(run.customMessages.at(-1)?.customType, "spark-goal-request");
-    assert.equal(run.customMessages.at(-1)?.details?.selectedMode, "plan");
+    assert.equal(run.customMessages.at(-1)?.details?.selectedPhase, "plan");
 
     const loopCommand = run.commands.get("loop");
     assert.ok(loopCommand, "missing /loop command");
     await loopCommand.handler(objective, ctx);
     assert.equal(run.customMessages.at(-1)?.customType, "spark-loop-request");
-    assert.equal(run.customMessages.at(-1)?.details?.selectedMode, "plan");
+    assert.equal(run.customMessages.at(-1)?.details?.selectedPhase, "plan");
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -1524,13 +1561,13 @@ void test("foreground drivers preserve pure empty-frontier research objectives",
     assert.ok(goalCommand, "missing /goal command");
     await goalCommand.handler(objective, ctx);
     assert.equal(run.customMessages.at(-1)?.customType, "spark-goal-request");
-    assert.equal(run.customMessages.at(-1)?.details?.selectedMode, "research");
+    assert.equal(run.customMessages.at(-1)?.details?.selectedPhase, "research");
 
     const loopCommand = run.commands.get("loop");
     assert.ok(loopCommand, "missing /loop command");
     await loopCommand.handler(objective, ctx);
     assert.equal(run.customMessages.at(-1)?.customType, "spark-loop-request");
-    assert.equal(run.customMessages.at(-1)?.details?.selectedMode, "research");
+    assert.equal(run.customMessages.at(-1)?.details?.selectedPhase, "research");
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -1757,7 +1794,7 @@ void test("session shutdown clears foreground timers without pausing active goal
   }
 });
 
-void test("/loop foreground driver persists, reschedules, and does not call reviewer completion", async () => {
+void test("/loop foreground driver persists, uses loop tool scheduling, and does not call reviewer completion", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-loop-foreground-driver-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -1814,11 +1851,24 @@ void test("/loop foreground driver persists, reschedules, and does not call revi
     assert.equal(run.customMessages.at(-1)?.details?.purpose, "foreground-loop-tick");
     assert.equal(reviewerCalls, 0);
 
+    await executeSparkTool(run.tools, "loop", ctx, {
+      action: "schedule",
+      delayMs: 300_000,
+      reason: "periodic low-urgency follow-up",
+    });
     for (const handler of run.eventHandlers.get("agent_end") ?? []) {
       await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
     }
     assert.equal(reviewerCalls, 0);
-    assert.ok(timers.some((timer) => timer.delay === 30_000 && !timer.cleared));
+    assert.ok(
+      timers.some(
+        (timer) =>
+          typeof timer.delay === "number" &&
+          timer.delay > 299_000 &&
+          timer.delay <= 300_000 &&
+          !timer.cleared,
+      ),
+    );
 
     const messageCountBeforeScheduledTick = run.customMessages.length;
     timers.at(-1)?.callback();
@@ -1922,7 +1972,7 @@ void test("session_start schedules goal instead of loop when both persisted stat
   }
 });
 
-void test("/loop stop and pause aliases all persist paused state", async () => {
+void test("/loop stop aliases clear plain loop state and pause is removed", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-loop-pause-aliases-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1932,17 +1982,38 @@ void test("/loop stop and pause aliases all persist paused state", async () => {
     const loopCommand = run.commands.get("loop");
     assert.ok(loopCommand, "missing /loop command");
 
-    for (const alias of ["stop", "pause", "停止", "暂停", "停下"] as const) {
+    for (const alias of ["stop", "halt", "停止", "停下"] as const) {
       await loopCommand.handler(`objective before ${alias}`, ctx);
       const active = await loadSessionLoop(dir, ctx);
       assert.equal(active?.status, "active");
       await loopCommand.handler(alias, ctx);
-      const paused = await loadSessionLoop(dir, ctx);
-      assert.equal(paused?.loopId, active?.loopId);
-      assert.equal(paused?.status, "paused");
-      assert.equal(paused?.retryState, undefined);
-      assert.match(paused?.pauseReason ?? "", /Paused by \/loop stop/);
+      assert.ok(active?.loopId);
+      assert.equal(await loadSessionLoop(dir, ctx), undefined);
     }
+
+    await loopCommand.handler("objective before removed pause", ctx);
+    const activeBeforeRemovedPause = await loadSessionLoop(dir, ctx);
+    assert.equal(activeBeforeRemovedPause?.status, "active");
+    await loopCommand.handler("pause", ctx);
+    assert.equal((await loadSessionLoop(dir, ctx))?.loopId, activeBeforeRemovedPause?.loopId);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /pause was removed/);
+
+    await assert.rejects(
+      executeSparkTool(run.tools, "loop", ctx, { action: "pause" }),
+      /loop action must be status, schedule, or clear/,
+    );
+    const clearedViaTool = await executeSparkTool(run.tools, "loop", ctx, { action: "clear" });
+    assert.equal(clearedViaTool.details?.loop, null);
+    assert.equal(await loadSessionLoop(dir, ctx), undefined);
+
+    await setSessionLoop(dir, ctx, {
+      objective: "legacy paused loop",
+      source: "explicit",
+      status: "paused",
+    });
+    const legacyStatus = await executeSparkTool(run.tools, "loop", ctx, { action: "status" });
+    assert.equal(legacyStatus.details?.loop, null);
+    assert.equal(await loadSessionLoop(dir, ctx), undefined);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -6310,6 +6381,24 @@ void test("learning tool routes record, list, search, read, export, and import t
       confidence: 0.9,
     });
     assert.match(toolText(recorded), /Recorded learning artifact:learning-explicit-export/);
+    await writeFile(
+      join(dir, ".learnings", "invalid-kind-learning.json"),
+      JSON.stringify(
+        {
+          ref: "artifact:invalid-kind-learning",
+          kind: "not-a-valid-kind",
+          title: "Invalid learning artifact metadata",
+          format: "json",
+          body: {},
+          links: [],
+          provenance: { producer: "task" },
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        },
+        null,
+        2,
+      ),
+    );
 
     const listed = await executeSparkTool(tools, "learning", ctx, {
       action: "list",
@@ -6317,6 +6406,8 @@ void test("learning tool routes record, list, search, read, export, and import t
       location: "workspace",
     });
     assert.match(toolText(listed), /Export shared learnings explicitly/);
+    assert.match(toolText(listed), /Warnings: skipped 1 invalid learning artifact/);
+    assert.equal((listed.details as { warnings?: unknown[] }).warnings?.length, 1);
 
     const search = await executeSparkTool(tools, "learning", ctx, {
       action: "search",
@@ -6324,6 +6415,8 @@ void test("learning tool routes record, list, search, read, export, and import t
       location: "workspace",
     });
     assert.match(toolText(search), /Export shared learnings explicitly/);
+    assert.match(toolText(search), /Warnings: skipped 1 invalid learning artifact/);
+    assert.equal((search.details as { warnings?: unknown[] }).warnings?.length, 1);
 
     const read = await executeSparkTool(tools, "learning", ctx, {
       action: "read",
@@ -6416,6 +6509,18 @@ void test("spark learning tools reject invalid explicit parameters", async () =>
           apply: "true",
         }),
       /apply must be a boolean/,
+    );
+
+    await writeFile(
+      join(dir, "not-learning-export.md"),
+      "# Notes\n\nNo pi-learning blocks here.\n",
+    );
+    await assert.rejects(
+      () =>
+        executeSparkTool(tools, "impl_learning_import_markdown", ctx, {
+          inputPath: "not-learning-export.md",
+        }),
+      /\[E_LEARNING_IMPORT_FORMAT\][\s\S]*export_markdown[\s\S]*dry-run[\s\S]*apply=true/,
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -6720,10 +6825,82 @@ void test("spark_goal foreground loop asks agent to bootstrap a project when non
     await flushAsyncWork();
 
     assert.equal(isForegroundGoalTickMessage(run.customMessages.at(-1)), true);
-    assert.equal(run.customMessages.at(-1)?.details?.selectedMode, "plan");
+    assert.equal(run.customMessages.at(-1)?.details?.selectedPhase, "plan");
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("spark_goal foreground loop hides internal artifact validation errors from UI", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-safe-error-"));
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const originalWarn = console.warn;
+  type FakeTimer = {
+    callback: () => void;
+    delay: number | undefined;
+    cleared: boolean;
+    unref: () => FakeTimer;
+  };
+  const timers: FakeTimer[] = [];
+  const warnings: string[] = [];
+  globalThis.setTimeout = ((
+    callback: Parameters<typeof setTimeout>[0],
+    delay?: number,
+    ...args: unknown[]
+  ) => {
+    const timer: FakeTimer = {
+      callback: () => {
+        if (typeof callback === "function") callback(...args);
+      },
+      delay,
+      cleared: false,
+      unref: () => timer,
+    };
+    timers.push(timer);
+    return timer as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
+    const fake = timer as unknown as FakeTimer | undefined;
+    if (fake) fake.cleared = true;
+  }) as typeof clearTimeout;
+  console.warn = ((...args: unknown[]) => {
+    warnings.push(args.map(String).join(" "));
+  }) as typeof console.warn;
+  async function flushAsyncWork(): Promise<void> {
+    for (let index = 0; index < 20; index += 1)
+      await new Promise((resolve) => originalSetTimeout(resolve, 0));
+  }
+
+  try {
+    const ctx = testSparkContext(dir, "main");
+    ctx.waitForIdle = async () => {
+      throw new Error(
+        `${join(dir, ".spark/artifacts/002487e2-a5e5-4f07-8b52-d12772fe33d2.json")}: kind must be a valid artifact kind`,
+      );
+    };
+    const run = registerSparkToolsForTest();
+    await executeSparkTool(run.tools, "goal", ctx, {
+      action: "start",
+      objective: "Keep running the foreground goal loop",
+    });
+    for (const handler of run.eventHandlers.get("session_start") ?? []) await handler({}, ctx);
+    assert.equal(timers.length, 1);
+    timers[0]?.callback();
+    await flushAsyncWork();
+
+    const notification = ctx.notifications.at(-1);
+    assert.equal(notification?.level, "warning");
+    assert.match(notification?.message ?? "", /Spark foreground goal loop hit an internal error/);
+    assert.doesNotMatch(notification?.message ?? "", /\.spark\/artifacts/u);
+    assert.doesNotMatch(notification?.message ?? "", /kind must be a valid artifact kind/u);
+    assert.equal(warnings.join("\n"), "");
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+    console.warn = originalWarn;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
@@ -6940,17 +7117,19 @@ void test("spark_goal complete allows evidenced narrow goal despite unrelated pr
       await saveCurrentProjectRef(dir, ctx, project.ref);
       const doneTask = graph.createTask({
         projectRef: project.ref,
-        name: "loop-paused-validation-docs",
-        title: "Update docs and run final validation for paused loop lifecycle",
-        description: "Completed evidence for the active loop paused lifecycle goal.",
+        name: "loop-stop-validation-docs",
+        title: "Update docs and run final validation for plain loop stop lifecycle",
+        description: "Completed evidence for the active loop stop lifecycle goal.",
         status: "done",
-        plan: executionReadyPlan("Update docs and run final validation for paused loop lifecycle"),
+        plan: executionReadyPlan(
+          "Update docs and run final validation for plain loop stop lifecycle",
+        ),
       });
       const evidence = await defaultArtifactStore(dir).put({
         kind: "trace",
-        title: "Loop paused lifecycle validation",
+        title: "Loop stop lifecycle validation",
         format: "text",
-        body: "tsc, lint, boundaries, and tests passed for loop active paused lifecycle.",
+        body: "tsc, lint, boundaries, and tests passed for plain loop stop lifecycle.",
         provenance: { producer: "task", projectRef: project.ref, taskRef: doneTask.ref },
       });
       graph.attachOutputArtifact(doneTask.ref, evidence.ref);
@@ -6967,7 +7146,7 @@ void test("spark_goal complete allows evidenced narrow goal despite unrelated pr
     await executeSparkTool(tools, "goal", ctx, {
       action: "start",
       objective:
-        "将 Spark 的 /loop 与底层 pi-loop lifecycle 统一为 active/paused 语义，并完成持久前台驱动、/goal 互斥、widget 展示、文档与验证对齐。",
+        "将 Spark 的 plain /loop stop 语义统一为 clear/removal，并完成持久前台驱动、/goal 互斥、widget 展示、文档与验证对齐。",
     });
 
     await executeSparkTool(tools, "goal", ctx, { action: "complete" });
@@ -7109,7 +7288,11 @@ void test("/implement canonical ask uses UI instead of reviewer auto-answer", as
     const implementCommand = run.commands.get("implement");
     assert.ok(implementCommand, "missing /implement command");
     await implementCommand.handler("work until a human decision is needed", ctx);
-    assert.deepEqual(ctx.sparkActiveLens, { mode: "implement", driver: "interactive" });
+    assert.deepEqual(ctx.sparkActiveLens, {
+      phase: "implement",
+      mode: "assist",
+      drive: "assist",
+    });
 
     const asked = await executeSparkTool(run.tools, "ask", ctx, {
       title: "Choose path",
@@ -7446,7 +7629,10 @@ void test("Spark extension exposes canonical tools instead of removed spark_* to
   assert.ok(run.tools.has("learning"));
   assert.ok(run.tools.has("ask"));
   assert.ok(run.tools.has("goal"));
-  assert.ok(run.tools.has("mode"));
+  assert.ok(run.tools.has("loop"));
+  assert.ok(run.tools.has("drive"));
+  assert.ok(run.tools.has("phase"));
+  assert.equal(run.tools.has("mode"), false);
   assert.deepEqual(
     run
       .getActiveToolNames()
@@ -7456,23 +7642,77 @@ void test("Spark extension exposes canonical tools instead of removed spark_* to
   );
 });
 
-void test("mode tool returns per-turn Spark lens requirements without persisted mode state", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-mode-tool-"));
+void test("phase tool returns requirements and persists session phase", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-phase-tool-"));
   try {
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
     const { tools } = registerSparkToolsForTest();
     await executeSparkTool(tools, "impl_use_project", ctx, { project: "Tool persistence" });
 
-    const switched = await executeSparkTool(tools, "mode", ctx, {
+    const switched = await executeSparkTool(tools, "phase", ctx, {
       action: "plan",
       focus: "tighten task graph",
     });
-    assert.deepEqual(switched.details, { mode: "plan", statusOnly: false });
+    assert.deepEqual(switched.details, { phase: "plan", statusOnly: false });
+    assert.match(toolText(switched), /Phase set to: plan/);
     assert.deepEqual(await loadSparkMode(dir, ctx), {
-      mode: "research",
+      mode: "plan",
       projectRef: (await loadCurrentProjectState(dir, ctx))?.projectRef,
     });
+
+    const status = await executeSparkTool(tools, "phase", ctx, { action: "status" });
+    assert.deepEqual(status.details, { phase: "plan", statusOnly: true });
+    assert.match(toolText(status), /Current phase: plan/);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("drive tool derives mode and switches explicit foreground drives", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-drive-tool-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+    await executeSparkTool(tools, "impl_use_project", ctx, { project: "Tool persistence" });
+
+    const initial = await executeSparkTool(tools, "drive", ctx, { action: "status" });
+    assert.equal((initial.details as { mode?: string }).mode, "assist");
+    assert.match(toolText(initial), /Mode: assist/);
+
+    const loopStarted = await executeSparkTool(tools, "drive", ctx, {
+      action: "start",
+      drive: "loop",
+      objective: "Continuously watch low-risk follow-ups",
+    });
+    assert.match(toolText(loopStarted), /Drive started: loop/);
+    assert.equal((await loadSessionLoop(dir, ctx))?.status, "active");
+    assert.equal(await loadSessionGoal(dir, ctx), undefined);
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", mode: "loop", drive: "loop" });
+
+    const goalSwitched = await executeSparkTool(tools, "drive", ctx, {
+      action: "switch",
+      drive: "goal",
+      objective: "Finish Tool persistence with review",
+    });
+    assert.match(toolText(goalSwitched), /Drive switched: goal/);
+    assert.equal((await loadSessionGoal(dir, ctx))?.status, "active");
+    assert.equal(await loadSessionLoop(dir, ctx), undefined);
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", mode: "goal", drive: "goal" });
+
+    const stopped = await executeSparkTool(tools, "drive", ctx, { action: "stop", drive: "goal" });
+    assert.match(toolText(stopped), /Drive stopped: goal/);
+    assert.equal((stopped.details as { mode?: string }).mode, "assist");
+    assert.equal(await loadSessionGoal(dir, ctx), undefined);
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", mode: "assist", drive: "assist" });
+
+    const workflow = await executeSparkTool(tools, "drive", ctx, {
+      action: "start",
+      drive: "workflow",
+    });
+    assert.equal(workflow.isError, true);
+    assert.match(toolText(workflow), /Workflow drive is controlled by workflow_run or \/workflow/);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -7539,6 +7779,8 @@ void test("impl_list_projects returns structured permanent project summaries", a
     ) as Array<{
       ref: string;
       currentForSession: boolean;
+      kind: string;
+      kindDisplay: { kind: string; title: string; panels: unknown[] };
       taskCounts: { total: number; active: number; done: number; cancelled: number };
     }>;
     assert.deepEqual(
@@ -7547,11 +7789,179 @@ void test("impl_list_projects returns structured permanent project summaries", a
     );
     assert.equal(projects[0]?.currentForSession, true);
     assert.equal(projects[1]?.currentForSession, false);
+    assert.equal(projects[0]?.kind, "generic");
+    assert.deepEqual(projects[0]?.kindDisplay, { kind: "generic", title: "Generic", panels: [] });
     assert.deepEqual(projects[0]?.taskCounts, { total: 3, active: 1, done: 1, cancelled: 1 });
     assert.deepEqual(projects[1]?.taskCounts, { total: 1, active: 0, done: 1, cancelled: 0 });
     assert.equal(Object.hasOwn(projects[0] ?? {}, "status"), false);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("project kind defaults, validates setting surfaces, and appears in status", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-project-kind-tools-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const store = defaultTaskGraphStore(dir);
+    const graph = await store.load();
+    assert.ok(graph);
+    const legacyProject = graph.createProject({
+      title: "Legacy kind project",
+      description: "Created before Spark kind validation.",
+      kind: "legacy-import",
+    });
+    await store.save(graph);
+
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+
+    const created = await executeSparkTool(tools, "task_write", ctx, {
+      action: "project_use",
+      title: "Kinded generic project",
+      description: "Created with explicit generic kind.",
+      kind: "generic",
+      kindState: { target: "generic" },
+    });
+    assert.equal((created.details as { project?: { kind?: string } }).project?.kind, "generic");
+    assert.deepEqual(
+      (created.details as { project?: { kindState?: unknown } }).project?.kindState,
+      { target: "generic" },
+    );
+
+    await assert.rejects(
+      () =>
+        executeSparkTool(tools, "task_write", ctx, {
+          action: "project_use",
+          title: "Unknown kind project",
+          description: "Should fail kind validation.",
+          kind: "unknown-kind",
+        }),
+      /unknown project kind: unknown-kind/,
+    );
+
+    await executeSparkTool(tools, "impl_use_project", ctx, { project: legacyProject.ref });
+    const metadata = await executeSparkTool(tools, "task_write", ctx, {
+      action: "project_metadata_update",
+      kind: "generic",
+      kindState: { migrated: true },
+    });
+    const metadataDetails = metadata.details as {
+      changedFields?: string[];
+      project?: { kind?: string; kindState?: unknown };
+    };
+    assert.deepEqual(metadataDetails.changedFields, ["kind", "kindState"]);
+    assert.equal(metadataDetails.project?.kind, "generic");
+    assert.deepEqual(metadataDetails.project?.kindState, { migrated: true });
+
+    await assert.rejects(
+      () =>
+        executeSparkTool(tools, "task_write", ctx, {
+          action: "project_metadata_update",
+          kind: "unknown-kind",
+        }),
+      /unknown project kind: unknown-kind/,
+    );
+
+    const status = await executeSparkTool(tools, "impl_status", ctx, {
+      scope: "project",
+      format: "json",
+    });
+    const details = status.details as {
+      selectedProject?: { kind?: string; kindDisplay?: { kind?: string; panels?: unknown[] } };
+    };
+    assert.equal(details.selectedProject?.kind, "generic");
+    assert.deepEqual(details.selectedProject?.kindDisplay, {
+      kind: "generic",
+      title: "Generic",
+      panels: [],
+    });
+
+    const reproductionState = {
+      target: {
+        sourceRefs: ["issue:demo"],
+        targetEnv: "local",
+        expectedOutputs: ["CLI smoke"],
+        successMetrics: [{ id: "cli-smoke", status: "covered" }],
+      },
+      experiments: [{ status: "passed" }],
+      findings: [{ title: "CLI smoke reproduced", learningRef: "artifact:learning-demo" }],
+      learningRefs: ["artifact:learning-demo"],
+    };
+    await executeSparkTool(tools, "task_write", ctx, {
+      action: "project_metadata_update",
+      kind: "reproduction",
+      kindState: reproductionState,
+    });
+    const reproductionStatus = await executeSparkTool(tools, "impl_status", ctx, {
+      scope: "project",
+      format: "json",
+    });
+    const reproductionDetails = reproductionStatus.details as {
+      selectedProject?: {
+        kind?: string;
+        kindDisplay?: { badge?: string; panels?: Array<{ label?: string; text?: string }> };
+      };
+    };
+    assert.equal(reproductionDetails.selectedProject?.kind, "reproduction");
+    assert.equal(reproductionDetails.selectedProject?.kindDisplay?.badge, "repro");
+    assert.deepEqual(
+      reproductionDetails.selectedProject?.kindDisplay?.panels?.map((panel) => [
+        panel.label,
+        panel.text,
+      ]),
+      [
+        ["Target", JSON.stringify(reproductionState.target)],
+        ["Metrics", "1/1"],
+        ["Experiments", "1"],
+        ["Findings", "CLI smoke reproduced"],
+      ],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark_goal complete blocks reproduction project kind gate before reviewer", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-reproduction-gate-complete-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest({
+      reviewerRunner: {
+        async review(): Promise<ReviewerRunResult> {
+          assert.fail("reproduction deterministic gate should block before reviewer");
+        },
+      },
+    });
+    await useOnlySparkProject(tools, ctx);
+    await executeSparkTool(tools, "task_write", ctx, {
+      action: "project_metadata_update",
+      kind: "reproduction",
+      kindState: {
+        target: { successMetrics: [{ id: "metric-a" }] },
+        experiments: [{ status: "failed" }],
+        findings: [],
+      },
+    });
+    await executeSparkTool(tools, "goal", ctx, {
+      action: "start",
+      objective: "Finish reproduction project",
+    });
+
+    const blocked = await executeSparkTool(tools, "goal", ctx, { action: "complete" });
+
+    assert.match(toolText(blocked), /project kind gate/);
+    const details = blocked.details as { outcome?: string; blockers?: string[] };
+    assert.equal(details.outcome, "blocked");
+    assert.deepEqual(details.blockers, [
+      "reproduction_success_metrics_uncovered=metric-a",
+      "reproduction_failed_experiments_without_disposition=1",
+      "reproduction_learning_not_recorded",
+    ]);
+    assert.equal((await loadSessionGoal(dir, ctx))?.status, "active");
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
 
@@ -7681,7 +8091,7 @@ void test("current project store ignores legacy mode and run control blocks", as
       (error) =>
         error instanceof JsonStoreFormatError &&
         error.filePath === stateFile &&
-        /projectRef must be a non-empty string/.test(error.message),
+        /projectRef must be a string/.test(error.message),
     );
 
     await writeFile(
@@ -8005,12 +8415,12 @@ void test("impl_status includes active dynamic workflow snapshot projection", as
       now: "2026-06-23T00:00:00.000Z",
     });
     await store.appendEvent(runRef, {
-      type: "phase_started",
-      nodeId: "phase:Watch",
+      type: "stage_started",
+      nodeId: "stage:Watch",
       parentId: "run",
-      nodeKind: "phase",
+      nodeKind: "stage",
       title: "Watch",
-      phase: "Watch",
+      stage: "Watch",
       timestamp: "2026-06-23T00:00:01.000Z",
     });
     const resultRun = await store.start({
@@ -8024,6 +8434,7 @@ void test("impl_status includes active dynamic workflow snapshot projection", as
     await store.finish(resultRun.ref, {
       meta: { name: "status result", description: "status result workflow" },
       result: { report: "ready" },
+      stages: [],
       phases: [],
       agentCount: 0,
       journal: [],
@@ -8110,17 +8521,19 @@ void test("impl_workflow_runs renders and controls dynamic workflow_run records"
       meta,
       options: {},
     });
+    const completedStages = [
+      {
+        title: "Synthesis",
+        status: "success" as const,
+        startedAt: "2026-06-22T00:00:00.000Z",
+        finishedAt: "2026-06-22T00:00:02.000Z",
+      },
+    ];
     await dynamicStore.finish(completedRun.ref, {
       meta,
       result: { report: "delivered" },
-      phases: [
-        {
-          title: "Synthesis",
-          status: "success",
-          startedAt: "2026-06-22T00:00:00.000Z",
-          finishedAt: "2026-06-22T00:00:02.000Z",
-        },
-      ],
+      stages: completedStages,
+      phases: completedStages,
       agentCount: 1,
       journal: [{ index: 0, hash: "doneabc12345", result: "compact child output" }],
     });

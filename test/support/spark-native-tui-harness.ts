@@ -11,6 +11,7 @@ import {
   type SparkNativeSlashCommandMap,
 } from "../../apps/spark-tui/src/native-tui.ts";
 import type { SparkKeybindings } from "../../apps/spark-tui/src/host/keybindings.ts";
+import type { SparkTheme } from "../../apps/spark-tui/src/host/theme.ts";
 
 export interface FakeSparkNativeTuiState {
   readonly children: Component[];
@@ -42,6 +43,7 @@ export interface SparkNativeTuiHarnessOptions {
   autocompleteFdPath?: string | null;
   interactionHandler?: SparkNativeInteractionHandler;
   keybindings?: SparkKeybindings;
+  theme?: SparkTheme;
   withOverlay?: boolean;
 }
 

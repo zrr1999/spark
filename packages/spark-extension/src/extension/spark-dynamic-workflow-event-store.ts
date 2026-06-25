@@ -14,6 +14,7 @@ import {
   type WorkflowJournalEntry,
   type WorkflowMeta,
   type WorkflowPhaseRun,
+  type WorkflowStageRun,
   type WorkflowRunEvent,
   type WorkflowRunResult,
   type WorkflowRunSnapshot,
@@ -48,6 +49,8 @@ export interface SparkDynamicWorkflowEventRunMetadata {
   savedWorkflow?: SparkDynamicWorkflowRunSavedWorkflow;
   acknowledgedAt?: string;
   resumedFrom?: RunRef;
+  stages?: WorkflowStageRun[];
+  /** @deprecated Use stages. */
   phases?: WorkflowPhaseRun[];
   journal?: WorkflowJournalEntry[];
   spentTokens?: number;
@@ -139,6 +142,7 @@ export class SparkDynamicWorkflowEventStore {
       ...((input.resumedFrom ?? input.resumeRunRef)
         ? { resumedFrom: input.resumedFrom ?? input.resumeRunRef }
         : {}),
+      ...(previousMetadata?.stages ? { stages: previousMetadata.stages } : {}),
       ...(previousMetadata?.phases ? { phases: previousMetadata.phases } : {}),
       ...(previousMetadata?.journal ? { journal: previousMetadata.journal } : {}),
       ...(previousMetadata?.spentTokens !== undefined
@@ -187,33 +191,40 @@ export class SparkDynamicWorkflowEventStore {
     return snapshot;
   }
 
-  async recordPhase(runRef: RunRef, phase: WorkflowPhaseRun): Promise<void> {
+  async recordStage(runRef: RunRef, stage: WorkflowStageRun): Promise<void> {
     await this.updateMetadata(runRef, (metadata, now) => {
-      const next = [...(metadata.phases ?? [])].filter(
-        (candidate) => candidate.title !== phase.title,
-      );
-      next.push(phase);
+      const existingStages = metadata.stages ?? metadata.phases ?? [];
+      const next = [...existingStages].filter((candidate) => candidate.title !== stage.title);
+      next.push(stage);
+      metadata.stages = next;
       metadata.phases = next;
       metadata.updatedAt = now;
     });
     await this.appendEvent(runRef, {
-      type: phase.status ? "phase_finished" : "phase_started",
-      nodeId: `phase:${phase.title}`,
+      type: stage.status ? "stage_finished" : "stage_started",
+      nodeId: `stage:${stage.title}`,
       parentId: "run",
-      nodeKind: "phase",
-      title: phase.title,
-      phase: phase.title,
-      phaseRun: phase,
+      nodeKind: "stage",
+      title: stage.title,
+      stage: stage.title,
+      phase: stage.title,
+      stageRun: stage,
+      phaseRun: stage,
       status:
-        phase.status === "fail"
+        stage.status === "fail"
           ? "failed"
-          : phase.status === "skip"
+          : stage.status === "skip"
             ? "skipped"
-            : phase.status
+            : stage.status
               ? "succeeded"
               : undefined,
-      timestamp: phase.finishedAt ?? phase.startedAt,
+      timestamp: stage.finishedAt ?? stage.startedAt,
     });
+  }
+
+  /** @deprecated Use recordStage. */
+  async recordPhase(runRef: RunRef, phase: WorkflowPhaseRun): Promise<void> {
+    await this.recordStage(runRef, phase);
   }
 
   async recordJournal(runRef: RunRef, entry: WorkflowJournalEntry): Promise<void> {
@@ -269,7 +280,7 @@ export class SparkDynamicWorkflowEventStore {
     result: WorkflowRunResult,
     error?: unknown,
   ): Promise<SparkDynamicWorkflowRunRecord | undefined> {
-    for (const phase of result.phases) await this.recordPhase(runRef, phase);
+    for (const stage of result.stages ?? result.phases) await this.recordStage(runRef, stage);
     for (const entry of result.journal) await this.recordJournal(runRef, entry);
     await this.appendEvent(runRef, {
       type: error ? "run_failed" : "run_succeeded",
@@ -279,7 +290,9 @@ export class SparkDynamicWorkflowEventStore {
       errorMessage: error ? errorMessage(error) : undefined,
     });
     await this.updateMetadata(runRef, (metadata, now) => {
-      metadata.phases = result.phases;
+      const stages = result.stages ?? result.phases;
+      metadata.stages = stages;
+      metadata.phases = stages;
       metadata.journal = result.journal;
       const totals = aggregateWorkflowUsageTotals(metadata.agentTelemetry ?? []);
       if (totals) metadata.usageTotals = totals;
@@ -338,6 +351,7 @@ export class SparkDynamicWorkflowEventStore {
     await this.updateMetadata(runRef, (metadata, now) => {
       metadata.acknowledgedAt = undefined;
       metadata.spentTokens = undefined;
+      metadata.stages = [];
       metadata.phases = [];
       metadata.journal = [];
       metadata.usageTotals = undefined;
@@ -561,6 +575,7 @@ export class SparkDynamicWorkflowEventStore {
       ...(record.savedWorkflow ? { savedWorkflow: record.savedWorkflow } : {}),
       ...(record.acknowledgedAt ? { acknowledgedAt: record.acknowledgedAt } : {}),
       ...(record.resumedFrom ? { resumedFrom: record.resumedFrom } : {}),
+      stages: record.phases,
       phases: record.phases,
       journal: record.journal,
       createdAt: record.startedAt,
@@ -747,7 +762,7 @@ export function dynamicWorkflowRecordFromEventRun(
     scriptHash: run.metadata.scriptHash,
     ...(run.metadata.args === undefined ? {} : { args: run.metadata.args }),
     meta: run.snapshot.meta ?? run.metadata.meta,
-    phases: run.metadata.phases ?? phaseRunsFromSnapshot(run.snapshot),
+    phases: run.metadata.stages ?? run.metadata.phases ?? stageRunsFromSnapshot(run.snapshot),
     journal:
       run.metadata.journal ??
       agentNodes.map((node, index) => ({
@@ -785,9 +800,9 @@ function snapshotStatusToDynamicStatus(
   return status;
 }
 
-function phaseRunsFromSnapshot(snapshot: WorkflowRunSnapshot): WorkflowPhaseRun[] {
+function stageRunsFromSnapshot(snapshot: WorkflowRunSnapshot): WorkflowStageRun[] {
   return snapshot.nodes
-    .filter((node) => node.kind === "phase")
+    .filter((node) => node.kind === "stage" || node.kind === "phase")
     .map((node) => ({
       title: node.label,
       status: workflowNodeStatusToPhaseStatus(node.status),
@@ -796,7 +811,7 @@ function phaseRunsFromSnapshot(snapshot: WorkflowRunSnapshot): WorkflowPhaseRun[
     }));
 }
 
-function workflowNodeStatusToPhaseStatus(status: string): WorkflowPhaseRun["status"] {
+function workflowNodeStatusToPhaseStatus(status: string): WorkflowStageRun["status"] {
   if (status === "failed") return "fail";
   if (status === "skipped") return "skip";
   if (status === "succeeded") return "success";

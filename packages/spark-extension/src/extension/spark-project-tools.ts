@@ -2,6 +2,7 @@ import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
 import type { ArtifactRef, JsonValue, ProjectRef } from "@zendev-lab/pi-extension-api";
 import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import type { clarifyProjectPurposeIfNeeded } from "../flows/project-purpose-flow.ts";
+import { normalizeProjectKindId, renderSparkProjectKindDisplay } from "./project-kind-registry.ts";
 import { isImportantStatus } from "./spark-status.ts";
 
 export interface SparkProjectPatch {
@@ -9,6 +10,8 @@ export interface SparkProjectPatch {
   description?: string;
   purpose?: string;
   outputLanguage?: "zh" | "en";
+  kind?: string;
+  kindState?: JsonValue;
 }
 
 export interface SparkNewProjectInput {
@@ -17,6 +20,8 @@ export interface SparkNewProjectInput {
   description?: string;
   purpose?: string;
   outputLanguage?: "zh" | "en";
+  kind?: string;
+  kindState?: JsonValue;
 }
 
 export interface SparkDuplicateProjectCandidate {
@@ -49,12 +54,23 @@ export function normalizeSparkProjectOutputLanguage(value: unknown): "zh" | "en"
   throw new Error("outputLanguage must be zh or en");
 }
 
+export function normalizeSparkProjectKindState(value: unknown): JsonValue | undefined {
+  if (value === undefined) return undefined;
+  if (!isJsonValue(value)) throw new Error("kindState must be JSON-serializable");
+  return value;
+}
+
 export function normalizeSparkProjectPatch(params: Record<string, unknown>): SparkProjectPatch {
   return {
     title: normalizeSparkProjectOptionalString(params.title, "title"),
     description: normalizeSparkProjectOptionalString(params.description, "description"),
     purpose: normalizeSparkProjectOptionalString(params.purpose, "purpose"),
     outputLanguage: normalizeSparkProjectOutputLanguage(params.outputLanguage),
+    kind:
+      params.kind === undefined || params.kind === null
+        ? undefined
+        : normalizeProjectKindId(params.kind),
+    kindState: normalizeSparkProjectKindState(params.kindState),
   };
 }
 
@@ -67,11 +83,23 @@ export function normalizeSparkNewProjectInput(
     description: normalizeSparkProjectOptionalString(params.description, "description"),
     purpose: normalizeSparkProjectOptionalString(params.purpose, "purpose"),
     outputLanguage: normalizeSparkProjectOutputLanguage(params.outputLanguage),
+    kind:
+      params.kind === undefined || params.kind === null
+        ? undefined
+        : normalizeProjectKindId(params.kind),
+    kindState: normalizeSparkProjectKindState(params.kindState),
   };
 }
 
 export function hasSparkProjectPatch(patch: SparkProjectPatch): boolean {
-  return Boolean(patch.title || patch.description || patch.purpose || patch.outputLanguage);
+  return Boolean(
+    patch.title ||
+    patch.description ||
+    patch.purpose ||
+    patch.outputLanguage ||
+    patch.kind ||
+    patch.kindState !== undefined,
+  );
 }
 
 export function resolveSparkProject(
@@ -132,6 +160,15 @@ export function findDuplicateSparkProjects(input: {
       "This gate does not merge, move tasks, or relink artifacts; selecting an existing Project is the only merge-like action in this slice.",
     ],
   };
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (value === null) return true;
+  if (typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (typeof value !== "object") return false;
+  return Object.values(value as Record<string, unknown>).every(isJsonValue);
 }
 
 function scoreSparkProjectSimilarity(
@@ -217,6 +254,8 @@ export function collectSparkProjectSummaries(input: {
         done: tasks.filter((task) => task.status === "done").length,
         cancelled: tasks.filter((task) => task.status === "cancelled").length,
       },
+      kind: project.kind ?? "generic",
+      kindDisplay: renderSparkProjectKindDisplay(project),
       currentForSession: input.currentProjectRef === project.ref,
     };
   });

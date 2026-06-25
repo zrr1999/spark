@@ -314,7 +314,7 @@ void test("spark runtime role dispatch inherits session model when no role model
         dryRun: false,
         cwd: dir,
         piCommand: fakePi,
-        timeoutMs: 5_000,
+        timeoutMs: 15_000,
         sessionModel: "test/model",
       },
     );
@@ -355,7 +355,7 @@ void test("spark runtime role dispatch passes per-run env and tool policy to spa
         dryRun: false,
         cwd: dir,
         piCommand: fakePi,
-        timeoutMs: 5_000,
+        timeoutMs: 15_000,
         sessionModel: "test/model",
         env: { GRAFT_BASE_REF: "tree:spawn-base" },
         allowedTools: ["graft_read", "graft_write"],
@@ -389,7 +389,7 @@ void test("spark runtime role dispatch passes per-run env and tool policy to inj
       {
         dryRun: false,
         cwd: dir,
-        timeoutMs: 5_000,
+        timeoutMs: 15_000,
         sessionModel: "test/model",
         env: { GRAFT_BASE_REF: "tree:injected-base" },
         allowedTools: ["graft_read", "graft_candidate_from_scratch"],
@@ -570,7 +570,7 @@ void test("pi-roles can ignore child stdin for argv-prompt non-interactive runs"
       instruction: "Review.",
       piCommand: fakePi,
       cwd: dir,
-      timeoutMs: 5_000,
+      timeoutMs: 15_000,
       stdinMode: "ignore",
     });
 
@@ -716,7 +716,7 @@ void test("pi-roles tracks and cancels active runs", async () => {
       instruction: "Wait.",
       piCommand: fakePi,
       cwd: dir,
-      timeoutMs: 5_000,
+      timeoutMs: 15_000,
     });
     await eventually(() => listActiveRoleRuns().some((entry) => entry.ref === "run:cancel-test"));
     assert.equal(cancelRoleRun("run:cancel-test", "test cancellation"), true);

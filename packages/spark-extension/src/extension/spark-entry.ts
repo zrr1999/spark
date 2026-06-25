@@ -10,12 +10,16 @@ export interface SparkCommandProjectState {
   unfinishedTaskCount: number;
 }
 
-export type SparkEntryMode = "research" | "plan" | "implement";
-export type SparkEntryModeChoice = SparkEntryMode | "new_project";
+export type SparkEntryPhase = "research" | "plan" | "implement";
+/** @deprecated Use SparkEntryPhase. */
+export type SparkEntryMode = SparkEntryPhase;
+export type SparkEntryPhaseChoice = SparkEntryPhase | "new_project";
+/** @deprecated Use SparkEntryPhaseChoice. */
+export type SparkEntryModeChoice = SparkEntryPhaseChoice;
 export type SparkEntryConfidence = "high" | "ambiguous" | "conflicting";
 
-export interface SparkEntryModeAnalysis {
-  recommendation: SparkEntryModeChoice;
+export interface SparkEntryPhaseAnalysis {
+  recommendation: SparkEntryPhaseChoice;
   confidence: SparkEntryConfidence;
   reasons: string[];
   prompt: string;
@@ -30,7 +34,9 @@ export type SparkEntryIntent =
   | { kind: "auto"; prompt: string }
   | {
       kind: "direct";
-      mode: SparkEntryMode;
+      phase: SparkEntryPhase;
+      /** @deprecated Use phase. */
+      mode?: SparkEntryPhase;
       prompt: string;
     };
 
@@ -43,20 +49,29 @@ export type SparkEntryResolution =
     }
   | { action: "initialize_existing_project"; idea: string; planningSource: SparkPlanningModeSource }
   | {
+      action: "enter_phase";
+      phase: SparkEntryPhase;
+      focus?: string;
+      planningSource?: SparkPlanningModeSource;
+    }
+  | {
+      /** @deprecated Use enter_phase. */
       action: "enter_mode";
-      mode: SparkEntryMode;
+      mode: SparkEntryPhase;
       focus?: string;
       planningSource?: SparkPlanningModeSource;
     }
   | { action: "blocked"; message: string }
   | { action: "none" };
 
-export function analyzeSparkEntryMode(
+export interface SparkEntryModeAnalysis extends SparkEntryPhaseAnalysis {}
+
+export function analyzeSparkEntryPhase(
   graph: TaskGraph,
   projectState: SparkCommandProjectState,
   prompt: string,
   selectedProject: { ref: ProjectRef; title: string } | undefined,
-): SparkEntryModeAnalysis {
+): SparkEntryPhaseAnalysis {
   const currentProjectTitle =
     selectedProject?.title ?? graph.projects()[0]?.title ?? "current Spark workspace";
   const tasks = graph.tasks(selectedProject?.ref);
@@ -187,7 +202,7 @@ export function analyzeSparkEntryMode(
       confidence: "conflicting",
       reasons: [
         ...reasons,
-        "The prompt contains both research and planning signals; planning mode can inspect first and update tasks only when needed.",
+        "The prompt contains both research and planning signals; the planning phase can inspect first and update tasks only when needed.",
       ],
       prompt: normalizedPrompt,
       currentProjectTitle,
@@ -253,8 +268,8 @@ export function analyzeSparkEntryMode(
     reasons: [
       ...reasons,
       normalizedPrompt
-        ? "The prompt does not clearly choose planning or execution; Spark should infer the next mode from task readiness."
-        : "No explicit mode prompt was provided in an initialized workspace; Spark should infer the next mode from task readiness.",
+        ? "The prompt does not clearly choose planning or execution; Spark should infer the next phase from task readiness."
+        : "No explicit phase prompt was provided in an initialized workspace; Spark should infer the next phase from task readiness.",
     ],
     prompt: normalizedPrompt,
     currentProjectTitle,
@@ -264,6 +279,9 @@ export function analyzeSparkEntryMode(
     pendingTaskCount,
   };
 }
+
+/** @deprecated Use analyzeSparkEntryPhase. */
+export const analyzeSparkEntryMode = analyzeSparkEntryPhase;
 
 function normalizePromptForSparkSignalDetection(prompt: string): string {
   return prompt

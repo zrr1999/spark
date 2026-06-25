@@ -4,14 +4,15 @@
  * Two parallel plugin lists:
  *   - `extensions[]` — module specifiers loaded as ExtensionAPI plugins
  *   - `providers[]`  — module specifiers loaded as ProviderRegistrationAPI
- *                      plugins. Default includes spark-tui-app's own
+ *                      plugins. Default includes spark-ai's bundled
  *                      `baidu-oneapi-provider`.
  *
  * Both lists are loaded by the same `loadPlugins(...)` helper in
  * `plugin-loader.ts`, but the runtime API surface they receive differs.
  *
- * The schema also tracks `activeProvider` / `activeModel` so the spark-tui
- * boot path can re-select the user's last picked model without prompting.
+ * The schema tracks `activeModelId` so the spark-tui boot path can re-select
+ * the user's last picked Spark model without prompting. Deprecated
+ * `activeProvider` / `activeModel` pairs are still read for migration.
  *
  * Persistence:
  *   - Read with `loadSparkConfig(path?)`. Missing or malformed files fall
@@ -27,7 +28,16 @@ import { dirname, join } from "node:path";
 export interface SparkConfig {
   extensions: string[];
   providers: string[];
+  skills?: string[];
+  promptTemplates?: string[];
+  themes?: string[];
+  contextFiles?: string[];
+  trustedWorkspaces?: string[];
+  activeTheme?: string;
+  activeModelId?: string;
+  /** @deprecated Use activeModelId. */
   activeProvider?: string;
+  /** @deprecated Use activeModelId. */
   activeModel?: string;
   activeThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 }
@@ -36,11 +46,18 @@ export const DEFAULT_SPARK_CONFIG: SparkConfig = {
   extensions: [
     "@zendev-lab/pi-ask/extension",
     "@zendev-lab/pi-cue/extension",
+    "@zendev-lab/pi-files/extension",
+    "@zendev-lab/spark-ai/models-extension",
     "@zendev-lab/pi-roles/extension",
     "@zendev-lab/pi-graft/extension",
     "@zendev-lab/spark-extension/extension",
   ],
-  providers: ["@zendev-lab/spark-tui-app/baidu-oneapi-provider"],
+  providers: ["@zendev-lab/spark-ai/baidu-oneapi-provider"],
+  skills: [],
+  promptTemplates: [],
+  themes: [],
+  contextFiles: [],
+  trustedWorkspaces: [],
 };
 
 export function defaultSparkConfigPath(): string {
@@ -83,6 +100,19 @@ export function mergeWithDefault(raw: unknown): SparkConfig {
   return {
     extensions: stringArray(fields.extensions, DEFAULT_SPARK_CONFIG.extensions),
     providers: stringArray(fields.providers, DEFAULT_SPARK_CONFIG.providers),
+    skills: stringArray(fields.skills, DEFAULT_SPARK_CONFIG.skills ?? []),
+    promptTemplates: stringArray(
+      fields.promptTemplates,
+      DEFAULT_SPARK_CONFIG.promptTemplates ?? [],
+    ),
+    themes: stringArray(fields.themes, DEFAULT_SPARK_CONFIG.themes ?? []),
+    contextFiles: stringArray(fields.contextFiles, DEFAULT_SPARK_CONFIG.contextFiles ?? []),
+    trustedWorkspaces: stringArray(
+      fields.trustedWorkspaces,
+      DEFAULT_SPARK_CONFIG.trustedWorkspaces ?? [],
+    ),
+    activeTheme: typeof fields.activeTheme === "string" ? fields.activeTheme : undefined,
+    activeModelId: parseActiveModelId(fields),
     activeProvider: typeof fields.activeProvider === "string" ? fields.activeProvider : undefined,
     activeModel: typeof fields.activeModel === "string" ? fields.activeModel : undefined,
     activeThinkingLevel: parseThinkingLevel(fields.activeThinkingLevel),
@@ -93,12 +123,36 @@ function cloneDefault(): SparkConfig {
   return {
     extensions: [...DEFAULT_SPARK_CONFIG.extensions],
     providers: [...DEFAULT_SPARK_CONFIG.providers],
+    skills: [...(DEFAULT_SPARK_CONFIG.skills ?? [])],
+    promptTemplates: [...(DEFAULT_SPARK_CONFIG.promptTemplates ?? [])],
+    themes: [...(DEFAULT_SPARK_CONFIG.themes ?? [])],
+    contextFiles: [...(DEFAULT_SPARK_CONFIG.contextFiles ?? [])],
+    trustedWorkspaces: [...(DEFAULT_SPARK_CONFIG.trustedWorkspaces ?? [])],
   };
 }
 
 function stringArray(value: unknown, fallback: string[]): string[] {
   if (!Array.isArray(value)) return [...fallback];
   return value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+}
+
+function parseActiveModelId(
+  fields: Partial<Record<keyof SparkConfig, unknown>>,
+): string | undefined {
+  if (typeof fields.activeModelId === "string" && fields.activeModelId.trim()) {
+    return fields.activeModelId;
+  }
+  if (
+    typeof fields.activeProvider === "string" &&
+    fields.activeProvider.trim() &&
+    typeof fields.activeModel === "string" &&
+    fields.activeModel.trim()
+  ) {
+    return `${fields.activeProvider}/${fields.activeModel}`;
+  }
+  if (typeof fields.activeModel === "string" && fields.activeModel.trim())
+    return fields.activeModel;
+  return undefined;
 }
 
 function parseThinkingLevel(value: unknown): SparkConfig["activeThinkingLevel"] {

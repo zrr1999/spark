@@ -3,10 +3,10 @@
  * spark-cli pi-tui host.
  *
  * This module intentionally keeps UI rendering at arm's length. It owns the
- * provider/model selection rules, persistence into SparkConfig, and concrete
- * keybinding handlers. The pi-tui SelectList wrapper lives in
- * `../tui/model-selector.ts` and can be injected through `picker` when the real
- * boot path wires Ctrl+L.
+ * model-id selection rules, persistence into SparkConfig, and concrete
+ * keybinding handlers. Provider/route remains internal routing detail. The
+ * pi-tui SelectList wrapper lives in `../tui/model-selector.ts` and can be
+ * injected through `picker` when the real boot path wires Ctrl+L.
  */
 
 import type { SparkConfig } from "./config.ts";
@@ -47,6 +47,7 @@ export interface SparkModelPickerState {
   providers: SparkModelProviderGroup[];
   items: SparkModelSelectorItem[];
   active?: SparkActiveSelection;
+  activeModelId?: string;
 }
 
 export type SparkModelPicker = (
@@ -100,10 +101,12 @@ export class SparkModelSelector {
 
   getPickerState(): SparkModelPickerState {
     const providers = this.listProviderGroups();
+    const active = this.registry.getActive();
     return {
       providers,
       items: providers.flatMap((provider) => provider.models),
-      active: this.registry.getActive(),
+      active,
+      activeModelId: active ? sparkModelSelectionValue(active) : undefined,
     };
   }
 
@@ -122,15 +125,16 @@ export class SparkModelSelector {
   async select(selection: SparkActiveSelection): Promise<SparkActiveSelection> {
     this.registry.setActive(selection);
     const config = await this.getConfig();
-    config.activeProvider = selection.providerName;
-    config.activeModel = selection.modelId;
+    config.activeModelId = sparkModelSelectionValue(selection);
+    delete config.activeProvider;
+    delete config.activeModel;
     await this.saveConfig(config);
     return { ...selection };
   }
 
   /**
-   * Cycle within the currently active provider's model list. If there is no
-   * active selection yet, pick the first registered provider/model.
+   * Cycle across the flattened Spark model id list. If there is no active
+   * selection yet, pick the first registered model.
    */
   async cycle(direction: SparkModelCycleDirection): Promise<SparkActiveSelection | undefined> {
     const target = this.resolveCycleTarget(direction) ?? this.firstSelection();
@@ -138,7 +142,7 @@ export class SparkModelSelector {
     return this.select(target);
   }
 
-  /** Open the injected picker and persist the selected provider/model. */
+  /** Open the injected picker and persist the selected model id. */
   async openPicker(ctx?: SparkKeybindingContext): Promise<SparkActiveSelection | undefined> {
     if (!this.picker) return undefined;
     const result = await this.picker(this.getPickerState(), ctx);
@@ -149,22 +153,22 @@ export class SparkModelSelector {
   private resolveCycleTarget(
     direction: SparkModelCycleDirection,
   ): SparkActiveSelection | undefined {
+    const items = this.listItems();
+    if (items.length === 0) return undefined;
     const active = this.registry.getActive();
-    if (!active) return undefined;
-
-    const models = this.registry.listModelsFor(active.providerName);
-    if (models.length === 0) return undefined;
-
-    const currentIndex = models.findIndex((model) => model.id === active.modelId);
+    const activeModelId = active ? sparkModelSelectionValue(active) : undefined;
+    const currentIndex = activeModelId
+      ? items.findIndex((item) => item.value === activeModelId)
+      : -1;
     const step = direction === "next" ? 1 : -1;
     const nextIndex =
       currentIndex === -1
         ? direction === "next"
           ? 0
-          : models.length - 1
-        : mod(currentIndex + step, models.length);
+          : items.length - 1
+        : mod(currentIndex + step, items.length);
 
-    return { providerName: active.providerName, modelId: models[nextIndex]!.id };
+    return selectionFromItem(items[nextIndex]!);
   }
 
   private firstSelection(): SparkActiveSelection | undefined {
@@ -202,7 +206,7 @@ export function registerSparkModelSelectorKeybindings(
   keybindings.register({
     id: SPARK_MODEL_CYCLE_NEXT_BINDING_ID,
     defaultKey: "ctrl+p",
-    description: "Cycle to the next model for the active provider",
+    description: "Cycle to the next Spark model",
     handler: async () => {
       const selection = await selector.cycle("next");
       if (selection) options.notify?.(formatSelection(selection), "info");
@@ -212,7 +216,7 @@ export function registerSparkModelSelectorKeybindings(
   keybindings.register({
     id: SPARK_MODEL_CYCLE_PREV_BINDING_ID,
     defaultKey: "shift+ctrl+p",
-    description: "Cycle to the previous model for the active provider",
+    description: "Cycle to the previous Spark model",
     handler: async () => {
       const selection = await selector.cycle("prev");
       if (selection) options.notify?.(formatSelection(selection), "info");
@@ -221,24 +225,35 @@ export function registerSparkModelSelectorKeybindings(
 }
 
 export function sparkModelSelectionValue(selection: SparkActiveSelection): string {
-  return JSON.stringify([selection.providerName, selection.modelId]);
+  return `${selection.providerName}/${selection.modelId}`;
 }
 
 export function sparkModelSelectionFromValue(value: string): SparkActiveSelection {
-  const parsed: unknown = JSON.parse(value);
-  if (
-    !Array.isArray(parsed) ||
-    parsed.length !== 2 ||
-    typeof parsed[0] !== "string" ||
-    typeof parsed[1] !== "string"
-  ) {
+  const slash = value.indexOf("/");
+  if (slash <= 0 || slash === value.length - 1) {
     throw new Error(`Invalid Spark model selection value: ${value}`);
   }
-  return { providerName: parsed[0], modelId: parsed[1] };
+  return { providerName: value.slice(0, slash), modelId: value.slice(slash + 1) };
+}
+
+export function resolveSparkModelSelectionById(
+  registry: SparkProviderRegistry,
+  modelId: string,
+): SparkActiveSelection {
+  const trimmed = modelId.trim();
+  if (!trimmed) throw new Error("Spark model id must be non-empty");
+  if (trimmed.includes("/")) return sparkModelSelectionFromValue(trimmed);
+  const matches = registry
+    .listProviders()
+    .filter((provider) => provider.models.some((model) => model.id === trimmed));
+  if (matches.length === 1) return { providerName: matches[0]!.name, modelId: trimmed };
+  if (matches.length > 1)
+    throw new Error(`Ambiguous Spark model id "${trimmed}"; use provider/model.`);
+  throw new Error(`Unknown Spark model: ${trimmed}`);
 }
 
 export function formatSelection(selection: SparkActiveSelection): string {
-  return `Model: ${selection.providerName}/${selection.modelId}`;
+  return `Model: ${sparkModelSelectionValue(selection)}`;
 }
 
 function toSelectorItem(
@@ -259,8 +274,13 @@ function toSelectorItem(
   };
 }
 
+function selectionFromItem(item: SparkModelSelectorItem): SparkActiveSelection {
+  return { providerName: item.providerName, modelId: item.modelId };
+}
+
 function describeModel(provider: ProviderConfig, model: ProviderModelDefinition): string {
-  const parts = [`${provider.name}/${model.id}`];
+  const route = model.transportApi ? `${provider.name} via ${model.transportApi}` : provider.name;
+  const parts = [`route ${route}`, "health unknown"];
   const cost = formatCostDetails(model);
   if (cost) parts.push(cost);
   if (model.reasoning) parts.push("reasoning");

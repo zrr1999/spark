@@ -3,14 +3,20 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  SparkBranchSummaryEntry,
   SparkCompactionEntry,
   SparkCustomMessageEntry,
   SparkSessionEntry,
   SparkSessionMessage,
   SparkSessionMessageEntry,
   SparkSessionRecord,
+  SparkSessionStore,
 } from "./session-store.ts";
-import { getSparkSessionBranch, getSparkSessionLeafId } from "./session-navigation.ts";
+import {
+  getSparkSessionBranch,
+  getSparkSessionLeafId,
+  switchSparkSessionLeaf,
+} from "./session-navigation.ts";
 
 export interface SparkCompactionSettings {
   enabled: boolean;
@@ -53,6 +59,28 @@ export interface SparkCompactionSummaryResult<T = unknown> {
 export type SparkCompactionSummarizer<T = unknown> = (
   preparation: SparkCompactionPreparation,
 ) => SparkCompactionSummaryResult<T> | Promise<SparkCompactionSummaryResult<T>>;
+
+export interface SparkTranscriptMessageForCompaction {
+  role: string;
+  text: string;
+  display?: boolean;
+  customType?: string;
+  toolName?: string;
+  toolCallId?: string;
+  status?: string;
+}
+
+export interface SparkVisibleTranscriptCompactionResult {
+  record: SparkSessionRecord;
+  entry: SparkCompactionEntry<{ mode: "deterministic"; summarizedMessages: number }>;
+  keptMessages: SparkSessionMessage[];
+}
+
+export interface SparkBranchNavigationSummaryResult {
+  activeLeafId: string | null;
+  editorText?: string;
+  summaryEntry?: SparkBranchSummaryEntry<{ mode: "deterministic"; summarizedEntries: number }>;
+}
 
 export function shouldSparkCompact(
   contextTokens: number,
@@ -237,6 +265,131 @@ export async function compactSparkSessionRecord<T = unknown>(
   return entry;
 }
 
+export async function compactSparkVisibleTranscript(
+  store: SparkSessionStore,
+  messages: readonly SparkTranscriptMessageForCompaction[],
+  options: {
+    sessionId?: string;
+    customInstructions?: string;
+    settings?: SparkCompactionSettings;
+  } = {},
+): Promise<SparkVisibleTranscriptCompactionResult | undefined> {
+  const exportable = messages.filter(
+    (message) => message.display !== false && message.text.trim().length > 0,
+  );
+  if (exportable.length < 2) return undefined;
+
+  const record = store.createSession({
+    id: options.sessionId ?? `compact-${Date.now().toString(36)}`,
+  });
+  for (const message of exportable) {
+    store.appendMessage(record, transcriptMessageToSessionMessage(message));
+  }
+
+  const settings = options.settings ?? manualSparkCompactionSettings(record);
+  const preparation = prepareSparkCompaction(record, undefined, settings);
+  if (!preparation || preparation.messagesToSummarize.length === 0) return undefined;
+
+  const entry = await compactSparkSessionRecord(record, preparation, (input) =>
+    deterministicSparkCompactionSummary(input, options.customInstructions),
+  );
+  await store.save(record);
+  return {
+    record,
+    entry,
+    keptMessages: getCompactionKeptMessages(record, entry),
+  };
+}
+
+export function deterministicSparkCompactionSummary(
+  preparation: SparkCompactionPreparation,
+  customInstructions?: string,
+): SparkCompactionSummaryResult<{ mode: "deterministic"; summarizedMessages: number }> {
+  const sections: string[] = [];
+  if (preparation.previousSummary) {
+    sections.push(`Previous summary:\n${preparation.previousSummary}`);
+  }
+  if (customInstructions?.trim()) {
+    sections.push(`Custom focus: ${customInstructions.trim()}`);
+  }
+  const summarized = summarizeSparkMessages(preparation.messagesToSummarize, 16);
+  sections.push(
+    summarized.length > 0
+      ? `Conversation summary:\n${summarized}`
+      : "Conversation summary:\nNo prior history to summarize.",
+  );
+  if (preparation.isSplitTurn && preparation.turnPrefixMessages.length > 0) {
+    sections.push(
+      `Turn Context (split turn):\n${summarizeSparkMessages(preparation.turnPrefixMessages, 8)}`,
+    );
+  }
+  return {
+    summary: sections.join("\n\n---\n\n"),
+    details: { mode: "deterministic", summarizedMessages: preparation.messagesToSummarize.length },
+  };
+}
+
+export function appendSparkBranchSummary(
+  record: SparkSessionRecord,
+  targetId: string | null,
+  entriesToSummarize: readonly SparkSessionEntry[],
+  options: { customInstructions?: string } = {},
+): SparkBranchSummaryEntry<{ mode: "deterministic"; summarizedEntries: number }> | undefined {
+  if (entriesToSummarize.length === 0) return undefined;
+  const existing = new Set(record.entries.map((entry) => entry.id));
+  const entry: SparkBranchSummaryEntry<{ mode: "deterministic"; summarizedEntries: number }> = {
+    type: "branch_summary",
+    id: createEntryId(existing),
+    parentId: targetId,
+    timestamp: new Date().toISOString(),
+    fromId: entriesToSummarize.at(-1)?.id ?? targetId ?? "root",
+    summary: deterministicSparkBranchSummary(entriesToSummarize, options.customInstructions),
+    details: { mode: "deterministic", summarizedEntries: entriesToSummarize.length },
+  };
+  record.entries.push(entry);
+  return entry;
+}
+
+export function navigateSparkSessionBranchWithSummary(
+  record: SparkSessionRecord,
+  targetId: string,
+  options: { summarize?: boolean; customInstructions?: string } = {},
+): SparkBranchNavigationSummaryResult {
+  const oldLeafId = getSparkSessionLeafId(record);
+  if (targetId === oldLeafId) return { activeLeafId: oldLeafId };
+  const target = record.entries.find((entry) => entry.id === targetId);
+  if (!target) throw new Error(`Session entry not found: ${targetId}`);
+  const entriesToSummarize = collectSparkBranchEntriesToSummarize(record, oldLeafId, targetId);
+  const targetLeafId =
+    target.type === "message" && target.message.role === "user" ? target.parentId : targetId;
+  let summaryEntry: SparkBranchNavigationSummaryResult["summaryEntry"];
+  if (options.summarize) {
+    summaryEntry = appendSparkBranchSummary(record, targetLeafId, entriesToSummarize, {
+      customInstructions: options.customInstructions,
+    });
+    return { activeLeafId: summaryEntry?.id ?? targetLeafId, summaryEntry };
+  }
+  return { activeLeafId: switchSparkSessionLeaf(record, targetLeafId) };
+}
+
+export function collectSparkBranchEntriesToSummarize(
+  record: SparkSessionRecord,
+  oldLeafId: string | null,
+  targetId: string,
+): SparkSessionEntry[] {
+  if (!oldLeafId) return [];
+  const oldBranch = getSparkSessionBranch(record, oldLeafId);
+  const targetBranch = getSparkSessionBranch(record, targetId);
+  const targetIds = new Set(targetBranch.map((entry) => entry.id));
+  const entries: SparkSessionEntry[] = [];
+  for (let index = oldBranch.length - 1; index >= 0; index -= 1) {
+    const entry = oldBranch[index]!;
+    if (targetIds.has(entry.id)) break;
+    entries.unshift(entry);
+  }
+  return entries;
+}
+
 export function entriesToMessages(entries: SparkSessionEntry[]): SparkSessionMessage[] {
   return entries
     .map((entry) => messageFromEntryForCompaction(entry))
@@ -261,6 +414,90 @@ function messageFromEntryForCompaction(entry: SparkSessionEntry): SparkSessionMe
     return { role: "branchSummary", summary: entry.summary, fromId: entry.fromId };
   }
   return undefined;
+}
+
+function manualSparkCompactionSettings(record: SparkSessionRecord): SparkCompactionSettings {
+  const messageCount = record.entries.filter((entry) => entry.type === "message").length;
+  return {
+    ...DEFAULT_SPARK_COMPACTION_SETTINGS,
+    keepRecentTokens: Math.max(1, Math.floor(messageCount / 2)),
+  };
+}
+
+function transcriptMessageToSessionMessage(
+  message: SparkTranscriptMessageForCompaction,
+): SparkSessionMessage {
+  const label = message.toolName
+    ? `${message.toolName}${message.status ? ` [${message.status}]` : ""}`
+    : message.customType;
+  return {
+    role: normalizeTranscriptRole(message.role),
+    content: label ? `${label}: ${message.text}` : message.text,
+    timestamp: Date.now(),
+    ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
+  };
+}
+
+function normalizeTranscriptRole(role: string): string {
+  if (role === "tool") return "toolResult";
+  if (role === "thinking") return "custom";
+  if (role === "custom") return "custom";
+  return role;
+}
+
+function getCompactionKeptMessages(
+  record: SparkSessionRecord,
+  compaction: SparkCompactionEntry,
+): SparkSessionMessage[] {
+  const branch = getSparkSessionBranch(record, compaction.id);
+  const kept: SparkSessionEntry[] = [];
+  let foundFirstKept = false;
+  for (const entry of branch) {
+    if (entry.id === compaction.firstKeptEntryId) foundFirstKept = true;
+    if (foundFirstKept && entry.type === "message") kept.push(entry);
+  }
+  return entriesToMessages(kept);
+}
+
+function deterministicSparkBranchSummary(
+  entries: readonly SparkSessionEntry[],
+  customInstructions?: string,
+): string {
+  const messages = entriesToMessages([...entries]);
+  const lines = ["The following is a summary of a branch that this conversation came back from:"];
+  if (customInstructions?.trim()) lines.push(`Custom focus: ${customInstructions.trim()}`);
+  lines.push(summarizeSparkMessages(messages, 16) || "No content to summarize.");
+  return lines.join("\n\n");
+}
+
+function summarizeSparkMessages(messages: readonly SparkSessionMessage[], limit: number): string {
+  return messages
+    .slice(0, limit)
+    .map((message, index) => {
+      const text = extractMessageText(message).replace(/\s+/gu, " ").trim();
+      const truncated = text.length > 220 ? `${text.slice(0, 217)}...` : text;
+      return `${index + 1}. ${message.role}: ${truncated || "[non-text content]"}`;
+    })
+    .join("\n");
+}
+
+function extractMessageText(message: SparkSessionMessage): string {
+  const content = message.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return JSON.stringify(content ?? "");
+  return content
+    .map((block) => {
+      if (!block || typeof block !== "object") return "";
+      const record = block as Record<string, unknown>;
+      if (record.type === "text" && typeof record.text === "string") return record.text;
+      if (record.type === "thinking" && typeof record.thinking === "string") return record.thinking;
+      if (record.type === "toolCall")
+        return `tool call ${typeof record.name === "string" ? record.name : ""}`;
+      if (record.type === "image") return "[image]";
+      return "";
+    })
+    .filter(Boolean)
+    .join(" ");
 }
 
 function findValidCutPoints(
@@ -321,8 +558,8 @@ function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
   return -1;
 }
 
-function createEntryId(entries: SparkSessionEntry[]): string {
-  const existing = new Set(entries.map((entry) => entry.id));
+function createEntryId(entries: SparkSessionEntry[] | Set<string>): string {
+  const existing = entries instanceof Set ? entries : new Set(entries.map((entry) => entry.id));
   for (let i = 0; i < 100; i += 1) {
     const id = randomUUID().slice(0, 8);
     if (!existing.has(id)) return id;

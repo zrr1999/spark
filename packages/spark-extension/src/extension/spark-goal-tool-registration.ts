@@ -606,6 +606,8 @@ function goalCompletionResult(
         error: "goal_completion_needs_changes",
         goal: result.goal ?? originalGoal,
         outcome: result.outcome,
+        blockers: result.blockers,
+        remainingWork: result.remainingWork,
         review: result.review?.verdict,
         reviewArtifact: result.artifactRef,
       },

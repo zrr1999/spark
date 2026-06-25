@@ -13,26 +13,20 @@ import {
 } from "../apps/spark-tui/src/host/index.ts";
 
 void test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin extension set", () => {
+  const expected = [
+    "@zendev-lab/pi-ask/extension",
+    "@zendev-lab/pi-cue/extension",
+    "@zendev-lab/pi-files/extension",
+    "@zendev-lab/spark-ai/models-extension",
+    "@zendev-lab/pi-roles/extension",
+    "@zendev-lab/pi-graft/extension",
+    "@zendev-lab/spark-extension/extension",
+  ];
   assert.deepEqual(
     loadBuiltinExtensionFactories().map((entry) => entry.specifier),
-    [
-      "@zendev-lab/pi-ask/extension",
-      "@zendev-lab/pi-cue/extension",
-      "@zendev-lab/pi-roles/extension",
-      "@zendev-lab/pi-graft/extension",
-      "@zendev-lab/spark-extension/extension",
-    ],
+    expected,
   );
-  assert.deepEqual(
-    [...DEFAULT_SPARK_EXTENSION_SPECS],
-    [
-      "@zendev-lab/pi-ask/extension",
-      "@zendev-lab/pi-cue/extension",
-      "@zendev-lab/pi-roles/extension",
-      "@zendev-lab/pi-graft/extension",
-      "@zendev-lab/spark-extension/extension",
-    ],
-  );
+  assert.deepEqual([...DEFAULT_SPARK_EXTENSION_SPECS], expected);
 });
 
 void test("SparkExtensionLoader loads builtin factories through explicit imports", async () => {
@@ -42,6 +36,8 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
     extensions: [
       "@zendev-lab/pi-ask/extension",
       "@zendev-lab/pi-cue/extension",
+      "@zendev-lab/pi-files/extension",
+      "@zendev-lab/spark-ai/models-extension",
       "@zendev-lab/pi-roles/extension",
       "@zendev-lab/pi-graft/extension",
       "@zendev-lab/spark-extension/extension",
@@ -57,6 +53,8 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
   assert.ok(!tools.includes("ask_user"));
   assert.ok(!tools.includes("ask_flow"));
   assert.ok(tools.includes("cue_exec"));
+  assert.ok(tools.includes("read"));
+  assert.ok(tools.includes("models"));
   assert.ok(tools.includes("role"));
   assert.ok(!tools.includes("list_roles"));
   assert.ok(tools.includes("graft_status"));

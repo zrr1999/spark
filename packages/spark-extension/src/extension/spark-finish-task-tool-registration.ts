@@ -1015,7 +1015,7 @@ function renderFinishNextStepSuffix(
 ): string {
   if (status !== "done") return "";
   return nextReady
-    ? "\nImplementation mode can continue. Next ready task: @" +
+    ? "\nImplementation phase can continue. Next ready task: @" +
         nextReady.name +
         ": " +
         nextReady.title +

@@ -90,7 +90,14 @@ describe("project cockpit projection", () => {
         dependencies: [
           { fromTaskRuntimeId: "task-plan", toTaskRuntimeId: "task-build", kind: "depends_on" },
         ],
-        payload: {},
+        payload: {
+          projectKind: {
+            kind: "generic",
+            title: "Generic",
+            badge: "generic",
+            panels: [{ label: "Gate", render: "text", text: "task graph" }],
+          },
+        },
       },
       receivedAt: now,
     });
@@ -118,6 +125,12 @@ describe("project cockpit projection", () => {
       linkedInvocationCount: 1,
     });
     expect(cockpit?.taskSummary.byGroup).toMatchObject({ done: 1, blocked: 1 });
+    expect(cockpit?.projectKind).toEqual({
+      kind: "generic",
+      title: "Generic",
+      badge: "generic",
+      panels: [{ label: "Gate", render: "text", text: "task graph" }],
+    });
 
     const buildTask = cockpit?.tasks.find((task) => task.runtimeTaskId === "task-build");
     expect(buildTask?.blockers).toEqual([

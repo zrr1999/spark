@@ -29,6 +29,12 @@ import {
 
 type AssistantMessage = any;
 
+const ESC = String.fromCharCode(27);
+const ANSI_PATTERN = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, "gu");
+function stripAnsi(text: string): string {
+  return text.replace(ANSI_PATTERN, "");
+}
+
 function fakeTui(): TUI {
   return {
     requestRender: () => undefined,
@@ -108,7 +114,7 @@ void test("SparkAgentSession projects loop view events into native TUI transport
     const result = await session.run({ sessionId: "native-ui-session", prompt: "hello" });
 
     assert.equal(result.sessionId, "native-ui-session");
-    assert.match(app.render(120).join("\n"), /spark> count:1/);
+    assert.match(stripAnsi(app.render(120).join("\n")), /spark> count:1/);
     assert.equal((await services.sessionStore.findMostRecent())?.id, "native-ui-session");
   } finally {
     await rm(dir, { recursive: true, force: true });

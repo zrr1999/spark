@@ -1,0 +1,28 @@
+{
+  "name": "@zendev-lab/spark-ai",
+  "version": "0.1.0",
+  "description": "Spark AI plumbing: model-routing contracts, materialization helpers, provider registry compatibility, and bundled provider plugins over @earendil-works/pi-ai.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./baidu-oneapi-provider": "./src/baidu-oneapi-provider.ts",
+    "./models-extension": "./src/models-extension.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^0.79.4",
+    "@zendev-lab/pi-extension-api": "workspace:^",
+    "typebox": "^1.2.13"
+  }
+}

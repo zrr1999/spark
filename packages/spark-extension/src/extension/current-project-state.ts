@@ -9,6 +9,7 @@ import type { TaskGraph } from "@zendev-lab/pi-tasks";
 import {
   normalizeCurrentProjectStoreSnapshot,
   type CurrentProjectStoreSnapshot,
+  type SparkAgentPhase,
   type SparkRunStrategy,
 } from "./current-project-state-schema.ts";
 import { readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
@@ -22,6 +23,7 @@ import type { SparkSessionContext } from "./session-identity.ts";
 export type {
   CurrentProjectStoreSnapshot,
   SparkAgentMode,
+  SparkAgentPhase,
   SparkPlanningModeSource,
   SparkRunStrategy,
 } from "./current-project-state-schema.ts";
@@ -49,10 +51,12 @@ export async function saveCurrentProjectRef(
   projectRef: ProjectRef,
   currentTaskRef?: TaskRef,
 ): Promise<void> {
+  const existing = await loadCurrentProjectState(cwd, ctx);
   await saveCurrentProjectState(cwd, ctx, {
     version: 1,
     projectRef,
     ...(currentTaskRef ? { currentTaskRef } : {}),
+    ...(existing?.phase ? { phase: existing.phase } : {}),
   });
 }
 
@@ -68,8 +72,27 @@ export async function clearCurrentProjectRef(
   cwd: string,
   ctx: SparkSessionContext | undefined,
 ): Promise<void> {
+  const existing = await loadCurrentProjectState(cwd, ctx);
+  if (existing?.phase) {
+    await saveCurrentProjectState(cwd, ctx, { version: 1, phase: existing.phase });
+    return;
+  }
   await rm(currentProjectStorePath(cwd, ctx), { force: true });
   await rebuildSessionIndex(cwd);
+}
+
+export async function saveSessionPhase(
+  cwd: string,
+  ctx: SparkSessionContext | undefined,
+  phase: SparkAgentPhase,
+): Promise<void> {
+  const existing = await loadCurrentProjectState(cwd, ctx);
+  await saveCurrentProjectState(cwd, ctx, {
+    version: 1,
+    ...(existing?.projectRef ? { projectRef: existing.projectRef } : {}),
+    ...(existing?.currentTaskRef ? { currentTaskRef: existing.currentTaskRef } : {}),
+    phase,
+  });
 }
 
 export async function currentSparkProject(
