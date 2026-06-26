@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -450,16 +450,12 @@ void test("script_eval renders a bounded inline code preview", () => {
   assert.doesNotMatch(rendered ?? "", /print\('sixth'\)/);
 });
 
-void test("script_run and script_eval choose and report python interpreters", async () => {
+void test("script_run and script_eval execute python through uv run", async () => {
   const tools = registerCueToolsForTest();
   const runTool = tools.get("script_run");
   const evalTool = tools.get("script_eval");
   assert.ok(runTool);
   assert.ok(evalTool);
-  const dir = await mkdtemp(join(tmpdir(), "pi-cue-python-path-"));
-  const python312 = join(dir, "python3.12");
-  await writeFile(python312, "#!/bin/sh\necho 'Python 3.12.9'\n");
-  await chmod(python312, 0o755);
   const commands: string[] = [];
   const fakeClient = {
     isClosed: false,
@@ -479,7 +475,7 @@ void test("script_run and script_eval choose and report python interpreters", as
   const ctx = {
     cwd: "/work",
     cueClient: fakeClient,
-    env: { PATH: dir },
+    env: { PATH: "/usr/bin" },
   } as unknown as PiCueToolContext;
 
   const defaultEval = await evalTool.execute(
@@ -492,12 +488,12 @@ void test("script_run and script_eval choose and report python interpreters", as
     () => undefined,
     ctx,
   );
-  assert.equal(commands[0], `${python312} -c "print('modern')"`);
-  assert.deepEqual((defaultEval.details as { pythonInterpreter?: unknown }).pythonInterpreter, {
-    executable: python312,
-    source: "path",
-    candidates: ["python3.13", "python3.12", "python3"],
-    version: "Python 3.12.9",
+  assert.equal(commands[0], `uv run python -c "print('modern')"`);
+  assert.deepEqual((defaultEval.details as { pythonRunner?: unknown }).pythonRunner, {
+    executable: "uv",
+    source: "uv",
+    argv: ["uv", "run", "python"],
+    note: "Python is executed through `uv run python ...`; uv resolves the project/session Python environment.",
   });
 
   const fileResult = await runTool.execute(
@@ -507,7 +503,7 @@ void test("script_run and script_eval choose and report python interpreters", as
     () => undefined,
     ctx,
   );
-  assert.equal(commands[1], "/work/.venv/bin/python /work/tools/check.py");
+  assert.equal(commands[1], "uv run --python /work/.venv/bin/python python /work/tools/check.py");
   assert.equal((fileResult.details as { venv?: string }).venv, "/work/.venv");
 
   const evalResult = await evalTool.execute(
@@ -521,7 +517,7 @@ void test("script_run and script_eval choose and report python interpreters", as
     () => undefined,
     ctx,
   );
-  assert.equal(commands[2], "/opt/venv/bin/python -c \"print('ok')\"");
+  assert.equal(commands[2], "uv run --python /opt/venv/bin/python python -c \"print('ok')\"");
   assert.equal((evalResult.details as { venv?: string }).venv, "/opt/venv");
 
   await assert.rejects(
@@ -572,7 +568,7 @@ void test("pi-cue tool descriptions match cue-shell chain operator contract", ()
   assert.match(scriptTool.description, /`\|\?\|`/);
 });
 
-void test("pi-cue docs document script runner venv and python -c behavior", async () => {
+void test("pi-cue docs document script runner venv and uv run python behavior", async () => {
   const skill = await readFile("packages/pi-cue/skills/pi-cue/SKILL.md", "utf8");
   const readme = await readFile("packages/pi-cue/README.md", "utf8");
   const toolsDoc = await readFile("docs/tools.md", "utf8");
@@ -581,18 +577,19 @@ void test("pi-cue docs document script runner venv and python -c behavior", asyn
   assert.match(skill, /`script_eval`\s+\|[^\n]+`venv\?`/);
   assert.doesNotMatch(skill, /`script_run`\s+\|[^\n]+`scope\?`/);
   assert.doesNotMatch(skill, /`script_eval`\s+\|[^\n]+`scope\?`/);
+  assert.match(skill, /Python always executes through `uv run python`/);
   assert.match(skill, /`venv` is valid only with `language="python"`/);
   assert.match(skill, /`&&` is valid cue-shell job logic/);
   assert.doesNotMatch(skill, /`&&` is bash; use `->`/);
 
-  assert.match(readme, /`venv` interpreter/);
-  assert.match(readme, /python -c/);
+  assert.match(readme, /uv run --python <venv>\/bin\/python/);
+  assert.match(readme, /uv run python -c/);
   assert.match(readme, /Tool-call rendering shows a fixed, bounded preview/);
   assert.doesNotMatch(readme, /`scope` is valid only for `language: "cue-shell"`/);
 
   assert.match(toolsDoc, /`pi-cue` tools \([^\n]+`cue_resources`[^\n]+\)/);
   assert.match(toolsDoc, /`cue_resources` — inspect resource providers and snapshots/);
-  assert.match(toolsDoc, /python -c/);
+  assert.match(toolsDoc, /uv run python -c/);
   assert.match(toolsDoc, /`venv` is python-only/);
   assert.doesNotMatch(toolsDoc, /temporary file before execution/);
 });

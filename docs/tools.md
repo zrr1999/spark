@@ -325,8 +325,8 @@ Resource-oriented tools:
 - `cue_exec` — execute commands and create cue-shell jobs. Tool/API runs use the current Pi session working directory by default and pipe mode (`pty: false`) by default; set `pty: true` only for commands that genuinely need terminal semantics. Foreground stdout/stderr are tailed to 16 KiB per stream by default; `tail_bytes` must be positive.
 - `cue_run` — run a `.cue` file via cue-shell script mode, mirroring `cue run <file.cue>`. Top-level items execute sequentially and fail fast; per-item stdout/stderr are tailed by default.
 - `cue_script` — run an inline `.cue` script body. Use this when the script content is generated in the Pi session; prefer `cue_run` when a real `.cue` file exists on disk.
-- `script_run` — run a script file with an explicit `language`. First batch supports `cue-shell` and `python`; `cue-shell` delegates to RunScript, while `python` runs `python3` or the selected `venv` interpreter through cue-shell job execution.
-- `script_eval` — run an inline script body with an explicit `language`. Inline Python executes through `python -c` or the selected `venv` interpreter. For script runners, `venv` is python-only and `scope` is cue-shell-only.
+- `script_run` — run a script file with an explicit `language`. First batch supports `cue-shell` and `python`; `cue-shell` delegates to RunScript, while `python` always runs through `uv run python` (or `uv run --python <venv>/bin/python python` when `venv` is supplied) via cue-shell job execution.
+- `script_eval` — run an inline script body with an explicit `language`. Inline Python executes through `uv run python -c` or `uv run --python <venv>/bin/python python -c`. For script runners, `venv` is python-only and `scope` is cue-shell-only.
 - `cue_jobs` — list, inspect, wait for, and stop jobs via `action`. List output is limited to 20 rows by default; `action=status` / `action=wait` output is tailed by default.
 - `cue_resources` — inspect resource providers and snapshots via `action: "providers"` or `action: "resources"`.
 - `cue_schedule` — add/list/pause/resume/remove scheduled or one-shot jobs. List output is limited to 20 rows by default.

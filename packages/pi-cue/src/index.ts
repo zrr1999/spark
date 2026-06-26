@@ -24,7 +24,6 @@
  */
 
 import type { ExtensionAPI } from "@zendev-lab/pi-extension-api";
-import { accessSync, constants } from "node:fs";
 import { execFileSync } from "node:child_process";
 import * as nodePath from "node:path";
 import { truncateToWidth } from "@zendev-lab/spark-tui/text";
@@ -925,14 +924,12 @@ async function runPythonScriptJob(
     tailBytes: number;
     cwd: string;
     venv?: string;
-    env?: Record<string, string | undefined>;
   },
 ) {
-  const python = resolvePythonInterpreter({ venv: options.venv, env: options.env });
-  const target = options.inlineScript
-    ? `-c ${quoteCueWord(options.inlineScript)}`
-    : quoteCueWord(options.path ?? "");
-  const result = await cued.runJob(`${quoteCueWord(python.executable)} ${target}`, {
+  const runner = resolvePythonRunner({ venv: options.venv });
+  const targetWords = options.inlineScript ? ["-c", options.inlineScript] : [options.path ?? ""];
+  const command = [...runner.argv, ...targetWords].map(quoteCueWord).join(" ");
+  const result = await cued.runJob(command, {
     timeout: options.timeout,
     cwd: options.cwd,
   });
@@ -960,7 +957,8 @@ async function runPythonScriptJob(
     exitCode: result.exitCode,
     timedOut: result.timedOut,
     warnings: result.warnings,
-    pythonInterpreter: python,
+    pythonRunner: runner,
+    ...(runner.python ? { pythonInterpreter: runner.python } : {}),
     ...(options.venv ? { venv: options.venv } : {}),
   };
   if (result.status === "Failed" && !result.timedOut) {
@@ -971,66 +969,44 @@ async function runPythonScriptJob(
   return { content: [{ type: "text" as const, text: lines.join("\n") }], details };
 }
 
-const PYTHON_INTERPRETER_CANDIDATES = ["python3.13", "python3.12", "python3"] as const;
-
-export interface PythonInterpreterResolution {
-  executable: string;
-  source: "venv" | "path" | "fallback";
-  candidates: string[];
-  version?: string;
-  note?: string;
+export interface PythonRunnerResolution {
+  executable: "uv";
+  source: "uv";
+  argv: string[];
+  python?: {
+    executable: string;
+    source: "venv";
+    version?: string;
+  };
+  note: string;
 }
 
-export function resolvePythonInterpreter(
+export function resolvePythonRunner(
   options: {
     venv?: string;
-    env?: Record<string, string | undefined>;
   } = {},
-): PythonInterpreterResolution {
+): PythonRunnerResolution {
   if (options.venv) {
     const executable = `${options.venv.replace(/\/+$/u, "")}/bin/python`;
     return {
-      executable,
-      source: "venv",
-      candidates: [executable],
-      version: pythonVersion(executable),
-    };
-  }
-
-  for (const candidate of PYTHON_INTERPRETER_CANDIDATES) {
-    const executable = findExecutableOnPath(candidate, options.env?.PATH ?? process.env.PATH);
-    if (!executable) continue;
-    return {
-      executable,
-      source: candidate === "python3" ? "fallback" : "path",
-      candidates: [...PYTHON_INTERPRETER_CANDIDATES],
-      version: pythonVersion(executable),
-      ...(candidate === "python3"
-        ? { note: "python3.12+ was not found on PATH; fell back to python3." }
-        : {}),
+      executable: "uv",
+      source: "uv",
+      argv: ["uv", "run", "--python", executable, "python"],
+      python: {
+        executable,
+        source: "venv",
+        version: pythonVersion(executable),
+      },
+      note: "Python is executed through `uv run --python <venv>/bin/python python ...`.",
     };
   }
 
   return {
-    executable: "python3",
-    source: "fallback",
-    candidates: [...PYTHON_INTERPRETER_CANDIDATES],
-    note: "python3.12+ was not found on the host PATH; cue-shell will resolve python3 in the daemon/session PATH.",
+    executable: "uv",
+    source: "uv",
+    argv: ["uv", "run", "python"],
+    note: "Python is executed through `uv run python ...`; uv resolves the project/session Python environment.",
   };
-}
-
-function findExecutableOnPath(name: string, pathValue: string | undefined): string | undefined {
-  for (const dir of (pathValue ?? "").split(nodePath.delimiter)) {
-    if (!dir) continue;
-    const executable = nodePath.join(dir, name);
-    try {
-      accessSync(executable, constants.X_OK);
-      return executable;
-    } catch {
-      // Continue scanning PATH.
-    }
-  }
-  return undefined;
 }
 
 function pythonVersion(executable: string): string | undefined {
@@ -1585,7 +1561,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     description:
       "Run a script file with an explicit language runner. " +
       "Supported languages in this version: cue-shell and python. " +
-      "For cue-shell this delegates to RunScript and mirrors cue_run; for python it uses the selected venv interpreter, otherwise prefers python3.12+ before falling back to python3, and reports the resolved interpreter in details.",
+      "For cue-shell this delegates to RunScript and mirrors cue_run; for python it always executes through uv run, optionally with --python <venv>/bin/python, and reports the resolved runner in details.",
     parameters: Type.Object({
       path: Type.String({ description: "Path to the script file to run." }),
       language: Type.String({ description: "Script language. Required: cue-shell or python." }),
@@ -1682,7 +1658,6 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         tailBytes,
         cwd: baseCwd,
         venv,
-        env: ctx.env,
       });
     },
   });
@@ -1693,7 +1668,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     description:
       "Run an inline script body with an explicit language runner. " +
       "Supported languages in this version: cue-shell and python. " +
-      "Inline Python is executed with python -c through cue-shell, using the selected venv interpreter, otherwise preferring python3.12+ before falling back to python3, and reporting the resolved interpreter in details.",
+      "Inline Python is executed with uv run python -c through cue-shell, optionally with --python <venv>/bin/python, and reports the resolved runner in details. Manual cue_exec python calls are blocked by the default daemon guardrails.",
     parameters: Type.Object({
       script: Type.String({ description: "Inline script body to run." }),
       language: Type.String({ description: "Script language. Required: cue-shell or python." }),
@@ -1787,7 +1762,6 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         tailBytes,
         cwd: baseCwd,
         venv,
-        env: ctx.env,
       });
     },
   });
