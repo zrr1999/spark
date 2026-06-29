@@ -1,0 +1,27 @@
+{
+  "name": "@zendev-lab/spark-host",
+  "version": "0.1.0",
+  "description": "Host-neutral Spark ExtensionAPI runtime and host services.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/runtime.ts",
+    "./keybindings": "./src/keybindings.ts",
+    "./types": "./src/types.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@zendev-lab/pi-extension-api": "workspace:^",
+    "@zendev-lab/spark-protocol": "workspace:^"
+  }
+}

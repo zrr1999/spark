@@ -16,7 +16,7 @@
   },
   "scripts": {
     "build": "node scripts/build-cli.mjs",
-    "check": "tsc --noEmit",
+    "check": "tsc -p tsconfig.json --noEmit",
     "cli": "pnpm run build && node dist/cli.js",
     "prepack": "pnpm run build",
     "test": "vp test run",
@@ -33,7 +33,6 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.79.4",
     "@types/ws": "^8.18.1",
     "@zendev-lab/spark-db": "workspace:*",
     "@zendev-lab/spark-protocol": "workspace:*",

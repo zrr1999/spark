@@ -126,4 +126,8 @@ export function createSparkNativeTuiHarness(
 export async function flushNativeTuiMicrotasks(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
   await new Promise<void>((resolve) => setImmediate(resolve));
+  // Some native submit paths (notably visible bang commands) cross a child
+  // process boundary; give those macrotasks a deterministic chance to settle.
+  await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }

@@ -164,16 +164,52 @@ void test("artifact record rejects retired verification kind with a directed hin
   }
 });
 
-void test("artifact store rejects non-canonical artifact kinds when reading metadata", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-artifact-noncanonical-kind-"));
+void test("artifact store maps known legacy artifact kinds when reading metadata", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-artifact-legacy-kind-"));
   try {
-    const ref = newRef("artifact", "noncanonical-role-plan");
+    const store = new ArtifactStore({ rootDir: dir });
+    const ref = newRef("artifact", "legacy-cue-output");
     const metadata = {
       ref,
-      kind: "role-plan",
-      title: "Role plan",
+      kind: "cue-output",
+      title: "Cue output",
+      format: "json",
+      body: { ok: true },
+      links: [],
+      provenance: { producer: "cue" },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    await writeFile(
+      join(dir, `${ref.slice("artifact:".length)}.json`),
+      `${JSON.stringify(metadata, null, 2)}\n`,
+      "utf8",
+    );
+
+    const artifact = await store.get(ref);
+    assert.equal(artifact.kind, "trace");
+    assert.equal((artifact as unknown as { legacyKind?: string }).legacyKind, "cue-output");
+    const [listed] = await store.list({ kind: "trace" });
+    assert.equal(listed?.ref, ref);
+    assert.equal(
+      (listed as unknown as { legacyKind?: string } | undefined)?.legacyKind,
+      "cue-output",
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("artifact store rejects unknown non-canonical artifact kinds when reading metadata", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-artifact-noncanonical-kind-"));
+  try {
+    const ref = newRef("artifact", "noncanonical-unknown-kind");
+    const metadata = {
+      ref,
+      kind: "unknown-artifact-kind",
+      title: "Unknown kind",
       format: "markdown",
-      body: "# Roles\n",
+      body: "# Unknown\n",
       links: [],
       provenance: { producer: "spark" },
       createdAt: "2026-01-01T00:00:00.000Z",

@@ -282,6 +282,24 @@ export class ArtifactStoreFormatError extends Error {
 const DEFAULT_INLINE_BODY_THRESHOLD_BYTES = 64 * 1024;
 const DEFAULT_BODY_PREVIEW_CHARS = 4_000;
 
+const LEGACY_ARTIFACT_KIND_MAP: Readonly<Record<string, ArtifactKind>> = {
+  "agent-plan": "document",
+  "ask-answer": "record",
+  "cue-output": "trace",
+  review: "record",
+  "role-plan": "document",
+  "run-trace": "trace",
+  "spark-md": "document",
+  validation: "record",
+  verification: "record",
+};
+
+export function canonicalArtifactKindForPersistedKind(value: unknown): ArtifactKind | undefined {
+  if (typeof value !== "string") return undefined;
+  if (isArtifactKind(value)) return value;
+  return LEGACY_ARTIFACT_KIND_MAP[value];
+}
+
 export class ArtifactStore {
   readonly rootDir: string;
   readonly blobDir: string;
@@ -501,12 +519,24 @@ export async function readArtifactMetadataFile(filePath: string): Promise<Artifa
       "invalid_json",
     );
   }
+  const metadata = normalizePersistedArtifactMetadata(raw);
   try {
-    validateArtifact(raw);
+    validateArtifact(metadata);
   } catch (error) {
     throw new ArtifactStoreFormatError(filePath, unknownErrorMessage(error));
   }
-  return raw;
+  return metadata;
+}
+
+function normalizePersistedArtifactMetadata(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  const canonicalKind = canonicalArtifactKindForPersistedKind(raw.kind);
+  if (!canonicalKind || canonicalKind === raw.kind) return raw;
+  return {
+    ...raw,
+    kind: canonicalKind,
+    legacyKind: raw.kind,
+  };
 }
 
 export function resolveArtifactBlobPath(rootDir: string, blobPath: string): string | undefined {

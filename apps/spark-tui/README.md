@@ -47,6 +47,8 @@ Default shape:
    "extensions": [
       "@zendev-lab/pi-ask/extension",
       "@zendev-lab/pi-cue/extension",
+      "@zendev-lab/pi-files/extension",
+      "@zendev-lab/spark-ai/models-extension",
       "@zendev-lab/pi-roles/extension",
       "@zendev-lab/pi-graft/extension",
       "@zendev-lab/spark-extension/extension"

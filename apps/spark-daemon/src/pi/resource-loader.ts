@@ -1,12 +1,24 @@
-import {
-  createExtensionRuntime,
-  type ResourceLoader,
-  type ResourceDiagnostic,
-} from "@earendil-works/pi-coding-agent";
+export interface SparkDaemonResourceDiagnostic {
+  message?: string;
+  severity?: string;
+  [key: string]: unknown;
+}
 
-export function createNaviaResourceLoader(systemPrompt?: string): ResourceLoader {
+export interface SparkDaemonResourceLoader {
+  getExtensions(): { extensions: unknown[]; errors: unknown[]; runtime: Record<string, never> };
+  getSkills(): { skills: unknown[]; diagnostics: SparkDaemonResourceDiagnostic[] };
+  getPrompts(): { prompts: unknown[]; diagnostics: SparkDaemonResourceDiagnostic[] };
+  getThemes(): { themes: unknown[]; diagnostics: SparkDaemonResourceDiagnostic[] };
+  getAgentsFiles(): { agentsFiles: unknown[] };
+  getSystemPrompt(): string;
+  getAppendSystemPrompt(): string[];
+  extendResources(): void;
+  reload(): Promise<void>;
+}
+
+export function createNaviaResourceLoader(systemPrompt?: string): SparkDaemonResourceLoader {
   return {
-    getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
+    getExtensions: () => ({ extensions: [], errors: [], runtime: {} }),
     getSkills: () => ({ skills: [], diagnostics: [] }),
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
@@ -20,6 +32,6 @@ export function createNaviaResourceLoader(systemPrompt?: string): ResourceLoader
   };
 }
 
-export function emptyDiagnostics(): ResourceDiagnostic[] {
+export function emptyDiagnostics(): SparkDaemonResourceDiagnostic[] {
   return [];
 }

@@ -58,6 +58,9 @@ importers:
       '@zendev-lab/spark-ai':
         specifier: workspace:^
         version: link:packages/spark-ai
+      '@zendev-lab/spark-host':
+        specifier: workspace:^
+        version: link:packages/spark-host
       '@zendev-lab/spark-protocol':
         specifier: workspace:^
         version: link:packages/spark-protocol
@@ -67,6 +70,9 @@ importers:
       '@zendev-lab/spark-tui':
         specifier: workspace:^
         version: link:packages/spark-tui
+      '@zendev-lab/spark-turn':
+        specifier: workspace:^
+        version: link:packages/spark-turn
       typebox:
         specifier: ^1.2.13
         version: 1.2.13
@@ -178,9 +184,6 @@ importers:
         specifier: ^8.18.3
         version: 8.21.0
     devDependencies:
-      '@earendil-works/pi-coding-agent':
-        specifier: 0.79.4
-        version: 0.79.4(ws@8.21.0)(zod@4.4.3)
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
@@ -217,12 +220,18 @@ importers:
       '@zendev-lab/spark-ai':
         specifier: workspace:^
         version: link:../../packages/spark-ai
+      '@zendev-lab/spark-host':
+        specifier: workspace:^
+        version: link:../../packages/spark-host
       '@zendev-lab/spark-protocol':
         specifier: workspace:^
         version: link:../../packages/spark-protocol
       '@zendev-lab/spark-tui':
         specifier: workspace:^
         version: link:../../packages/spark-tui
+      '@zendev-lab/spark-turn':
+        specifier: workspace:^
+        version: link:../../packages/spark-turn
 
   packages/pi-artifacts:
     dependencies:
@@ -433,6 +442,15 @@ importers:
         specifier: ^1.2.13
         version: 1.2.13
 
+  packages/spark-host:
+    dependencies:
+      '@zendev-lab/pi-extension-api':
+        specifier: workspace:^
+        version: link:../pi-extension-api
+      '@zendev-lab/spark-protocol':
+        specifier: workspace:^
+        version: link:../spark-protocol
+
   packages/spark-protocol:
     dependencies:
       zod:
@@ -478,6 +496,15 @@ importers:
       '@earendil-works/pi-tui':
         specifier: ^0.79.4
         version: 0.79.4
+
+  packages/spark-turn:
+    dependencies:
+      '@zendev-lab/pi-extension-api':
+        specifier: workspace:^
+        version: link:../pi-extension-api
+      '@zendev-lab/spark-protocol':
+        specifier: workspace:^
+        version: link:../spark-protocol
 
 packages:
 
@@ -4327,7 +4354,7 @@ snapshots:
       '@protobufjs/path': 1.1.2
       '@protobufjs/pool': 1.1.0
       '@protobufjs/utf8': 1.1.1
-      '@types/node': 25.9.3
+      '@types/node': 26.0.1
       long: 5.3.2
 
   punycode@2.3.1:

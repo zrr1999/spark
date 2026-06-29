@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createNaviaResourceLoader } from "./resource-loader.js";
+import { extractTextDelta } from "./session.js";
 
-describe("Pi SDK integration surface", () => {
+describe("Spark daemon session compatibility surface", () => {
   it("uses a daemon-owned resource loader with no extension discovery by default", () => {
     const loader = createNaviaResourceLoader();
 
@@ -12,10 +13,22 @@ describe("Pi SDK integration surface", () => {
     expect(loader.getSystemPrompt()).toContain("Spark Daemon");
   });
 
-  it("can import the pinned Pi SDK", async () => {
-    const sdk = await import("@earendil-works/pi-coding-agent");
+  it("uses Spark headless session execution instead of pi-coding-agent sessions", async () => {
+    const headless = await import("@zendev-lab/spark-tui-app/headless-role-executor");
 
-    expect(typeof sdk.createAgentSession).toBe("function");
-    expect(typeof sdk.AuthStorage.create).toBe("function");
+    expect(typeof headless.createSparkHeadlessSessionExecutor).toBe("function");
+  });
+
+  it("extracts text deltas from Spark headless stream events and legacy Pi events", () => {
+    expect(
+      extractTextDelta({ type: "stream_event", event: { type: "text_delta", delta: "spark" } }),
+    ).toBe("spark");
+    expect(
+      extractTextDelta({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "legacy" },
+      }),
+    ).toBe("legacy");
+    expect(extractTextDelta({ type: "stream_event", event: { type: "done" } })).toBeNull();
   });
 });

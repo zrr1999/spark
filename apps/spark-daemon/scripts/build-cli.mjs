@@ -7,7 +7,7 @@ await build({
   },
   bundle: true,
   entryPoints: ["src/cli.ts"],
-  external: ["@earendil-works/pi-coding-agent", "ws"],
+  external: ["ws"],
   format: "esm",
   outfile: "dist/cli.js",
   platform: "node",

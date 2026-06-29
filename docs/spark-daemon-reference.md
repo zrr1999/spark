@@ -8,7 +8,7 @@ Spark implements one **Spark daemon** runtime core:
 
 - daemon core: local lock + local IPC + file queue + worker loop + service lifecycle.
 - cockpit adapter: server WebSocket protocol, workspace registration, command routing, cancellation, and projection emission.
-- not Pi RPC: do not wrap `pi --mode rpc`; Spark already owns `SparkHostRuntime`, `SparkAgentLoop`, providers, sessions, skills, and extension loading.
+- not Pi RPC and not Pi agent sessions: do not wrap `pi --mode rpc` or call `createAgentSession`; Spark owns `@zendev-lab/spark-host`, `@zendev-lab/spark-turn`, providers, sessions, skills, extension loading, and daemon headless execution.
 
 ## nyakore daemon mechanics to reuse
 
@@ -47,7 +47,7 @@ The daemon loop order is:
 6. run scheduler burst
 7. sleep if no work happened
 
-Spark should start smaller:
+Spark starts smaller, and current `session.run` work is already routed through Spark's headless session executor backed by `spark-host` / `spark-turn`:
 
 1. sweep stale/expired daemon task claims if implemented
 2. process queue batch

@@ -49,7 +49,7 @@ Target package topology follows type-first names:
 - `pi-extension-api` is the host-neutral TypeScript contract for Pi-style extensions. Do not merge it into Spark product code; Spark extension packages depend on this contract instead.
 - `packages/spark-extension/src/extension/` is the Spark extension facade path. It must remain loadable by Pi as a normal extension.
 - Spark extension/shared packages must not import concrete app host internals from `apps/spark-cli`, `apps/spark-tui`, `@zendev-lab/spark-tui-app`, or `@earendil-works/pi-coding-agent` runtime code.
-- Native Spark host code belongs in executable app packages (`apps/spark-tui` for the terminal host); pi-tui-specific wrappers should stay behind the reusable `packages/spark-tui` boundary.
+- Shared Spark host/turn code belongs in `packages/spark-host` and `packages/spark-turn`; executable apps keep only bootstrap, UI, daemon, and compatibility-adapter glue. pi-tui-specific wrappers should stay behind the reusable `packages/spark-tui` boundary.
 - When adding or changing a host-touching extension capability, update `pi-extension-api` only if both hosts need the contract, and add/adjust dual-host tests such as `test/spark-ext-host-contract.test.ts`, `test/spark-host-runtime-cross.test.ts`, and the relevant Spark host test.
 - Keep builtin extension loading explicit for Spark native hosts; do not reintroduce Pi SDK package discovery or `loadPiSdk` into Spark apps.
 

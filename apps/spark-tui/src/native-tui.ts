@@ -1110,6 +1110,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
   }
 
   setEditorText(text: string): void {
+    if (this.editor.isShowingAutocomplete()) this.editor.handleInput(Key.escape);
     this.editor.setText(text);
     this.invalidate();
     this.tui.requestRender();

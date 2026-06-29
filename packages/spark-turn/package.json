@@ -1,0 +1,25 @@
+{
+  "name": "@zendev-lab/spark-turn",
+  "version": "0.1.0",
+  "description": "Host-neutral Spark model/tool turn loop.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/agent-loop.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@zendev-lab/pi-extension-api": "workspace:^",
+    "@zendev-lab/spark-protocol": "workspace:^"
+  }
+}

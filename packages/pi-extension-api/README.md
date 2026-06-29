@@ -33,10 +33,10 @@ dependencies. Two hosts implement supersets of these types:
 - pi-coding-agent runtime — full Pi semantics (commands, tools, events,
   widgets, sessions). Declares this surface as a subset of its private
   `ExtensionAPI`.
-- spark-tui-app native pi-tui host — `SparkHostRuntime` implements the retained
+- Spark native host family — `@zendev-lab/spark-host` provides `SparkHostRuntime`, implementing the retained
   surface needed by `@zendev-lab/pi-ask`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-roles`, `@zendev-lab/pi-graft`, and `@zendev-lab/spark-extension`,
   plus host-only helpers for keybindings, message renderers, provider/model
-  selection, and the native TUI bridge.
+  registry adapters, session glue, and native UI bridges.
 
 ## Contract rules
 
@@ -57,7 +57,7 @@ dependencies. Two hosts implement supersets of these types:
 | Host                                      | Status                                                                         |
 | ----------------------------------------- | ------------------------------------------------------------------------------ |
 | `@earendil-works/pi-coding-agent` runtime | Subset implemented (registerCommand, registerTool, on, sendUserMessage, ui.\*) |
-| `@zendev-lab/spark-tui-app` SparkHostRuntime          | Retained extension surface implemented for native Spark TUI boot               |
+| `@zendev-lab/spark-host` SparkHostRuntime | Retained extension surface implemented for Spark native TUI/headless/daemon hosts |
 
 ## Adding a new capability
 

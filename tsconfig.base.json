@@ -45,11 +45,15 @@
         "./packages/spark-ai/src/baidu-oneapi-provider.ts"
       ],
       "@zendev-lab/spark-ai/models-extension": ["./packages/spark-ai/src/models-extension.ts"],
+      "@zendev-lab/spark-host": ["./packages/spark-host/src/runtime.ts"],
+      "@zendev-lab/spark-host/keybindings": ["./packages/spark-host/src/keybindings.ts"],
+      "@zendev-lab/spark-host/types": ["./packages/spark-host/src/types.ts"],
       "@zendev-lab/spark-tui-app/headless-role-executor": [
         "./apps/spark-tui/src/headless-role-executor.ts"
       ],
       "@zendev-lab/spark-protocol": ["./packages/spark-protocol/src/index.ts"],
       "@zendev-lab/spark-runtime": ["./packages/spark-runtime/src/index.ts"],
+      "@zendev-lab/spark-turn": ["./packages/spark-turn/src/agent-loop.ts"],
       "@zendev-lab/spark-extension/extension": [
         "./packages/spark-extension/src/extension/index.ts"
       ],
