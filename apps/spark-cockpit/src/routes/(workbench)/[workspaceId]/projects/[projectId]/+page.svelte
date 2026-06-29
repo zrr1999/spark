@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
+  import ProjectMainSessionChatPanel from "$lib/ProjectMainSessionChatPanel.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
   import { workspacePath } from "$lib/workspace-routes";
 
@@ -25,20 +26,21 @@
     runtimeStatus: string | null;
   };
 
-  let canStartTask = $derived(data.ownerBinding?.bindingStatus === "available");
+  let canStartTask = $derived(
+    data.ownerBinding?.bindingStatus === "available" &&
+      data.workspaceControl.control.serverMutationAllowed,
+  );
   let startButtonLabel = $derived(
     !data.ownerBinding
       ? t.command.noRunnerOwner
-      : data.ownerBinding.bindingStatus !== "available"
+      : !canStartTask
         ? t.command.workspaceUnavailable
         : t.command.queueTask,
   );
   let ownerCommandNote = $derived(
     data.ownerBinding
       ? `${t.command.ownerPrefix} ${data.ownerBinding.displayName} · ${data.ownerBinding.runtimeName}${
-          data.ownerBinding.runtimeStatus === "online"
-            ? ""
-            : ` · ${t.command.offlinePending}`
+          canStartTask ? "" : ` · ${data.workspaceControl.control.message}`
         }`
       : "",
   );
@@ -157,6 +159,19 @@
     </article>
   </section>
 
+  <ProjectMainSessionChatPanel
+    {data}
+    {form}
+    {canStartTask}
+    {startButtonLabel}
+    {ownerCommandNote}
+    {workspaceUrl}
+    {statusLabel}
+    {formatRelative}
+    {deliveryHeadline}
+    {deliveryDetail}
+  />
+
   <section class="panel summary-panel" aria-labelledby="graph-summary-title">
     <div class="summary-content">
       <div>
@@ -173,79 +188,6 @@
         <span class="status-pill done">{t.graph.done} {doneCount}</span>
       </div>
     </div>
-
-    <form method="POST" action="?/startTask" class="task-start-form">
-      <div class="form-heading">
-        <div>
-          <p class="meta-label">{t.command.metaLabel}</p>
-          <h3>{t.command.title}</h3>
-        </div>
-        {#if data.ownerBinding}
-          <span class="status-pill {data.ownerBinding.runtimeStatus}"
-            >{statusLabel(data.ownerBinding.runtimeStatus)}</span
-          >
-        {:else}
-          <span class="status-pill blocked">{t.command.noOwner}</span>
-        {/if}
-      </div>
-
-      <label>
-        <span>{t.command.titleLabel}</span>
-        <input
-          name="title"
-          value={form?.values?.title ?? t.command.titleDefault}
-          placeholder={t.command.titleDefault}
-          required
-        />
-      </label>
-      <label>
-        <span>{t.command.promptLabel}</span>
-        <textarea
-          name="prompt"
-          rows="4"
-          placeholder={t.command.promptPlaceholder}
-          required>{form?.values?.prompt ?? ""}</textarea
-        >
-      </label>
-      {#if form?.message}
-        <p class:form-error={!form?.queuedCommandId} class="form-message">{form.message}</p>
-      {/if}
-      <button type="submit" disabled={!canStartTask}>
-        <Icon name="play" size={16} stroke={2.3} />
-        <span>{startButtonLabel}</span>
-      </button>
-      {#if ownerCommandNote}
-        <p class="command-note">{ownerCommandNote}</p>
-      {/if}
-
-      <div class="command-deliveries" aria-label={t.command.recentAria}>
-        <div class="command-deliveries-heading">
-          <span class="meta-label">{t.command.recentLabel}</span>
-          <small>{data.commands.length} {t.command.shownSuffix}</small>
-        </div>
-        {#if data.commands.length === 0}
-          <p class="command-note">{t.command.empty}</p>
-        {:else}
-          {#each data.commands as command}
-            <article class="command-delivery-row">
-              <header>
-                <div>
-                  <strong>{command.title ?? command.kind}</strong>
-                  <small>{command.id} · {formatRelative(command.createdAt)}</small>
-                </div>
-                <span class="status-pill {command.deliveryStatus ?? command.status}">
-                  {statusLabel(command.deliveryStatus ?? command.status)}
-                </span>
-              </header>
-              <p>{deliveryHeadline(command)}</p>
-              {#if deliveryDetail(command)}
-                <small>{deliveryDetail(command)}</small>
-              {/if}
-            </article>
-          {/each}
-        {/if}
-      </div>
-    </form>
   </section>
 
   <section class="grid">
@@ -421,29 +363,6 @@
     </section>
   </section>
 
-  <section class="panel logs-panel" aria-labelledby="logs-title">
-    <div class="panel-header compact">
-      <div>
-        <p class="panel-kicker">{t.logs.kicker}</p>
-        <h2 id="logs-title">{t.logs.title}</h2>
-      </div>
-    </div>
-    {#if data.logChunks.length === 0}
-      <div class="compact-empty"><Icon name="activity" size={24} /><p>{t.logs.empty}</p></div>
-    {:else}
-      <div class="log-list">
-        {#each data.logChunks as log}
-          <article>
-            <header>
-              <span>{log.stream}</span>
-              <small>{log.runtimeInvocationId} · #{log.sequence}</small>
-            </header>
-            <pre>{log.content}</pre>
-          </article>
-        {/each}
-      </div>
-    {/if}
-  </section>
 </section>
 
 <style>
@@ -569,18 +488,16 @@
   }
 
   .summary-panel {
-    align-items: start;
-    display: grid;
-    gap: 24px;
-    grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
     padding: 24px 28px;
   }
 
-  .summary-content,
-  .task-start-form {
-    display: grid;
-    gap: 16px;
+  .summary-content {
+    align-items: start;
+    display: flex;
+    gap: 24px;
+    justify-content: space-between;
   }
+
 
   .summary-copy {
     margin-top: 8px;
@@ -593,123 +510,6 @@
     justify-content: flex-end;
   }
 
-  .task-start-form {
-    border-left: 1px solid var(--color-border);
-    padding-left: 24px;
-  }
-
-  .form-heading {
-    align-items: start;
-    display: flex;
-    gap: 12px;
-    justify-content: space-between;
-  }
-
-  .task-start-form label {
-    color: var(--color-ink-muted);
-    display: grid;
-    font-size: 12px;
-    font-weight: 800;
-    gap: 6px;
-    text-transform: uppercase;
-  }
-
-  .task-start-form input,
-  .task-start-form textarea {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    color: var(--color-ink);
-    font: inherit;
-    font-size: 14px;
-    line-height: 1.45;
-    padding: 9px 12px;
-    text-transform: none;
-  }
-
-  .task-start-form input:focus,
-  .task-start-form textarea:focus {
-    border-color: var(--color-focus-ring);
-    box-shadow: var(--shadow-focus);
-    outline: none;
-  }
-
-  .task-start-form button {
-    align-items: center;
-    background: var(--color-primary);
-    border: 0;
-    border-radius: 8px;
-    color: var(--color-surface);
-    display: inline-flex;
-    font-weight: 700;
-    gap: 8px;
-    justify-content: center;
-    min-height: 40px;
-    padding: 9px 14px;
-  }
-
-  .task-start-form button:not(:disabled):hover {
-    background: var(--color-primary-hover);
-  }
-
-  .task-start-form button:disabled {
-    background: var(--color-border);
-    color: var(--color-ink-disabled);
-    cursor: not-allowed;
-  }
-
-  .form-message,
-  .command-note {
-    color: var(--color-primary);
-    font-size: 12px;
-    line-height: 1.45;
-  }
-
-  .form-message.form-error {
-    color: var(--color-danger);
-  }
-
-  .command-deliveries {
-    border-top: 1px solid var(--color-border);
-    display: grid;
-    gap: 10px;
-    padding-top: 14px;
-  }
-
-  .command-deliveries-heading,
-  .command-delivery-row header {
-    align-items: center;
-    display: flex;
-    gap: 10px;
-    justify-content: space-between;
-  }
-
-  .command-deliveries-heading small,
-  .command-delivery-row small {
-    color: var(--color-ink-subtle);
-    font-size: 12px;
-  }
-
-  .command-delivery-row {
-    background: var(--color-canvas);
-    border: 1px solid var(--color-border);
-    border-radius: 12px;
-    display: grid;
-    gap: 8px;
-    padding: 12px;
-  }
-
-  .command-delivery-row strong {
-    color: var(--color-ink);
-    display: block;
-    font-size: 13px;
-  }
-
-  .command-delivery-row p {
-    color: var(--color-ink-muted);
-    font-size: 13px;
-    font-weight: 700;
-  }
 
   .grid {
     align-items: start;
@@ -904,45 +704,6 @@
     padding: 24px;
   }
 
-  .log-list {
-    display: grid;
-    gap: 10px;
-    padding: 16px;
-  }
-
-  .log-list article {
-    background: var(--color-ink);
-    border-radius: 8px;
-    color: var(--color-border);
-    overflow: hidden;
-  }
-
-  .log-list header {
-    align-items: center;
-    background: var(--color-code-surface-soft);
-    color: var(--color-ink-disabled);
-    display: flex;
-    font-size: 12px;
-    justify-content: space-between;
-    padding: 8px 12px;
-  }
-
-  .log-list span {
-    color: var(--color-border);
-    font-weight: 800;
-    text-transform: uppercase;
-  }
-
-  .log-list pre {
-    font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    line-height: 1.5;
-    margin: 0;
-    overflow-x: auto;
-    padding: 12px;
-    white-space: pre-wrap;
-  }
-
   time {
     color: var(--color-ink-subtle);
     font-size: 12px;
@@ -958,9 +719,10 @@
       grid-template-columns: 1fr;
     }
 
-    .summary-panel,
+    .summary-content,
     .task-heading {
       align-items: stretch;
+      flex-direction: column;
       grid-template-columns: 1fr;
     }
 
@@ -969,12 +731,6 @@
       flex-direction: column;
     }
 
-    .task-start-form {
-      border-left: 0;
-      border-top: 1px solid var(--color-border);
-      padding-left: 0;
-      padding-top: 20px;
-    }
 
     .status-summary {
       justify-content: flex-start;

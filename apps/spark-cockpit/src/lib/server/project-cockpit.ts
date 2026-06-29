@@ -124,6 +124,7 @@ export interface ProjectCockpitCommand {
   id: string;
   kind: string;
   title: string | null;
+  payloadJson: string;
   status: string;
   deliveryStatus: string | null;
   attemptCount: number | null;
@@ -401,15 +402,14 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
     createdAt: string;
   }>;
 
-  const invocations = invocationRows
-    .slice(0, 8)
-    .map(({ taskRuntimeId: _taskRuntimeId, ...row }) => row);
+  const invocations = invocationRows.slice(0, 8);
 
   const commands = db
     .prepare(
       `SELECT c.id,
               c.kind,
               c.title,
+              c.payload_json AS payloadJson,
               c.status,
               c.created_at AS createdAt,
               c.updated_at AS updatedAt,
