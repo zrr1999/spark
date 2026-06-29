@@ -97,7 +97,6 @@ export {
   createSparkCliHostServices,
   defaultSparkCliKeybindingsPath,
   selectInitialModel,
-  submitToSparkAgent,
 } from "./bootstrap.ts";
 export {
   DEFAULT_SPARK_CONFIG,

@@ -118,7 +118,7 @@ void test("SparkAuthStore persists OAuth credentials with restrictive file mode"
   });
 });
 
-void test("SparkProviderAuthResolver handles env, literal, and OAuth provider refs", async () => {
+void test("SparkProviderAuthResolver handles env, stored API key, literal, and OAuth provider refs", async () => {
   await withAuthDir(async (_dir, authPath) => {
     const store = new SparkAuthStore({ path: authPath });
     await store.reload();
@@ -127,6 +127,14 @@ void test("SparkProviderAuthResolver handles env, literal, and OAuth provider re
     assert.equal(resolver.hasConfiguredAuth(providerConfig("ENV_KEY")), true);
     assert.equal(resolver.resolveApiKey(providerConfig("ENV_KEY")), "env-secret");
     assert.equal(resolver.hasConfiguredAuth(providerConfig("MISSING_KEY")), false);
+    await store.set("oauth-provider", {
+      type: "api_key",
+      provider: "oauth-provider",
+      apiKey: "stored-provider-secret",
+      updatedAt: "2026-01-02T03:04:05.000Z",
+    });
+    assert.equal(resolver.hasConfiguredAuth(providerConfig("MISSING_KEY")), true);
+    assert.equal(resolver.resolveApiKey(providerConfig("MISSING_KEY")), "stored-provider-secret");
     assert.equal(resolver.hasConfiguredAuth(providerConfig("literal-secret")), true);
     assert.equal(resolver.resolveApiKey(providerConfig("literal-secret")), "literal-secret");
     assert.equal(resolver.hasConfiguredAuth(providerConfig("oauth:test-oauth")), false);

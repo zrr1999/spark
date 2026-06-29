@@ -13,11 +13,11 @@ Spark TUI remains daemon-first and does not runtime-depend on `@earendil-works/p
 | HTML export/share | `/export html` and `/share` write self-contained, theme-aware, escaped local HTML for visible or persisted sessions; no secret upload by default. | `artifact:2914e9af-edee-4144-8e25-c59616f73e9f` |
 | Package manager resources | `install/remove/update/list/config` manage local/npm/git resources in Spark package roots with manifest/config reconciliation and safe deletion boundaries. | `artifact:89377550-a259-4fd4-819d-0cd7c015dea6` |
 | Image paste/resize content | `@image` and pasted/dragged image paths become bounded structured `<image>` attachments with MIME/size/dimension metadata; oversized images are rejected with diagnostics and transcript rendering elides base64. | `artifact:f67723ad-fac1-4251-886c-c1adfe68e6e6` |
-| JSON/RPC/direct SDK | Daemon-first `--print`, `--mode json`, and `--mode rpc` remain default. Daemon RPC prompt/get_state use daemon IPC; daemon get_messages/abort/new_session are documented compatibility placeholders for queued daemon turns. Explicit `--direct` uses in-process `SparkAgentLoop` for SDK/RPC fallback, with tested prompt/get_state/get_messages/abort/new_session paths exported through the app SDK entrypoint. | final task validation artifact |
+| JSON/RPC/SDK CLI | `--print`, `--mode json`, `--mode rpc`, and native TUI turns all use daemon IPC. RPC prompt/get_state use daemon services; get_messages/abort/new_session remain compatibility placeholders for queued daemon turns. No separate in-process direct mode is exposed. | final task validation artifact |
 
 ## Boundary checks
 
 - No `apps/spark-tui` implementation imports `@earendil-works/pi-coding-agent` at runtime.
 - `pi-*` packages stay reusable and do not import `spark-*`; Spark app/host glue owns Spark-specific adapters.
 - Shell access remains through the Spark/Cue surfaces; no `bash` tool was introduced.
-- Cockpit/workflow/session behavior remains daemon-first by default, with direct mode explicitly requested.
+- Cockpit/workflow/session behavior is daemon-first; Spark CLI does not expose a separate direct execution mode.

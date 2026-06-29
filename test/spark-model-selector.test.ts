@@ -116,6 +116,35 @@ void test("SparkModelSelector select validates through registry and persists Spa
   ]);
 });
 
+void test("SparkModelSelector canonicalizes model aliases without exposing duplicate picker rows", async () => {
+  const registry = new SparkProviderRegistry();
+  registry.registerProvider(
+    "fake",
+    provider("fake", [{ ...model("model-a", "Model A"), aliases: ["model-a-alias"] }]),
+  );
+  const config = configSeed();
+  const saved: SparkConfig[] = [];
+  const selector = new SparkModelSelector({
+    registry,
+    config,
+    saveConfig: (nextConfig) => void saved.push(cloneConfig(nextConfig)),
+  });
+
+  const selection = await selector.select({ providerName: "fake", modelId: "model-a-alias" });
+
+  assert.deepEqual(selection, { providerName: "fake", modelId: "model-a" });
+  assert.deepEqual(registry.getActive(), selection);
+  assert.equal(config.activeModelId, "fake/model-a");
+  assert.deepEqual(
+    saved.map((entry) => entry.activeModelId),
+    ["fake/model-a"],
+  );
+  assert.deepEqual(
+    selector.getPickerState().items.map((item) => item.value),
+    ["fake/model-a"],
+  );
+});
+
 void test("SparkModelSelector includes model pricing in picker state", () => {
   const registry = registryWithModels();
   const selector = new SparkModelSelector({ registry, config: configSeed() });

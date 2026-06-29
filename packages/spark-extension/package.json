@@ -23,7 +23,6 @@
     "@zendev-lab/pi-artifacts": "workspace:^",
     "@zendev-lab/pi-context": "workspace:^",
     "@zendev-lab/pi-extension-api": "workspace:^",
-    "@zendev-lab/pi-goal": "workspace:^",
     "@zendev-lab/pi-learnings": "workspace:^",
     "@zendev-lab/pi-loop": "workspace:^",
     "@zendev-lab/pi-modes": "workspace:^",

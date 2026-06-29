@@ -1,4 +1,4 @@
-import type { GoalStatus, Goal } from "./types.ts";
+import type { Goal, GoalStatus } from "./goal-types.ts";
 
 export interface GoalToolRecord {
   goalId: string;

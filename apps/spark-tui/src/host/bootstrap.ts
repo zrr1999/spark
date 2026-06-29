@@ -1,10 +1,9 @@
 /** Spark TUI native host service construction. */
 
-import { mkdir } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import { stableId, type ExtensionAPI } from "@zendev-lab/pi-extension-api";
-import { assistantMessageToText, createProviderRegistryStreamFunction } from "@zendev-lab/spark-ai";
+import { createProviderRegistryStreamFunction } from "@zendev-lab/spark-ai";
 
 import { renderSparkActiveSystemPrompt } from "../../../../packages/spark-extension/src/extension/spark-active-injection.ts";
 import { renderBaseSystemPromptsPrompt } from "../../../../packages/spark-extension/src/extension/spark-builtin-skills.ts";
@@ -339,15 +338,6 @@ export function selectInitialModel(
   return selection;
 }
 
-export async function submitToSparkAgent(
-  services: SparkCliHostServices,
-  input: string,
-): Promise<string> {
-  await ensureSparkCliSessionFile(services.sessionStore);
-  const result = await services.agentLoop.submit(input);
-  return result ? assistantMessageToText(result) : "No assistant response.";
-}
-
 function createSparkCliSessionManagerStub(store: SparkSessionStore, cwd: string) {
   return {
     getSessionFile: () => currentSparkCliSessionFile(store, cwd),
@@ -361,10 +351,6 @@ function currentSparkCliSessionFile(store: SparkSessionStore, cwd: string): stri
 
 function currentSparkCliLeafId(store: SparkSessionStore, cwd: string): string {
   return basename(currentSparkCliSessionFile(store, cwd), ".jsonl");
-}
-
-async function ensureSparkCliSessionFile(store: SparkSessionStore): Promise<void> {
-  await mkdir(store.sessionDir, { recursive: true });
 }
 
 export function defaultSparkCliKeybindingsPath(sparkHome?: string): string {

@@ -1,6 +1,5 @@
-import { escapeXmlText as escapeLoopXmlText } from "@zendev-lab/pi-loop";
-
-import type { Goal } from "./types.ts";
+import { escapeXmlText } from "./prompts.ts";
+import type { Goal } from "./goal-types.ts";
 
 const CONTINUATION_MARKER_PREFIX = '<spark_goal_continuation goal_id="';
 
@@ -35,10 +34,6 @@ export function continuationGoalIdFromPrompt(prompt: string): string | null {
     return null;
   }
   return prompt.slice(CONTINUATION_MARKER_PREFIX.length, end);
-}
-
-export function escapeXmlText(value: string): string {
-  return escapeLoopXmlText(value);
 }
 
 export function supersededContinuationMessage(goalId: string): string {

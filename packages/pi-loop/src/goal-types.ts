@@ -1,4 +1,4 @@
-import { MAX_LOOP_OBJECTIVE_CHARS } from "@zendev-lab/pi-loop";
+import { MAX_LOOP_OBJECTIVE_CHARS } from "./types.ts";
 
 export const GOAL_CUSTOM_ENTRY_TYPE = "spark-goal";
 export const MAX_OBJECTIVE_CHARS = MAX_LOOP_OBJECTIVE_CHARS;
@@ -46,10 +46,4 @@ export interface GoalResult {
 export interface GoalSnapshot {
   goal: Goal | null;
   hasGoal: boolean;
-}
-
-export interface SessionEntryLike {
-  type: string;
-  customType?: string;
-  data?: unknown;
 }

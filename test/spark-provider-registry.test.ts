@@ -202,7 +202,7 @@ void test("SparkProviderRegistry accepts the production baidu-oneapi-provider pl
   assert.equal(registry.hasProvider("baidu-oneapi"), true);
   const provider = registry.getProvider("baidu-oneapi")!;
   assert.equal(provider.api, "baidu-oneapi");
-  assert.equal(provider.models.length >= 6, true);
+  assert.equal(provider.models.length, 5);
   assert.equal(
     provider.models.some((m) => m.id === "claude-opus-4.8"),
     true,
@@ -222,7 +222,7 @@ void test("SparkProviderRegistry accepts the production baidu-oneapi-provider pl
   const opus48Model = registry.buildModel("baidu-oneapi", "claude-opus-4.8");
   assert.equal(opus48Model.contextWindow, 300_000);
   const fableModel = registry.buildModel("baidu-oneapi", "claude-fable-5");
-  assert.equal(fableModel.name, "Fable 5 (Baidu OneAPI)");
+  assert.equal(fableModel.name, "Claude Fable 5");
   assert.equal(fableModel.contextWindow, 300_000);
   assert.equal(fableModel.maxTokens, 32_000);
   const gptModel = registry.buildModel("baidu-oneapi", "gpt-5.5");
@@ -230,6 +230,8 @@ void test("SparkProviderRegistry accepts the production baidu-oneapi-provider pl
   assert.equal(gptModel.baseUrl, "https://oneapi-comate.baidu-int.com/v1");
   assert.equal(gptModel.contextWindow, 258_000);
   assert.equal(gptModel.maxTokens, 32_768);
+  const gptAliasModel = registry.buildModel("baidu-oneapi", "gpt-5.5-coding-plan");
+  assert.equal(gptAliasModel.id, "gpt-5.5");
 
   const opusProfile = registry.buildProfile("baidu-oneapi", "claude-opus-4.8");
   assert.equal(opusProfile.id, "baidu-oneapi/claude-opus-4.8");
@@ -238,7 +240,8 @@ void test("SparkProviderRegistry accepts the production baidu-oneapi-provider pl
   assert.equal(opusProfile.routes[0]?.transportApi, "anthropic-messages");
   assert.equal(opusProfile.routes[0]?.transportModelId, "Opus 4.8 Coding Plan");
 
-  const gptProfile = registry.buildProfile("baidu-oneapi", "gpt-5.5");
+  const gptProfile = registry.buildProfile("baidu-oneapi", "gpt-5.5-coding-plan");
+  assert.equal(gptProfile.id, "baidu-oneapi/gpt-5.5");
   assert.equal(gptProfile.routes[0]?.transportApi, "openai-responses");
   assert.equal(gptProfile.routes[0]?.transportModelId, "gpt-5.5-coding-plan");
 });

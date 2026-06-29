@@ -41,7 +41,7 @@ Spark 现在支持两个宿主目标：Pi 中的 `packages/spark-extension/src/e
 - `packages/pi-artifacts`：证据制品元数据与二进制对象存储、来源、谱系，以及规范化 `artifact({ action })` 工具。
 - `packages/pi-tasks`：通用项目、任务、待办事项与运行图；负责依赖、认领租约、任务计划就绪性、任务状态、运行状态以及规范化 `task({ action })` 工具。
 - `packages/pi-learnings`：基于证据的可复用经验存储、`.learnings/` 本地与用户作用域、导出导入、生命周期管理以及规范化 `learning({ action })` 工具。
-- `packages/pi-goal`：通用目标状态和延续提示原语；Spark 只保留项目绑定的 `/goal` 门面，历史序列化标记保持兼容。
+- `packages/pi-loop`：通用 loop 生命周期/tick 原语，以及 goal 状态和延续提示原语；Spark 只保留项目绑定的 `/loop`、`/goal` 门面，历史序列化标记保持兼容。
 - `packages/pi-workflows`：已保存工作流的发现与运行时原语，以及 `.spark/workflow-runs.json` 工作流运行存储。
 - `packages/pi-ask`：通用规范化 `ask({ action })` 协议、内部聚焦与全屏流程状态机、TUI 渲染和结果语义；具体问题由调用处根据实际上下文生成，不提供制式表单。
 - `packages/pi-roles`：`RoleSpec`、项目/用户/内置角色存储、`RoleRun` 全新或分叉子 Pi 执行，以及角色工具；不拥有任务有向无环图。

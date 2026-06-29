@@ -1,20 +1,17 @@
 import { randomUUID } from "node:crypto";
 
+import { type SessionEntryLike } from "./types.ts";
 import {
   GOAL_CUSTOM_ENTRY_TYPE,
   MAX_OBJECTIVE_CHARS,
+  type Goal,
   type GoalCustomEntry,
   type GoalEntrySource,
   type GoalResult,
   type GoalSnapshot,
   type GoalStatus,
-  type SessionEntryLike,
-  type Goal,
-} from "./types.ts";
-
-export function unixSeconds(): number {
-  return Math.floor(Date.now() / 1000);
-}
+} from "./goal-types.ts";
+import { unixSeconds } from "./state.ts";
 
 export function cloneGoal(goal: Goal): Goal {
   return { ...goal };

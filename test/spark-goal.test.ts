@@ -10,17 +10,21 @@ import {
   evaluateLoopTick,
   goalToolResponse,
   validateObjective,
-} from "@zendev-lab/pi-goal";
+} from "@zendev-lab/pi-loop";
 
-void test("pi-goal package stays isolated from workflow packages", async () => {
-  const pkg = JSON.parse(await readFile("packages/pi-goal/package.json", "utf8")) as {
+void test("pi-loop package owns goal primitives and stays isolated from workflow packages", async () => {
+  const pkg = JSON.parse(await readFile("packages/pi-loop/package.json", "utf8")) as {
     dependencies?: Record<string, string>;
   };
 
-  assert.equal(pkg.dependencies?.["@zendev-lab/pi-loop"], "workspace:^");
+  const dependencyNames = Object.keys(pkg.dependencies ?? {});
+  assert.equal(
+    dependencyNames.some((name) => name.endsWith("/pi-" + "goal")),
+    false,
+  );
   assert.equal(pkg.dependencies?.["spark-workflows"], undefined);
 
-  const sourceFiles = await listTypeScriptFiles("packages/pi-goal/src");
+  const sourceFiles = await listTypeScriptFiles("packages/pi-loop/src");
   for (const file of sourceFiles) {
     const source = await readFile(file, "utf8");
     assert.doesNotMatch(
@@ -31,7 +35,7 @@ void test("pi-goal package stays isolated from workflow packages", async () => {
   }
 });
 
-void test("pi-goal helpers create goals and continuation prompts", () => {
+void test("pi-loop goal helpers create goals and continuation prompts", () => {
   assert.equal(validateObjective("  ship feature  "), null);
   const goal = createGoal("  ship feature  ", 123);
   assert.equal(goal.objective, "ship feature");
@@ -45,7 +49,7 @@ void test("pi-goal helpers create goals and continuation prompts", () => {
   assert.equal(response.goal?.status, "active");
 });
 
-void test("pi-goal re-exports non-completing pi-loop primitives", () => {
+void test("pi-loop exposes non-completing loop primitives alongside goal helpers", () => {
   const loop = createLoop("Continue without completing", 123);
   const tick = evaluateLoopTick({ loop, now: 124, reason: "start" });
 

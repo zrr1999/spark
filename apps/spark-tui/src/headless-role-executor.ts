@@ -68,6 +68,7 @@ export interface SparkHeadlessSessionRunInput {
   reset?: boolean;
   signal?: AbortSignal;
   sparkHome?: string;
+  onEvent?: (event: unknown) => void | Promise<void>;
 }
 
 export interface SparkHeadlessSessionRunResult {
@@ -77,6 +78,7 @@ export interface SparkHeadlessSessionRunResult {
   assistantText: string;
   stderr: string;
   jsonEvents: unknown[];
+  eventsStreamed?: boolean;
 }
 
 export interface SparkHeadlessRoleExecutorOptions {
@@ -108,11 +110,15 @@ export async function runSparkHeadlessSession(
     hasUI: false,
   } satisfies SparkCliHostServicesOptions);
 
+  const recordEvent = (event: unknown) => {
+    jsonEvents.push(event);
+    void input.onEvent?.(event);
+  };
   const unsubscribe = services.agentLoop.onEvent((event) => {
-    jsonEvents.push(serializeLoopEvent(event));
+    recordEvent(serializeLoopEvent(event));
   });
   const unsubscribeDaemon = services.runtime.onDaemonEvent((event) => {
-    jsonEvents.push({ type: "daemon_event", event });
+    recordEvent({ type: "daemon_event", event });
   });
   const abort = () => services.agentLoop.abort(abortReason(input.signal));
   if (input.signal?.aborted) abort();
@@ -132,6 +138,7 @@ export async function runSparkHeadlessSession(
       assistantText: result.assistantText,
       stderr: renderDiagnostics(services.diagnostics),
       jsonEvents,
+      ...(input.onEvent ? { eventsStreamed: true } : {}),
     };
   } finally {
     input.signal?.removeEventListener("abort", abort);

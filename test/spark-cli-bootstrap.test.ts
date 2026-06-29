@@ -7,9 +7,9 @@ import test from "node:test";
 import { stableId } from "../packages/pi-extension-api/src/index.ts";
 import { parseSparkCliArgs } from "../apps/spark-tui/src/cli.ts";
 import {
+  assistantMessageToText,
   createProviderRegistryWorkflowModelRunner,
   createSparkCliHostServices,
-  submitToSparkAgent,
   type SparkConfig,
 } from "../apps/spark-tui/src/host/index.ts";
 
@@ -164,8 +164,8 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
       true,
     );
 
-    const response = await submitToSparkAgent(services, "hello");
-    assert.equal(response, "boot ok:1");
+    const response = await services.agentLoop.submit("hello");
+    assert.equal(response ? assistantMessageToText(response) : "", "boot ok:1");
     assert.match(captured.systemPrompt ?? "", /native spark-tui host/);
     assert.doesNotMatch(captured.systemPrompt ?? "", /You are Spark,/);
     assert.match(captured.systemPrompt ?? "", /Spark default research phase\./);

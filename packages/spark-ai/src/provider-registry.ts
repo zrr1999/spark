@@ -3,6 +3,8 @@ import type { SparkAuthRef, SparkModelProfile } from "./index.ts";
 
 export interface ProviderModelDefinition {
   id: string;
+  /** Alternate ids accepted for selection/config migration but hidden from model lists. */
+  aliases?: string[];
   name: string;
   api?: Api;
   baseUrl?: string;
@@ -75,15 +77,8 @@ export class SparkProviderRegistry implements ProviderRegistrationAPI {
   }
 
   setActive(selection: SparkActiveSelection): void {
-    const provider = this.#providers.get(selection.providerName);
-    if (!provider) throw new Error(`Unknown provider: ${selection.providerName}`);
-    const model = provider.models.find((candidate) => candidate.id === selection.modelId);
-    if (!model) {
-      throw new Error(
-        `Provider "${selection.providerName}" has no model with id "${selection.modelId}"`,
-      );
-    }
-    this.#active = { ...selection };
+    const { def } = this.#requireProviderModel(selection.providerName, selection.modelId);
+    this.#active = { providerName: selection.providerName, modelId: def.id };
   }
 
   getActive(): SparkActiveSelection | undefined {
@@ -166,10 +161,14 @@ export class SparkProviderRegistry implements ProviderRegistrationAPI {
   } {
     const provider = this.#providers.get(providerName);
     if (!provider) throw new Error(`Unknown provider: ${providerName}`);
-    const def = provider.models.find((candidate) => candidate.id === modelId);
+    const def = provider.models.find((candidate) => modelIdMatches(candidate, modelId));
     if (!def) throw new Error(`Provider "${providerName}" has no model with id "${modelId}"`);
     return { provider, def };
   }
+}
+
+function modelIdMatches(model: ProviderModelDefinition, modelId: string): boolean {
+  return model.id === modelId || (model.aliases ?? []).includes(modelId);
 }
 
 function providerAuthRef(provider: ProviderConfig): SparkAuthRef {

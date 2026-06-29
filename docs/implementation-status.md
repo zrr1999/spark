@@ -18,9 +18,9 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
    - generic evidence-backed `learning` / `learning-candidate` / `learning-export` records
    - canonical `learning({ action })` tool
    - `.learnings/` repo/workspace/user stores, active/candidate/stale/superseded/rejected lifecycle, keyword search, and explicit Markdown export/import
-- `pi-goal`
-   - generic durable goal primitives and continuation prompt helpers
-   - Spark keeps project-bound `/goal` command/tool facade; historical serialized marker strings remain stable until an explicit migration changes them
+- `pi-loop`
+   - generic loop lifecycle/tick primitives plus durable goal primitives and continuation prompt helpers
+   - Spark keeps project-bound `/loop` and `/goal` command/tool facades; historical serialized marker strings remain stable until an explicit migration changes them
 - `pi-workflows`
    - canonical `workflow` list/read tool for saved scripts in controlled workspace `.spark/workflows/*.js` and user `~/.agents/workflows/*.js` roots
    - workflow metadata/runtime primitives and `.spark/workflow-runs.json` workflow-run store with scheduling/reconciliation/retention helpers

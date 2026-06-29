@@ -34,9 +34,12 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
     api: string;
     models: Array<{
       id: string;
+      name: string;
       reasoning: boolean;
       api?: string;
+      transportModelId?: string;
       baseUrl?: string;
+      aliases?: string[];
       thinkingLevelMap?: Record<string, string | null>;
       cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
     }>;
@@ -47,15 +50,18 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
   assert.equal(config.api, "baidu-oneapi");
   assert.equal(config.streamSimple, streamBaiduOneApi);
   assert.deepEqual(
-    config.models.map((model) => [model.id, model.reasoning, model.api]),
+    config.models.map((model) => [model.id, model.name, model.reasoning, model.api]),
     [
-      ["claude-opus-4.6", true, undefined],
-      ["claude-opus-4.7", true, undefined],
-      ["claude-opus-4.8", true, undefined],
-      ["claude-fable-5", true, undefined],
-      ["gpt-5.5", true, undefined],
-      ["gpt-5.5-coding-plan", true, undefined],
+      ["claude-opus-4.6", "Claude Opus 4.6", true, undefined],
+      ["claude-opus-4.7", "Claude Opus 4.7", true, undefined],
+      ["claude-opus-4.8", "Claude Opus 4.8", true, undefined],
+      ["claude-fable-5", "Claude Fable 5", true, undefined],
+      ["gpt-5.5", "GPT-5.5", true, undefined],
     ],
+  );
+  assert.equal(
+    config.models.find((model) => model.id === "gpt-5.5")?.transportModelId,
+    "gpt-5.5-coding-plan",
   );
   assert.deepEqual(
     config.models.find((model) => model.id === "claude-opus-4.8")?.thinkingLevelMap,
@@ -78,10 +84,9 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
     minimal: "low",
     xhigh: "xhigh",
   });
-  assert.deepEqual(
-    config.models.find((model) => model.id === "gpt-5.5-coding-plan")?.thinkingLevelMap,
-    config.models.find((model) => model.id === "gpt-5.5")?.thinkingLevelMap,
-  );
+  assert.deepEqual(config.models.find((model) => model.id === "gpt-5.5")?.aliases, [
+    "gpt-5.5-coding-plan",
+  ]);
   assert.equal(
     config.models.find((model) => model.id === "gpt-5.5")?.baseUrl,
     "https://oneapi-comate.baidu-int.com/v1",

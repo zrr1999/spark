@@ -3,6 +3,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { createConnection, createServer, type Socket } from "node:net";
 import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import type { SparkDaemonEvent } from "@zendev-lab/spark-protocol";
 import type { SparkPaths } from "@zendev-lab/spark-system";
 import {
   SparkDaemonQueue,
@@ -36,6 +37,24 @@ import {
 export interface LocalRpcServer {
   socketPath: string;
   close(): Promise<void>;
+}
+
+export interface SparkDaemonLocalEventBus {
+  publish(event: SparkDaemonEvent): void;
+  subscribe(listener: (event: SparkDaemonEvent) => void): () => void;
+}
+
+export function createSparkDaemonLocalEventBus(): SparkDaemonLocalEventBus {
+  const listeners = new Set<(event: SparkDaemonEvent) => void>();
+  return {
+    publish(event) {
+      for (const listener of listeners) listener(event);
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
 }
 
 export interface WorkspaceListResult {
@@ -155,13 +174,14 @@ export async function startLocalRpcServer(options: {
   paths: SparkPaths;
   db: DatabaseSync;
   onStop?: () => void | Promise<void>;
+  eventBus?: SparkDaemonLocalEventBus;
 }): Promise<LocalRpcServer> {
   const socketPath = localRpcSocketPath(options.paths);
   mkdirSync(dirname(socketPath), { recursive: true, mode: 0o700 });
   rmSync(socketPath, { force: true });
 
   const server = createServer((socket) => {
-    handleLocalRpcSocket(socket, options.paths, options.db, options.onStop);
+    handleLocalRpcSocket(socket, options.paths, options.db, options.onStop, options.eventBus);
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -360,6 +380,9 @@ async function localRpcRequest<T>(
     });
     socket.once("error", fail);
     socket.on("connect", () => {
+      socket.setTimeout(30_000, () => {
+        fail(new Error(`Timed out waiting for daemon RPC response from ${socketPath}`));
+      });
       socket.write(`${JSON.stringify(request)}\n`);
     });
     socket.on("data", (chunk) => {
@@ -390,19 +413,128 @@ function handleLocalRpcSocket(
   paths: SparkPaths,
   db: DatabaseSync,
   onStop: (() => void | Promise<void>) | undefined,
+  eventBus: SparkDaemonLocalEventBus | undefined,
 ): void {
   let buffer = "";
+  socket.on("error", () => {
+    // Clients may time out or disconnect before a long-running request writes
+    // its response. Treat broken local RPC pipes as per-client failures rather
+    // than daemon-fatal uncaught Socket errors.
+  });
   socket.on("data", (chunk) => {
     buffer += chunk.toString("utf8");
     let newline = buffer.indexOf("\n");
     while (newline !== -1) {
       const line = buffer.slice(0, newline);
       buffer = buffer.slice(newline + 1);
+      if (handleLocalRpcStreamLine(line, socket, paths, eventBus)) {
+        return;
+      }
       void handleLocalRpcLine(line, paths, db, onStop).then((response) => {
-        socket.write(`${JSON.stringify(response)}\n`);
+        writeLocalRpcResponse(socket, response);
       });
       newline = buffer.indexOf("\n");
     }
+  });
+}
+
+function handleLocalRpcStreamLine(
+  line: string,
+  socket: Socket,
+  paths: SparkPaths,
+  eventBus: SparkDaemonLocalEventBus | undefined,
+): boolean {
+  let request: { id: string; method: string; params?: unknown };
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    if (!isRecord(parsed) || typeof parsed.id !== "string" || typeof parsed.method !== "string") {
+      return false;
+    }
+    request = { id: parsed.id, method: parsed.method, params: parsed.params };
+  } catch {
+    return false;
+  }
+  if (request.method !== "turn.stream") return false;
+  if (!eventBus) {
+    writeLocalRpcResponse(socket, {
+      id: request.id,
+      ok: false,
+      error: { message: "Spark daemon local event stream is not available." },
+    });
+    return true;
+  }
+
+  let taskFileName: string | undefined;
+  const unsubscribe = eventBus.subscribe((event) => {
+    if (!taskFileName || !eventMatchesTaskFile(event, taskFileName)) return;
+    writeLocalRpcStreamMessage(socket, { id: request.id, ok: true, event });
+    if (isTerminalTaskEvent(event, taskFileName)) {
+      unsubscribe();
+      socket.end();
+    }
+  });
+  socket.once("close", unsubscribe);
+
+  void (async () => {
+    try {
+      const params = parseLocalTurnSubmitParams(request.params);
+      const queue = new SparkDaemonQueue({ paths });
+      const entry = await queue.enqueue({
+        type: "session.run",
+        sessionId: params.sessionId,
+        prompt: params.prompt,
+        ...(params.reset !== undefined ? { reset: params.reset } : {}),
+        actor: "spark-daemon-local-rpc",
+      });
+      taskFileName = entry.fileName;
+      writeLocalRpcStreamMessage(socket, {
+        id: request.id,
+        ok: true,
+        result: {
+          fileName: entry.fileName,
+          filePath: entry.filePath,
+          task: entry.payload.task,
+          observedAt: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      unsubscribe();
+      writeLocalRpcResponse(socket, {
+        id: request.id,
+        ok: false,
+        error: { message: error instanceof Error ? error.message : String(error) },
+      });
+    }
+  })();
+  return true;
+}
+
+function writeLocalRpcStreamMessage(socket: Socket, message: Record<string, unknown>): void {
+  if (socket.destroyed || !socket.writable) return;
+  socket.write(`${JSON.stringify(message)}\n`, (error) => {
+    if (error) socket.destroy();
+  });
+}
+
+function eventMatchesTaskFile(event: SparkDaemonEvent, taskFileName: string): boolean {
+  const record = event as unknown as Record<string, unknown>;
+  const eventTaskFileName =
+    typeof record.taskFileName === "string" ? record.taskFileName : undefined;
+  return eventTaskFileName === taskFileName || event.invocationId === taskFileName;
+}
+
+function isTerminalTaskEvent(event: SparkDaemonEvent, taskFileName: string): boolean {
+  return (
+    event.type === "daemon.task.lifecycle" &&
+    eventMatchesTaskFile(event, taskFileName) &&
+    (event.status === "succeeded" || event.status === "failed" || event.status === "cancelled")
+  );
+}
+
+function writeLocalRpcResponse(socket: Socket, response: LocalRpcResponse): void {
+  if (socket.destroyed || !socket.writable) return;
+  socket.write(`${JSON.stringify(response)}\n`, (error) => {
+    if (error) socket.destroy();
   });
 }
 

@@ -67,6 +67,22 @@ void test("SparkNativeSession appends streaming assistant chunks smoothly", () =
   assert.equal(assistantMessages[0]!.streaming, false);
 });
 
+void test("SparkNativeSession responder context streams assistant chunks without duplicate final text", async () => {
+  const session = new SparkNativeSession(async (_input, context) => {
+    context.appendAssistantChunk?.("hello");
+    context.appendAssistantChunk?.(" world");
+    return "final duplicate should be ignored";
+  });
+
+  await session.submit("go");
+  await waitUntil(() => !session.isProcessing);
+
+  const assistantMessages = session.messages.filter((message) => message.role === "assistant");
+  assert.equal(assistantMessages.length, 1);
+  assert.equal(assistantMessages[0]!.text, "hello world");
+  assert.equal(assistantMessages[0]!.streaming, false);
+});
+
 void test("SparkNativeTuiApp folds tool output and toggles thinking/tool visibility", () => {
   const session = new SparkNativeSession();
   session.addToolMessage({ toolName: "impl_status", text: "long tool output", status: "success" });
@@ -738,3 +754,12 @@ void test("Spark daemon native slash commands render status, start, and queue su
   assert.match(rendered, /queue:failed entries=1/);
   assert.match(rendered, /task\.json • session-1 • hello • result=\{"text":"done"\}/);
 });
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(predicate(), true);
+}

@@ -95,7 +95,7 @@ Spark package names are type-first:
 - `@zendev-lab/pi-artifacts` — reusable artifact/evidence store, durable artifact metadata/blobs, provenance/lineage contracts, and the canonical `artifact` action tool.
 - `@zendev-lab/pi-tasks` — generic project/task/TODO/run graph capability and canonical `task_read` / `task_write` / `assign` tools; owns readiness, claims, TODO stores, and `.spark/projects.json` graph state without depending on Spark packages.
 - `@zendev-lab/pi-learnings` — generic evidence-backed learning capability and canonical `learning({ action })` tool; owns `.learnings/` local/user learning stores.
-- `@zendev-lab/pi-goal` — generic durable goal primitives and continuation prompt helpers; Spark owns the project-bound `/goal` facade while preserving historical serialized marker strings.
+- `@zendev-lab/pi-loop` — generic foreground loop and goal primitives, including non-completing loop continuation plus goal objective/completion prompt helpers; Spark owns the project-bound `/loop` and `/goal` facades while preserving historical serialized marker strings.
 - `@zendev-lab/pi-workflows` — saved-script workflow discovery/runtime primitives plus workflow/DAG run-store support for `.spark/workflow-runs.json`.
 - `@zendev-lab/pi-context` — registered context-provider capability with bounded list/preview actions and no freeform prompt injection.
 - `@zendev-lab/pi-recall` — controlled explicit-scope recall candidate store/tool, separate from `.learnings/` and automatic memory.

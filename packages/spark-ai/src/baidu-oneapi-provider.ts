@@ -201,7 +201,7 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
     models: [
       {
         id: "claude-opus-4.6",
-        name: "Claude Opus 4.6 (Baidu OneAPI)",
+        name: "Claude Opus 4.6",
         transportApi: "anthropic-messages",
         transportModelId: "Claude Opus 4.6",
         reasoning: true,
@@ -219,7 +219,7 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
       },
       {
         id: "claude-opus-4.7",
-        name: "Claude Opus 4.7 (Baidu OneAPI)",
+        name: "Claude Opus 4.7",
         transportApi: "anthropic-messages",
         transportModelId: "Claude Opus 4.7",
         reasoning: true,
@@ -237,7 +237,7 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
       },
       {
         id: "claude-opus-4.8",
-        name: "Opus 4.8 Coding Plan (Baidu OneAPI)",
+        name: "Claude Opus 4.8",
         transportApi: "anthropic-messages",
         transportModelId: "Opus 4.8 Coding Plan",
         reasoning: true,
@@ -255,7 +255,7 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
       },
       {
         id: "claude-fable-5",
-        name: "Fable 5 (Baidu OneAPI)",
+        name: "Claude Fable 5",
         transportApi: "anthropic-messages",
         transportModelId: "Fable 5",
         reasoning: true,
@@ -273,20 +273,8 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
       },
       {
         id: "gpt-5.5",
-        name: "GPT-5.5 Coding Plan (Baidu OneAPI)",
-        baseUrl: process.env.BAIDU_ONEAPI_OPENAI_BASE_URL ?? BAIDU_ONEAPI_OPENAI_BASE_URL,
-        transportApi: "openai-responses",
-        transportModelId: "gpt-5.5-coding-plan",
-        reasoning: true,
-        thinkingLevelMap: GPT_5_5_THINKING_LEVEL_MAP,
-        input: ["text", "image"],
-        cost: GPT_5_5_COST,
-        contextWindow: 258000,
-        maxTokens: 32768,
-      },
-      {
-        id: "gpt-5.5-coding-plan",
-        name: "GPT-5.5 Coding Plan (Baidu OneAPI)",
+        aliases: ["gpt-5.5-coding-plan"],
+        name: "GPT-5.5",
         baseUrl: process.env.BAIDU_ONEAPI_OPENAI_BASE_URL ?? BAIDU_ONEAPI_OPENAI_BASE_URL,
         transportApi: "openai-responses",
         transportModelId: "gpt-5.5-coding-plan",

@@ -7,7 +7,7 @@ This historical migration record documents the implemented contract for making t
 This migration is implemented for package boundaries and the visible tool facade:
 
 - `spark-core`, `spark-tasks`, `spark-learnings`, `spark-goal`, and `spark-workflows` have retired as workspaces.
-- Generic implementations now live in `pi-extension-api`, `pi-artifacts`, `pi-tasks`, `pi-learnings`, `pi-goal`, and `pi-workflows`.
+- Generic implementations now live in `pi-extension-api`, `pi-artifacts`, `pi-tasks`, `pi-learnings`, `pi-loop`, and `pi-workflows`.
 - Spark's visible tool surface uses canonical tools (`task_read`, `task_write`, `assign`, `learning`, `artifact`, `ask`, `context`, `workflow`, `role`, `recall`, `goal`). Legacy `spark_*` tool configs are retired rather than kept as internal dispatch wiring.
 - `pi-* -> spark-*` regressions are guarded by the boundary checker inside `pnpm run check`, `prek`, and CI static checks.
 - On-disk schema roots remain stable: `.spark/`, `.spark/projects/`, `.spark/workflow-runs.json`, and historical goal marker strings are schema data, not package ownership; legacy `.spark/projects.json` is import-only.

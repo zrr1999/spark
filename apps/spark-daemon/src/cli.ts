@@ -23,6 +23,7 @@ import { sparkDaemonVersion, startSparkDaemon } from "./daemon.js";
 import { acquireSparkDaemonLock } from "./core/index.ts";
 import {
   LocalRpcUnavailableError,
+  createSparkDaemonLocalEventBus,
   localRpcSocketPath,
   requestDaemonQueue,
   requestDaemonStop,
@@ -124,6 +125,12 @@ export async function main(argv = process.argv.slice(2), io: CliIo = defaultIo):
         return await start(paths);
       case "stop":
         return await stop(paths, args.slice(1), io);
+      case "restart":
+        return await restart(paths, args.slice(1), io);
+      case "queue":
+        return await daemonQueue(paths, args.slice(1), io);
+      case "submit":
+        return await daemonSubmit(paths, args.slice(1), io);
       case "workspace":
       case "ws":
         return await workspace(paths, subcommand, rest, io);
@@ -228,10 +235,12 @@ async function start(paths: ReturnType<typeof resolveSparkPaths>): Promise<numbe
   };
   process.once("SIGINT", onShutdownSignal);
   process.once("SIGTERM", onShutdownSignal);
+  const localEventBus = createSparkDaemonLocalEventBus();
   const localRpc = await startLocalRpcServer({
     paths,
     db,
     onStop: () => shutdown.abort(),
+    eventBus: localEventBus,
   });
   try {
     await startSparkDaemon({
@@ -239,6 +248,7 @@ async function start(paths: ReturnType<typeof resolveSparkPaths>): Promise<numbe
       config: readSparkDaemonConfig(paths),
       db,
       signal: shutdown.signal,
+      localEventSink: (event) => localEventBus.publish(event),
     });
     return 0;
   } finally {
@@ -311,13 +321,8 @@ async function daemon(
       return await start(paths);
     case "stop":
       return await stop(paths, args, io);
-    case "restart": {
-      const stopped = await stop(paths, args, io);
-      if (stopped !== 0) {
-        return stopped;
-      }
-      return await start(paths);
-    }
+    case "restart":
+      return await restart(paths, args, io);
     case "logs":
       return await logs(paths, args, io);
     case "queue":
@@ -326,6 +331,58 @@ async function daemon(
       return await daemonSubmit(paths, args, io);
     default:
       throw new Error("Usage: spark daemon <status|start|stop|restart|logs|queue|submit>");
+  }
+}
+
+async function restart(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  const previousPid = readRunningPid(paths);
+  const stopped = await stop(paths, args, io);
+  if (stopped !== 0) return stopped;
+
+  const stoppedOrReplaced = await waitForDaemonStoppedOrReplaced(paths, previousPid);
+  const currentPid = readRunningPid(paths);
+  if (currentPid && currentPid !== previousPid) {
+    io.stdout.write(`Spark daemon restarted as process ${currentPid}.\n`);
+    return 0;
+  }
+  if (!stoppedOrReplaced) {
+    io.stderr.write(
+      previousPid
+        ? `Spark daemon process ${previousPid} did not stop before restart timeout.\n`
+        : "Spark daemon did not stop before restart timeout.\n",
+    );
+    return 1;
+  }
+  const service = startSparkDaemonProcess(paths, io);
+  io.stdout.write(`${service.detail}\n`);
+  return 0;
+}
+
+async function waitForDaemonStoppedOrReplaced(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  previousPid: number | null,
+  timeoutMs = 10_000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const currentPid = readRunningPid(paths);
+    const previousStillAlive = previousPid !== null && isProcessAlive(previousPid);
+    if (!previousStillAlive && (currentPid === null || currentPid !== previousPid)) return true;
+    await delay(50);
+  }
+  return false;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
   }
 }
 

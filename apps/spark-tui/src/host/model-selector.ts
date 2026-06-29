@@ -124,12 +124,13 @@ export class SparkModelSelector {
    */
   async select(selection: SparkActiveSelection): Promise<SparkActiveSelection> {
     this.registry.setActive(selection);
+    const active = this.registry.getActive() ?? selection;
     const config = await this.getConfig();
-    config.activeModelId = sparkModelSelectionValue(selection);
+    config.activeModelId = sparkModelSelectionValue(active);
     delete config.activeProvider;
     delete config.activeModel;
     await this.saveConfig(config);
-    return { ...selection };
+    return { ...active };
   }
 
   /**
@@ -242,11 +243,18 @@ export function resolveSparkModelSelectionById(
 ): SparkActiveSelection {
   const trimmed = modelId.trim();
   if (!trimmed) throw new Error("Spark model id must be non-empty");
-  if (trimmed.includes("/")) return sparkModelSelectionFromValue(trimmed);
-  const matches = registry
-    .listProviders()
-    .filter((provider) => provider.models.some((model) => model.id === trimmed));
-  if (matches.length === 1) return { providerName: matches[0]!.name, modelId: trimmed };
+  if (trimmed.includes("/")) {
+    const selection = sparkModelSelectionFromValue(trimmed);
+    return {
+      providerName: selection.providerName,
+      modelId: resolveCanonicalModelId(registry, selection.providerName, selection.modelId),
+    };
+  }
+  const matches = registry.listProviders().flatMap((provider) => {
+    const model = provider.models.find((candidate) => modelIdMatches(candidate, trimmed));
+    return model ? [{ providerName: provider.name, modelId: model.id }] : [];
+  });
+  if (matches.length === 1) return matches[0]!;
   if (matches.length > 1)
     throw new Error(`Ambiguous Spark model id "${trimmed}"; use provider/model.`);
   throw new Error(`Unknown Spark model: ${trimmed}`);
@@ -254,6 +262,22 @@ export function resolveSparkModelSelectionById(
 
 export function formatSelection(selection: SparkActiveSelection): string {
   return `Model: ${sparkModelSelectionValue(selection)}`;
+}
+
+function resolveCanonicalModelId(
+  registry: SparkProviderRegistry,
+  providerName: string,
+  modelId: string,
+): string {
+  const model = registry
+    .listModelsFor(providerName)
+    .find((candidate) => modelIdMatches(candidate, modelId));
+  if (!model) throw new Error(`Provider "${providerName}" has no model with id "${modelId}"`);
+  return model.id;
+}
+
+function modelIdMatches(model: ProviderModelDefinition, modelId: string): boolean {
+  return model.id === modelId || (model.aliases ?? []).includes(modelId);
 }
 
 function toSelectorItem(

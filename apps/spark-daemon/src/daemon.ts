@@ -111,6 +111,7 @@ export interface StartSparkDaemonOptions {
   queueConcurrency?: number;
   invocationRegistry?: SparkDaemonInvocationRegistry;
   humanWaits?: SparkDaemonHumanWaitRegistry;
+  localEventSink?: SparkDaemonEventSink;
 }
 
 export async function startSparkDaemon(options: StartSparkDaemonOptions): Promise<void> {
@@ -122,6 +123,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     emitQueueEventToServer = sink ?? null;
   };
   const emitQueueEvent: SparkDaemonEventSink = async (event) => {
+    await options.localEventSink?.(event);
     await emitQueueEventToServer?.(event);
   };
   const queueContext =

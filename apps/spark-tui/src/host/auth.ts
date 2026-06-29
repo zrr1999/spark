@@ -181,7 +181,7 @@ export class SparkProviderAuthResolver {
         provider: provider.name,
         kind: "env",
         ref: ref.name,
-        configured: Boolean(this.#env[ref.name]),
+        configured: Boolean(this.#storedApiKey(provider, ref.name) ?? this.#env[ref.name]),
       };
     }
     if (ref.kind === "oauth") {
@@ -202,11 +202,20 @@ export class SparkProviderAuthResolver {
   resolveApiKey(provider: ProviderConfig): string | undefined {
     const ref = normalizeProviderAuthRef(provider.apiKey);
     if (ref.kind === "none") return undefined;
-    if (ref.kind === "env") return this.#env[ref.name];
+    if (ref.kind === "env") return this.#storedApiKey(provider, ref.name) ?? this.#env[ref.name];
     if (ref.kind === "literal") return ref.value;
     const credential = this.#store.get(ref.provider);
     if (credential?.type !== "oauth") return undefined;
     return getOAuthProvider(ref.provider)?.getApiKey(credential.credentials);
+  }
+
+  #storedApiKey(provider: ProviderConfig, envRef?: string): string | undefined {
+    for (const key of [provider.name, envRef]) {
+      if (!key) continue;
+      const credential = this.#store.get(key);
+      if (credential?.type === "api_key") return credential.apiKey;
+    }
+    return undefined;
   }
 }
 

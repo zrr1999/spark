@@ -1,4 +1,4 @@
-import { compactContinuationPrompt, createGoal } from "@zendev-lab/pi-goal";
+import { compactContinuationPrompt, createGoal } from "@zendev-lab/pi-loop";
 
 export function renderSparkGoalContinuationPrompt(objective: string): string {
   const trimmed = objective.trim() || "Continue Spark goal execution.";

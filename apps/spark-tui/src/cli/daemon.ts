@@ -5,7 +5,10 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+
+import type { SparkDaemonEvent } from "@zendev-lab/spark-protocol";
 
 import {
   exportSparkSessionRecord,
@@ -54,6 +57,11 @@ export interface SparkDaemonClientOptions {
   turnSubmit?: (
     paths: SparkDaemonClientPaths,
     input: { sessionId: string; prompt: string; reset?: boolean },
+  ) => Promise<LocalTurnSubmitResult>;
+  turnStream?: (
+    paths: SparkDaemonClientPaths,
+    input: { sessionId: string; prompt: string; reset?: boolean },
+    handlers: { onEvent?: (event: SparkDaemonEvent) => void; signal?: AbortSignal },
   ) => Promise<LocalTurnSubmitResult>;
   workspaceEnsureLocal?: (
     paths: SparkDaemonClientPaths,
@@ -445,19 +453,138 @@ export function sparkDaemonHelpText(): string {
 
 export interface SparkDaemonNativeResponderOptions {
   sessionId?: string;
+  waitForCompletion?: boolean;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+}
+
+interface SparkDaemonNativeResponderContext {
+  signal?: AbortSignal;
+  appendAssistantChunk?: (chunk: string) => void;
+  finishAssistantMessage?: () => void;
 }
 
 export function createSparkDaemonNativeResponder(
   client: SparkDaemonClientOptions = {},
   options: SparkDaemonNativeResponderOptions = {},
-): (input: string) => Promise<string> {
+): (input: string, context?: SparkDaemonNativeResponderContext) => Promise<string> {
   const sessionId = options.sessionId ?? `spark-cli-${Date.now().toString(36)}`;
-  return async (input: string) => {
+  return async (input: string, context?: SparkDaemonNativeResponderContext) => {
     const prompt = input.trim();
     if (!prompt) return "ignored empty prompt";
-    const result = await clientSubmit({ sessionId, prompt }, client);
-    return `queued for Spark daemon session ${sessionId}: ${result.fileName}`;
+    const live = createDaemonLiveAssistantRenderer(context);
+    const result = await clientSubmitStreaming({ sessionId, prompt }, client, {
+      signal: context?.signal,
+      onEvent: live.onEvent,
+    });
+    if (options.waitForCompletion === false) {
+      return `queued for Spark daemon session ${sessionId}: ${result.fileName}`;
+    }
+    const finalText = await waitForSubmittedTurn(result, client, {
+      signal: context?.signal,
+      pollIntervalMs: options.pollIntervalMs,
+      timeoutMs: options.timeoutMs,
+    });
+    if (live.streamed) {
+      context?.finishAssistantMessage?.();
+      return "";
+    }
+    return finalText;
   };
+}
+
+function createDaemonLiveAssistantRenderer(
+  context: SparkDaemonNativeResponderContext | undefined,
+): {
+  streamed: boolean;
+  onEvent?: (event: SparkDaemonEvent) => void;
+} {
+  if (!context?.appendAssistantChunk) return { streamed: false };
+  let streamed = false;
+  let lastText = "";
+  return {
+    get streamed() {
+      return streamed;
+    },
+    onEvent(event) {
+      const text = assistantTextFromDaemonViewEvent(event);
+      if (text === undefined) return;
+      const chunk = text.startsWith(lastText) ? text.slice(lastText.length) : text;
+      lastText = text;
+      if (!chunk) return;
+      streamed = true;
+      context.appendAssistantChunk?.(chunk);
+    },
+  };
+}
+
+function assistantTextFromDaemonViewEvent(event: SparkDaemonEvent): string | undefined {
+  if (event.type !== "daemon.view_event") return undefined;
+  const view = event.view;
+  if (!isRecord(view) || view.type !== "session.message" || !isRecord(view.message)) {
+    return undefined;
+  }
+  const message = view.message;
+  if (message.role !== "assistant" || message.status !== "streaming") return undefined;
+  return typeof message.text === "string" ? message.text : undefined;
+}
+
+interface SubmittedTurnWaitOptions {
+  signal?: AbortSignal;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+}
+
+async function waitForSubmittedTurn(
+  submitted: LocalTurnSubmitResult,
+  client: SparkDaemonClientOptions,
+  options: SubmittedTurnWaitOptions = {},
+): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? 5 * 60_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 500;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    throwIfAborted(options.signal);
+    const queue = await clientQueue({ state: "all", limit: 100 }, client);
+    const entry = findQueueEntry(queue, submitted.fileName);
+    if (entry?.payload.failedAt) {
+      throw new Error(entry.payload.error ?? `Spark daemon failed ${submitted.fileName}`);
+    }
+    if (entry?.payload.processedAt) {
+      return renderProcessedTurnResponse(entry.payload.result, submitted);
+    }
+    await delay(pollIntervalMs, undefined, { signal: options.signal });
+  }
+  return `queued for Spark daemon session ${submitted.task.sessionId}: ${submitted.fileName}`;
+}
+
+function findQueueEntry(
+  queue: LocalDaemonQueueResult,
+  fileName: string,
+): NonNullable<LocalDaemonQueueResult["entries"]>[number] | undefined {
+  const entries = [
+    ...(queue.entries ?? []),
+    ...Object.values(queue.byState ?? {}).flatMap((items) => items ?? []),
+  ];
+  return entries.find((entry) => entry.fileName === fileName);
+}
+
+function renderProcessedTurnResponse(result: unknown, submitted: LocalTurnSubmitResult): string {
+  if (isRecord(result)) {
+    const assistantText = result.assistantText;
+    if (typeof assistantText === "string" && assistantText.trim()) return assistantText;
+    const stderr = result.stderr;
+    if (typeof stderr === "string" && stderr.trim()) return stderr;
+  }
+  return `Spark daemon completed session ${submitted.task.sessionId}: ${submitted.fileName}`;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function createSparkDaemonNativeCommands(
@@ -640,6 +767,18 @@ async function clientSubmit(
     method: "turn.submit",
     params: input,
   });
+}
+
+async function clientSubmitStreaming(
+  input: { sessionId: string; prompt: string; reset?: boolean },
+  client: SparkDaemonClientOptions,
+  handlers: { onEvent?: (event: SparkDaemonEvent) => void; signal?: AbortSignal } = {},
+): Promise<LocalTurnSubmitResult> {
+  const paths = resolveSparkDaemonClientPaths(client);
+  await clientEnsureRunning(client);
+  if (client.turnStream) return await client.turnStream(paths, input, handlers);
+  if (handlers.onEvent) return await localRpcTurnStream(paths, input, handlers);
+  return await clientSubmit(input, client);
 }
 
 async function clientEnsureLocalWorkspace(
@@ -843,6 +982,92 @@ async function localRpcRequest<T>(
       }
     });
   });
+}
+
+async function localRpcTurnStream(
+  paths: SparkDaemonClientPaths,
+  input: { sessionId: string; prompt: string; reset?: boolean },
+  handlers: { onEvent?: (event: SparkDaemonEvent) => void; signal?: AbortSignal } = {},
+): Promise<LocalTurnSubmitResult> {
+  const requestId = localRequestId();
+  return await new Promise<LocalTurnSubmitResult>((resolvePromise, reject) => {
+    const socket = createConnection(paths.socketPath);
+    let buffer = "";
+    let submitted: LocalTurnSubmitResult | undefined;
+    let settled = false;
+    const cleanup = () => {
+      handlers.signal?.removeEventListener("abort", abort);
+      socket.removeListener("error", fail);
+    };
+    const resolveOnce = () => {
+      if (settled || !submitted) return;
+      settled = true;
+      cleanup();
+      socket.end();
+      resolvePromise(submitted);
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      socket.destroy();
+      reject(error);
+    };
+    const abort = () => fail(new Error("aborted"));
+    handlers.signal?.addEventListener("abort", abort, { once: true });
+    socket.setTimeout(1_000, () => fail(new Error(`Timed out connecting to ${paths.socketPath}`)));
+    socket.once("error", fail);
+    socket.on("connect", () => {
+      socket.setTimeout(5 * 60_000, () =>
+        fail(new Error(`Timed out waiting for daemon stream from ${paths.socketPath}`)),
+      );
+      socket.write(`${JSON.stringify({ id: requestId, method: "turn.stream", params: input })}\n`);
+    });
+    socket.on("close", () => {
+      if (submitted) resolveOnce();
+    });
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString("utf8");
+      let newline = buffer.indexOf("\n");
+      while (newline !== -1) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        try {
+          const message = parseLocalRpcStreamMessage(line, requestId);
+          if (message.result) submitted = message.result;
+          if (message.event) {
+            handlers.onEvent?.(message.event);
+            if (isTerminalStreamEvent(message.event)) resolveOnce();
+          }
+        } catch (error) {
+          fail(error instanceof Error ? error : new Error(String(error)));
+        }
+        newline = buffer.indexOf("\n");
+      }
+    });
+  });
+}
+
+function parseLocalRpcStreamMessage(
+  line: string,
+  requestId: string,
+): { result?: LocalTurnSubmitResult; event?: SparkDaemonEvent } {
+  const value = JSON.parse(line) as unknown;
+  if (!isRecord(value) || value.id !== requestId || value.ok !== true) {
+    const error = isRecord(value) && isRecord(value.error) ? value.error.message : undefined;
+    throw new Error(typeof error === "string" ? error : "Invalid Spark daemon stream response.");
+  }
+  return {
+    ...(isRecord(value.result) ? { result: value.result as unknown as LocalTurnSubmitResult } : {}),
+    ...(isRecord(value.event) ? { event: value.event as unknown as SparkDaemonEvent } : {}),
+  };
+}
+
+function isTerminalStreamEvent(event: SparkDaemonEvent): boolean {
+  return (
+    event.type === "daemon.task.lifecycle" &&
+    (event.status === "succeeded" || event.status === "failed" || event.status === "cancelled")
+  );
 }
 
 function resolveSparkDaemonClientPaths(

@@ -34,15 +34,15 @@ importers:
       '@zendev-lab/pi-files':
         specifier: workspace:^
         version: link:packages/pi-files
-      '@zendev-lab/pi-goal':
-        specifier: workspace:^
-        version: link:packages/pi-goal
       '@zendev-lab/pi-graft':
         specifier: workspace:^
         version: link:packages/pi-graft
       '@zendev-lab/pi-learnings':
         specifier: workspace:^
         version: link:packages/pi-learnings
+      '@zendev-lab/pi-loop':
+        specifier: workspace:^
+        version: link:packages/pi-loop
       '@zendev-lab/pi-recall':
         specifier: workspace:^
         version: link:packages/pi-recall
@@ -298,12 +298,6 @@ importers:
         specifier: ^1.2.13
         version: 1.2.13
 
-  packages/pi-goal:
-    dependencies:
-      '@zendev-lab/pi-loop':
-        specifier: workspace:^
-        version: link:../pi-loop
-
   packages/pi-graft:
     dependencies:
       '@zendev-lab/pi-roles':
@@ -411,9 +405,6 @@ importers:
       '@zendev-lab/pi-extension-api':
         specifier: workspace:^
         version: link:../pi-extension-api
-      '@zendev-lab/pi-goal':
-        specifier: workspace:^
-        version: link:../pi-goal
       '@zendev-lab/pi-learnings':
         specifier: workspace:^
         version: link:../pi-learnings

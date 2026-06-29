@@ -6,7 +6,7 @@ It wires together Spark mode/policy code and generic `pi-*` capabilities, while 
 
 - `@zendev-lab/pi-tasks` owns project/task/TODO graph state, readiness, optional role hints, claims, and the canonical `task_read`, `task_write`, and `assign` tools.
 - `@zendev-lab/pi-workflows` owns saved workflow discovery/runtime primitives and `.spark/workflow-runs.json` workflow-run state.
-- `@zendev-lab/pi-goal` owns reusable goal state and continuation prompt primitives; Spark owns the project-bound `/goal` command/facade.
+- `@zendev-lab/pi-loop` owns reusable loop and goal state/continuation prompt primitives; Spark owns the project-bound `/loop` and `/goal` command facades.
 - `@zendev-lab/pi-artifacts` owns artifact metadata/blobs and provenance.
 - `@zendev-lab/pi-learnings` owns evidence-backed `.learnings/` records and the canonical `learning` tool.
 - `@zendev-lab/pi-ask`, `@zendev-lab/pi-context`, `@zendev-lab/pi-recall`, `@zendev-lab/pi-cue`, `@zendev-lab/pi-graft`, and `@zendev-lab/pi-roles` remain reusable outside Spark mode.

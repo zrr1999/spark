@@ -34,7 +34,6 @@ import {
   loadSparkConfig,
   registerSparkSessionsCommand,
   resolveSparkModelSelectionById,
-  submitToSparkAgent,
   type SparkActiveSelection,
   type SparkCliHostServices,
   type SparkCliHostServicesOptions,
@@ -71,7 +70,6 @@ export interface SparkCliRuntimeOptions {
   themes?: string[];
   noThemes?: boolean;
   noContextFiles?: boolean;
-  direct?: boolean;
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   tools?: string[];
   excludeTools?: string[];
@@ -243,9 +241,6 @@ function parseSparkPiCompatibleOptions(argv: string[]): ParsedSparkPiOptions {
       case "--no-session":
         options.noSession = true;
         break;
-      case "--direct":
-        options.direct = true;
-        break;
       case "--name":
       case "-n":
         options.name = readRequired(argv, ++index, arg);
@@ -318,6 +313,8 @@ function parseSparkPiCompatibleOptions(argv: string[]): ParsedSparkPiOptions {
       default:
         if (arg.startsWith("@")) {
           (options.fileArgs ??= []).push(arg.slice(1));
+        } else if (arg.startsWith("-")) {
+          throw new Error(`Unknown spark option: ${arg}`);
         } else {
           messages.push(arg);
         }
@@ -400,35 +397,14 @@ export async function runSparkCli(
       console.log(formatSparkModelList(services, command.query));
       return 0;
     }
-    case "rpc": {
-      const createHostServices = options.createHostServices ?? createSparkCliHostServices;
-      const directServices = command.options?.direct
-        ? await createHostServices(await hostServiceOptionsFromRuntime(command.options))
-        : undefined;
-      await runSparkRpcMode(daemonClient, command.options, directServices);
+    case "rpc":
+      await runSparkRpcMode(daemonClient, command.options);
       return 0;
-    }
     case "print": {
       const sessionId =
         command.options?.sessionId ??
         command.options?.session ??
         `spark-print-${Date.now().toString(36)}`;
-      if (command.options?.direct) {
-        const createHostServices = options.createHostServices ?? createSparkCliHostServices;
-        const services = await createHostServices(
-          await hostServiceOptionsFromRuntime(command.options),
-        );
-        const text = await submitToSparkAgent(services, command.prompt);
-        const result = {
-          action: "direct-submit",
-          sessionId,
-          message: { role: "assistant", content: [{ type: "text", text }] },
-        };
-        if (command.mode === "json")
-          printSparkJsonEventStream(command.prompt, sessionId, result, text);
-        else console.log(JSON.stringify(result, null, 2));
-        return 0;
-      }
       const lease = await attachSparkWorkspaceClient(daemonClient, {
         kind: "headless",
         displayName: "Spark headless submit",
@@ -723,13 +699,12 @@ function printSparkJsonEventStream(
 async function runSparkRpcMode(
   daemonClient: SparkDaemonClientOptions,
   options: SparkCliRuntimeOptions | undefined,
-  directServices?: SparkCliHostServices,
 ): Promise<void> {
   writeRpc({
     type: "response",
     command: "ready",
     success: true,
-    data: { protocol: "spark-rpc-jsonl", mode: directServices ? "direct" : "daemon" },
+    data: { protocol: "spark-rpc-jsonl", mode: "daemon" },
   });
   let buffered = "";
   for await (const chunk of processStdin) {
@@ -738,19 +713,18 @@ async function runSparkRpcMode(
     while (newline >= 0) {
       const line = buffered.slice(0, newline).replace(/\r$/u, "");
       buffered = buffered.slice(newline + 1);
-      if (line.trim()) await handleSparkRpcLine(line, daemonClient, options, directServices);
+      if (line.trim()) await handleSparkRpcLine(line, daemonClient, options);
       newline = buffered.indexOf("\n");
     }
   }
   if (buffered.trim())
-    await handleSparkRpcLine(buffered.replace(/\r$/u, ""), daemonClient, options, directServices);
+    await handleSparkRpcLine(buffered.replace(/\r$/u, ""), daemonClient, options);
 }
 
 export async function handleSparkRpcLine(
   line: string,
   daemonClient: SparkDaemonClientOptions,
   options: SparkCliRuntimeOptions | undefined,
-  directServices?: SparkCliHostServices,
   writer: (value: Record<string, unknown>) => void = writeRpc,
 ): Promise<void> {
   let request: Record<string, unknown>;
@@ -768,22 +742,6 @@ export async function handleSparkRpcLine(
       if (!message) throw new Error(`${command} requires message`);
       const sessionId =
         options?.sessionId ?? options?.session ?? `spark-rpc-${Date.now().toString(36)}`;
-      if (directServices) {
-        const text = await submitToSparkAgent(directServices, message);
-        writer({
-          id,
-          type: "response",
-          command,
-          success: true,
-          data: {
-            action: "direct-submit",
-            sessionId,
-            message: { role: "assistant", content: [{ type: "text", text }] },
-            text,
-          },
-        });
-        return;
-      }
       const result = await handleSparkDaemonCliCommand(
         { action: "submit", json: true, sessionId, prompt: message },
         daemonClient,
@@ -792,16 +750,6 @@ export async function handleSparkRpcLine(
       return;
     }
     if (command === "get_state") {
-      if (directServices) {
-        writer({
-          id,
-          type: "response",
-          command,
-          success: true,
-          data: { mode: "direct", state: directServices.agentLoop.getState() },
-        });
-        return;
-      }
       const state = await handleSparkDaemonCliCommand(
         { action: "status", json: true },
         daemonClient,
@@ -815,30 +763,27 @@ export async function handleSparkRpcLine(
         type: "response",
         command,
         success: true,
-        data: { messages: directServices ? [...directServices.agentLoop.getMessages()] : [] },
+        data: { messages: [] },
       });
       return;
     }
     if (command === "abort") {
-      directServices?.agentLoop.abort("rpc_abort");
       writer({
         id,
         type: "response",
         command,
         success: true,
-        data: directServices ? { mode: "direct", aborted: true } : { queuedDaemonMode: true },
+        data: { queuedDaemonMode: true },
       });
       return;
     }
     if (command === "new_session") {
-      if (directServices?.agentLoop.getState() === "idle")
-        directServices.agentLoop.replaceMessages([]);
       writer({
         id,
         type: "response",
         command,
         success: true,
-        data: directServices ? { mode: "direct", messages: [] } : { queuedDaemonMode: true },
+        data: { queuedDaemonMode: true },
       });
       return;
     }

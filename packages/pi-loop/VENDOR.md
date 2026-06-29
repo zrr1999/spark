@@ -10,14 +10,14 @@
 
 ## License notice
 
-The vendored source is derived from MIT-licensed pi-codex-goal. Preserve this attribution when redistributing substantial portions of the code: Copyright (c) 2026 Mitch Fultz.
+The goal-layer source is derived from MIT-licensed pi-codex-goal. Preserve this attribution when redistributing substantial portions of the code: Copyright (c) 2026 Mitch Fultz.
 
 ## Copied and renamed
 
-- types.ts: goal data model, renamed ThreadGoal to Goal and custom entry type to pi-goal.
-- state.ts: validation, reconstruction, and state transitions, renamed createThreadGoal to createGoal.
-- format.ts: status formatting helpers with user-facing slash-command hints removed.
-- prompts.ts: continuation/completion-audit prompts with Spark-owned tool names and spark_goal_continuation marker.
+- goal-types.ts: goal data model, renamed ThreadGoal to Goal and custom entry type to spark-goal.
+- goal-state.ts: validation, reconstruction, and state transitions, renamed createThreadGoal to createGoal.
+- goal-format.ts: status formatting helpers with user-facing slash-command hints removed.
+- goal-prompts.ts: continuation/completion-audit prompts with Spark-owned tool names and spark_goal_continuation marker.
 
 ## Removed features
 
@@ -33,4 +33,4 @@ The vendored source is derived from MIT-licensed pi-codex-goal. Preserve this at
 
 ## Local ownership
 
-Goal continuation code lives under `packages/pi-goal` and is treated as Spark-owned goal code, separate from workflow script parsing and workflow-run scheduling. Future API names, file layout, and behavior should follow Spark project semantics.
+Goal continuation code now lives under `packages/pi-loop` alongside the non-completing loop substrate. `@zendev-lab/pi-loop` is the single package boundary for reusable loop and goal primitives, while Spark-specific command/tool/reviewer policy remains in `@zendev-lab/spark-extension`.

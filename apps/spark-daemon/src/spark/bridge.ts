@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { importWorkspaceAware } from "./import-utils.ts";
 type ArtifactRef = `artifact:${string}`;
 type ProjectRef = `proj:${string}`;
 type RunRef = `run:${string}`;
@@ -157,7 +158,7 @@ async function loadSparkRuntimeModules(): Promise<SparkRuntimeModules> {
       runSparkTask: SparkRuntimeModules["runSparkTask"];
       killActiveSparkRoleRunProcesses: SparkRuntimeModules["killActiveSparkRoleRunProcesses"];
     }>("@zendev-lab/spark-runtime"),
-    dynamicImport<{
+    importWorkspaceAware<{
       createSparkHeadlessRoleExecutor: SparkRuntimeModules["createSparkHeadlessRoleExecutor"];
     }>("@zendev-lab/spark-tui-app/headless-role-executor"),
   ]);

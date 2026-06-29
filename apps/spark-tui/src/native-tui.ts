@@ -101,6 +101,8 @@ export interface SparkNativeCustomMessageInput {
 export interface SparkNativeResponderContext {
   readonly messages: readonly SparkNativeMessage[];
   readonly signal?: AbortSignal;
+  readonly appendAssistantChunk?: (chunk: string) => void;
+  readonly finishAssistantMessage?: () => void;
 }
 
 export type SparkNativeResponder = (
@@ -454,13 +456,23 @@ export class SparkNativeSession {
     this.currentAbort = abortController;
     this.pushMessage({ role: "user", text: displayNativeSubmittedInput(input) });
 
+    let streamedAssistant = false;
     try {
       const response = await this.responder(input, {
         messages: this.messages,
         signal: abortController.signal,
+        appendAssistantChunk: (chunk) => {
+          streamedAssistant = true;
+          this.appendAssistantChunk(chunk);
+        },
+        finishAssistantMessage: () => this.finishAssistantMessage(),
       });
       if (this.activeTurnId !== turnId) return;
-      this.pushMessage({ role: "assistant", text: response });
+      if (streamedAssistant) {
+        this.finishAssistantMessage();
+      } else {
+        this.pushMessage({ role: "assistant", text: response });
+      }
     } catch (error) {
       if (this.activeTurnId !== turnId) return;
       this.pushMessage({

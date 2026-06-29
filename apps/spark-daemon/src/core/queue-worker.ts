@@ -181,6 +181,13 @@ function daemonEventsFromResult(
   result: unknown,
   options: { entry: SparkDaemonQueueEntry; invocationId: string },
 ): SparkDaemonEvent[] {
+  if (
+    result &&
+    typeof result === "object" &&
+    (result as { eventsStreamed?: unknown }).eventsStreamed
+  ) {
+    return [];
+  }
   const rawEvents =
     result && typeof result === "object"
       ? (result as { jsonEvents?: unknown }).jsonEvents
