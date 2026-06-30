@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
+  import { buildCockpitProjectTaskDisplay } from "$lib/project-task-display";
   import { workspaceControlControlLabel } from "$lib/workspace-control-display";
   import { workspacePath } from "$lib/workspace-routes";
 
@@ -12,6 +13,14 @@
   let blockedCount = $derived(data.taskSummary.byGroup.blocked ?? 0);
   let runningCount = $derived(data.taskSummary.byGroup.running ?? 0);
   let doneCount = $derived(data.taskSummary.byGroup.done ?? 0);
+  let projectTaskDisplay = $derived(
+    buildCockpitProjectTaskDisplay({
+      project: { name: data.project.name },
+      projectKind: data.projectKind,
+      tasks: data.tasks,
+      taskSummary: data.taskSummary,
+    }),
+  );
   type Command = {
     status: string;
     deliveryStatus: string | null;
@@ -170,6 +179,10 @@
         <p class="summary-copy">
           {t.graph.body}
         </p>
+        <div class="pi-task-model" aria-label="pi-tasks project model">
+          <code>{projectTaskDisplay.projectLine}</code>
+          <code>{projectTaskDisplay.taskCountsLine}</code>
+        </div>
       </div>
       <div class="status-summary" aria-label={t.graph.statusSummaryAria}>
         <span class="status-pill ready">{t.graph.ready} {readyCount}</span>
@@ -280,12 +293,16 @@
       {:else}
         <div class="graph-list">
           {#each data.tasks as task}
+            {@const taskDisplay = projectTaskDisplay.tasksByRuntimeId[task.runtimeTaskId]}
             <article class="graph-row">
               <div class="task-main">
                 <div class="task-heading">
                   <div>
-                    <h3>{task.title}</h3>
-                    <p>
+                    <h3>{taskDisplay?.title ?? task.title}</h3>
+                    <p class="task-status-line">
+                      {taskDisplay?.statusLine ?? task.runtimeTaskId}
+                    </p>
+                    <p class="task-runtime-line">
                       {task.runtimeTaskId}{task.clusterTitle ? ` · ${task.clusterTitle}` : ""}{task.agentRef
                         ? ` · ${task.agentRef}`
                         : ""}
@@ -589,6 +606,42 @@
 
   .summary-copy {
     margin-top: 8px;
+  }
+
+  .pi-task-model {
+    display: grid;
+    gap: 8px;
+    margin-top: 14px;
+  }
+
+  .pi-task-model code,
+  .task-status-line {
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    color: var(--color-ink-muted);
+    font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .pi-task-model code {
+    display: block;
+    overflow-wrap: anywhere;
+    padding: 8px 10px;
+  }
+
+  .task-status-line {
+    margin-top: 6px;
+    overflow-wrap: anywhere;
+    padding: 7px 9px;
+  }
+
+  .task-runtime-line {
+    color: var(--color-ink-subtle);
+    font-size: 12px;
+    line-height: 1.45;
+    margin-top: 6px;
   }
 
   .status-summary {

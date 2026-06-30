@@ -1,4 +1,5 @@
 export * from "./common.ts";
+export * from "./display.ts";
 export * from "./graph.ts";
 export * from "./graph-store.ts";
 export * from "./todo-store.ts";

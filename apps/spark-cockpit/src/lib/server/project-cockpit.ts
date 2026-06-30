@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { normalizePiTaskStatusGroup } from "@zendev-lab/pi-tasks";
 import { loadWorkspaceServerControl } from "./projection-services";
 
 function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
@@ -45,26 +46,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function normalizeTaskStatus(status: string) {
-  const normalized = status.toLowerCase().replaceAll("_", "-");
-  if (["ready", "pending", "queued", "not-started"].includes(normalized)) {
-    return "ready";
-  }
-  if (["running", "in-progress", "processing"].includes(normalized)) {
-    return "running";
-  }
-  if (["blocked", "waiting"].includes(normalized)) {
-    return "blocked";
-  }
-  if (["done", "completed", "complete", "succeeded", "success", "resolved"].includes(normalized)) {
-    return "done";
-  }
-  if (["failed", "error", "timed-out"].includes(normalized)) {
-    return "failed";
-  }
-  if (["cancelled", "canceled", "archived"].includes(normalized)) {
-    return "cancelled";
-  }
-  return "other";
+  const group = normalizePiTaskStatusGroup(status);
+  return group === "pending" ? "ready" : group;
 }
 
 export interface ProjectCockpitTaskLink {
@@ -96,6 +79,7 @@ export interface ProjectCockpitKindDisplay {
 
 export interface ProjectCockpitTask {
   runtimeTaskId: string;
+  name: string | null;
   title: string;
   description: string | null;
   status: string;
@@ -110,6 +94,7 @@ export interface ProjectCockpitTask {
   blockers: ProjectCockpitTaskLink[];
   dependents: ProjectCockpitTaskLink[];
   invocationLinks: ProjectCockpitInvocationLink[];
+  readyFrontier: boolean;
 }
 
 export interface ProjectCockpitOwnerBinding {
@@ -237,6 +222,7 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
         .prepare(
           `SELECT t.runtime_task_id AS runtimeTaskId,
                   t.runtime_cluster_id AS runtimeClusterId,
+                  t.name,
                   t.title,
                   t.description,
                   t.status,
@@ -256,6 +242,7 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
         .all(latestSnapshot.id) as Array<{
         runtimeTaskId: string;
         runtimeClusterId: string | null;
+        name: string | null;
         title: string;
         description: string | null;
         status: string;
@@ -309,6 +296,9 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
   }>;
 
   const taskTitleByRuntimeId = new Map(taskRows.map((task) => [task.runtimeTaskId, task.title]));
+  const taskStatusGroupByRuntimeId = new Map(
+    taskRows.map((task) => [task.runtimeTaskId, normalizeTaskStatus(task.status)]),
+  );
   const tasks: ProjectCockpitTask[] = taskRows.map((task) => {
     const runIds = parseJsonArray(task.runIdsJson);
     const invocationLinks = invocationRows
@@ -319,8 +309,18 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
       )
       .map(({ taskRuntimeId: _taskRuntimeId, ...invocation }) => invocation);
 
+    const blockers = dependencyRows
+      .filter((dependency) => dependency.toTaskRuntimeId === task.runtimeTaskId)
+      .map((dependency) => ({
+        runtimeTaskId: dependency.fromTaskRuntimeId,
+        title:
+          taskTitleByRuntimeId.get(dependency.fromTaskRuntimeId) ?? dependency.fromTaskRuntimeId,
+        kind: dependency.kind,
+      }));
+
     return {
       runtimeTaskId: task.runtimeTaskId,
+      name: task.name,
       title: task.title,
       description: task.description,
       status: task.status,
@@ -332,14 +332,7 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
       inputArtifactCount: parseJsonArray(task.inputArtifactIdsJson).length,
       outputArtifactCount: parseJsonArray(task.outputArtifactIdsJson).length,
       runIds,
-      blockers: dependencyRows
-        .filter((dependency) => dependency.toTaskRuntimeId === task.runtimeTaskId)
-        .map((dependency) => ({
-          runtimeTaskId: dependency.fromTaskRuntimeId,
-          title:
-            taskTitleByRuntimeId.get(dependency.fromTaskRuntimeId) ?? dependency.fromTaskRuntimeId,
-          kind: dependency.kind,
-        })),
+      blockers,
       dependents: dependencyRows
         .filter((dependency) => dependency.fromTaskRuntimeId === task.runtimeTaskId)
         .map((dependency) => ({
@@ -348,6 +341,11 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
           kind: dependency.kind,
         })),
       invocationLinks,
+      readyFrontier:
+        normalizeTaskStatus(task.status) === "ready" &&
+        blockers.every(
+          (blocker) => taskStatusGroupByRuntimeId.get(blocker.runtimeTaskId) === "done",
+        ),
     };
   });
 
@@ -355,7 +353,7 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
     (summary, task) => {
       summary.total += 1;
       summary.byGroup[task.statusGroup] = (summary.byGroup[task.statusGroup] ?? 0) + 1;
-      summary.byStatus[task.status] = (summary.byStatus[task.status] ?? 0) + 1;
+      summary.byStatus[task.statusGroup] = (summary.byStatus[task.statusGroup] ?? 0) + 1;
       return summary;
     },
     {

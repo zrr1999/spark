@@ -1,5 +1,12 @@
 import type { Task, TaskStatus, ProjectRef } from "@zendev-lab/pi-extension-api";
-import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
+import {
+  countPiTaskStatuses,
+  formatPiTaskStatusCounts,
+  isImportantPiTaskStatus,
+  isUnfinishedTaskStatus,
+  sortPiTasksForStatusVisibility,
+  type TaskGraph,
+} from "@zendev-lab/pi-tasks";
 import { renderSparkProjectKindDisplay } from "./project-kind-registry.ts";
 import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 
@@ -38,33 +45,11 @@ export function normalizeSparkStatusLimit(params: Record<string, unknown>): numb
 }
 
 export function isImportantStatus(status: TaskStatus): boolean {
-  return status !== "done" && status !== "cancelled";
+  return isImportantPiTaskStatus(status);
 }
 
 export function sortTasksForStatusVisibility(tasks: Task[]): Task[] {
-  return [...tasks].sort((a, b) => {
-    const byStatus = taskStatusVisibilityRank(a.status) - taskStatusVisibilityRank(b.status);
-    if (byStatus !== 0) return byStatus;
-    return (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "");
-  });
-}
-
-function taskStatusVisibilityRank(status: TaskStatus): number {
-  switch (status) {
-    case "running":
-      return 0;
-    case "blocked":
-      return 1;
-    case "ready":
-    case "pending":
-      return 2;
-    case "failed":
-      return 3;
-    case "done":
-      return 4;
-    case "cancelled":
-      return 5;
-  }
+  return sortPiTasksForStatusVisibility(tasks);
 }
 
 export function shouldRenderProjectInSparkStatus(input: {
@@ -79,26 +64,11 @@ export function shouldRenderProjectInSparkStatus(input: {
 }
 
 export function countTaskStatuses(tasks: Task[]): Partial<Record<TaskStatus, number>> {
-  const counts: Partial<Record<TaskStatus, number>> = {};
-  for (const task of tasks) counts[task.status] = (counts[task.status] ?? 0) + 1;
-  return counts;
+  return countPiTaskStatuses(tasks);
 }
 
 export function formatTaskStatusCounts(counts: Partial<Record<TaskStatus, number>>): string {
-  const order: TaskStatus[] = [
-    "running",
-    "blocked",
-    "pending",
-    "ready",
-    "failed",
-    "done",
-    "cancelled",
-  ];
-  const parts = order.flatMap((status) => {
-    const count = counts[status] ?? 0;
-    return count > 0 ? [`${status}=${count}`] : [];
-  });
-  return parts.length > 0 ? parts.join(" ") : "none";
+  return formatPiTaskStatusCounts(counts);
 }
 
 export function compactProjectSummaries(graph: TaskGraph, sessionKey: string) {

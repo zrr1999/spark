@@ -1,5 +1,9 @@
 import type { TaskGraph } from "@zendev-lab/pi-tasks";
-import { isUnfinishedTaskStatus } from "@zendev-lab/pi-tasks";
+import {
+  formatPiTaskActiveStatusLine,
+  formatPiTaskSummaryStatusLine,
+  isUnfinishedTaskStatus,
+} from "@zendev-lab/pi-tasks";
 import type {
   ProjectRef,
   TaskRef,
@@ -606,10 +610,8 @@ function appendTaskStatusLines(
       latestRun: input.lastRunsByTaskRef.get(task.ref),
     });
     const planSummary = taskPlanSummary(task);
-    const planSuffix = planSummary ? ` plan=${planSummary}` : "";
     const lifecycleSuffix = taskLifecycleSuffix(task);
     const taskOwnedBySession = isClaimOwnedBySession(task, input.sessionKey);
-    const readyFrontierSuffix = input.readyTaskRefs.has(task.ref) ? " ready_frontier=yes" : "";
     const taskTodos = taskOwnedBySession ? input.graph.taskTodos(task.ref) : [];
     const visibleTaskTodos =
       input.view === "active" ? taskTodos.slice(0, DEFAULT_SPARK_STATUS_TODO_LIMIT) : taskTodos;
@@ -641,7 +643,13 @@ function appendTaskStatusLines(
     });
     if (input.view === "active") {
       lines.push(
-        `  - [${task.status}] @${task.name}: ${task.title} owner=@${owner}${readyFrontierSuffix}${planSuffix}${lifecycleSuffix}`,
+        `  ${formatPiTaskActiveStatusLine({
+          task,
+          owner,
+          readyFrontier: input.readyTaskRefs.has(task.ref),
+          plan: planSummary,
+          lifecycleSuffix,
+        })}`,
       );
       if (taskOwnedBySession) {
         for (const todo of visibleTaskTodos)
@@ -653,7 +661,17 @@ function appendTaskStatusLines(
     }
     const taskSummary = input.graph.todoSummary(task.ref);
     lines.push(
-      `  - [${task.status}] @${task.name}: ${task.title} (${task.ref}) kind=${task.kind} owner=@${owner} claimed=${taskClaimSummary(task)} todos=${taskSummary.total}/${taskSummary.inProgress}/${taskSummary.pending}/${taskSummary.done}${readyFrontierSuffix}${planSuffix}${lifecycleSuffix}`,
+      `  ${formatPiTaskSummaryStatusLine({
+        task,
+        owner,
+        ref: task.ref,
+        kind: task.kind,
+        claimed: taskClaimSummary(task),
+        todos: `${taskSummary.total}/${taskSummary.inProgress}/${taskSummary.pending}/${taskSummary.done}`,
+        readyFrontier: input.readyTaskRefs.has(task.ref),
+        plan: planSummary,
+        lifecycleSuffix,
+      })}`,
     );
     if (taskOwnedBySession) {
       for (const todo of visibleTaskTodos)

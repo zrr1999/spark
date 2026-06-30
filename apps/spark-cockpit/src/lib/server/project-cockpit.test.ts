@@ -69,7 +69,7 @@ describe("project cockpit projection", () => {
             runtimeTaskId: "task-plan",
             runtimeClusterId: "cluster-main",
             title: "Plan",
-            status: "done",
+            status: "completed",
             inputArtifactIds: [],
             outputArtifactIds: [createId("art")],
             runIds: [],
@@ -125,6 +125,7 @@ describe("project cockpit projection", () => {
       linkedInvocationCount: 1,
     });
     expect(cockpit?.taskSummary.byGroup).toMatchObject({ done: 1, blocked: 1 });
+    expect(cockpit?.taskSummary.byStatus).toMatchObject({ done: 1, blocked: 1 });
     expect(cockpit?.projectKind).toEqual({
       kind: "generic",
       title: "Generic",
@@ -140,6 +141,7 @@ describe("project cockpit projection", () => {
       { runtimeInvocationId: invocationId, agentName: "worker", status: "running" },
     ]);
     expect(buildTask?.inputArtifactCount).toBe(1);
+    expect(buildTask?.readyFrontier).toBe(false);
 
     db.close();
   });
