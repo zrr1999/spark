@@ -2,7 +2,11 @@ import { spawn, type SpawnOptions } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { sparkCliDispatcherStrings } from "@zendev-lab/spark-i18n/cli";
+
 export const SPARK_CLI_VERSION = "0.1.0";
+
+const dispatcherStrings = sparkCliDispatcherStrings();
 
 export type SparkDispatcherTarget = "tui" | "daemon";
 
@@ -31,7 +35,7 @@ export function parseSparkDispatcherArgs(argv: string[]): SparkDispatcherCommand
   if (isSparkTuiCompatibilityCommand(first)) return { kind: "dispatch", target: "tui", argv };
   return {
     kind: "error",
-    message: `Unknown spark subcommand: ${first}\nRun "spark --help" for available subcommands. Use "spark tui ${argv.join(" ")}" to send text to the interactive TUI.`,
+    message: dispatcherStrings.unknownSubcommand(first, argv),
   };
 }
 
@@ -59,7 +63,7 @@ export async function runSparkDispatcher(
 }
 
 export function helpText(): string {
-  return `spark - Spark command dispatcher\n\nUsage:\n  spark\n  spark tui [initial message]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <command> [args...]\n  spark --help\n  spark --version\n\nDispatches to Spark surfaces:\n  spark tui      interactive terminal UI and Pi-compatible CLI/resource shims\n  spark daemon   daemon administration\n\nUnknown subcommands fail loudly instead of being interpreted as prompts. Use "spark tui ..." for interactive TUI input.\n`;
+  return dispatcherStrings.helpText;
 }
 
 function isSparkTuiCompatibilityCommand(first: string): boolean {
@@ -84,12 +88,12 @@ const defaultLauncher: SparkDispatcherLauncher = {
       const child = spawn(command.command, [...command.args, ...argv], options);
       child.on("error", (error: NodeJS.ErrnoException) => {
         const detail = error.code === "ENOENT" ? "executable was not found on PATH" : error.message;
-        process.stderr.write(`Unable to dispatch to ${command.label}: ${detail}\n`);
+        process.stderr.write(`${dispatcherStrings.dispatchFailure(command.label, detail)}\n`);
         resolve(error.code === "ENOENT" ? 127 : 1);
       });
       child.on("close", (code, signal) => {
         if (signal) {
-          process.stderr.write(`${command.label} exited due to signal ${signal}\n`);
+          process.stderr.write(`${dispatcherStrings.signalExit(command.label, signal)}\n`);
           resolve(1);
           return;
         }
@@ -120,7 +124,7 @@ function resolveTargetCommand(target: SparkDispatcherTarget): {
 }
 
 function targetLabel(target: SparkDispatcherTarget): string {
-  return target === "daemon" ? "spark daemon" : "spark tui";
+  return dispatcherStrings.targetLabel(target);
 }
 
 function localTargetCommand(target: SparkDispatcherTarget): string | undefined {

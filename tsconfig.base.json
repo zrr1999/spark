@@ -48,6 +48,9 @@
       "@zendev-lab/spark-host": ["./packages/spark-host/src/runtime.ts"],
       "@zendev-lab/spark-host/keybindings": ["./packages/spark-host/src/keybindings.ts"],
       "@zendev-lab/spark-host/types": ["./packages/spark-host/src/types.ts"],
+      "@zendev-lab/spark-i18n": ["./packages/spark-i18n/src/index.ts"],
+      "@zendev-lab/spark-i18n/cli": ["./packages/spark-i18n/src/cli.ts"],
+      "@zendev-lab/spark-i18n/extension": ["./packages/spark-i18n/src/extension.ts"],
       "@zendev-lab/spark-tui-app/headless-role-executor": [
         "./apps/spark-tui/src/headless-role-executor.ts"
       ],

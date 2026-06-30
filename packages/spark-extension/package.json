@@ -29,6 +29,7 @@
     "@zendev-lab/pi-roles": "workspace:^",
     "@zendev-lab/pi-tasks": "workspace:^",
     "@zendev-lab/pi-workflows": "workspace:^",
+    "@zendev-lab/spark-i18n": "workspace:^",
     "@zendev-lab/spark-runtime": "workspace:^",
     "@zendev-lab/spark-tui": "workspace:^",
     "typebox": "^1.2.13"

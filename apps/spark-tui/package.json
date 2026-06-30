@@ -29,6 +29,7 @@
     "@zendev-lab/pi-files": "workspace:^",
     "@zendev-lab/spark-ai": "workspace:^",
     "@zendev-lab/spark-host": "workspace:^",
+    "@zendev-lab/spark-i18n": "workspace:^",
     "@zendev-lab/spark-protocol": "workspace:^",
     "@zendev-lab/spark-tui": "workspace:^",
     "@zendev-lab/spark-turn": "workspace:^"

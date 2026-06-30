@@ -1,0 +1,19 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "status_ready": "Ready",
+  "status_pending": "Pending",
+  "status_queued": "Queued",
+  "status_running": "Running",
+  "status_blocked": "Blocked",
+  "status_done": "Done",
+  "status_completed": "Completed",
+  "status_failed": "Failed",
+  "status_cancelled": "Cancelled",
+  "status_rejected": "Rejected",
+  "status_acked": "Acknowledged",
+  "relative_never": "never",
+  "relative_just_now": "just now",
+  "size_unknown": "unknown size",
+  "goal_active": "Spark goal active",
+  "goal_not_set": "Spark session goal is not set."
+}

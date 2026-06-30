@@ -2,6 +2,8 @@ import { realpathSync } from "node:fs";
 import { stdin as processStdin } from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { sparkTuiCliStrings } from "@zendev-lab/spark-i18n/cli";
+
 import {
   attachSparkWorkspaceClient,
   createSparkDaemonNativeCommands,
@@ -44,6 +46,8 @@ import {
   createSparkModelPickerFromCustomUi,
   type SparkModelSelectorCustomUi,
 } from "./tui/model-selector.ts";
+
+const tuiCliStrings = sparkTuiCliStrings();
 
 export interface SparkCliArgs {
   initialMessage?: string;
@@ -128,7 +132,7 @@ export function parseSparkCliCommand(argv: string[]): SparkCliCommand {
   if (parsed.options.mode === "rpc") return { kind: "rpc", ...(options ? { options } : {}) };
   if (parsed.print) {
     const prompt = parsed.messages.join(" ").trim();
-    if (!prompt) throw new Error("spark --print requires a prompt");
+    if (!prompt) throw new Error(tuiCliStrings.printRequiresPrompt);
     return {
       kind: "print",
       prompt,
@@ -407,7 +411,7 @@ export async function runSparkCli(
         `spark-print-${Date.now().toString(36)}`;
       const lease = await attachSparkWorkspaceClient(daemonClient, {
         kind: "headless",
-        displayName: "Spark headless submit",
+        displayName: tuiCliStrings.headlessDisplayName,
         heartbeatIntervalMs: false,
       });
       try {
@@ -431,7 +435,7 @@ export async function runSparkCli(
     case "tui": {
       const lease = await attachSparkWorkspaceClient(daemonClient, {
         kind: "interactive",
-        displayName: "Spark TUI",
+        displayName: tuiCliStrings.interactiveDisplayName,
       });
       try {
         const createHostServices = options.createHostServices ?? createSparkCliHostServices;
@@ -498,8 +502,8 @@ const NATIVE_SLASH_COMMAND_EXCLUSIONS = [
 function registerSparkNativeModelCommand(services: SparkCliHostServices): void {
   if (services.runtime.getCommand("model")) return;
   services.runtime.registerCommand("model", {
-    description: "Switch or inspect the active Spark model",
-    argumentHint: "[model-id]",
+    description: tuiCliStrings.modelCommandDescription,
+    argumentHint: tuiCliStrings.modelCommandArgumentHint,
     getArgumentCompletions: (prefix) => modelArgumentCompletions(services, prefix),
     async handler(args, ctx) {
       const selection = await handleSparkNativeModelCommand(services, args);
@@ -516,7 +520,7 @@ async function handleSparkNativeModelCommand(
   if (query) return await services.modelSelector.select(resolveSparkModelArgument(services, query));
   const picked = await services.modelSelector.openPicker({ hasUI: true });
   const active = picked ?? services.modelSelector.getActive();
-  if (!active) throw new Error("No Spark model is registered yet.");
+  if (!active) throw new Error(tuiCliStrings.noActiveModel);
   return active;
 }
 
@@ -546,7 +550,7 @@ function modelCompletionItems(
 ): Array<{ value: string; label: string; description?: string }> {
   return state.items.map((item) => ({
     value: item.value,
-    label: `${item.modelLabel}${item.active ? " (active)" : ""}`,
+    label: `${item.modelLabel}${item.active ? tuiCliStrings.activeModelSuffix : ""}`,
     description: item.description,
   }));
 }
@@ -661,7 +665,7 @@ function formatSparkModelList(services: SparkCliHostServices, query: string | un
         : true,
     );
   if (rows.length === 0)
-    return query ? `No Spark models matching ${query}` : "No Spark models registered";
+    return query ? tuiCliStrings.noModelsMatching(query) : tuiCliStrings.noModelsRegistered;
   return rows
     .map((row) => {
       const marker = row.active ? "*" : " ";
@@ -674,7 +678,7 @@ function printSparkJsonEventStream(
   prompt: string,
   sessionId: string,
   result: unknown,
-  assistantText = "Spark daemon accepted the headless prompt.",
+  assistantText = tuiCliStrings.headlessAccepted,
 ): void {
   const timestamp = new Date().toISOString();
   const lines = [
@@ -739,7 +743,7 @@ export async function handleSparkRpcLine(
   try {
     if (command === "prompt" || command === "steer" || command === "follow_up") {
       const message = typeof request.message === "string" ? request.message : "";
-      if (!message) throw new Error(`${command} requires message`);
+      if (!message) throw new Error(tuiCliStrings.rpcRequiresMessage(command));
       const sessionId =
         options?.sessionId ?? options?.session ?? `spark-rpc-${Date.now().toString(36)}`;
       const result = await handleSparkDaemonCliCommand(
@@ -792,7 +796,7 @@ export async function handleSparkRpcLine(
       type: "response",
       command,
       success: false,
-      error: `unsupported rpc command: ${command}`,
+      error: tuiCliStrings.unsupportedRpcCommand(command),
     });
   } catch (error) {
     writer({ id, type: "response", command, success: false, error: errorMessage(error) });
@@ -808,9 +812,7 @@ function errorMessage(error: unknown): string {
 }
 
 function printHelp(): void {
-  console.log(
-    `spark-tui - Spark terminal UI\n\nUsage:\n  spark-tui [initial message]\n  spark-tui --print <prompt>\n  spark-tui --mode json --print <prompt>\n  spark-tui --mode rpc\n  spark-tui --list-models [search]\n  spark-tui install|remove|update|list|config [resource]\n  spark-tui --help\n\nRuns terminal UI rendering by default, but prompts are submitted to the Spark daemon over local IPC. Pi-compatible resource commands update ~/.spark/config.json and keep extensions/providers/skills/prompt templates/themes explicit. Use the root "spark daemon ..." dispatcher path for daemon administration.`,
-  );
+  console.log(tuiCliStrings.helpText);
 }
 
 function isDirectRun(moduleUrl: string, argvEntry: string | undefined): boolean {

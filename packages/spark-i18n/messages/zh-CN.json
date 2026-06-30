@@ -1,0 +1,19 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "status_ready": "就绪",
+  "status_pending": "待处理",
+  "status_queued": "已排队",
+  "status_running": "运行中",
+  "status_blocked": "已阻塞",
+  "status_done": "已完成",
+  "status_completed": "已完成",
+  "status_failed": "失败",
+  "status_cancelled": "已取消",
+  "status_rejected": "已拒绝",
+  "status_acked": "已确认",
+  "relative_never": "从未",
+  "relative_just_now": "刚刚",
+  "size_unknown": "大小未知",
+  "goal_active": "Spark 目标已启动",
+  "goal_not_set": "尚未设置 Spark 会话目标。"
+}

@@ -1,0 +1,41 @@
+{
+  "name": "@zendev-lab/spark-i18n",
+  "version": "0.1.0",
+  "description": "Shared Spark localization helpers and Inlang/Paraglide message boundary.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "src/**/*.json",
+    "src/paraglide/**/*.js",
+    "src/paraglide/**/*.d.ts",
+    "scripts/*.mjs",
+    "project.inlang/**/*",
+    "messages/**/*",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./cli": "./src/cli.ts",
+    "./extension": "./src/extension.ts",
+    "./paraglide/messages": "./src/paraglide/messages.js",
+    "./paraglide/runtime": "./src/paraglide/runtime.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "generate": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide --emit-ts-declarations --strategy baseLocale && node scripts/allow-generated-output.mjs",
+    "check": "pnpm run generate && tsc -p tsconfig.json --noEmit && vp test run",
+    "test": "vp test run"
+  },
+  "devDependencies": {
+    "@inlang/paraglide-js": "^2.20.2",
+    "typescript": "^6.0.3",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=26.0.0 <27"
+  }
+}

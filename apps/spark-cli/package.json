@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@zendev-lab/spark-daemon": "workspace:^",
+    "@zendev-lab/spark-i18n": "workspace:^",
     "@zendev-lab/spark-tui-app": "workspace:^"
   },
   "engines": {

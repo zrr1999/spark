@@ -13,4 +13,8 @@ sixbones = "sixbones"
 typebox = "typebox"
 
 [files]
-extend-exclude = [".spark/**", "**/.pi-lens/**"]
+extend-exclude = [
+  ".spark/**",
+  "**/.pi-lens/**",
+  "packages/spark-i18n/src/paraglide/**"
+]

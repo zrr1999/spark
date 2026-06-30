@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "rootDir": "../.."
+  },
+  "include": ["src/**/*.ts", "src/paraglide/**/*.js", "src/paraglide/**/*.d.ts"]
+}
