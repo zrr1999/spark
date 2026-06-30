@@ -2,6 +2,9 @@
   "name": "@zendev-lab/spark-cockpit",
   "version": "0.1.0",
   "description": "Spark Cockpit SvelteKit web application.",
+  "bin": {
+    "spark-cockpit": "./bin/spark-cockpit"
+  },
   "type": "module",
   "publishConfig": {
     "access": "public"

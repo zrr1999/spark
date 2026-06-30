@@ -118,6 +118,7 @@ Typical merged-repo development commands:
 pnpm run check                                    # full validation gate
 pnpm run build                                    # daemon + cockpit production builds
 pnpm run preview                                  # start the local cockpit dev server
+spark cockpit                                     # start the local cockpit dev server through the CLI
 pnpm install -g .                                 # link the unified spark CLI
 pnpm run publish                                  # validate, build, publish public packages
 ```
@@ -133,6 +134,7 @@ pnpm install
 pnpm run check
 pnpm run build
 pnpm run preview
+spark cockpit
 pnpm run publish
 apps/spark-cli/bin/spark --help
 apps/spark-cli/bin/spark tui --help

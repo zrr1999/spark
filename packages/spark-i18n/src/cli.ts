@@ -5,7 +5,7 @@ export interface SparkCliDispatcherStrings {
   dispatchFailure: (targetLabel: string, detail: string) => string;
   signalExit: (targetLabel: string, signal: string) => string;
   helpText: string;
-  targetLabel: (target: "tui" | "daemon") => string;
+  targetLabel: (target: "tui" | "daemon" | "cockpit") => string;
 }
 
 export interface SparkTuiCliStrings {
@@ -33,8 +33,17 @@ const DISPATCHER: Record<SparkLanguage, SparkCliDispatcherStrings> = {
     dispatchFailure: (targetLabel, detail) => `Unable to dispatch to ${targetLabel}: ${detail}`,
     signalExit: (targetLabel, signal) => `${targetLabel} exited due to signal ${signal}`,
     helpText:
-      'spark - Spark command dispatcher\n\nUsage:\n  spark\n  spark tui [initial message]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <command> [args...]\n  spark --help\n  spark --version\n\nDispatches to Spark surfaces:\n  spark tui      interactive terminal UI and Pi-compatible CLI/resource shims\n  spark daemon   daemon administration\n\nUnknown subcommands fail loudly instead of being interpreted as prompts. Use "spark tui ..." for interactive TUI input.\n',
-    targetLabel: (target) => (target === "tui" ? "Spark TUI" : "Spark daemon"),
+      'spark - Spark command dispatcher\n\nUsage:\n  spark\n  spark tui [initial message]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <command> [args...]\n  spark cockpit [command] [args...]\n  spark --help\n  spark --version\n\nDispatches to Spark surfaces:\n  spark tui       interactive terminal UI and Pi-compatible CLI/resource shims\n  spark daemon    daemon administration\n  spark cockpit   local Cockpit web app\n\nUnknown subcommands fail loudly instead of being interpreted as prompts. Use "spark tui ..." for interactive TUI input.\n',
+    targetLabel: (target) => {
+      switch (target) {
+        case "tui":
+          return "Spark TUI";
+        case "daemon":
+          return "Spark daemon";
+        case "cockpit":
+          return "Spark Cockpit";
+      }
+    },
   },
   zh: {
     unknownSubcommand: (subcommand, originalArgs) =>
@@ -44,8 +53,17 @@ const DISPATCHER: Record<SparkLanguage, SparkCliDispatcherStrings> = {
     dispatchFailure: (targetLabel, detail) => `无法分发到 ${targetLabel}：${detail}`,
     signalExit: (targetLabel, signal) => `${targetLabel} 因信号 ${signal} 退出`,
     helpText:
-      'spark - Spark 命令分发器\n\n用法：\n  spark\n  spark tui [初始消息]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <command> [args...]\n  spark --help\n  spark --version\n\n分发到 Spark 界面：\n  spark tui      交互式终端 UI 和 Pi 兼容 CLI/resource shim\n  spark daemon   daemon 管理\n\n未知子命令会直接失败，不会被解释成 prompt。交互式 TUI 输入请使用 "spark tui ..."。\n',
-    targetLabel: (target) => (target === "tui" ? "Spark TUI" : "Spark daemon"),
+      'spark - Spark 命令分发器\n\n用法：\n  spark\n  spark tui [初始消息]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <command> [args...]\n  spark cockpit [command] [args...]\n  spark --help\n  spark --version\n\n分发到 Spark 界面：\n  spark tui       交互式终端 UI 和 Pi 兼容 CLI/resource shim\n  spark daemon    daemon 管理\n  spark cockpit   本地 Cockpit Web 应用\n\n未知子命令会直接失败，不会被解释成 prompt。交互式 TUI 输入请使用 "spark tui ..."。\n',
+    targetLabel: (target) => {
+      switch (target) {
+        case "tui":
+          return "Spark TUI";
+        case "daemon":
+          return "Spark daemon";
+        case "cockpit":
+          return "Spark Cockpit";
+      }
+    },
   },
 };
 

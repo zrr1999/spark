@@ -34,6 +34,7 @@ Target package topology follows type-first names:
 | `pnpm test`                              | Root Node tests only (`test/*.test.ts`)                          |
 | `pnpm run build`                         | Build the Spark daemon CLI and Spark Cockpit web app             |
 | `pnpm run preview`                       | Start the local Spark Cockpit dev server                         |
+| `spark cockpit`                          | Start the local Spark Cockpit dev server through the CLI          |
 | `pnpm install -g .`                      | Link the unified root `spark` CLI                                |
 | `pnpm run publish`                       | Validate, build, and publish `apps/*` plus `@zendev-lab/spark-extension` |
 

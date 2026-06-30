@@ -32,10 +32,10 @@ export const actions: Actions = {
     const project = requireProjectForWorkspace(db, params.projectId, workspace.id);
 
     const formData = await request.formData();
+    const title = formText(formData, "title").trim();
     const prompt = formText(formData, "prompt").trim();
-    const title = formText(formData, "title").trim() || titleFromPrompt(prompt);
 
-    if (!prompt) {
+    if (!title || !prompt) {
       return fail(400, {
         message: t.taskRequired,
         values: { title, prompt },
@@ -71,47 +71,6 @@ export const actions: Actions = {
       });
     }
   },
-  cancelRun: async ({ cookies, locals, params, request }) => {
-    const t = getRequestDictionary({
-      cookieLocale: cookies.get(localeCookieName),
-      acceptLanguage: request.headers.get("accept-language"),
-    }).project.formMessages;
-    const db = getDatabase();
-    const workspace = requireWorkspaceByRouteId(db, params.workspaceId);
-    const project = requireProjectForWorkspace(db, params.projectId, workspace.id);
-    const formData = await request.formData();
-    const runtimeInvocationId = formText(formData, "runtimeInvocationId").trim();
-
-    if (!runtimeInvocationId.startsWith("inv_")) {
-      return fail(400, { message: t.cancelRequired });
-    }
-
-    try {
-      const command = queueCommandForWorkspaceOwner(db, {
-        workspaceId: project.workspaceId,
-        projectId: project.id,
-        requestedByUserId: getCurrentUserId(db, locals.sessionToken),
-        idempotencyKey: createId("idem"),
-        payload: {
-          kind: "invocation.cancel.request",
-          title: t.cancelTitle,
-          payload: {
-            runtimeInvocationId,
-            source: "project-cockpit",
-          },
-        },
-      });
-
-      return {
-        message: t.cancelQueued,
-        queuedCommandId: command.id,
-      };
-    } catch (caught) {
-      return fail(400, {
-        message: caught instanceof Error ? caught.message : t.cancelFailed,
-      });
-    }
-  },
 };
 
 function requireProjectForWorkspace(
@@ -133,14 +92,6 @@ function requireProjectForWorkspace(
   }
 
   return project;
-}
-
-function titleFromPrompt(prompt: string) {
-  const normalized = prompt.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return "Project chat message";
-  }
-  return normalized.length > 80 ? `${normalized.slice(0, 77)}…` : normalized;
 }
 
 function getCurrentUserId(db: ReturnType<typeof getDatabase>, sessionToken: string | null) {

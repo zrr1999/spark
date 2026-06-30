@@ -1117,6 +1117,48 @@ void test("ask action tool reports missing reviewer resolver as a tool error wit
   assert.match(result.content.map((part: { text: string }) => part.text).join("\n"), /blocked/i);
 });
 
+void test("ask action tool blocks empty reviewer answers for required questions", async () => {
+  const tools = new Map<string, { execute: Function }>();
+  const registerTool = (config: { name: string; execute: Function }) =>
+    tools.set(config.name, config);
+  registerPiAskTools({ registerTool });
+  registerPiAskActionTool(
+    { registerTool },
+    {
+      resolveTool: (name) => tools.get(name) as never,
+      autoAnswer: async () => ({ reason: "reviewer omitted the answer", answers: {} }),
+    },
+  );
+  const tool = tools.get("ask");
+  assert.ok(tool);
+
+  const result = await tool.execute(
+    "ask-auto-answer-empty-required-test",
+    {
+      action: "ask",
+      autoAnswer: "reviewer",
+      title: "Choose mode",
+      mode: "decision",
+      questions: [
+        {
+          id: "mode",
+          prompt: "Which mode?",
+          type: "single",
+          required: true,
+          options: [{ value: "safe_mode", label: "Safe path" }],
+        },
+      ],
+    },
+    new AbortController().signal,
+    () => undefined,
+    {},
+  );
+
+  assert.equal(result.isError, true);
+  assert.equal(result.details.autoAnswered, false);
+  assert.match(result.details.reason, /required question mode/);
+});
+
 void test("ask action tool can auto-answer through a registered provider", async () => {
   const tools = new Map<string, { execute: Function }>();
   const registerTool = (config: { name: string; execute: Function }) =>

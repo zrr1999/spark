@@ -1,0 +1,56 @@
+#!/usr/bin/env sh
+set -eu
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+APP_DIR="$SCRIPT_DIR/.."
+
+print_help() {
+  cat <<'EOF'
+spark-cockpit - Spark Cockpit local web app
+
+Usage:
+  spark-cockpit [dev|preview] [vite args...]
+  spark-cockpit start
+  spark-cockpit build
+  spark-cockpit --help
+
+Commands:
+  dev, preview   Start the local Cockpit dev server on 127.0.0.1 (default)
+  start          Start the built Cockpit Node server with runtime WebSocket support
+  build          Build the Cockpit production app
+
+Examples:
+  spark cockpit
+  spark cockpit --port 5174
+  spark cockpit start
+EOF
+}
+
+command="${1:-dev}"
+case "$command" in
+  help|--help|-h)
+    print_help
+    ;;
+  dev|preview)
+    shift || true
+    cd "$APP_DIR"
+    exec pnpm run dev -- "$@"
+    ;;
+  start)
+    shift
+    cd "$APP_DIR"
+    exec pnpm run start:custom -- "$@"
+    ;;
+  build)
+    shift
+    cd "$APP_DIR"
+    exec pnpm run build -- "$@"
+    ;;
+  --*)
+    cd "$APP_DIR"
+    exec pnpm run dev -- "$@"
+    ;;
+  *)
+    printf 'Unknown spark-cockpit command: %s\nRun "spark-cockpit --help" for available commands.\n' "$command" >&2
+    exit 2
+    ;;
+esac

@@ -14,6 +14,7 @@ import { TaskGraph } from "@zendev-lab/pi-tasks";
 import {
   PiRolesReviewerRunner,
   buildReadOnlyReviewerSystemPrompt,
+  parseAskAutoAnswerResult,
   parseReviewerVerdictForInput,
   renderReviewerInstruction,
   reviewerInputFingerprint,
@@ -40,6 +41,34 @@ function reviewTaskInput(): TaskReviewInput {
     sessionKey: "session:test",
   };
 }
+
+void test("ask auto-answer parser skips leading protocol wrappers", () => {
+  const result = parseAskAutoAnswerResult(
+    [
+      '{"type":"session","id":"leading-event"}',
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                answers: { mode: { values: ["safe_mode"], notes: "clear" } },
+                blocked: false,
+                reason: "selected safe mode",
+              }),
+            },
+          ],
+        },
+      }),
+    ].join("\n"),
+  );
+
+  assert.equal(result.blocked, undefined);
+  assert.equal(result.reason, "selected safe mode");
+  assert.deepEqual(result.answers?.mode?.values, ["safe_mode"]);
+  assert.equal(result.answers?.mode?.notes, "clear");
+});
 
 void test("reviewer verdict parser maps task approval verdicts", () => {
   const input = reviewTaskInput();

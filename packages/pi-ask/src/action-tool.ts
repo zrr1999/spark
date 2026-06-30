@@ -290,11 +290,20 @@ function validateAutoAnswerResult(
   if (result.blocked) return result.reason || "reviewer auto-answer blocked";
   const answers = result.answers ?? {};
   const questions = new Map(request.questions.map((question) => [question.id, question]));
+  for (const question of request.questions) {
+    if (!question.required) continue;
+    const answer = answers[question.id];
+    if (!answer) return `reviewer auto-answer did not answer required question ${question.id}`;
+  }
   for (const [questionId, answer] of Object.entries(answers)) {
     const question = questions.get(questionId);
     if (!question) return `reviewer answered unknown question ${questionId}`;
     const values = answer.values ?? [];
-    if ((question.type ?? "single") === "freeform") continue;
+    if ((question.type ?? "single") === "freeform") {
+      if (question.required && !answer.customText && !answer.notes && !answer.comment)
+        return `reviewer answer for ${questionId} did not provide freeform text`;
+      continue;
+    }
     const allowed = new Set((question.options ?? []).map((option) => option.value));
     for (const value of values) {
       if (!allowed.has(value))

@@ -2,10 +2,35 @@
 
 
 ```rust
-Type[n]: Type[n+1]
-HLevel[n]: Type[n+1]
+primitive type LevelParamId = u32;
+
+meta data Level {
+    Zero,
+    Succ(Level),
+    Max(Level, Level),
+    Param(LevelParam),
+}
+meta data Sort {
+    Type(Level),
+    DimUniv,
+    LevelUniv
+}
+
+```
+```rust
+Type、Level、Path、Self
+
+axiom Type@u: Type@(u+1)
+axiom HLevel[n]: Type[n+1]
 
 
+HLevel、IsSet、IsProp、IsContr
+
+fn id[u: Level, A: Type[u]](x: A) -> A {
+    x
+}
+
+let x = id[0, i64](3);
 
 //
 data Expr[T: Type] : hSet {

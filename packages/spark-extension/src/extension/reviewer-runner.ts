@@ -196,7 +196,9 @@ const ASK_AUTO_ANSWER_JSON_SCHEMA = [
   '  "blocked": false,',
   '  "reason": "why blocked or why these answers were chosen"',
   "}",
-  "Use options[].value exactly. For single/preview choose at most one value. For freeform use customText. If the packet is ambiguous or evidence is insufficient, set blocked=true and explain reason.",
+  "Use options[].value exactly. For single/preview choose at most one value. For freeform use customText.",
+  "Answer every required question when the packet and options make the answer clear; otherwise set blocked=true and explain reason.",
+  "If the packet is ambiguous or evidence is insufficient, set blocked=true and explain reason instead of omitting answers.",
 ].join("\n");
 
 export class PiRolesReviewerRunner implements ReviewerRunner {
@@ -394,7 +396,7 @@ export function renderAskAutoAnswerInstruction(input: AskAutoAnswerInput): strin
 }
 
 export function parseAskAutoAnswerResult(text: string): AskAutoAnswerResult {
-  const value = parseJsonObjectFromText(text);
+  const value = parseAskAutoAnswerObjectFromText(text);
   const output: AskAutoAnswerResult = {};
   if (typeof value.reason === "string") output.reason = value.reason;
   if (value.blocked === true) output.blocked = true;
@@ -414,6 +416,79 @@ export function parseAskAutoAnswerResult(text: string): AskAutoAnswerResult {
     }
   }
   return output;
+}
+
+function parseAskAutoAnswerObjectFromText(text: string): Record<string, unknown> {
+  const trimmed = text.trim();
+  if (!trimmed) throw new Error("reviewer ask auto-answer must be non-empty JSON");
+  let fallback: Record<string, unknown> | undefined;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (isRecord(parsed)) {
+      fallback = parsed;
+      const answer = findAskAutoAnswerRecord(parsed);
+      if (answer) return answer;
+    }
+  } catch {
+    // Fall through to JSON-object extraction for role output wrappers.
+  }
+  for (const objectText of extractJsonObjects(trimmed)) {
+    try {
+      const parsed = JSON.parse(objectText);
+      if (!isRecord(parsed)) continue;
+      fallback ??= parsed;
+      const answer = findAskAutoAnswerRecord(parsed);
+      if (answer) return answer;
+    } catch {
+      // Keep scanning later objects; role stdout can contain protocol JSON and text fragments.
+    }
+  }
+  if (fallback) return fallback;
+  throw new Error("reviewer ask auto-answer must be a JSON object");
+}
+
+function findAskAutoAnswerRecord(
+  record: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (isAskAutoAnswerRecord(record)) return record;
+  for (const text of reviewerVerdictTextCandidates(record)) {
+    const found = findAskAutoAnswerRecordInText(text);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function findAskAutoAnswerRecordInText(text: string): Record<string, unknown> | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (isRecord(parsed)) {
+      const found = findAskAutoAnswerRecord(parsed);
+      if (found) return found;
+    }
+  } catch {
+    // Continue with object extraction below.
+  }
+  for (const objectText of extractJsonObjects(trimmed)) {
+    try {
+      const parsed = JSON.parse(objectText);
+      if (!isRecord(parsed)) continue;
+      const found = findAskAutoAnswerRecord(parsed);
+      if (found) return found;
+    } catch {
+      // Keep scanning; assistant content can include prose plus JSON.
+    }
+  }
+  return undefined;
+}
+
+function isAskAutoAnswerRecord(record: Record<string, unknown>): boolean {
+  return (
+    (record.answers !== undefined && isRecord(record.answers)) ||
+    record.blocked === true ||
+    record.blocked === false
+  );
 }
 
 export function parseReviewerVerdictForInput(input: ReviewInput, text: string): ReviewerVerdict {

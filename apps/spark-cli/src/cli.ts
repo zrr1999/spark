@@ -8,7 +8,7 @@ export const SPARK_CLI_VERSION = "0.1.0";
 
 const dispatcherStrings = sparkCliDispatcherStrings();
 
-export type SparkDispatcherTarget = "tui" | "daemon";
+export type SparkDispatcherTarget = "tui" | "daemon" | "cockpit";
 
 export type SparkDispatcherCommand =
   | { kind: "dispatch"; target: SparkDispatcherTarget; argv: string[] }
@@ -32,6 +32,7 @@ export function parseSparkDispatcherArgs(argv: string[]): SparkDispatcherCommand
   if (first === "version" || first === "--version" || first === "-v") return { kind: "version" };
   if (first === "tui") return { kind: "dispatch", target: "tui", argv: rest };
   if (first === "daemon") return { kind: "dispatch", target: "daemon", argv: rest };
+  if (first === "cockpit") return { kind: "dispatch", target: "cockpit", argv: rest };
   if (isSparkTuiCompatibilityCommand(first)) return { kind: "dispatch", target: "tui", argv };
   return {
     kind: "error",
@@ -120,6 +121,8 @@ function resolveTargetCommand(target: SparkDispatcherTarget): {
       // resolved by the package manager. The public/operator surface remains
       // the parent `spark daemon ...` command group.
       return { command: "spark-daemon", args: [], label: targetLabel(target) };
+    case "cockpit":
+      return { command: "spark-cockpit", args: [], label: targetLabel(target) };
   }
 }
 
@@ -133,6 +136,8 @@ function localTargetCommand(target: SparkDispatcherTarget): string | undefined {
       return fileURLToPath(new URL("../../spark-tui/bin/spark-tui", import.meta.url));
     case "daemon":
       return fileURLToPath(new URL("../../spark-daemon/dist/cli.js", import.meta.url));
+    case "cockpit":
+      return fileURLToPath(new URL("../../spark-cockpit/bin/spark-cockpit", import.meta.url));
   }
 }
 

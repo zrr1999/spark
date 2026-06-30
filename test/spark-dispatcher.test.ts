@@ -7,7 +7,7 @@ import {
   runSparkDispatcher,
 } from "../apps/spark-cli/src/cli.ts";
 
-void test("parseSparkDispatcherArgs routes default, tui, daemon, and print commands", () => {
+void test("parseSparkDispatcherArgs routes default, tui, daemon, cockpit, and print commands", () => {
   assert.deepEqual(parseSparkDispatcherArgs([]), {
     kind: "dispatch",
     target: "tui",
@@ -22,6 +22,11 @@ void test("parseSparkDispatcherArgs routes default, tui, daemon, and print comma
     kind: "dispatch",
     target: "daemon",
     argv: ["status", "--json"],
+  });
+  assert.deepEqual(parseSparkDispatcherArgs(["cockpit", "--port", "5174"]), {
+    kind: "dispatch",
+    target: "cockpit",
+    argv: ["--port", "5174"],
   });
   assert.deepEqual(parseSparkDispatcherArgs(["--print", "hello"]), {
     kind: "dispatch",
