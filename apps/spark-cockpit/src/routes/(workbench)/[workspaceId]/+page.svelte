@@ -25,7 +25,9 @@
     "draining",
     "disabled",
   ];
-  let controlDisplay = $derived(workspaceControlDisplay(data.workspaceControl));
+  let controlDisplay = $derived(
+    workspaceControlDisplay(data.workspaceControl, t.workspaceControl),
+  );
 
   function countRunners(status: (typeof runnerStatusOrder)[number]) {
     return data.runnerConnections.filter((runner) => daemonDisplayStatus(runner) === status)
@@ -105,7 +107,7 @@
   </article>
 </section>
 
-<section class="control-strip" aria-label="Workspace control mode">
+<section class="control-strip" aria-label={t.workspaceControl.aria}>
   <span>{controlDisplay.connectionLabel}</span>
   <span>{controlDisplay.borrowedLabel}</span>
   <span>{controlDisplay.executorLabel}</span>

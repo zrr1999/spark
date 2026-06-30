@@ -2,6 +2,7 @@
   import Icon from "$lib/Icon.svelte";
   import ProjectMainSessionChatPanel from "$lib/ProjectMainSessionChatPanel.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
+  import { workspaceControlControlLabel } from "$lib/workspace-control-display";
   import { workspacePath } from "$lib/workspace-routes";
 
   let { data, form } = $props();
@@ -37,10 +38,13 @@
         ? t.command.workspaceUnavailable
         : t.command.queueTask,
   );
+  let workspaceControlLabel = $derived(
+    workspaceControlControlLabel(data.workspaceControl.control, data.messages.home.workspaceControl),
+  );
   let ownerCommandNote = $derived(
     data.ownerBinding
       ? `${t.command.ownerPrefix} ${data.ownerBinding.displayName} · ${data.ownerBinding.runtimeName}${
-          canStartTask ? "" : ` · ${data.workspaceControl.control.message}`
+          canStartTask ? "" : ` · ${workspaceControlLabel}`
         }`
       : "",
   );
