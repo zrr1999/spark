@@ -180,6 +180,9 @@ importers:
       '@zendev-lab/pi-tasks':
         specifier: workspace:^
         version: link:../../packages/pi-tasks
+      '@zendev-lab/spark-i18n':
+        specifier: workspace:^
+        version: link:../../packages/spark-i18n
       '@zendev-lab/spark-runtime':
         specifier: workspace:^
         version: link:../../packages/spark-runtime

@@ -25,8 +25,8 @@ Created `packages/spark-i18n` with:
 - generated Paraglide output in `src/paraglide/**`
 - Spark-owned locale/language helpers in `src/index.ts`
 - Cockpit dictionary exports in `src/cockpit.ts` backed by TS dictionary modules under `src/cockpit/`
-- CLI/TUI entry and native TUI core copy exports in `src/cli.ts`
-- extension/goal/context copy exports in `src/extension.ts`
+- CLI/TUI/daemon/resource copy exports in `src/cli.ts`
+- extension/goal/context/tool copy exports in `src/extension.ts`
 - package tests covering locale matching, Accept-Language parsing, language mapping/detection, generated messages, dictionary assembly, formatting, Cockpit key parity, CLI/TUI entry strings, and extension strings
 
 ### Cockpit
@@ -39,35 +39,29 @@ Created `packages/spark-i18n` with:
 
 - `packages/spark-extension/src/extension/spark-i18n.ts` is now a thin re-export facade from `@zendev-lab/spark-i18n/extension`.
 - Core language/goal/context strings live in `packages/spark-i18n/src/extension.ts`.
+- Spark context provider labels/descriptions are supplied by `sparkExtensionContextProviderStrings`.
+- Tool operational notes are re-exported from `@zendev-lab/spark-i18n/extension`.
+- Tool label/description/prompt-guideline copy flows through `sparkExtensionToolCopy()` at public and internal Spark tool registration boundaries.
 - The shared implementation no longer imports `pi-extension-api`, `pi-tasks`, or `spark-extension` internals.
 
-### Spark CLI/TUI
+### Spark CLI/TUI/daemon
 
-- `packages/spark-i18n/src/cli.ts` now owns root dispatcher, native TUI entry, and native TUI core help/label/error strings.
+- `packages/spark-i18n/src/cli.ts` now owns root dispatcher, native TUI entry, native TUI core, daemon client, resource manager, and Pi-parity slash-command copy.
 - `apps/spark-cli/src/cli.ts` consumes `@zendev-lab/spark-i18n/cli` for `spark --help`, unknown subcommand errors, dispatch failure messages, signal exits, and target labels.
 - `apps/spark-tui/src/cli.ts` consumes `@zendev-lab/spark-i18n/cli` for `spark tui --help`, print-prompt validation, daemon attachment display names, `/model` command copy, model-list empty states, JSON event assistant text, and RPC errors.
 - `apps/spark-tui/src/native-tui.ts` consumes `@zendev-lab/spark-i18n/cli` for native welcome/help/default responder text, stop/failure/queued-input messages, built-in slash command descriptions, keybinding descriptions, header/footer, folded tool labels, command errors, cockpit open/close messages, and terminal title.
+- `apps/spark-tui/src/cli/daemon.ts`, `resource-manager.ts`, and `pi-parity-commands.ts` consume `@zendev-lab/spark-i18n/cli` for daemon, resource, and Pi-parity subcommand diagnostics.
+- `apps/spark-daemon/src/cli.ts` consumes `@zendev-lab/spark-i18n/cli` for shared daemon submit and unknown-command diagnostics.
 - Runtime smoke fixed the Node v26 ESM workspace path issue by using extensionful internal imports (`./index.ts`, `./cockpit.ts`) and avoiding JSON imports in runtime-loaded package modules.
 
-## Explicit non-goal follow-ups / localization debt
+## Intentionally not translated
 
 | Surface | Status | Reason |
 | --- | --- | --- |
-| root `apps/spark-cli/src/cli.ts` dispatcher help/errors | completed core | Now consumes `@zendev-lab/spark-i18n/cli`; non-English locale selection remains a future CLI policy layer. |
-| `apps/spark-tui/src/cli.ts` entry help/model/RPC strings | completed core | Now consumes `@zendev-lab/spark-i18n/cli`. |
-| `apps/spark-tui/src/native-tui.ts` core UI/help/command strings | completed core | Now consumes `@zendev-lab/spark-i18n/cli`; data-driven cockpit row content and protocol labels remain local/generated data. |
-| `apps/spark-tui/src/cli/**` daemon/resource helper strings | out of scope | These are subcommand implementation details and daemon/resource diagnostics; they need a separate CLI locale policy and are not required for this shared facade milestone. |
-| `apps/spark-daemon/src/cli.ts` and registration output | out of scope | Mixes user CLI messages and daemon diagnostics; a daemon diagnostics localization pass should be separate. |
-| `packages/spark-extension/src/extension/*-tool-registration.ts` descriptions | out of scope | Tool descriptions can affect model/tool behavior, so localize only after a prompt/tool language strategy. |
-| reviewer/mode/workflow prompt contracts | out of scope | Behavioral prompt contracts, not simple UI labels. |
-| broad dashboard/rendering strings | out of scope | Generated/data-heavy display content should follow after locale plumbing and projection label strategy. |
-| `packages/pi-*` strings | leave local | Pi packages must not import Spark packages. A Pi-level i18n package would be separate. |
-| protocol constants, IDs, event types, queue statuses | protocol/internal | Must remain stable and machine-readable. |
-
-More detailed matrices:
-
-- `docs/evidence/spark-i18n-user-facing-string-audit.md`
-- `docs/evidence/spark-i18n-extension-cli-migration.md`
+| generic `packages/pi-*` strings | local | Pi packages must not import Spark packages. A Pi-level i18n package would be separate. |
+| protocol constants, IDs, event types, queue statuses | protocol/internal | Must remain stable and machine-readable; translate display labels only. |
+| raw logs, stack traces, SQL, env vars, paths, generated JSON | local/internal | Developer/protocol diagnostics, not product copy. |
+| auth/token prompt mechanics | local policy boundary | Avoid broadening trust/credential behavior; shared facade covers surrounding daemon command diagnostics. |
 
 ## Final validation commands
 
@@ -77,26 +71,30 @@ All commands below passed on 2026-06-30:
   - Paraglide compilation passed
   - `tsc -p packages/spark-i18n/tsconfig.json --noEmit` passed
   - Vitest passed: 2 files, 14 tests
-- `pnpm --filter @zendev-lab/spark-cockpit check`
-  - `svelte-check` found 0 errors and 0 warnings
-- `pnpm --filter @zendev-lab/spark-cockpit test`
-  - 16 files, 71 tests passed
-- `pnpm --filter @zendev-lab/spark-cockpit build`
-  - production build passed
 - `pnpm --filter @zendev-lab/spark-extension check`
   - workspace TypeScript check passed
-- `pnpm --filter @zendev-lab/spark-cli check`
-  - dispatcher TypeScript check passed
 - `pnpm --filter @zendev-lab/spark-tui-app check`
   - native TUI TypeScript check passed
-- `spark --help`, `spark tui --help`, and `spark --list-models`
-  - runtime smoke passed under Node v26 workspace TS execution
+- `pnpm --filter @zendev-lab/spark-daemon check`
+  - daemon TypeScript check passed
 - `pnpm exec tsc -p tsconfig.json --noEmit`
   - root workspace TypeScript check passed
+- Focused root node:test coverage for touched tool/goal paths passed:
+  - `node --experimental-strip-types --test --test-name-pattern "goal start enables same-turn reviewer auto-answer" test/spark-tools.test.ts`
+  - `node --experimental-strip-types --test --test-name-pattern /goal foreground loop records unmet reviewer verdict before continuation test/spark-tools.test.ts`
+- `pnpm --filter @zendev-lab/spark-daemon test -- spark-daemon-cli`
+  - daemon package tests passed
+
+Note: a full `pnpm test` run passed once during this validation cycle, but subsequent full-suite reruns hit intermittent timing/temporary-dir flakes in existing goal-loop/dynamic-workflow tests unrelated to the i18n surfaces. The package checks, root TypeScript check, boundary check, smoke checks, Cockpit checks, and focused touched tests above passed on the final code.
+
+Additional validations from the prior i18n slice remain valid for unchanged Cockpit surfaces:
+
+- `pnpm --filter @zendev-lab/spark-cockpit check`
+- `pnpm --filter @zendev-lab/spark-cockpit test`
+- `pnpm --filter @zendev-lab/spark-cockpit build`
 - `node scripts/check-pi-boundaries.mjs`
-  - package boundary check passed
 - `git diff --check`
-  - whitespace/conflict-marker check passed
+- runtime smoke: `spark --help`, `spark tui --help`, `spark --list-models`
 
 ## Worktree note
 

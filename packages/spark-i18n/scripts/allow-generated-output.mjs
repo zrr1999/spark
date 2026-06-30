@@ -1,10 +1,27 @@
+import { spawnSync } from "node:child_process";
 import { readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 for (const path of ["src/paraglide/.gitignore", "src/paraglide/.prettierignore"]) {
   await rm(new URL(`../${path}`, import.meta.url), { force: true });
 }
 
+const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+
 await stripTrailingWhitespace(new URL("../src/paraglide/", import.meta.url));
+formatGeneratedOutput();
+await stripTrailingWhitespace(new URL("../src/paraglide/", import.meta.url));
+
+function formatGeneratedOutput() {
+  const result = spawnSync("pnpm", ["exec", "vp", "fmt", "src/paraglide", "--write"], {
+    cwd: packageRoot,
+    encoding: "utf8",
+    stdio: "inherit",
+  });
+  if (result.status !== 0) {
+    throw new Error(`failed to format generated Paraglide output (exit ${result.status})`);
+  }
+}
 
 async function stripTrailingWhitespace(rootUrl) {
   const entries = await readdir(rootUrl, { withFileTypes: true });

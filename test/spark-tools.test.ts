@@ -660,6 +660,7 @@ type TestSparkContext = {
   inputValue?: string;
   editorText?: string;
   askAutoAnswer?: "reviewer";
+  askAutoAnswerResolver?: (request: unknown, ctx: SparkToolContext) => Promise<unknown>;
   sparkActiveLens?: {
     phase: "research" | "plan" | "implement";
     mode?: "assist" | "loop" | "goal" | "workflow";
@@ -7380,6 +7381,74 @@ void test("/implement canonical ask does not inherit active goal reviewer auto-a
       (asked.details as { result?: { answers?: { mode?: { values?: string[] } } } }).result?.answers
         ?.mode?.values?.[0],
       "safe_mode",
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("goal start enables same-turn reviewer auto-answer for canonical ask", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-goal-same-turn-ask-auto-answer-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    ctx.ui.select = async () => assert.fail("goal auto-answer should not invoke select UI");
+    let answerAskRequest: unknown;
+    const run = registerSparkToolsForTest({
+      reviewerRunner: {
+        async review(input: ReviewInput): Promise<ReviewerRunResult> {
+          return createTaskApprovingGoalUnmetReviewerRunner().review(input);
+        },
+        async answerAsk(input) {
+          answerAskRequest = input.request;
+          return {
+            reason: "reviewer selected the same-turn continuation",
+            answers: { mode: { values: ["safe_mode"] } },
+          };
+        },
+      },
+    });
+
+    await executeSparkTool(run.tools, "goal", ctx, {
+      action: "start",
+      objective: "Use same-turn reviewer backed asks",
+    });
+
+    assert.equal(ctx.askAutoAnswer, "reviewer");
+    assert.equal(typeof ctx.askAutoAnswerResolver, "function");
+
+    delete ctx.askAutoAnswer;
+    delete ctx.askAutoAnswerResolver;
+    for (const handler of run.eventHandlers.get("tool_execution_start") ?? []) {
+      await handler({ toolName: "ask" }, ctx);
+    }
+    assert.equal(ctx.askAutoAnswer, "reviewer");
+    assert.equal(typeof ctx.askAutoAnswerResolver, "function");
+
+    const asked = await executeSparkTool(run.tools, "ask", ctx, {
+      title: "Choose path",
+      mode: "decision",
+      questions: [
+        {
+          id: "mode",
+          label: "Mode",
+          prompt: "Which path should goal mode take?",
+          type: "single",
+          options: [{ label: "Safe path", value: "safe_mode" }],
+        },
+      ],
+    });
+
+    assert.ok(answerAskRequest);
+    assert.equal((asked.details as { autoAnswered?: boolean }).autoAnswered, true);
+    assert.equal(
+      (asked.details as { result?: { answers?: { mode?: { values?: string[] } } } }).result?.answers
+        ?.mode?.values?.[0],
+      "safe_mode",
+    );
+    assert.equal(
+      (asked.details as { autoAnswer?: { reason?: string } }).autoAnswer?.reason,
+      "reviewer selected the same-turn continuation",
     );
   } finally {
     await rm(dir, { recursive: true, force: true });

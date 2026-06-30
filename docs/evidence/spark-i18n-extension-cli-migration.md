@@ -3,72 +3,80 @@
 Date: 2026-06-30
 Project: `proj:4c3508b5-6097-48ee-9d52-d2abeec121a8`
 
-## Completed in this slice
+## Completed migration
 
-### Extension core i18n moved behind `spark-i18n`
+### Extension core and tool copy
 
-`packages/spark-extension/src/extension/spark-i18n.ts` is now a thin facade:
+`packages/spark-extension/src/extension/spark-i18n.ts` remains a thin facade over `@zendev-lab/spark-i18n/extension`.
 
-```ts
-export { ... } from "@zendev-lab/spark-i18n/extension";
-```
+`packages/spark-i18n/src/extension.ts` now centralizes:
 
-The implementation now lives in `packages/spark-i18n/src/extension.ts` and includes:
-
-- `SparkLanguage` compatibility exports
-- `sparkLanguageForProject`
-- `normalizeSparkLanguage`
-- goal notification strings
-- goal instruction strings
-- goal context strings
+- Spark language detection and normalization helpers
+- goal notifications, goal instructions, and goal context strings
 - active Spark context strings
 - system-prompt language directive
+- Spark context provider label/description
+- Spark tool operational notes appended to registered tool descriptions
+- Spark tool label/description/prompt-guideline copy via `sparkExtensionToolCopy()` at the registration boundary
 
-Host-package dependencies were removed from the implementation:
+All public and internal Spark extension tool registrations now flow through `sparkExtensionToolCopy()` before registration. This keeps tool/prompt copy behind a Spark-owned i18n facade without coupling generic `pi-*` packages to `spark-*` packages.
+
+Host-package dependencies remain excluded from the shared implementation:
 
 - no `@zendev-lab/pi-extension-api` import in `spark-i18n`
 - no `@zendev-lab/pi-tasks` import in `spark-i18n`
 - no `spark-extension` import in `spark-i18n`
 
-The core language detector is now the pure `detectSparkLanguage` helper from `@zendev-lab/spark-i18n`.
+### CLI/TUI and daemon diagnostics
 
-Some core labels use generated Paraglide messages immediately, e.g. `goal_active` and `goal_not_set`, while larger structured goal/context strings are centralized in the package facade for compatibility. Future flattening can move these strings into Paraglide scalar keys without changing `spark-extension` imports.
+`packages/spark-i18n/src/cli.ts` now centralizes:
 
-### CLI/TUI entry i18n moved behind `spark-i18n`
+- root dispatcher strings via `sparkCliDispatcherStrings()`
+- Spark TUI entry/model/RPC strings via `sparkTuiCliStrings()`
+- native TUI core UI/help/command strings via `sparkNativeTuiStrings()`
+- TUI resource install/list/update/remove diagnostics via `sparkTuiResourceStrings()`
+- Pi-parity slash-command descriptions and high-level diagnostics via `sparkTuiPiParityStrings()`
+- daemon client/help/native command diagnostics via `sparkDaemonCliStrings()`
 
-`packages/spark-i18n/src/cli.ts` now centralizes the root dispatcher, native TUI entry strings, and native TUI core UI strings:
+Migrated consumer surfaces include:
 
-- `sparkCliDispatcherStrings()` for `apps/spark-cli/src/cli.ts`
-- `sparkTuiCliStrings()` for `apps/spark-tui/src/cli.ts`
-- `sparkNativeTuiStrings()` for `apps/spark-tui/src/native-tui.ts`
-
-Migrated consumer surfaces include root `spark --help`, unknown subcommand errors, dispatch failure/signal messages, target labels, `spark tui --help`, `--print` prompt validation, daemon attachment display names, `/model` command description/argument hint, model-list empty states, headless JSON assistant text, RPC parse/unsupported-command errors, native TUI welcome/default help text, stop/failure/restored-input messages, built-in slash command descriptions, keybinding descriptions, command errors, cockpit panel open/close messages, and terminal title.
+- `apps/spark-cli/src/cli.ts`
+- `apps/spark-tui/src/cli.ts`
+- `apps/spark-tui/src/native-tui.ts`
+- `apps/spark-tui/src/cli/daemon.ts`
+- `apps/spark-tui/src/cli/resource-manager.ts`
+- `apps/spark-tui/src/cli/pi-parity-commands.ts`
+- `apps/spark-daemon/src/cli.ts` for shared daemon submit/unknown-command diagnostics
+- `packages/spark-extension/src/extension/index.ts`
+- `packages/spark-extension/src/extension/spark-tool-operational-notes.ts`
 
 Runtime smoke also fixed Node v26 direct workspace execution by using extensionful internal imports in `spark-i18n` and replacing runtime JSON imports with TS dictionary modules.
 
-## Explicit non-goal follow-ups / left local
+## Intentionally local / not translated
 
-| Surface | Current status | Reason |
+| Surface | Status | Reason |
 | --- | --- | --- |
-| `apps/spark-cli/src/cli.ts` dispatcher help/errors | completed core | Consumes `@zendev-lab/spark-i18n/cli`; runtime smoke covers `spark --help`. Locale source/policy for non-English CLI output remains future work. |
-| `apps/spark-tui/src/cli.ts` entry/model/RPC strings | completed core | Consumes `@zendev-lab/spark-i18n/cli`; runtime smoke covers `spark tui --help` and `spark --list-models`. |
-| `apps/spark-tui/src/native-tui.ts` core UI/help/command strings | completed core | Consumes `@zendev-lab/spark-i18n/cli`; data-driven cockpit rows/protocol values remain local/generated data. |
-| `apps/spark-tui/src/cli/**` daemon/resource helper strings | out of scope | Subcommand implementation details and diagnostics need a separate CLI locale policy; not required for this facade milestone. |
-| `apps/spark-daemon/src/cli.ts` and `registration.ts` | out of scope | Some strings are user CLI errors; others are daemon diagnostics. Needs a narrower daemon diagnostics pass. |
-| `packages/spark-extension/src/extension/*-tool-registration.ts` descriptions | out of scope | Tool schema descriptions affect model/tool behavior. Localize only after deliberate prompt/tool-language strategy. |
-| `packages/spark-extension/src/extension/mode/*`, reviewer prompts, workflow builtins | out of scope | Prompt contracts and reviewer JSON constraints are high-risk behavioral strings, not simple UI labels. |
-| `packages/spark-extension/src/extension/*rendering.ts` dashboards | out of scope | User-readable but broad/data-heavy; migrate after projection label strategy. |
-| generic `packages/pi-*` strings | leave-local | Pi packages must not import `spark-*`. A future Pi-level i18n package would be separate from `spark-i18n`. |
-| protocol constants, command kinds, IDs, log streams | protocol/internal | Must remain machine-readable and stable. Translate only display labels. |
+| generic `packages/pi-*` UI strings | intentionally local | Pi packages must not import Spark packages; a future Pi-level i18n package would be separate. |
+| protocol constants, command kinds, event IDs, raw queue/status IDs | protocol/internal | Must remain machine-readable and stable; only display labels are localized. |
+| raw logs, stack traces, generated JSON, SQL, file paths, env vars | protocol/internal/developer diagnostics | Not product localization copy. |
+| daemon registration secrets/token prompts | local policy boundary | Auth/token handling remains in daemon/host policy; user-facing daemon command diagnostics now have shared facade coverage. |
 
 ## Validation evidence
 
-- `pnpm --filter @zendev-lab/spark-i18n check` passed with Paraglide generation, `tsc`, and 14 tests.
-- `pnpm --filter @zendev-lab/spark-extension check` passed.
-- `pnpm --filter @zendev-lab/spark-cli check` passed.
-- `pnpm --filter @zendev-lab/spark-tui-app check` passed.
-- `pnpm exec tsc -p tsconfig.json --noEmit` passed.
-- `node scripts/check-pi-boundaries.mjs` passed.
-- Runtime smoke passed: `spark --help`, `spark tui --help`, `spark --list-models`.
-- Grep evidence: `packages/spark-extension/src/extension/spark-i18n.ts` contains only the facade export from `@zendev-lab/spark-i18n/extension` and no longer contains the duplicated goal copy tables.
-- Grep evidence: `apps/spark-cli/src/cli.ts`, `apps/spark-tui/src/cli.ts`, and `apps/spark-tui/src/native-tui.ts` import `@zendev-lab/spark-i18n/cli` for migrated dispatcher, TUI entry, and native TUI core strings.
+Passing validation commands for this broadened slice:
+
+- `pnpm --filter @zendev-lab/spark-i18n check`
+- `pnpm --filter @zendev-lab/spark-extension check`
+- `pnpm --filter @zendev-lab/spark-tui-app check`
+- `pnpm --filter @zendev-lab/spark-daemon check`
+- `pnpm exec tsc -p tsconfig.json --noEmit`
+- focused root node:test coverage for touched ask/goal paths:
+  - `node --experimental-strip-types --test --test-name-pattern "goal start enables same-turn reviewer auto-answer" test/spark-tools.test.ts`
+  - `node --experimental-strip-types --test --test-name-pattern /goal foreground loop records unmet reviewer verdict before continuation test/spark-tools.test.ts`
+- focused daemon package test: `pnpm --filter @zendev-lab/spark-daemon test -- spark-daemon-cli`
+
+Grep evidence:
+
+- `packages/spark-extension/src/extension/spark-tool-operational-notes.ts` re-exports from `@zendev-lab/spark-i18n/extension`.
+- `packages/spark-extension/src/extension/index.ts` imports `sparkExtensionToolCopy` and `sparkExtensionContextProviderStrings` from `@zendev-lab/spark-i18n/extension`.
+- `apps/spark-cli/src/cli.ts`, `apps/spark-tui/src/cli.ts`, `apps/spark-tui/src/native-tui.ts`, `apps/spark-tui/src/cli/daemon.ts`, `apps/spark-tui/src/cli/resource-manager.ts`, and `apps/spark-tui/src/cli/pi-parity-commands.ts` import `@zendev-lab/spark-i18n/cli`.

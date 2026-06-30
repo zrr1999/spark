@@ -9,6 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import type { SparkDaemonEvent } from "@zendev-lab/spark-protocol";
+import { sparkDaemonCliStrings } from "@zendev-lab/spark-i18n/cli";
 
 import {
   exportSparkSessionRecord,
@@ -38,6 +39,8 @@ export type SparkDaemonCliAction =
   | "sessions"
   | "service";
 export type SparkDaemonCliQueueState = "inbox" | "processed" | "failed" | "all";
+
+const STRINGS = sparkDaemonCliStrings();
 
 export interface SparkDaemonClientPaths {
   runtimeDir: string;
@@ -321,8 +324,8 @@ export function parseSparkDaemonCliArgs(argv: string[]): SparkDaemonCliCommand {
     case "submit": {
       const sessionId = readStringOption(parsed.options, "session")?.trim();
       const prompt = readPrompt(parsed);
-      if (!sessionId) throw new Error("spark daemon submit requires --session <id>");
-      if (!prompt) throw new Error("spark daemon submit requires --prompt <text> or trailing text");
+      if (!sessionId) throw new Error(STRINGS.submitRequiresSession);
+      if (!prompt) throw new Error(STRINGS.submitRequiresPrompt);
       return {
         action: "submit",
         json,
@@ -352,7 +355,7 @@ export function parseSparkDaemonCliArgs(argv: string[]): SparkDaemonCliCommand {
     case "logs":
       return { action: "service", argv: ["daemon", ...argv] };
     default:
-      throw new Error(`unknown spark daemon command: ${String(action)}`);
+      throw new Error(STRINGS.unknownCommand(String(action)));
   }
 }
 
@@ -364,7 +367,7 @@ function parseSparkDaemonSessionsCommand(
   if (subcommand === "list") return { action: "sessions", subcommand, json };
   if (subcommand === "export") {
     const sessionId = readStringOption(parsed.options, "session")?.trim();
-    if (!sessionId) throw new Error("spark daemon sessions export requires --session <id|path>");
+    if (!sessionId) throw new Error(STRINGS.sessionsExportRequiresSession);
     const format = readSparkSessionExportFormat(
       readStringOption(parsed.options, "format") ?? "jsonl",
     );
@@ -380,7 +383,7 @@ function parseSparkDaemonSessionsCommand(
   }
   if (subcommand === "replay") {
     const sessionId = readStringOption(parsed.options, "session")?.trim();
-    if (!sessionId) throw new Error("spark daemon sessions replay requires --session <id|path>");
+    if (!sessionId) throw new Error(STRINGS.sessionsReplayRequiresSession);
     const leafId = readDaemonLeafArg(readStringOption(parsed.options, "leaf") ?? maybeLeaf);
     return {
       action: "sessions",
@@ -390,7 +393,7 @@ function parseSparkDaemonSessionsCommand(
       ...(leafId !== undefined ? { leafId } : {}),
     };
   }
-  throw new Error(`unknown spark daemon sessions command: ${subcommand}`);
+  throw new Error(STRINGS.unknownSessionsCommand(subcommand));
 }
 
 export async function handleSparkDaemonCliCommand(
@@ -421,7 +424,7 @@ export async function handleSparkDaemonCliCommand(
       await clientEnsureRunning(client);
       return { action: "start", daemon: await clientStatus(client) };
     case "service":
-      throw new Error("spark daemon service commands must be run through runSparkDaemonCliCommand");
+      throw new Error(STRINGS.serviceCommandMustUseServiceRunner);
   }
 }
 
@@ -448,7 +451,7 @@ export async function runSparkDaemonCliCommand(
 }
 
 export function sparkDaemonHelpText(): string {
-  return `spark daemon - Spark daemon control surface\n\nUsage:\n  spark daemon [--workspace <name>]\n  spark daemon status [--json]\n  spark daemon start [--json]\n  spark daemon stop [--yes]\n  spark daemon restart [--yes]\n  spark daemon logs [--follow] [--lines <n>]\n  spark daemon submit --session <id> --prompt <text> [--reset] [--json]\n  spark daemon queue [--state inbox|processed|failed|all] [--limit <n>] [--json]\n  spark daemon sessions [list] [--json]\n  spark daemon sessions export --session <id|path> [--format jsonl|json|text] [--leaf <entry-id|root>] [--json]\n  spark daemon sessions replay --session <id|path> [--leaf <entry-id|root>] [--json]\n  spark daemon workspace register [path] --server-url <url> --token <token|-> --name <name>\n  spark daemon workspace ls [--json] [--all] [--full]\n  spark daemon workspace show [name] [--json]\n  spark daemon workspace stop <name> [--yes]\n\nSpark CLI never runs an independent queue worker; it starts/wakes the Spark daemon and talks over local IPC.`;
+  return STRINGS.helpText;
 }
 
 export interface SparkDaemonNativeResponderOptions {
@@ -471,14 +474,14 @@ export function createSparkDaemonNativeResponder(
   const sessionId = options.sessionId ?? `spark-cli-${Date.now().toString(36)}`;
   return async (input: string, context?: SparkDaemonNativeResponderContext) => {
     const prompt = input.trim();
-    if (!prompt) return "ignored empty prompt";
+    if (!prompt) return STRINGS.ignoredEmptyPrompt;
     const live = createDaemonLiveAssistantRenderer(context);
     const result = await clientSubmitStreaming({ sessionId, prompt }, client, {
       signal: context?.signal,
       onEvent: live.onEvent,
     });
     if (options.waitForCompletion === false) {
-      return `queued for Spark daemon session ${sessionId}: ${result.fileName}`;
+      return STRINGS.queuedSession(sessionId, result.fileName);
     }
     const finalText = await waitForSubmittedTurn(result, client, {
       signal: context?.signal,
@@ -548,14 +551,14 @@ async function waitForSubmittedTurn(
     const queue = await clientQueue({ state: "all", limit: 100 }, client);
     const entry = findQueueEntry(queue, submitted.fileName);
     if (entry?.payload.failedAt) {
-      throw new Error(entry.payload.error ?? `Spark daemon failed ${submitted.fileName}`);
+      throw new Error(entry.payload.error ?? STRINGS.failedFile(submitted.fileName));
     }
     if (entry?.payload.processedAt) {
       return renderProcessedTurnResponse(entry.payload.result, submitted);
     }
     await delay(pollIntervalMs, undefined, { signal: options.signal });
   }
-  return `queued for Spark daemon session ${submitted.task.sessionId}: ${submitted.fileName}`;
+  return STRINGS.queuedSession(submitted.task.sessionId, submitted.fileName);
 }
 
 function findQueueEntry(
@@ -576,7 +579,7 @@ function renderProcessedTurnResponse(result: unknown, submitted: LocalTurnSubmit
     const stderr = result.stderr;
     if (typeof stderr === "string" && stderr.trim()) return stderr;
   }
-  return `Spark daemon completed session ${submitted.task.sessionId}: ${submitted.fileName}`;
+  return STRINGS.completedSession(submitted.task.sessionId, submitted.fileName);
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
@@ -592,18 +595,18 @@ export function createSparkDaemonNativeCommands(
 ): SparkNativeSlashCommandMap {
   return {
     status: {
-      description: "show Spark daemon status",
+      description: STRINGS.nativeCommandDescriptions.status,
       handler: async () => formatNativeDaemonStatus(await clientStatus(client)),
     },
     queue: {
-      description: "show Spark daemon queue; optional state: inbox, processed, failed, all",
+      description: STRINGS.nativeCommandDescriptions.queue,
       handler: async (args) => {
         const state = readNativeQueueState(args);
         return formatNativeDaemonQueue(await clientQueue({ state, limit: 10 }, client));
       },
     },
     start: {
-      description: "start or wake the Spark daemon, then show status",
+      description: STRINGS.nativeCommandDescriptions.start,
       handler: async () => {
         await clientEnsureRunning(client);
         return formatNativeDaemonStatus(await clientStatus(client));
@@ -837,11 +840,11 @@ async function clientWorkspaceClientRelease(
 function defaultWorkspaceClientDisplayName(kind: SparkWorkspaceClientKind): string {
   switch (kind) {
     case "interactive":
-      return "Spark TUI";
+      return STRINGS.displayName.interactive;
     case "headless":
-      return "Spark headless submit";
+      return STRINGS.displayName.headless;
     case "executor":
-      return "Spark background executor";
+      return STRINGS.displayName.executor;
   }
 }
 
@@ -913,7 +916,7 @@ function sparkDaemonServiceCliCommand(): { command: string; args: string[] } {
       stdio: "inherit",
     });
     if (build.status !== 0) {
-      throw new Error("Failed to build Spark daemon service CLI.");
+      throw new Error(STRINGS.buildServiceFailed);
     }
     if (existsSync(distCli)) {
       return { command: process.execPath, args: [distCli] };
@@ -942,7 +945,7 @@ async function waitForDaemonRpc(
     }
   }
   throw new Error(
-    `Spark daemon did not become reachable: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    STRINGS.notReachable(lastError instanceof Error ? lastError.message : String(lastError)),
   );
 }
 
@@ -973,7 +976,7 @@ async function localRpcRequest<T>(
           error?: { message?: string };
         };
         if (response.ok !== true) {
-          reject(new Error(response.error?.message ?? "Spark daemon local RPC failed"));
+          reject(new Error(response.error?.message ?? STRINGS.localRpcFailed));
           return;
         }
         resolvePromise(response.result as T);
@@ -1055,7 +1058,7 @@ function parseLocalRpcStreamMessage(
   const value = JSON.parse(line) as unknown;
   if (!isRecord(value) || value.id !== requestId || value.ok !== true) {
     const error = isRecord(value) && isRecord(value.error) ? value.error.message : undefined;
-    throw new Error(typeof error === "string" ? error : "Invalid Spark daemon stream response.");
+    throw new Error(typeof error === "string" ? error : STRINGS.invalidStreamResponse);
   }
   return {
     ...(isRecord(value.result) ? { result: value.result as unknown as LocalTurnSubmitResult } : {}),
@@ -1109,7 +1112,7 @@ function readDaemonLeafArg(raw: string | undefined): string | null | undefined {
 
 function readQueueState(raw: string): SparkDaemonCliQueueState {
   if (raw === "inbox" || raw === "processed" || raw === "failed" || raw === "all") return raw;
-  throw new Error(`invalid daemon queue state: ${raw}`);
+  throw new Error(STRINGS.invalidQueueState(raw));
 }
 
 function readNativeQueueState(args: string): SparkDaemonCliQueueState {

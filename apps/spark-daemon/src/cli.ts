@@ -14,6 +14,7 @@ import { createInterface } from "node:readline/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { ensureSparkPathDirs, gitCommand, resolveSparkPaths } from "@zendev-lab/spark-system";
+import { sparkDaemonCliStrings } from "@zendev-lab/spark-i18n/cli";
 import {
   defaultSparkDaemonConfig,
   readSparkDaemonConfig,
@@ -69,6 +70,7 @@ export interface CliIo {
 }
 
 const defaultIo: CliIo = { stdout: process.stdout, stderr: process.stderr };
+const STRINGS = sparkDaemonCliStrings();
 
 class SparkDaemonUnavailableError extends Error {
   constructor(cause: unknown, options: { running?: boolean } = {}) {
@@ -137,7 +139,7 @@ export async function main(argv = process.argv.slice(2), io: CliIo = defaultIo):
       case "daemon":
         return await daemon(paths, subcommand, rest, io);
       default:
-        io.stderr.write(`Unknown command: ${command}\n`);
+        io.stderr.write(`${STRINGS.unknownCommand(command)}\n`);
         printHelp(io);
         return 2;
     }
@@ -477,8 +479,8 @@ async function daemonSubmit(
   const flags = parseFlags(args);
   const sessionId = flags.session?.trim();
   const prompt = (flags.prompt ?? positionalArgs(args).join(" ")).trim();
-  if (!sessionId) throw new Error("spark daemon submit requires --session <id>");
-  if (!prompt) throw new Error("spark daemon submit requires --prompt <text>");
+  if (!sessionId) throw new Error(STRINGS.submitRequiresSession);
+  if (!prompt) throw new Error(STRINGS.submitRequiresPrompt);
   const result = await (io.turnSubmitToService ?? requestTurnSubmit)(paths, { sessionId, prompt });
   if (flags.json === "true") {
     io.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

@@ -28,7 +28,7 @@ interface SparkExtensionEventApi extends SparkModeMessageApi {
   setActiveTools?(names: string[]): void;
 }
 
-interface SparkExtensionEventDeps {
+export interface SparkExtensionEventDeps {
   refreshSparkWidget: (cwd: string, ctx?: SparkToolContext) => Promise<void>;
   ensureWorkflowRunManager: (cwd: string, ctx: SparkToolContext) => void;
   createAskAutoAnswerResolver?: (
@@ -44,6 +44,7 @@ export interface SparkExtensionEventHandlers {
     instruction: string,
     options?: { goalId?: string },
   ): void;
+  syncGoalAskAutoAnswerPolicy(ctx: SparkToolContext): Promise<void>;
 }
 
 export function registerSparkExtensionEvents(
@@ -62,6 +63,9 @@ export function registerSparkExtensionEvents(
     pendingSparkAgentInstructions.set(sessionKey, { instruction, goalId: options.goalId });
   }
 
+  const syncGoalAskAutoAnswerPolicy = (ctx: SparkToolContext) =>
+    syncSparkGoalAskAutoAnswerPolicy(ctx, deps);
+
   pi.on?.("input", async (event: unknown, ctx: SparkToolContext) =>
     handleSparkInput(event, ctx, {
       piApi: pi,
@@ -76,7 +80,7 @@ export function registerSparkExtensionEvents(
     injectSparkHints(event, ctx),
   );
   pi.on?.("before_agent_start", async (_event: unknown, ctx: SparkToolContext) => {
-    await syncGoalAskAutoAnswerPolicy(ctx, deps);
+    await syncGoalAskAutoAnswerPolicy(ctx);
     await syncGoalInteractiveToolAvailability(pi, ctx, goalToolBaselines);
     const sessionKey = sparkSessionOwnerKey(ctx);
     const pendingEntry = pendingSparkAgentInstructions.get(sessionKey);
@@ -103,9 +107,12 @@ export function registerSparkExtensionEvents(
   pi.on?.("turn_start", async (_event: unknown, ctx: SparkToolContext) => {
     await ensureLocalSparkDirectory(ctx.cwd);
     await ensureSparkStateForActiveWorkspace(ctx.cwd, ctx);
-    await syncGoalAskAutoAnswerPolicy(ctx, deps);
+    await syncGoalAskAutoAnswerPolicy(ctx);
     await syncGoalInteractiveToolAvailability(pi, ctx, goalToolBaselines);
     await deps.refreshSparkWidget(ctx.cwd, ctx);
+  });
+  pi.on?.("tool_execution_start", async (_event: unknown, ctx: SparkToolContext) => {
+    await syncGoalAskAutoAnswerPolicy(ctx);
   });
   pi.on?.("session_start", async (_event: unknown, ctx: SparkToolContext) => {
     await ensureLocalSparkDirectory(ctx.cwd);
@@ -129,7 +136,7 @@ export function registerSparkExtensionEvents(
   pi.on?.("tool_execution_end", async (event: unknown, ctx: SparkToolContext) => {
     if (isSparkWidgetRefreshToolEvent(event)) await deps.refreshSparkWidget(ctx.cwd, ctx);
     if (isToolExecutionEvent(event, "goal")) {
-      await syncGoalAskAutoAnswerPolicy(ctx, deps);
+      await syncGoalAskAutoAnswerPolicy(ctx);
       await syncGoalInteractiveToolAvailability(pi, ctx, goalToolBaselines);
     }
   });
@@ -146,7 +153,7 @@ export function registerSparkExtensionEvents(
     await deps.refreshSparkWidget(ctx.cwd, ctx);
   });
 
-  return { queueSparkAgentInstruction };
+  return { queueSparkAgentInstruction, syncGoalAskAutoAnswerPolicy };
 }
 
 const GOAL_DISABLED_INTERACTIVE_TOOLS = new Set(["ask_user", "ask_flow"]);
@@ -162,7 +169,7 @@ async function activePendingInstruction(
   return goal?.status === "active" && goal.goalId === pending.goalId ? pending : undefined;
 }
 
-async function syncGoalAskAutoAnswerPolicy(
+export async function syncSparkGoalAskAutoAnswerPolicy(
   ctx: SparkToolContext,
   deps: SparkExtensionEventDeps,
 ): Promise<void> {

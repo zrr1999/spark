@@ -146,11 +146,7 @@ export function registerPiAskActionTool(
       const forwarded = stripAdapterOnlyParams(params);
       if (!autoAnswer) return tool.execute(toolCallId, forwarded, signal, onUpdate, ctx);
       const resolver = options.autoAnswer ?? contextAutoAnswerResolver(ctx);
-      if (!resolver)
-        return blockedAutoAnswerResult(
-          params,
-          "ask autoAnswer=reviewer requires a host-provided auto-answer resolver",
-        );
+      if (!resolver) return blockedAutoAnswerResult(params, missingAutoAnswerResolverReason());
       const request = decodeAutoAnswerRequest(params);
       const autoAnswered = await resolver(request, ctx);
       const blocked = validateAutoAnswerResult(request, autoAnswered);
@@ -329,6 +325,15 @@ function labelsForValues(question: PiAskAutoAnswerQuestion, values: string[]): s
   });
 }
 
+function missingAutoAnswerResolverReason(): string {
+  return [
+    "ask autoAnswer=reviewer cannot run because this tool call did not receive a host-provided reviewer auto-answer resolver.",
+    "Spark injects that resolver only for active goal turns and deliberately clears it for /implement or ordinary manual asks.",
+    "Start or resume a goal and run the goal turn, or omit autoAnswer=reviewer for a normal user-facing ask.",
+    "If a session goal is already active and this still appears, the Spark goal ask-auto-answer policy did not attach its resolver to the current tool context.",
+  ].join(" ");
+}
+
 function blockedAutoAnswerResult(params: Record<string, unknown>, reason: string) {
   const request = decodeAutoAnswerRequest(params);
   return {
@@ -341,6 +346,7 @@ function blockedAutoAnswerResult(params: Record<string, unknown>, reason: string
       error: "auto_answer_blocked",
       reason,
     },
+    isError: true,
   };
 }
 

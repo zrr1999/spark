@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { copyFile, cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { sparkTuiResourceStrings } from "@zendev-lab/spark-i18n/cli";
 
 import {
   defaultSparkConfigPath,
@@ -66,6 +67,7 @@ export type SparkPackageCommandRunner = (
 
 const MANIFEST_FILE_NAME = "manifest.json";
 const NETWORK_TIMEOUT_MS = 120_000;
+const STRINGS = sparkTuiResourceStrings();
 
 export async function runSparkResourceCommand(
   action: SparkResourceCommandResult["action"],
@@ -81,7 +83,7 @@ export async function runSparkResourceCommand(
   let message = "";
 
   if (action === "install") {
-    if (!source) throw new Error("spark install requires a resource source");
+    if (!source) throw new Error(STRINGS.installRequiresSource);
     const kind = options.kind ?? inferResourceKind(source);
     const record = await installPackageSource(source, kind, {
       cwd: dirname(configPath),
@@ -94,10 +96,10 @@ export async function runSparkResourceCommand(
     await savePackageManifest(packageRoot, manifest);
     await saveSparkConfig(config, configPath);
     message = changed
-      ? `Installed Spark ${kind} package: ${source}`
-      : `Spark ${kind} package already installed: ${source}`;
+      ? STRINGS.installedPackage(kind, source)
+      : STRINGS.packageAlreadyInstalled(kind, source);
   } else if (action === "remove") {
-    if (!source) throw new Error("spark remove requires a resource source");
+    if (!source) throw new Error(STRINGS.removeRequiresSource);
     const kind = options.kind ?? inferResourceKind(source);
     const removedRecords = removeInstalledPackages(manifest, source, kind);
     for (const record of removedRecords) await removeManagedPath(record.path, packageRoot);
@@ -108,16 +110,16 @@ export async function runSparkResourceCommand(
       await saveSparkConfig(config, configPath);
     }
     message = changed
-      ? `Removed Spark ${kind} resource: ${source}`
-      : `Spark ${kind} resource was not installed: ${source}`;
+      ? STRINGS.removedResource(kind, source)
+      : STRINGS.resourceWasNotInstalled(kind, source);
   } else if (action === "update") {
     const records = source
       ? manifest.packages.filter((record) => packageRecordMatches(record, source))
       : [...manifest.packages];
     if (source && records.length === 0) {
-      message = `Spark package not installed: ${source}`;
+      message = STRINGS.packageNotInstalled(source);
     } else if (records.length === 0) {
-      message = `No Spark packages installed in ${packageRoot}.`;
+      message = STRINGS.noPackagesInstalled(packageRoot);
     } else {
       for (const record of records) {
         const updated = await installPackageSource(record.source, record.kind, {
@@ -132,14 +134,12 @@ export async function runSparkResourceCommand(
       await savePackageManifest(packageRoot, manifest);
       await saveSparkConfig(config, configPath);
       changed = true;
-      message = source
-        ? `Updated Spark package: ${source}`
-        : `Updated ${records.length} Spark package${records.length === 1 ? "" : "s"}.`;
+      message = source ? STRINGS.updatedPackage(source) : STRINGS.updatedPackages(records.length);
     }
   } else if (action === "config") {
-    message = `Spark resource config: ${configPath}\nSpark package root: ${packageRoot}`;
+    message = STRINGS.configMessage(configPath, packageRoot);
   } else {
-    message = "Spark configured and installed resources";
+    message = STRINGS.configuredAndInstalled;
   }
 
   return {
@@ -194,7 +194,7 @@ export function listSparkResources(
 export function formatSparkResourceResult(result: SparkResourceCommandResult): string {
   const lines = [result.message];
   if (result.entries.length === 0) {
-    lines.push("No Spark resources configured or installed.");
+    lines.push(STRINGS.noResourcesConfigured);
   } else {
     for (const entry of result.entries) {
       const state = entry.enabled ? "configured" : "installed-only";

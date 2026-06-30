@@ -1075,6 +1075,47 @@ void test("ask action tool auto-answers with reviewer resolver without invoking 
   );
 });
 
+void test("ask action tool reports missing reviewer resolver as a tool error with guidance", async () => {
+  const tools = new Map<string, { execute: Function }>();
+  const registerTool = (config: { name: string; execute: Function }) =>
+    tools.set(config.name, config);
+  registerPiAskTools({ registerTool });
+  registerPiAskActionTool({ registerTool }, { resolveTool: (name) => tools.get(name) as never });
+  const tool = tools.get("ask");
+  assert.ok(tool);
+
+  const result = await tool.execute(
+    "ask-missing-auto-answer-resolver-test",
+    {
+      action: "ask",
+      autoAnswer: "reviewer",
+      title: "Choose mode",
+      mode: "decision",
+      questions: [
+        {
+          id: "mode",
+          prompt: "Which mode?",
+          type: "single",
+          required: true,
+          options: [{ value: "safe_mode", label: "Safe path" }],
+        },
+      ],
+    },
+    new AbortController().signal,
+    () => undefined,
+    {},
+  );
+
+  assert.equal(result.isError, true);
+  assert.equal(result.details.autoAnswered, false);
+  assert.equal(result.details.blocked, true);
+  assert.equal(result.details.result.nextAction, "block");
+  assert.match(result.details.reason, /host-provided reviewer auto-answer resolver/);
+  assert.match(result.details.reason, /active goal turns/);
+  assert.match(result.details.reason, /omit autoAnswer=reviewer/);
+  assert.match(result.content.map((part: { text: string }) => part.text).join("\n"), /blocked/i);
+});
+
 void test("ask action tool blocks invalid reviewer auto-answer output", async () => {
   const tools = new Map<string, { execute: Function }>();
   const registerTool = (config: { name: string; execute: Function }) =>
@@ -1115,6 +1156,7 @@ void test("ask action tool blocks invalid reviewer auto-answer output", async ()
     {},
   );
 
+  assert.equal(result.isError, true);
   assert.equal(result.details.autoAnswered, false);
   assert.equal(result.details.blocked, true);
   assert.equal(result.details.result.nextAction, "block");

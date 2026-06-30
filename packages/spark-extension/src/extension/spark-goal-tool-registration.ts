@@ -41,6 +41,7 @@ export type SparkGoalToolAction =
 
 interface SparkGoalToolDeps {
   refreshSparkWidget: (cwd: string, ctx?: SparkToolContext) => Promise<void>;
+  syncAskAutoAnswerPolicy?: (ctx: SparkToolContext) => Promise<void>;
   createReviewerRunner?: (
     cwd: string,
     ctx: SparkToolContext,
@@ -112,7 +113,7 @@ export function registerSparkGoalTool(
           source,
           status: "active",
         });
-        await deps.refreshSparkWidget(cwd, ctx);
+        await refreshGoalRuntimeState(cwd, ctx, deps);
         return goalResult(goal, action, renderGoalActivationResult(goal, graph, project));
       }
 
@@ -129,11 +130,12 @@ export function registerSparkGoalTool(
           { graph: graph ?? undefined, project, goal: existingGoal },
           { trigger: "tool" },
         );
+        await deps.syncAskAutoAnswerPolicy?.(ctx);
         return goalCompletionResult(existingGoal, action, completion);
       }
       if (action === "clear") {
         await clearSessionGoal(cwd, ctx);
-        await deps.refreshSparkWidget(cwd, ctx);
+        await refreshGoalRuntimeState(cwd, ctx, deps);
         return {
           content: [
             {
@@ -156,7 +158,7 @@ export function registerSparkGoalTool(
             details: { found: true, action, error: "goal_already_complete", goal: existingGoal },
           };
         const resumed = await updateSessionGoalStatus(cwd, ctx, "active", { retryState: null });
-        await deps.refreshSparkWidget(cwd, ctx);
+        await refreshGoalRuntimeState(cwd, ctx, deps);
         const relationship = describeGoalProjectRelationship(
           resumed ?? existingGoal,
           graph,
@@ -346,7 +348,7 @@ async function reviewedEditCurrentSessionGoal(
   if (verdict.outcome !== "approved")
     return { goal: existingGoal, approved: false, review, reviewArtifactRef: artifact.ref };
   const edited = await editSessionGoalObjective(cwd, ctx, proposedObjective);
-  await deps.refreshSparkWidget(cwd, ctx);
+  await refreshGoalRuntimeState(cwd, ctx, deps);
   return { goal: edited, approved: true, review, reviewArtifactRef: artifact.ref };
 }
 
@@ -404,8 +406,17 @@ export async function reviewedPauseCurrentSessionGoal(
       reviewedAt: review.record.finishedAt || nowIso(),
     },
   });
-  await deps.refreshSparkWidget(cwd, ctx);
+  await refreshGoalRuntimeState(cwd, ctx, deps);
   return { goal, approved: true, review, reviewArtifactRef: artifact.ref };
+}
+
+async function refreshGoalRuntimeState(
+  cwd: string,
+  ctx: SparkToolContext,
+  deps: SparkGoalToolDeps,
+): Promise<void> {
+  await deps.syncAskAutoAnswerPolicy?.(ctx);
+  await deps.refreshSparkWidget(cwd, ctx);
 }
 
 async function runGoalReviewer(

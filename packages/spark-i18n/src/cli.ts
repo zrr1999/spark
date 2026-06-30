@@ -294,10 +294,296 @@ const NATIVE_TUI: Record<SparkLanguage, SparkNativeTuiStrings> = {
   },
 };
 
+export interface SparkTuiResourceStrings {
+  installRequiresSource: string;
+  removeRequiresSource: string;
+  installedPackage: (kind: string, source: string) => string;
+  packageAlreadyInstalled: (kind: string, source: string) => string;
+  removedResource: (kind: string, source: string) => string;
+  resourceWasNotInstalled: (kind: string, source: string) => string;
+  packageNotInstalled: (source: string) => string;
+  noPackagesInstalled: (packageRoot: string) => string;
+  updatedPackage: (source: string) => string;
+  updatedPackages: (count: number) => string;
+  configMessage: (configPath: string, packageRoot: string) => string;
+  configuredAndInstalled: string;
+  noResourcesConfigured: string;
+}
+
+export interface SparkTuiPiParityStrings {
+  descriptions: Record<string, string>;
+  noAssistantMessage: string;
+  changelog: string;
+  trust: (cwd: string) => string;
+  newTranscript: string;
+  reload: string;
+  settingsUsageThinking: (levels: readonly string[]) => string;
+  thinkingLevelSet: (level: string) => string;
+  settingsUsageTheme: (themes: readonly string[]) => string;
+  themeSet: (themeId: string) => string;
+  settingsHeader: string;
+  noModelsRegistered: string;
+  noExternalUpload: string;
+  importUsage: string;
+  sessionNameUnset: string;
+  nativeSessionHeader: string;
+  authStoreUnavailable: string;
+  logoutUsageStored: (providers: readonly string[]) => string;
+  logoutUsageEmpty: string;
+  removedCredential: (provider: string) => string;
+  noCredential: (provider: string) => string;
+  providerAuthHeader: string;
+  storedCredentials: (providers: readonly string[]) => string;
+  noStoredCredentials: string;
+  noProvidersRegistered: string;
+}
+
+export interface SparkDaemonCliStrings {
+  submitRequiresSession: string;
+  submitRequiresPrompt: string;
+  unknownCommand: (command: string) => string;
+  unknownSessionsCommand: (command: string) => string;
+  sessionsExportRequiresSession: string;
+  sessionsReplayRequiresSession: string;
+  serviceCommandMustUseServiceRunner: string;
+  helpText: string;
+  ignoredEmptyPrompt: string;
+  queuedSession: (sessionId: string, fileName: string) => string;
+  failedFile: (fileName: string) => string;
+  completedSession: (sessionId: string, fileName: string) => string;
+  nativeCommandDescriptions: {
+    status: string;
+    queue: string;
+    start: string;
+  };
+  displayName: Record<"interactive" | "headless" | "executor", string>;
+  buildServiceFailed: string;
+  notReachable: (message: string) => string;
+  localRpcFailed: string;
+  invalidStreamResponse: string;
+  invalidQueueState: (state: string) => string;
+}
+
+const RESOURCE_STRINGS: Record<SparkLanguage, SparkTuiResourceStrings> = {
+  en: {
+    installRequiresSource: "spark install requires a resource source",
+    removeRequiresSource: "spark remove requires a resource source",
+    installedPackage: (kind, source) => `Installed Spark ${kind} package: ${source}`,
+    packageAlreadyInstalled: (kind, source) => `Spark ${kind} package already installed: ${source}`,
+    removedResource: (kind, source) => `Removed Spark ${kind} resource: ${source}`,
+    resourceWasNotInstalled: (kind, source) =>
+      `Spark ${kind} resource was not installed: ${source}`,
+    packageNotInstalled: (source) => `Spark package not installed: ${source}`,
+    noPackagesInstalled: (packageRoot) => `No Spark packages installed in ${packageRoot}.`,
+    updatedPackage: (source) => `Updated Spark package: ${source}`,
+    updatedPackages: (count) => `Updated ${count} Spark package${count === 1 ? "" : "s"}.`,
+    configMessage: (configPath, packageRoot) =>
+      `Spark resource config: ${configPath}\nSpark package root: ${packageRoot}`,
+    configuredAndInstalled: "Spark configured and installed resources",
+    noResourcesConfigured: "No Spark resources configured or installed.",
+  },
+  zh: {
+    installRequiresSource: "spark install 需要 resource source",
+    removeRequiresSource: "spark remove 需要 resource source",
+    installedPackage: (kind, source) => `已安装 Spark ${kind} package：${source}`,
+    packageAlreadyInstalled: (kind, source) => `Spark ${kind} package 已安装：${source}`,
+    removedResource: (kind, source) => `已移除 Spark ${kind} resource：${source}`,
+    resourceWasNotInstalled: (kind, source) => `Spark ${kind} resource 未安装：${source}`,
+    packageNotInstalled: (source) => `Spark package 未安装：${source}`,
+    noPackagesInstalled: (packageRoot) => `${packageRoot} 中没有已安装的 Spark package。`,
+    updatedPackage: (source) => `已更新 Spark package：${source}`,
+    updatedPackages: (count) => `已更新 ${count} 个 Spark package。`,
+    configMessage: (configPath, packageRoot) =>
+      `Spark resource config：${configPath}\nSpark package root：${packageRoot}`,
+    configuredAndInstalled: "Spark 已配置和已安装 resource",
+    noResourcesConfigured: "没有配置或安装 Spark resource。",
+  },
+};
+
+const PI_PARITY_DESCRIPTIONS = {
+  settings: "show Spark settings and provider/session configuration",
+  scopedModels: "show models enabled for Spark model selection/cycling",
+  export: "export visible Spark transcript or a persisted session",
+  import: "import a Spark/Pi JSONL session and show resume guidance",
+  share: "write a share-safe local HTML transcript export (no secret upload)",
+  copy: "copy/show the last Spark assistant message",
+  name: "set or show the current Spark session display name",
+  session: "show Spark native session info and transcript stats",
+  changelog: "show Spark parity changelog highlights",
+  hotkeys: "show all Spark keyboard shortcuts",
+  fork: "fork the current visible transcript into a new Spark session record",
+  clone: "clone the current visible transcript into a new Spark session record",
+  tree: "show persisted session tree or append a branch summary",
+  trust: "show Spark project trust status and safe next steps",
+  login: "log in to a supported Spark OAuth provider or show auth status",
+  logout: "remove a stored Spark OAuth/API credential",
+  new: "start a new visible Spark transcript",
+  compact: "summarize visible Spark transcript and clear older context",
+  resume: "list or preview a persisted Spark session for resume",
+  reload: "reload Spark keybindings/settings guidance",
+} as const;
+
+const PI_PARITY_STRINGS: Record<SparkLanguage, SparkTuiPiParityStrings> = {
+  en: {
+    descriptions: PI_PARITY_DESCRIPTIONS,
+    noAssistantMessage: "No assistant message to copy yet.",
+    changelog: [
+      "Spark native TUI parity highlights:",
+      "- daemon-first native pi-tui host",
+      "- slash autocomplete and /model selection",
+      "- native widget factory rendering",
+      "- Spark cockpit panels for workflows, runs, tasks, artifacts, reviews, and Graft",
+    ].join("\n"),
+    trust: (cwd) =>
+      `Spark trusts this workspace only through explicit config and tool-approval flows. cwd=${cwd}`,
+    newTranscript: "Started a new Spark native transcript.",
+    reload:
+      "Restart or relaunch the native Spark TUI to reload extensions, providers, skills, prompts, themes, and keybindings from disk.",
+    settingsUsageThinking: (levels) => `Usage: /settings set thinking <${levels.join("|")}>`,
+    thinkingLevelSet: (level) => `Spark thinking level set for this session: ${level}.`,
+    settingsUsageTheme: (themes) =>
+      `Usage: /settings set theme <${themes.join("|") || "dark|light"}>`,
+    themeSet: (themeId) =>
+      `Spark theme set: ${themeId}. Restart or /reload to apply it to the active TUI.`,
+    settingsHeader: "Spark settings",
+    noModelsRegistered: "No Spark models registered.",
+    noExternalUpload:
+      "No external upload was performed. Review the file before sharing it outside this machine.",
+    importUsage: "Usage: /import <spark-jsonl-session-path>",
+    sessionNameUnset: "(unset)",
+    nativeSessionHeader: "Spark native session",
+    authStoreUnavailable: "Spark auth store is not available in this host.",
+    logoutUsageStored: (providers) => `Usage: /logout <provider>. Stored: ${providers.join(", ")}`,
+    logoutUsageEmpty: "Usage: /logout <provider>",
+    removedCredential: (provider) => `Removed stored Spark credential for ${provider}.`,
+    noCredential: (provider) => `No stored Spark credential for ${provider}.`,
+    providerAuthHeader: "Spark provider auth",
+    storedCredentials: (providers) => `Stored credentials: ${providers.join(", ")}`,
+    noStoredCredentials: "Stored credentials: none",
+    noProvidersRegistered: "No OAuth-capable Spark providers registered.",
+  },
+  zh: {
+    descriptions: PI_PARITY_DESCRIPTIONS,
+    noAssistantMessage: "还没有可复制的 assistant 消息。",
+    changelog: [
+      "Spark native TUI parity highlights:",
+      "- daemon-first native pi-tui host",
+      "- slash autocomplete and /model selection",
+      "- native widget factory rendering",
+      "- Spark cockpit panels for workflows, runs, tasks, artifacts, reviews, and Graft",
+    ].join("\n"),
+    trust: (cwd) => `Spark 只通过显式 config 和 tool approval 信任此 workspace。cwd=${cwd}`,
+    newTranscript: "已开始新的 Spark native transcript。",
+    reload:
+      "重启或重新打开 native Spark TUI 以从磁盘重新加载 extensions/providers/skills/prompts/themes/keybindings。",
+    settingsUsageThinking: (levels) => `用法：/settings set thinking <${levels.join("|")}>`,
+    thinkingLevelSet: (level) => `Thinking level 已设为 ${level}。`,
+    settingsUsageTheme: (themes) =>
+      `用法：/settings set theme <${themes.join("|") || "dark|light"}>`,
+    themeSet: (themeId) => `Theme 已设为 ${themeId}。重启 TUI 以重新加载样式。`,
+    settingsHeader: "Spark settings",
+    noModelsRegistered: "尚未注册 Spark 模型。",
+    noExternalUpload: "未执行外部上传。",
+    importUsage: "用法：/import <spark-jsonl-session-path>",
+    sessionNameUnset: "（未设置）",
+    nativeSessionHeader: "Spark native session",
+    authStoreUnavailable: "此 host 中 Spark auth store 不可用。",
+    logoutUsageStored: (providers) => `用法：/logout <provider>。已存储：${providers.join(", ")}`,
+    logoutUsageEmpty: "用法：/logout <provider>",
+    removedCredential: (provider) => `已移除 ${provider} 的存储凭据。`,
+    noCredential: (provider) => `未找到 ${provider} 的存储凭据。`,
+    providerAuthHeader: "Spark provider auth",
+    storedCredentials: (providers) => `已存储凭据：${providers.join(", ")}`,
+    noStoredCredentials: "已存储凭据：无",
+    noProvidersRegistered: "尚未注册支持 OAuth 的 Spark provider。",
+  },
+};
+
+const DAEMON_HELP_TEXT = `spark daemon - Spark daemon control surface\n\nUsage:\n  spark daemon [--workspace <name>]\n  spark daemon status [--json]\n  spark daemon start [--json]\n  spark daemon stop [--yes]\n  spark daemon restart [--yes]\n  spark daemon logs [--follow] [--lines <n>]\n  spark daemon submit --session <id> --prompt <text> [--reset] [--json]\n  spark daemon queue [--state inbox|processed|failed|all] [--limit <n>] [--json]\n  spark daemon sessions [list] [--json]\n  spark daemon sessions export --session <id|path> [--format jsonl|json|text] [--leaf <entry-id|root>] [--json]\n  spark daemon sessions replay --session <id|path> [--leaf <entry-id|root>] [--json]\n  spark daemon workspace register [path] --server-url <url> --token <token|-> --name <name>\n  spark daemon workspace ls [--json] [--all] [--full]\n  spark daemon workspace show [name] [--json]\n  spark daemon workspace stop <name> [--yes]\n\nSpark CLI never runs an independent queue worker; it starts/wakes the Spark daemon and talks over local IPC.`;
+
+const DAEMON_STRINGS: Record<SparkLanguage, SparkDaemonCliStrings> = {
+  en: {
+    submitRequiresSession: "spark daemon submit requires --session <id>",
+    submitRequiresPrompt: "spark daemon submit requires --prompt <text> or trailing text",
+    unknownCommand: (command) => `unknown spark daemon command: ${command}`,
+    unknownSessionsCommand: (command) => `unknown spark daemon sessions command: ${command}`,
+    sessionsExportRequiresSession: "spark daemon sessions export requires --session <id|path>",
+    sessionsReplayRequiresSession: "spark daemon sessions replay requires --session <id|path>",
+    serviceCommandMustUseServiceRunner:
+      "spark daemon service commands must be run through runSparkDaemonCliCommand",
+    helpText: DAEMON_HELP_TEXT,
+    ignoredEmptyPrompt: "ignored empty prompt",
+    queuedSession: (sessionId, fileName) =>
+      `queued for Spark daemon session ${sessionId}: ${fileName}`,
+    failedFile: (fileName) => `Spark daemon failed ${fileName}`,
+    completedSession: (sessionId, fileName) =>
+      `Spark daemon completed session ${sessionId}: ${fileName}`,
+    nativeCommandDescriptions: {
+      status: "show Spark daemon status",
+      queue: "show Spark daemon queue; optional state: inbox, processed, failed, all",
+      start: "start or wake the Spark daemon, then show status",
+    },
+    displayName: {
+      interactive: "Spark interactive TUI",
+      headless: "Spark headless CLI",
+      executor: "Spark executor",
+    },
+    buildServiceFailed: "Spark daemon CLI service build failed before launch.",
+    notReachable: (message) => `Spark daemon is not reachable: ${message}`,
+    localRpcFailed: "Spark daemon local RPC request failed",
+    invalidStreamResponse: "Spark daemon stream response was not readable.",
+    invalidQueueState: (state) => `Invalid daemon queue state: ${state}`,
+  },
+  zh: {
+    submitRequiresSession: "spark daemon submit 需要 --session <id>",
+    submitRequiresPrompt: "spark daemon submit 需要 --prompt <text> 或 trailing text",
+    unknownCommand: (command) => `未知 spark daemon 命令：${command}`,
+    unknownSessionsCommand: (command) => `未知 spark daemon sessions 命令：${command}`,
+    sessionsExportRequiresSession: "spark daemon sessions export 需要 --session <id|path>",
+    sessionsReplayRequiresSession: "spark daemon sessions replay 需要 --session <id|path>",
+    serviceCommandMustUseServiceRunner:
+      "spark daemon service 命令必须通过 runSparkDaemonCliCommand 运行",
+    helpText: DAEMON_HELP_TEXT,
+    ignoredEmptyPrompt: "已忽略空 prompt",
+    queuedSession: (sessionId, fileName) =>
+      `已排队到 Spark daemon session ${sessionId}：${fileName}`,
+    failedFile: (fileName) => `Spark daemon 失败：${fileName}`,
+    completedSession: (sessionId, fileName) =>
+      `Spark daemon 已完成 session ${sessionId}：${fileName}`,
+    nativeCommandDescriptions: {
+      status: "显示 Spark daemon 状态",
+      queue: "显示 Spark daemon queue；可选 state：inbox、processed、failed、all",
+      start: "启动或唤醒 Spark daemon，然后显示状态",
+    },
+    displayName: {
+      interactive: "Spark interactive TUI",
+      headless: "Spark headless CLI",
+      executor: "Spark executor",
+    },
+    buildServiceFailed: "Spark daemon CLI service build failed before launch.",
+    notReachable: (message) => `Spark daemon 不可达：${message}`,
+    localRpcFailed: "Spark daemon local RPC request failed",
+    invalidStreamResponse: "Spark daemon stream response was not readable.",
+    invalidQueueState: (state) => `Invalid daemon queue state: ${state}`,
+  },
+};
+
 export function sparkTuiCliStrings(language: SparkLanguage = "en"): SparkTuiCliStrings {
   return TUI_CLI[language];
 }
 
 export function sparkNativeTuiStrings(language: SparkLanguage = "en"): SparkNativeTuiStrings {
   return NATIVE_TUI[language];
+}
+
+export function sparkTuiResourceStrings(language: SparkLanguage = "en"): SparkTuiResourceStrings {
+  return RESOURCE_STRINGS[language];
+}
+
+export function sparkTuiPiParityStrings(language: SparkLanguage = "en"): SparkTuiPiParityStrings {
+  return PI_PARITY_STRINGS[language];
+}
+
+export function sparkDaemonCliStrings(language: SparkLanguage = "en"): SparkDaemonCliStrings {
+  return DAEMON_STRINGS[language];
 }

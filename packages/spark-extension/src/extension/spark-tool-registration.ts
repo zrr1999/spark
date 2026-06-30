@@ -51,7 +51,7 @@ export interface SparkToolContext {
   };
   hasUI?: boolean;
   askAutoAnswer?: "reviewer";
-  askAutoAnswerResolver?: (request: unknown, ctx: SparkToolContext) => Promise<unknown>;
+  askAutoAnswerResolver?: (request: unknown, ctx: any) => Promise<unknown>;
 
   sparkAutonomousGoalTurn?: { goalId: string };
   ui?: {

@@ -27,6 +27,10 @@ import {
   renderActiveSparkContextSummary,
 } from "./spark-active-injection.ts";
 import { registerSparkExtensionEvents } from "./spark-extension-events.ts";
+import {
+  sparkExtensionContextProviderStrings,
+  sparkExtensionToolCopy,
+} from "@zendev-lab/spark-i18n/extension";
 import { sessionModelName } from "./session-model.ts";
 import { withSparkToolOperationalNotes } from "./spark-tool-operational-notes.ts";
 import { SparkWorkflowRunManagerController } from "./spark-workflow-run-manager.ts";
@@ -102,15 +106,17 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   const registeredSparkTools = new Map<string, SparkRegisteredToolConfig>();
   const registerSparkTool = (config: SparkRegisteredToolConfig): void => {
     registeredSparkTools.set(config.name, config);
+    const copy = sparkExtensionToolCopy(config.name, config);
     pi.registerTool?.({
       ...config,
-      description: withSparkToolOperationalNotes(config.name, config.description),
+      ...copy,
+      description: withSparkToolOperationalNotes(config.name, copy.description),
       renderCall: (args, theme, context) => renderSparkToolCall(config.name, args, theme, context),
     });
   };
   const registerSparkImplementationTool = (config: SparkRegisteredToolConfig): void => {
     registeredSparkTools.set(config.name, config);
-    pi.registerInternalTool?.(config);
+    pi.registerInternalTool?.({ ...config, ...sparkExtensionToolCopy(config.name, config) });
   };
 
   async function createReviewerRunner(cwd: string, ctx: SparkToolContext): Promise<ReviewerRunner> {
@@ -153,7 +159,11 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
   registerSparkPlanTasksTool(registerSparkImplementationTool, { refreshSparkWidget });
 
-  registerSparkGoalTool(registerSparkTool, { refreshSparkWidget, createReviewerRunner });
+  registerSparkGoalTool(registerSparkTool, {
+    refreshSparkWidget,
+    syncAskAutoAnswerPolicy: (ctx) => eventHandlers.syncGoalAskAutoAnswerPolicy(ctx),
+    createReviewerRunner,
+  });
 
   registerSparkLoopTool(registerSparkTool, { refreshSparkWidget });
 
@@ -190,8 +200,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       providers: [
         {
           id: "spark.active",
-          label: "Spark context",
-          description: "Bounded Spark project/task/TODO/SPARK.md context.",
+          label: sparkExtensionContextProviderStrings.label,
+          description: sparkExtensionContextProviderStrings.description,
           defaultBudgetChars: 4_000,
           priority: 100,
           async render(ctx) {

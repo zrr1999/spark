@@ -326,6 +326,91 @@ export function activeSparkContextStrings(language: SparkLanguage): ActiveSparkC
   return ACTIVE_CONTEXT[language];
 }
 
+export interface SparkExtensionToolCopy {
+  label?: string;
+  description: string;
+  promptGuidelines?: string[];
+}
+
+const SPARK_EXTENSION_TOOL_COPY: Record<string, Partial<SparkExtensionToolCopy>> = {
+  impl_ask: {
+    label: "Spark Ask",
+    description:
+      "Ask the user a structured multi-question clarification, decision, approval, or unblock form and persist the answer as an artifact.",
+  },
+  impl_ask_replay: { label: "Spark Ask Replay" },
+  drive: { label: "Spark Drive" },
+  goal: { label: "Spark Goal" },
+  loop: { label: "Spark Loop" },
+  workflow_run: {
+    label: "Workflow Run",
+    description:
+      "Execute a generated or saved JavaScript workflow through Spark workflow runtime primitives. Use for explicit dynamic workflow/fan-out requests after the script has metadata and clear stages.",
+  },
+  impl_workflow_runs: { label: "Spark Workflow Runs" },
+  impl_status: { label: "Spark Status" },
+  impl_state: { label: "Spark State" },
+  impl_claim_task: { label: "Spark Claim Task" },
+  impl_plan_tasks: { label: "Spark Plan Tasks" },
+  impl_finish_task: { label: "Spark Finish Task" },
+  impl_update_task_plan_items: { label: "Spark Update Task plan items" },
+  impl_run_ready_tasks: { label: "Spark Run Ready Tasks" },
+  impl_recover_task_claim: { label: "Spark Recover Task Claim" },
+  impl_list_projects: { label: "Spark List Projects" },
+  impl_project_mutation: { label: "Spark Project Mutation" },
+  impl_use_project: { label: "Spark Use Project" },
+  impl_learning_record: { label: "Spark Learning Record" },
+  impl_learning_search: { label: "Spark Learning Search" },
+  impl_learning_list: { label: "Spark Learning List" },
+  impl_learning_read: { label: "Spark Learning Read" },
+  impl_learning_mark_stale: { label: "Spark Learning Mark Stale" },
+  impl_learning_supersede: { label: "Spark Learning Supersede" },
+  impl_learning_reject: { label: "Spark Learning Reject" },
+  impl_learning_export_markdown: { label: "Spark Learning Export Markdown" },
+  impl_learning_import_markdown: { label: "Spark Learning Import Markdown" },
+};
+
+export function sparkExtensionToolCopy(
+  toolName: string,
+  fallback: SparkExtensionToolCopy,
+): SparkExtensionToolCopy {
+  const override = SPARK_EXTENSION_TOOL_COPY[toolName];
+  return {
+    ...fallback,
+    ...override,
+    promptGuidelines: override?.promptGuidelines ?? fallback.promptGuidelines,
+  };
+}
+
+export interface SparkToolOperationalNotes {
+  atomic: string;
+  idempotent: string;
+  prerequisites: string[];
+}
+
+const DEFAULT_SPARK_TOOL_OPERATIONAL_NOTES: SparkToolOperationalNotes = {
+  atomic: "read-only",
+  idempotent: "yes; repeated calls only re-read current Spark state",
+  prerequisites: ["Spark state exists in the current workspace."],
+};
+
+export function withSparkToolOperationalNotes(_toolName: string, description: string): string {
+  const notes = DEFAULT_SPARK_TOOL_OPERATIONAL_NOTES;
+  return [
+    description.trimEnd(),
+    "",
+    `Atomic: ${notes.atomic}`,
+    `Idempotent: ${notes.idempotent}`,
+    "Prerequisites:",
+    ...notes.prerequisites.map((item) => `- ${item}`),
+  ].join("\n");
+}
+
+export const sparkExtensionContextProviderStrings = {
+  label: "Spark context",
+  description: "Bounded Spark project/task/TODO/SPARK.md context.",
+} as const;
+
 export function sparkSystemPromptLanguageDirective(language: SparkLanguage): string {
   if (language === "zh") {
     return "Reply in the language the user is using; project default language: zh.";

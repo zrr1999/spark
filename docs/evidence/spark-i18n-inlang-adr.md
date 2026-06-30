@@ -68,7 +68,7 @@ This is closest to Paraglide monorepo Pattern 2 (dedicated package compiles once
 - For structured data, use one of these patterns per migration finding:
   1. Convert arrays/records into explicit scalar keys and assemble typed objects in `spark-i18n` facade code.
   2. Keep non-copy structure in TypeScript and fill user-visible copy from generated message functions.
-  3. Defer highly dynamic or diagnostic data with explicit audit rationale.
+  3. Keep highly dynamic or diagnostic data local/internal unless it is promoted to stable display copy through a Spark facade.
 - Do not translate protocol enums, IDs, command kinds, log stream names, or machine-readable status values. Translate display labels derived from those values.
 
 ## Consumer integration
@@ -95,16 +95,16 @@ This is closest to Paraglide monorepo Pattern 2 (dedicated package compiles once
 - Keep generic `pi-*` package copy local unless the audit proves it is specifically Spark-facing. `pi-*` packages should not import `spark-*` as a side effect of localization.
 - Keep developer diagnostics/log lines local or untranslated unless they are deliberately user-facing UX strings.
 
-## Rejected/deferred alternatives
+## Rejected or not-selected alternatives
 
 | Option | Decision | Reason |
 | --- | --- | --- |
 | Zero-dependency forever | Rejected as the primary direction | User selected Inlang; zero-dep remains the reversal path via the Spark facade. |
-| `typesafe-i18n` | Deferred/rejected | Good TypeScript fit, but Inlang/Paraglide has official SvelteKit/Vite integration and generated ESM message functions. |
+| `typesafe-i18n` | Not selected | Good TypeScript fit, but Inlang/Paraglide has official SvelteKit/Vite integration and generated ESM message functions. |
 | `i18next` + ICU | Rejected for first phase | Mature ecosystem but heavier runtime model and broader plugin surface than needed for a local monorepo package. |
-| FormatJS / `intl-messageformat` directly | Deferred | Strong ICU formatting foundation, but Paraglide already provides compile-time message functions and can use format plugins. Use direct FormatJS only if advanced ICU formatting becomes the blocker. |
-| Fluent | Deferred | Powerful message model but higher migration/tooling cost for current two-locale Spark copy. |
-| MessageFormat 2 | Deferred | Promising standard direction but ecosystem adoption is still not the least-risk first migration path. |
+| FormatJS / `intl-messageformat` directly | Not selected | Strong ICU formatting foundation, but Paraglide already provides compile-time message functions and can use format plugins. Use direct FormatJS only if advanced ICU formatting becomes the blocker. |
+| Fluent | Not selected | Powerful message model but higher migration/tooling cost for current two-locale Spark copy. |
+| MessageFormat 2 | Not selected | Promising standard direction but ecosystem adoption is still not the least-risk first migration path. |
 | App-local Paraglide only | Rejected for this project | Would improve Cockpit but not centralize extension/TUI/CLI localization in `spark-i18n`. |
 
 ## Lock-in and reversal cost

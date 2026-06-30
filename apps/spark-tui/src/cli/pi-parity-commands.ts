@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { basename, dirname } from "node:path";
 import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
+import { sparkTuiPiParityStrings } from "@zendev-lab/spark-i18n/cli";
 
 import type {
   SparkNativeMessage,
@@ -30,6 +31,7 @@ import type { SparkConfig } from "../host/config.ts";
 import type { SparkSessionMessage, SparkSessionRecord } from "../host/session-store.ts";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const STRINGS = sparkTuiPiParityStrings();
 
 type SparkThinkingLevel = NonNullable<SparkConfig["activeThinkingLevel"]>;
 
@@ -63,110 +65,101 @@ export function createSparkPiParitySlashCommands(
 ): SparkNativeSlashCommandMap {
   return {
     settings: {
-      description: "show Spark settings and provider/session configuration",
+      description: STRINGS.descriptions.settings,
       argumentHint: "[set thinking <off|minimal|low|medium|high|xhigh>|set theme <id>]",
       getArgumentCompletions: (prefix) => settingsCompletions(prefix),
       handler: async (args) => handleSettingsCommand(services, args),
     },
     "scoped-models": {
-      description: "show models enabled for Spark model selection/cycling",
+      description: STRINGS.descriptions.scopedModels,
       handler: () => renderScopedModels(services),
     },
     export: {
-      description: "export visible Spark transcript or a persisted session",
+      description: STRINGS.descriptions.export,
       argumentHint: "[json|jsonl|text|html] [session-id|path] [output.html]",
       getArgumentCompletions: (prefix) => exportCompletions(prefix),
       handler: async (args, ctx) => handleExportCommand(services, args, ctx.session.messages),
     },
     import: {
-      description: "import a Spark/Pi JSONL session and show resume guidance",
+      description: STRINGS.descriptions.import,
       argumentHint: "<jsonl-path>",
       handler: async (args) => handleImportCommand(services, args),
     },
     share: {
-      description: "write a share-safe local HTML transcript export (no secret upload)",
+      description: STRINGS.descriptions.share,
       argumentHint: "[session-id|path] [output.html]",
       handler: async (args, ctx) => handleShareCommand(services, args, ctx.session.messages),
     },
     copy: {
-      description: "copy/show the last Spark assistant message",
+      description: STRINGS.descriptions.copy,
       handler: (_args, ctx) =>
-        lastAssistantMessage(ctx.session.messages) ?? "No assistant message to copy yet.",
+        lastAssistantMessage(ctx.session.messages) ?? STRINGS.noAssistantMessage,
     },
     name: {
-      description: "set or show the current Spark session display name",
+      description: STRINGS.descriptions.name,
       argumentHint: "[name]",
       handler: (args, ctx) => handleNameCommand(ctx.session.messages, args),
     },
     session: {
-      description: "show Spark native session info and transcript stats",
+      description: STRINGS.descriptions.session,
       handler: (_args, ctx) => renderNativeSessionInfo(ctx.session.messages),
     },
     changelog: {
-      description: "show Spark parity changelog highlights",
-      handler: () =>
-        [
-          "Spark native TUI parity highlights:",
-          "- daemon-first native pi-tui host",
-          "- slash autocomplete and /model selection",
-          "- native widget factory rendering",
-          "- Spark cockpit panels for workflows, runs, tasks, artifacts, reviews, and Graft",
-        ].join("\n"),
+      description: STRINGS.descriptions.changelog,
+      handler: () => STRINGS.changelog,
     },
     hotkeys: {
-      description: "show all Spark keyboard shortcuts",
+      description: STRINGS.descriptions.hotkeys,
       handler: () => renderHotkeys(services),
     },
     fork: {
-      description: "fork the current visible transcript into a new Spark session record",
+      description: STRINGS.descriptions.fork,
       handler: async (_args, ctx) => forkVisibleTranscript(services, ctx.session.messages),
     },
     clone: {
-      description: "clone the current visible transcript into a new Spark session record",
+      description: STRINGS.descriptions.clone,
       handler: async (_args, ctx) => cloneVisibleTranscript(services, ctx.session.messages),
     },
     tree: {
-      description: "show persisted session tree or append a branch summary",
+      description: STRINGS.descriptions.tree,
       argumentHint: "[session-id|path] [summarize <entry-id> [instructions]]",
       handler: async (args) => handleTreeCommand(services, args),
     },
     trust: {
-      description: "show Spark project trust status and safe next steps",
-      handler: () =>
-        `Spark trusts this workspace only through explicit config and tool-approval flows. cwd=${services.cwd}`,
+      description: STRINGS.descriptions.trust,
+      handler: () => STRINGS.trust(services.cwd),
     },
     login: {
-      description: "log in to a supported Spark OAuth provider or show auth status",
+      description: STRINGS.descriptions.login,
       argumentHint: "[oauth-provider]",
       getArgumentCompletions: (prefix) => oauthProviderCompletions(prefix),
       handler: async (args, ctx) => handleLoginCommand(services, args, ctx),
     },
     logout: {
-      description: "remove a stored Spark OAuth/API credential",
+      description: STRINGS.descriptions.logout,
       argumentHint: "<provider>",
       getArgumentCompletions: (prefix) => storedCredentialCompletions(services, prefix),
       handler: async (args) => handleLogoutCommand(services, args),
     },
     new: {
-      description: "start a new visible Spark transcript",
+      description: STRINGS.descriptions.new,
       handler: (_args, ctx) => {
-        ctx.session.clearTranscript("Started a new Spark native transcript.");
+        ctx.session.clearTranscript(STRINGS.newTranscript);
       },
     },
     compact: {
-      description: "summarize visible Spark transcript and clear older context",
+      description: STRINGS.descriptions.compact,
       argumentHint: "[custom instructions]",
       handler: async (args, ctx) => handleCompactCommand(services, args, ctx.session.messages),
     },
     resume: {
-      description: "list or preview a persisted Spark session for resume",
+      description: STRINGS.descriptions.resume,
       argumentHint: "[session-id|path]",
       handler: async (args) => handleResumeCommand(services, args),
     },
     reload: {
-      description: "reload Spark keybindings/settings guidance",
-      handler: () =>
-        "Restart or relaunch the native Spark TUI to reload extensions, providers, skills, prompts, themes, and keybindings from disk.",
+      description: STRINGS.descriptions.reload,
+      handler: () => STRINGS.reload,
     },
   };
 }
@@ -222,26 +215,26 @@ async function handleSettingsCommand(
   if (tokens[0] === "set" && tokens[1] === "thinking") {
     const level = tokens[2];
     if (!isThinkingLevel(level)) {
-      return `Usage: /settings set thinking ${THINKING_LEVELS.join("|")}`;
+      return STRINGS.settingsUsageThinking(THINKING_LEVELS);
     }
     services.config.activeThinkingLevel = level;
     await services.saveConfig?.(services.config);
-    return `Spark thinking level set for this session: ${level}.`;
+    return STRINGS.thinkingLevelSet(level);
   }
   if (tokens[0] === "set" && tokens[1] === "theme") {
     const themeId = tokens[2];
     const themes = services.themeCatalog?.themes ?? [];
     if (!themeId || !themes.some((theme) => theme.id === themeId)) {
-      return `Usage: /settings set theme <${themes.map((theme) => theme.id).join("|") || "dark|light"}>`;
+      return STRINGS.settingsUsageTheme(themes.map((theme) => theme.id));
     }
     services.config.activeTheme = themeId;
     await services.saveConfig?.(services.config);
-    return `Spark theme set: ${themeId}. Restart or /reload to apply it to the active TUI.`;
+    return STRINGS.themeSet(themeId);
   }
 
   const active = services.modelSelector.getActive();
   const lines = [
-    "Spark settings:",
+    `${STRINGS.settingsHeader}:`,
     `cwd: ${services.cwd}`,
     `active model: ${active ? `${active.providerName}/${active.modelId}` : "none"}`,
     `thinking level: ${services.config.activeThinkingLevel ?? "default"}`,
@@ -264,7 +257,7 @@ function isThinkingLevel(value: string | undefined): value is SparkThinkingLevel
 
 function renderScopedModels(services: SparkCliHostServices): string {
   const items = services.modelSelector.getPickerState().items;
-  if (items.length === 0) return "No Spark models are registered.";
+  if (items.length === 0) return STRINGS.noModelsRegistered;
   return items
     .map((model) => `${model.active ? "*" : " "} ${model.value} — ${model.description}`)
     .join("\n");
@@ -314,7 +307,7 @@ async function handleShareCommand(
   );
   return [
     result.replace(/^Exported HTML:/u, "Share-safe HTML export:"),
-    "No external upload was performed. Review the file before sharing it outside this machine.",
+    STRINGS.noExternalUpload,
   ].join("\n");
 }
 
@@ -367,7 +360,7 @@ async function handleHtmlExportCommand(
 
 async function handleImportCommand(services: SparkCliHostServices, args: string): Promise<string> {
   const filePath = args.trim();
-  if (!filePath) return "Usage: /import <jsonl-path>";
+  if (!filePath) return STRINGS.importUsage;
   const record = await services.sessionStore.load(filePath);
   return `Imported Spark/Pi session ${record.header.id} from ${basename(filePath)}. Resume with /resume ${record.header.id} or inspect with /tree ${record.header.id}.`;
 }
@@ -383,7 +376,7 @@ function handleNameCommand(messages: SparkNativeMessage[], args: string): string
 function renderNativeSessionInfo(messages: readonly SparkNativeMessage[]): string {
   const counts = new Map<string, number>();
   for (const message of messages) counts.set(message.role, (counts.get(message.role) ?? 0) + 1);
-  const lines = ["Spark native session:", `messages: ${messages.length}`];
+  const lines = [`${STRINGS.nativeSessionHeader}:`, `messages: ${messages.length}`];
   for (const [role, count] of [...counts.entries()].sort(([left], [right]) =>
     left.localeCompare(right),
   )) {
@@ -611,7 +604,7 @@ async function handleLoginCommand(
   args: string,
   ctx: SparkNativeSlashCommandContext,
 ): Promise<string> {
-  if (!services.authStore) return "Spark auth store is not available in this host.";
+  if (!services.authStore) return STRINGS.authStoreUnavailable;
   const providerId = args.trim();
   if (!providerId) return renderAuthSummary(services);
 
@@ -631,13 +624,11 @@ async function handleLoginCommand(
 }
 
 async function handleLogoutCommand(services: SparkCliHostServices, args: string): Promise<string> {
-  if (!services.authStore) return "Spark auth store is not available in this host.";
+  if (!services.authStore) return STRINGS.authStoreUnavailable;
   const providerId = args.trim();
   if (!providerId) {
     const stored = services.authStore.listProviders();
-    return stored.length
-      ? `Stored Spark credentials: ${stored.join(", ")}\nUsage: /logout <provider>`
-      : "No Spark credentials are stored. Usage: /logout <provider>";
+    return stored.length ? STRINGS.logoutUsageStored(stored) : STRINGS.logoutUsageEmpty;
   }
 
   const provider = services.providerRegistry.getProvider(providerId);
@@ -647,9 +638,7 @@ async function handleLogoutCommand(services: SparkCliHostServices, args: string)
   }
 
   const removed = await services.authStore.remove(providerId);
-  return removed
-    ? `Removed stored Spark credential for ${providerId}.`
-    : `No stored Spark credential for ${providerId}.`;
+  return removed ? STRINGS.removedCredential(providerId) : STRINGS.noCredential(providerId);
 }
 
 function createOAuthLoginCallbacks(
