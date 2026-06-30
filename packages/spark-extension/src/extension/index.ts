@@ -1,3 +1,4 @@
+import { registerPiAskAutoAnswerProvider } from "@zendev-lab/pi-ask";
 import { registerPiContextTool } from "@zendev-lab/pi-context/extension";
 import {
   registerPiLearningTool,
@@ -43,6 +44,8 @@ import { SparkRoleRunTuiController } from "./spark-role-run-tui-controller.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import { PiRolesReviewerRunner, type ReviewerRunner } from "./reviewer-runner.ts";
 import { registerSparkReflectionCommands } from "./reflection-in-session-scheduler.ts";
+import { sparkActiveLensPhase } from "./spark-drive-state.ts";
+import { loadSessionGoal } from "./spark-session-goals.ts";
 
 interface SparkExtensionAPI extends SparkCommandApi {
   registerTool?(config: SparkRegisteredToolConfig): void;
@@ -83,24 +86,24 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     refreshSparkWidget,
   });
 
+  registerPiAskAutoAnswerProvider("spark-goal-reviewer", async (request, rawCtx) => {
+    const askCtx = rawCtx as SparkToolContext;
+    if (!askCtx.cwd) return undefined;
+    if (sparkActiveLensPhase(askCtx.sparkActiveLens) === "implement")
+      return {
+        blocked: true,
+        reason: "reviewer ask auto-answer is disabled in /implement mode",
+      };
+    const goal = await loadSessionGoal(askCtx.cwd, askCtx);
+    if (goal?.status !== "active") return undefined;
+    return answerAskWithReviewer(request, askCtx, askCtx);
+  });
+
   const eventHandlers = registerSparkExtensionEvents(pi, {
     refreshSparkWidget,
     ensureWorkflowRunManager: (cwd, ctx) => workflowRunManagerController.ensure(cwd, ctx),
-    createAskAutoAnswerResolver: (ctx) => async (request, askCtx) => {
-      const cwd = askCtx.cwd || ctx.cwd;
-      const reviewer = await createReviewerRunner(cwd, askCtx);
-      if (!reviewer.answerAsk)
-        return {
-          blocked: true,
-          reason: "reviewer runner does not support ask auto-answer",
-        };
-      return reviewer.answerAsk({
-        cwd,
-        request,
-        sessionKey: sparkSessionKey(askCtx),
-        forkFromSession: askCtx.sessionManager?.getSessionFile?.(),
-      });
-    },
+    createAskAutoAnswerResolver: (ctx) => (request, askCtx) =>
+      answerAskWithReviewer(request, askCtx, ctx),
   });
 
   const registeredSparkTools = new Map<string, SparkRegisteredToolConfig>();
@@ -126,6 +129,26 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       registry: await createSparkRoleRegistry(cwd),
       cwd,
       sessionModel: sessionModelName(ctx.model),
+    });
+  }
+
+  async function answerAskWithReviewer(
+    request: unknown,
+    askCtx: SparkToolContext,
+    fallbackCtx: SparkToolContext,
+  ) {
+    const cwd = askCtx.cwd || fallbackCtx.cwd;
+    const reviewer = await createReviewerRunner(cwd, askCtx);
+    if (!reviewer.answerAsk)
+      return {
+        blocked: true,
+        reason: "reviewer runner does not support ask auto-answer",
+      };
+    return reviewer.answerAsk({
+      cwd,
+      request,
+      sessionKey: sparkSessionKey(askCtx),
+      forkFromSession: askCtx.sessionManager?.getSessionFile?.(),
     });
   }
 

@@ -7419,13 +7419,12 @@ void test("goal start enables same-turn reviewer auto-answer for canonical ask",
 
     delete ctx.askAutoAnswer;
     delete ctx.askAutoAnswerResolver;
-    for (const handler of run.eventHandlers.get("tool_execution_start") ?? []) {
-      await handler({ toolName: "ask" }, ctx);
-    }
-    assert.equal(ctx.askAutoAnswer, "reviewer");
-    assert.equal(typeof ctx.askAutoAnswerResolver, "function");
+    assert.equal(ctx.askAutoAnswer, undefined);
+    assert.equal(ctx.askAutoAnswerResolver, undefined);
 
     const asked = await executeSparkTool(run.tools, "ask", ctx, {
+      action: "ask",
+      autoAnswer: "reviewer",
       title: "Choose path",
       mode: "decision",
       questions: [

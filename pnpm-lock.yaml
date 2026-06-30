@@ -420,6 +420,9 @@ importers:
       '@zendev-lab/pi-artifacts':
         specifier: workspace:^
         version: link:../pi-artifacts
+      '@zendev-lab/pi-ask':
+        specifier: workspace:^
+        version: link:../pi-ask
       '@zendev-lab/pi-context':
         specifier: workspace:^
         version: link:../pi-context

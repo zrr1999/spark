@@ -567,8 +567,13 @@ function truncateInline(value: string, maxLength: number): string {
 
 export * from "./schema.ts";
 export * from "./flow.ts";
-export { registerPiAskActionTool } from "./action-tool.ts";
-export type { PiAskAction, PiAskActionToolOptions } from "./action-tool.ts";
+export { registerPiAskActionTool, registerPiAskAutoAnswerProvider } from "./action-tool.ts";
+export type {
+  PiAskAction,
+  PiAskActionToolOptions,
+  PiAskAutoAnswerProvider,
+  PiAskAutoAnswerResolver,
+} from "./action-tool.ts";
 export {
   createAskArtifactBody,
   isAskArtifactBody,

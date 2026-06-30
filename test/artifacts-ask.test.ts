@@ -23,6 +23,7 @@ import {
   PiAskFlowPayloadStore,
   PiAskFlowPayloadStoreFormatError,
   registerPiAskActionTool,
+  registerPiAskAutoAnswerProvider,
   registerPiAskFlowTool,
   registerPiAskTools,
   runPiAskFlow,
@@ -1114,6 +1115,63 @@ void test("ask action tool reports missing reviewer resolver as a tool error wit
   assert.match(result.details.reason, /active goal turns/);
   assert.match(result.details.reason, /omit autoAnswer=reviewer/);
   assert.match(result.content.map((part: { text: string }) => part.text).join("\n"), /blocked/i);
+});
+
+void test("ask action tool can auto-answer through a registered provider", async () => {
+  const tools = new Map<string, { execute: Function }>();
+  const registerTool = (config: { name: string; execute: Function }) =>
+    tools.set(config.name, config);
+  registerPiAskTools({ registerTool });
+  registerPiAskFlowTool({ registerTool });
+  registerPiAskActionTool({ registerTool }, { resolveTool: (name) => tools.get(name) as never });
+  const tool = tools.get("ask");
+  assert.ok(tool);
+  const unregister = registerPiAskAutoAnswerProvider("test-provider", async () => ({
+    reason: "provider selected the safe path",
+    answers: { mode: { values: ["safe_mode"] } },
+  }));
+  let uiInvoked = false;
+
+  try {
+    const result = await tool.execute(
+      "ask-auto-answer-provider-test",
+      {
+        action: "ask",
+        autoAnswer: "reviewer",
+        title: "Choose mode",
+        mode: "decision",
+        questions: [
+          {
+            id: "mode",
+            prompt: "Which mode?",
+            type: "single",
+            required: true,
+            options: [
+              { value: "fast_mode", label: "Fast path" },
+              { value: "safe_mode", label: "Safe path" },
+            ],
+          },
+        ],
+      },
+      new AbortController().signal,
+      () => undefined,
+      {
+        ui: {
+          select: async () => {
+            uiInvoked = true;
+            return "Fast path";
+          },
+        },
+      },
+    );
+
+    assert.equal(uiInvoked, false);
+    assert.equal(result.details.autoAnswered, true);
+    assert.equal(result.details.autoAnswer.reason, "provider selected the safe path");
+    assert.deepEqual(result.details.result.answers.mode.values, ["safe_mode"]);
+  } finally {
+    unregister();
+  }
 });
 
 void test("ask action tool blocks invalid reviewer auto-answer output", async () => {

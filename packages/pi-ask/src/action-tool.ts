@@ -61,6 +61,34 @@ export type PiAskAutoAnswerResolver = (
   ctx: ExtensionContext,
 ) => Promise<PiAskAutoAnswerResult> | PiAskAutoAnswerResult;
 
+export type PiAskAutoAnswerProvider = (
+  request: PiAskAutoAnswerRequest,
+  ctx: ExtensionContext,
+) => Promise<PiAskAutoAnswerResult | undefined> | PiAskAutoAnswerResult | undefined;
+
+const AUTO_ANSWER_PROVIDER_REGISTRY_KEY = "__zendevLabPiAskAutoAnswerProviders";
+
+type GlobalWithPiAskAutoAnswerProviders = typeof globalThis & {
+  __zendevLabPiAskAutoAnswerProviders?: Map<string, PiAskAutoAnswerProvider>;
+};
+
+function autoAnswerProviderRegistry(): Map<string, PiAskAutoAnswerProvider> {
+  const globalObject = globalThis as GlobalWithPiAskAutoAnswerProviders;
+  globalObject[AUTO_ANSWER_PROVIDER_REGISTRY_KEY] ??= new Map();
+  return globalObject[AUTO_ANSWER_PROVIDER_REGISTRY_KEY];
+}
+
+export function registerPiAskAutoAnswerProvider(
+  id: string,
+  provider: PiAskAutoAnswerProvider,
+): () => void {
+  const providers = autoAnswerProviderRegistry();
+  providers.set(id, provider);
+  return () => {
+    if (providers.get(id) === provider) providers.delete(id);
+  };
+}
+
 class ToolCallText implements ToolRenderComponent {
   private readonly text: string;
 
@@ -145,10 +173,12 @@ export function registerPiAskActionTool(
       if (!tool) throw new Error(`ask action adapter could not find ${target}`);
       const forwarded = stripAdapterOnlyParams(params);
       if (!autoAnswer) return tool.execute(toolCallId, forwarded, signal, onUpdate, ctx);
-      const resolver = options.autoAnswer ?? contextAutoAnswerResolver(ctx);
-      if (!resolver) return blockedAutoAnswerResult(params, missingAutoAnswerResolverReason());
       const request = decodeAutoAnswerRequest(params);
-      const autoAnswered = await resolver(request, ctx);
+      const resolver = options.autoAnswer ?? contextAutoAnswerResolver(ctx);
+      const autoAnswered = resolver
+        ? await resolver(request, ctx)
+        : await resolveAutoAnswerFromProviders(request, ctx);
+      if (!autoAnswered) return blockedAutoAnswerResult(params, missingAutoAnswerResolverReason());
       const blocked = validateAutoAnswerResult(request, autoAnswered);
       if (blocked) return blockedAutoAnswerResult(params, blocked);
       const syntheticCtx = withSyntheticAutoAnswerUi(ctx, request, autoAnswered.answers ?? {});
@@ -177,6 +207,17 @@ function contextAutoAnswerMode(ctx: ExtensionContext): unknown {
 function contextAutoAnswerResolver(ctx: ExtensionContext): PiAskAutoAnswerResolver | undefined {
   const resolver = (ctx as { askAutoAnswerResolver?: unknown }).askAutoAnswerResolver;
   return typeof resolver === "function" ? (resolver as PiAskAutoAnswerResolver) : undefined;
+}
+
+async function resolveAutoAnswerFromProviders(
+  request: PiAskAutoAnswerRequest,
+  ctx: ExtensionContext,
+): Promise<PiAskAutoAnswerResult | undefined> {
+  for (const provider of autoAnswerProviderRegistry().values()) {
+    const answer = await provider(request, ctx);
+    if (answer) return answer;
+  }
+  return undefined;
 }
 
 function selectAskTarget(

@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@zendev-lab/pi-artifacts": "workspace:^",
+    "@zendev-lab/pi-ask": "workspace:^",
     "@zendev-lab/pi-context": "workspace:^",
     "@zendev-lab/pi-extension-api": "workspace:^",
     "@zendev-lab/pi-learnings": "workspace:^",
