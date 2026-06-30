@@ -68,6 +68,29 @@
   </div>
 </section>
 
+<section class="control-strip" aria-label={t.workspaceControl.aria}>
+  <div class="control-summary">
+    <span class="control-kicker">{t.workspaceControl.aria}</span>
+    <strong>{controlDisplay.controlLabel}</strong>
+  </div>
+  <div class="control-status-list">
+    <span class="control-chip {data.workspaceControl.connection.status}">
+      <span class="control-chip-dot" aria-hidden="true"></span>
+      {controlDisplay.connectionLabel}
+    </span>
+    <span
+      class="control-chip {data.workspaceControl.borrowed?.borrowed ? 'borrowed' : 'available'}"
+    >
+      <span class="control-chip-dot" aria-hidden="true"></span>
+      {controlDisplay.borrowedLabel}
+    </span>
+    <span class="control-chip executor-{data.workspaceControl.executor?.state ?? 'none'}">
+      <span class="control-chip-dot" aria-hidden="true"></span>
+      {controlDisplay.executorLabel}
+    </span>
+  </div>
+</section>
+
 <section class="metrics" aria-label={t.metrics.aria}>
   <article class="metric orange featured">
     <div class="metric-icon"><Icon name="inbox" size={28} /></div>
@@ -105,13 +128,6 @@
       <small>{common.reportedByConnectedRunners}</small>
     </div>
   </article>
-</section>
-
-<section class="control-strip" aria-label={t.workspaceControl.aria}>
-  <span>{controlDisplay.connectionLabel}</span>
-  <span>{controlDisplay.borrowedLabel}</span>
-  <span>{controlDisplay.executorLabel}</span>
-  <strong>{controlDisplay.controlLabel}</strong>
 </section>
 
 <section class="dashboard-grid">
@@ -497,6 +513,112 @@
     color: var(--color-purple);
   }
 
+  .control-strip {
+    align-items: center;
+    background: linear-gradient(135deg, var(--color-surface), var(--color-surface-soft));
+    border: 1px solid var(--color-border);
+    border-radius: 16px;
+    box-shadow: var(--shadow-card);
+    display: grid;
+    gap: 18px;
+    grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.6fr);
+    margin: 0 0 24px;
+    padding: 16px 18px;
+  }
+
+  .control-summary {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  .control-kicker {
+    color: var(--color-ink-subtle);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .control-summary strong {
+    color: var(--color-ink);
+    font-size: 16px;
+    line-height: 1.35;
+  }
+
+  .control-status-list {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+
+  .control-chip {
+    align-items: center;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    color: var(--color-ink-muted);
+    display: inline-flex;
+    font-size: 13px;
+    font-weight: 750;
+    gap: 8px;
+    min-height: 34px;
+    padding: 0 12px;
+    white-space: nowrap;
+  }
+
+  .control-chip-dot {
+    background: var(--color-ink-disabled);
+    border-radius: 999px;
+    height: 8px;
+    width: 8px;
+  }
+
+  .control-chip.connected,
+  .control-chip.available,
+  .control-chip.executor-online {
+    background: var(--color-success-soft);
+    border-color: color-mix(in srgb, var(--color-success) 24%, transparent);
+    color: var(--color-success);
+  }
+
+  .control-chip.connected .control-chip-dot,
+  .control-chip.available .control-chip-dot,
+  .control-chip.executor-online .control-chip-dot {
+    background: var(--color-success);
+  }
+
+  .control-chip.disconnected,
+  .control-chip.executor-none {
+    background: var(--color-surface);
+    color: var(--color-ink-subtle);
+  }
+
+  .control-chip.borrowed,
+  .control-chip.executor-starting {
+    background: var(--color-warning-weak);
+    border-color: var(--color-warning-soft);
+    color: var(--color-warning);
+  }
+
+  .control-chip.borrowed .control-chip-dot,
+  .control-chip.executor-starting .control-chip-dot {
+    background: var(--color-warning);
+  }
+
+  .control-chip.executor-unhealthy {
+    background: var(--color-danger-soft);
+    border-color: color-mix(in srgb, var(--color-danger) 22%, transparent);
+    color: var(--color-danger);
+  }
+
+  .control-chip.executor-unhealthy .control-chip-dot {
+    background: var(--color-danger);
+  }
+
   .dashboard-grid {
     align-items: start;
     display: grid;
@@ -833,6 +955,19 @@
     .dashboard-grid,
     .lower-grid {
       grid-template-columns: 1fr;
+    }
+
+    .control-strip {
+      align-items: flex-start;
+      grid-template-columns: 1fr;
+    }
+
+    .control-status-list {
+      justify-content: flex-start;
+    }
+
+    .control-chip {
+      white-space: normal;
     }
 
     .workspace-row,
