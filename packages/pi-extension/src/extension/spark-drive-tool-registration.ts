@@ -15,6 +15,7 @@ import {
   setSessionGoal,
 } from "./spark-session-goals.ts";
 import { clearSessionLoop, loadSessionLoop, setSessionLoop } from "./spark-session-loops.ts";
+import { clearSessionRepro, readSessionRepro } from "./spark-session-repro.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 
 interface SparkDriveToolDeps {
@@ -30,7 +31,7 @@ export function registerSparkDriveTool(
     name: "drive",
     label: "Spark Drive",
     description:
-      "Inspect or control the current session drive. Mode is read-only and derived from drive state: assist, loop, goal, or workflow. Use action=status for the projection; use start/switch/stop with drive=assist|goal|loop for explicit foreground control. Workflow drive starts through workflow_run or /workflow, because it needs a workflow selector/script.",
+      "Inspect or control the current session drive. Mode is read-only and derived from drive state: assist, loop, goal, repro, or workflow. Use action=status for the projection; use start/switch/stop with drive=assist|goal|loop|repro for explicit foreground control. Workflow drive starts through workflow_run or /workflow, because it needs a workflow selector/script.",
     promptGuidelines: [
       "Use drive action=status when you need the read-only derived mode/drive projection.",
       "Do not set mode directly; start/switch/stop a drive instead.",
@@ -86,6 +87,7 @@ export function registerSparkDriveTool(
         const stoppedDrive = requestedDrive ?? before.mode;
         if (stoppedDrive === "goal") await clearSessionGoal(cwd, ctx);
         if (stoppedDrive === "loop") await clearSessionLoop(cwd, ctx);
+        if (stoppedDrive === "repro") await clearSessionRepro(cwd, ctx);
         if (stoppedDrive === "assist") {
           // Stopping assist is a no-op; assist is the default when no foreground drive is active.
         }
@@ -100,13 +102,20 @@ export function registerSparkDriveTool(
       if (requestedDrive === "assist") {
         await clearSessionGoal(cwd, ctx);
         await clearSessionLoop(cwd, ctx);
+        await clearSessionRepro(cwd, ctx);
+      } else if (requestedDrive === "repro") {
+        // repro and goal/loop are mutually exclusive
+        await clearSessionGoal(cwd, ctx);
+        await clearSessionLoop(cwd, ctx);
       } else if (requestedDrive === "goal") {
         const objective = resolveDriveObjective(params.objective, graph, project, "goal");
         await clearSessionLoop(cwd, ctx);
+        await clearSessionRepro(cwd, ctx);
         await setSessionGoal(cwd, ctx, { objective, source: "explicit", status: "active" });
       } else if (requestedDrive === "loop") {
         const objective = resolveDriveObjective(params.objective, graph, project, "loop");
         await clearSessionGoal(cwd, ctx);
+        await clearSessionRepro(cwd, ctx);
         await setSessionLoop(cwd, ctx, { objective, source: "explicit", status: "active" });
       }
 
@@ -141,7 +150,7 @@ function normalizeRequestedDrive(
     if (action === "stop") return currentMode;
     return undefined;
   }
-  throw new Error("drive must be assist, loop, goal, or workflow");
+  throw new Error("drive must be assist, loop, goal, repro, or workflow");
 }
 
 async function driveSnapshot(
@@ -152,16 +161,23 @@ async function driveSnapshot(
   mode: SparkDriveMode;
   goal: Awaited<ReturnType<typeof loadSessionGoal>>;
   loop: Awaited<ReturnType<typeof loadSessionLoop>>;
+  repro: Awaited<ReturnType<typeof readSessionRepro>>;
 }> {
-  const [goal, loop] = await Promise.all([loadSessionGoal(cwd, ctx), loadSessionLoop(cwd, ctx)]);
+  const [goal, loop, repro] = await Promise.all([
+    loadSessionGoal(cwd, ctx),
+    loadSessionLoop(cwd, ctx),
+    readSessionRepro(cwd, ctx),
+  ]);
   return {
     mode: deriveSparkDriveMode({
       activeLens: options.ignoreActiveLens ? undefined : ctx.sparkActiveLens,
+      repro,
       goal,
       loop,
     }),
     goal,
     loop,
+    repro,
   };
 }
 

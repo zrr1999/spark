@@ -749,7 +749,6 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
     assert.equal(initializedRun.customMessages.at(-1)?.customType, "spark-mode-request");
     assert.deepEqual(initializedCtx.sparkActiveLens, {
       phase: "implement",
-      mode: "assist",
       drive: "assist",
     });
 
@@ -835,7 +834,6 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
     assert.equal(initializedRun.customMessages.at(-1)?.customType, "spark-mode-request");
     assert.deepEqual(initializedCtx.sparkActiveLens, {
       phase: "research",
-      mode: "workflow",
       drive: "workflow",
     });
 
@@ -846,7 +844,6 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
     assert.equal(initializedRun.customMessages.at(-1)?.customType, "spark-mode-request");
     assert.deepEqual(initializedCtx.sparkActiveLens, {
       phase: "research",
-      mode: "workflow",
       drive: "workflow",
     });
 
@@ -966,7 +963,6 @@ void test("latest direct Spark mode replaces older pending hidden mode context",
     const hiddenMessage = run.customMessages.at(-1);
     assert.equal(hiddenMessage?.customType, "spark-mode-request");
     assert.equal(ctx.sparkActiveLens?.phase, "plan");
-    assert.equal(ctx.sparkActiveLens?.mode, "assist");
     assert.equal(ctx.sparkActiveLens?.drive, "assist");
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -1009,7 +1005,7 @@ void test("/plan includes active roadmap item context and matches focus to an ex
 
     assert.equal(run.messages.length, 0);
     assert.equal(run.customMessages.at(-1)?.customType, "spark-mode-request");
-    assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", mode: "assist", drive: "assist" });
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", drive: "assist" });
     const graph = await defaultTaskGraphStore(dir).load();
     const project = graph?.projects()[0];
     assert.ok(project?.roadmap);
@@ -1422,7 +1418,6 @@ void test("/implement continues by prompting for the next ready task without aut
     assert.equal(run.customMessages.at(-1)?.customType, "spark-mode-request");
     assert.deepEqual(ctx.sparkActiveLens, {
       phase: "implement",
-      mode: "assist",
       drive: "assist",
     });
 
@@ -1471,7 +1466,6 @@ void test("/implement continues by prompting for the next ready task without aut
     assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
     assert.deepEqual(ctx.sparkActiveLens, {
       phase: "implement",
-      mode: "assist",
       drive: "assist",
     });
 
@@ -7291,7 +7285,6 @@ void test("/implement canonical ask uses UI instead of reviewer auto-answer", as
     await implementCommand.handler("work until a human decision is needed", ctx);
     assert.deepEqual(ctx.sparkActiveLens, {
       phase: "implement",
-      mode: "assist",
       drive: "assist",
     });
 
@@ -7757,7 +7750,7 @@ void test("drive tool derives mode and switches explicit foreground drives", asy
     assert.match(toolText(loopStarted), /Drive started: loop/);
     assert.equal((await loadSessionLoop(dir, ctx))?.status, "active");
     assert.equal(await loadSessionGoal(dir, ctx), undefined);
-    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", mode: "loop", drive: "loop" });
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "loop" });
 
     const goalSwitched = await executeSparkTool(tools, "drive", ctx, {
       action: "switch",
@@ -7767,13 +7760,13 @@ void test("drive tool derives mode and switches explicit foreground drives", asy
     assert.match(toolText(goalSwitched), /Drive switched: goal/);
     assert.equal((await loadSessionGoal(dir, ctx))?.status, "active");
     assert.equal(await loadSessionLoop(dir, ctx), undefined);
-    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", mode: "goal", drive: "goal" });
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "goal" });
 
     const stopped = await executeSparkTool(tools, "drive", ctx, { action: "stop", drive: "goal" });
     assert.match(toolText(stopped), /Drive stopped: goal/);
     assert.equal((stopped.details as { mode?: string }).mode, "assist");
     assert.equal(await loadSessionGoal(dir, ctx), undefined);
-    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", mode: "assist", drive: "assist" });
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "assist" });
 
     const workflow = await executeSparkTool(tools, "drive", ctx, {
       action: "start",
@@ -7858,7 +7851,7 @@ void test("impl_list_projects returns structured permanent project summaries", a
     assert.equal(projects[0]?.currentForSession, true);
     assert.equal(projects[1]?.currentForSession, false);
     assert.equal(projects[0]?.kind, "generic");
-    assert.deepEqual(projects[0]?.kindDisplay, { kind: "generic", title: "Generic", panels: [] });
+    assert.deepEqual(projects[0]?.kindDisplay, { kind: "generic", title: "generic", panels: [] });
     assert.deepEqual(projects[0]?.taskCounts, { total: 3, active: 1, done: 1, cancelled: 1 });
     assert.deepEqual(projects[1]?.taskCounts, { total: 1, active: 0, done: 1, cancelled: 0 });
     assert.equal(Object.hasOwn(projects[0] ?? {}, "status"), false);
@@ -7867,7 +7860,7 @@ void test("impl_list_projects returns structured permanent project summaries", a
   }
 });
 
-void test("project kind defaults, validates setting surfaces, and appears in status", async () => {
+void test("project kind fields are preserved in metadata but no longer validated against registry", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-project-kind-tools-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7897,15 +7890,16 @@ void test("project kind defaults, validates setting surfaces, and appears in sta
       { target: "generic" },
     );
 
-    await assert.rejects(
-      () =>
-        executeSparkTool(tools, "task_write", ctx, {
-          action: "project_use",
-          title: "Unknown kind project",
-          description: "Should fail kind validation.",
-          kind: "unknown-kind",
-        }),
-      /unknown project kind: unknown-kind/,
+    // Unknown kinds are no longer rejected — requireKnownSparkProjectKind is a no-op
+    const unknownKind = await executeSparkTool(tools, "task_write", ctx, {
+      action: "project_use",
+      title: "Unknown kind project",
+      description: "Should no longer fail kind validation.",
+      kind: "unknown-kind",
+    });
+    assert.equal(
+      (unknownKind.details as { project?: { kind?: string } }).project?.kind,
+      "unknown-kind",
     );
 
     await executeSparkTool(tools, "impl_use_project", ctx, { project: legacyProject.ref });
@@ -7922,13 +7916,14 @@ void test("project kind defaults, validates setting surfaces, and appears in sta
     assert.equal(metadataDetails.project?.kind, "generic");
     assert.deepEqual(metadataDetails.project?.kindState, { migrated: true });
 
-    await assert.rejects(
-      () =>
-        executeSparkTool(tools, "task_write", ctx, {
-          action: "project_metadata_update",
-          kind: "unknown-kind",
-        }),
-      /unknown project kind: unknown-kind/,
+    // Unknown kinds in metadata_update are also no longer rejected
+    const unknownMetadata = await executeSparkTool(tools, "task_write", ctx, {
+      action: "project_metadata_update",
+      kind: "unknown-kind",
+    });
+    assert.equal(
+      (unknownMetadata.details as { project?: { kind?: string } }).project?.kind,
+      "unknown-kind",
     );
 
     const status = await executeSparkTool(tools, "impl_status", ctx, {
@@ -7938,67 +7933,46 @@ void test("project kind defaults, validates setting surfaces, and appears in sta
     const details = status.details as {
       selectedProject?: { kind?: string; kindDisplay?: { kind?: string; panels?: unknown[] } };
     };
-    assert.equal(details.selectedProject?.kind, "generic");
+    assert.equal(details.selectedProject?.kind, "unknown-kind");
+    // kindDisplay now always returns empty panels (no-op stub)
     assert.deepEqual(details.selectedProject?.kindDisplay, {
-      kind: "generic",
-      title: "Generic",
+      kind: "unknown-kind",
+      title: "unknown-kind",
       panels: [],
     });
-
-    const reproductionState = {
-      target: {
-        sourceRefs: ["issue:demo"],
-        targetEnv: "local",
-        expectedOutputs: ["CLI smoke"],
-        successMetrics: [{ id: "cli-smoke", status: "covered" }],
-      },
-      experiments: [{ status: "passed" }],
-      findings: [{ title: "CLI smoke reproduced", learningRef: "artifact:learning-demo" }],
-      learningRefs: ["artifact:learning-demo"],
-    };
-    await executeSparkTool(tools, "task_write", ctx, {
-      action: "project_metadata_update",
-      kind: "reproduction",
-      kindState: reproductionState,
-    });
-    const reproductionStatus = await executeSparkTool(tools, "impl_status", ctx, {
-      scope: "project",
-      format: "json",
-    });
-    const reproductionDetails = reproductionStatus.details as {
-      selectedProject?: {
-        kind?: string;
-        kindDisplay?: { badge?: string; panels?: Array<{ label?: string; text?: string }> };
-      };
-    };
-    assert.equal(reproductionDetails.selectedProject?.kind, "reproduction");
-    assert.equal(reproductionDetails.selectedProject?.kindDisplay?.badge, "repro");
-    assert.deepEqual(
-      reproductionDetails.selectedProject?.kindDisplay?.panels?.map((panel) => [
-        panel.label,
-        panel.text,
-      ]),
-      [
-        ["Target", JSON.stringify(reproductionState.target)],
-        ["Metrics", "1/1"],
-        ["Experiments", "1"],
-        ["Findings", "CLI smoke reproduced"],
-      ],
-    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-void test("spark_goal complete blocks reproduction project kind gate before reviewer", async () => {
+void test("spark_goal complete no longer blocks on reproduction project kind gate (deprecated)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reproduction-gate-complete-"));
   try {
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
+    let reviewerCalled = false;
     const { tools } = registerSparkToolsForTest({
       reviewerRunner: {
         async review(): Promise<ReviewerRunResult> {
-          assert.fail("reproduction deterministic gate should block before reviewer");
+          reviewerCalled = true;
+          return {
+            record: {
+              runRef: "run:test-repro-gate",
+              roleRef: "role:reviewer",
+              startedAt: new Date().toISOString(),
+              finishedAt: new Date().toISOString(),
+            },
+            verdict: {
+              targetKind: "goal",
+              goalId: "test",
+              achieved: true,
+              outcome: "approved",
+              confidence: "high",
+              summary: "All done.",
+              remainingWork: "",
+              blockers: [],
+            },
+          } as unknown as ReviewerRunResult;
         },
       },
     });
@@ -8017,17 +7991,17 @@ void test("spark_goal complete blocks reproduction project kind gate before revi
       objective: "Finish reproduction project",
     });
 
-    const blocked = await executeSparkTool(tools, "goal", ctx, { action: "complete" });
+    const result = await executeSparkTool(tools, "goal", ctx, { action: "complete" });
 
-    assert.match(toolText(blocked), /project kind gate/);
-    const details = blocked.details as { outcome?: string; blockers?: string[] };
-    assert.equal(details.outcome, "blocked");
-    assert.deepEqual(details.blockers, [
-      "reproduction_success_metrics_uncovered=metric-a",
-      "reproduction_failed_experiments_without_disposition=1",
-      "reproduction_learning_not_recorded",
-    ]);
-    assert.equal((await loadSessionGoal(dir, ctx))?.status, "active");
+    // With project.kind gate removed, completion now reaches the reviewer
+    // (may still be blocked by unfinished tasks, but NOT by kind gate)
+    const details = result.details as { outcome?: string };
+    // Reviewer was called (gate no longer blocks)
+    assert.ok(reviewerCalled || details.outcome === "blocked");
+    if (details.outcome === "blocked") {
+      // If blocked, it should be due to unfinished tasks, not kind gate
+      assert.doesNotMatch(toolText(result), /project kind gate/);
+    }
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }

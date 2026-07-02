@@ -386,6 +386,7 @@ void test("PiRolesReviewerRunner resolves reviewer model from role model setting
     assert.equal(result.verdict.outcome, "approved");
     const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
     assert.ok(args.includes("--no-session"));
+    assert.ok(args.includes("--no-extensions"));
     assert.ok(args.includes("--model"));
     assert.equal(args[args.indexOf("--model") + 1], "test/reviewer");
     assert.ok(args.includes("--thinking"));
@@ -394,7 +395,11 @@ void test("PiRolesReviewerRunner resolves reviewer model from role model setting
     assert.ok(args.includes("--tools"));
     const tools = args[args.indexOf("--tools") + 1]?.split(",") ?? [];
     assert.ok(tools.includes("read"));
-    assert.ok(tools.includes("web_search"));
+    assert.ok(tools.includes("grep"));
+    assert.ok(tools.includes("find"));
+    assert.equal(tools.includes("web_search"), false);
+    assert.equal(tools.includes("fetch_content"), false);
+    assert.equal(tools.includes("get_search_content"), false);
     assert.equal(tools.includes("cue_exec"), false);
     assert.equal(tools.includes("script_eval"), false);
     assert.equal(tools.includes("learning"), false);
@@ -475,8 +480,9 @@ void test("PiRolesReviewerRunner strips reviewer role orchestration and interact
     assert.equal(result.verdict.outcome, "approved");
     const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
     assert.ok(args.includes("--no-session"));
+    assert.ok(args.includes("--no-extensions"));
     const tools = args[args.indexOf("--tools") + 1]?.split(",") ?? [];
-    assert.deepEqual(tools, ["read", "web_search", "task_read"]);
+    assert.deepEqual(tools, ["read", "task_read"]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -604,10 +610,15 @@ void test("PiRolesReviewerRunner runs reviewer gates in fresh mode even with par
     const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
     assert.equal(args.includes("--fork"), false);
     assert.ok(args.includes("--no-session"));
+    assert.ok(args.includes("--no-extensions"));
     assert.ok(args.includes("--tools"));
     const tools = args[args.indexOf("--tools") + 1]?.split(",") ?? [];
     assert.ok(tools.includes("read"));
-    assert.ok(tools.includes("web_search"));
+    assert.ok(tools.includes("grep"));
+    assert.ok(tools.includes("find"));
+    assert.equal(tools.includes("web_search"), false);
+    assert.equal(tools.includes("fetch_content"), false);
+    assert.equal(tools.includes("get_search_content"), false);
     assert.equal(tools.includes("cue_exec"), false);
     assert.equal(tools.includes("script_eval"), false);
     assert.equal(tools.includes("learning"), false);

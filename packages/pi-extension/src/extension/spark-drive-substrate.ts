@@ -1,4 +1,6 @@
-export type SparkForegroundDriveDiscriminator = "goal" | "loop" | "workflow" | "implement";
+import type { SparkDriveMode } from "./spark-drive-state.ts";
+
+export type SparkForegroundDriveDiscriminator = Exclude<SparkDriveMode, "assist"> | "implement";
 
 type ForegroundTimer = ReturnType<typeof setTimeout>;
 

@@ -1042,14 +1042,14 @@ void test("spark widget summarizes tasks and current-session in-memory running r
 
 void test("spark widget renders phase on the project header", () => {
   const planLines = renderSparkWidgetLines(
-    widgetState({ activeLens: { phase: "plan", mode: "assist", drive: "assist" } }),
+    widgetState({ activeLens: { phase: "plan", drive: "assist" } }),
     { terminal: { columns: 120 }, requestRender() {} },
     theme,
   );
   assert.match(planLines[0] ?? "", /^◆ Spark UX redesign · Phase: plan/);
 
   const researchLines = renderSparkWidgetLines(
-    widgetState({ activeLens: { phase: "research", mode: "assist", drive: "assist" } }),
+    widgetState({ activeLens: { phase: "research", drive: "assist" } }),
     { terminal: { columns: 120 }, requestRender() {} },
     theme,
   );

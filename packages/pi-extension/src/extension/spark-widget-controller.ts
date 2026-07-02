@@ -36,6 +36,7 @@ import { deriveSparkDriveMode, sparkActiveLens } from "./spark-drive-state.ts";
 import { ensureSparkGraphInvariants, isPlaceholderProjectTitle } from "./spark-graph-invariants.ts";
 import { loadSessionGoal } from "./spark-session-goals.ts";
 import { clearSessionLoop, loadSessionLoop, type SparkSessionLoop } from "./spark-session-loops.ts";
+import { readSessionRepro } from "./spark-session-repro.ts";
 import { latestRunsByTaskRef, taskPlanSummary } from "./task-display.ts";
 import { deriveTaskRoleLabel, isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 
@@ -92,12 +93,18 @@ export class SparkWidgetController {
       await clearSessionLoop(cwd, ctx);
       sessionLoop = undefined;
     }
-    const foregroundDriver = sparkForegroundDriverWidgetEntries(sessionGoal, sessionLoop);
+    const sessionRepro = await readSessionRepro(cwd, ctx);
+    const foregroundDriver = sparkForegroundDriverWidgetEntries(
+      sessionGoal,
+      sessionLoop,
+      sessionRepro,
+    );
     const phase = (await loadSparkPhase(cwd, ctx)).phase;
     const activeLens = sparkActiveLens(
       phase,
       deriveSparkDriveMode({
         activeLens: ctx?.sparkActiveLens,
+        repro: sessionRepro,
         goal: sessionGoal,
         loop: sessionLoop,
       }),
@@ -228,7 +235,25 @@ function mapTodoStatus(status: string): SessionTodoEntry["status"] {
 function sparkForegroundDriverWidgetEntries(
   sessionGoal: Awaited<ReturnType<typeof loadSessionGoal>>,
   sessionLoop: Awaited<ReturnType<typeof loadSessionLoop>>,
-): Pick<SparkWidgetState, "goal" | "loop"> {
+  sessionRepro?: Awaited<ReturnType<typeof readSessionRepro>>,
+): Pick<SparkWidgetState, "goal" | "loop" | "repro"> {
+  if (sessionRepro?.status === "active") {
+    const stage = sessionRepro.stages[sessionRepro.currentStageIndex];
+    return {
+      repro: {
+        status: sessionRepro.status,
+        stageName: stage.name,
+        stageIndex: sessionRepro.currentStageIndex,
+        totalStages: sessionRepro.stages.length,
+        phase: sessionRepro.currentPhase,
+        acceptance: stage.acceptance.map((c) => ({
+          description: c.description,
+          satisfied: c.satisfied,
+        })),
+        gate: stage.gate ? { id: stage.gate.id, passed: stage.gate.passed } : undefined,
+      },
+    };
+  }
   if (sessionGoal && sessionGoal.status !== "complete") {
     return {
       goal: {

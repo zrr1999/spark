@@ -7,7 +7,6 @@ import {
   type ProjectRef,
   type RoleRef,
 } from "@zendev-lab/spark-extension-api";
-import { evaluateSparkProjectKindCompletionGate } from "./project-kind-registry.ts";
 import { updateSessionGoalStatus, type SparkSessionGoal } from "./spark-session-goals.ts";
 import type {
   GoalReviewEvidencePreview,
@@ -96,7 +95,6 @@ export async function requestGoalCompletionReview(
     active.goal.objective,
     reviewContext.projectStatus,
     reviewContext.evidenceRefs,
-    active.project,
   );
   if (preReviewBlocker) {
     const reviewedAt = nowIso();
@@ -161,7 +159,6 @@ export async function requestGoalCompletionReview(
     active.goal.objective,
     reviewInput.projectStatus,
     reviewInput.evidenceRefs,
-    active.project,
   );
   const effectiveAchieved = verdict.achieved && !postReviewBlocker;
   const reviewSummary = {
@@ -209,19 +206,7 @@ function goalCompletionDeterministicBlocker(
   objective: string,
   projectStatus: GoalReviewInput["projectStatus"] | undefined,
   evidenceRefs: readonly ArtifactRef[],
-  project?: SparkProjectLike,
 ): { reason: string; remainingWork: string; blockers: string[] } | undefined {
-  if (project) {
-    const kindGate = evaluateSparkProjectKindCompletionGate(project);
-    if (!kindGate.ok) {
-      const reason = `Goal completion blocked by ${kindGate.kind} project kind gate.`;
-      return {
-        reason,
-        remainingWork: `${reason} ${kindGate.summary}. Update project.kindState with covered successMetrics, dispositions for failed experiments, and learningRefs/findings before requesting completion.`,
-        blockers: kindGate.blockers,
-      };
-    }
-  }
   const unfinishedTasks = projectStatus?.unfinishedTasks ?? [];
   const unfinished = unfinishedTasks.length || (projectStatus?.taskCounts.unfinished ?? 0);
   if (unfinished <= 0) return undefined;

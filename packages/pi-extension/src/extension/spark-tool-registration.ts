@@ -37,12 +37,7 @@ export interface SparkToolContext {
   model?: SparkSessionModelRef;
   sparkActiveLens?: {
     phase: "research" | "plan" | "implement";
-    /** Read-only derived drive mode. */
-    mode?: SparkDriveMode;
-    /** Canonical drive value. */
     drive?: SparkDriveModeInput;
-    /** @deprecated Use drive/mode. */
-    driver?: SparkDriveModeInput;
   };
   isIdle?: () => boolean;
   sessionManager?: {

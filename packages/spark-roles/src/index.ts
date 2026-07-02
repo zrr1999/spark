@@ -84,6 +84,8 @@ export interface RoleRunRequest {
   allowedTools?: string[];
   /** Launch Pi without saving or reusing a session. Useful for short verifier gates. */
   noSession?: boolean;
+  /** Disable extension discovery for child Pi. Useful for self-contained verifier gates. */
+  noExtensions?: boolean;
   sessionDir?: string;
   forkFromSession?: string;
   /** Adapter-specific guidance appended between the role prompt and instruction. */
@@ -1259,6 +1261,7 @@ export function buildRoleRunArgs(input: RoleRunCommandInput): string[] {
     throw new Error("noSession role runs cannot use forked launch");
   }
   const args = ["--print", "--mode", "json"];
+  if (input.noExtensions) args.push("--no-extensions");
   if (input.noSession) args.push("--no-session");
   if (input.model?.trim()) args.push("--model", input.model.trim());
   if (input.thinking !== undefined)

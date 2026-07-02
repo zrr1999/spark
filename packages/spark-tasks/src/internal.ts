@@ -178,7 +178,12 @@ function slugifyHandle(value: string): string {
 
 export function assertTaskName(name: string): void {
   if (!/^[a-z0-9][a-z0-9_-]*$/.test(name))
-    throw new Error(`task name must be a simple @name handle: ${name}`);
+    throw new Error(
+      `invalid task name: "${name}". ` +
+        `A task name must start with a lowercase letter or digit, ` +
+        `followed by lowercase letters, digits, hyphens (-), or underscores (_). ` +
+        `Do not include the @ prefix. Examples: my-task, fix-bug-42, setup_env`,
+    );
 }
 
 export function uniqueTaskName(preferred: string, existing: Set<string>): string {

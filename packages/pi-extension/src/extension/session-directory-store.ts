@@ -63,6 +63,10 @@ export function sessionLoopStorePathV2(cwd: string, ctx?: SparkSessionContext): 
   return join(sessionDirectoryPath(cwd, ctx), "loop.json");
 }
 
+export function sessionReproStorePathV2(cwd: string, ctx?: SparkSessionContext): string {
+  return join(sessionDirectoryPath(cwd, ctx), "repro.json");
+}
+
 export function sessionTodoDisplayNumberStorePath(cwd: string, ctx?: SparkSessionContext): string {
   return join(sessionDirectoryPath(cwd, ctx), "todo-display-numbers.json");
 }

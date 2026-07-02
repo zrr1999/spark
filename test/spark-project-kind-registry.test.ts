@@ -1,26 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { JsonValue, Project } from "@zendev-lab/spark-extension-api";
+import type { Project } from "@zendev-lab/spark-extension-api";
 import {
-  defaultSparkProjectKindRegistry,
   evaluateSparkProjectKindCompletionGate,
   renderSparkProjectKindDisplay,
   sparkProjectKindRoleForPhase,
-  createSparkProjectKindRegistry,
+  normalizeProjectKindId,
 } from "../packages/pi-extension/src/extension/project-kind-registry.ts";
 
 const baseProject: Project = {
   ref: "proj:demo",
   title: "Demo project",
   description: "Demo project",
-  kind: "demo",
-  kindState: {
-    target: "CLI smoke",
-    metrics: { done: 1, total: 2 },
-    experiments: [{ status: "done" }, { status: "pending" }],
-    findings: [{ title: "Finding A" }, { title: "Finding B" }],
-  },
+  kind: "reproduction",
+  kindState: { target: "CLI smoke" },
   roadmap: {
     ref: "roadmap:demo",
     title: "Demo roadmap",
@@ -32,138 +26,47 @@ const baseProject: Project = {
   updatedAt: "2026-06-24T00:00:00.000Z",
 };
 
-void test("project kind registry defaults generic to an empty declarative display", () => {
-  const display = renderSparkProjectKindDisplay({ ...baseProject, kind: undefined });
-  assert.deepEqual(display, { kind: "generic", title: "Generic", panels: [] });
+void test("normalizeProjectKindId returns generic for empty/null/undefined", () => {
+  assert.equal(normalizeProjectKindId(undefined), "generic");
+  assert.equal(normalizeProjectKindId(null), "generic");
+  assert.equal(normalizeProjectKindId(""), "generic");
+  assert.equal(normalizeProjectKindId("  "), "generic");
 });
 
-void test("builtin reproduction kind declares display, phase plan, and gate", () => {
-  const registry = defaultSparkProjectKindRegistry();
-  const definition = registry.get("reproduction");
-  assert.ok(definition);
-  assert.equal(definition.display.badge, "repro");
-  assert.deepEqual(definition.phasePlan, {
-    research: "researcher",
-    plan: "planner",
-    implement: "engineer",
-  });
-  assert.match(definition.completionGate, /successMetrics_all_covered/);
-  assert.equal(sparkProjectKindRoleForPhase({ kind: "reproduction" }, "implement"), "engineer");
+void test("normalizeProjectKindId passes through non-empty strings", () => {
+  assert.equal(normalizeProjectKindId("reproduction"), "reproduction");
+  assert.equal(normalizeProjectKindId("custom"), "custom");
+});
 
-  const kindState: JsonValue = {
-    target: {
-      sourceRefs: ["issue:1"],
-      targetEnv: "local",
-      expectedOutputs: ["CLI smoke passes"],
-      successMetrics: [
-        { id: "cli-smoke", status: "covered", covered: true },
-        { id: "regression-note", status: "covered", covered: true },
-      ],
-    },
-    experiments: [
-      { id: "exp-pass", status: "passed", disposition: "not needed" },
-      { id: "exp-fail", status: "failed", disposition: "documented as upstream" },
-    ],
-    findings: [{ title: "CLI smoke reproduced", learningRef: "artifact:learning-demo" }],
-    learningRefs: ["artifact:learning-demo"],
-  };
-  const project: Project = {
-    ...baseProject,
-    kind: "reproduction",
-    kindState,
-  };
-
-  const display = renderSparkProjectKindDisplay(project);
+void test("renderSparkProjectKindDisplay returns no-op display with no panels", () => {
+  const display = renderSparkProjectKindDisplay(baseProject);
   assert.equal(display.kind, "reproduction");
-  assert.equal(display.badge, "repro");
-  assert.deepEqual(
-    display.panels.map((panel) => ({ label: panel.label, render: panel.render, text: panel.text })),
-    [
-      { label: "Target", render: "text", text: JSON.stringify(kindState.target) },
-      { label: "Metrics", render: "progress", text: "2/2" },
-      { label: "Experiments", render: "counts", text: "2" },
-      { label: "Findings", render: "list", text: "CLI smoke reproduced" },
-    ],
-  );
-  assert.deepEqual(evaluateSparkProjectKindCompletionGate(project), {
-    kind: "reproduction",
-    gate: definition.completionGate,
-    ok: true,
-    summary:
-      "reproduction gate satisfied: success metrics covered, failures dispositioned, learning recorded",
-    blockers: [],
-    details: {
-      metrics: { done: 2, total: 2 },
-      experiments: { total: 2, failedWithoutDisposition: 0 },
-      findings: 1,
-      learningRecorded: true,
-    },
-  });
+  assert.deepEqual(display.panels, []);
+  assert.equal(display.badge, undefined);
 });
 
-void test("reproduction completion gate blocks uncovered metrics and missing learning", () => {
-  const blocked = evaluateSparkProjectKindCompletionGate({
-    ...baseProject,
-    kind: "reproduction",
-    kindState: {
-      target: {
-        successMetrics: [
-          { id: "metric-a", status: "pending", covered: false },
-          { id: "metric-b", status: "covered", covered: true },
-        ],
-      },
-      experiments: [{ status: "failed", disposition: "" }],
-      findings: [],
-    },
-  });
-
-  assert.equal(blocked.ok, false);
-  assert.deepEqual(blocked.blockers, [
-    "reproduction_success_metrics_uncovered=metric-a",
-    "reproduction_failed_experiments_without_disposition=1",
-    "reproduction_learning_not_recorded",
-  ]);
+void test("renderSparkProjectKindDisplay returns generic for undefined kind", () => {
+  const display = renderSparkProjectKindDisplay({ kind: undefined });
+  assert.equal(display.kind, "generic");
+  assert.deepEqual(display.panels, []);
 });
 
-void test("project kind display renders declarative text/progress/counts/list panels", () => {
-  const registry = createSparkProjectKindRegistry([
-    {
-      id: "generic",
-      title: "Generic",
-      completionGate: "task_graph",
-      phasePlan: {},
-      display: { panels: [] },
-    },
-    {
-      id: "demo",
-      title: "Demo",
-      completionGate: "demo_gate",
-      phasePlan: { research: "researcher", plan: "planner", implement: "engineer" },
-      stateSchema: "demo-v1",
-      display: {
-        badge: "demo",
-        panels: [
-          { label: "Target", source: "kindState.target", render: "text" },
-          { label: "Metrics", source: "kindState.metrics", render: "progress" },
-          { label: "Experiments", source: "kindState.experiments", render: "counts" },
-          { label: "Findings", source: "kindState.findings", render: "list" },
-        ],
-      },
-    },
-  ]);
+void test("sparkProjectKindRoleForPhase always returns undefined (deprecated)", () => {
+  assert.equal(sparkProjectKindRoleForPhase({ kind: "reproduction" }, "implement"), undefined);
+  assert.equal(sparkProjectKindRoleForPhase({ kind: "generic" }, "research"), undefined);
+});
 
-  const display = renderSparkProjectKindDisplay(baseProject, registry);
+void test("evaluateSparkProjectKindCompletionGate always returns ok=true (deprecated)", () => {
+  const result = evaluateSparkProjectKindCompletionGate(baseProject);
+  assert.equal(result.ok, true);
+  assert.equal(result.gate, "none");
+  assert.deepEqual(result.blockers, []);
+});
 
-  assert.equal(display.kind, "demo");
-  assert.equal(display.title, "Demo");
-  assert.equal(display.badge, "demo");
-  assert.deepEqual(
-    display.panels.map((panel) => ({ label: panel.label, render: panel.render, text: panel.text })),
-    [
-      { label: "Target", render: "text", text: "CLI smoke" },
-      { label: "Metrics", render: "progress", text: "1/2" },
-      { label: "Experiments", render: "counts", text: "2" },
-      { label: "Findings", render: "list", text: "Finding A, Finding B" },
-    ],
-  );
+void test("evaluateSparkProjectKindCompletionGate ok even with empty kindState", () => {
+  const result = evaluateSparkProjectKindCompletionGate({
+    kind: "reproduction",
+    kindState: undefined,
+  });
+  assert.equal(result.ok, true);
 });

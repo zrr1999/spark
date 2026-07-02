@@ -4,7 +4,7 @@ import { clarifyProjectPurposeIfNeeded } from "../flows/project-purpose-flow.ts"
 import { currentSparkProject, loadSparkGraph, saveCurrentProjectRef } from "./session-state.ts";
 import { ensureLocalSparkDirectory } from "./spark-activation.ts";
 import { sparkAskUi } from "./spark-ask-ui.ts";
-import { requireKnownSparkProjectKind } from "./project-kind-registry.ts";
+import { requireKnownSparkProjectKind } from "./project-kind-registry.ts"; // deprecated no-op
 import {
   collectSparkProjectSummaries,
   findDuplicateSparkProjects,
@@ -78,9 +78,11 @@ export function registerSparkProjectTools(
         Type.String({ description: "Durable project purpose for project_metadata_update." }),
       ),
       outputLanguage: Type.Optional(Type.String({ description: "zh | en" })),
-      kind: Type.Optional(Type.String({ description: "Project kind id, e.g. generic." })),
+      kind: Type.Optional(
+        Type.String({ description: "Deprecated: project kinds are no longer used. Ignored." }),
+      ),
       kindState: Type.Optional(
-        Type.Any({ description: "Project-kind-specific JSON state for declarative display." }),
+        Type.Any({ description: "Deprecated: project kind state is no longer used. Ignored." }),
       ),
       text: Type.Optional(Type.String({ description: "Reason/details for metadata updates." })),
     }),
@@ -159,10 +161,10 @@ export function registerSparkProjectTools(
         Type.String({ description: "zh | en for a newly created project." }),
       ),
       kind: Type.Optional(
-        Type.String({ description: "Project kind id for a newly created project." }),
+        Type.String({ description: "Deprecated: project kinds are no longer used. Ignored." }),
       ),
       kindState: Type.Optional(
-        Type.Any({ description: "Project-kind-specific JSON state for declarative display." }),
+        Type.Any({ description: "Deprecated: project kind state is no longer used. Ignored." }),
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

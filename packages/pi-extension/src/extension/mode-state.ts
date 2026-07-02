@@ -6,19 +6,16 @@ import {
   saveSessionPhase,
 } from "./current-project-state.ts";
 import type { SparkAgentPhase, SparkPlanningModeSource } from "./current-project-state-schema.ts";
+import type { SparkActiveLensDriveState } from "./spark-drive-state.ts";
 import type { SparkSessionContext } from "./session-identity.ts";
 
 interface SparkActiveLensContext extends SparkSessionContext {
-  sparkActiveLens?: {
-    phase?: SparkSessionPhase;
-    /** Deprecated legacy phase alias; new callers use mode for derived drive state. */
-    mode?: SparkSessionPhase | "assist" | "loop" | "goal" | "workflow";
-  };
+  sparkActiveLens?: SparkActiveLensDriveState;
 }
 
 /**
  * Session-scoped Spark operating phase/lens. It controls prompt/tool policy only;
- * drive mode (assist/loop/goal/workflow) is derived from active drive state.
+ * drive mode is derived from registered active drive state.
  */
 export type SparkSessionPhase = SparkAgentPhase;
 /** @deprecated Use SparkSessionPhase. */
@@ -54,8 +51,7 @@ export async function loadSparkPhase(
   ctx?: SparkActiveLensContext,
 ): Promise<SparkSessionPhaseState> {
   const state = await loadCurrentProjectState(cwd, ctx);
-  const legacyModePhase = sparkAgentPhase(ctx?.sparkActiveLens?.mode);
-  const phase = ctx?.sparkActiveLens?.phase ?? legacyModePhase ?? state?.phase ?? "research";
+  const phase = ctx?.sparkActiveLens?.phase ?? state?.phase ?? "research";
   return state?.projectRef ? { phase, projectRef: state.projectRef } : { phase };
 }
 
@@ -120,9 +116,4 @@ export function nextSparkSessionPhase(current: SparkSessionPhase): SparkSessionP
 /** @deprecated Use nextSparkSessionPhase. */
 export function nextSparkSessionMode(current: SparkSessionMode): SparkSessionMode {
   return nextSparkSessionPhase(current);
-}
-
-function sparkAgentPhase(value: unknown): SparkSessionPhase | undefined {
-  if (value === "research" || value === "plan" || value === "implement") return value;
-  return undefined;
 }

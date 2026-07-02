@@ -8,8 +8,10 @@ import {
   type Model,
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import { stream as streamAnthropic } from "@earendil-works/pi-ai/api/anthropic-messages";
-import { streamSimple as streamSimpleOpenAIResponses } from "@earendil-works/pi-ai/api/openai-responses";
+import {
+  stream as streamPiAi,
+  streamSimple as streamSimplePiAi,
+} from "@earendil-works/pi-ai/compat";
 
 import type { ProviderRegistrationAPI } from "./provider-registry.ts";
 
@@ -22,6 +24,7 @@ const GATEWAY_MODEL_BY_ID: Record<string, string> = {
   "claude-opus-4.6": "Claude Opus 4.6",
   "claude-opus-4.7": "Claude Opus 4.7",
   "claude-opus-4.8": "Opus 4.8 Coding Plan",
+  "claude-sonnet-5": "Claude Sonnet 5",
   "claude-fable-5": "Fable 5",
   "gpt-5.5": "gpt-5.5-coding-plan",
   "gpt-5.5-coding-plan": "gpt-5.5-coding-plan",
@@ -36,6 +39,7 @@ type BaiduOneApiStream = AsyncIterable<AssistantMessageEvent> & {
 const GPT_5_5_COST = { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 };
 const GPT_5_5_THINKING_LEVEL_MAP = { minimal: "low", xhigh: "xhigh" };
 const CLAUDE_FABLE_5_COST = { input: 1.1, output: 5.5, cacheRead: 0.11, cacheWrite: 1.375 };
+const CLAUDE_SONNET_5_COST = { input: 1.1, output: 5.5, cacheRead: 0.11, cacheWrite: 1.375 };
 const CLAUDE_OPUS_4_6_COST = {
   input: 5.5,
   output: 27.5,
@@ -178,7 +182,7 @@ export function streamBaiduOneApiAnthropic(
   const effort = mapThinkingEffort(model, options?.reasoning);
 
   return startBaiduOneApiStream(model, () =>
-    streamAnthropic(transportModel, context, {
+    streamPiAi(transportModel, context, {
       ...options,
       ...(apiKey !== undefined ? { apiKey } : {}),
       thinkingEnabled: options?.reasoning !== undefined,
@@ -212,7 +216,7 @@ export function streamBaiduOneApiOpenAIResponses(
   const transportModel = withBaiduOneApiTransportApi(model, "openai-responses");
 
   return startBaiduOneApiStream(model, () =>
-    streamSimpleOpenAIResponses(transportModel, context, {
+    streamSimplePiAi(transportModel, context, {
       ...options,
       ...(apiKey !== undefined ? { apiKey } : {}),
       async onPayload(payload) {
@@ -287,6 +291,24 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
         input: ["text", "image"],
         cost: CLAUDE_OPUS_4_6_COST,
         contextWindow: 300000,
+        maxTokens: 32000,
+      },
+      {
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        transportApi: "anthropic-messages",
+        transportModelId: "Claude Sonnet 5",
+        reasoning: true,
+        thinkingLevelMap: {
+          minimal: "low",
+          low: "low",
+          medium: "medium",
+          high: "high",
+          xhigh: "xhigh",
+        },
+        input: ["text", "image"],
+        cost: CLAUDE_SONNET_5_COST,
+        contextWindow: 200000,
         maxTokens: 32000,
       },
       {

@@ -202,9 +202,13 @@ void test("SparkProviderRegistry accepts the production baidu-oneapi-provider pl
   assert.equal(registry.hasProvider("baidu-oneapi"), true);
   const provider = registry.getProvider("baidu-oneapi")!;
   assert.equal(provider.api, "baidu-oneapi");
-  assert.equal(provider.models.length, 5);
+  assert.equal(provider.models.length, 6);
   assert.equal(
     provider.models.some((m) => m.id === "claude-opus-4.8"),
+    true,
+  );
+  assert.equal(
+    provider.models.some((m) => m.id === "claude-sonnet-5"),
     true,
   );
   assert.equal(
@@ -225,6 +229,10 @@ void test("SparkProviderRegistry accepts the production baidu-oneapi-provider pl
   assert.equal(fableModel.name, "Claude Fable 5");
   assert.equal(fableModel.contextWindow, 300_000);
   assert.equal(fableModel.maxTokens, 32_000);
+  const sonnet5Model = registry.buildModel("baidu-oneapi", "claude-sonnet-5");
+  assert.equal(sonnet5Model.name, "Claude Sonnet 5");
+  assert.equal(sonnet5Model.contextWindow, 200_000);
+  assert.equal(sonnet5Model.maxTokens, 32_000);
   const gptModel = registry.buildModel("baidu-oneapi", "gpt-5.5");
   assert.equal(gptModel.api, "baidu-oneapi");
   assert.equal(gptModel.baseUrl, "https://oneapi-comate.baidu-int.com/v1");

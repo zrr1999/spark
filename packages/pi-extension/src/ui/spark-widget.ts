@@ -71,6 +71,16 @@ export interface SparkLoopWidgetEntry {
   schedule?: SparkLoopScheduleWidgetEntry;
 }
 
+export interface SparkReproWidgetEntry {
+  status: "active" | "complete";
+  stageName: string;
+  stageIndex: number;
+  totalStages: number;
+  phase: string;
+  acceptance: Array<{ description: string; satisfied: boolean }>;
+  gate?: { id: string; passed: boolean };
+}
+
 export interface SparkProjectKindWidgetPanel {
   label: string;
   render: "text" | "progress" | "counts" | "list";
@@ -86,11 +96,7 @@ export interface SparkProjectKindWidgetEntry {
 
 export interface SparkWidgetActiveLens {
   phase: "research" | "plan" | "implement";
-  /** Read-only derived drive mode. */
-  mode?: SparkDriveMode | "research" | "plan" | "implement";
   drive?: SparkDriveModeInput;
-  /** @deprecated Use drive/mode. */
-  driver?: SparkDriveModeInput;
 }
 
 export interface SparkWidgetState {
@@ -100,6 +106,7 @@ export interface SparkWidgetState {
   dynamicWorkflowRun?: SparkDynamicWorkflowRunWidgetEntry;
   goal?: SparkGoalWidgetEntry;
   loop?: SparkLoopWidgetEntry;
+  repro?: SparkReproWidgetEntry;
   projectKind?: SparkProjectKindWidgetEntry;
   tasks: TaskEntry[];
   independentTodos: SessionTodoEntry[];

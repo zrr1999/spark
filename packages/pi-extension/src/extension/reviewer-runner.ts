@@ -32,6 +32,7 @@ export interface TaskReviewInput {
   requestedStatus: "done" | "failed" | "cancelled";
   summary?: string;
   evidenceRefs: ArtifactRef[];
+  evidencePreviews?: GoalReviewEvidencePreview[];
   sessionKey?: string;
   forkFromSession?: string;
 }
@@ -147,6 +148,8 @@ const REVIEWER_EXECUTION_TOOLS = new Set([
   "cue_jobs",
 ]);
 
+const REVIEWER_LOW_COST_READ_TOOLS = new Set(["read", "grep", "find", "task_read", "artifact"]);
+
 export interface AskAutoAnswerInput {
   cwd: string;
   request: unknown;
@@ -179,9 +182,14 @@ export interface PiRolesReviewerRunnerOptions {
   sessionDir?: string;
   reviewerThinkingLevel?: ReviewerThinkingLevel;
   now?: () => string;
+  /** Maximum retry attempts for transient failures (timeout, overloaded). Default: 2. */
+  maxRetries?: number;
+  /** Base delay between retries in milliseconds. Default: 5000. Exponential backoff applied. */
+  retryBaseDelayMs?: number;
 }
 
-const DEFAULT_REVIEWER_TIMEOUT_MS = 600_000;
+const REVIEWER_TIMEOUT_MS_ENV = "SPARK_REVIEWER_TIMEOUT_MS";
+const DEFAULT_REVIEWER_TIMEOUT_MS = 1_200_000;
 export const DEFAULT_REVIEWER_THINKING_LEVEL: ReviewerThinkingLevel = "medium";
 
 const REVIEWER_THINKING_RANK: Record<ReviewerThinkingLevel, number> = {
@@ -246,20 +254,49 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
   readonly #reviewerThinkingLevel: ReviewerThinkingLevel;
   readonly #now: () => string;
 
+  readonly #maxRetries: number;
+  readonly #retryBaseDelayMs: number;
+
   constructor(options: PiRolesReviewerRunnerOptions) {
     this.#registry = options.registry;
     this.#cwd = options.cwd;
     this.#piCommand = options.piCommand ?? "pi";
-    this.#timeoutMs = options.timeoutMs ?? DEFAULT_REVIEWER_TIMEOUT_MS;
+    this.#timeoutMs = options.timeoutMs ?? reviewerTimeoutMsFromEnv(process.env);
     this.#reviewerRoleRef = options.reviewerRoleRef ?? builtinRoleRef("reviewer");
     this.#model = options.model;
     this.#sessionModel = options.sessionModel;
     this.#sessionDir = options.sessionDir;
     this.#reviewerThinkingLevel = options.reviewerThinkingLevel ?? DEFAULT_REVIEWER_THINKING_LEVEL;
     this.#now = options.now ?? nowIso;
+    this.#maxRetries = options.maxRetries ?? 2;
+    this.#retryBaseDelayMs = options.retryBaseDelayMs ?? 5_000;
   }
 
   async review(input: ReviewInput, signal?: AbortSignal): Promise<ReviewerRunResult> {
+    let lastResult: ReviewerRunResult | undefined;
+    for (let attempt = 0; attempt <= this.#maxRetries; attempt++) {
+      if (signal?.aborted) break;
+      if (attempt > 0) {
+        const delayMs = this.#retryBaseDelayMs * Math.pow(2, attempt - 1);
+        await sleep(delayMs, signal);
+        if (signal?.aborted) break;
+      }
+      const result = await this.#singleReviewAttempt(input, signal);
+      if (isRetriableReviewerFailure(result)) {
+        lastResult = result;
+        continue;
+      }
+      return result;
+    }
+    return (
+      lastResult ?? {
+        verdict: failedReviewerRunVerdict(input, "reviewer aborted before any attempt completed"),
+        record: { roleRef: this.#reviewerRoleRef, startedAt: this.#now(), finishedAt: this.#now() },
+      }
+    );
+  }
+
+  async #singleReviewAttempt(input: ReviewInput, signal?: AbortSignal): Promise<ReviewerRunResult> {
     const role = this.#registry.get(this.#reviewerRoleRef);
     const runRef = newRef("run");
     const startedAt = this.#now();
@@ -271,24 +308,37 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
       userStore: defaultUserRoleModelSettingsStore(),
     });
     const resolvedModel = this.#model ?? roleModel?.model ?? this.#sessionModel;
-    const result = await runRole({
-      runRef: runRef as `run:${string}`,
-      roleRef: role.ref as `role:${string}`,
-      systemPrompt: buildReadOnlyReviewerSystemPrompt(role.systemPrompt),
-      model: resolvedModel,
-      thinking: this.#reviewerThinkingLevel,
-      instruction: renderReviewerInstruction(input),
-      runGuidance: REVIEWER_JSON_SCHEMA,
-      allowedTools: reviewerGateAllowedTools(role.allowedTools),
-      noSession: true,
-      launch: "fresh",
-      sessionDir: this.#sessionDir,
-      piCommand: this.#piCommand,
-      cwd: input.cwd || this.#cwd,
-      timeoutMs: this.#timeoutMs,
-      signal,
-      stdinMode: "ignore",
-    });
+    let result: RoleRunResult;
+    try {
+      result = await runRole({
+        runRef: runRef as `run:${string}`,
+        roleRef: role.ref as `role:${string}`,
+        systemPrompt: buildReadOnlyReviewerSystemPrompt(role.systemPrompt),
+        model: resolvedModel,
+        thinking: this.#reviewerThinkingLevel,
+        instruction: renderReviewerInstruction(input),
+        runGuidance: REVIEWER_JSON_SCHEMA,
+        allowedTools: reviewerGateAllowedTools(role.allowedTools),
+        noSession: true,
+        noExtensions: true,
+        launch: "fresh",
+        sessionDir: this.#sessionDir,
+        piCommand: this.#piCommand,
+        cwd: input.cwd || this.#cwd,
+        timeoutMs: this.#timeoutMs,
+        signal,
+        stdinMode: "ignore",
+      });
+    } catch (error) {
+      const finishedAt = this.#now();
+      return {
+        verdict: failedReviewerRunVerdict(
+          input,
+          `reviewer role run error: ${unknownErrorMessage(error)}`,
+        ),
+        record: { runRef, roleRef: role.ref as RoleRef, startedAt, finishedAt },
+      };
+    }
     const finishedAt = result.record.finishedAt ?? this.#now();
     if (result.record.status !== "succeeded")
       return {
@@ -313,6 +363,28 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
   }
 
   async answerAsk(input: AskAutoAnswerInput, signal?: AbortSignal): Promise<AskAutoAnswerResult> {
+    let lastResult: AskAutoAnswerResult | undefined;
+    for (let attempt = 0; attempt <= this.#maxRetries; attempt++) {
+      if (signal?.aborted) break;
+      if (attempt > 0) {
+        const delayMs = this.#retryBaseDelayMs * Math.pow(2, attempt - 1);
+        await sleep(delayMs, signal);
+        if (signal?.aborted) break;
+      }
+      const result = await this.#singleAskAttempt(input, signal);
+      if (isRetriableAskFailure(result)) {
+        lastResult = result;
+        continue;
+      }
+      return result;
+    }
+    return lastResult ?? { blocked: true, reason: "reviewer aborted before any attempt completed" };
+  }
+
+  async #singleAskAttempt(
+    input: AskAutoAnswerInput,
+    signal?: AbortSignal,
+  ): Promise<AskAutoAnswerResult> {
     const role = this.#registry.get(this.#reviewerRoleRef);
     const runRef = newRef("run");
     const roleModel = await resolveRoleModelSetting({
@@ -335,6 +407,7 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
         runGuidance: ASK_AUTO_ANSWER_JSON_SCHEMA,
         allowedTools: reviewerGateAllowedTools(role.allowedTools),
         noSession: true,
+        noExtensions: true,
         launch: "fresh",
         sessionDir: this.#sessionDir,
         piCommand: this.#piCommand,
@@ -377,6 +450,7 @@ export function renderReviewerInstruction(input: ReviewInput): string {
           requestedStatus: input.requestedStatus,
           summary: input.summary,
           evidenceRefs: input.evidenceRefs,
+          ...(input.evidencePreviews?.length ? { evidencePreviews: input.evidencePreviews } : {}),
           sessionKey: input.sessionKey,
         }
       : {
@@ -567,10 +641,22 @@ function normalizeReviewerVerdictObject(value: Record<string, unknown>): ReviewV
   };
 }
 
-function reviewerGateAllowedTools(allowedTools: string[] | undefined): string[] | undefined {
-  return allowedTools?.filter(
-    (tool) => !REVIEWER_FORBIDDEN_TOOLS.has(tool) && !REVIEWER_EXECUTION_TOOLS.has(tool),
+function reviewerGateAllowedTools(allowedTools: string[] | undefined): string[] {
+  const candidates = allowedTools?.length ? allowedTools : Array.from(REVIEWER_LOW_COST_READ_TOOLS);
+  return candidates.filter(
+    (tool) =>
+      REVIEWER_LOW_COST_READ_TOOLS.has(tool) &&
+      !REVIEWER_FORBIDDEN_TOOLS.has(tool) &&
+      !REVIEWER_EXECUTION_TOOLS.has(tool),
   );
+}
+
+function reviewerTimeoutMsFromEnv(env: NodeJS.ProcessEnv): number {
+  const raw = env[REVIEWER_TIMEOUT_MS_ENV]?.trim();
+  if (!raw) return DEFAULT_REVIEWER_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_REVIEWER_TIMEOUT_MS;
+  return Math.floor(parsed);
 }
 
 function roleRunRecord(
@@ -589,6 +675,49 @@ function roleRunRecord(
     stderr: result.stderr,
     jsonEvents: result.jsonEvents,
   };
+}
+
+const RETRIABLE_FAILURE_PATTERNS = [
+  /timed out/i,
+  /timeout/i,
+  /overloaded/i,
+  /empty response/i,
+  /ECONNRESET/i,
+  /ECONNREFUSED/i,
+  /ETIMEDOUT/i,
+  /network/i,
+  /role run failed/i,
+  /role run error/i,
+];
+
+function isRetriableReviewerFailure(result: ReviewerRunResult): boolean {
+  if (result.verdict.outcome !== "blocked") return false;
+  const reason = result.verdict.summary;
+  return RETRIABLE_FAILURE_PATTERNS.some((pattern) => pattern.test(reason));
+}
+
+function isRetriableAskFailure(result: AskAutoAnswerResult): boolean {
+  if (!result.blocked || !result.reason) return false;
+  return RETRIABLE_FAILURE_PATTERNS.some((pattern) => pattern.test(result.reason!));
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
 }
 
 function failedReviewerRunVerdict(input: ReviewInput, reason: string): ReviewerVerdict {

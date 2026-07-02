@@ -31,6 +31,7 @@ import { truncateInline } from "./tool-rendering.ts";
 import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 import type {
+  GoalReviewEvidencePreview,
   ReviewerRunResult,
   ReviewerRunner,
   TaskReviewInput,
@@ -340,6 +341,7 @@ export function registerSparkFinishTaskTool(
           requestedStatus: "done",
           summary: input.summary,
           evidenceRefs: candidate.task.outputArtifacts,
+          evidencePreviews: await buildTaskEvidencePreviews(cwd, candidate.task.outputArtifacts),
           sessionKey: sparkSessionKey(ctx),
           forkFromSession: ctx.sessionManager?.getSessionFile?.(),
         };
@@ -708,30 +710,18 @@ async function resolveFinishReviewCandidate(
       persistedTask: Task;
     }
 > {
-  const updated = await store.update(
-    async (graph) => {
-      const project = await currentSparkProject(cwd, ctx, graph);
-      if (!project) return { error: "no_project" as const };
-      const task = resolveSessionClaimedTask(graph, project.ref, sparkSessionKey(ctx), input.task);
-      if (!task) return { error: "no_matching_claimed_task" as const };
-      const candidateTask = taskWithFinishEvidenceRefs(task, input.evidenceRefs);
-      return {
-        projectRef: project.ref,
-        task: candidateTask,
-        persistedTask: task,
-      };
-    },
-    { createIfMissing: false },
-  );
-  if (!updated.graph) return { error: "no_project" };
-  return updated.result as
-    | { error: "no_project" | "no_matching_claimed_task" }
-    | {
-        error?: undefined;
-        projectRef: ProjectRef;
-        task: Task;
-        persistedTask: Task;
-      };
+  const graph = await store.load();
+  if (!graph) return { error: "no_project" };
+  const project = await currentSparkProject(cwd, ctx, graph);
+  if (!project) return { error: "no_project" };
+  const task = resolveSessionClaimedTask(graph, project.ref, sparkSessionKey(ctx), input.task);
+  if (!task) return { error: "no_matching_claimed_task" };
+  const candidateTask = taskWithFinishEvidenceRefs(task, input.evidenceRefs);
+  return {
+    projectRef: project.ref,
+    task: candidateTask,
+    persistedTask: task,
+  };
 }
 
 async function commitFinishedTask(
@@ -1058,4 +1048,39 @@ async function recordTaskLearningCandidate(
     ].join("\n"),
   });
   return { artifact, location: store.location };
+}
+
+async function buildTaskEvidencePreviews(
+  cwd: string,
+  artifactRefs: ArtifactRef[],
+): Promise<GoalReviewEvidencePreview[]> {
+  if (!artifactRefs.length) return [];
+  const store = defaultArtifactStore(cwd);
+  return Promise.all(
+    artifactRefs.slice(-10).map(async (ref) => {
+      try {
+        const artifact = await store.get(ref);
+        const bodyText =
+          typeof artifact.body === "string"
+            ? artifact.body
+            : JSON.stringify(artifact.body, null, 2);
+        const bodyPreview =
+          artifact.bodyPreview ??
+          (bodyText.length > 2000 ? bodyText.slice(0, 2000) + "…" : bodyText);
+        return {
+          ref,
+          title: artifact.title,
+          kind: artifact.kind,
+          format: artifact.format,
+          provenance: artifact.provenance as unknown as Record<string, unknown>,
+          bodyPreview,
+        };
+      } catch (error) {
+        return {
+          ref,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }),
+  );
 }
