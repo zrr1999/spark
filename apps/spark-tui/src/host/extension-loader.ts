@@ -8,7 +8,7 @@ import sparkFilesExtension from "../../../../packages/spark-files/src/extension.
 import sparkGraftExtension from "../../../../packages/spark-graft/src/extension.ts";
 import sparkRolesExtension from "../../../../packages/spark-roles/src/extension.ts";
 import sparkModelsExtension from "../../../../packages/spark-ai/src/models-extension.ts";
-import sparkExtension from "../../../../packages/spark-extension/src/extension/index.ts";
+import sparkExtension from "../../../../packages/pi-extension/src/extension/index.ts";
 
 export type SparkBuiltinExtensionName =
   | "@zendev-lab/spark-ask"
@@ -52,7 +52,7 @@ export const DEFAULT_SPARK_EXTENSION_SPECS = [
   "@zendev-lab/spark-ai/models-extension",
   "@zendev-lab/spark-roles/extension",
   "@zendev-lab/spark-graft/extension",
-  "@zendev-lab/spark-extension/extension",
+  "@zendev-lab/pi-extension/extension",
 ] as const;
 
 const BUILTIN_EXTENSION_FACTORIES: readonly SparkBuiltinExtensionFactory[] = [
@@ -88,7 +88,7 @@ const BUILTIN_EXTENSION_FACTORIES: readonly SparkBuiltinExtensionFactory[] = [
   },
   {
     name: "spark",
-    specifier: "@zendev-lab/spark-extension/extension",
+    specifier: "@zendev-lab/pi-extension/extension",
     factory: sparkExtension as SparkExtensionFactory,
   },
 ];

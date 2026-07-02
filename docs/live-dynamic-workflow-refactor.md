@@ -6,7 +6,7 @@ This document is the acceptance contract for turning Spark dynamic workflows fro
 
 The current implementation has useful runtime primitives, persistence, Graft isolation, saved workflows, and a better completion card, but the user-visible system is still not dynamic enough:
 
-- `workflow_run` executes the script synchronously in one tool call and awaits `runWorkflow(...)` before returning (`packages/spark-extension/src/extension/spark-workflow-run-tool-registration.ts`).
+- `workflow_run` executes the script synchronously in one tool call and awaits `runWorkflow(...)` before returning (`packages/pi-extension/src/extension/spark-workflow-run-tool-registration.ts`).
 - The tool execution callback receives `_onUpdate`, but live stage/agent updates are not streamed to the host UI.
 - Persisted dynamic workflow state is a snapshot JSON store, not a live event stream.
 - Pause/resume/stop/restart controls mostly mutate stored status; they do not yet control the active runtime scheduler or child role runs.

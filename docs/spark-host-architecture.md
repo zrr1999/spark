@@ -64,13 +64,13 @@ Spark has two host targets that share extension packages through the extension A
 
 - Usually reached through the `apps/spark-cli/bin/spark` dispatcher, which routes `spark tui ...` to `spark-tui`; direct TUI boot starts with `apps/spark-tui/bin/spark-tui` and `apps/spark-tui/src/cli.ts`.
 - Constructs native host services in `src/host/bootstrap.ts` using shared `@zendev-lab/spark-host` (`SparkHostRuntime`) and `@zendev-lab/spark-turn` (`SparkAgentLoop` / `SparkTurnRunner`).
-- Loads retained builtin extensions through explicit imports in `SparkExtensionLoader`; it does not call Pi SDK discovery or `loadPiSdk`. The default builtin set is `@zendev-lab/spark-ask`, `@zendev-lab/spark-cue`, `@zendev-lab/spark-files`, `@zendev-lab/spark-ai` models extension, `@zendev-lab/spark-roles`, `@zendev-lab/spark-graft`, and `@zendev-lab/spark-extension`.
+- Loads retained builtin extensions through explicit imports in `SparkExtensionLoader`; it does not call Pi SDK discovery or `loadPiSdk`. The default builtin set is `@zendev-lab/spark-ask`, `@zendev-lab/spark-cue`, `@zendev-lab/spark-files`, `@zendev-lab/spark-ai` models extension, `@zendev-lab/spark-roles`, `@zendev-lab/spark-graft`, and `@zendev-lab/pi-extension`.
 - Registers working-tree file tools (`read`/`write`/`edit`/`ls`/`grep`/`find`) natively through the `@zendev-lab/spark-files` extension. `cue_exec` remains the shell surface; there is no `bash` tool (spark-cue disables bash by policy).
 - Registers providers through `SparkProviderRegistry` and runs turns through shared `spark-turn` plus `SparkAgentSession`; concrete provider streaming still uses `@earendil-works/pi-ai` behind the Spark-owned provider/stream function boundary.
 - Owns terminal UI components through the `@zendev-lab/spark-tui` boundary and app-local `pi-tui` adapter.
 - Stores native sessions as Pi-compatible JSONL v3 files under `~/.spark/sessions/<workspaceHash>/`.
 - Shares the same host/turn core with daemon headless execution. The daemon owns the local queue under `~/.spark/daemon/` plus `~/.spark/runtime/daemon.lock` and runs `session.run` through Spark's headless session executor instead of `pi-coding-agent` sessions.
-- Resolves workspace and user skills from `<cwd>/.spark/skills/**` and `~/.spark/skills/**`. Resolves prompt templates from `<cwd>/.spark/prompts/*.md`, `~/.spark/prompts/*.md`, and configured `promptTemplates` paths, then registers non-colliding templates as native slash commands. The Spark product no longer bundles project-idea/SPARK.md workflow prompts under `packages/spark-extension/skills/**`; those live in external skill repositories such as `zrr1999/skills`.
+- Resolves workspace and user skills from `<cwd>/.spark/skills/**` and `~/.spark/skills/**`. Resolves prompt templates from `<cwd>/.spark/prompts/*.md`, `~/.spark/prompts/*.md`, and configured `promptTemplates` paths, then registers non-colliding templates as native slash commands. The Spark product no longer bundles project-idea/SPARK.md workflow prompts under `packages/pi-extension/skills/**`; those live in external skill repositories such as `zrr1999/skills`.
 
 ## Boundary rules
 

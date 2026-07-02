@@ -5,12 +5,9 @@ import {
   loopContinuationPrompt,
 } from "@zendev-lab/spark-loop";
 import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
-import { nowIso, type ProjectRef, type RunRef } from "@zendev-lab/spark-extension-api";
+import { nowIso, type ProjectRef } from "@zendev-lab/spark-extension-api";
 import type { SparkEntryIntent, SparkEntryPhase } from "./spark-entry.ts";
-import {
-  applySparkEntryResolution,
-  type SparkEntryApplicationDeps,
-} from "./spark-entry-application.ts";
+import { applySparkEntryResolution } from "./spark-entry-application.ts";
 import { detectSparkProjectState, resolveSparkEntry } from "./spark-entry-resolution.ts";
 import { currentSparkProject, loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
 import { suggestForegroundGoalPhase } from "./spark-foreground-goal-mode.ts";
@@ -70,7 +67,6 @@ import {
   parseDynamicWorkflowRunRefArg,
   parseGoalCommandArgs,
   parseLoopCommandAction,
-  parseWorkflowCommandArgs,
 } from "./spark-command-parser-utils.ts";
 import {
   isGoalToolDeactivationEvent,
@@ -90,7 +86,6 @@ import type {
 } from "./spark-command-types.ts";
 
 type SparkProjectLike = ReturnType<TaskGraph["projects"]>[number];
-import type { ReviewerRunner } from "./reviewer-runner.ts";
 import { isSparkReviewerLeaseActive } from "./spark-reviewer-lease.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 import { isClaimOwnedBySession } from "./task-ownership.ts";

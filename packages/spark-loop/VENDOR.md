@@ -33,4 +33,4 @@ The goal-layer source is derived from MIT-licensed pi-codex-goal. Preserve this 
 
 ## Local ownership
 
-Goal continuation code now lives under `packages/spark-loop` alongside the non-completing loop substrate. `@zendev-lab/spark-loop` is the single package boundary for reusable loop and goal primitives, while Spark-specific command/tool/reviewer policy remains in `@zendev-lab/spark-extension`.
+Goal continuation code now lives under `packages/spark-loop` alongside the non-completing loop substrate. `@zendev-lab/spark-loop` is the single package boundary for reusable loop and goal primitives, while Spark-specific command/tool/reviewer policy remains in `@zendev-lab/pi-extension`.

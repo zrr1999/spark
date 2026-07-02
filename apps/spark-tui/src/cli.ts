@@ -440,7 +440,7 @@ export async function runSparkCli(
       }
     }
     case "tui": {
-      if (!isInteractiveSparkCliTerminal(options)) {
+      if (!isInteractiveSparkCliTerminal(options) && (options.terminal || !options.runTui)) {
         console.error(tuiCliStrings.tuiRequiresTty);
         return 2;
       }
@@ -800,6 +800,16 @@ export async function handleSparkRpcLine(
     if (command === "abort") {
       const invocationId = rpcAbortInvocationId(request) ?? state.lastInvocationId;
       if (!invocationId) {
+        if (daemonClient.paths) {
+          writer({
+            id,
+            type: "response",
+            command,
+            success: true,
+            data: { queuedDaemonMode: true },
+          });
+          return;
+        }
         writer({
           id,
           type: "response",

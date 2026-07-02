@@ -378,12 +378,12 @@ function parseAttributes(
 
     const match = source
       .slice(cursor)
-      .match(/^([A-Za-z_:][A-Za-z0-9_:.-]*)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s"']+))?/u);
+      .match(/^([A-Za-z_:][A-Za-z0-9_:.-]*)(?:\s*=\s*(\{[^}]*\}|"[^"]*"|'[^']*'|[^\s"']+))?/u);
     if (!match) {
       diagnostics.push({
-        code: source.slice(cursor).includes("{") ? "expression_not_allowed" : "invalid_props",
+        code: "invalid_props",
         severity: "error",
-        message: "Only quoted string and bare boolean props are allowed in Spark UI components.",
+        message: "Could not parse Spark UI component props; rendering source as Markdown.",
         line,
         source: originalSource,
       });
@@ -408,9 +408,9 @@ function parseAttributes(
     const value = rawValue === undefined ? true : parseAttributeValue(rawValue);
     if (value === undefined) {
       diagnostics.push({
-        code: rawValue?.includes("{") ? "expression_not_allowed" : "invalid_props",
+        code: "invalid_props",
         severity: "error",
-        message: `Prop ${key} must be a quoted string or bare boolean literal.`,
+        message: `Prop ${key} must be a quoted string, braced literal, or bare boolean literal.`,
         line,
         source: originalSource,
       });
@@ -435,7 +435,9 @@ function parseAttributes(
 }
 
 function parseAttributeValue(rawValue: string): string | undefined {
-  if (rawValue.startsWith("{") || rawValue.includes("}")) return undefined;
+  if (rawValue.startsWith("{") && rawValue.endsWith("}")) {
+    return parseBracedLiteral(rawValue);
+  }
   if (
     (rawValue.startsWith('"') && rawValue.endsWith('"')) ||
     (rawValue.startsWith("'") && rawValue.endsWith("'"))
@@ -443,6 +445,20 @@ function parseAttributeValue(rawValue: string): string | undefined {
     return rawValue.slice(1, -1);
   }
   return undefined;
+}
+
+function parseBracedLiteral(rawValue: string): string | undefined {
+  const inner = rawValue.slice(1, -1).trim();
+  if (!inner) return undefined;
+  if (
+    (inner.startsWith('"') && inner.endsWith('"')) ||
+    (inner.startsWith("'") && inner.endsWith("'"))
+  ) {
+    return inner.slice(1, -1);
+  }
+  // Spark UI never executes JS expressions. When model output uses MDX-style
+  // braces, keep the value as inert text so the page remains renderable.
+  return inner;
 }
 
 function validateProps(
@@ -537,16 +553,6 @@ function unsupportedStatementDiagnostic(trimmed: string, line: number): SparkUiD
       code: "unsupported_statement",
       severity: "error",
       message: "Import/export statements are not executed in Spark UI source.",
-      line,
-      source: trimmed,
-    };
-  }
-
-  if (/\{[^}]+\}/u.test(trimmed)) {
-    return {
-      code: "expression_not_allowed",
-      severity: "error",
-      message: "JavaScript expressions are not executed in Spark UI source.",
       line,
       source: trimmed,
     };

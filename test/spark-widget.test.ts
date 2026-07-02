@@ -13,16 +13,16 @@ import {
   type SparkWidgetState,
   type SparkWidgetTheme,
   type SparkWidgetTui,
-} from "../packages/spark-extension/src/ui/spark-widget.ts";
-import { SparkWidgetController } from "../packages/spark-extension/src/extension/spark-widget-controller.ts";
-import { defaultSparkDynamicWorkflowEventStore } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-event-store.ts";
-import { setSessionGoal } from "../packages/spark-extension/src/extension/spark-session-goals.ts";
+} from "../packages/pi-extension/src/ui/spark-widget.ts";
+import { SparkWidgetController } from "../packages/pi-extension/src/extension/spark-widget-controller.ts";
+import { defaultSparkDynamicWorkflowEventStore } from "../packages/pi-extension/src/extension/spark-dynamic-workflow-event-store.ts";
+import { setSessionGoal } from "../packages/pi-extension/src/extension/spark-session-goals.ts";
 import {
   loadSessionLoop,
   scheduleSessionLoopTick,
   setSessionLoop,
-} from "../packages/spark-extension/src/extension/spark-session-loops.ts";
-import { saveCurrentProjectRef } from "../packages/spark-extension/src/extension/session-state.ts";
+} from "../packages/pi-extension/src/extension/spark-session-loops.ts";
+import { saveCurrentProjectRef } from "../packages/pi-extension/src/extension/session-state.ts";
 
 const theme: SparkWidgetTheme = {
   fg: (_color, text) => text,

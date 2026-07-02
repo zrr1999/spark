@@ -92,6 +92,9 @@ function classifyBoundary(packageDir, manifest) {
   const relativePackageDir = formatPath(packageDir);
   const [workspaceDir, pathName = ""] = relativePackageDir.split("/");
   const packageName = typeof manifest.name === "string" ? manifest.name : "";
+  if (pathName === "pi-extension" || packageName === "@zendev-lab/pi-extension") {
+    return "pi-extension";
+  }
   if (pathName.startsWith("pi-") || packageName.startsWith("@zendev-lab/pi-")) return "pi";
   if (workspaceDir === "apps") {
     if (pathName === "spark-cockpit" || packageName === "@zendev-lab/spark-cockpit") {
@@ -109,14 +112,6 @@ function classifyBoundary(packageDir, manifest) {
     ) {
       return "spark-app";
     }
-  }
-  if (
-    pathName === "spark" ||
-    pathName === "spark-extension" ||
-    packageName === "@zendev-lab/spark" ||
-    packageName === "@zendev-lab/spark-extension"
-  ) {
-    return "spark-extension";
   }
   if (pathName.startsWith("navia-") || packageName.startsWith("@zendev-lab/navia-")) {
     return "cockpit-package";
@@ -227,9 +222,9 @@ function forbiddenSpecifierReason(specifier, boundary) {
       return "pi-* packages may depend only on renamed Spark foundation packages, not Spark product packages";
     }
   }
-  if (boundary === "spark-extension") {
+  if (boundary === "pi-extension") {
     if (specifier === "@zendev-lab/spark-tui" || specifier.startsWith("@zendev-lab/spark-tui/")) {
-      return "spark-extension must use @zendev-lab/spark-text instead of @zendev-lab/spark-tui";
+      return "pi-extension must use @zendev-lab/spark-text instead of @zendev-lab/spark-tui";
     }
   }
   if (boundary === "daemon-app") {
@@ -240,7 +235,7 @@ function forbiddenSpecifierReason(specifier, boundary) {
       return "spark-daemon must use @zendev-lab/spark-host/headless-loader instead of @zendev-lab/spark-tui-app";
     }
   }
-  if (boundary === "spark-core" || boundary === "spark-extension") {
+  if (boundary === "spark-core" || boundary === "pi-extension") {
     if (isCockpitSpecifier(specifier)) {
       return "Spark core/runtime packages must not depend on cockpit or daemon adapter packages";
     }

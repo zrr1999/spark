@@ -10,11 +10,11 @@ import {
   registerSparkReflectionCommands,
   runReflectionOnce,
   stopReflectionScheduler,
-} from "../packages/spark-extension/src/extension/reflection-in-session-scheduler.ts";
+} from "../packages/pi-extension/src/extension/reflection-in-session-scheduler.ts";
 import type {
   SparkCommandApi,
   SparkCommandContext,
-} from "../packages/spark-extension/src/extension/spark-command-registration.ts";
+} from "../packages/pi-extension/src/extension/spark-command-registration.ts";
 
 void test("runReflectionOnce scans incrementally, writes cursor/candidates/report, and avoids duplicate observations", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reflection-run-"));

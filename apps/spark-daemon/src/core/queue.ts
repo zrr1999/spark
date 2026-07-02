@@ -17,6 +17,8 @@ import {
 
 export interface SparkDaemonQueueOptions extends SparkDaemonPathOptions {}
 
+let queueFileSequence = 0;
+
 export class SparkDaemonQueue {
   readonly rootDir: string;
   readonly inboxDir: string;
@@ -44,7 +46,9 @@ export class SparkDaemonQueue {
       enqueuedAt: new Date().toISOString(),
       task: validateSparkDaemonTask(task),
     };
-    const fileName = `${Date.now()}_${payload.task.type.replace(/\./g, "_")}_${randomUUID().slice(0, 8)}.json`;
+    queueFileSequence = (queueFileSequence + 1) % 1_000_000;
+    const sequence = queueFileSequence.toString().padStart(6, "0");
+    const fileName = `${Date.now()}_${sequence}_${payload.task.type.replace(/\./g, "_")}_${randomUUID().slice(0, 8)}.json`;
     const filePath = join(this.inboxDir, fileName);
     await writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
     return { fileName, filePath, payload };

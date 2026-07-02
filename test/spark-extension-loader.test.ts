@@ -20,7 +20,7 @@ void test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin 
     "@zendev-lab/spark-ai/models-extension",
     "@zendev-lab/spark-roles/extension",
     "@zendev-lab/spark-graft/extension",
-    "@zendev-lab/spark-extension/extension",
+    "@zendev-lab/pi-extension/extension",
   ];
   assert.deepEqual(
     loadBuiltinExtensionFactories().map((entry) => entry.specifier),
@@ -40,7 +40,7 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
       "@zendev-lab/spark-ai/models-extension",
       "@zendev-lab/spark-roles/extension",
       "@zendev-lab/spark-graft/extension",
-      "@zendev-lab/spark-extension/extension",
+      "@zendev-lab/pi-extension/extension",
     ],
   }).load();
 

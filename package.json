@@ -28,7 +28,7 @@
     "test:file": "node --experimental-strip-types --test",
     "build": "pnpm --filter @zendev-lab/spark-daemon run build && pnpm --filter @zendev-lab/spark-cockpit run build",
     "preview": "pnpm --filter @zendev-lab/spark-cockpit run dev",
-    "publish": "pnpm run check && pnpm run build && pnpm -r --filter './apps/*' --filter @zendev-lab/spark-extension publish --access public",
+    "publish": "pnpm run check && pnpm run build && pnpm -r --filter './apps/*' --filter @zendev-lab/pi-extension publish --access public",
     "prepare": "pnpx @j178/prek install --hook-type commit-msg --hook-type pre-commit"
   },
   "dependencies": {
@@ -40,7 +40,6 @@
     "@zendev-lab/spark-cue": "workspace:^",
     "@zendev-lab/spark-extension-api": "workspace:^",
     "@zendev-lab/spark-files": "workspace:^",
-    "@zendev-lab/spark-generative-ui": "workspace:^",
     "@zendev-lab/spark-graft": "workspace:^",
     "@zendev-lab/spark-host": "workspace:^",
     "@zendev-lab/spark-learnings": "workspace:^",
@@ -51,6 +50,7 @@
     "@zendev-lab/spark-runtime": "workspace:^",
     "@zendev-lab/spark-tasks": "workspace:^",
     "@zendev-lab/spark-tui": "workspace:^",
+    "@zendev-lab/spark-tui-app": "workspace:^",
     "@zendev-lab/spark-turn": "workspace:^",
     "@zendev-lab/spark-workflows": "workspace:^",
     "typebox": "^1.2.13"
@@ -82,7 +82,7 @@
       "./packages/spark-workflows/src/extension-entry.ts",
       "./packages/spark-graft/src/extension-entry.ts",
       "./packages/spark-ai/src/baidu-oneapi-provider.ts",
-      "./packages/spark-extension/src/extension/index.ts"
+      "./packages/pi-extension/src/extension/index.ts"
     ],
     "skills": [
       "./packages/pi-btw/skills"

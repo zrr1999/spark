@@ -11,7 +11,7 @@ import {
   saveReflectionScanCursor,
   scanPiSessionHistory,
   summarizeReflectionScan,
-} from "../packages/spark-extension/src/extension/reflection-session-scanner.ts";
+} from "../packages/pi-extension/src/extension/reflection-session-scanner.ts";
 
 void test("reflection scanner extracts user/custom/summary observations and tolerates malformed lines", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reflection-scan-"));

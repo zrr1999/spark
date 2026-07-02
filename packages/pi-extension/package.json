@@ -1,7 +1,7 @@
 {
-  "name": "@zendev-lab/spark-extension",
+  "name": "@zendev-lab/pi-extension",
   "version": "0.1.0",
-  "description": "Spark extension facade for Pi-style hosts.",
+  "description": "Legacy Pi-compatible extension facade; slated for retirement as Spark-native hosts absorb its policy surface.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [

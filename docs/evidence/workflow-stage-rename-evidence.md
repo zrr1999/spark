@@ -136,8 +136,8 @@ Exit code: 0
 - `packages/pi-workflows/src/runtime.ts`
 - `packages/pi-workflows/src/events.ts`
 - `packages/pi-workflows/src/builtins.ts`
-- `packages/spark-extension/src/extension/spark-workflow-run-tool-registration.ts`
-- `packages/spark-extension/src/extension/spark-dynamic-workflow-event-store.ts`
+- `packages/pi-extension/src/extension/spark-workflow-run-tool-registration.ts`
+- `packages/pi-extension/src/extension/spark-dynamic-workflow-event-store.ts`
 - `packages/spark-runtime/src/workflow-role-run-adapter.ts`
 - `README.md`
 - `docs/dynamic-workflow-benchmark.md`

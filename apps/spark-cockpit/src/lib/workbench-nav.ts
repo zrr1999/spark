@@ -66,13 +66,7 @@ export function buildWorkbenchNavGroups(input: {
       label: input.groups.library,
       items: [
         { href: workspaceRoute("/artifacts"), label: input.nav.artifacts, icon: "artifacts" },
-        { href: workspaceRoute("/repos"), label: input.nav.repos, icon: "repos" },
       ],
-    },
-    {
-      id: "runtime",
-      label: input.groups.runtime,
-      items: [{ href: workspaceRoute("/agents"), label: input.nav.agents, icon: "agents" }],
     },
     {
       id: "system",
@@ -113,8 +107,7 @@ export function currentWorkbenchPageLabel(input: {
 
   if (section === "projects") return input.nav.projects;
   if (section === "inbox") return input.nav.inbox;
-  if (section === "repos") return input.nav.repos;
-  if (section === "agents") return input.nav.agents;
+  if (section === "agents") return input.nav.artifacts;
   if (section === "artifacts") return input.nav.artifacts;
   if (section === "settings") return input.pages.settings;
 

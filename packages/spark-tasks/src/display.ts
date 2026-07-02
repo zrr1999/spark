@@ -1,10 +1,8 @@
 import type {
   RoleRef,
   Task,
-  TaskAttribution,
   TaskCancellation,
   TaskClaim,
-  TaskRef,
   TaskRun,
   TaskStatus,
 } from "@zendev-lab/spark-extension-api";
@@ -28,7 +26,7 @@ export interface PiTaskActiveLineInput {
   task: PiTaskDisplayIdentity & PiTaskDisplayLifecycle;
   owner: string;
   readyFrontier?: boolean;
-  plan?: "missing" | string;
+  plan?: string;
   lifecycleSuffix?: string;
 }
 
@@ -122,9 +120,7 @@ export function countPiTaskStatuses<T extends { status: TaskStatus }>(
   return counts;
 }
 
-export function formatPiTaskStatusCounts(
-  counts: Partial<Record<TaskStatus | string, number>>,
-): string {
+export function formatPiTaskStatusCounts(counts: Partial<Record<string, number>>): string {
   const order: TaskStatus[] = [
     "running",
     "blocked",

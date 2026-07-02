@@ -16,5 +16,5 @@ Non-responsibilities:
 
 - does not parse or run workflow scripts (`@zendev-lab/spark-workflows`)
 - does not schedule ready tasks or own workflow-run state
-- does not register tools or slash commands (`@zendev-lab/spark-extension` owns the facade)
+- does not register tools or slash commands (`@zendev-lab/pi-extension` owns the facade)
 - does not make plain loop a completion authority; reviewer-gated completion is a goal-layer policy

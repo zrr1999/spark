@@ -28,7 +28,7 @@ Spark-native capability.
   implementation waves.
 - Keep public/default tool names and command semantics stable during the package
   rename.
-- Introduce a host-neutral `spark-generative-ui` package for a safe
+- Keep Generative UI parsing in `@zendev-lab/spark-artifacts/generative-ui` for a safe
   Markdown/MDX-like agent output grammar and `spark.ui.v1` schema.
 - Store generated UI as provenance-backed artifacts: source plus derived JSON
   AST linked by `derived-from`.
@@ -53,7 +53,7 @@ canonical names are:
 
 | Current package | Target package | Notes |
 | --- | --- | --- |
-| `@zendev-lab/pi-extension-api` | `@zendev-lab/spark-extension-api` | Host/tool contract and shared refs/helpers. |
+| `@zendev-lab/spark-extension-api` | *(current)* | Host/tool contract and shared refs/helpers. |
 | `@zendev-lab/pi-artifacts` | `@zendev-lab/spark-artifacts` | Artifact metadata, blobs, provenance, links, and `artifact` tool. |
 | `@zendev-lab/spark-ask` | `@zendev-lab/spark-ask` | Structured ask/flow capability and canonical `ask` tool. |
 | `@zendev-lab/spark-context` | `@zendev-lab/spark-context` | Registered context provider listing/preview capability. |
@@ -98,7 +98,7 @@ consumers or publish safety. Prefer direct rolling updates inside this monorepo.
 ```text
 agent assistant stream
   -> Markdown/MDX-like source buffer
-  -> spark-generative-ui parser
+  -> spark-artifacts/generative-ui parser
   -> spark.ui.v1 JSON AST + diagnostics
   -> Cockpit Svelte renderer using an allowlisted component catalog
   -> source artifact + derived AST artifact at stable turn/run boundaries
@@ -141,7 +141,7 @@ A minimal AST body shape is:
 
 ### Safe MDX-like grammar
 
-The first `spark-generative-ui` implementation should support Markdown plus a
+The Generative UI parser in `spark-artifacts/generative-ui` supports Markdown plus a
 small component-like syntax that parses into JSON. It must not compile or run
 MDX as JavaScript.
 
@@ -200,8 +200,8 @@ nested detail routes must continue to work after the sidebar is grouped.
 
 1. Land this concept contract and annotate older docs that still present `pi-*`
    packages as the final canonical direction.
-2. Add `packages/spark-generative-ui` with `spark.ui.v1` types, parser, catalog
-   validation contracts, and security tests.
+2. Keep `packages/spark-artifacts/src/generative-ui.ts` as the `spark.ui.v1` types, parser, catalog
+   validation contracts, and security tests home.
 3. Render streaming `spark.ui.v1` output in Cockpit chat with raw fallback.
 4. Persist source and derived UI AST artifacts and replay them in artifact detail
    views.

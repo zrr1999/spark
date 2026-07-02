@@ -3,7 +3,7 @@ import {
   createSparkUiComponentCatalog,
   parseSparkUiSource,
   type SparkUiComponentBlock,
-} from "./index";
+} from "./generative-ui";
 
 describe("parseSparkUiSource", () => {
   it("parses markdown plus artifact, task, run, and callout blocks", () => {
@@ -54,7 +54,25 @@ Check the logs before merging.
     expect(result.diagnostics).toMatchObject([{ code: "unknown_component", severity: "warning" }]);
   });
 
-  it("rejects unsafe statements, expressions, handlers, urls, and raw scripts", () => {
+  it("keeps JavaScript-like braces inert instead of surfacing expression errors", () => {
+    const result = parseSparkUiSource(`## Score {notExecuted}
+<Callout title={"Plan"}>
+Use {literal} braces in prose.
+</Callout>`);
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.blocks).toEqual([
+      { type: "markdown", text: "## Score {notExecuted}" },
+      {
+        type: "callout",
+        tone: "info",
+        title: "Plan",
+        body: "Use {literal} braces in prose.",
+      },
+    ]);
+  });
+
+  it("rejects unsafe statements, handlers, urls, and raw scripts", () => {
     const result = parseSparkUiSource(`import X from "./x"
 <ArtifactCard artifactRef={artifactRef} />
 <ArtifactCard artifactRef="artifact:abc" onclick="steal()" />
@@ -63,7 +81,7 @@ Check the logs before merging.
 
     expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
       "unsupported_statement",
-      "expression_not_allowed",
+      "invalid_props",
       "invalid_props",
       "unknown_component",
       "dangerous_html",

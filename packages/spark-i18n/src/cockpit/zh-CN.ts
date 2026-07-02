@@ -785,11 +785,11 @@ const messages = {
       ],
     },
     formMessages: {
-      chatRequired: "请输入要发送给 Spark 的消息。",
-      chatQueued: "智能体聊天消息已排队等待 Spark。",
-      chatQueueFailed: "无法排队智能体聊天消息。",
+      chatRequired: "请输入要交给 Spark 的任务目标。",
+      chatQueued: "智能体产物任务已排队等待 Spark。",
+      chatQueueFailed: "无法排队智能体产物任务。",
       cancelRequired: "缺少要取消的调用。",
-      cancelTitle: "取消智能体聊天运行",
+      cancelTitle: "取消智能体产物运行",
       cancelQueued: "停止请求已排队等待 Spark。",
       cancelFailed: "无法排队停止请求。",
     },
@@ -797,9 +797,9 @@ const messages = {
   artifacts: {
     headTitle: "产物 · Spark",
     hero: {
-      eyebrow: "证据",
+      eyebrow: "产物与证据",
       title: "产物",
-      lede: "Spark 支撑的运行和人工产出的证据会以投影元数据的形式出现在这里。规范内容仍保留在 Spark 产物存储和本地文件中，直到你请求预览或导出。",
+      lede: "工作空间智能体产物和 Spark 运行证据都汇入这里。实时产物画布由 daemon 投影更新；规范产物内容仍保留在 Spark / 本地存储中，直到你请求预览。",
     },
     metrics: {
       aria: "产物状态",
@@ -818,7 +818,7 @@ const messages = {
       body: "Spark 运行产物和操作员回复产物会带着来源和内容指针出现在这里。",
     },
     list: {
-      title: "证据板",
+      title: "产物历史",
       projectedSuffix: "已接收",
       links: "链接",
       notCached: "未缓存",

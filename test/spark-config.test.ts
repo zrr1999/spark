@@ -43,11 +43,7 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
     const path = join(dir, "config.json");
     await saveSparkConfig(
       {
-        extensions: [
-          "@zendev-lab/spark-extension/extension",
-          "@zendev-lab/spark-cue",
-          "my-extension",
-        ],
+        extensions: ["@zendev-lab/pi-extension/extension", "@zendev-lab/spark-cue", "my-extension"],
         providers: ["@zendev-lab/spark-ai/baidu-oneapi-provider", "my-provider"],
         activeModelId: "baidu-oneapi/claude-opus-4.7",
         activeThinkingLevel: "medium",
@@ -56,7 +52,7 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
     );
     const config = await loadSparkConfig(path);
     assert.deepEqual(config.extensions, [
-      "@zendev-lab/spark-extension/extension",
+      "@zendev-lab/pi-extension/extension",
       "@zendev-lab/spark-cue",
       "my-extension",
     ]);

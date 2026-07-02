@@ -11,17 +11,23 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./extension": "./src/extension.ts"
+    "./extension": "./src/extension.ts",
+    "./generative-ui": "./src/generative-ui.ts"
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "check": "tsc -p ../../tsconfig.json --noEmit"
+    "check": "tsc -p ../../tsconfig.json --noEmit && vitest run",
+    "test": "vitest run"
   },
   "dependencies": {
     "@zendev-lab/spark-extension-api": "workspace:^",
     "typebox": "^1.2.13"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vitest": "catalog:"
   },
   "pi": {
     "extensions": [

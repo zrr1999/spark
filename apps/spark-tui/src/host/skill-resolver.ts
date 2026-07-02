@@ -7,7 +7,7 @@ import {
   defaultBuiltinSkillsDir,
   parseSkillFrontmatter,
   type SparkSkillFrontmatter,
-} from "../../../../packages/spark-extension/src/extension/spark-builtin-skills.ts";
+} from "../../../../packages/pi-extension/src/extension/spark-builtin-skills.ts";
 
 export { defaultBuiltinSkillsDir, parseSkillFrontmatter };
 export type { SparkSkillFrontmatter };

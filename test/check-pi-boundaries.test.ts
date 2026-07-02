@@ -55,10 +55,10 @@ void test("boundary checker rejects cockpit packages importing Spark CLI host in
   assert.match(result.stderr, /Cockpit packages must not import Spark CLI host internals/u);
 });
 
-void test("boundary checker rejects Spark extension imports from app host internals", async () => {
+void test("boundary checker rejects pi-extension imports from app host internals", async () => {
   const root = await fixtureRoot();
-  await writePackage(root, "packages/spark-extension", {
-    name: "@zendev-lab/spark-extension",
+  await writePackage(root, "packages/pi-extension", {
+    name: "@zendev-lab/pi-extension",
     source: 'import { createSparkCliHostServices } from "@zendev-lab/spark-tui-app/host";\n',
   });
 
@@ -148,12 +148,12 @@ void test("boundary checker keeps direct pi-tui usage behind spark-tui", async (
   const root = await fixtureRoot();
   await writePackage(root, "packages/spark-tui", {
     name: "@zendev-lab/spark-tui",
-    dependencies: { [piTuiSpecifier]: "^0.79.4" },
+    dependencies: { [piTuiSpecifier]: "^0.80.3" },
     source: `export { visibleWidth } from "${piTuiSpecifier}";\n`,
   });
   await writePackage(root, "packages/pi-sample", {
     name: "@zendev-lab/pi-sample",
-    dependencies: { [piTuiSpecifier]: "^0.79.4" },
+    dependencies: { [piTuiSpecifier]: "^0.80.3" },
     source: `import { visibleWidth } from "${piTuiSpecifier}";\n`,
   });
 
@@ -168,7 +168,7 @@ void test("boundary checker allows pi packages to use the spark-tui boundary", a
   const root = await fixtureRoot();
   await writePackage(root, "packages/spark-tui", {
     name: "@zendev-lab/spark-tui",
-    dependencies: { [piTuiSpecifier]: "^0.79.4" },
+    dependencies: { [piTuiSpecifier]: "^0.80.3" },
     source: `export { visibleWidth } from "${piTuiSpecifier}";\n`,
   });
   await writePackage(root, "packages/pi-sample", {

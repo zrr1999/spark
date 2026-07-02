@@ -12,7 +12,7 @@ Target package topology follows type-first names:
 - `apps/spark-cockpit` — Spark Cockpit SvelteKit local web cockpit/projection app. Keep SvelteKit/browser-specific checks isolated from the non-Svelte Spark package checks.
 - `packages/spark-*` — Spark-owned capability/runtime packages. Core capability primitives include `spark-extension-api`, `spark-artifacts`, `spark-tasks`, `spark-workflows`, `spark-loop`, and `spark-modes`.
 - `packages/pi-*` — retained Pi-compatible adapters or capabilities not yet renamed (`spark-ask`, `spark-cue`, `spark-files`, `spark-graft`, `spark-roles`, `pi-btw`, …). These must not depend on Spark product packages; only renamed Spark foundation packages and the `@zendev-lab/spark-tui` presentation boundary are allowed.
-- `packages/spark-extension` — Spark extension facade. It owns Spark command/tool policy and depends on `spark-extension-api` instead of concrete host runtimes.
+- `packages/pi-extension` — legacy Pi-compatible extension facade (slated for retirement). It owns Spark command/tool policy and depends on `spark-extension-api` instead of concrete host runtimes.
 - `packages/spark-runtime`, `packages/spark-protocol`, `packages/spark-tui`, `packages/spark-db`, and `packages/spark-system` — Spark shared runtime, protocol/schema, reusable TUI boundary, SQLite/migration, and local-system helper packages.
 - `packages/spark-cockpit-*` — reserved for Cockpit-private implementation packages; do not put daemon/shared helpers behind Cockpit-private names.
 - `docs/navia/` — Historical cockpit product, design, architecture, and release-readiness documentation imported from the standalone Navia repository.
@@ -37,7 +37,7 @@ Target package topology follows type-first names:
 | `pnpm run preview`                       | Start the local Spark Cockpit dev server                         |
 | `spark cockpit`                          | Start the built Spark Cockpit production server through the CLI   |
 | `pnpm install -g .`                      | Link the unified root `spark` CLI                                |
-| `pnpm run publish`                       | Validate, build, and publish `apps/*` plus `@zendev-lab/spark-extension` |
+| `pnpm run publish`                       | Validate, build, and publish `apps/*` plus `@zendev-lab/pi-extension` |
 
 ## CI
 
@@ -49,7 +49,7 @@ Target package topology follows type-first names:
 ## Dual-host Spark extension boundary
 
 - `spark-extension-api` is the host-neutral TypeScript contract for Spark extension hosts and retained Pi-compatible adapters. Do not merge it into Spark product code; Spark extension packages depend on this contract instead.
-- `packages/spark-extension/src/extension/` is the Spark extension facade path. It must remain loadable by Pi as a normal extension.
+- `packages/pi-extension/src/extension/` is the legacy Pi extension facade path. It must remain loadable by Pi as a normal extension until Pi support is retired.
 - Spark extension/shared packages must not import concrete app host internals from `apps/spark-cli`, `apps/spark-tui`, `@zendev-lab/spark-tui-app`, or `@earendil-works/pi-coding-agent` runtime code.
 - Shared Spark host/turn code belongs in `packages/spark-host` and `packages/spark-turn`; executable apps keep only bootstrap, UI, daemon, and compatibility-adapter glue. pi-tui-specific wrappers should stay behind the reusable `packages/spark-tui` boundary.
 - When adding or changing a host-touching extension capability, update `spark-extension-api` only if both hosts need the contract, and add/adjust dual-host tests such as `test/spark-ext-host-contract.test.ts`, `test/spark-host-runtime-cross.test.ts`, and the relevant Spark host test.

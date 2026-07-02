@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseSparkUiSource } from "@zendev-lab/spark-generative-ui";
+import { parseSparkUiSource } from "@zendev-lab/spark-artifacts/generative-ui";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
 import {

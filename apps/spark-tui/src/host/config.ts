@@ -50,7 +50,7 @@ export const DEFAULT_SPARK_CONFIG: SparkConfig = {
     "@zendev-lab/spark-ai/models-extension",
     "@zendev-lab/spark-roles/extension",
     "@zendev-lab/spark-graft/extension",
-    "@zendev-lab/spark-extension/extension",
+    "@zendev-lab/pi-extension/extension",
   ],
   providers: ["@zendev-lab/spark-ai/baidu-oneapi-provider"],
   skills: [],

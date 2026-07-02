@@ -20,22 +20,22 @@ This change makes Spark's foreground mode a read-only projection of active drive
   - `resolveTurnDriver()` precedence is `workflow > goal > loop > assist`.
 - `packages/pi-modes/src/prompt.ts`
   - Prompt marker renders session `Phase: ...` and derived `Mode: ...` only when non-assist.
-- `packages/spark-extension/src/extension/spark-drive-state.ts`
+- `packages/pi-extension/src/extension/spark-drive-state.ts`
   - New normalized drive/mode helpers and active-lens projection helpers.
-- `packages/spark-extension/src/extension/spark-drive-tool-registration.ts`
+- `packages/pi-extension/src/extension/spark-drive-tool-registration.ts`
   - New public `drive` tool with `status | start | switch | stop`.
   - `drive=status` returns the read-only derived mode projection.
   - `drive=start|switch` controls `assist | goal | loop` explicitly.
   - Workflow drive is delegated to `workflow_run`/`/workflow`, since it needs a workflow selector/script.
-- `packages/spark-extension/src/extension/index.ts`
+- `packages/pi-extension/src/extension/index.ts`
   - Registers public `drive` and continues exposing `phase`; no public `mode` tool.
-- `packages/spark-extension/src/extension/spark-command-registration.ts`
+- `packages/pi-extension/src/extension/spark-command-registration.ts`
   - Goal ticks stamp drive `goal`; loop ticks stamp drive `loop`.
-- `packages/spark-extension/src/extension/spark-status-tool-registration.ts`
+- `packages/pi-extension/src/extension/spark-status-tool-registration.ts`
   - Status loads goal/loop state and surfaces derived `driveMode`.
-- `packages/spark-extension/src/extension/spark-widget-controller.ts`
+- `packages/pi-extension/src/extension/spark-widget-controller.ts`
   - Widget active lens derives drive mode from session goal/loop state.
-- `packages/spark-extension/src/ui/spark-widget.ts`
+- `packages/pi-extension/src/ui/spark-widget.ts`
   - Header shows `Phase: <phase>` and appends `Mode: <drive>` for non-assist.
 
 ## Test coverage

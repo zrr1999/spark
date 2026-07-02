@@ -26,14 +26,14 @@ Implemented built-in `project.kind = "reproduction"` as the first non-generic pr
 
 ## Main code paths
 
-- `packages/spark-extension/src/extension/project-kind-registry.ts`
+- `packages/pi-extension/src/extension/project-kind-registry.ts`
   - Adds built-in reproduction definition.
   - Adds `sparkProjectKindRoleForPhase()`.
   - Adds `evaluateSparkProjectKindCompletionGate()`.
   - Enhances progress rendering so metric arrays count `covered/passed/satisfied` records.
-- `packages/spark-extension/src/extension/spark-goal-completion-review.ts`
+- `packages/pi-extension/src/extension/spark-goal-completion-review.ts`
   - Applies project-kind deterministic completion gate before reviewer completion review.
-- `packages/spark-extension/src/extension/spark-goal-tool-registration.ts`
+- `packages/pi-extension/src/extension/spark-goal-tool-registration.ts`
   - Includes deterministic blockers/remainingWork in blocked completion details.
 
 ## Test coverage

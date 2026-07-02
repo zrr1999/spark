@@ -8,7 +8,7 @@ import {
   renderSparkProjectKindDisplay,
   sparkProjectKindRoleForPhase,
   createSparkProjectKindRegistry,
-} from "../packages/spark-extension/src/extension/project-kind-registry.ts";
+} from "../packages/pi-extension/src/extension/project-kind-registry.ts";
 
 const baseProject: Project = {
   ref: "proj:demo",

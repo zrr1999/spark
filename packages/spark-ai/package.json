@@ -21,7 +21,7 @@
     "check": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.79.4",
+    "@earendil-works/pi-ai": "^0.80.3",
     "@zendev-lab/spark-extension-api": "workspace:^",
     "typebox": "^1.2.13"
   }

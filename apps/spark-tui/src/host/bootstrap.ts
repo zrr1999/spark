@@ -5,10 +5,10 @@ import type { Model } from "@earendil-works/pi-ai";
 import { stableId, type ExtensionAPI } from "@zendev-lab/spark-extension-api";
 import { createProviderRegistryStreamFunction } from "@zendev-lab/spark-ai";
 
-import { renderSparkActiveSystemPrompt } from "../../../../packages/spark-extension/src/extension/spark-active-injection.ts";
-import { renderBaseSystemPromptsPrompt } from "../../../../packages/spark-extension/src/extension/spark-builtin-skills.ts";
-import { loadSparkMode } from "../../../../packages/spark-extension/src/extension/session-state.ts";
-import type { SparkSessionContext } from "../../../../packages/spark-extension/src/extension/session-identity.ts";
+import { renderSparkActiveSystemPrompt } from "../../../../packages/pi-extension/src/extension/spark-active-injection.ts";
+import { renderBaseSystemPromptsPrompt } from "../../../../packages/pi-extension/src/extension/spark-builtin-skills.ts";
+import { loadSparkMode } from "../../../../packages/pi-extension/src/extension/session-state.ts";
+import type { SparkSessionContext } from "../../../../packages/pi-extension/src/extension/session-identity.ts";
 import { SparkAgentLoop } from "./agent-loop.ts";
 import { SparkAuthStore, SparkProviderAuthResolver, defaultSparkAuthPath } from "./auth.ts";
 import {

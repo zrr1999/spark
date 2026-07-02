@@ -51,7 +51,7 @@ Default shape:
       "@zendev-lab/spark-ai/models-extension",
       "@zendev-lab/spark-roles/extension",
       "@zendev-lab/spark-graft/extension",
-      "@zendev-lab/spark-extension/extension"
+      "@zendev-lab/pi-extension/extension"
    ],
    "providers": ["@zendev-lab/spark-ai/baidu-oneapi-provider"],
    "activeProvider": "baidu-oneapi",
@@ -102,7 +102,7 @@ Daemon state follows the Spark daemon XDG paths (`$SPARK_DAEMON_*`, then `$XDG_*
 
 ## Host-only features
 
-These features are native Spark TUI app responsibilities and should not be added to `packages/spark-extension/src/extension/`:
+These features are native Spark TUI app responsibilities and should not be added to `packages/pi-extension/src/extension/`:
 
 - TUI process/editor lifecycle.
 - Local transcript rendering and queued follow-up handling.

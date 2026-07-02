@@ -16,7 +16,7 @@ import {
   buildSparkRoleRunRegistry,
   findSparkRoleRunRegistryEntry,
   serializeSparkRoleRunRegistry,
-} from "../packages/spark-extension/src/extension/spark-role-run-observability.ts";
+} from "../packages/pi-extension/src/extension/spark-role-run-observability.ts";
 
 const projectRef = "proj:observability" as ProjectRef;
 const taskRef = "task:role-run" as TaskRef;

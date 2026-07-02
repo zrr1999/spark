@@ -18,10 +18,10 @@ import {
 } from "@zendev-lab/spark-extension-api";
 import { builtinRoleRef, createBuiltinRoles } from "@zendev-lab/spark-roles";
 import { TaskGraph } from "@zendev-lab/spark-tasks";
-import { renderSparkActiveSystemPrompt } from "../packages/spark-extension/src/extension/spark-active-injection.ts";
-import { isGenericTaskNameForTitle } from "../packages/spark-extension/src/extension/spark-claim-task-tool-registration.ts";
-import { isPlaceholderProjectTitle } from "../packages/spark-extension/src/extension/spark-graph-invariants.ts";
-import { deriveTaskRoleLabel } from "../packages/spark-extension/src/extension/task-ownership.ts";
+import { renderSparkActiveSystemPrompt } from "../packages/pi-extension/src/extension/spark-active-injection.ts";
+import { isGenericTaskNameForTitle } from "../packages/pi-extension/src/extension/spark-claim-task-tool-registration.ts";
+import { isPlaceholderProjectTitle } from "../packages/pi-extension/src/extension/spark-graph-invariants.ts";
+import { deriveTaskRoleLabel } from "../packages/pi-extension/src/extension/task-ownership.ts";
 
 function executionReadyPlan(objective: string): TaskPlan {
   return {

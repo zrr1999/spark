@@ -2,7 +2,7 @@ import {
   parseSparkUiSource,
   type SparkUiDocumentV1,
   type SparkUiJsonObject,
-} from "@zendev-lab/spark-generative-ui";
+} from "@zendev-lab/spark-artifacts/generative-ui";
 
 export const sparkUiSourceArtifactKind = "spark.ui.source";
 export const sparkUiAstArtifactKind = "spark.ui.v1";

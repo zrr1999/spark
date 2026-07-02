@@ -13,7 +13,7 @@ import {
 import {
   loadBuiltinSkills,
   renderBuiltinSkillsForPrompt,
-} from "../packages/spark-extension/src/extension/spark-builtin-skills.ts";
+} from "../packages/pi-extension/src/extension/spark-builtin-skills.ts";
 
 async function writeSkill(
   root: string,

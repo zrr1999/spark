@@ -6,7 +6,7 @@ import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import {
   foregroundUnfinishedTaskMode,
   suggestForegroundGoalMode,
-} from "../packages/spark-extension/src/extension/spark-foreground-goal-mode.ts";
+} from "../packages/pi-extension/src/extension/spark-foreground-goal-mode.ts";
 
 const projectRef = "proj:test" as ProjectRef;
 

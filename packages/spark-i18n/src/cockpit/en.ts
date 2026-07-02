@@ -800,21 +800,21 @@ const messages = {
       ],
     },
     formMessages: {
-      chatRequired: "Enter a message for Spark.",
-      chatQueued: "Agents chat message queued for Spark.",
-      chatQueueFailed: "Could not queue the agents chat message.",
+      chatRequired: "Enter a task objective for Spark.",
+      chatQueued: "Agent product task queued for Spark.",
+      chatQueueFailed: "Could not queue the agent product task.",
       cancelRequired: "Missing invocation to cancel.",
-      cancelTitle: "Cancel agents chat run",
+      cancelTitle: "Cancel agent product run",
       cancelQueued: "Stop request queued for Spark.",
       cancelFailed: "Could not queue the stop request.",
     },
   },
   artifacts: {
-    headTitle: "Artifacts · Spark",
+    headTitle: "Products & artifacts · Spark",
     hero: {
-      eyebrow: "Evidence",
-      title: "Artifacts",
-      lede: "Evidence produced by Spark-backed runs and operators surfaces here as projection metadata. Canonical content stays in Spark/local artifact stores until you request a preview or export.",
+      eyebrow: "Products & evidence",
+      title: "Products & artifacts",
+      lede: "The workspace agent product lives here alongside evidence produced by Spark-backed runs. The live product canvas updates from daemon projections; canonical artifact content remains in Spark/local stores until previewed.",
     },
     metrics: {
       aria: "Artifact status",
@@ -833,7 +833,7 @@ const messages = {
       body: "Local execution artifacts and operator-response artifacts show up here with provenance and content pointers.",
     },
     list: {
-      title: "Evidence board",
+      title: "Artifact history",
       projectedSuffix: "projected",
       links: "links",
       notCached: "not cached",

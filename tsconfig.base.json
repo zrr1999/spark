@@ -17,6 +17,9 @@
     "paths": {
       "@zendev-lab/spark-artifacts": ["./packages/spark-artifacts/src/index.ts"],
       "@zendev-lab/spark-artifacts/extension": ["./packages/spark-artifacts/src/extension.ts"],
+      "@zendev-lab/spark-artifacts/generative-ui": [
+        "./packages/spark-artifacts/src/generative-ui.ts"
+      ],
       "@zendev-lab/spark-ask": ["./packages/spark-ask/src/index.ts"],
       "@zendev-lab/spark-ask/extension": ["./packages/spark-ask/src/extension.ts"],
       "@zendev-lab/spark-context": ["./packages/spark-context/src/index.ts"],
@@ -57,9 +60,7 @@
       "@zendev-lab/spark-protocol": ["./packages/spark-protocol/src/index.ts"],
       "@zendev-lab/spark-runtime": ["./packages/spark-runtime/src/index.ts"],
       "@zendev-lab/spark-turn": ["./packages/spark-turn/src/agent-loop.ts"],
-      "@zendev-lab/spark-extension/extension": [
-        "./packages/spark-extension/src/extension/index.ts"
-      ],
+      "@zendev-lab/pi-extension/extension": ["./packages/pi-extension/src/extension/index.ts"],
       "@zendev-lab/spark-tui": ["./packages/spark-tui/src/index.ts"],
       "@zendev-lab/spark-tui/input": ["./packages/spark-tui/src/input.ts"],
       "@zendev-lab/spark-tui/pi-tui": ["./packages/spark-tui/src/pi-tui.ts"],

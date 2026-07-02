@@ -15,11 +15,11 @@ This keeps each drive's durable state and tick behavior domain-specific, while u
 
 ## Main code paths
 
-- `packages/spark-extension/src/extension/spark-drive-substrate.ts`
+- `packages/pi-extension/src/extension/spark-drive-substrate.ts`
   - New `SparkForegroundDriveSubstrate` class.
   - Centralizes per-drive timer storage, timer clearing, generation bumping, and stale-generation rejection.
   - Adds shared `scheduledDriveDelayMs()` helper for persisted loop schedules.
-- `packages/spark-extension/src/extension/spark-command-registration.ts`
+- `packages/pi-extension/src/extension/spark-command-registration.ts`
   - Replaces separate goal/loop timer and generation maps with the shared substrate.
   - Goal and loop foreground scheduling now call `foregroundDriveSubstrate.schedule()` with `drive: "goal" | "loop"`.
   - Goal and loop clear/await/stale checks now use substrate methods.
@@ -31,7 +31,7 @@ This keeps each drive's durable state and tick behavior domain-specific, while u
 
 ### Shared substrate
 
-From `packages/spark-extension/src/extension/spark-drive-substrate.ts`:
+From `packages/pi-extension/src/extension/spark-drive-substrate.ts`:
 
 ```ts
 export type SparkForegroundDriveDiscriminator = "goal" | "loop" | "workflow" | "implement";
@@ -58,7 +58,7 @@ export class SparkForegroundDriveSubstrate {
 
 ### Goal/loop using the same substrate
 
-From `packages/spark-extension/src/extension/spark-command-registration.ts`:
+From `packages/pi-extension/src/extension/spark-command-registration.ts`:
 
 ```ts
 const foregroundDriveSubstrate = new SparkForegroundDriveSubstrate();

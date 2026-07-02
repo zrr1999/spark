@@ -4,11 +4,12 @@ import {
   type AssistantMessage,
   type AssistantMessageEvent,
   type Context,
+  createAssistantMessageEventStream,
   type Model,
   type SimpleStreamOptions,
-  streamAnthropic,
-  streamSimpleOpenAIResponses,
 } from "@earendil-works/pi-ai";
+import { stream as streamAnthropic } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { streamSimple as streamSimpleOpenAIResponses } from "@earendil-works/pi-ai/api/openai-responses";
 
 import type { ProviderRegistrationAPI } from "./provider-registry.ts";
 
@@ -96,6 +97,41 @@ function retagBaiduOneApiStream(stream: BaiduOneApiStream): BaiduOneApiStream {
   };
 }
 
+function startBaiduOneApiStream(
+  model: Model<Api>,
+  factory: () => BaiduOneApiStream,
+): BaiduOneApiStream {
+  try {
+    return retagBaiduOneApiStream(factory());
+  } catch (error) {
+    return baiduOneApiErrorStream(model, error);
+  }
+}
+
+function baiduOneApiErrorStream(model: Model<Api>, error: unknown): BaiduOneApiStream {
+  const message: AssistantMessage = {
+    role: "assistant",
+    content: [],
+    api: BAIDU_ONEAPI_API,
+    provider: BAIDU_ONEAPI_PROVIDER,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error",
+    errorMessage: error instanceof Error ? error.message : String(error),
+    timestamp: Date.now(),
+  };
+  const stream = createAssistantMessageEventStream();
+  stream.push({ type: "error", reason: "error", error: message });
+  return stream;
+}
+
 export function resolveBaiduOneApiKey(apiKey: string | undefined): string | undefined {
   if (apiKey === undefined || apiKey === "BAIDU_ONEAPI_API_KEY") {
     return process.env.BAIDU_ONEAPI_API_KEY;
@@ -141,7 +177,7 @@ export function streamBaiduOneApiAnthropic(
   const transportModel = withBaiduOneApiTransportApi(model, "anthropic-messages");
   const effort = mapThinkingEffort(model, options?.reasoning);
 
-  return retagBaiduOneApiStream(
+  return startBaiduOneApiStream(model, () =>
     streamAnthropic(transportModel, context, {
       ...options,
       ...(apiKey !== undefined ? { apiKey } : {}),
@@ -175,7 +211,7 @@ export function streamBaiduOneApiOpenAIResponses(
   const apiKey = resolveBaiduOneApiKey(options?.apiKey);
   const transportModel = withBaiduOneApiTransportApi(model, "openai-responses");
 
-  return retagBaiduOneApiStream(
+  return startBaiduOneApiStream(model, () =>
     streamSimpleOpenAIResponses(transportModel, context, {
       ...options,
       ...(apiKey !== undefined ? { apiKey } : {}),

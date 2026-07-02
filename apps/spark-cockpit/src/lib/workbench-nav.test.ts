@@ -45,13 +45,11 @@ describe("workbench nav", () => {
     expect(result.map((group) => [group.id, group.label])).toEqual([
       ["work", "Work"],
       ["library", "Library"],
-      ["runtime", "Runtime"],
       ["system", "System"],
     ]);
     expect(result.map((group) => group.items.map((item) => item.label))).toEqual([
       ["Overview", "Projects", "Inbox"],
-      ["Artifacts", "Repos"],
-      ["Agents"],
+      ["Artifacts"],
       ["Settings"],
     ]);
     expect(result[0]?.items[0]).toMatchObject({ href: "/local", icon: "home" });

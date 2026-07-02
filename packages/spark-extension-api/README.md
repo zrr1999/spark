@@ -8,7 +8,7 @@ and the Spark native host family.
 ## Why this package exists
 
 Before this package, every extension package (`@zendev-lab/spark-ask`, `@zendev-lab/spark-cue`,
-`@zendev-lab/spark-graft`, `@zendev-lab/spark-roles`, `@zendev-lab/spark-extension`) maintained its own `pi-types.d.ts` shim
+`@zendev-lab/spark-graft`, `@zendev-lab/spark-roles`, `@zendev-lab/pi-extension`) maintained its own `pi-types.d.ts` shim
 that re-declared a slice of `ExtensionAPI` via `declare module
 "@earendil-works/pi-coding-agent"`. That meant:
 
@@ -35,7 +35,7 @@ dependencies. Two hosts implement supersets of these types:
   widgets, sessions). Declares this surface as a subset of its private
   `ExtensionAPI`.
 - Spark native host family — `@zendev-lab/spark-host` provides `SparkHostRuntime`, implementing the retained
-  surface needed by `@zendev-lab/spark-ask`, `@zendev-lab/spark-cue`, `@zendev-lab/spark-roles`, `@zendev-lab/spark-graft`, and `@zendev-lab/spark-extension`,
+  surface needed by `@zendev-lab/spark-ask`, `@zendev-lab/spark-cue`, `@zendev-lab/spark-roles`, `@zendev-lab/spark-graft`, and `@zendev-lab/pi-extension`,
   plus host-only helpers for keybindings, message renderers, provider/model
   registry adapters, session glue, and native UI bridges.
 

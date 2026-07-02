@@ -44,7 +44,7 @@ pi-btw                # Pi-specific side-conversation workflow, excluded from th
 spark-runtime         # Spark task-to-role-run adapter and role-run artifacts
 spark-host            # shared Spark ExtensionAPI host runtime and keybindings
 spark-turn            # shared model/tool turn loop and view-event projection
-spark-extension       # Spark facade: modes, widget, commands, builtin Spark roles, policy
+pi-extension          # Pi-compatible facade (legacy): modes, widget, commands, builtin Spark roles, policy
 spark-cli             # thin root spark dispatcher
 spark-tui-app         # native Spark TUI app/bootstrap over spark-host + spark-turn
 spark-daemon          # local daemon/queue app using Spark headless session execution
@@ -52,7 +52,7 @@ spark-daemon          # local daemon/queue app using Spark headless session exec
 
 Allowed high-level usage:
 
-- `spark-extension` may orchestrate Spark mode UI/policy and compose capability
+- `pi-extension` may orchestrate Spark mode UI/policy and compose capability
   primitives plus `spark-runtime`. It owns ordinary lightweight research
   behavior, intent-specific Spark commands such as `/plan`, `/implement`,
   `/goal`, `/loop`, `/workflow`, the Spark widget, active-context provider

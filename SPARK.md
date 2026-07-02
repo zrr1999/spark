@@ -33,9 +33,9 @@ inspired_by:
 
 ## 当前包边界
 
-Spark 现在支持 Pi 扩展宿主和 Spark 原生宿主家族：Pi 中的 `packages/spark-extension/src/extension/` 是意图命令和门面策略的 Pi 扩展入口；Spark 原生 TUI/headless/daemon 共享 `packages/spark-host` 的 `SparkHostRuntime` 与 `packages/spark-turn` 的 `SparkAgentLoop` / `SparkTurnRunner`，`apps/spark-tui` 只保留原生 `pi-tui` 表现层、启动 glue、会话存储、提供方注册表、模型选择器和兼容重导出。`apps/spark-cli` 只发布根 `spark` dispatcher，把 `spark <name>` 转发给 `spark-<name>` 可执行 app。共享扩展包通过 `spark-extension-api` 在两个宿主中运行，不应依赖具体的 Pi SDK 运行时。
+Spark 现在支持 Pi 扩展宿主和 Spark 原生宿主家族：Pi 中的 `packages/pi-extension/src/extension/` 是意图命令和门面策略的 Pi 扩展入口；Spark 原生 TUI/headless/daemon 共享 `packages/spark-host` 的 `SparkHostRuntime` 与 `packages/spark-turn` 的 `SparkAgentLoop` / `SparkTurnRunner`，`apps/spark-tui` 只保留原生 `pi-tui` 表现层、启动 glue、会话存储、提供方注册表、模型选择器和兼容重导出。`apps/spark-cli` 只发布根 `spark` dispatcher，把 `spark <name>` 转发给 `spark-<name>` 可执行 app。共享扩展包通过 `spark-extension-api` 在两个宿主中运行，不应依赖具体的 Pi SDK 运行时。
 
-- `packages/spark-extension`：Pi 扩展门面、默认轻量 research 行为、`/plan`、`/implement`、`/goal`、`/loop`、`/workflow`、Spark 小组件、模式与策略、内置 Spark 角色以及活动上下文提供方。
+- `packages/pi-extension`：Pi 扩展门面、默认轻量 research 行为、`/plan`、`/implement`、`/goal`、`/loop`、`/workflow`、Spark 小组件、模式与策略、内置 Spark 角色以及活动上下文提供方。
 - `packages/spark-runtime`：单个 Spark 任务到角色执行的适配层，负责调用 `spark-roles` 并回写证据制品、运行记录和状态。
 - `packages/spark-host`：可复用的 Spark ExtensionAPI 宿主运行时，包含工具/命令注册、事件总线、交互/outbox、keybindings 和宿主内部类型；TUI、headless 和 daemon 共享它。
 - `packages/spark-turn`：可复用的模型/工具 turn loop，包含模型流、工具回合、approval、abort、outbox drain 和 view 事件投影。

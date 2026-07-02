@@ -27,7 +27,6 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
   type Focusable,
-  type KeybindingsManager,
   type OverlayHandle,
   type TUI,
 } from "@zendev-lab/spark-tui/pi-tui";
@@ -60,6 +59,10 @@ const BTW_CONTINUE_THREAD_ASSISTANT_TEXT = "Understood, continuing our side conv
 
 type SessionThinkingLevel = "off" | AiThinkingLevel;
 type BtwThreadMode = "contextual" | "tangent";
+type BtwRenderableTui = Pick<TUI, "requestRender">;
+type BtwKeybindings = {
+  matches(data: string, keybinding: "tui.select.cancel"): boolean;
+};
 type SessionModel = NonNullable<ExtensionCommandContext["model"]>;
 /**
  * Loose model reference parsed from `/btw:model <provider> <id> <api>` and persisted to
@@ -1115,7 +1118,7 @@ class BtwOverlayComponent extends Container implements Focusable {
   private readonly onSubmitCallback: (value: string) => void;
   private readonly onDismissCallback: () => void;
   private readonly onUnfocusCallback: () => void;
-  private readonly tui: TUI;
+  private readonly tui: BtwRenderableTui;
   private readonly theme: ExtensionContext["ui"]["theme"];
   private transcriptLines: string[] = [];
   private transcriptScrollOffset = 0;
@@ -1137,9 +1140,9 @@ class BtwOverlayComponent extends Container implements Focusable {
   }
 
   constructor(
-    tui: TUI,
+    tui: BtwRenderableTui,
     theme: ExtensionContext["ui"]["theme"],
-    keybindings: KeybindingsManager,
+    keybindings: BtwKeybindings,
     readTranscriptEntries: () => BtwTranscript,
     getStatus: () => string | null,
     getMode: () => BtwThreadMode,
@@ -1175,7 +1178,7 @@ class BtwOverlayComponent extends Container implements Focusable {
 
     const originalHandleInput = this.input.handleInput.bind(this.input);
     this.input.handleInput = (data: string) => {
-      if (keybindings.matches(data, "app.clear")) {
+      if (matchesKey(data, Key.ctrl("c"))) {
         if (this.input.getValue().length > 0) {
           this.input.setValue("");
           this.tui.requestRender();

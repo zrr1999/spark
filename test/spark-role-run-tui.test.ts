@@ -15,21 +15,21 @@ import type {
 } from "@zendev-lab/spark-extension-api";
 import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
 
-import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
+import sparkExtension from "../packages/pi-extension/src/extension/index.ts";
 import {
   buildSparkRoleRunRegistry,
   type SparkRoleRunRegistryEntry,
-} from "../packages/spark-extension/src/extension/spark-role-run-observability.ts";
-import { roleRunTaskInfoByRefForTests } from "../packages/spark-extension/src/extension/spark-role-run-tui-controller.ts";
+} from "../packages/pi-extension/src/extension/spark-role-run-observability.ts";
+import { roleRunTaskInfoByRefForTests } from "../packages/pi-extension/src/extension/spark-role-run-tui-controller.ts";
 import type {
   SparkWidgetTheme,
   SparkWidgetTui,
-} from "../packages/spark-extension/src/ui/spark-widget.ts";
+} from "../packages/pi-extension/src/ui/spark-widget.ts";
 import {
   formatSparkRoleRunStatusSummary,
   renderSparkRoleRunBoardLines,
   renderSparkRoleRunCompletionMessageLines,
-} from "../packages/spark-extension/src/ui/spark-role-run-tui.ts";
+} from "../packages/pi-extension/src/ui/spark-role-run-tui.ts";
 
 type SparkPi = Parameters<typeof sparkExtension>[0];
 type SparkToolConfig = Parameters<NonNullable<SparkPi["registerTool"]>>[0];

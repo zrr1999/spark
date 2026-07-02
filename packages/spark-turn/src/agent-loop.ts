@@ -390,7 +390,7 @@ export class SparkAgentLoop {
   private async consumeAssistantStream(
     stream: ReturnType<SparkAgentStreamFunction>,
   ): Promise<AssistantMessage> {
-    let assistant: AssistantMessage | undefined;
+    let assistant: AssistantMessage;
     for await (const event of stream) {
       this.publish({ type: "stream_event", event });
       if (event.type === "done" || event.type === "error") {

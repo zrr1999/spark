@@ -10,14 +10,14 @@ import {
   handleSparkInput,
   injectSparkHints,
   type SparkInputModeRouter,
-} from "../packages/spark-extension/src/extension/spark-active-injection.ts";
-import { analyzeSparkEntryMode } from "../packages/spark-extension/src/extension/spark-entry.ts";
+} from "../packages/pi-extension/src/extension/spark-active-injection.ts";
+import { analyzeSparkEntryMode } from "../packages/pi-extension/src/extension/spark-entry.ts";
 import {
   loadSparkMode,
   saveCurrentProjectRef,
-} from "../packages/spark-extension/src/extension/session-state.ts";
-import { setSessionGoal } from "../packages/spark-extension/src/extension/spark-session-goals.ts";
-import type { SparkToolContext } from "../packages/spark-extension/src/extension/spark-tool-registration.ts";
+} from "../packages/pi-extension/src/extension/session-state.ts";
+import { setSessionGoal } from "../packages/pi-extension/src/extension/spark-session-goals.ts";
+import type { SparkToolContext } from "../packages/pi-extension/src/extension/spark-tool-registration.ts";
 
 interface TestSparkInputContext extends SparkToolContext {
   editorText?: string;

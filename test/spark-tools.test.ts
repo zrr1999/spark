@@ -34,15 +34,15 @@ import {
 } from "@zendev-lab/spark-tasks";
 import { registerPiArtifactTool } from "@zendev-lab/spark-artifacts/extension";
 import piAskExtension from "../packages/spark-ask/src/extension.ts";
-import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
-import { JsonStoreFormatError } from "../packages/spark-extension/src/extension/json-store.ts";
-import type { SparkToolContext } from "../packages/spark-extension/src/extension/spark-tool-registration.ts";
+import sparkExtension from "../packages/pi-extension/src/extension/index.ts";
+import { JsonStoreFormatError } from "../packages/pi-extension/src/extension/json-store.ts";
+import type { SparkToolContext } from "../packages/pi-extension/src/extension/spark-tool-registration.ts";
 import {
   loadCurrentProjectState,
   loadHiddenRoleRunInboxState,
   loadSparkMode,
   saveCurrentProjectRef,
-} from "../packages/spark-extension/src/extension/session-state.ts";
+} from "../packages/pi-extension/src/extension/session-state.ts";
 import {
   assignTodoDisplayNumber,
   importLegacyIndependentTodos,
@@ -50,12 +50,12 @@ import {
   loadTodoDisplayNumberState,
   saveIndependentTodos,
   saveTodoDisplayNumberState,
-} from "../packages/spark-extension/src/extension/session-todos.ts";
+} from "../packages/pi-extension/src/extension/session-todos.ts";
 import {
   normalizeSparkStatusFormat,
   normalizeSparkStatusLimit,
   normalizeSparkStatusView,
-} from "../packages/spark-extension/src/extension/spark-status.ts";
+} from "../packages/pi-extension/src/extension/spark-status.ts";
 import {
   normalizeForceAfterMs,
   normalizeKillSignal,
@@ -63,27 +63,27 @@ import {
   normalizeOptionalRunRef,
   normalizeSparkBackgroundAction,
   normalizeSparkBackgroundBoolean,
-} from "../packages/spark-extension/src/extension/background-runs.ts";
+} from "../packages/pi-extension/src/extension/background-runs.ts";
 import {
   normalizeSparkRunReadyTasksBoolean,
   normalizeSparkRunReadyTasksPositiveInteger,
-} from "../packages/spark-extension/src/extension/spark-run-ready-tasks-tool-registration.ts";
-import { normalizeSparkPlanTaskInputs } from "../packages/spark-extension/src/extension/spark-plan-tasks-tool-registration.ts";
-import { normalizeSparkClaimTaskInput } from "../packages/spark-extension/src/extension/spark-claim-task-tool-registration.ts";
-import { normalizeSparkFinishTaskInput } from "../packages/spark-extension/src/extension/spark-finish-task-tool-registration.ts";
+} from "../packages/pi-extension/src/extension/spark-run-ready-tasks-tool-registration.ts";
+import { normalizeSparkPlanTaskInputs } from "../packages/pi-extension/src/extension/spark-plan-tasks-tool-registration.ts";
+import { normalizeSparkClaimTaskInput } from "../packages/pi-extension/src/extension/spark-claim-task-tool-registration.ts";
+import { normalizeSparkFinishTaskInput } from "../packages/pi-extension/src/extension/spark-finish-task-tool-registration.ts";
 import {
   goalReviewDirectory,
   rebuildWorkspaceReviewIndex,
   subjectReviewRecordPath,
   taskReviewDirectory,
-} from "../packages/spark-extension/src/extension/subject-review-store.ts";
-import { normalizeSparkTodoOps } from "../packages/spark-extension/src/extension/spark-todo-tool-registration.ts";
+} from "../packages/pi-extension/src/extension/subject-review-store.ts";
+import { normalizeSparkTodoOps } from "../packages/pi-extension/src/extension/spark-todo-tool-registration.ts";
 import {
   normalizeArtifactBoolean,
   normalizeArtifactLimit,
   normalizeArtifactRef,
   normalizePositiveInteger,
-} from "../packages/spark-extension/src/extension/artifact-tools.ts";
+} from "../packages/pi-extension/src/extension/artifact-tools.ts";
 import {
   normalizeLearningBoolean,
   normalizeLearningCategory,
@@ -92,44 +92,44 @@ import {
   normalizeLearningLocation,
   normalizeLearningStatusFilter,
   normalizeStringArray,
-} from "../packages/spark-extension/src/extension/learning-tools.ts";
+} from "../packages/pi-extension/src/extension/learning-tools.ts";
 import {
   normalizeSparkWorkflowRunsAction,
   normalizeSparkWorkflowRunsBoolean,
   normalizeSparkWorkflowRunsNonNegativeInteger,
   normalizeSparkWorkflowRunsRunRef,
-} from "../packages/spark-extension/src/extension/spark-workflow-runs-tool-registration.ts";
-import { defaultSparkDynamicWorkflowEventStore } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-event-store.ts";
+} from "../packages/pi-extension/src/extension/spark-workflow-runs-tool-registration.ts";
+import { defaultSparkDynamicWorkflowEventStore } from "../packages/pi-extension/src/extension/spark-dynamic-workflow-event-store.ts";
 import {
   normalizeSparkNewProjectInput,
   normalizeSparkProjectOptionalString,
   normalizeSparkProjectOutputLanguage,
   normalizeSparkProjectPatch,
-} from "../packages/spark-extension/src/extension/spark-project-tools.ts";
+} from "../packages/pi-extension/src/extension/spark-project-tools.ts";
 import {
   normalizeSparkStateAction,
   normalizeSparkStateOptionalString,
-} from "../packages/spark-extension/src/extension/spark-state-tool-registration.ts";
+} from "../packages/pi-extension/src/extension/spark-state-tool-registration.ts";
 import {
   normalizeTaskKind,
   normalizeTaskStatus,
-} from "../packages/spark-extension/src/extension/task-plan-tool.ts";
-import { normalizeSparkAskReplayArtifactRef } from "../packages/spark-extension/src/extension/spark-ask-tool-registration.ts";
+} from "../packages/pi-extension/src/extension/task-plan-tool.ts";
+import { normalizeSparkAskReplayArtifactRef } from "../packages/pi-extension/src/extension/spark-ask-tool-registration.ts";
 import {
   inferSessionGoalObjective,
   loadSessionGoal,
   setSessionGoal,
   updateSessionGoalStatus,
-} from "../packages/spark-extension/src/extension/spark-session-goals.ts";
+} from "../packages/pi-extension/src/extension/spark-session-goals.ts";
 import {
   loadSessionLoop,
   setSessionLoop,
-} from "../packages/spark-extension/src/extension/spark-session-loops.ts";
+} from "../packages/pi-extension/src/extension/spark-session-loops.ts";
 import type {
   ReviewInput,
   ReviewerRunResult,
   ReviewerRunner,
-} from "../packages/spark-extension/src/extension/reviewer-runner.ts";
+} from "../packages/pi-extension/src/extension/reviewer-runner.ts";
 
 type SparkExtensionApiForTest = Parameters<typeof sparkExtension>[0];
 type SparkToolConfig = Parameters<NonNullable<SparkExtensionApiForTest["registerTool"]>>[0];
@@ -513,7 +513,7 @@ void test("Spark tool normalizer groups reject invalid explicit parameters inste
             evidence: {
               title: " Evidence title ",
               notes: " Notes ",
-              changedFiles: [" packages/spark-extension/src/file.ts "],
+              changedFiles: [" packages/pi-extension/src/file.ts "],
               sourceRefs: [" test/file.test.ts:10 "],
               validationCommands: [" pnpm test — pass "],
             },
@@ -526,7 +526,7 @@ void test("Spark tool normalizer groups reject invalid explicit parameters inste
           evidence: {
             title: "Evidence title",
             notes: "Notes",
-            changedFiles: ["packages/spark-extension/src/file.ts"],
+            changedFiles: ["packages/pi-extension/src/file.ts"],
             sourceRefs: ["test/file.test.ts:10"],
             validationCommands: ["pnpm test — pass"],
           },
@@ -1824,7 +1824,7 @@ void test("/loop foreground driver persists, uses loop tool scheduling, and does
   }) as typeof clearTimeout;
 
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -2049,7 +2049,7 @@ void test("/loop foreground driver keeps retrying failures with capped backoff",
   }) as typeof clearTimeout;
 
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -2126,7 +2126,7 @@ void test("/goal foreground loop reschedules active goal on session_start", asyn
   }) as typeof clearTimeout;
 
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -2199,7 +2199,7 @@ void test("/goal foreground loop does not duplicate awaiting continuations", asy
     if (fake) fake.cleared = true;
   }) as typeof clearTimeout;
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -2492,7 +2492,7 @@ void test("/goal foreground loop completes active goal when reviewer says achiev
     if (fake) fake.cleared = true;
   }) as typeof clearTimeout;
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -2579,7 +2579,7 @@ void test("/goal foreground loop includes completed current project evidence", a
     if (fake) fake.cleared = true;
   }) as typeof clearTimeout;
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -2699,7 +2699,7 @@ void test("/goal foreground loop blocks completion when project tasks remain unf
     if (fake) fake.cleared = true;
   }) as typeof clearTimeout;
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -2784,7 +2784,7 @@ void test("/goal foreground loop includes project-scoped review artifacts", asyn
     if (fake) fake.cleared = true;
   }) as typeof clearTimeout;
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -2891,7 +2891,7 @@ void test("/goal foreground loop records unmet reviewer verdict before continuat
     if (fake) fake.cleared = true;
   }) as typeof clearTimeout;
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -2980,7 +2980,7 @@ void test("/goal foreground loop defers while task finish review is running", as
     if (fake) fake.cleared = true;
   }) as typeof clearTimeout;
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -3251,7 +3251,7 @@ void test("/goal foreground loop keeps retrying with capped backoff", async () =
   }) as typeof clearTimeout;
 
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -3367,7 +3367,7 @@ void test("/goal foreground loop pauses without retry after manual abort", async
   }) as typeof clearTimeout;
 
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -3461,7 +3461,7 @@ void test("/goal foreground loop clears retry state after successful turn", asyn
   }) as typeof clearTimeout;
 
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -3558,7 +3558,7 @@ void test("/goal foreground loop waits for idle and stops after pause", async ()
   }) as typeof clearTimeout;
 
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -3737,7 +3737,7 @@ void test("/goal foreground loop defers ticks while compaction is active", async
   }) as typeof clearTimeout;
 
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
     }
   }
@@ -5441,7 +5441,7 @@ void test("impl_finish_task can create bounded task evidence artifact before rev
         title: "Generated finish evidence",
         notes: "Bounded evidence notes.",
         changedFiles: [
-          "packages/spark-extension/src/extension/spark-finish-task-tool-registration.ts",
+          "packages/pi-extension/src/extension/spark-finish-task-tool-registration.ts",
         ],
         sourceRefs: ["test/spark-tools.test.ts:generated-evidence"],
         validationCommands: ["pnpm run test:file test/spark-tools.test.ts — pass"],
@@ -6809,7 +6809,7 @@ void test("spark_goal foreground loop asks agent to bootstrap a project when non
     if (fake) fake.cleared = true;
   }) as typeof clearTimeout;
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1)
+    for (let index = 0; index < 100; index += 1)
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
   }
 
@@ -6871,7 +6871,7 @@ void test("spark_goal foreground loop hides internal artifact validation errors 
     warnings.push(args.map(String).join(" "));
   }) as typeof console.warn;
   async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 20; index += 1)
+    for (let index = 0; index < 100; index += 1)
       await new Promise((resolve) => originalSetTimeout(resolve, 0));
   }
 

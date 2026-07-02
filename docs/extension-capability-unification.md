@@ -101,12 +101,12 @@ The text summary stays compact. Full structured data lives in `details` or artif
 | Role specs/runs        | `packages/spark-roles/src/extension.ts`, `docs/role-boundaries.md`                                  | `spark-roles`                       | Generic reusable role ownership is correct; Spark role execution goes through task/run policy.                                           |
 | Ask UI                 | `packages/spark-ask/src/index.ts`, `packages/spark-ask/src/flow.ts`                                    | `spark-ask`                         | Generic ask UI/result semantics are exposed through canonical `ask`; focused/flow implementations are internal.                          |
 | Artifacts              | `packages/spark-artifacts/src/index.ts`, `packages/spark-artifacts/src/extension.ts`                   | `spark-artifacts`                   | Artifact store is generic evidence infrastructure, not Spark-specific.                                                                   |
-| Task graph/TODO/run    | `packages/spark-tasks/src/*`, `packages/spark-extension/src/extension/index.ts` action handlers               | `spark-tasks` + Spark facade        | TODO belongs to task state; project/task/TODO/run are split into `task_read`, `task_write`, and explicit `assign` capability surfaces.      |
+| Task graph/TODO/run    | `packages/spark-tasks/src/*`, `packages/pi-extension/src/extension/index.ts` action handlers               | `spark-tasks` + Spark facade        | TODO belongs to task state; project/task/TODO/run are split into `task_read`, `task_write`, and explicit `assign` capability surfaces.      |
 | Learnings              | `packages/spark-learnings/src/*`                                                                    | `spark-learnings`                   | Evidence-backed learning is generic; plural `.learnings/` is retained.                                                                   |
-| Active context         | `packages/spark-context/src/extension.ts`, `packages/spark-extension/src/extension/spark-active-context.ts`   | `spark-context` + Spark provider    | Spark registers a bounded `spark.active` provider.                                                                                       |
+| Active context         | `packages/spark-context/src/extension.ts`, `packages/pi-extension/src/extension/spark-active-context.ts`   | `spark-context` + Spark provider    | Spark registers a bounded `spark.active` provider.                                                                                       |
 | Recall/memory          | `packages/spark-recall/src/index.ts`                                                                | `spark-recall`                      | Lightweight explicit recall is separate from `spark-learnings`.                                                                             |
-| Workflow saved scripts | `packages/spark-workflows/src/*`, `packages/spark-extension/src/extension/spark-workflow-registry.ts`         | `spark-workflows` + Spark facade    | Saved scripts and workflow-run state are reusable Pi workflow capability; Spark `/workflow` delegates policy.                            |
-| Spark state cleanup    | `packages/spark-extension/src/extension/spark-state-tool-registration.ts`, `docs/spark-store-inventory.md` | Spark facade + individual stores | Split broad cleanup into owner-specific maintenance actions. Avoid one broad unrestricted state cleanup tool.                            |
+| Workflow saved scripts | `packages/spark-workflows/src/*`, `packages/pi-extension/src/extension/spark-workflow-registry.ts`         | `spark-workflows` + Spark facade    | Saved scripts and workflow-run state are reusable Pi workflow capability; Spark `/workflow` delegates policy.                            |
+| Spark state cleanup    | `packages/pi-extension/src/extension/spark-state-tool-registration.ts`, `docs/spark-store-inventory.md` | Spark facade + individual stores | Split broad cleanup into owner-specific maintenance actions. Avoid one broad unrestricted state cleanup tool.                            |
 | Pi-only side thread    | `packages/pi-btw/`                                                                               | `pi-btw`                         | Keep Pi-host-only. Do not add to native Spark TUI defaults or auto-ingest hidden side threads into main context.                         |
 | Cue/Graft              | `packages/spark-cue`, `packages/spark-graft`                                                           | `spark-cue`, `spark-graft`             | Domain-specific explicit tool families are not duplicated by Spark. Keep out of this pass except common envelope/rendering improvements. |
 
@@ -323,7 +323,7 @@ Execution and workflow-run retention remain host/Spark policy rather than public
 
 ## Spark facade after cutover
 
-`packages/spark-extension` should register Spark commands and Spark-specific providers/policy only:
+`packages/pi-extension` should register Spark commands and Spark-specific providers/policy only:
 
 - Spark default research behavior
 - `/plan`

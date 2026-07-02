@@ -20,7 +20,7 @@ This is the final evidence matrix for the Spark live dynamic workflow refactor. 
 ## Focused final command set
 
 ```text
-pnpm --filter @zendev-lab/spark-extension run check
+pnpm --filter @zendev-lab/pi-extension run check
 node --experimental-strip-types --test --test-name-pattern "workflow_run returns before background|streams live onUpdate|DynamicWorkflowManager applies pause|zero-agent parallel helper|dashboard renders isolated Graft|production dynamic workflow surfaces are cut over|event store migrates v1" test/spark-workflows.test.ts
 node --experimental-strip-types --test --test-name-pattern "impl_status includes active dynamic workflow snapshot projection|impl_workflow_runs renders|/workflow selector commands" test/spark-tools.test.ts
 node --experimental-strip-types --test --test-name-pattern "dynamic workflow result|active dynamic workflow snapshot progress|projects active dynamic workflow snapshots" test/spark-widget.test.ts

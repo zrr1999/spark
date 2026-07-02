@@ -2,7 +2,9 @@
 
 Reusable artifact/evidence storage for Spark capability hosts.
 
-`@zendev-lab/spark-artifacts` owns content-addressed artifact metadata, blobs, provenance, links, and the canonical `artifact` tool for Spark capability packages and host facades.
+`@zendev-lab/spark-artifacts` owns content-addressed artifact metadata, blobs, provenance, links, the canonical `artifact` tool, and the safe `spark.ui.v1` Generative UI parser used by Cockpit artifact rendering.
+
+Import Generative UI types and parsing from `@zendev-lab/spark-artifacts/generative-ui`.
 
 Prefer constructing `ArtifactStore` with an explicit `rootDir` owned by the host package. The exported `defaultArtifactStore(cwd)` reads `.spark/artifacts/`.
 

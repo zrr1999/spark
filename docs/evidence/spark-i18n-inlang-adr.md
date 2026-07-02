@@ -9,14 +9,14 @@ Project: `proj:4c3508b5-6097-48ee-9d52-d2abeec121a8` — Spark Cockpit chat UI a
 The project now needs a shared `@zendev-lab/spark-i18n` package that centralizes localization across:
 
 - `apps/spark-cockpit` SvelteKit UI
-- `packages/spark-extension` goal/context/notification copy
+- `packages/pi-extension` goal/context/notification copy
 - Spark-owned TUI/CLI-facing strings where the full-repo audit marks them user-facing
 
 Current repo observations:
 
 - Cockpit owns `apps/spark-cockpit/src/lib/i18n.ts` plus `apps/spark-cockpit/src/lib/i18n/en.json` and `zh-CN.json`. That module provides locale matching, request dictionary selection, status labels, relative time, enum labels, and byte formatting.
 - Cockpit route server files import `getRequestDictionary` / `localeCookieName`; Svelte files import `formatRelativeTime`, `formatByteSize`, `enumLabel`, and `statusLabel` from `$lib/i18n`.
-- `packages/spark-extension/src/extension/spark-i18n.ts` owns a separate `SparkLanguage = "en" | "zh"` path and bilingual strings for goal notifications, goal instructions, active context, and related extension copy.
+- `packages/pi-extension/src/extension/spark-i18n.ts` owns a separate `SparkLanguage = "en" | "zh"` path and bilingual strings for goal notifications, goal instructions, active context, and related extension copy.
 - `apps/spark-tui`, `apps/spark-cli`, `packages/spark-tui`, and some `pi-*` packages have user-facing strings and status labels, but many of those are generic Pi surfaces or machine/debug output. The next audit task must classify them before migration.
 
 The user explicitly chose Inlang: “用inlang吧”. The remaining decision is therefore integration shape, not whether to use Inlang.

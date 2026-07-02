@@ -269,10 +269,11 @@ function messageContentText(content: unknown): string | null {
   return text || null;
 }
 
-function parseJson(value: string): unknown | null {
+function parseJson(value: string): Record<string, unknown> | null {
   if (!value.startsWith("{") || !value.endsWith("}")) return null;
   try {
-    return JSON.parse(value) as unknown;
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : null;
   } catch {
     return null;
   }

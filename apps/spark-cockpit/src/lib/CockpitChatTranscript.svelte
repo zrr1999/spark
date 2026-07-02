@@ -78,7 +78,7 @@
     formatRelative: (value: string | null) => string;
   } = $props();
 
-  let transcriptElement: HTMLDivElement | undefined;
+  let transcriptElement = $state<HTMLDivElement | undefined>(undefined);
   let stickToBottom = $state(true);
   let transcriptTurns = $derived(
     buildCockpitChatTranscriptTurns(commands, invocations, logChunks, {
@@ -105,8 +105,7 @@
   let transcriptScrollSignal = $derived(`${transcriptTurns.length}:${logChunks.length}`);
 
   $effect(() => {
-    transcriptScrollSignal;
-    if (!transcriptElement || !stickToBottom) return;
+    if (!transcriptElement || !stickToBottom || transcriptScrollSignal.length === 0) return;
     queueMicrotask(() => {
       transcriptElement?.scrollTo({ top: transcriptElement.scrollHeight, behavior: "smooth" });
     });

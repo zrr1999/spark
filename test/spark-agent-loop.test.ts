@@ -117,6 +117,7 @@ void test("SparkAgentLoop times out a never-resolving model stream", async () =>
     ({
       async *[Symbol.asyncIterator]() {
         await new Promise<never>(() => undefined);
+        yield undefined as never;
       },
       result: async () => await new Promise<never>(() => undefined),
     }) as ReturnType<SparkAgentStreamFunction>;

@@ -4,7 +4,7 @@ import type {
   AssistantMessageEvent,
   Model,
   ModelThinkingLevel,
-  Provider,
+  ProviderId,
   ThinkingLevelMap,
 } from "@earendil-works/pi-ai";
 export type {
@@ -37,13 +37,13 @@ export interface SparkModelCapabilities {
 
 export interface SparkModelIdentity {
   api?: Api;
-  provider?: Provider;
+  provider?: ProviderId;
   model?: string;
 }
 
 export interface ResolvedSparkModelIdentity {
   api: Api;
-  provider: Provider;
+  provider: ProviderId;
   model: string;
 }
 
@@ -79,7 +79,7 @@ export interface SparkModelProfile {
  */
 export interface ProviderRoute<TApi extends Api = Api> {
   id: ProviderRouteId;
-  provider: Provider;
+  provider: ProviderId;
   label?: string;
   priority: number;
   enabled?: boolean;

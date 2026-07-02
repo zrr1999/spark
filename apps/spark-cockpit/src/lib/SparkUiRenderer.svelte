@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { SparkUiDiagnostic, SparkUiDocumentV1 } from "@zendev-lab/spark-generative-ui";
+  import type { SparkUiDiagnostic, SparkUiDocumentV1 } from "@zendev-lab/spark-artifacts/generative-ui";
   import SafeMarkdown from "$lib/SafeMarkdown.svelte";
 
   type Labels = {

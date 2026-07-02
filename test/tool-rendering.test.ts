@@ -9,7 +9,7 @@ import piAskExtension from "../packages/spark-ask/src/extension.ts";
 import { registerPiCueTools } from "../packages/spark-cue/src/index.ts";
 import piGraftExtension from "../packages/spark-graft/src/extension.ts";
 import { registerPiRolesTools } from "../packages/spark-roles/src/extension.ts";
-import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
+import sparkExtension from "../packages/pi-extension/src/extension/index.ts";
 
 interface RenderTheme {
   fg: (_color: string, text: string) => string;

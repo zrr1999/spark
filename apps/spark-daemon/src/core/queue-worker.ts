@@ -96,7 +96,7 @@ function launchQueueTask(
     ...options,
     invocationId: invocation.invocationId,
     signal: invocation.signal,
-    cancelInvocation: invocation.cancel,
+    cancelInvocation: (reason?: string) => invocation.cancel(reason),
   })
     .catch((error) => {
       console.error(

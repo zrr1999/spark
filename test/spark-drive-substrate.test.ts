@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   SparkForegroundDriveSubstrate,
   scheduledDriveDelayMs,
-} from "../packages/spark-extension/src/extension/spark-drive-substrate.ts";
+} from "../packages/pi-extension/src/extension/spark-drive-substrate.ts";
 
 void test("SparkForegroundDriveSubstrate cancels stale generations per drive", async () => {
   const substrate = new SparkForegroundDriveSubstrate();

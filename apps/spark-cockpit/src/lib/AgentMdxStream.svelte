@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { parseSparkUiSource } from "@zendev-lab/spark-generative-ui";
+  import { parseSparkUiSource } from "@zendev-lab/spark-artifacts/generative-ui";
   import SparkUiRenderer from "$lib/SparkUiRenderer.svelte";
 
   let {

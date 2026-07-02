@@ -27,7 +27,7 @@ $lib/i18n|from "[^"]*i18n|from '[^']*i18n|localeCookieName|getRequestDictionary|
 Findings before migration:
 
 - `apps/spark-cockpit/src/lib/i18n.ts` owned local dictionaries/helpers.
-- `packages/spark-extension/src/extension/spark-i18n.ts` owned bilingual goal/context strings.
+- `packages/pi-extension/src/extension/spark-i18n.ts` owned bilingual goal/context strings.
 - CLI/TUI/daemon/tool copy was spread across root CLI, native TUI, TUI subcommands, daemon CLI, and Spark extension tool registration paths.
 
 ### Candidate literal scan
@@ -43,21 +43,21 @@ High-priority candidate groups and final status:
 | 175 | `apps/spark-daemon/src/cli.ts` | shared daemon submit/unknown-command diagnostics migrated; auth/token prompt mechanics intentionally local |
 | 156 | `apps/spark-tui/src/native-tui.ts` | `migrated-to-spark-i18n` for core UI/help/command strings |
 | 118 | `apps/spark-tui/src/cli/pi-parity-commands.ts` | `migrated-to-spark-i18n` for slash descriptions and high-level diagnostics |
-| 106 | `packages/spark-extension/src/extension/spark-i18n.ts` | `migrated-to-spark-i18n` via facade |
-| 70 | `packages/spark-extension/src/extension/learning-tool-registration.ts` | tool copy flows through `sparkExtensionToolCopy()`; parameter schemas remain local/internal |
-| 69 | `packages/spark-extension/src/extension/spark-command-registration.ts` | command/tool copy flows through shared registration facade where registered |
-| 61 | `packages/spark-extension/src/extension/spark-goal-tool-registration.ts` | tool copy flows through `sparkExtensionToolCopy()`; behavioral reviewer contracts remain protocol/internal |
-| 55 | `packages/spark-extension/src/extension/reviewer-runner.ts` | `protocol/internal` reviewer prompt/JSON contract |
+| 106 | `packages/pi-extension/src/extension/spark-i18n.ts` | `migrated-to-spark-i18n` via facade |
+| 70 | `packages/pi-extension/src/extension/learning-tool-registration.ts` | tool copy flows through `sparkExtensionToolCopy()`; parameter schemas remain local/internal |
+| 69 | `packages/pi-extension/src/extension/spark-command-registration.ts` | command/tool copy flows through shared registration facade where registered |
+| 61 | `packages/pi-extension/src/extension/spark-goal-tool-registration.ts` | tool copy flows through `sparkExtensionToolCopy()`; behavioral reviewer contracts remain protocol/internal |
+| 55 | `packages/pi-extension/src/extension/reviewer-runner.ts` | `protocol/internal` reviewer prompt/JSON contract |
 | 54 | `apps/spark-cockpit/src/lib/server/workspace-profiles.ts` | Cockpit dictionary path migrated where applicable; file/path errors local/internal |
 | 44 | `packages/spark-ask/src/ui/render.ts` | `intentionally-local` generic Pi UI |
 | 44 | `apps/spark-tui/src/cli/daemon.ts` | `migrated-to-spark-i18n` for daemon CLI/client messages |
-| 43 | `packages/spark-extension/src/extension/spark-project-tool-registration.ts` | tool copy flows through `sparkExtensionToolCopy()`; parameter schemas remain local/internal |
-| 31 | `packages/spark-extension/src/extension/spark-status-rendering.ts` | extension/context/status copy centralized where surfaced through Spark i18n helpers; generated data rows local/internal |
+| 43 | `packages/pi-extension/src/extension/spark-project-tool-registration.ts` | tool copy flows through `sparkExtensionToolCopy()`; parameter schemas remain local/internal |
+| 31 | `packages/pi-extension/src/extension/spark-status-rendering.ts` | extension/context/status copy centralized where surfaced through Spark i18n helpers; generated data rows local/internal |
 | 30 | `apps/spark-tui/src/cli/resource-manager.ts` | `migrated-to-spark-i18n` for resource command diagnostics |
 | 27 | `apps/spark-cli/src/cli.ts` | `migrated-to-spark-i18n` for top-level CLI help/errors |
 | 23 | `apps/spark-daemon/src/spark/bridge.ts` | `protocol/internal` runtime bridge logs/events |
 | 20 | `apps/spark-tui/src/host/theme.ts` | `intentionally-local` theme catalog data |
-| 19 | `packages/spark-extension/src/extension/spark-ask-tool-registration.ts` | tool copy flows through `sparkExtensionToolCopy()`; parameter schema text remains local/internal |
+| 19 | `packages/pi-extension/src/extension/spark-ask-tool-registration.ts` | tool copy flows through `sparkExtensionToolCopy()`; parameter schema text remains local/internal |
 | 15 | `apps/spark-tui/src/host/model-selector.ts` | shared TUI/model entry strings migrated; host internals local/internal |
 | 12 | `apps/spark-daemon/src/registration.ts` | auth/registration policy diagnostics intentionally local |
 | 10 | `packages/pi-loop/src/goal-format.ts` | `intentionally-local` generic Pi/Spark loop package boundary |
@@ -69,8 +69,8 @@ High-priority candidate groups and final status:
 | Area | Paths | Implementation |
 | --- | --- | --- |
 | Cockpit dictionaries/helpers | `apps/spark-cockpit/src/lib/i18n.ts`, old local JSON dictionaries | App facade imports shared Cockpit dictionaries/helpers from `@zendev-lab/spark-i18n`. |
-| Extension language/goal/context copy | `packages/spark-extension/src/extension/spark-i18n.ts` | Extension facade re-exports from `@zendev-lab/spark-i18n/extension`. |
-| Extension context provider and tool copy | `packages/spark-extension/src/extension/index.ts`, `spark-tool-operational-notes.ts` | Context label/description, operational notes, and registered tool copy flow through shared extension i18n facade. |
+| Extension language/goal/context copy | `packages/pi-extension/src/extension/spark-i18n.ts` | Extension facade re-exports from `@zendev-lab/spark-i18n/extension`. |
+| Extension context provider and tool copy | `packages/pi-extension/src/extension/index.ts`, `spark-tool-operational-notes.ts` | Context label/description, operational notes, and registered tool copy flow through shared extension i18n facade. |
 | Top-level Spark CLI | `apps/spark-cli/src/cli.ts` | Uses `sparkCliDispatcherStrings()`. |
 | Spark TUI entry/model/RPC | `apps/spark-tui/src/cli.ts` | Uses `sparkTuiCliStrings()`. |
 | Native TUI core UI/help | `apps/spark-tui/src/native-tui.ts` | Uses `sparkNativeTuiStrings()`. |

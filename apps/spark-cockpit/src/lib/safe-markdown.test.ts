@@ -1,4 +1,4 @@
-import { parseSparkUiSource } from "@zendev-lab/spark-generative-ui";
+import { parseSparkUiSource } from "@zendev-lab/spark-artifacts/generative-ui";
 import { describe, expect, it } from "vitest";
 import { parseSafeMarkdown } from "./safe-markdown";
 

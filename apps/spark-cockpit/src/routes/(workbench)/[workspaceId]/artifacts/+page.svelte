@@ -1,9 +1,10 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
+  import WorkspaceAgentProduct from "$lib/WorkspaceAgentProduct.svelte";
   import { enumLabel, formatByteSize, formatRelativeTime } from "$lib/i18n";
   import { workspacePath } from "$lib/workspace-routes";
 
-  let { data } = $props();
+  let { data, form } = $props();
   let t = $derived(data.messages.artifacts);
   let common = $derived(data.messages.common);
   let workspaceUrl = $derived(data.workspace ? workspacePath(data.workspace) : "/");
@@ -70,13 +71,17 @@
       <p>{t.emptyWorkspace.body}</p>
       <a class="secondary-action" href={workspaceUrl}>{t.emptyWorkspace.action}</a>
     </section>
-  {:else if data.artifacts.length === 0}
+  {:else}
+    <WorkspaceAgentProduct {data} {form} />
+  {/if}
+
+  {#if data.workspace && data.artifacts.length === 0}
     <section class="panel empty-state">
       <div class="empty-icon"><Icon name="artifacts" size={28} /></div>
       <h2>{t.empty.title}</h2>
       <p>{t.empty.body}</p>
     </section>
-  {:else}
+  {:else if data.workspace && data.artifacts.length > 0}
     <section class="panel" aria-labelledby="artifact-list-title">
       <div class="panel-header">
           <div>

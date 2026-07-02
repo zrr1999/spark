@@ -29,18 +29,18 @@ import {
 import {
   registerSparkWorkflowRunTool,
   workflowAgentTelemetryFromRoleRun,
-} from "../packages/spark-extension/src/extension/spark-workflow-run-tool-registration.ts";
+} from "../packages/pi-extension/src/extension/spark-workflow-run-tool-registration.ts";
 import {
   defaultSparkDynamicWorkflowEventStore,
   type SparkDynamicWorkflowEventInput,
-} from "../packages/spark-extension/src/extension/spark-dynamic-workflow-event-store.ts";
-import { defaultSparkDynamicWorkflowManager } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-manager.ts";
-import { defaultSparkDynamicWorkflowRunStore } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-run-store.ts";
+} from "../packages/pi-extension/src/extension/spark-dynamic-workflow-event-store.ts";
+import { defaultSparkDynamicWorkflowManager } from "../packages/pi-extension/src/extension/spark-dynamic-workflow-manager.ts";
+import { defaultSparkDynamicWorkflowRunStore } from "../packages/pi-extension/src/extension/spark-dynamic-workflow-run-store.ts";
 import {
   buildSparkDynamicWorkflowDashboardView,
   formatSparkDynamicWorkflowRunLine,
   renderSparkDynamicWorkflowDashboardText,
-} from "../packages/spark-extension/src/extension/spark-dynamic-workflow-run-rendering.ts";
+} from "../packages/pi-extension/src/extension/spark-dynamic-workflow-run-rendering.ts";
 
 void test("spark-workflows package stays isolated from runtime execution packages", async () => {
   const pkg = JSON.parse(await readFile("packages/spark-workflows/package.json", "utf8")) as {
@@ -63,7 +63,7 @@ void test("spark-workflows package stays isolated from runtime execution package
 });
 
 void test("Spark production code uses generic spark-workflows imports instead of removed aliases", async () => {
-  const sourceFiles = await listTypeScriptFiles("packages/spark-extension/src");
+  const sourceFiles = await listTypeScriptFiles("packages/pi-extension/src");
   const removedPiWorkflowImports =
     /import\s+(?:type\s+)?\{[^}]*\b(?:defaultSparkDagRunStore|defaultWorkflowRunStore|workspaceWorkflowDir|SparkDag\w*|SparkWorkflow\w*|sparkDagRunNextSteps|runReadySparkTasks)\b[^}]*\}\s+from\s+["'](?:@zendev-lab\/)?spark-workflows["']/su;
   for (const file of sourceFiles) {
@@ -1501,7 +1501,7 @@ return 'ok'`;
 });
 
 void test("Spark production dynamic workflow surfaces are cut over to v2 event store", async () => {
-  const sourceFiles = await listTypeScriptFiles("packages/spark-extension/src/extension");
+  const sourceFiles = await listTypeScriptFiles("packages/pi-extension/src/extension");
   const offenders: string[] = [];
   for (const file of sourceFiles) {
     if (file.endsWith("spark-dynamic-workflow-run-store.ts")) continue;

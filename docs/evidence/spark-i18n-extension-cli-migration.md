@@ -7,7 +7,7 @@ Project: `proj:4c3508b5-6097-48ee-9d52-d2abeec121a8`
 
 ### Extension core and tool copy
 
-`packages/spark-extension/src/extension/spark-i18n.ts` remains a thin facade over `@zendev-lab/spark-i18n/extension`.
+`packages/pi-extension/src/extension/spark-i18n.ts` remains a thin facade over `@zendev-lab/spark-i18n/extension`.
 
 `packages/spark-i18n/src/extension.ts` now centralizes:
 
@@ -47,8 +47,8 @@ Migrated consumer surfaces include:
 - `apps/spark-tui/src/cli/resource-manager.ts`
 - `apps/spark-tui/src/cli/pi-parity-commands.ts`
 - `apps/spark-daemon/src/cli.ts` for shared daemon submit/unknown-command diagnostics
-- `packages/spark-extension/src/extension/index.ts`
-- `packages/spark-extension/src/extension/spark-tool-operational-notes.ts`
+- `packages/pi-extension/src/extension/index.ts`
+- `packages/pi-extension/src/extension/spark-tool-operational-notes.ts`
 
 Runtime smoke also fixed Node v26 direct workspace execution by using extensionful internal imports in `spark-i18n` and replacing runtime JSON imports with TS dictionary modules.
 
@@ -66,7 +66,7 @@ Runtime smoke also fixed Node v26 direct workspace execution by using extensionf
 Passing validation commands for this broadened slice:
 
 - `pnpm --filter @zendev-lab/spark-i18n check`
-- `pnpm --filter @zendev-lab/spark-extension check`
+- `pnpm --filter @zendev-lab/pi-extension check`
 - `pnpm --filter @zendev-lab/spark-tui-app check`
 - `pnpm --filter @zendev-lab/spark-daemon check`
 - `pnpm exec tsc -p tsconfig.json --noEmit`
@@ -77,6 +77,6 @@ Passing validation commands for this broadened slice:
 
 Grep evidence:
 
-- `packages/spark-extension/src/extension/spark-tool-operational-notes.ts` re-exports from `@zendev-lab/spark-i18n/extension`.
-- `packages/spark-extension/src/extension/index.ts` imports `sparkExtensionToolCopy` and `sparkExtensionContextProviderStrings` from `@zendev-lab/spark-i18n/extension`.
+- `packages/pi-extension/src/extension/spark-tool-operational-notes.ts` re-exports from `@zendev-lab/spark-i18n/extension`.
+- `packages/pi-extension/src/extension/index.ts` imports `sparkExtensionToolCopy` and `sparkExtensionContextProviderStrings` from `@zendev-lab/spark-i18n/extension`.
 - `apps/spark-cli/src/cli.ts`, `apps/spark-tui/src/cli.ts`, `apps/spark-tui/src/native-tui.ts`, `apps/spark-tui/src/cli/daemon.ts`, `apps/spark-tui/src/cli/resource-manager.ts`, and `apps/spark-tui/src/cli/pi-parity-commands.ts` import `@zendev-lab/spark-i18n/cli`.

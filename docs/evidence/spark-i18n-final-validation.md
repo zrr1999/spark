@@ -37,7 +37,7 @@ Created `packages/spark-i18n` with:
 
 ### Spark extension
 
-- `packages/spark-extension/src/extension/spark-i18n.ts` is now a thin re-export facade from `@zendev-lab/spark-i18n/extension`.
+- `packages/pi-extension/src/extension/spark-i18n.ts` is now a thin re-export facade from `@zendev-lab/spark-i18n/extension`.
 - Core language/goal/context strings live in `packages/spark-i18n/src/extension.ts`.
 - Spark context provider labels/descriptions are supplied by `sparkExtensionContextProviderStrings`.
 - Tool operational notes are re-exported from `@zendev-lab/spark-i18n/extension`.
@@ -71,7 +71,7 @@ All commands below passed on 2026-06-30:
   - Paraglide compilation passed
   - `tsc -p packages/spark-i18n/tsconfig.json --noEmit` passed
   - Vitest passed: 2 files, 14 tests
-- `pnpm --filter @zendev-lab/spark-extension check`
+- `pnpm --filter @zendev-lab/pi-extension check`
   - workspace TypeScript check passed
 - `pnpm --filter @zendev-lab/spark-tui-app check`
   - native TUI TypeScript check passed
