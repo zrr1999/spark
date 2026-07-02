@@ -60,6 +60,11 @@
       "@zendev-lab/spark-protocol": ["./packages/spark-protocol/src/index.ts"],
       "@zendev-lab/spark-runtime": ["./packages/spark-runtime/src/index.ts"],
       "@zendev-lab/spark-server": ["./packages/spark-server/src/index.ts"],
+      "@zendev-lab/spark-server/agents-product": ["./packages/spark-server/src/agents-product.ts"],
+      "@zendev-lab/spark-server/artifact-cache": ["./packages/spark-server/src/artifact-cache.ts"],
+      "@zendev-lab/spark-server/cockpit-queries": [
+        "./packages/spark-server/src/cockpit-queries.ts"
+      ],
       "@zendev-lab/spark-server/command-submission": [
         "./packages/spark-server/src/command-submission.ts"
       ],
@@ -75,6 +80,7 @@
         "./packages/spark-server/src/runtime-registration.ts"
       ],
       "@zendev-lab/spark-server/runtime-ws": ["./packages/spark-server/src/runtime-ws.ts"],
+      "@zendev-lab/spark-server/routing": ["./packages/spark-server/src/routing.ts"],
       "@zendev-lab/spark-server/search": ["./packages/spark-server/src/search.ts"],
       "@zendev-lab/spark-server/security": ["./packages/spark-server/src/security.ts"],
       "@zendev-lab/spark-turn": ["./packages/spark-turn/src/agent-loop.ts"],

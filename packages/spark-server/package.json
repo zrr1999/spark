@@ -12,6 +12,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./agents-product": "./src/agents-product.ts",
+    "./artifact-cache": "./src/artifact-cache.ts",
+    "./cockpit-queries": "./src/cockpit-queries.ts",
     "./command-submission": "./src/command-submission.ts",
     "./events": "./src/events.ts",
     "./liveness": "./src/liveness.ts",
@@ -19,6 +22,7 @@
     "./projection-services": "./src/projection-services.ts",
     "./runtime-registration": "./src/runtime-registration.ts",
     "./runtime-ws": "./src/runtime-ws.ts",
+    "./routing": "./src/routing.ts",
     "./search": "./src/search.ts",
     "./security": "./src/security.ts"
   },

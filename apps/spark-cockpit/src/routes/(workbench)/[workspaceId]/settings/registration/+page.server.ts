@@ -1,94 +1,23 @@
-import { fail } from "@sveltejs/kit";
+import { fail, error as kitError } from "@sveltejs/kit";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { ensureCurrentOwnerSession } from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";
 import { formText } from "$lib/server/form-data";
 import {
   createRuntimeEnrollmentToken,
-  listRuntimeEnrollmentTokens,
   revokeRuntimeEnrollmentToken,
 } from "$lib/server/runtime-registration";
-import { requireWorkspaceByRouteId } from "$lib/server/workspace-routing";
+import { loadWorkspaceRegistrationPage } from "@zendev-lab/spark-server/cockpit-queries";
 import { workspacePath } from "$lib/workspace-routes";
 import type { Actions, PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = ({ params, url }) => {
-  const db = getDatabase();
-  const workspace = loadWorkspaceRegistration(db, params.workspaceId);
-
-  const runnerConnections = db
-    .prepare(
-      `SELECT DISTINCT rc.id,
-              rc.installation_id AS installationId,
-              rc.name,
-              rc.status,
-              rc.protocol_version AS protocolVersion,
-              rc.last_heartbeat_at AS lastHeartbeatAt,
-              rc.updated_at AS updatedAt
-       FROM runtime_connections rc
-       JOIN runtime_workspace_bindings rb ON rb.runtime_id = rc.id
-       JOIN workspace_owner_bindings wob
-         ON wob.runtime_workspace_binding_id = rb.id
-        AND wob.ended_at IS NULL
-       WHERE wob.workspace_id = ?
-       ORDER BY rc.updated_at DESC`,
-    )
-    .all(workspace.id) as Array<{
-    id: string;
-    installationId: string | null;
-    name: string;
-    status: "online" | "offline" | "draining" | "disabled";
-    protocolVersion: string | null;
-    lastHeartbeatAt: string | null;
-    updatedAt: string;
-  }>;
-
-  const runnerBindings = db
-    .prepare(
-      `SELECT rb.id,
-              rb.runtime_id AS runtimeId,
-              rb.local_workspace_key AS localWorkspaceKey,
-              rb.display_name AS displayName,
-              rb.status,
-              rb.last_snapshot_at AS lastSnapshotAt,
-              rb.updated_at AS updatedAt,
-              rc.name AS runtimeName,
-              rc.status AS runtimeStatus
-       FROM runtime_workspace_bindings rb
-       JOIN runtime_connections rc ON rc.id = rb.runtime_id
-       JOIN workspace_owner_bindings wob
-         ON wob.runtime_workspace_binding_id = rb.id
-        AND wob.ended_at IS NULL
-       WHERE wob.workspace_id = ?
-       ORDER BY rb.updated_at DESC`,
-    )
-    .all(workspace.id) as Array<{
-    id: string;
-    runtimeId: string;
-    localWorkspaceKey: string;
-    displayName: string;
-    status: "available" | "indexing" | "degraded" | "unavailable" | "archived";
-    lastSnapshotAt: string | null;
-    updatedAt: string;
-    runtimeName: string;
-    runtimeStatus: string;
-  }>;
-
-  const connectedSessions = db
-    .prepare("SELECT COUNT(*) AS count FROM runtime_sessions WHERE status = 'connected'")
-    .get() as { count: number };
-
+  const page = loadWorkspaceRegistrationPage(getDatabase(), params.workspaceId);
+  if (!page) throw kitError(404, "Workspace not found.");
   return {
-    workspace,
-    backSettingsPath: workspacePath(workspace, "/settings"),
+    ...page,
+    backSettingsPath: workspacePath(page.workspace, "/settings"),
     serverOrigin: url.origin,
-    runnerConnections,
-    runnerBindings,
-    enrollmentTokens: listRuntimeEnrollmentTokens(db, {
-      workspaceId: workspace.id,
-      workspaceSlug: workspace.slug,
-    }),
-    connectedSessionCount: connectedSessions.count,
   };
 };
 
@@ -99,7 +28,9 @@ export const actions: Actions = {
       acceptLanguage: request.headers.get("accept-language"),
     }).settings;
     const db = getDatabase();
-    const workspace = loadWorkspaceRegistration(db, params.workspaceId);
+    const page = loadWorkspaceRegistrationPage(db, params.workspaceId);
+    if (!page) throw kitError(404, "Workspace not found.");
+    const { workspace } = page;
     const userId = ensureCurrentOwnerSession(db, cookies, locals.sessionToken);
 
     const formData = await request.formData();
@@ -146,32 +77,6 @@ export const actions: Actions = {
     };
   },
 };
-
-function loadWorkspaceRegistration(db: ReturnType<typeof getDatabase>, workspaceId: string) {
-  const routeWorkspace = requireWorkspaceByRouteId(db, workspaceId);
-  return db
-    .prepare(
-      `SELECT id,
-              slug,
-              name,
-              description,
-              status,
-              created_at AS createdAt,
-              updated_at AS updatedAt
-       FROM workspaces
-       WHERE id = ?
-       LIMIT 1`,
-    )
-    .get(routeWorkspace.id) as {
-    id: string;
-    slug: string;
-    name: string;
-    description: string | null;
-    status: "active" | "archived";
-    createdAt: string;
-    updatedAt: string;
-  };
-}
 
 function buildEnrollCommand(serverOrigin: string, refreshToken: string, workspaceName: string) {
   return [

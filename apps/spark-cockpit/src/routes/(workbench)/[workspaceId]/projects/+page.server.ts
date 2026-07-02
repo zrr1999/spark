@@ -1,5 +1,6 @@
-import { fail, redirect } from "@sveltejs/kit";
+import { fail, redirect, error as kitError } from "@sveltejs/kit";
 import { asciiSlug } from "@zendev-lab/spark-system";
+import { loadProjectsPage } from "@zendev-lab/spark-server/cockpit-queries";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { getDatabase } from "$lib/server/db";
 import { formText } from "$lib/server/form-data";
@@ -9,43 +10,9 @@ import { workspacePath } from "$lib/workspace-routes";
 import type { Actions, PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = ({ params }) => {
-  const db = getDatabase();
-  const workspace = requireWorkspaceByRouteId(db, params.workspaceId);
-
-  const projects = db
-    .prepare(
-      `SELECT p.id,
-              p.slug,
-              p.name,
-              p.description,
-              p.status,
-              p.created_at AS createdAt,
-              p.updated_at AS updatedAt,
-              COUNT(DISTINCT ii.id) FILTER (WHERE ii.status = 'pending') AS pendingInboxCount,
-              COUNT(DISTINCT mi.id) FILTER (WHERE mi.status = 'running') AS runningInvocationCount,
-              COUNT(DISTINCT a.id) AS artifactCount
-       FROM projects p
-       LEFT JOIN inbox_items ii ON ii.project_id = p.id
-       LEFT JOIN mirrored_invocations mi ON mi.project_id = p.id
-       LEFT JOIN artifacts a ON a.project_id = p.id
-       WHERE p.workspace_id = ?
-       GROUP BY p.id
-       ORDER BY p.updated_at DESC, p.created_at DESC`,
-    )
-    .all(workspace.id) as Array<{
-    id: string;
-    slug: string;
-    name: string;
-    description: string | null;
-    status: string;
-    createdAt: string;
-    updatedAt: string;
-    pendingInboxCount: number;
-    runningInvocationCount: number;
-    artifactCount: number;
-  }>;
-
-  return { workspace, projects };
+  const page = loadProjectsPage(getDatabase(), params.workspaceId);
+  if (!page) throw kitError(404, "Workspace not found.");
+  return page;
 };
 
 export const actions: Actions = {

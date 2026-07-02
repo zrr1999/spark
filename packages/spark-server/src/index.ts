@@ -1,3 +1,6 @@
+export * from "./agents-product.ts";
+export * from "./artifact-cache.ts";
+export * from "./cockpit-queries.ts";
 export * from "./command-submission.ts";
 export * from "./events.ts";
 export * from "./liveness.ts";
@@ -5,5 +8,6 @@ export * from "./project-cockpit.ts";
 export * from "./projection-services.ts";
 export * from "./runtime-registration.ts";
 export * from "./runtime-ws.ts";
+export * from "./routing.ts";
 export * from "./search.ts";
 export * from "./security.ts";

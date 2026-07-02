@@ -1,127 +1,42 @@
 import { error as kitError, fail } from "@sveltejs/kit";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import {
-  ensureArtifactPreviewCache,
-  readArtifactPreviewContent,
-  type ArtifactPreviewStatus,
-} from "$lib/server/artifact-cache";
+  loadArtifactDetailPage,
+  prepareArtifactPreviewForWorkspace,
+} from "@zendev-lab/spark-server/cockpit-queries";
 import { getDatabase } from "$lib/server/db";
-import { requireWorkspaceByRouteId } from "$lib/server/workspace-routing";
+import type { ArtifactPreviewStatus } from "$lib/server/artifact-cache";
 import type { Actions, PageServerLoad } from "./$types";
 
-interface ArtifactDetailRow {
-  id: string;
-  workspaceId: string;
-  workspaceSlug: string;
-  workspaceName: string;
-  projectId: string | null;
-  projectName: string | null;
-  scope: string;
-  kind: string;
-  title: string;
-  format: string;
-  source: string;
-  hash: string | null;
-  sizeBytes: number | null;
-  contentRefJson: string;
-  provenanceJson: string;
-  createdAt: string;
-  updatedAt: string;
-  runtimeWorkspaceBindingId: string | null;
-  runtimeWorkspaceName: string | null;
-  runtimeName: string | null;
-  invocationId: string | null;
-  runtimeInvocationId: string | null;
-  invocationStatus: string | null;
-  agentName: string | null;
-  humanRequestId: string | null;
-  humanRequestTitle: string | null;
-}
-
 export const load: PageServerLoad = ({ params }) => {
-  const workspace = requireWorkspaceByRouteId(getDatabase(), params.workspaceId);
-  const artifact = loadArtifactDetail(params.artifactId);
-  if (artifact.workspaceId !== workspace.id) {
-    throw kitError(404, "Artifact not found");
-  }
-  const links = getDatabase()
-    .prepare(
-      `SELECT id, target_kind AS targetKind, target_id AS targetId, relation, created_at AS createdAt
-       FROM artifact_links
-       WHERE artifact_id = ?
-       ORDER BY created_at ASC`,
-    )
-    .all(artifact.id) as Array<{
-    id: string;
-    targetKind: string;
-    targetId: string;
-    relation: string;
-    createdAt: string;
-  }>;
+  const page = loadArtifactDetailPage(getDatabase(), params.workspaceId, params.artifactId);
+  if (!page) throw kitError(404, "Artifact not found");
 
-  const cacheBlobs = getDatabase()
-    .prepare(
-      `SELECT id,
-              state,
-              is_preview AS isPreview,
-              cache_path AS cachePath,
-              size_bytes AS sizeBytes,
-              mime,
-              fetched_at AS fetchedAt,
-              last_accessed_at AS lastAccessedAt,
-              expires_at AS expiresAt,
-              error_json AS errorJson,
-              created_at AS createdAt,
-              updated_at AS updatedAt
-       FROM artifact_cache_blobs
-       WHERE artifact_id = ?
-       ORDER BY is_preview DESC, created_at DESC`,
-    )
-    .all(artifact.id) as Array<{
-    id: string;
-    state: string;
-    isPreview: number;
-    cachePath: string;
-    sizeBytes: number | null;
-    mime: string | null;
-    fetchedAt: string | null;
-    lastAccessedAt: string | null;
-    expiresAt: string | null;
-    errorJson: string | null;
-    createdAt: string;
-    updatedAt: string;
-  }>;
-
-  // Lazily resolve the preview cache record + body so the detail page can
-  // render real preview content for `ready` artifacts and an explicit
-  // missing/large/binary/error state otherwise. We never load oversized
-  // bodies here: `readArtifactPreviewContent` short-circuits before reading.
-  const previewResult = readArtifactPreviewContent(getDatabase(), artifact.id);
   const previewBody =
-    previewResult.cache.previewStatus === "ready" && previewResult.body
-      ? truncatePreviewBody(previewResult.body, previewResult.cache.mime)
+    page.previewResult.cache.previewStatus === "ready" && page.previewResult.body
+      ? truncatePreviewBody(page.previewResult.body, page.previewResult.cache.mime)
       : null;
   const preview = {
-    status: previewResult.cache.previewStatus satisfies ArtifactPreviewStatus,
-    state: previewResult.cache.state,
-    mime: previewResult.cache.mime,
-    sizeBytes: previewResult.cache.sizeBytes,
-    fetchedAt: previewResult.cache.fetchedAt,
-    lastAccessedAt: previewResult.cache.lastAccessedAt,
-    error: previewResult.cache.error,
+    status: page.previewResult.cache.previewStatus satisfies ArtifactPreviewStatus,
+    state: page.previewResult.cache.state,
+    mime: page.previewResult.cache.mime,
+    sizeBytes: page.previewResult.cache.sizeBytes,
+    fetchedAt: page.previewResult.cache.fetchedAt,
+    lastAccessedAt: page.previewResult.cache.lastAccessedAt,
+    error: page.previewResult.cache.error,
     body: previewBody,
     inlineLimitBytes: PREVIEW_INLINE_LIMIT_BYTES,
   };
 
   return {
     artifact: {
-      ...artifact,
-      contentRef: parseJsonObject(artifact.contentRefJson),
-      provenance: parseJsonObject(artifact.provenanceJson),
+      ...page.artifact,
+      contentRef: parseJsonObject(page.artifact.contentRefJson),
+      provenance: parseJsonObject(page.artifact.provenanceJson),
     },
-    links,
+    links: page.links,
     preview,
-    cacheBlobs: cacheBlobs.map((blob) => ({
+    cacheBlobs: page.cacheBlobs.map((blob) => ({
       ...blob,
       isPreview: blob.isPreview === 1,
       error: blob.errorJson ? parseJsonObject(blob.errorJson) : null,
@@ -135,14 +50,15 @@ export const actions: Actions = {
       cookieLocale: cookies.get(localeCookieName),
       acceptLanguage: request.headers.get("accept-language"),
     }).artifactDetail.formMessages;
-    const workspace = requireWorkspaceByRouteId(getDatabase(), params.workspaceId);
-    const artifact = loadArtifactDetail(params.artifactId);
-    if (artifact.workspaceId !== workspace.id) {
-      throw kitError(404, "Artifact not found");
-    }
     try {
-      ensureArtifactPreviewCache(getDatabase(), params.artifactId);
+      const cache = prepareArtifactPreviewForWorkspace(
+        getDatabase(),
+        params.workspaceId,
+        params.artifactId,
+      );
+      if (!cache) throw kitError(404, "Artifact not found");
     } catch (caught) {
+      if (caught && typeof caught === "object" && "status" in caught) throw caught;
       return fail(400, {
         message: caught instanceof Error ? caught.message : t.prepareFailed,
       });
@@ -151,54 +67,6 @@ export const actions: Actions = {
     return { prepared: true };
   },
 };
-
-function loadArtifactDetail(artifactId: string) {
-  const row = getDatabase()
-    .prepare(
-      `SELECT a.id,
-              a.workspace_id AS workspaceId,
-              w.slug AS workspaceSlug,
-              w.name AS workspaceName,
-              a.project_id AS projectId,
-              p.name AS projectName,
-              a.scope,
-              a.kind,
-              a.title,
-              a.format,
-              a.source,
-              a.hash,
-              a.size_bytes AS sizeBytes,
-              a.content_ref_json AS contentRefJson,
-              a.provenance_json AS provenanceJson,
-              a.created_at AS createdAt,
-              a.updated_at AS updatedAt,
-              a.runtime_workspace_binding_id AS runtimeWorkspaceBindingId,
-              rb.display_name AS runtimeWorkspaceName,
-              rc.name AS runtimeName,
-              a.invocation_id AS invocationId,
-              mi.runtime_invocation_id AS runtimeInvocationId,
-              mi.status AS invocationStatus,
-              mi.agent_name AS agentName,
-              a.human_request_id AS humanRequestId,
-              hr.title AS humanRequestTitle
-       FROM artifacts a
-       JOIN workspaces w ON w.id = a.workspace_id
-       LEFT JOIN projects p ON p.id = a.project_id
-       LEFT JOIN runtime_workspace_bindings rb ON rb.id = a.runtime_workspace_binding_id
-       LEFT JOIN runtime_connections rc ON rc.id = rb.runtime_id
-       LEFT JOIN mirrored_invocations mi ON mi.id = a.invocation_id
-       LEFT JOIN human_requests hr ON hr.id = a.human_request_id
-       WHERE a.id = ?
-       LIMIT 1`,
-    )
-    .get(artifactId) as ArtifactDetailRow | undefined;
-
-  if (!row) {
-    throw kitError(404, "Artifact not found");
-  }
-
-  return row;
-}
 
 function parseJsonObject(value: string) {
   const parsed = JSON.parse(value) as unknown;
