@@ -26,6 +26,7 @@
     "@zendev-lab/spark-db": "workspace:*",
     "@zendev-lab/spark-i18n": "workspace:*",
     "@zendev-lab/spark-protocol": "workspace:*",
+    "@zendev-lab/spark-server": "workspace:*",
     "@zendev-lab/spark-system": "workspace:*",
     "@zendev-lab/spark-tasks": "workspace:*",
     "smol-toml": "^1.6.1",

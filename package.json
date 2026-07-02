@@ -48,6 +48,7 @@
     "@zendev-lab/spark-recall": "workspace:^",
     "@zendev-lab/spark-roles": "workspace:^",
     "@zendev-lab/spark-runtime": "workspace:^",
+    "@zendev-lab/spark-server": "workspace:^",
     "@zendev-lab/spark-tasks": "workspace:^",
     "@zendev-lab/spark-tui": "workspace:^",
     "@zendev-lab/spark-tui-app": "workspace:^",

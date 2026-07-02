@@ -61,6 +61,9 @@ importers:
       '@zendev-lab/spark-runtime':
         specifier: workspace:^
         version: link:packages/spark-runtime
+      '@zendev-lab/spark-server':
+        specifier: workspace:^
+        version: link:packages/spark-server
       '@zendev-lab/spark-tasks':
         specifier: workspace:^
         version: link:packages/spark-tasks
@@ -137,6 +140,9 @@ importers:
       '@zendev-lab/spark-protocol':
         specifier: workspace:*
         version: link:../../packages/spark-protocol
+      '@zendev-lab/spark-server':
+        specifier: workspace:*
+        version: link:../../packages/spark-server
       '@zendev-lab/spark-system':
         specifier: workspace:*
         version: link:../../packages/spark-system
@@ -506,6 +512,34 @@ importers:
       '@zendev-lab/spark-workflows':
         specifier: workspace:^
         version: link:../spark-workflows
+
+  packages/spark-server:
+    dependencies:
+      '@zendev-lab/spark-protocol':
+        specifier: workspace:*
+        version: link:../spark-protocol
+      '@zendev-lab/spark-system':
+        specifier: workspace:*
+        version: link:../spark-system
+      '@zendev-lab/spark-tasks':
+        specifier: workspace:*
+        version: link:../spark-tasks
+      ws:
+        specifier: ^8.18.3
+        version: 8.21.0
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      '@zendev-lab/spark-db':
+        specifier: workspace:*
+        version: link:../spark-db
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: 4.1.9
+        version: 4.1.9(@opentelemetry/api@1.9.0)(@types/node@26.0.1)(@vitest/browser-preview@4.1.9)(@voidzero-dev/vite-plus-core@0.2.1(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(jsdom@27.4.0)
 
   packages/spark-system:
     devDependencies:
