@@ -220,7 +220,7 @@
         "severity": "error",
         "code": "WORKSPACE_DETACHED",
         "message": "Workspace is detached.",
-        "retryable": false
+        "retryable": true
       },
       "transport": {
         "kind": "runtime-ws",
