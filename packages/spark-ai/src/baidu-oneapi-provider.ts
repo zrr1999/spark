@@ -5,13 +5,10 @@ import {
   type AssistantMessageEvent,
   type Context,
   createAssistantMessageEventStream,
+  lazyApi,
   type Model,
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import {
-  stream as streamPiAi,
-  streamSimple as streamSimplePiAi,
-} from "@earendil-works/pi-ai/compat";
 
 import type { ProviderRegistrationAPI } from "./provider-registry.ts";
 
@@ -35,6 +32,13 @@ type BaiduOneApiTransportApi = "anthropic-messages" | "openai-responses";
 type BaiduOneApiStream = AsyncIterable<AssistantMessageEvent> & {
   result(): Promise<AssistantMessage>;
 };
+
+const baiduOneApiAnthropicMessagesApi = lazyApi(
+  () => import("@earendil-works/pi-ai/api/anthropic-messages"),
+);
+const baiduOneApiOpenAIResponsesApi = lazyApi(
+  () => import("@earendil-works/pi-ai/api/openai-responses"),
+);
 
 const GPT_5_5_COST = { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 };
 const GPT_5_5_THINKING_LEVEL_MAP = { minimal: "low", xhigh: "xhigh" };
@@ -181,17 +185,19 @@ export function streamBaiduOneApiAnthropic(
   const transportModel = withBaiduOneApiTransportApi(model, "anthropic-messages");
   const effort = mapThinkingEffort(model, options?.reasoning);
 
-  return startBaiduOneApiStream(model, () =>
-    streamPiAi(transportModel, context, {
-      ...options,
-      ...(apiKey !== undefined ? { apiKey } : {}),
-      thinkingEnabled: options?.reasoning !== undefined,
-      ...(effort !== undefined ? { effort } : {}),
-      async onPayload(payload) {
-        const remapped = remapBaiduOneApiPayload(payload, gatewayModel, effort);
-        return (await options?.onPayload?.(remapped, model)) ?? remapped;
-      },
-    }),
+  return startBaiduOneApiStream(
+    model,
+    () =>
+      baiduOneApiAnthropicMessagesApi.stream(transportModel, context, {
+        ...options,
+        ...(apiKey !== undefined ? { apiKey } : {}),
+        thinkingEnabled: options?.reasoning !== undefined,
+        ...(effort !== undefined ? { effort } : {}),
+        async onPayload(payload) {
+          const remapped = remapBaiduOneApiPayload(payload, gatewayModel, effort);
+          return (await options?.onPayload?.(remapped, model)) ?? remapped;
+        },
+      } as Parameters<typeof baiduOneApiAnthropicMessagesApi.stream>[2]) as BaiduOneApiStream,
   );
 }
 
@@ -215,15 +221,17 @@ export function streamBaiduOneApiOpenAIResponses(
   const apiKey = resolveBaiduOneApiKey(options?.apiKey);
   const transportModel = withBaiduOneApiTransportApi(model, "openai-responses");
 
-  return startBaiduOneApiStream(model, () =>
-    streamSimplePiAi(transportModel, context, {
-      ...options,
-      ...(apiKey !== undefined ? { apiKey } : {}),
-      async onPayload(payload) {
-        const remapped = remapOpenAIResponsesModel(payload, gatewayModel);
-        return (await options?.onPayload?.(remapped, model)) ?? remapped;
-      },
-    }),
+  return startBaiduOneApiStream(
+    model,
+    () =>
+      baiduOneApiOpenAIResponsesApi.streamSimple(transportModel, context, {
+        ...options,
+        ...(apiKey !== undefined ? { apiKey } : {}),
+        async onPayload(payload) {
+          const remapped = remapOpenAIResponsesModel(payload, gatewayModel);
+          return (await options?.onPayload?.(remapped, model)) ?? remapped;
+        },
+      }) as BaiduOneApiStream,
   );
 }
 

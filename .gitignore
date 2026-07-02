@@ -17,6 +17,7 @@ package-lock.json
 
 .spark/
 .pi/
+.cursor
 .pi-lens/
 **/.pi-lens/
 .learnings/
