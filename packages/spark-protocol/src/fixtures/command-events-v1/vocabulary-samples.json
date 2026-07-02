@@ -1,0 +1,252 @@
+{
+  "commands": [
+    {
+      "schemaVersion": "spark.command.v1",
+      "id": "rpc_turn_submit",
+      "kind": "turn.submit.request",
+      "title": "Local turn submit",
+      "route": {
+        "sessionId": "session-a"
+      },
+      "payload": {
+        "prompt": "continue work",
+        "actor": "spark-daemon-local-rpc"
+      },
+      "transport": {
+        "kind": "local-rpc",
+        "method": "turn.submit",
+        "requestId": "turn_submit"
+      }
+    },
+    {
+      "schemaVersion": "spark.command.v1",
+      "id": "rpc_turn_cancel",
+      "kind": "turn.cancel.request",
+      "title": "Local turn cancel",
+      "route": {
+        "invocationId": "turn-file.json"
+      },
+      "payload": {
+        "reason": "test cancel"
+      },
+      "transport": {
+        "kind": "local-rpc",
+        "method": "turn.cancel",
+        "requestId": "turn_cancel"
+      }
+    },
+    {
+      "schemaVersion": "spark.command.v1",
+      "id": "rpc_turn_status",
+      "kind": "turn.status.request",
+      "title": "Local turn status",
+      "payload": {
+        "state": "inbox"
+      },
+      "transport": {
+        "kind": "local-rpc",
+        "method": "daemon.queue",
+        "requestId": "queue_list"
+      }
+    },
+    {
+      "schemaVersion": "spark.command.v1",
+      "id": "rpc_workspace_register",
+      "kind": "workspace.register.request",
+      "title": "Register local workspace",
+      "route": {
+        "workspaceLocalPath": "/tmp/spore"
+      },
+      "payload": {
+        "serverUrl": "http://127.0.0.1:5173/",
+        "displayName": "Spore",
+        "localWorkspaceKey": "spore"
+      },
+      "transport": {
+        "kind": "local-rpc",
+        "method": "workspace.register",
+        "requestId": "rpc_register"
+      }
+    },
+    {
+      "schemaVersion": "spark.command.v1",
+      "id": "cmd_01234567890123456789012345678901",
+      "kind": "workspace.snapshot.request",
+      "title": "Refresh workspace snapshot",
+      "route": {
+        "runtimeId": "rt_01234567890123456789012345678901",
+        "workspaceBindingId": "rtwb_01234567890123456789012345678901",
+        "workspaceId": "ws_01234567890123456789012345678901",
+        "commandId": "cmd_01234567890123456789012345678901"
+      },
+      "transport": {
+        "kind": "runtime-ws",
+        "envelopeType": "server.command",
+        "messageId": "msg_01234567890123456789012345678901",
+        "sourceKind": "workspace.snapshot.request"
+      }
+    },
+    {
+      "schemaVersion": "spark.command.v1",
+      "id": "cmd_11111111111111111111111111111111",
+      "kind": "task.start.request",
+      "title": "Start MVP task",
+      "route": {
+        "runtimeId": "rt_01234567890123456789012345678901",
+        "workspaceBindingId": "rtwb_01234567890123456789012345678901",
+        "workspaceId": "ws_01234567890123456789012345678901",
+        "projectId": "proj_01234567890123456789012345678901",
+        "commandId": "cmd_11111111111111111111111111111111"
+      },
+      "payload": {
+        "prompt": "Inspect the workspace.",
+        "source": "project-chat"
+      },
+      "idempotencyKey": "idem_01234567890123456789012345678901",
+      "transport": {
+        "kind": "runtime-ws",
+        "envelopeType": "server.command",
+        "messageId": "msg_11111111111111111111111111111111",
+        "sourceKind": "task.start.request"
+      }
+    }
+  ],
+  "events": [
+    {
+      "schemaVersion": "spark.event.v1",
+      "id": "msg_22222222222222222222222222222222",
+      "kind": "command.accepted",
+      "commandId": "cmd_11111111111111111111111111111111",
+      "status": "accepted",
+      "route": {
+        "runtimeId": "rt_01234567890123456789012345678901",
+        "workspaceBindingId": "rtwb_01234567890123456789012345678901",
+        "workspaceId": "ws_01234567890123456789012345678901",
+        "projectId": "proj_01234567890123456789012345678901",
+        "commandId": "cmd_11111111111111111111111111111111",
+        "invocationId": "inv_01234567890123456789012345678901"
+      },
+      "payload": {
+        "accepted": true,
+        "invocationId": "inv_01234567890123456789012345678901"
+      },
+      "transport": {
+        "kind": "runtime-ws",
+        "envelopeType": "runtime.command.ack",
+        "messageId": "msg_22222222222222222222222222222222"
+      }
+    },
+    {
+      "schemaVersion": "spark.event.v1",
+      "id": "rpc_turn_cancel_result",
+      "kind": "command.status",
+      "status": "cancelled",
+      "route": {
+        "invocationId": "turn-file.json"
+      },
+      "payload": {
+        "cancelled": true,
+        "message": "Cancellation signalled for Spark daemon invocation turn-file.json."
+      },
+      "transport": {
+        "kind": "local-rpc",
+        "method": "turn.cancel",
+        "requestId": "turn_cancel"
+      }
+    },
+    {
+      "schemaVersion": "spark.event.v1",
+      "id": "msg_33333333333333333333333333333333",
+      "kind": "projection.workspace.snapshot",
+      "subject": {
+        "kind": "workspace",
+        "id": "ws_01234567890123456789012345678901"
+      },
+      "route": {
+        "runtimeId": "rt_01234567890123456789012345678901",
+        "workspaceBindingId": "rtwb_01234567890123456789012345678901",
+        "workspaceId": "ws_01234567890123456789012345678901"
+      },
+      "payload": {
+        "displayName": "Spore",
+        "status": "available",
+        "activeInvocationCount": 1,
+        "activeAgentCount": 2
+      },
+      "transport": {
+        "kind": "runtime-ws",
+        "envelopeType": "workspace.snapshot",
+        "messageId": "msg_33333333333333333333333333333333"
+      }
+    },
+    {
+      "schemaVersion": "spark.event.v1",
+      "id": "rpc_daemon_status_result",
+      "kind": "diagnostic.reported",
+      "subject": {
+        "kind": "daemon"
+      },
+      "payload": {
+        "queue": {
+          "inbox": 1,
+          "processed": 0,
+          "failed": 0
+        }
+      },
+      "diagnostic": {
+        "severity": "info",
+        "code": "daemon.status",
+        "message": "Local daemon status reported."
+      },
+      "transport": {
+        "kind": "local-rpc",
+        "method": "daemon.status",
+        "requestId": "daemon_status"
+      }
+    },
+    {
+      "schemaVersion": "spark.event.v1",
+      "id": "msg_44444444444444444444444444444444",
+      "kind": "command.rejected",
+      "commandId": "cmd_01234567890123456789012345678901",
+      "status": "rejected",
+      "route": {
+        "runtimeId": "rt_01234567890123456789012345678901",
+        "workspaceBindingId": "rtwb_01234567890123456789012345678901",
+        "workspaceId": "ws_01234567890123456789012345678901",
+        "commandId": "cmd_01234567890123456789012345678901"
+      },
+      "diagnostic": {
+        "severity": "error",
+        "code": "WORKSPACE_DETACHED",
+        "message": "Workspace is detached.",
+        "retryable": false
+      },
+      "transport": {
+        "kind": "runtime-ws",
+        "envelopeType": "runtime.command.reject",
+        "messageId": "msg_44444444444444444444444444444444"
+      }
+    },
+    {
+      "schemaVersion": "spark.event.v1",
+      "id": "msg_55555555555555555555555555555555",
+      "kind": "error.reported",
+      "subject": {
+        "kind": "runtime",
+        "id": "rt_01234567890123456789012345678901"
+      },
+      "diagnostic": {
+        "severity": "error",
+        "code": "unsupported_runtime_message",
+        "message": "Unsupported runtime WebSocket message.",
+        "retryable": false
+      },
+      "transport": {
+        "kind": "runtime-ws",
+        "envelopeType": "server.error",
+        "messageId": "msg_55555555555555555555555555555555"
+      }
+    }
+  ]
+}

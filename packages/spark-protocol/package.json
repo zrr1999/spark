@@ -13,6 +13,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./command-delivery": "./src/command-delivery.ts",
+    "./command-events": "./src/command-events.ts",
     "./errors": "./src/errors.ts",
     "./refs": "./src/refs.ts",
     "./runtime-v1/envelope": "./src/runtime-v1/envelope.ts",

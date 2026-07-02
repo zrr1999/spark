@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export * from "./command-delivery.ts";
+export * from "./command-events.ts";
 export * from "./errors.ts";
 export * from "./refs.ts";
 export * from "./runtime-v1/envelope.ts";

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { runtimeServerCommandKindOptions } from "../command-events.ts";
 import { isoDateTimeSchema, prefixedIdSchema } from "../refs.ts";
 import { runtimeEnvelopeFor, runtimeFeatureSchema } from "./envelope.ts";
 
@@ -158,14 +159,7 @@ export const workspaceSnapshotPayloadSchema = z.object({
   resources: z.array(jsonObjectSchema).default([]),
 });
 
-export const commandKindSchema = z.enum([
-  "workspace.snapshot.request",
-  "project.create.request",
-  "task.start.request",
-  "invocation.cancel.request",
-  "artifact.content.request",
-  "diagnostics.request",
-]);
+export const commandKindSchema = z.enum(runtimeServerCommandKindOptions);
 
 export const payloadRefSchema = z.object({
   url: z.string().min(1),
