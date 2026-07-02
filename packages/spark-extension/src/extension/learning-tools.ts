@@ -9,8 +9,8 @@ import {
   type LearningStatus,
   type LearningStoreDiagnostic,
   parseLearningExportMarkdown,
-} from "@zendev-lab/pi-learnings";
-import type { Artifact } from "@zendev-lab/pi-artifacts";
+} from "@zendev-lab/spark-learnings";
+import type { Artifact } from "@zendev-lab/spark-artifacts";
 
 const LEARNING_STATUSES = ["candidate", "active", "stale", "superseded", "rejected"] as const;
 const LEARNING_LOCATIONS = ["user", "workspace", "repo"] as const;

@@ -4,8 +4,8 @@ import {
   DEFAULT_READY_TASK_MAX_CONCURRENCY,
   type ProjectRef,
   type TaskRef,
-} from "@zendev-lab/pi-extension-api";
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-extension-api";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import {
   normalizeCurrentProjectStoreSnapshot,
   type CurrentProjectStoreSnapshot,

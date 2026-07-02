@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { loadSparkHeadlessSessionModule } from "@zendev-lab/spark-host/headless-loader";
 import { importWorkspaceAware } from "./import-utils.ts";
 type ArtifactRef = `artifact:${string}`;
 type ProjectRef = `proj:${string}`;
@@ -13,6 +14,7 @@ type TaskRun = {
   failureKind?: string;
   errorMessage?: string;
   outputArtifacts: ArtifactRef[];
+  completionSummary?: { summary?: string };
 };
 
 type SparkTaskRunOptionsLike = Record<string, unknown>;
@@ -51,6 +53,7 @@ type TaskGraphLike = {
     description: string;
   };
   createTask(input: Record<string, unknown>): { ref: TaskRef; name: string };
+  mergeTaskProgressFrom?(source: TaskGraphLike, taskRefs: TaskRef[]): void;
 };
 
 type SparkRuntimeModules = {
@@ -72,10 +75,12 @@ type SparkRuntimeModules = {
 import {
   createId,
   type ArtifactProjectionPayload,
+  type InvocationLogChunkStream,
   type ServerCommandPayload,
   type serverCommandEnvelopeSchema,
 } from "@zendev-lab/spark-protocol";
 import type { SparkPaths } from "@zendev-lab/spark-system";
+import { extractFinalAssistantText, extractTextDelta } from "../pi/session.ts";
 import type { SparkDaemonWorkspace } from "../store/workspaces.js";
 import {
   artifactProjected,
@@ -144,23 +149,23 @@ async function dynamicImport<T>(specifier: string): Promise<T> {
 async function loadSparkRuntimeModules(): Promise<SparkRuntimeModules> {
   const [artifacts, roles, tasks, runtime, headless] = await Promise.all([
     dynamicImport<{ defaultArtifactStore: SparkRuntimeModules["defaultArtifactStore"] }>(
-      "@zendev-lab/pi-artifacts",
+      "@zendev-lab/spark-artifacts",
     ),
     dynamicImport<{
       builtinRoleRef: SparkRuntimeModules["builtinRoleRef"];
       createDefaultRoleRegistry: SparkRuntimeModules["createDefaultRoleRegistry"];
       hydrateDefaultRoleRegistry: SparkRuntimeModules["hydrateDefaultRoleRegistry"];
-    }>("@zendev-lab/pi-roles"),
+    }>("@zendev-lab/spark-roles"),
     dynamicImport<{ defaultTaskGraphStore: SparkRuntimeModules["defaultTaskGraphStore"] }>(
-      "@zendev-lab/pi-tasks",
+      "@zendev-lab/spark-tasks",
     ),
     dynamicImport<{
       runSparkTask: SparkRuntimeModules["runSparkTask"];
       killActiveSparkRoleRunProcesses: SparkRuntimeModules["killActiveSparkRoleRunProcesses"];
     }>("@zendev-lab/spark-runtime"),
-    importWorkspaceAware<{
-      createSparkHeadlessRoleExecutor: SparkRuntimeModules["createSparkHeadlessRoleExecutor"];
-    }>("@zendev-lab/spark-tui-app/headless-role-executor"),
+    loadSparkHeadlessSessionModule({
+      importModule: (specifier) => importWorkspaceAware(specifier),
+    }),
   ]);
   return {
     defaultArtifactStore: artifacts.defaultArtifactStore,
@@ -170,7 +175,8 @@ async function loadSparkRuntimeModules(): Promise<SparkRuntimeModules> {
     defaultTaskGraphStore: tasks.defaultTaskGraphStore,
     runSparkTask: runtime.runSparkTask,
     killActiveSparkRoleRunProcesses: runtime.killActiveSparkRoleRunProcesses,
-    createSparkHeadlessRoleExecutor: headless.createSparkHeadlessRoleExecutor,
+    createSparkHeadlessRoleExecutor:
+      headless.createSparkHeadlessRoleExecutor as SparkRuntimeModules["createSparkHeadlessRoleExecutor"],
   };
 }
 
@@ -183,6 +189,33 @@ export async function runSparkCommandBridge(
   const startedAt = new Date().toISOString();
   const route = { ...input.route, invocationId };
   const prompt = promptForCommand(command);
+  let logSequence = 0;
+  let assistantChunkCount = 0;
+  let assistantText = "";
+  let latestFinalAssistantText: string | undefined;
+  const emitLogChunk = (
+    stream: InvocationLogChunkStream,
+    content: string,
+    metadata?: Record<string, unknown>,
+  ) => {
+    logSequence += 1;
+    if (stream === "assistant") {
+      assistantChunkCount += 1;
+      assistantText += content;
+    }
+    input.emit(
+      invocationLogChunk(
+        {
+          runtimeInvocationId: invocationId,
+          stream,
+          sequence: logSequence,
+          content,
+          ...(metadata ? { metadata } : {}),
+        },
+        route,
+      ),
+    );
+  };
 
   recordInvocationStarted(input.db, {
     invocationId,
@@ -215,17 +248,7 @@ export async function runSparkCommandBridge(
       route,
     ),
   );
-  input.emit(
-    invocationLogChunk(
-      {
-        runtimeInvocationId: invocationId,
-        stream: "system",
-        sequence: 1,
-        content: "Spark runtime role-run started.",
-      },
-      route,
-    ),
-  );
+  emitLogChunk("system", "Spark runtime role-run started.");
 
   const spark = input.executeSparkTask ? null : await loadSparkRuntimeModules();
   const taskGraphStore =
@@ -233,8 +256,9 @@ export async function runSparkCommandBridge(
   const artifactStore =
     input.artifactStore ?? spark!.defaultArtifactStore(input.workspace.localPath);
 
+  let binding: SparkTaskBinding | undefined;
   try {
-    const binding = await ensureSparkTaskBinding({
+    binding = await ensureSparkTaskBinding({
       store: taskGraphStore,
       command,
       projectId: input.command.projectId,
@@ -258,6 +282,19 @@ export async function runSparkCommandBridge(
       timeoutMs: DEFAULT_SPARK_TIMEOUT_MS,
       signal: input.signal,
       ...(spark ? { roleExecutor: spark.createSparkHeadlessRoleExecutor() } : {}),
+      onRoleEvent: (event: unknown) => {
+        const delta = extractTextDelta(event);
+        const eventType = eventTypeOf(event);
+        if (delta) {
+          emitLogChunk("assistant", delta, {
+            source: "role_run_event",
+            ...(eventType ? { eventType } : {}),
+          });
+          return;
+        }
+        const finalText = extractFinalAssistantText(event);
+        if (finalText) latestFinalAssistantText = finalText;
+      },
       claim: {
         kind: "role-run",
         sessionId: `spark-daemon:${input.route.runtimeId}`,
@@ -265,19 +302,32 @@ export async function runSparkCommandBridge(
         leaseMs: DEFAULT_SPARK_TIMEOUT_MS,
       },
       onHeartbeat: async (graph: TaskGraphLike) => {
-        await taskGraphStore.save(graph);
+        await mergeTaskProgressIntoStore(taskGraphStore, graph, binding!.taskRef);
       },
     });
-    await taskGraphStore.save(binding.graph);
+    await mergeTaskProgressIntoStore(taskGraphStore, binding.graph, binding.taskRef);
 
     const completedAt = new Date().toISOString();
-    const outputArtifactIds = await projectSparkArtifacts({
+    const projectedArtifacts = await projectSparkArtifacts({
       artifactStore,
       artifactRefs: run.outputArtifacts,
       emit: (message) => input.emit(message),
       route,
       invocationId,
     });
+    const outputArtifactIds = projectedArtifacts.artifactIds;
+    const fallbackAssistantText = fallbackAssistantTextForCompletedRun({
+      assistantChunkCount,
+      assistantText,
+      latestFinalAssistantText,
+      artifactAssistantText: projectedArtifacts.assistantText,
+      completionSummary: run.completionSummary?.summary,
+    });
+    if (fallbackAssistantText) {
+      emitLogChunk("assistant", fallbackAssistantText, {
+        source: projectedArtifacts.assistantText ? "role_run_artifact" : "role_run_final",
+      });
+    }
     const terminalStatus = naviaStatusForRun(run);
     recordInvocationStatus(input.db, invocationId, terminalStatus, completedAt);
     const taskStatus = terminalStatus === "succeeded" ? "done" : "failed";
@@ -319,19 +369,19 @@ export async function runSparkCommandBridge(
     };
   } catch (error) {
     const completedAt = new Date().toISOString();
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorMessage = errorMessageOf(error);
     recordInvocationStatus(input.db, invocationId, "failed", completedAt);
-    input.emit(
-      invocationLogChunk(
-        {
-          runtimeInvocationId: invocationId,
-          stream: "system",
-          sequence: 2,
-          content: errorMessage,
-        },
-        route,
-      ),
-    );
+    if (binding) {
+      try {
+        await mergeTaskProgressIntoStore(taskGraphStore, binding.graph, binding.taskRef);
+      } catch (mergeError) {
+        emitLogChunk(
+          "system",
+          `Failed to persist Spark task progress after error: ${errorMessageOf(mergeError)}`,
+        );
+      }
+    }
+    emitLogChunk("system", errorMessage);
     input.emit(
       taskGraphSnapshot(
         taskGraphForCommand(command, taskRuntimeId, invocationId, "failed", 2),
@@ -372,6 +422,16 @@ export async function cancelSparkBridgeInvocation(
         ? "No active Spark role-run process matched the Spark daemon invocation."
         : `Cancellation signalled for ${killed.length} Spark role-run process(es).`,
   };
+}
+
+async function mergeTaskProgressIntoStore(
+  store: TaskGraphStoreLike,
+  source: TaskGraphLike,
+  taskRef: TaskRef,
+): Promise<void> {
+  await store.update((current) => {
+    current.mergeTaskProgressFrom?.(source, [taskRef]);
+  });
 }
 
 async function ensureSparkTaskBinding(input: {
@@ -437,12 +497,18 @@ async function projectSparkArtifacts(input: {
   emit(message: unknown): void;
   route: RouteContext;
   invocationId: string;
-}): Promise<string[]> {
+}): Promise<{ artifactIds: string[]; assistantText?: string }> {
   const projected: string[] = [];
+  let assistantText: string | undefined;
   for (const artifactRef of input.artifactRefs) {
     const artifact = await input.artifactStore.get(artifactRef);
     const artifactId = naviaArtifactIdForSparkRef(artifactRef);
     const serializedPreview = await input.artifactStore.getBody(artifactRef);
+    assistantText ??= assistantTextFromProjectedArtifact({
+      kind: artifact.kind,
+      format: artifact.format,
+      body: serializedPreview,
+    });
     const payload: ArtifactProjectionPayload = {
       artifactId,
       scope: "project",
@@ -460,6 +526,7 @@ async function projectSparkArtifacts(input: {
         sparkArtifactRef: artifactRef,
         inlineMarkdown: artifact.format === "markdown" ? serializedPreview : undefined,
         inlineText: artifact.format === "text" ? serializedPreview : undefined,
+        ...(assistantText ? { assistantTextPreview: assistantText } : {}),
       },
       contentAvailability: {
         hash: artifact.hash,
@@ -478,7 +545,93 @@ async function projectSparkArtifacts(input: {
     input.emit(artifactProjected(payload, { ...input.route, invocationId: input.invocationId }));
     projected.push(artifactId);
   }
-  return projected;
+  return { artifactIds: projected, assistantText };
+}
+
+function fallbackAssistantTextForCompletedRun(input: {
+  assistantChunkCount: number;
+  assistantText: string;
+  latestFinalAssistantText?: string | undefined;
+  artifactAssistantText?: string | undefined;
+  completionSummary?: string | undefined;
+}): string | undefined {
+  if (input.assistantChunkCount > 0 || input.assistantText.trim()) return undefined;
+  return firstNonEmpty([
+    input.latestFinalAssistantText,
+    input.artifactAssistantText,
+    input.completionSummary,
+  ]);
+}
+
+function assistantTextFromProjectedArtifact(input: {
+  kind: string;
+  format: string;
+  body: string;
+}): string | undefined {
+  if (input.format === "markdown" || input.format === "text") return nonEmpty(input.body);
+  if (input.format !== "json") return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(input.body) as unknown;
+  } catch {
+    return undefined;
+  }
+  return assistantTextFromRoleRunBody(parsed);
+}
+
+function assistantTextFromRoleRunBody(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const body = isRecord(value.body) ? value.body : value;
+  return firstNonEmpty([
+    assistantTextFromRoleRunJsonEvents(body.jsonEvents),
+    textTail(body.stdout),
+    stringValue(body.summary),
+  ]);
+}
+
+function assistantTextFromRoleRunJsonEvents(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const tail = Array.isArray(value.tail) ? value.tail : [];
+  for (const raw of [...tail].reverse()) {
+    const parsed = typeof raw === "string" ? parseJson(raw) : raw;
+    const text = extractFinalAssistantText(parsed);
+    if (text) return text;
+  }
+  return undefined;
+}
+
+function textTail(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  return stringValue(value.tail);
+}
+
+function firstNonEmpty(values: Array<string | undefined | null>): string | undefined {
+  for (const value of values) {
+    const text = nonEmpty(value);
+    if (text) return text;
+  }
+  return undefined;
+}
+
+function nonEmpty(value: string | undefined | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function parseJson(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function recordInvocationStarted(
@@ -530,6 +683,16 @@ function naviaStatusForRun(run: TaskRun): "succeeded" | "failed" | "cancelled" |
   if (run.status === "cancelled") return "cancelled";
   if (run.failureKind === "runtime_timeout") return "timed_out";
   return "failed";
+}
+
+function errorMessageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function eventTypeOf(event: unknown): string | undefined {
+  if (!event || typeof event !== "object") return undefined;
+  const type = (event as { type?: unknown }).type;
+  return typeof type === "string" ? type : undefined;
 }
 
 function retryOfInvocationId(command: ServerCommandPayload): string | undefined {

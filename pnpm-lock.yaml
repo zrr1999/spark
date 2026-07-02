@@ -13,66 +13,69 @@ importers:
 
   .:
     dependencies:
-      '@zendev-lab/pi-artifacts':
-        specifier: workspace:^
-        version: link:packages/pi-artifacts
-      '@zendev-lab/pi-ask':
-        specifier: workspace:^
-        version: link:packages/pi-ask
       '@zendev-lab/pi-btw':
         specifier: workspace:^
         version: link:packages/pi-btw
-      '@zendev-lab/pi-context':
-        specifier: workspace:^
-        version: link:packages/pi-context
-      '@zendev-lab/pi-cue':
-        specifier: workspace:^
-        version: link:packages/pi-cue
-      '@zendev-lab/pi-extension-api':
-        specifier: workspace:^
-        version: link:packages/pi-extension-api
-      '@zendev-lab/pi-files':
-        specifier: workspace:^
-        version: link:packages/pi-files
-      '@zendev-lab/pi-graft':
-        specifier: workspace:^
-        version: link:packages/pi-graft
-      '@zendev-lab/pi-learnings':
-        specifier: workspace:^
-        version: link:packages/pi-learnings
-      '@zendev-lab/pi-loop':
-        specifier: workspace:^
-        version: link:packages/pi-loop
-      '@zendev-lab/pi-recall':
-        specifier: workspace:^
-        version: link:packages/pi-recall
-      '@zendev-lab/pi-roles':
-        specifier: workspace:^
-        version: link:packages/pi-roles
-      '@zendev-lab/pi-tasks':
-        specifier: workspace:^
-        version: link:packages/pi-tasks
-      '@zendev-lab/pi-workflows':
-        specifier: workspace:^
-        version: link:packages/pi-workflows
       '@zendev-lab/spark-ai':
         specifier: workspace:^
         version: link:packages/spark-ai
+      '@zendev-lab/spark-artifacts':
+        specifier: workspace:^
+        version: link:packages/spark-artifacts
+      '@zendev-lab/spark-ask':
+        specifier: workspace:^
+        version: link:packages/spark-ask
+      '@zendev-lab/spark-context':
+        specifier: workspace:^
+        version: link:packages/spark-context
+      '@zendev-lab/spark-cue':
+        specifier: workspace:^
+        version: link:packages/spark-cue
+      '@zendev-lab/spark-extension-api':
+        specifier: workspace:^
+        version: link:packages/spark-extension-api
+      '@zendev-lab/spark-files':
+        specifier: workspace:^
+        version: link:packages/spark-files
+      '@zendev-lab/spark-generative-ui':
+        specifier: workspace:^
+        version: link:packages/spark-generative-ui
+      '@zendev-lab/spark-graft':
+        specifier: workspace:^
+        version: link:packages/spark-graft
       '@zendev-lab/spark-host':
         specifier: workspace:^
         version: link:packages/spark-host
+      '@zendev-lab/spark-learnings':
+        specifier: workspace:^
+        version: link:packages/spark-learnings
+      '@zendev-lab/spark-loop':
+        specifier: workspace:^
+        version: link:packages/spark-loop
       '@zendev-lab/spark-protocol':
         specifier: workspace:^
         version: link:packages/spark-protocol
+      '@zendev-lab/spark-recall':
+        specifier: workspace:^
+        version: link:packages/spark-recall
+      '@zendev-lab/spark-roles':
+        specifier: workspace:^
+        version: link:packages/spark-roles
       '@zendev-lab/spark-runtime':
         specifier: workspace:^
         version: link:packages/spark-runtime
+      '@zendev-lab/spark-tasks':
+        specifier: workspace:^
+        version: link:packages/spark-tasks
       '@zendev-lab/spark-tui':
         specifier: workspace:^
         version: link:packages/spark-tui
       '@zendev-lab/spark-turn':
         specifier: workspace:^
         version: link:packages/spark-turn
+      '@zendev-lab/spark-workflows':
+        specifier: workspace:^
+        version: link:packages/spark-workflows
       typebox:
         specifier: ^1.2.13
         version: 1.2.13
@@ -122,12 +125,12 @@ importers:
       '@sveltejs/kit':
         specifier: ^2.28.0
         version: 2.65.1(@sveltejs/vite-plugin-svelte@6.2.4(@voidzero-dev/vite-plus-core@0.2.1(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(svelte@5.56.3))(@voidzero-dev/vite-plus-core@0.2.1(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(svelte@5.56.3)(typescript@6.0.3)
-      '@zendev-lab/pi-tasks':
-        specifier: workspace:*
-        version: link:../../packages/pi-tasks
       '@zendev-lab/spark-db':
         specifier: workspace:*
         version: link:../../packages/spark-db
+      '@zendev-lab/spark-generative-ui':
+        specifier: workspace:*
+        version: link:../../packages/spark-generative-ui
       '@zendev-lab/spark-i18n':
         specifier: workspace:*
         version: link:../../packages/spark-i18n
@@ -137,6 +140,9 @@ importers:
       '@zendev-lab/spark-system':
         specifier: workspace:*
         version: link:../../packages/spark-system
+      '@zendev-lab/spark-tasks':
+        specifier: workspace:*
+        version: link:../../packages/spark-tasks
       smol-toml:
         specifier: ^1.6.1
         version: 1.6.1
@@ -171,27 +177,27 @@ importers:
 
   apps/spark-daemon:
     dependencies:
-      '@zendev-lab/pi-artifacts':
+      '@zendev-lab/spark-artifacts':
         specifier: workspace:^
-        version: link:../../packages/pi-artifacts
-      '@zendev-lab/pi-extension-api':
+        version: link:../../packages/spark-artifacts
+      '@zendev-lab/spark-extension-api':
         specifier: workspace:^
-        version: link:../../packages/pi-extension-api
-      '@zendev-lab/pi-roles':
+        version: link:../../packages/spark-extension-api
+      '@zendev-lab/spark-host':
         specifier: workspace:^
-        version: link:../../packages/pi-roles
-      '@zendev-lab/pi-tasks':
-        specifier: workspace:^
-        version: link:../../packages/pi-tasks
+        version: link:../../packages/spark-host
       '@zendev-lab/spark-i18n':
         specifier: workspace:^
         version: link:../../packages/spark-i18n
+      '@zendev-lab/spark-roles':
+        specifier: workspace:^
+        version: link:../../packages/spark-roles
       '@zendev-lab/spark-runtime':
         specifier: workspace:^
         version: link:../../packages/spark-runtime
-      '@zendev-lab/spark-tui-app':
+      '@zendev-lab/spark-tasks':
         specifier: workspace:^
-        version: link:../spark-tui
+        version: link:../../packages/spark-tasks
       ws:
         specifier: ^8.18.3
         version: 8.21.0
@@ -223,15 +229,15 @@ importers:
       '@earendil-works/pi-ai':
         specifier: ^0.79.4
         version: 0.79.4(ws@8.21.0)(zod@4.4.3)
-      '@zendev-lab/pi-extension-api':
-        specifier: workspace:^
-        version: link:../../packages/pi-extension-api
-      '@zendev-lab/pi-files':
-        specifier: workspace:^
-        version: link:../../packages/pi-files
       '@zendev-lab/spark-ai':
         specifier: workspace:^
         version: link:../../packages/spark-ai
+      '@zendev-lab/spark-extension-api':
+        specifier: workspace:^
+        version: link:../../packages/spark-extension-api
+      '@zendev-lab/spark-files':
+        specifier: workspace:^
+        version: link:../../packages/spark-files
       '@zendev-lab/spark-host':
         specifier: workspace:^
         version: link:../../packages/spark-host
@@ -248,27 +254,6 @@ importers:
         specifier: workspace:^
         version: link:../../packages/spark-turn
 
-  packages/pi-artifacts:
-    dependencies:
-      '@zendev-lab/pi-extension-api':
-        specifier: workspace:^
-        version: link:../pi-extension-api
-      typebox:
-        specifier: ^1.2.13
-        version: 1.2.13
-
-  packages/pi-ask:
-    dependencies:
-      '@zendev-lab/pi-extension-api':
-        specifier: workspace:^
-        version: link:../pi-extension-api
-      '@zendev-lab/spark-tui':
-        specifier: workspace:^
-        version: link:../spark-tui
-      typebox:
-        specifier: ^1.2.13
-        version: 1.2.13
-
   packages/pi-btw:
     dependencies:
       '@earendil-works/pi-ai':
@@ -281,123 +266,56 @@ importers:
         specifier: workspace:^
         version: link:../spark-tui
 
-  packages/pi-context:
-    dependencies:
-      '@zendev-lab/pi-extension-api':
-        specifier: workspace:^
-        version: link:../pi-extension-api
-      typebox:
-        specifier: ^1.2.13
-        version: 1.2.13
-
-  packages/pi-cue:
-    dependencies:
-      '@zendev-lab/pi-extension-api':
-        specifier: workspace:^
-        version: link:../pi-extension-api
-      '@zendev-lab/spark-tui':
-        specifier: workspace:^
-        version: link:../spark-tui
-      typebox:
-        specifier: ^1.2.13
-        version: 1.2.13
-
-  packages/pi-extension-api: {}
-
-  packages/pi-files:
-    dependencies:
-      '@zendev-lab/pi-extension-api':
-        specifier: workspace:^
-        version: link:../pi-extension-api
-      diff:
-        specifier: ^8.0.4
-        version: 8.0.4
-      ignore:
-        specifier: ^7.0.5
-        version: 7.0.5
-      minimatch:
-        specifier: ^10.2.5
-        version: 10.2.5
-      typebox:
-        specifier: ^1.2.13
-        version: 1.2.13
-
-  packages/pi-graft:
-    dependencies:
-      '@zendev-lab/pi-roles':
-        specifier: workspace:^
-        version: link:../pi-roles
-      typebox:
-        specifier: ^1.2.13
-        version: 1.2.13
-
-  packages/pi-learnings:
-    dependencies:
-      '@zendev-lab/pi-artifacts':
-        specifier: workspace:^
-        version: link:../pi-artifacts
-      '@zendev-lab/pi-extension-api':
-        specifier: workspace:^
-        version: link:../pi-extension-api
-      typebox:
-        specifier: ^1.2.13
-        version: 1.2.13
-
-  packages/pi-loop: {}
-
-  packages/pi-modes:
-    dependencies:
-      typebox:
-        specifier: ^1.2.13
-        version: 1.2.13
-
-  packages/pi-recall:
-    dependencies:
-      '@zendev-lab/pi-extension-api':
-        specifier: workspace:^
-        version: link:../pi-extension-api
-      typebox:
-        specifier: ^1.2.13
-        version: 1.2.13
-
-  packages/pi-roles:
-    dependencies:
-      '@zendev-lab/spark-tui':
-        specifier: workspace:^
-        version: link:../spark-tui
-      typebox:
-        specifier: ^1.2.13
-        version: 1.2.13
-
-  packages/pi-tasks:
-    dependencies:
-      '@zendev-lab/pi-extension-api':
-        specifier: workspace:^
-        version: link:../pi-extension-api
-      typebox:
-        specifier: ^1.2.13
-        version: 1.2.13
-
-  packages/pi-workflows:
-    dependencies:
-      '@zendev-lab/pi-extension-api':
-        specifier: workspace:^
-        version: link:../pi-extension-api
-      '@zendev-lab/pi-tasks':
-        specifier: workspace:^
-        version: link:../pi-tasks
-      typebox:
-        specifier: ^1.2.13
-        version: 1.2.13
-
   packages/spark-ai:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: ^0.79.4
         version: 0.79.4(ws@8.21.0)(zod@4.4.3)
-      '@zendev-lab/pi-extension-api':
+      '@zendev-lab/spark-extension-api':
         specifier: workspace:^
-        version: link:../pi-extension-api
+        version: link:../spark-extension-api
+      typebox:
+        specifier: ^1.2.13
+        version: 1.2.13
+
+  packages/spark-artifacts:
+    dependencies:
+      '@zendev-lab/spark-extension-api':
+        specifier: workspace:^
+        version: link:../spark-extension-api
+      typebox:
+        specifier: ^1.2.13
+        version: 1.2.13
+
+  packages/spark-ask:
+    dependencies:
+      '@zendev-lab/spark-extension-api':
+        specifier: workspace:^
+        version: link:../spark-extension-api
+      '@zendev-lab/spark-tui':
+        specifier: workspace:^
+        version: link:../spark-tui
+      typebox:
+        specifier: ^1.2.13
+        version: 1.2.13
+
+  packages/spark-context:
+    dependencies:
+      '@zendev-lab/spark-extension-api':
+        specifier: workspace:^
+        version: link:../spark-extension-api
+      typebox:
+        specifier: ^1.2.13
+        version: 1.2.13
+
+  packages/spark-cue:
+    dependencies:
+      '@zendev-lab/spark-extension-api':
+        specifier: workspace:^
+        version: link:../spark-extension-api
+      '@zendev-lab/spark-tui':
+        specifier: workspace:^
+        version: link:../spark-tui
       typebox:
         specifier: ^1.2.13
         version: 1.2.13
@@ -420,54 +338,92 @@ importers:
 
   packages/spark-extension:
     dependencies:
-      '@zendev-lab/pi-artifacts':
+      '@zendev-lab/spark-artifacts':
         specifier: workspace:^
-        version: link:../pi-artifacts
-      '@zendev-lab/pi-ask':
+        version: link:../spark-artifacts
+      '@zendev-lab/spark-ask':
         specifier: workspace:^
-        version: link:../pi-ask
-      '@zendev-lab/pi-context':
+        version: link:../spark-ask
+      '@zendev-lab/spark-context':
         specifier: workspace:^
-        version: link:../pi-context
-      '@zendev-lab/pi-extension-api':
+        version: link:../spark-context
+      '@zendev-lab/spark-extension-api':
         specifier: workspace:^
-        version: link:../pi-extension-api
-      '@zendev-lab/pi-learnings':
-        specifier: workspace:^
-        version: link:../pi-learnings
-      '@zendev-lab/pi-loop':
-        specifier: workspace:^
-        version: link:../pi-loop
-      '@zendev-lab/pi-modes':
-        specifier: workspace:^
-        version: link:../pi-modes
-      '@zendev-lab/pi-roles':
-        specifier: workspace:^
-        version: link:../pi-roles
-      '@zendev-lab/pi-tasks':
-        specifier: workspace:^
-        version: link:../pi-tasks
-      '@zendev-lab/pi-workflows':
-        specifier: workspace:^
-        version: link:../pi-workflows
+        version: link:../spark-extension-api
       '@zendev-lab/spark-i18n':
         specifier: workspace:^
         version: link:../spark-i18n
+      '@zendev-lab/spark-learnings':
+        specifier: workspace:^
+        version: link:../spark-learnings
+      '@zendev-lab/spark-loop':
+        specifier: workspace:^
+        version: link:../spark-loop
+      '@zendev-lab/spark-modes':
+        specifier: workspace:^
+        version: link:../spark-modes
+      '@zendev-lab/spark-roles':
+        specifier: workspace:^
+        version: link:../spark-roles
       '@zendev-lab/spark-runtime':
         specifier: workspace:^
         version: link:../spark-runtime
-      '@zendev-lab/spark-tui':
+      '@zendev-lab/spark-tasks':
         specifier: workspace:^
-        version: link:../spark-tui
+        version: link:../spark-tasks
+      '@zendev-lab/spark-text':
+        specifier: workspace:^
+        version: link:../spark-text
+      '@zendev-lab/spark-workflows':
+        specifier: workspace:^
+        version: link:../spark-workflows
+      typebox:
+        specifier: ^1.2.13
+        version: 1.2.13
+
+  packages/spark-extension-api: {}
+
+  packages/spark-files:
+    dependencies:
+      '@zendev-lab/spark-extension-api':
+        specifier: workspace:^
+        version: link:../spark-extension-api
+      diff:
+        specifier: ^8.0.4
+        version: 8.0.4
+      ignore:
+        specifier: ^7.0.5
+        version: 7.0.5
+      minimatch:
+        specifier: ^10.2.5
+        version: 10.2.5
+      typebox:
+        specifier: ^1.2.13
+        version: 1.2.13
+
+  packages/spark-generative-ui:
+    devDependencies:
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: 4.1.9
+        version: 4.1.9(@types/node@26.0.1)(@vitest/browser-preview@4.1.9)(@voidzero-dev/vite-plus-core@0.2.1(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(jsdom@27.4.0)
+
+  packages/spark-graft:
+    dependencies:
+      '@zendev-lab/spark-roles':
+        specifier: workspace:^
+        version: link:../spark-roles
       typebox:
         specifier: ^1.2.13
         version: 1.2.13
 
   packages/spark-host:
     dependencies:
-      '@zendev-lab/pi-extension-api':
+      '@zendev-lab/spark-extension-api':
         specifier: workspace:^
-        version: link:../pi-extension-api
+        version: link:../spark-extension-api
       '@zendev-lab/spark-protocol':
         specifier: workspace:^
         version: link:../spark-protocol
@@ -484,6 +440,26 @@ importers:
         specifier: 4.1.9
         version: 4.1.9(@types/node@26.0.1)(@vitest/browser-preview@4.1.9)(@voidzero-dev/vite-plus-core@0.2.1(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(jsdom@27.4.0)
 
+  packages/spark-learnings:
+    dependencies:
+      '@zendev-lab/spark-artifacts':
+        specifier: workspace:^
+        version: link:../spark-artifacts
+      '@zendev-lab/spark-extension-api':
+        specifier: workspace:^
+        version: link:../spark-extension-api
+      typebox:
+        specifier: ^1.2.13
+        version: 1.2.13
+
+  packages/spark-loop: {}
+
+  packages/spark-modes:
+    dependencies:
+      typebox:
+        specifier: ^1.2.13
+        version: 1.2.13
+
   packages/spark-protocol:
     dependencies:
       zod:
@@ -497,23 +473,41 @@ importers:
         specifier: 4.1.9
         version: 4.1.9(@types/node@26.0.1)(@vitest/browser-preview@4.1.9)(@voidzero-dev/vite-plus-core@0.2.1(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(jsdom@27.4.0)
 
+  packages/spark-recall:
+    dependencies:
+      '@zendev-lab/spark-extension-api':
+        specifier: workspace:^
+        version: link:../spark-extension-api
+      typebox:
+        specifier: ^1.2.13
+        version: 1.2.13
+
+  packages/spark-roles:
+    dependencies:
+      '@zendev-lab/spark-tui':
+        specifier: workspace:^
+        version: link:../spark-tui
+      typebox:
+        specifier: ^1.2.13
+        version: 1.2.13
+
   packages/spark-runtime:
     dependencies:
-      '@zendev-lab/pi-artifacts':
+      '@zendev-lab/spark-artifacts':
         specifier: workspace:^
-        version: link:../pi-artifacts
-      '@zendev-lab/pi-extension-api':
+        version: link:../spark-artifacts
+      '@zendev-lab/spark-extension-api':
         specifier: workspace:^
-        version: link:../pi-extension-api
-      '@zendev-lab/pi-roles':
+        version: link:../spark-extension-api
+      '@zendev-lab/spark-roles':
         specifier: workspace:^
-        version: link:../pi-roles
-      '@zendev-lab/pi-tasks':
+        version: link:../spark-roles
+      '@zendev-lab/spark-tasks':
         specifier: workspace:^
-        version: link:../pi-tasks
-      '@zendev-lab/pi-workflows':
+        version: link:../spark-tasks
+      '@zendev-lab/spark-workflows':
         specifier: workspace:^
-        version: link:../pi-workflows
+        version: link:../spark-workflows
 
   packages/spark-system:
     devDependencies:
@@ -524,20 +518,50 @@ importers:
         specifier: 4.1.9
         version: 4.1.9(@types/node@26.0.1)(@vitest/browser-preview@4.1.9)(@voidzero-dev/vite-plus-core@0.2.1(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(jsdom@27.4.0)
 
-  packages/spark-tui:
+  packages/spark-tasks:
+    dependencies:
+      '@zendev-lab/spark-extension-api':
+        specifier: workspace:^
+        version: link:../spark-extension-api
+      typebox:
+        specifier: ^1.2.13
+        version: 1.2.13
+
+  packages/spark-text:
     dependencies:
       '@earendil-works/pi-tui':
         specifier: ^0.79.4
         version: 0.79.4
 
+  packages/spark-tui:
+    dependencies:
+      '@earendil-works/pi-tui':
+        specifier: ^0.79.4
+        version: 0.79.4
+      '@zendev-lab/spark-text':
+        specifier: workspace:^
+        version: link:../spark-text
+
   packages/spark-turn:
     dependencies:
-      '@zendev-lab/pi-extension-api':
+      '@zendev-lab/spark-extension-api':
         specifier: workspace:^
-        version: link:../pi-extension-api
+        version: link:../spark-extension-api
       '@zendev-lab/spark-protocol':
         specifier: workspace:^
         version: link:../spark-protocol
+
+  packages/spark-workflows:
+    dependencies:
+      '@zendev-lab/spark-extension-api':
+        specifier: workspace:^
+        version: link:../spark-extension-api
+      '@zendev-lab/spark-tasks':
+        specifier: workspace:^
+        version: link:../spark-tasks
+      typebox:
+        specifier: ^1.2.13
+        version: 1.2.13
 
 packages:
 

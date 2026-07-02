@@ -1,4 +1,4 @@
-import { defaultTaskGraphStore, type TaskGraph } from "@zendev-lab/pi-tasks";
+import { defaultTaskGraphStore, type TaskGraph } from "@zendev-lab/spark-tasks";
 import { renderActiveSparkContext } from "./spark-active-context.ts";
 import { ensureLocalSparkDirectory, readActiveSparkMd } from "./spark-activation.ts";
 import { ensureSparkClaimReaper, sweepExpiredSparkClaims } from "./spark-claim-reaper.ts";

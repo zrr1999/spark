@@ -1,0 +1,27 @@
+{
+  "name": "@zendev-lab/spark-learnings",
+  "version": "0.1.0",
+  "description": "Generic evidence-backed learning capability and canonical learning tool for Spark extension hosts.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./extension": "./src/extension.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@zendev-lab/spark-artifacts": "workspace:^",
+    "@zendev-lab/spark-extension-api": "workspace:^",
+    "typebox": "^1.2.13"
+  }
+}

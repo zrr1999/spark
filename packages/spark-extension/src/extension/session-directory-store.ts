@@ -1,7 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
-import { nowIso, type ProjectRef, type TaskRef } from "@zendev-lab/pi-extension-api";
+import { nowIso, type ProjectRef, type TaskRef } from "@zendev-lab/spark-extension-api";
 import { readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {
   sanitizeStoreScope,

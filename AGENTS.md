@@ -10,8 +10,9 @@ Target package topology follows type-first names:
 - `apps/spark-tui` — executable native terminal host (`@zendev-lab/spark-tui-app`). Keep host/runtime/editor code here, not in the dispatcher.
 - `apps/spark-daemon` — Spark daemon service package that owns local workspace state, IPC, and background execution.
 - `apps/spark-cockpit` — Spark Cockpit SvelteKit local web cockpit/projection app. Keep SvelteKit/browser-specific checks isolated from the non-Svelte Spark package checks.
-- `packages/pi-*` — host-neutral Pi-style capabilities and contracts (`pi-extension-api`, `pi-tasks`, `pi-workflows`, `pi-cue`, …). These must not depend on Spark product packages.
-- `packages/spark-extension` — Spark Pi-style extension facade. It owns Spark command/tool policy and depends on `pi-extension-api` instead of concrete host runtimes.
+- `packages/spark-*` — Spark-owned capability/runtime packages. Core capability primitives include `spark-extension-api`, `spark-artifacts`, `spark-tasks`, `spark-workflows`, `spark-loop`, and `spark-modes`.
+- `packages/pi-*` — retained Pi-compatible adapters or capabilities not yet renamed (`spark-ask`, `spark-cue`, `spark-files`, `spark-graft`, `spark-roles`, `pi-btw`, …). These must not depend on Spark product packages; only renamed Spark foundation packages and the `@zendev-lab/spark-tui` presentation boundary are allowed.
+- `packages/spark-extension` — Spark extension facade. It owns Spark command/tool policy and depends on `spark-extension-api` instead of concrete host runtimes.
 - `packages/spark-runtime`, `packages/spark-protocol`, `packages/spark-tui`, `packages/spark-db`, and `packages/spark-system` — Spark shared runtime, protocol/schema, reusable TUI boundary, SQLite/migration, and local-system helper packages.
 - `packages/spark-cockpit-*` — reserved for Cockpit-private implementation packages; do not put daemon/shared helpers behind Cockpit-private names.
 - `docs/navia/` — Historical cockpit product, design, architecture, and release-readiness documentation imported from the standalone Navia repository.
@@ -34,7 +35,7 @@ Target package topology follows type-first names:
 | `pnpm test`                              | Root Node tests only (`test/*.test.ts`)                          |
 | `pnpm run build`                         | Build the Spark daemon CLI and Spark Cockpit web app             |
 | `pnpm run preview`                       | Start the local Spark Cockpit dev server                         |
-| `spark cockpit`                          | Start the local Spark Cockpit dev server through the CLI          |
+| `spark cockpit`                          | Start the built Spark Cockpit production server through the CLI   |
 | `pnpm install -g .`                      | Link the unified root `spark` CLI                                |
 | `pnpm run publish`                       | Validate, build, and publish `apps/*` plus `@zendev-lab/spark-extension` |
 
@@ -47,11 +48,11 @@ Target package topology follows type-first names:
 
 ## Dual-host Spark extension boundary
 
-- `pi-extension-api` is the host-neutral TypeScript contract for Pi-style extensions. Do not merge it into Spark product code; Spark extension packages depend on this contract instead.
+- `spark-extension-api` is the host-neutral TypeScript contract for Spark extension hosts and retained Pi-compatible adapters. Do not merge it into Spark product code; Spark extension packages depend on this contract instead.
 - `packages/spark-extension/src/extension/` is the Spark extension facade path. It must remain loadable by Pi as a normal extension.
 - Spark extension/shared packages must not import concrete app host internals from `apps/spark-cli`, `apps/spark-tui`, `@zendev-lab/spark-tui-app`, or `@earendil-works/pi-coding-agent` runtime code.
 - Shared Spark host/turn code belongs in `packages/spark-host` and `packages/spark-turn`; executable apps keep only bootstrap, UI, daemon, and compatibility-adapter glue. pi-tui-specific wrappers should stay behind the reusable `packages/spark-tui` boundary.
-- When adding or changing a host-touching extension capability, update `pi-extension-api` only if both hosts need the contract, and add/adjust dual-host tests such as `test/spark-ext-host-contract.test.ts`, `test/spark-host-runtime-cross.test.ts`, and the relevant Spark host test.
+- When adding or changing a host-touching extension capability, update `spark-extension-api` only if both hosts need the contract, and add/adjust dual-host tests such as `test/spark-ext-host-contract.test.ts`, `test/spark-host-runtime-cross.test.ts`, and the relevant Spark host test.
 - Keep builtin extension loading explicit for Spark native hosts; do not reintroduce Pi SDK package discovery or `loadPiSdk` into Spark apps.
 
 ## Notes for agents
@@ -59,5 +60,5 @@ Target package topology follows type-first names:
 - Public/default repo-owned tools should use canonical `tool({ action })` surfaces when operations share one domain/state/permission/render/result contract; do not keep fragmented duplicate aliases public, and render action tools as `tool action=<value> ...`.
 - Prefer `vp fmt` / `vp check` before committing when touching TS/Markdown; pre-commit runs `vp check --fix`.
 - Do not commit secrets or `.env` files.
-- Spark Cockpit local app/projection state currently lives under `.navia/`; Spark runtime state remains under `.spark/`; local learnings remain under `.learnings/`. Treat all three as ignored local state unless explicitly exported or documented.
-- Boundary checks should keep `pi-*` independent from Spark/Cockpit packages, keep Spark shared packages independent from Cockpit/daemon adapter packages, and treat legacy `navia-*` names in active docs as historical/migration-only context.
+- **State directories** — Workspace agent runtime lives under `.spark/`; local learnings under `.learnings/`. Cockpit and daemon app databases live under XDG paths via `resolveSparkPaths()` (`~/.local/share/spark/cockpit`, `~/.local/share/spark/daemon`). Legacy repo-local `.navia/` and `NAVIA_*` env aliases remain for migration only and should not be used for new installs.
+- Boundary checks should keep retained `pi-*` packages independent from Spark product/Cockpit packages except for renamed Spark foundation packages, keep Spark shared packages independent from Cockpit/daemon adapter packages, and treat legacy `navia-*` names in active docs as historical/migration-only context.

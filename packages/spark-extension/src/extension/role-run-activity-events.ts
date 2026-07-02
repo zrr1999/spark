@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import type { RunRef } from "@zendev-lab/pi-extension-api";
+import type { RunRef } from "@zendev-lab/spark-extension-api";
 import type { SparkRoleRunActivityEventInput } from "./spark-role-run-observability.ts";
 
 interface RoleRunActivityEventStoreSnapshot {

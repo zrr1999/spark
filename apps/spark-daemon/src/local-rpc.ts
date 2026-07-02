@@ -6,6 +6,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { SparkDaemonEvent } from "@zendev-lab/spark-protocol";
 import type { SparkPaths } from "@zendev-lab/spark-system";
 import {
+  SparkDaemonInvocationRegistry,
   SparkDaemonQueue,
   type SparkDaemonQueueEntry,
   type SparkDaemonQueueState,
@@ -88,6 +89,18 @@ export interface LocalTurnSubmitResult {
   observedAt: string;
 }
 
+export interface LocalTurnCancelRequest {
+  invocationId: string;
+  reason?: string;
+}
+
+export interface LocalTurnCancelResult {
+  invocationId: string;
+  cancelled: boolean;
+  message: string;
+  observedAt: string;
+}
+
 export interface LocalDaemonStopResult {
   stopping: true;
   observedAt: string;
@@ -141,6 +154,7 @@ type LocalRpcRequest =
   | { id: string; method: "daemon.stop" }
   | { id: string; method: "daemon.queue"; params: LocalDaemonQueueParams }
   | { id: string; method: "turn.submit"; params: LocalTurnSubmitParams }
+  | { id: string; method: "turn.cancel"; params: LocalTurnCancelParams }
   | { id: string; method: "workspace.list" }
   | { id: string; method: "workspace.register"; params: LocalWorkspaceRegisterParams }
   | { id: string; method: "workspace.ensure-local"; params: LocalWorkspaceEnsureLocalParams }
@@ -153,6 +167,8 @@ type LocalRpcRequest =
     }
   | { id: string; method: "workspace.client.release"; params: { clientId: string } }
   | { id: string; method: "workspace.executor.ensure"; params: LocalWorkspaceExecutorEnsureParams };
+
+type LocalTurnCancelParams = LocalTurnCancelRequest;
 
 type LocalRpcErrorPayload = {
   message: string;
@@ -175,13 +191,21 @@ export async function startLocalRpcServer(options: {
   db: DatabaseSync;
   onStop?: () => void | Promise<void>;
   eventBus?: SparkDaemonLocalEventBus;
+  invocationRegistry?: SparkDaemonInvocationRegistry;
 }): Promise<LocalRpcServer> {
   const socketPath = localRpcSocketPath(options.paths);
   mkdirSync(dirname(socketPath), { recursive: true, mode: 0o700 });
   rmSync(socketPath, { force: true });
 
   const server = createServer((socket) => {
-    handleLocalRpcSocket(socket, options.paths, options.db, options.onStop, options.eventBus);
+    handleLocalRpcSocket(
+      socket,
+      options.paths,
+      options.db,
+      options.onStop,
+      options.eventBus,
+      options.invocationRegistry,
+    );
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -249,6 +273,17 @@ export async function requestTurnSubmit(
     paths,
     { id: localRequestId(), method: "turn.submit", params: localTurnSubmitParams(params) },
     turnSubmit,
+  );
+}
+
+export async function requestTurnCancel(
+  paths: SparkPaths,
+  params: LocalTurnCancelParams,
+): Promise<LocalTurnCancelResult> {
+  return localRpcRequest(
+    paths,
+    { id: localRequestId(), method: "turn.cancel", params: localTurnCancelParams(params) },
+    turnCancel,
   );
 }
 
@@ -414,6 +449,7 @@ function handleLocalRpcSocket(
   db: DatabaseSync,
   onStop: (() => void | Promise<void>) | undefined,
   eventBus: SparkDaemonLocalEventBus | undefined,
+  invocationRegistry: SparkDaemonInvocationRegistry | undefined,
 ): void {
   let buffer = "";
   socket.on("error", () => {
@@ -430,9 +466,11 @@ function handleLocalRpcSocket(
       if (handleLocalRpcStreamLine(line, socket, paths, eventBus)) {
         return;
       }
-      void handleLocalRpcLine(line, paths, db, onStop).then((response) => {
-        writeLocalRpcResponse(socket, response);
-      });
+      void handleLocalRpcLine(line, paths, db, onStop, undefined, invocationRegistry).then(
+        (response) => {
+          writeLocalRpcResponse(socket, response);
+        },
+      );
       newline = buffer.indexOf("\n");
     }
   });
@@ -544,6 +582,7 @@ export async function handleLocalRpcLine(
   db: DatabaseSync,
   onStop: (() => void | Promise<void>) | undefined,
   options: LocalRpcHandlerOptions = {},
+  invocationRegistry?: SparkDaemonInvocationRegistry,
 ): Promise<LocalRpcResponse> {
   let requestId = "unknown";
   const ensureRegistration =
@@ -599,6 +638,22 @@ export async function handleLocalRpcLine(
             fileName: entry.fileName,
             filePath: entry.filePath,
             task: entry.payload.task,
+            observedAt: new Date().toISOString(),
+          },
+        };
+      }
+      case "turn.cancel": {
+        const reason = request.params.reason ?? "Spark local RPC turn cancellation requested.";
+        const cancelled = invocationRegistry?.cancel(request.params.invocationId, reason) ?? false;
+        return {
+          id: request.id,
+          ok: true,
+          result: {
+            invocationId: request.params.invocationId,
+            cancelled,
+            message: cancelled
+              ? `Cancellation signalled for Spark daemon invocation ${request.params.invocationId}.`
+              : `No active Spark daemon invocation matched ${request.params.invocationId}.`,
             observedAt: new Date().toISOString(),
           },
         };
@@ -750,6 +805,9 @@ function parseLocalRpcRequest(line: string): LocalRpcRequest {
   if (value.method === "turn.submit") {
     return { id: value.id, method: value.method, params: parseLocalTurnSubmitParams(value.params) };
   }
+  if (value.method === "turn.cancel") {
+    return { id: value.id, method: value.method, params: parseLocalTurnCancelParams(value.params) };
+  }
   if (value.method === "workspace.list") {
     return { id: value.id, method: value.method };
   }
@@ -861,6 +919,13 @@ function localWorkspaceRegisterParams(
   };
 }
 
+function localTurnCancelParams(params: LocalTurnCancelRequest): LocalTurnCancelParams {
+  return {
+    invocationId: params.invocationId,
+    ...(params.reason ? { reason: params.reason } : {}),
+  };
+}
+
 function localWorkspaceEnsureLocalParams(
   params: LocalWorkspaceEnsureLocalRequest,
 ): LocalWorkspaceEnsureLocalParams {
@@ -940,6 +1005,20 @@ function parseLocalTurnSubmitParams(value: unknown): LocalTurnSubmitParams {
     sessionId,
     prompt: value.prompt,
     ...(typeof value.reset === "boolean" ? { reset: value.reset } : {}),
+  };
+}
+
+function parseLocalTurnCancelParams(value: unknown): LocalTurnCancelParams {
+  if (!isRecord(value) || typeof value.invocationId !== "string") {
+    throw new Error("Invalid local RPC turn cancel params.");
+  }
+  const invocationId = value.invocationId.trim();
+  if (!invocationId) throw new Error("turn.cancel requires invocationId.");
+  return {
+    invocationId,
+    ...(typeof value.reason === "string" && value.reason.trim()
+      ? { reason: value.reason.trim() }
+      : {}),
   };
 }
 
@@ -1116,6 +1195,23 @@ function turnSubmit(value: unknown): LocalTurnSubmitResult {
     fileName: value.fileName,
     filePath: value.filePath,
     task: validateTurnSubmitTask(value.task),
+    observedAt: typeof value.observedAt === "string" ? value.observedAt : new Date().toISOString(),
+  };
+}
+
+function turnCancel(value: unknown): LocalTurnCancelResult {
+  if (
+    !isRecord(value) ||
+    typeof value.invocationId !== "string" ||
+    typeof value.cancelled !== "boolean" ||
+    typeof value.message !== "string"
+  ) {
+    throw new Error("Invalid local RPC turn cancel result.");
+  }
+  return {
+    invocationId: value.invocationId,
+    cancelled: value.cancelled,
+    message: value.message,
     observedAt: typeof value.observedAt === "string" ? value.observedAt : new Date().toISOString(),
   };
 }

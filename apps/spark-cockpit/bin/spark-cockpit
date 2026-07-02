@@ -8,46 +8,53 @@ print_help() {
 spark-cockpit - Spark Cockpit local web app
 
 Usage:
-  spark-cockpit [dev|preview] [vite args...]
-  spark-cockpit start
+  spark-cockpit [start]
+  spark-cockpit dev [vite args...]
+  spark-cockpit preview [vite args...]
   spark-cockpit build
   spark-cockpit --help
 
 Commands:
-  dev, preview   Start the local Cockpit dev server on 127.0.0.1 (default)
-  start          Start the built Cockpit Node server with runtime WebSocket support
+  start          Start the built Cockpit Node server with runtime WebSocket support (default)
+  dev            Start the explicit Cockpit development server on 127.0.0.1
+  preview        Start SvelteKit/Vite preview for an already-built Cockpit app
   build          Build the Cockpit production app
 
 Examples:
+  spark cockpit build
   spark cockpit
-  spark cockpit --port 5174
-  spark cockpit start
+  PORT=5174 spark cockpit
 EOF
 }
 
-command="${1:-dev}"
+command="${1:-start}"
 case "$command" in
   help|--help|-h)
     print_help
     ;;
-  dev|preview)
+  start)
     shift || true
+    if [ ! -f "$APP_DIR/build/handler.js" ]; then
+      printf 'Spark Cockpit production build not found. Run "spark cockpit build" first.\n' >&2
+      exit 1
+    fi
+    cd "$APP_DIR"
+    exec pnpm run start:custom -- "$@"
+    ;;
+  dev)
+    shift
     cd "$APP_DIR"
     exec pnpm run dev -- "$@"
     ;;
-  start)
+  preview)
     shift
     cd "$APP_DIR"
-    exec pnpm run start:custom -- "$@"
+    exec pnpm run preview -- "$@"
     ;;
   build)
     shift
     cd "$APP_DIR"
     exec pnpm run build -- "$@"
-    ;;
-  --*)
-    cd "$APP_DIR"
-    exec pnpm run dev -- "$@"
     ;;
   *)
     printf 'Unknown spark-cockpit command: %s\nRun "spark-cockpit --help" for available commands.\n' "$command" >&2

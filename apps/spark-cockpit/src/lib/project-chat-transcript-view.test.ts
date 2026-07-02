@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   activityKind,
-  buildProjectChatTranscriptTurns,
-  type ProjectChatCommand,
-  type ProjectChatInvocation,
-  type ProjectChatLogChunk,
-} from "./project-chat-transcript-view";
+  buildCockpitChatTranscriptTurns,
+  orderedAssistantOutput,
+  orderedAssistantRenderSource,
+  type CockpitChatCommand,
+  type CockpitChatInvocation,
+  type CockpitChatLogChunk,
+} from "./cockpit-chat-transcript-view";
 
 const labels = {
   waitingAnswer: "waiting",
@@ -16,7 +18,7 @@ const labels = {
   latestOutputPrefix: "latest:",
 };
 
-function command(overrides: Partial<ProjectChatCommand> = {}): ProjectChatCommand {
+function command(overrides: Partial<CockpitChatCommand> = {}): CockpitChatCommand {
   return {
     id: "cmd-1",
     kind: "task.start.request",
@@ -31,7 +33,7 @@ function command(overrides: Partial<ProjectChatCommand> = {}): ProjectChatComman
   };
 }
 
-function invocation(overrides: Partial<ProjectChatInvocation> = {}): ProjectChatInvocation {
+function invocation(overrides: Partial<CockpitChatInvocation> = {}): CockpitChatInvocation {
   return {
     id: "inv-row-1",
     runtimeInvocationId: "inv-1",
@@ -43,7 +45,7 @@ function invocation(overrides: Partial<ProjectChatInvocation> = {}): ProjectChat
   };
 }
 
-function log(overrides: Partial<ProjectChatLogChunk> = {}): ProjectChatLogChunk {
+function log(overrides: Partial<CockpitChatLogChunk> = {}): CockpitChatLogChunk {
   return {
     id: "log-1",
     runtimeInvocationId: "inv-1",
@@ -56,9 +58,9 @@ function log(overrides: Partial<ProjectChatLogChunk> = {}): ProjectChatLogChunk 
   };
 }
 
-describe("project chat transcript view model", () => {
+describe("cockpit chat transcript view model", () => {
   it("renders assistant streaming as a running turn with latest readable output", () => {
-    const turns = buildProjectChatTranscriptTurns(
+    const turns = buildCockpitChatTranscriptTurns(
       [command()],
       [invocation({ status: "running" })],
       [log({ content: "Streaming assistant text\nwith another line" })],
@@ -72,9 +74,29 @@ describe("project chat transcript view model", () => {
     expect(turns[0]?.currentActivity).toBe("Streaming assistant text");
   });
 
+  it("assembles assistant token chunks in sequence order", () => {
+    const chunks = [
+      log({ id: "log-3", stream: "assistant", sequence: 3, content: "!" }),
+      log({ id: "log-1", stream: "assistant", sequence: 1, content: "Hello" }),
+      log({ id: "log-2", stream: "assistant", sequence: 2, content: " world" }),
+      log({ id: "log-system", stream: "system", sequence: 4, content: "done" }),
+    ];
+    const turns = buildCockpitChatTranscriptTurns(
+      [command()],
+      [invocation({ status: "running" })],
+      chunks,
+      labels,
+    );
+
+    expect(orderedAssistantOutput(chunks)).toBe("Hello world!");
+    expect(orderedAssistantRenderSource(chunks)).toBe("Hello world!");
+    expect(turns[0]?.answer).toBe("latest:\nHello world!");
+    expect(turns[0]?.renderSource).toBe("Hello world!");
+  });
+
   it("classifies completed tool success logs as successful run details", () => {
     const successLog = log({ content: "tests passed successfully" });
-    const turns = buildProjectChatTranscriptTurns(
+    const turns = buildCockpitChatTranscriptTurns(
       [command()],
       [invocation({ status: "completed" })],
       [successLog],
@@ -88,7 +110,7 @@ describe("project chat transcript view model", () => {
 
   it("promotes stderr/tool failure output to an actionable error card", () => {
     const errorLog = log({ stream: "stderr", content: "tool failed: missing config" });
-    const turns = buildProjectChatTranscriptTurns(
+    const turns = buildCockpitChatTranscriptTurns(
       [command()],
       [invocation({ status: "running" })],
       [errorLog],
@@ -101,7 +123,7 @@ describe("project chat transcript view model", () => {
   });
 
   it("renders command rejection without logs as a system error card", () => {
-    const turns = buildProjectChatTranscriptTurns(
+    const turns = buildCockpitChatTranscriptTurns(
       [command({ status: "rejected", deliveryStatus: "rejected" })],
       [],
       [],
@@ -112,9 +134,9 @@ describe("project chat transcript view model", () => {
     expect(turns[0]?.answer).toBe("error");
   });
 
-  it("preserves multiline markdown/html-like text as plain view-model text", () => {
+  it("preserves multiline markdown/html-like text as render source without executing it", () => {
     const markdown = "## Result\n- keep markdown literal\n<script>alert('x')</script>";
-    const turns = buildProjectChatTranscriptTurns(
+    const turns = buildCockpitChatTranscriptTurns(
       [command()],
       [invocation({ status: "completed" })],
       [log({ content: markdown })],
@@ -122,10 +144,25 @@ describe("project chat transcript view model", () => {
     );
 
     expect(turns[0]?.answer).toBe(`latest:\n${markdown}`);
+    expect(turns[0]?.renderSource).toBe(markdown);
+  });
+
+  it("keeps full assistant render source while bounding the compact answer", () => {
+    const longMarkdown = `## Result\n${"a".repeat(700)}`;
+    const turns = buildCockpitChatTranscriptTurns(
+      [command()],
+      [invocation({ status: "running" })],
+      [log({ stream: "assistant", content: longMarkdown })],
+      labels,
+    );
+
+    expect(turns[0]?.renderSource).toBe(longMarkdown);
+    expect(turns[0]?.answer).toContain("…");
+    expect(turns[0]?.answer.length).toBeLessThan(longMarkdown.length);
   });
 
   it("filters structured JSON control chunks out of assistant answer excerpts", () => {
-    const turns = buildProjectChatTranscriptTurns(
+    const turns = buildCockpitChatTranscriptTurns(
       [command()],
       [invocation({ status: "completed" })],
       [log({ content: JSON.stringify({ type: "tool", name: "read" }) })],
@@ -133,6 +170,41 @@ describe("project chat transcript view model", () => {
     );
 
     expect(turns[0]?.answer).toBe("completed");
+    expect(turns[0]?.renderSource).toBeNull();
     expect(turns[0]?.logs).toHaveLength(1);
+  });
+
+  it("extracts assistant text from serialized Spark JSON events", () => {
+    const chunk = log({
+      stream: "assistant",
+      content: JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "done",
+          message: { role: "assistant", content: [{ type: "text", text: "JSON final" }] },
+        },
+      }),
+    });
+    const turns = buildCockpitChatTranscriptTurns(
+      [command()],
+      [invocation({ status: "completed" })],
+      [chunk],
+      labels,
+    );
+
+    expect(turns[0]?.answer).toBe("latest:\nJSON final");
+    expect(turns[0]?.renderSource).toBe("JSON final");
+  });
+
+  it("does not show daemon startup boilerplate as assistant output", () => {
+    const turns = buildCockpitChatTranscriptTurns(
+      [command()],
+      [invocation({ status: "completed" })],
+      [log({ stream: "system", content: "Spark runtime role-run started." })],
+      labels,
+    );
+
+    expect(turns[0]?.answer).toBe("completed");
+    expect(turns[0]?.renderSource).toBeNull();
   });
 });

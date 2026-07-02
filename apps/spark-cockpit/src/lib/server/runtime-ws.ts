@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   artifactProjectionEnvelopeSchema,
   createId,
+  createServerCommandEnvelope,
   daemonEventEnvelopeSchema,
   humanRequestCreatedEnvelopeSchema,
   humanResponseAckEnvelopeSchema,
@@ -14,6 +15,7 @@ import {
   runtimeProtocolVersion,
   runtimeReconcileReportEnvelopeSchema,
   parseSparkDaemonEvent,
+  serializeServerCommandEnvelope,
   taskGraphSnapshotEnvelopeSchema,
   workspaceSnapshotEnvelopeSchema,
 } from "@zendev-lab/spark-protocol";
@@ -900,18 +902,18 @@ function flushPendingCommands(
     }
 
     ws.send(
-      JSON.stringify({
-        protocolVersion: runtimeProtocolVersion,
-        messageId,
-        type: "server.command",
-        sentAt: now,
+      serializeServerCommandEnvelope({
         runtimeId: context.runtimeId,
         workspaceBindingId: row.workspaceBindingId,
         workspaceId: row.workspaceId,
         projectId: row.projectId ?? undefined,
         commandId: row.commandId,
         idempotencyKey: row.idempotencyKey ?? undefined,
-        payload: JSON.parse(row.payloadJson),
+        messageId,
+        sentAt: now,
+        payload: JSON.parse(row.payloadJson) as Parameters<
+          typeof createServerCommandEnvelope
+        >[0]["payload"],
       }),
     );
   }

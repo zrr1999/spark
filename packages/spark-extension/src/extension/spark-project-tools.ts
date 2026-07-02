@@ -1,6 +1,6 @@
-import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
-import type { ArtifactRef, JsonValue, ProjectRef } from "@zendev-lab/pi-extension-api";
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
+import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import type { ArtifactRef, JsonValue, ProjectRef } from "@zendev-lab/spark-extension-api";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import type { clarifyProjectPurposeIfNeeded } from "../flows/project-purpose-flow.ts";
 import { normalizeProjectKindId, renderSparkProjectKindDisplay } from "./project-kind-registry.ts";
 import { isImportantStatus } from "./spark-status.ts";

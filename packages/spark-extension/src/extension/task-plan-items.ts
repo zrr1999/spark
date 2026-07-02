@@ -1,5 +1,5 @@
-import type { Task, TaskPlan } from "@zendev-lab/pi-extension-api";
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
+import type { Task, TaskPlan } from "@zendev-lab/spark-extension-api";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
 
 const MAX_PLAN_ITEMS = 12;
 

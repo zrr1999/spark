@@ -1,14 +1,14 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
-import { nowIso, type ProjectRef, type Task } from "@zendev-lab/pi-extension-api";
+import { nowIso, type ProjectRef, type Task } from "@zendev-lab/spark-extension-api";
 import {
   defaultArtifactStore,
   type Artifact,
   type ArtifactRef,
   type JsonValue,
-} from "@zendev-lab/pi-artifacts";
-import type { WorkflowRunStatusSummary } from "@zendev-lab/pi-workflows";
+} from "@zendev-lab/spark-artifacts";
+import type { WorkflowRunStatusSummary } from "@zendev-lab/spark-workflows";
 import type { ActiveSparkRoleRunProcess } from "@zendev-lab/spark-runtime";
 import { sessionDirectoryNameForKey } from "./session-directory-store.ts";
 

@@ -3,7 +3,7 @@ import {
   formatPiTaskStatusCounts,
   piTaskDisplayHandle,
   piTaskDisplayTitle,
-} from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-tasks";
 
 export interface CockpitProjectDisplayInput {
   name: string;

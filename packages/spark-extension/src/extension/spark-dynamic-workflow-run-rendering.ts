@@ -1,4 +1,4 @@
-import type { RunRef } from "@zendev-lab/pi-extension-api";
+import type { RunRef } from "@zendev-lab/spark-extension-api";
 import type { SparkDynamicWorkflowEventRunView } from "./spark-dynamic-workflow-event-store.ts";
 import type { SparkDynamicWorkflowRunRecord } from "./spark-dynamic-workflow-run-store.ts";
 

@@ -56,6 +56,7 @@ export interface SparkDaemonTaskExecutionContext {
   queueEntry: SparkDaemonQueueEntry;
   invocationId: string;
   signal: AbortSignal;
+  timeoutMs?: number;
   emitEvent?: SparkDaemonEventSink;
 }
 

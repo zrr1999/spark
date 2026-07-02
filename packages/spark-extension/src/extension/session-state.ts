@@ -1,4 +1,8 @@
-import { defaultTaskGraphStore, defaultTaskTodoStore, type TaskGraph } from "@zendev-lab/pi-tasks";
+import {
+  defaultTaskGraphStore,
+  defaultTaskTodoStore,
+  type TaskGraph,
+} from "@zendev-lab/spark-tasks";
 import { sparkSessionKey, type SparkSessionContext } from "./session-identity.ts";
 
 export {

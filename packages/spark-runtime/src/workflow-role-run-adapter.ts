@@ -1,9 +1,9 @@
-import type { RoleRef } from "@zendev-lab/pi-extension-api";
+import type { RoleRef } from "@zendev-lab/spark-extension-api";
 import type {
   WorkflowAgentOptions,
   WorkflowAgentReportedTelemetry,
   WorkflowAgentRunner,
-} from "@zendev-lab/pi-workflows";
+} from "@zendev-lab/spark-workflows";
 
 export const SPARK_WORKFLOW_GRAFT_ISOLATION_TOOLS = [
   "graft_help",

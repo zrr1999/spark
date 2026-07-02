@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defaultTaskGraphStore, TaskGraph } from "@zendev-lab/pi-tasks";
+import { defaultTaskGraphStore, TaskGraph } from "@zendev-lab/spark-tasks";
 import { clarifyProjectPurposeIfNeeded } from "../flows/project-purpose-flow.ts";
 import { currentSparkProject, loadSparkGraph, saveCurrentProjectRef } from "./session-state.ts";
 import { ensureLocalSparkDirectory } from "./spark-activation.ts";

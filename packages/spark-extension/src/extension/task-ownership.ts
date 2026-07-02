@@ -3,4 +3,4 @@ export {
   isClaimOwnedBySession,
   shortRoleLabel,
   taskClaimedBy,
-} from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-tasks";

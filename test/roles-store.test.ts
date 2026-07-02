@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -18,7 +18,7 @@ import {
   listExtensionRoles,
   registerExtensionRole,
   validateBuiltinRoleProfiles,
-} from "@zendev-lab/pi-roles";
+} from "@zendev-lab/spark-roles";
 
 void test("builtin Pi worker is instructed to implement concrete repo behavior feedback", () => {
   const roles = createBuiltinRoles();
@@ -127,7 +127,7 @@ void test("extension role specs hydrate separately from writable project/user st
 });
 
 void test("project role spec store persists and hydrates registry", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-roles-"));
+  const dir = await mkdtemp(join(tmpdir(), "spark-roles-"));
   try {
     const store = new MarkdownRoleStore(dir);
     const spec = createRoleSpec({
@@ -146,6 +146,44 @@ void test("project role spec store persists and hydrates registry", async () => 
     assert.equal(loaded.source, "project");
     assert.equal(loaded.id, "svg-assembler");
     assert.match(loaded.ref, /^role:project-/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("markdown role store ignores foreign subagent specs in shared .agents roles", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-roles-"));
+  try {
+    await writeFile(
+      join(dir, "coder.md"),
+      `---\nname: coder\ndescription: >-\n  External subagent spec.\nrole: subagent\nmodel:\n  tier: coding\ncapabilities:\n  - basic\n---\nYou are coder.\n`,
+      "utf8",
+    );
+    const store = new MarkdownRoleStore({ rootDir: dir, source: "user" });
+
+    assert.deepEqual(await store.loadAll(), []);
+    const registry = new RoleRegistry();
+    await store.hydrate(registry);
+    assert.throws(() => registry.select("coder", { source: "user" }), /no role matches/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("markdown role store still rejects Pi role specs with model frontmatter", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-roles-"));
+  try {
+    await writeFile(
+      join(dir, "bad.md"),
+      `---\nid: bad\ndescription: Invalid Pi role.\nmodel: test/model\n---\nYou are invalid.\n`,
+      "utf8",
+    );
+    const store = new MarkdownRoleStore(dir);
+
+    await assert.rejects(
+      () => store.loadAll(),
+      /role spec model fields are not supported; use role model settings/,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

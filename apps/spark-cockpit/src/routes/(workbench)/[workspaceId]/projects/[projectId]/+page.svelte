@@ -1,4 +1,9 @@
 <script lang="ts">
+  import {
+    commandDeliveryDetail,
+    commandDeliveryHeadline,
+    type CommandDeliveryDisplayCommand,
+  } from "$lib/command-delivery-display";
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
   import { buildCockpitProjectTaskDisplay } from "$lib/project-task-display";
@@ -21,18 +26,9 @@
       taskSummary: data.taskSummary,
     }),
   );
-  type Command = {
+  type Command = CommandDeliveryDisplayCommand & {
     status: string;
-    deliveryStatus: string | null;
-    attemptCount: number | null;
-    lastAttemptAt: string | null;
-    ackedAt: string | null;
     rejectedAt: string | null;
-    rejectCode: string | null;
-    rejectMessage: string | null;
-    runtimeWorkspaceName: string | null;
-    runtimeName: string | null;
-    runtimeStatus: string | null;
   };
 
   let canStartTask = $derived(
@@ -66,51 +62,11 @@
   }
 
   function deliveryHeadline(command: Command) {
-    switch (command.deliveryStatus) {
-      case "pending":
-        return command.runtimeStatus === "online"
-          ? t.command.delivery.pendingOnline
-          : t.command.delivery.pendingOffline;
-      case "sent":
-        return t.command.delivery.sent;
-      case "acked":
-        return t.command.delivery.acked;
-      case "rejected":
-        return t.command.delivery.rejected;
-      case "failed":
-        return t.command.delivery.failed;
-      case "cancelled":
-        return t.command.delivery.cancelled;
-      default:
-        return t.command.delivery.none;
-    }
+    return commandDeliveryHeadline(command, t.command.delivery);
   }
 
   function deliveryDetail(command: Command) {
-    const target = [command.runtimeWorkspaceName, command.runtimeName].filter(Boolean).join(" · ");
-    const attempts = command.attemptCount
-      ? `${command.attemptCount} ${
-          command.attemptCount === 1
-            ? t.command.delivery.attemptSingular
-            : t.command.delivery.attemptPlural
-        }`
-      : t.command.delivery.notAttempted;
-
-    if (command.deliveryStatus === "rejected") {
-      return [target, command.rejectCode, command.rejectMessage].filter(Boolean).join(" · ");
-    }
-    if (command.deliveryStatus === "acked") {
-      return [target, command.ackedAt ? `${t.command.delivery.ackedPrefix} ${formatRelative(command.ackedAt)}` : null]
-        .filter(Boolean)
-        .join(" · ");
-    }
-    if (command.deliveryStatus === "sent") {
-      return [target, attempts, command.lastAttemptAt ? `${t.command.delivery.sentPrefix} ${formatRelative(command.lastAttemptAt)}` : null]
-        .filter(Boolean)
-        .join(" · ");
-    }
-
-    return [target, attempts].filter(Boolean).join(" · ");
+    return commandDeliveryDetail(command, t.command.delivery, formatRelative);
   }
 </script>
 
@@ -179,7 +135,7 @@
         <p class="summary-copy">
           {t.graph.body}
         </p>
-        <div class="pi-task-model" aria-label="pi-tasks project model">
+        <div class="spark-task-model" aria-label="spark-tasks project model">
           <code>{projectTaskDisplay.projectLine}</code>
           <code>{projectTaskDisplay.taskCountsLine}</code>
         </div>
@@ -608,13 +564,13 @@
     margin-top: 8px;
   }
 
-  .pi-task-model {
+  .spark-task-model {
     display: grid;
     gap: 8px;
     margin-top: 14px;
   }
 
-  .pi-task-model code,
+  .spark-task-model code,
   .task-status-line {
     background: var(--color-canvas);
     border: 1px solid var(--color-border);
@@ -625,7 +581,7 @@
     line-height: 1.45;
   }
 
-  .pi-task-model code {
+  .spark-task-model code {
     display: block;
     overflow-wrap: anywhere;
     padding: 8px 10px;

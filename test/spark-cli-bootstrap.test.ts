@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
 
-import { stableId } from "../packages/pi-extension-api/src/index.ts";
+import { stableId } from "../packages/spark-extension-api/src/index.ts";
 import { parseSparkCliArgs } from "../apps/spark-tui/src/cli.ts";
 import {
   assistantMessageToText,
@@ -122,7 +122,7 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
     );
 
     const config: SparkConfig = {
-      extensions: ["@zendev-lab/pi-ask/extension"],
+      extensions: ["@zendev-lab/spark-ask/extension"],
       providers: ["fake-provider"],
     };
     const captured: { systemPrompt?: string } = {};
@@ -172,8 +172,8 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
     assert.match(captured.systemPrompt ?? "", /Tools: task_read, task_write, assign/);
     assert.match(captured.systemPrompt ?? "", /<base_system_prompts>/);
     assert.doesNotMatch(captured.systemPrompt ?? "", /# Spark/);
-    assert.match(captured.systemPrompt ?? "", /# pi-cue/);
-    assert.match(captured.systemPrompt ?? "", /# pi-graft/);
+    assert.match(captured.systemPrompt ?? "", /# spark-cue/);
+    assert.match(captured.systemPrompt ?? "", /# spark-graft/);
     assert.doesNotMatch(captured.systemPrompt ?? "", /at most one unfinished claimed task/);
     assert.match(captured.systemPrompt ?? "", /workspace-skill/);
   } finally {
@@ -181,8 +181,8 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
   }
 });
 
-void test("native host registers pi-files working-tree tools via the builtin extension set", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-cli-pi-files-"));
+void test("native host registers spark-files working-tree tools via the builtin extension set", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-spark-files-"));
   try {
     const cwd = join(dir, "repo");
     const sparkHome = join(dir, ".spark");
@@ -190,8 +190,8 @@ void test("native host registers pi-files working-tree tools via the builtin ext
     const services = await createSparkCliHostServices({
       cwd,
       sparkHome,
-      config: { extensions: ["@zendev-lab/pi-files/extension"], providers: ["fake-provider"] },
-      extensions: ["@zendev-lab/pi-files/extension"],
+      config: { extensions: ["@zendev-lab/spark-files/extension"], providers: ["fake-provider"] },
+      extensions: ["@zendev-lab/spark-files/extension"],
       providers: ["fake-provider"],
       providerImporter: async () => fakeProviderModule(),
     });
@@ -206,7 +206,7 @@ void test("native host registers pi-files working-tree tools via the builtin ext
     }
     assert.equal(
       services.extensionLoadResult.outcomes.find(
-        (outcome) => outcome.specifier === "@zendev-lab/pi-files/extension",
+        (outcome) => outcome.specifier === "@zendev-lab/spark-files/extension",
       )?.ok,
       true,
     );

@@ -52,7 +52,7 @@ export type Context = any;
 export type StreamOptions = any;
 export type AssistantMessageEvent = any;
 
-import type { ExtensionContext, ToolConfig } from "@zendev-lab/pi-extension-api";
+import type { ExtensionContext, ToolConfig } from "@zendev-lab/spark-extension-api";
 import {
   SPARK_PROTOCOL_VERSION,
   type SparkArtifactView,
@@ -106,6 +106,10 @@ export interface SparkTurnHost {
   publishView(event: SparkViewModelEvent): void;
 }
 
+export const DEFAULT_SPARK_AGENT_LOOP_STREAM_TIMEOUT_MS = 600_000;
+export const DEFAULT_SPARK_AGENT_LOOP_TOOL_TIMEOUT_MS = 300_000;
+export const DEFAULT_SPARK_AGENT_LOOP_INTERACTION_TIMEOUT_MS = 60_000;
+
 export interface SparkAgentLoopOptions {
   host: SparkTurnHost;
   /** pi-ai stream function. Pass the production `stream` import or a test fake. */
@@ -115,6 +119,12 @@ export interface SparkAgentLoopOptions {
   systemPrompt?: string;
   /** Maximum number of tool roundtrips per submit. Defaults to 16. */
   maxRoundtrips?: number;
+  /** Wall-clock timeout for one model stream pass. Defaults to 10 minutes; <=0 disables. */
+  streamTimeoutMs?: number;
+  /** Wall-clock timeout for one tool execution. Defaults to 5 minutes; <=0 disables. */
+  toolTimeoutMs?: number;
+  /** Wall-clock timeout for one host interaction/approval wait. Defaults to 60s; <=0 disables. */
+  interactionTimeoutMs?: number;
 }
 
 export type SparkAgentLoopEvent =
@@ -131,6 +141,9 @@ export class SparkAgentLoop {
   private readonly streamFunction: SparkAgentStreamFunction;
   private readonly getModel: () => Model<string>;
   private readonly maxRoundtrips: number;
+  private readonly streamTimeoutMs: number;
+  private readonly toolTimeoutMs: number;
+  private readonly interactionTimeoutMs: number;
   private systemPrompt: string;
   private readonly messages: Message[] = [];
   private state: SparkAgentLoopState = "idle";
@@ -147,6 +160,18 @@ export class SparkAgentLoop {
     this.getModel = options.getModel;
     this.systemPrompt = options.systemPrompt ?? "";
     this.maxRoundtrips = options.maxRoundtrips ?? 16;
+    this.streamTimeoutMs = normalizeTimeoutMs(
+      options.streamTimeoutMs,
+      DEFAULT_SPARK_AGENT_LOOP_STREAM_TIMEOUT_MS,
+    );
+    this.toolTimeoutMs = normalizeTimeoutMs(
+      options.toolTimeoutMs,
+      DEFAULT_SPARK_AGENT_LOOP_TOOL_TIMEOUT_MS,
+    );
+    this.interactionTimeoutMs = normalizeTimeoutMs(
+      options.interactionTimeoutMs,
+      DEFAULT_SPARK_AGENT_LOOP_INTERACTION_TIMEOUT_MS,
+    );
     this.host.setTriggerTurnHandler(() => this.triggerNextTurn());
   }
 
@@ -280,13 +305,12 @@ export class SparkAgentLoop {
           const stream = this.streamFunction(this.getModel(), context, {
             signal: abortController.signal,
           } as StreamOptions);
-          for await (const event of stream) {
-            this.publish({ type: "stream_event", event });
-            if (event.type === "done" || event.type === "error") {
-              assistant = event.type === "done" ? event.message : event.error;
-            }
-          }
-          if (!assistant) assistant = await stream.result();
+          assistant = await runWithTimeout(
+            this.consumeAssistantStream(stream),
+            this.streamTimeoutMs,
+            `Spark agent model stream timed out after ${this.streamTimeoutMs}ms`,
+            (error) => abortController.abort(error),
+          );
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           this.publish({ type: "error", message });
@@ -363,6 +387,19 @@ export class SparkAgentLoop {
     }
   }
 
+  private async consumeAssistantStream(
+    stream: ReturnType<SparkAgentStreamFunction>,
+  ): Promise<AssistantMessage> {
+    let assistant: AssistantMessage | undefined;
+    for await (const event of stream) {
+      this.publish({ type: "stream_event", event });
+      if (event.type === "done" || event.type === "error") {
+        assistant = event.type === "done" ? event.message : event.error;
+      }
+    }
+    return assistant ?? (await stream.result());
+  }
+
   private async dispatchToolCall(
     toolCall: ToolCall,
     signal: AbortSignal,
@@ -374,26 +411,31 @@ export class SparkAgentLoop {
 
     const ctx: ExtensionContext = this.host.makeContext({ model: this.getModel() });
     try {
-      const approval = await this.requestToolApprovalIfNeeded(toolCall, tool.config);
+      const approval = await this.requestToolApprovalIfNeeded(toolCall, tool.config, signal);
       if (!approval.approved) return errorToolResult(toolCall, approval.message);
 
       const onUpdate = () => undefined;
-      const result = await tool.config.execute(
-        toolCall.id,
-        toolCall.arguments,
-        signal,
-        onUpdate,
-        ctx,
-      );
-      return {
-        role: "toolResult",
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        content: result.content,
-        details: result.details,
-        isError: result.isError ?? false,
-        timestamp: Date.now(),
-      };
+      const toolAbort = new AbortController();
+      const cleanupAbort = relayAbort(signal, toolAbort);
+      try {
+        const result = await runWithTimeout(
+          tool.config.execute(toolCall.id, toolCall.arguments, toolAbort.signal, onUpdate, ctx),
+          this.toolTimeoutMs,
+          `Spark tool "${toolCall.name}" timed out after ${this.toolTimeoutMs}ms`,
+          (error) => toolAbort.abort(error),
+        );
+        return {
+          role: "toolResult",
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          content: result.content,
+          details: result.details,
+          isError: result.isError ?? false,
+          timestamp: Date.now(),
+        };
+      } finally {
+        cleanupAbort();
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return errorToolResult(toolCall, message);
@@ -403,21 +445,26 @@ export class SparkAgentLoop {
   private async requestToolApprovalIfNeeded(
     toolCall: ToolCall,
     config: ToolConfig,
+    _signal: AbortSignal,
   ): Promise<{ approved: true } | { approved: false; message: string }> {
     if (!toolRequiresApproval(config)) return { approved: true };
-    const response = await this.host.requestInteraction({
-      version: SPARK_PROTOCOL_VERSION,
-      kind: "toolApproval",
-      requestId: `tool-approval:${toolCall.id}:${Date.now().toString(36)}`,
-      title: `Approve tool: ${toolCall.name}`,
-      toolName: toolCall.name,
-      toolCallId: toolCall.id,
-      arguments: toolCall.arguments as never,
-      reason: `Tool "${toolCall.name}" requires approval before execution.`,
-      approveLabel: "Approve",
-      rejectLabel: "Reject",
-      metadata: { source: "SparkAgentLoop" },
-    });
+    const response = await runWithTimeout(
+      this.host.requestInteraction({
+        version: SPARK_PROTOCOL_VERSION,
+        kind: "toolApproval",
+        requestId: `tool-approval:${toolCall.id}:${Date.now().toString(36)}`,
+        title: `Approve tool: ${toolCall.name}`,
+        toolName: toolCall.name,
+        toolCallId: toolCall.id,
+        arguments: toolCall.arguments as never,
+        reason: `Tool "${toolCall.name}" requires approval before execution.`,
+        approveLabel: "Approve",
+        rejectLabel: "Reject",
+        metadata: { source: "SparkAgentLoop" },
+      }),
+      this.interactionTimeoutMs,
+      `Spark tool approval for "${toolCall.name}" timed out after ${this.interactionTimeoutMs}ms`,
+    );
     if (response.kind === "toolApproval" && response.status === "answered" && response.approved) {
       return { approved: true };
     }
@@ -666,6 +713,46 @@ export class SparkAgentLoop {
     this.host.publishView(event);
     this.publish({ type: "view_event", event });
   }
+}
+
+function normalizeTimeoutMs(value: number | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (!Number.isFinite(value)) return fallback;
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : 0;
+}
+
+async function runWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+  onTimeout?: (error: Error) => void,
+): Promise<T> {
+  if (timeoutMs <= 0) return await promise;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error(message);
+          error.name = "SparkAgentLoopTimeoutError";
+          onTimeout?.(error);
+          reject(error);
+        }, timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function relayAbort(source: AbortSignal, target: AbortController): () => void {
+  const abort = () => target.abort((source as { reason?: unknown }).reason);
+  if (source.aborted) abort();
+  else source.addEventListener("abort", abort, { once: true });
+  return () => source.removeEventListener("abort", abort);
 }
 
 function beforeAgentStartMessage(

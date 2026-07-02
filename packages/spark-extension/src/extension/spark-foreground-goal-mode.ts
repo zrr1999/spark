@@ -1,5 +1,5 @@
-import type { ProjectRef, Task } from "@zendev-lab/pi-extension-api";
-import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
+import type { ProjectRef, Task } from "@zendev-lab/spark-extension-api";
+import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
 import type { SparkEntryPhase } from "./spark-entry.ts";
 
 export function suggestForegroundGoalPhase(

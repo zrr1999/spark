@@ -1,6 +1,6 @@
 import { Type } from "typebox";
-import type { RunRef } from "@zendev-lab/pi-extension-api";
-import { defaultArtifactStore, type JsonValue } from "@zendev-lab/pi-artifacts";
+import type { RunRef } from "@zendev-lab/spark-extension-api";
+import { defaultArtifactStore, type JsonValue } from "@zendev-lab/spark-artifacts";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import {
   killActiveSparkRoleRunProcesses,

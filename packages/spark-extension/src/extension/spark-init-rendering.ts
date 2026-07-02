@@ -1,5 +1,5 @@
-import type { CopyLanguage } from "@zendev-lab/pi-extension-api";
-import type { ArtifactRef } from "@zendev-lab/pi-extension-api";
+import type { CopyLanguage } from "@zendev-lab/spark-extension-api";
+import type { ArtifactRef } from "@zendev-lab/spark-extension-api";
 
 export interface SparkInitResult {
   cwd: string;

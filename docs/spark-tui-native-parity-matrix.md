@@ -4,7 +4,7 @@ Spark TUI remains daemon-first and does not runtime-depend on `@earendil-works/p
 
 | Pi feature surface | Spark-native coverage | Evidence |
 | --- | --- | --- |
-| Core file tools | `@zendev-lab/pi-files` provides read/write/edit/ls/grep/find without importing Spark packages or `pi-coding-agent`. | `artifact:0674094c-39c5-4763-a25c-7b03b6ee9048`, `artifact:4fccd6b2-1960-4647-8fe7-fdd761e71a86` |
+| Core file tools | `@zendev-lab/spark-files` provides read/write/edit/ls/grep/find without importing Spark packages or `pi-coding-agent`. | `artifact:0674094c-39c5-4763-a25c-7b03b6ee9048`, `artifact:4fccd6b2-1960-4647-8fe7-fdd761e71a86` |
 | Model registry/models command | Spark host model registry adapter exposes provider/model state to `pi-models`; native `/model` picker remains Spark-owned. | `artifact:0b7a5065-068b-4954-80d3-951bcdfa927a` |
 | Provider auth/OAuth | Spark auth store/resolver supports OAuth/local credentials and login/logout commands without upstream runtime dependency. | `artifact:4a6b6048-fb8c-4437-ad53-eeb32502db84` |
 | Theme, markdown, diff rendering | Spark theme catalog, Markdown bridge, diff/role styling, and persisted `/settings set theme` support native TUI rendering parity. | `artifact:3adfada2-921f-4012-886c-061aa8466663`, `artifact:15fb9e7b-7b34-490b-9f0f-58c3b7087739` |

@@ -22,6 +22,7 @@ export { createSparkDaemonActiveTasks };
 
 export const DEFAULT_SPARK_DAEMON_QUEUE_LAUNCH_LIMIT = Number.POSITIVE_INFINITY;
 export const DEFAULT_SPARK_DAEMON_QUEUE_CONCURRENCY = Number.POSITIVE_INFINITY;
+export const DEFAULT_SPARK_DAEMON_QUEUE_TASK_TIMEOUT_MS = 600_000;
 
 export interface ProcessSparkDaemonQueueBatchOptions {
   queue: SparkDaemonQueue;
@@ -31,6 +32,7 @@ export interface ProcessSparkDaemonQueueBatchOptions {
   label?: string;
   limit?: number;
   concurrency?: number;
+  taskTimeoutMs?: number;
 }
 
 export interface WaitForSparkDaemonActiveTasksOptions {
@@ -94,6 +96,7 @@ function launchQueueTask(
     ...options,
     invocationId: invocation.invocationId,
     signal: invocation.signal,
+    cancelInvocation: invocation.cancel,
   })
     .catch((error) => {
       console.error(
@@ -113,24 +116,112 @@ async function runQueueTask(
     entry: SparkDaemonQueueEntry;
     invocationId: string;
     signal: AbortSignal;
+    cancelInvocation: (reason?: string) => boolean;
   },
 ): Promise<void> {
   try {
-    const result = await options.executeTask(options.entry.payload.task, {
-      fileName: options.fileName,
-      queueEntry: options.entry,
-      invocationId: options.invocationId,
-      signal: options.signal,
-      emitEvent: options.emitEvent,
-    });
+    const timeoutMs = normalizeQueueTaskTimeoutMs(options.taskTimeoutMs);
+    const result = await executeQueueTaskWithTimeout({ ...options, timeoutMs });
     await options.queue.markProcessed(options.fileName, result);
     emitDaemonEvent(options.emitEvent, daemonTaskLifecycleEvent(options, "succeeded"));
     for (const event of daemonEventsFromResult(result, options)) {
       emitDaemonEvent(options.emitEvent, event);
     }
   } catch (error) {
+    if (error instanceof SparkDaemonQueueTaskCancelledError) {
+      await cancelQueueTask({ ...options, error });
+      return;
+    }
     await failQueueTask({ ...options, error });
   }
+}
+
+async function executeQueueTaskWithTimeout(
+  options: ProcessSparkDaemonQueueBatchOptions & {
+    fileName: string;
+    entry: SparkDaemonQueueEntry;
+    invocationId: string;
+    signal: AbortSignal;
+    cancelInvocation: (reason?: string) => boolean;
+    timeoutMs: number;
+  },
+): Promise<unknown> {
+  const context = {
+    fileName: options.fileName,
+    queueEntry: options.entry,
+    invocationId: options.invocationId,
+    signal: options.signal,
+    timeoutMs: options.timeoutMs,
+    emitEvent: options.emitEvent,
+  };
+  const taskPromise = options.executeTask(options.entry.payload.task, context);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  let abort: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_resolve, reject) => {
+    abort = () => {
+      if (timedOut) return;
+      reject(new SparkDaemonQueueTaskCancelledError(abortSignalReason(options.signal)));
+    };
+    if (options.signal.aborted) abort();
+    else options.signal.addEventListener("abort", abort, { once: true });
+  });
+  const races: Array<Promise<unknown>> = [taskPromise, abortPromise];
+
+  if (options.timeoutMs > 0) {
+    races.push(
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          const error = new SparkDaemonQueueTaskTimeoutError(options.timeoutMs);
+          timedOut = true;
+          options.cancelInvocation(error.message);
+          reject(error);
+        }, options.timeoutMs);
+        timer.unref?.();
+      }),
+    );
+  }
+
+  try {
+    return await Promise.race(races);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (abort) options.signal.removeEventListener("abort", abort);
+  }
+}
+
+export class SparkDaemonQueueTaskTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`Spark daemon queue task timed out after ${timeoutMs}ms`);
+    this.name = "SparkDaemonQueueTaskTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+export class SparkDaemonQueueTaskCancelledError extends Error {
+  constructor(reason: string) {
+    super(`Spark daemon queue task cancelled: ${reason}`);
+    this.name = "SparkDaemonQueueTaskCancelledError";
+  }
+}
+
+async function cancelQueueTask(
+  options: ProcessSparkDaemonQueueBatchOptions & {
+    fileName: string;
+    entry: SparkDaemonQueueEntry | null;
+    error: SparkDaemonQueueTaskCancelledError;
+  },
+): Promise<void> {
+  console.error(
+    `[${options.label ?? "spark-daemon"}] cancelled ${options.fileName}: ${String(options.error)}`,
+  );
+  emitDaemonEvent(
+    options.emitEvent,
+    daemonTaskLifecycleEvent(options, "cancelled", errorMessage(options.error)),
+  );
+  await options.queue.markFailed(options.fileName, options.error);
 }
 
 async function failQueueTask(
@@ -267,10 +358,24 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function abortSignalReason(signal: AbortSignal): string {
+  const reason = (signal as { reason?: unknown }).reason;
+  if (reason instanceof Error) return reason.message;
+  if (typeof reason === "string" && reason.trim()) return reason.trim();
+  return "abort";
+}
+
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {
   if (!Number.isFinite(value)) return fallback;
   const normalized = Math.floor(value ?? fallback);
   return normalized > 0 ? normalized : fallback;
+}
+
+function normalizeQueueTaskTimeoutMs(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_SPARK_DAEMON_QUEUE_TASK_TIMEOUT_MS;
+  if (!Number.isFinite(value)) return DEFAULT_SPARK_DAEMON_QUEUE_TASK_TIMEOUT_MS;
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : 0;
 }
 
 export async function waitForSparkDaemonActiveTasks(

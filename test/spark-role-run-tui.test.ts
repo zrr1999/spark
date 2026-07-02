@@ -12,8 +12,8 @@ import type {
   Task,
   TaskRef,
   TaskRun,
-} from "@zendev-lab/pi-extension-api";
-import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-extension-api";
+import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
 
 import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
 import {

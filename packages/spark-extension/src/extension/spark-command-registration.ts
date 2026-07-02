@@ -3,10 +3,9 @@ import {
   createLoop,
   evaluateLoopTick,
   loopContinuationPrompt,
-} from "@zendev-lab/pi-loop";
-import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
-import { listBuiltinWorkflows } from "@zendev-lab/pi-workflows";
-import { nowIso, type ProjectRef, type RunRef } from "@zendev-lab/pi-extension-api";
+} from "@zendev-lab/spark-loop";
+import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
+import { nowIso, type ProjectRef, type RunRef } from "@zendev-lab/spark-extension-api";
 import type { SparkEntryIntent, SparkEntryPhase } from "./spark-entry.ts";
 import {
   applySparkEntryResolution,
@@ -62,6 +61,33 @@ import {
   buildSparkDynamicWorkflowDashboardView,
   renderSparkDynamicWorkflowDashboardText,
 } from "./spark-dynamic-workflow-run-rendering.ts";
+import {
+  compactionAbortSignal,
+  reportForegroundDriverError,
+} from "./spark-command-foreground-errors.ts";
+import {
+  compactInline,
+  parseDynamicWorkflowRunRefArg,
+  parseGoalCommandArgs,
+  parseLoopCommandAction,
+  parseWorkflowCommandArgs,
+} from "./spark-command-parser-utils.ts";
+import {
+  isGoalToolDeactivationEvent,
+  isLoopToolDeactivationEvent,
+  isLoopToolScheduleEvent,
+  sendSparkRuntimeInstruction,
+} from "./spark-command-tool-events.ts";
+import { registerSparkWorkflowCommands } from "./spark-command-workflow-registration.ts";
+import type {
+  ForegroundGoalAwaitingTurn,
+  ForegroundImplementAwaitingTurn,
+  ForegroundLoopAwaitingTurn,
+  SparkCommandApi,
+  SparkCommandContext,
+  SparkCommandRegistrationDeps,
+  SparkGoalLoopContext,
+} from "./spark-command-types.ts";
 
 type SparkProjectLike = ReturnType<TaskGraph["projects"]>[number];
 import type { ReviewerRunner } from "./reviewer-runner.ts";
@@ -69,53 +95,11 @@ import { isSparkReviewerLeaseActive } from "./spark-reviewer-lease.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 import { isClaimOwnedBySession } from "./task-ownership.ts";
 
-type SparkGoalLoopContext = SparkToolContext & {
-  waitForIdle?: () => Promise<void>;
-  setEditorText?: (text: string) => void;
-};
-
-export interface SparkCommandContext extends SparkGoalLoopContext {}
-
-export interface SparkCommandApi {
-  registerCommand(
-    name: string,
-    config: {
-      description: string;
-      argumentHint?: string;
-      getArgumentCompletions?: (
-        argumentPrefix: string,
-      ) =>
-        | Array<{ value: string; label: string; description?: string }>
-        | null
-        | Promise<Array<{ value: string; label: string; description?: string }> | null>;
-      handler: (args: string, ctx: SparkCommandContext) => void | Promise<void>;
-    },
-  ): void;
-  on?(event: string, handler: (event: unknown, ctx: SparkToolContext) => unknown): void;
-  sendMessage(
-    message: {
-      customType: string;
-      content: string;
-      display?: boolean;
-      details?: Record<string, unknown>;
-    },
-    options?: { deliverAs?: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean },
-  ): void;
-  sendUserMessage?(
-    content: string,
-    options?: {
-      deliverAs?: "steer" | "followUp" | "nextTurn";
-      streamingBehavior?: "steer" | "followUp";
-    },
-  ): void;
-}
-
-interface SparkCommandRegistrationDeps extends SparkEntryApplicationDeps {
-  createReviewerRunner?: (
-    cwd: string,
-    ctx: SparkToolContext,
-  ) => ReviewerRunner | Promise<ReviewerRunner>;
-}
+export type {
+  SparkCommandApi,
+  SparkCommandContext,
+  SparkCommandRegistrationDeps,
+} from "./spark-command-types.ts";
 
 const FOREGROUND_GOAL_IDLE_DELAY_MS = 30_000;
 const FOREGROUND_GOAL_RETRY_BACKOFF_MS = [30_000, 60_000, 120_000, 120_000, 120_000] as const;
@@ -126,76 +110,6 @@ const foregroundLoopAwaitingTurns = new Map<string, ForegroundLoopAwaitingTurn>(
 const foregroundCompactionGates = new Map<string, { startedAtMs: number }>();
 const foregroundImplementAwaitingTurns = new Map<string, ForegroundImplementAwaitingTurn>();
 const foregroundImplementGenerations = new Map<string, number>();
-
-interface ForegroundGoalAwaitingTurn {
-  piApi: SparkCommandApi;
-  ctx: SparkGoalLoopContext;
-  goalId: string;
-  generation: number;
-  startedAtMs: number;
-  failure?: string;
-}
-
-interface ForegroundLoopAwaitingTurn {
-  piApi: SparkCommandApi;
-  ctx: SparkGoalLoopContext;
-  loopId: string;
-  generation: number;
-  startedAtMs: number;
-  failure?: string;
-}
-
-interface ForegroundImplementAwaitingTurn {
-  piApi: SparkCommandApi;
-  ctx: SparkGoalLoopContext;
-  focus?: string;
-  generation: number;
-  startedAtMs: number;
-  failure?: string;
-}
-
-function sendSparkRuntimeInstruction(
-  piApi: SparkCommandApi,
-  customType: "spark-goal-request" | "spark-loop-request",
-  instruction: string,
-  visible: string,
-  details: Record<string, unknown> = {},
-): void {
-  piApi.sendMessage(
-    {
-      customType,
-      content: instruction,
-      display: false,
-      details: { ...details, visible },
-    },
-    { deliverAs: "followUp", triggerTurn: true },
-  );
-}
-
-function isGoalToolDeactivationEvent(event: unknown): boolean {
-  if (!event || typeof event !== "object") return false;
-  const toolEvent = event as { toolName?: unknown; isError?: unknown; params?: unknown };
-  if (toolEvent.toolName !== "goal" || toolEvent.isError === true) return false;
-  if (!toolEvent.params || typeof toolEvent.params !== "object") return false;
-  const action = (toolEvent.params as { action?: unknown }).action;
-  return action === "pause" || action === "clear";
-}
-
-function isLoopToolDeactivationEvent(event: unknown): boolean {
-  if (!event || typeof event !== "object") return false;
-  const toolEvent = event as { toolName?: unknown; isError?: unknown; params?: unknown };
-  if (toolEvent.toolName !== "loop" || toolEvent.isError === true) return false;
-  if (!toolEvent.params || typeof toolEvent.params !== "object") return false;
-  return (toolEvent.params as { action?: unknown }).action === "clear";
-}
-
-function isLoopToolScheduleEvent(event: unknown): boolean {
-  if (!event || typeof event !== "object") return false;
-  const toolEvent = event as { toolName?: unknown; isError?: unknown; params?: unknown };
-  if (toolEvent.toolName !== "loop" || toolEvent.isError === true) return false;
-  if (!toolEvent.params || typeof toolEvent.params !== "object") return false;
-  return (toolEvent.params as { action?: unknown }).action === "schedule";
-}
 
 export function registerSparkCommands(
   pi: SparkCommandApi,
@@ -288,63 +202,12 @@ export function registerSparkCommands(
     },
   });
 
-  pi.registerCommand("workflow", {
-    description:
-      "Enter Spark workflow execution mode; accepts optional selector like builtin:foo, workspace:foo, or user:foo. Empty /workflow opens the blocking workflow navigator.",
-    async handler(args, ctx) {
-      const parsed = parseWorkflowCommandArgs(args);
-      await handleSparkWorkflowCommand(pi, ctx, parsed);
-    },
+  registerSparkWorkflowCommands(pi, {
+    handleSparkWorkflowCommand,
+    handleSparkUltracodeCommand,
+    handleSparkDynamicWorkflowDashboardCommand,
+    handleSparkDynamicWorkflowActionCommand,
   });
-
-  pi.registerCommand("workflows", {
-    description:
-      "Open the Spark workflow dashboard/navigator without requiring project state; shows dynamic runs and explicit controls.",
-    async handler(args, ctx) {
-      await handleSparkWorkflowCommand(pi, ctx, {
-        focus: args.trim(),
-        forceNavigator: true,
-      });
-    },
-  });
-
-  pi.registerCommand("workflow-runs", {
-    description: "Show the live dynamic workflow run dashboard. Usage: /workflow-runs [runRef].",
-    argumentHint: "[runRef]",
-    async handler(args, ctx) {
-      await handleSparkDynamicWorkflowDashboardCommand(ctx, args.trim());
-    },
-  });
-
-  for (const action of ["inspect", "pause", "resume", "stop", "restart", "save", "ack"] as const) {
-    pi.registerCommand(`workflow-${action}`, {
-      description: `Dynamic workflow ${action}. Usage: /workflow-${action} <runRef>.`,
-      argumentHint: "<runRef>",
-      async handler(args, ctx) {
-        await handleSparkDynamicWorkflowActionCommand(ctx, action, args.trim());
-      },
-    });
-  }
-
-  pi.registerCommand("ultracode", {
-    description:
-      "Opt into high-effort dynamic workflow generation and execution through workflow_run.",
-    async handler(args, ctx) {
-      await handleSparkUltracodeCommand(pi, ctx, args.trim());
-    },
-  });
-
-  for (const workflow of listBuiltinWorkflows()) {
-    pi.registerCommand("workflow:" + workflow.id, {
-      description: `Enter Spark builtin workflow ${workflow.id}.`,
-      async handler(args, ctx) {
-        await handleSparkWorkflowCommand(pi, ctx, {
-          selector: "builtin:" + workflow.id,
-          focus: args.trim(),
-        });
-      },
-    });
-  }
 
   async function handleSparkDynamicWorkflowDashboardCommand(
     ctx: SparkCommandContext,
@@ -375,69 +238,6 @@ export function registerSparkCommands(
   ): Promise<void> {
     const runRef = parseDynamicWorkflowRunRefArg(`workflow-${action}`, args);
     await executeDynamicWorkflowNavigatorAction(ctx, deps, { dynamicAction: action, runRef });
-  }
-
-  function parseDynamicWorkflowRunRefArg(command: string, args: string): RunRef {
-    const runRef = args.trim().split(/\s+/u)[0] ?? "";
-    if (!/^run:[a-zA-Z0-9-]+$/u.test(runRef)) {
-      throw new Error(`/${command} requires a runRef like run:<id>`);
-    }
-    return runRef as RunRef;
-  }
-
-  function parseWorkflowCommandArgs(args: string): { selector?: string; focus: string } {
-    const trimmed = args.trim();
-    if (!trimmed) return { focus: "" };
-    const firstWhitespace = firstWhitespaceIndex(trimmed);
-    const candidate = firstWhitespace < 0 ? trimmed : trimmed.slice(0, firstWhitespace);
-    const rest = firstWhitespace < 0 ? "" : trimmed.slice(firstWhitespace + 1).trim();
-    const separator = candidate.indexOf(":");
-    if (separator < 0) return { focus: trimmed };
-    const source = candidate.slice(0, separator);
-    const id = candidate.slice(separator + 1);
-    if ((source === "builtin" || source === "workspace" || source === "user") && isWorkflowId(id)) {
-      return { selector: source + ":" + id, focus: rest };
-    }
-    return { focus: trimmed };
-  }
-
-  function parseGoalCommandArgs(args: string): string {
-    return args.trim();
-  }
-
-  function parseLoopCommandAction(
-    args: string,
-  ): { action: "continue"; objective: string } | { action: "clear" } | { action: "removed" } {
-    const trimmed = args.trim();
-    const normalized = trimmed.toLocaleLowerCase();
-    if (["stop", "halt", "停止", "停下"].includes(normalized)) {
-      return { action: "clear" };
-    }
-    if (["pause", "暂停"].includes(normalized)) {
-      return { action: "removed" };
-    }
-    return { action: "continue", objective: trimmed };
-  }
-
-  function firstWhitespaceIndex(value: string): number {
-    for (let index = 0; index < value.length; index += 1) {
-      if (value[index]?.trim() === "") return index;
-    }
-    return -1;
-  }
-
-  function isWorkflowId(value: string): boolean {
-    if (!value) return false;
-    const first = value[0];
-    if (!first || !isLowerAlphaNumeric(first)) return false;
-    for (const char of value.slice(1)) {
-      if (!isLowerAlphaNumeric(char) && char !== "-") return false;
-    }
-    return true;
-  }
-
-  function isLowerAlphaNumeric(char: string): boolean {
-    return (char >= "a" && char <= "z") || (char >= "0" && char <= "9");
   }
 
   async function handleSparkEntryCommand(
@@ -1821,48 +1621,4 @@ export function registerSparkCommands(
   function foregroundGoalLoopKey(cwd: string, ctx: SparkToolContext): string {
     return `${cwd}:${sparkSessionOwnerKey(ctx)}`;
   }
-
-  function compactInline(value: string): string {
-    const normalized = value.replace(/\s+/gu, " ").trim();
-    return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized;
-  }
-}
-
-type ForegroundDriverErrorScope = "driver" | "goal loop" | "loop";
-
-function renderForegroundDriverSafeErrorMessage(scope: ForegroundDriverErrorScope): string {
-  return `Spark foreground ${scope} hit an internal error. The raw error was hidden; check debug logs for details.`;
-}
-
-function reportForegroundDriverError(
-  ctx: SparkToolContext | undefined,
-  scope: ForegroundDriverErrorScope,
-  error: unknown,
-): void {
-  const message = renderForegroundDriverSafeErrorMessage(scope);
-  if (ctx?.ui?.notify) ctx.ui.notify(message, "warning");
-  else console.warn(message);
-  if (shouldLogForegroundDriverDebugErrors()) {
-    console.debug(
-      `Spark foreground ${scope} internal error: ${
-        error instanceof Error ? error.stack || error.message : String(error)
-      }`,
-    );
-  }
-}
-
-function shouldLogForegroundDriverDebugErrors(): boolean {
-  return (
-    process.env.SPARK_DEBUG_FOREGROUND_DRIVER_ERRORS === "1" || process.env.SPARK_DEBUG === "1"
-  );
-}
-
-function compactionAbortSignal(event: unknown): AbortSignal | undefined {
-  if (!event || typeof event !== "object") return undefined;
-  const signal = (event as { signal?: unknown }).signal;
-  if (!signal || typeof signal !== "object") return undefined;
-  const candidate = signal as { aborted?: unknown; addEventListener?: unknown };
-  if (typeof candidate.aborted !== "boolean") return undefined;
-  if (typeof candidate.addEventListener !== "function") return undefined;
-  return signal as AbortSignal;
 }

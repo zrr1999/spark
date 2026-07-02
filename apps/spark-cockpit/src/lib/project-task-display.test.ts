@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildCockpitProjectTaskDisplay } from "./project-task-display";
 
 describe("project task display model", () => {
-  it("uses pi-tasks-style project and task status lines", () => {
+  it("uses spark-tasks-style project and task status lines", () => {
     const display = buildCockpitProjectTaskDisplay({
       project: { name: "MVP" },
       projectKind: { badge: "Generic" },

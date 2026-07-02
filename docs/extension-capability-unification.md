@@ -1,13 +1,15 @@
 # Extension capability unification migration record
 
-This historical migration record documents the implemented contract for making the Pi/Spark extension suite conceptually unified while keeping implementations decoupled. It is intentionally **extension-first**: it does not refactor `apps/spark-tui/src/host/*` or native Spark TUI session internals.
+This is a historical migration record. It documents the implemented 2026-06 contract that promoted reusable mechanisms into `pi-*` packages. The newer selected direction for Spark-owned capability naming, artifact-backed Generative UI, and the explicit `pi-btw` exception is [`spark-capabilities-and-generative-ui.md`](./spark-capabilities-and-generative-ui.md). Use that newer document for forward-looking package names.
+
+This record documents the implemented contract for making the Pi/Spark extension suite conceptually unified while keeping implementations decoupled. It is intentionally **extension-first**: it does not refactor `apps/spark-tui/src/host/*` or native Spark TUI session internals.
 
 ## Status (2026-06-05)
 
 This migration is implemented for package boundaries and the visible tool facade:
 
 - `spark-core`, `spark-tasks`, `spark-learnings`, `spark-goal`, and `spark-workflows` have retired as workspaces.
-- Generic implementations now live in `pi-extension-api`, `pi-artifacts`, `pi-tasks`, `pi-learnings`, `pi-loop`, and `pi-workflows`.
+- Generic implementations now live in `spark-extension-api`, `spark-artifacts`, `spark-tasks`, `spark-learnings`, `spark-loop`, and `spark-workflows`.
 - Spark's visible tool surface uses canonical tools (`task_read`, `task_write`, `assign`, `learning`, `artifact`, `ask`, `context`, `workflow`, `role`, `recall`, `goal`). Legacy `spark_*` tool configs are retired rather than kept as internal dispatch wiring.
 - `pi-* -> spark-*` regressions are guarded by the boundary checker inside `pnpm run check`, `prek`, and CI static checks.
 - On-disk schema roots remain stable: `.spark/`, `.spark/projects/`, `.spark/workflow-runs.json`, and historical goal marker strings are schema data, not package ownership; legacy `.spark/projects.json` is import-only.
@@ -45,7 +47,7 @@ Canonical agent-facing tools should be named by concept and use an `action`/`mod
 
 Existing split tools such as `spark_update_todos`, `spark_ask`, `spark_learning_search`, and `list_roles` are replaced by the canonical owner. They are not kept as long-term aliases.
 
-Domain-specific command families that are not duplicated by Spark, such as `pi-cue` and `pi-graft`, are not forced into one giant tool in this pass. Their explicit tools currently provide stricter per-action schemas for execution and patch/scratch operations. They should still adopt the common result envelope/rendering guidance below, and a later pass may collapse them only if a discriminated schema remains at least as safe and understandable.
+Domain-specific command families that are not duplicated by Spark, such as `spark-cue` and `spark-graft`, are not forced into one giant tool in this pass. Their explicit tools currently provide stricter per-action schemas for execution and patch/scratch operations. They should still adopt the common result envelope/rendering guidance below, and a later pass may collapse them only if a discriminated schema remains at least as safe and understandable.
 
 ### 2. Capability packages own mechanisms; Spark owns policy
 
@@ -95,26 +97,26 @@ The text summary stays compact. Full structured data lives in `details` or artif
 
 | Current area           | Evidence                                                                                         | Current owner                    | Finding                                                                                                                                  |
 | ---------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Host contract          | `packages/pi-extension-api/src/index.ts`                                                         | `pi-extension-api`               | Host/tool contract plus shared refs and light helpers.                                                                                   |
-| Role specs/runs        | `packages/pi-roles/src/extension.ts`, `docs/role-boundaries.md`                                  | `pi-roles`                       | Generic reusable role ownership is correct; Spark role execution goes through task/run policy.                                           |
-| Ask UI                 | `packages/pi-ask/src/index.ts`, `packages/pi-ask/src/flow.ts`                                    | `pi-ask`                         | Generic ask UI/result semantics are exposed through canonical `ask`; focused/flow implementations are internal.                          |
-| Artifacts              | `packages/pi-artifacts/src/index.ts`, `packages/pi-artifacts/src/extension.ts`                   | `pi-artifacts`                   | Artifact store is generic evidence infrastructure, not Spark-specific.                                                                   |
-| Task graph/TODO/run    | `packages/pi-tasks/src/*`, `packages/spark-extension/src/extension/index.ts` action handlers               | `pi-tasks` + Spark facade        | TODO belongs to task state; project/task/TODO/run are split into `task_read`, `task_write`, and explicit `assign` capability surfaces.      |
-| Learnings              | `packages/pi-learnings/src/*`                                                                    | `pi-learnings`                   | Evidence-backed learning is generic; plural `.learnings/` is retained.                                                                   |
-| Active context         | `packages/pi-context/src/extension.ts`, `packages/spark-extension/src/extension/spark-active-context.ts`   | `pi-context` + Spark provider    | Spark registers a bounded `spark.active` provider.                                                                                       |
-| Recall/memory          | `packages/pi-recall/src/index.ts`                                                                | `pi-recall`                      | Lightweight explicit recall is separate from `pi-learnings`.                                                                             |
-| Workflow saved scripts | `packages/pi-workflows/src/*`, `packages/spark-extension/src/extension/spark-workflow-registry.ts`         | `pi-workflows` + Spark facade    | Saved scripts and workflow-run state are reusable Pi workflow capability; Spark `/workflow` delegates policy.                            |
+| Host contract          | `packages/spark-extension-api/src/index.ts`                                                         | `spark-extension-api`               | Host/tool contract plus shared refs and light helpers.                                                                                   |
+| Role specs/runs        | `packages/spark-roles/src/extension.ts`, `docs/role-boundaries.md`                                  | `spark-roles`                       | Generic reusable role ownership is correct; Spark role execution goes through task/run policy.                                           |
+| Ask UI                 | `packages/spark-ask/src/index.ts`, `packages/spark-ask/src/flow.ts`                                    | `spark-ask`                         | Generic ask UI/result semantics are exposed through canonical `ask`; focused/flow implementations are internal.                          |
+| Artifacts              | `packages/spark-artifacts/src/index.ts`, `packages/spark-artifacts/src/extension.ts`                   | `spark-artifacts`                   | Artifact store is generic evidence infrastructure, not Spark-specific.                                                                   |
+| Task graph/TODO/run    | `packages/spark-tasks/src/*`, `packages/spark-extension/src/extension/index.ts` action handlers               | `spark-tasks` + Spark facade        | TODO belongs to task state; project/task/TODO/run are split into `task_read`, `task_write`, and explicit `assign` capability surfaces.      |
+| Learnings              | `packages/spark-learnings/src/*`                                                                    | `spark-learnings`                   | Evidence-backed learning is generic; plural `.learnings/` is retained.                                                                   |
+| Active context         | `packages/spark-context/src/extension.ts`, `packages/spark-extension/src/extension/spark-active-context.ts`   | `spark-context` + Spark provider    | Spark registers a bounded `spark.active` provider.                                                                                       |
+| Recall/memory          | `packages/spark-recall/src/index.ts`                                                                | `spark-recall`                      | Lightweight explicit recall is separate from `spark-learnings`.                                                                             |
+| Workflow saved scripts | `packages/spark-workflows/src/*`, `packages/spark-extension/src/extension/spark-workflow-registry.ts`         | `spark-workflows` + Spark facade    | Saved scripts and workflow-run state are reusable Pi workflow capability; Spark `/workflow` delegates policy.                            |
 | Spark state cleanup    | `packages/spark-extension/src/extension/spark-state-tool-registration.ts`, `docs/spark-store-inventory.md` | Spark facade + individual stores | Split broad cleanup into owner-specific maintenance actions. Avoid one broad unrestricted state cleanup tool.                            |
 | Pi-only side thread    | `packages/pi-btw/`                                                                               | `pi-btw`                         | Keep Pi-host-only. Do not add to native Spark TUI defaults or auto-ingest hidden side threads into main context.                         |
-| Cue/Graft              | `packages/pi-cue`, `packages/pi-graft`                                                           | `pi-cue`, `pi-graft`             | Domain-specific explicit tool families are not duplicated by Spark. Keep out of this pass except common envelope/rendering improvements. |
+| Cue/Graft              | `packages/spark-cue`, `packages/spark-graft`                                                           | `spark-cue`, `spark-graft`             | Domain-specific explicit tool families are not duplicated by Spark. Keep out of this pass except common envelope/rendering improvements. |
 
 ## Target packages
 
-### `pi-extension-api`
+### `spark-extension-api`
 
 Keep as the host contract/type package only. It may grow only when both Pi host and Spark native host intentionally support a capability. It must not gain artifact/task/ask/reload business logic.
 
-### `pi-artifacts`
+### `spark-artifacts`
 
 Own content-addressed evidence storage and artifact tools.
 
@@ -141,11 +143,11 @@ Actions:
 | `link`    | `from`, `to`, `relation`                                                 | typed relation only; no arbitrary graph edges                             | current `ArtifactLink`                                |
 | `compact` | strategy-specific options, `dryRun` default true                         | owner-specific retention only; no generic deletion                        | role-run retention, `context-mode` storage discipline |
 
-### `pi-tasks`
+### `spark-tasks`
 
 Own project/task/TODO/run graph state. Package name may be plural for grouping, but the public/default tools are split by capability: `task_read`, `task_write`, and `assign`.
 
-Exports live in `pi-tasks` after promotion:
+Exports live in `spark-tasks` after promotion:
 
 - project/task/run/TODO types;
 - `TaskGraphStore`;
@@ -181,7 +183,7 @@ Actions:
 
 TODO is not a separate package or tool. It is a sub-action of the canonical task-write capability.
 
-### `pi-ask`
+### `spark-ask`
 
 Own all user-question UI and persisted ask answers.
 
@@ -203,12 +205,12 @@ Actions/modes:
 UI improvements to absorb:
 
 - submit review tab and option notes from `@juicesharp/rpiv-ask-user-question`;
-- searchable split-pane and inline/overlay option from `pi-ask-user`;
-- existing `pi-ask` flow preview height fix.
+- searchable split-pane and inline/overlay option from `spark-ask-user`;
+- existing `spark-ask` flow preview height fix.
 
-Spark-specific ask persistence becomes an adapter/provenance option in `pi-ask`, not a separate `spark_ask` concept.
+Spark-specific ask persistence becomes an adapter/provenance option in `spark-ask`, not a separate `spark_ask` concept.
 
-### `pi-roles`
+### `spark-roles`
 
 Keep ownership of reusable `RoleSpec` and concrete `RoleRun`. Consolidate tool surface.
 
@@ -227,7 +229,7 @@ Actions:
 | `create` | id, description, systemPrompt, rationale, expectedUses, source | no anonymous role; writable source project/user only                                       | `create_role` |
 | `call`   | role, instruction, `mode: fresh \| forked`                     | explicit fork source when forked; Spark mode still prefers `assign({ dryRun: true })` | `call_role`   |
 
-### `pi-learnings`
+### `spark-learnings`
 
 Own evidence-backed reusable learning records and `.learnings/` storage.
 
@@ -237,14 +239,14 @@ Canonical tool:
 learning({ action: "record" | "search" | "list" | "read" | "mark_stale" | "supersede" | "reject" | "export_markdown" | "import_markdown", ... })
 ```
 
-Actions are implemented directly by `pi-learnings` and exposed through the canonical `learning` tool. Guardrails:
+Actions are implemented directly by `spark-learnings` and exposed through the canonical `learning` tool. Guardrails:
 
 - `.learnings/` remains plural and local-only by default.
 - `record` requires a reusable statement and evidence refs or a candidate status.
 - Auto-discovered learning should default to candidate, not active.
 - Learning is not lightweight memory; do not use it for daily notes or transient preferences.
 
-### `pi-context`
+### `spark-context`
 
 Own context provider registration, preview, handoff, and reinjection.
 
@@ -277,9 +279,9 @@ interface ContextProvider {
 
 Spark registers a provider for active project/task/TODO/artifact/learning/workflow state. Hidden `pi-btw` entries are excluded unless explicitly selected by a future side-thread injection action.
 
-### `pi-recall`
+### `spark-recall`
 
-Own lightweight local memory/recall. It is deliberately separate from `pi-learnings`.
+Own lightweight local memory/recall. It is deliberately separate from `spark-learnings`.
 
 Canonical tool:
 
@@ -299,7 +301,7 @@ Actions:
 
 Scopes must be explicit: `user | workspace | repo`. Recall is not task truth and not evidence. It can inform context, but it cannot satisfy task evidence requirements unless recorded as an artifact or learning with provenance.
 
-### `pi-workflows`
+### `spark-workflows`
 
 Own saved scripts as a generic Pi capability.
 
@@ -383,12 +385,12 @@ It should not register duplicate canonical tools for task, artifact, ask, role, 
 ## Implementation order
 
 1. **Contract and tests first.** Completed: this document records the migration contract and tests now assert canonical surfaces.
-2. **Promote artifacts.** Completed: artifact store/tool live in `pi-artifacts`.
-3. **Promote tasks.** Completed: `pi-tasks` owns project/task/TODO/run graph state; Spark registers canonical `task_read`, `task_write`, and `assign` handlers.
-4. **Consolidate ask and role.** Completed for visible facade: `ask` and `role` are canonical action tools; Spark asks use shared `pi-ask` semantics.
-5. **Promote learnings.** Completed: `pi-learnings` owns `.learnings/` semantics and the canonical `learning` tool.
-6. **Add context and recall.** Completed: `pi-context` and `pi-recall` provide bounded context and explicit recall candidates.
-7. **Promote workflows.** Completed: saved scripts and workflow-run state live in `pi-workflows`; `/goal` stays separate.
+2. **Promote artifacts.** Completed: artifact store/tool live in `spark-artifacts`.
+3. **Promote tasks.** Completed: `spark-tasks` owns project/task/TODO/run graph state; Spark registers canonical `task_read`, `task_write`, and `assign` handlers.
+4. **Consolidate ask and role.** Completed for visible facade: `ask` and `role` are canonical action tools; Spark asks use shared `spark-ask` semantics.
+5. **Promote learnings.** Completed: `spark-learnings` owns `.learnings/` semantics and the canonical `learning` tool.
+6. **Add context and recall.** Completed: `spark-context` and `spark-recall` provide bounded context and explicit recall candidates.
+7. **Promote workflows.** Completed: saved scripts and workflow-run state live in `spark-workflows`; `/goal` stays separate.
 8. **Cut over Spark facade.** Completed: Spark's active tool registration exposes canonical tools; legacy `spark_*` configs are internal implementation wiring only.
 9. **Review and cleanup.** In progress: final docs/status cleanup and optional micro-splits remain.
 
@@ -397,7 +399,7 @@ It should not register duplicate canonical tools for task, artifact, ask, role, 
 - `pnpm run check:tsc` passes.
 - Focused tests for artifacts, tasks/TODOs, ask flow, roles, learnings, workflows, and Spark commands pass.
 - Grep finds no canonical `spark_*` registrations for concepts owned by `pi-*` capabilities.
-- Docs and skills direct agents to `task_read`, `task_write`, `assign`, `artifact`, `ask`, `role`, `learning`, `context`, `recall`, `workflow`, `pi-cue`, and `pi-graft` tools; patcher-style child runs use explicit extension roles.
+- Docs and skills direct agents to `task_read`, `task_write`, `assign`, `artifact`, `ask`, `role`, `learning`, `context`, `recall`, `workflow`, `spark-cue`, and `spark-graft` tools; patcher-style child runs use explicit extension roles.
 - Mutating tools have strict schemas and provenance/scope.
 - Broad cleanup/destructive actions default to dry-run and target only owner-approved stores.
 - Automatic learning/recall writes enter candidate/review when evidence or user approval is absent.

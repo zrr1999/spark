@@ -2,7 +2,7 @@
  * ask tool runner.
  *
  * Source content was previously routed through `spark-ask` (a thin facade over
- * `pi-ask`); now lives directly in `spark/extension` and consumes pi-ask
+ * `spark-ask`); now lives directly in `spark/extension` and consumes spark-ask
  * primitives by their original names. Spark-prefixed type names are kept
  * because these wrappers are spark-specific (artifact persistence + replay
  * through Spark artifact store + the `ask` tool name).
@@ -12,6 +12,7 @@ import {
   PiAskFlowController,
   createAskArtifactBody,
   createPiAskFlowRequest,
+  createPiAskFlowResult,
   isPiAskFlowArtifactBody,
   isPiAskFlowGateBlocked,
   normalizePiAskFlowResult,
@@ -22,9 +23,9 @@ import {
   type PiAskFlowQuestionTypeVal,
   type PiAskFlowRequest,
   type PiAskFlowResult,
-} from "@zendev-lab/pi-ask";
-import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
-import type { ArtifactRef, JsonValue } from "@zendev-lab/pi-extension-api";
+} from "@zendev-lab/spark-ask";
+import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import type { ArtifactRef, JsonValue } from "@zendev-lab/spark-extension-api";
 
 export const MIN_SPARK_ASK_OPTION_DESCRIPTION_LENGTH = 12;
 
@@ -54,8 +55,12 @@ export interface SparkAskToolParams {
   behaviour?: PiAskFlowBehaviour;
 }
 
+export const DEFAULT_SPARK_ASK_CUSTOM_UI_TIMEOUT_MS = 60_000;
+
 export type SparkAskToolUi = NonNullable<Parameters<typeof runPiAskFlow>[1]> & {
   custom?: (...args: unknown[]) => unknown;
+  /** Wall-clock timeout for custom fullscreen ask UI completion. Defaults to 60s; <=0 disables. */
+  customTimeoutMs?: number;
 };
 
 export function createSparkAskToolRequest(params: SparkAskToolParams): PiAskFlowRequest {
@@ -214,7 +219,7 @@ async function runSparkAskToolRequest(
   ui: SparkAskToolUi | undefined,
 ): Promise<PiAskFlowResult> {
   if (ui?.custom) {
-    const fullscreenResult = await runSparkAskFullscreen(request, ui.custom);
+    const fullscreenResult = await runSparkAskFullscreen(request, ui.custom, ui.customTimeoutMs);
     if (fullscreenResult) return fullscreenResult;
   }
   return runPiAskFlow(request, ui);
@@ -223,6 +228,7 @@ async function runSparkAskToolRequest(
 async function runSparkAskFullscreen(
   request: PiAskFlowRequest,
   custom: NonNullable<SparkAskToolUi["custom"]>,
+  timeoutMs: number | undefined,
 ): Promise<PiAskFlowResult | undefined> {
   let factoryStarted = false;
   let resolveDone!: (result: PiAskFlowResult) => void;
@@ -247,12 +253,60 @@ async function runSparkAskFullscreen(
     );
   };
   const maybeResult = custom(factory);
-  if (!isThenable(maybeResult)) return factoryStarted ? doneResult : undefined;
+  if (!isThenable(maybeResult)) {
+    return factoryStarted
+      ? runSparkAskFullscreenWithTimeout(doneResult, request, timeoutMs)
+      : undefined;
+  }
 
-  return Promise.race([
-    doneResult,
-    maybeResult.then((result) => (isPiAskFlowResultLike(result) ? result : undefined)),
-  ]);
+  return runSparkAskFullscreenWithTimeout(
+    Promise.race([
+      doneResult,
+      maybeResult.then((result) => (isPiAskFlowResultLike(result) ? result : undefined)),
+    ]),
+    request,
+    timeoutMs,
+  );
+}
+
+async function runSparkAskFullscreenWithTimeout(
+  result: Promise<PiAskFlowResult | undefined>,
+  request: PiAskFlowRequest,
+  timeoutMs: number | undefined,
+): Promise<PiAskFlowResult | undefined> {
+  const normalizedTimeoutMs = normalizeSparkAskCustomUiTimeoutMs(timeoutMs);
+  if (normalizedTimeoutMs <= 0) return await result;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      result,
+      new Promise<PiAskFlowResult>((resolve) => {
+        timer = setTimeout(() => {
+          resolve(createSparkAskCustomUiTimeoutResult(request));
+        }, normalizedTimeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function createSparkAskCustomUiTimeoutResult(request: PiAskFlowRequest): PiAskFlowResult {
+  return createPiAskFlowResult({
+    answers: {},
+    flow: request.flow,
+    mode: "cancel",
+    cancelled: true,
+    status: "cancelled",
+  });
+}
+
+function normalizeSparkAskCustomUiTimeoutMs(timeoutMs: number | undefined): number {
+  if (timeoutMs === undefined) return DEFAULT_SPARK_ASK_CUSTOM_UI_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs)) return DEFAULT_SPARK_ASK_CUSTOM_UI_TIMEOUT_MS;
+  const normalized = Math.floor(timeoutMs);
+  return normalized > 0 ? normalized : 0;
 }
 
 function isThenable(value: unknown): value is Promise<unknown> {

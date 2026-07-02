@@ -7,7 +7,7 @@
     {
       "id": "todo-records",
       "path": ".spark/todos/todos.sqlite",
-      "owner": "pi-tasks",
+      "owner": "spark-tasks",
       "kind": "canonical",
       "notes": "Task and session TODO rows are stored here after cutover; this is not a cache."
     },
@@ -21,14 +21,14 @@
     {
       "id": "project-task-tree",
       "path": ".spark/projects/<project>/",
-      "owner": "pi-tasks",
+      "owner": "spark-tasks",
       "kind": "canonical",
       "notes": "Project, roadmap, dependencies, tasks, task runs, and subject-owned task/project reviews."
     },
     {
       "id": "artifacts",
       "path": ".spark/artifacts/",
-      "owner": "pi-artifacts",
+      "owner": "spark-artifacts",
       "kind": "canonical",
       "notes": "Artifact metadata and blobs remain separate; owners store artifact refs only."
     }

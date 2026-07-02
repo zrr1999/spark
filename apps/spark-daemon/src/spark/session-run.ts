@@ -5,7 +5,11 @@ import {
   type SparkDaemonEvent,
 } from "@zendev-lab/spark-protocol";
 import type { SparkPaths } from "@zendev-lab/spark-system";
-import { importWorkspaceAware } from "./import-utils.ts";
+import {
+  loadSparkHeadlessSessionModule,
+  type CreateSparkHeadlessSessionExecutorFn,
+  type SparkHeadlessSessionExecutor,
+} from "@zendev-lab/spark-host/headless-loader";
 import type {
   SparkDaemonSessionRunTask,
   SparkDaemonTask,
@@ -13,35 +17,13 @@ import type {
   SparkDaemonTaskExecutor,
 } from "../core/types.ts";
 
-type SparkHeadlessSessionExecutor = (input: {
-  cwd: string;
-  sessionId: string;
-  prompt: string;
-  reset?: boolean;
-  signal?: AbortSignal;
-  sparkHome?: string;
-  onEvent?: (event: unknown) => void | Promise<void>;
-}) => Promise<unknown>;
-
-type CreateSparkHeadlessSessionExecutorFn = (options?: {
-  sparkHome?: string;
-}) => SparkHeadlessSessionExecutor;
-
-interface SparkHeadlessSessionModule {
-  createSparkHeadlessSessionExecutor: CreateSparkHeadlessSessionExecutorFn;
-}
-
 export interface SparkDaemonQueueTaskExecutorOptions {
   paths: SparkPaths;
   cwd?: string;
   createSparkHeadlessSessionExecutor?: CreateSparkHeadlessSessionExecutorFn;
 }
 
-export async function loadSparkHeadlessSessionModule(): Promise<SparkHeadlessSessionModule> {
-  return await importWorkspaceAware<SparkHeadlessSessionModule>(
-    "@zendev-lab/spark-tui-app/headless-role-executor",
-  );
-}
+export { loadSparkHeadlessSessionModule };
 
 export function createSparkDaemonQueueTaskExecutor(
   options: SparkDaemonQueueTaskExecutorOptions,
@@ -80,6 +62,7 @@ export async function executeSparkDaemonSessionRunTask(
     prompt: task.prompt,
     reset: task.reset,
     signal: context.signal,
+    timeoutMs: context.timeoutMs,
     onEvent: (event) => emitHeadlessEvent(event, task, context),
   });
 }

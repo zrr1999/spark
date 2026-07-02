@@ -1,0 +1,22 @@
+{
+  "name": "@zendev-lab/spark-loop",
+  "version": "0.1.0",
+  "description": "Generic loop and goal lifecycle, tick, and continuation prompt primitives for Spark capability hosts.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md",
+    "VENDOR.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  }
+}

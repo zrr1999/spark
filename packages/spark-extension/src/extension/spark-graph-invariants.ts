@@ -1,5 +1,5 @@
-import type { ProjectRef } from "@zendev-lab/pi-extension-api";
-import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
+import type { ProjectRef } from "@zendev-lab/spark-extension-api";
+import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
 import { normalizeProjectTitle } from "./spark-md-rendering.ts";
 
 export function ensureSparkGraphInvariants(graph: TaskGraph): boolean {

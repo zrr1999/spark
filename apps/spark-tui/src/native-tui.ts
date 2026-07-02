@@ -40,7 +40,7 @@ import {
   type SparkTaskView,
   type SparkViewModelEvent,
 } from "@zendev-lab/spark-protocol";
-import type { ExtensionCommandContext } from "@zendev-lab/pi-extension-api";
+import type { ExtensionCommandContext } from "@zendev-lab/spark-extension-api";
 
 import type { SparkKeybindingContext, SparkKeybindings } from "./host/keybindings.ts";
 import {

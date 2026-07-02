@@ -10,8 +10,8 @@ import {
   readJsonFileOptional,
   type RunRef,
   writeJsonFileAtomic,
-} from "@zendev-lab/pi-extension-api";
-import { parseWorkflowScript } from "@zendev-lab/pi-workflows";
+} from "@zendev-lab/spark-extension-api";
+import { parseWorkflowScript } from "@zendev-lab/spark-workflows";
 import type {
   WorkflowAgentTelemetry,
   WorkflowAgentTokenUsage,
@@ -19,7 +19,7 @@ import type {
   WorkflowMeta,
   WorkflowPhaseRun,
   WorkflowRunResult,
-} from "@zendev-lab/pi-workflows";
+} from "@zendev-lab/spark-workflows";
 import { userWorkflowDir, workspaceWorkflowDir } from "./spark-workflow-registry.ts";
 
 const execFileAsync = promisify(execFile);

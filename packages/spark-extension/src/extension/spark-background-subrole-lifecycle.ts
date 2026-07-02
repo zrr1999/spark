@@ -1,12 +1,12 @@
-import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
-import { newRef, nowIso } from "@zendev-lab/pi-extension-api";
+import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import { newRef, nowIso } from "@zendev-lab/spark-extension-api";
 import {
   createRoleRunClaimId,
   findResumableBackgroundRoleRunTasks,
   killActiveSparkRoleRunProcesses,
   runSparkTask,
 } from "@zendev-lab/spark-runtime";
-import { defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
+import { defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
 import { loadSparkGraph, saveSparkGraphAndTodos, sparkSessionOwnerKey } from "./session-state.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";

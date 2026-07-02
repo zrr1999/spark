@@ -5,10 +5,10 @@ import { fileURLToPath } from "node:url";
 
 import { visibleWidth } from "@zendev-lab/spark-tui/text";
 
-import piAskExtension from "../packages/pi-ask/src/extension.ts";
-import { registerPiCueTools } from "../packages/pi-cue/src/index.ts";
-import piGraftExtension from "../packages/pi-graft/src/extension.ts";
-import { registerPiRolesTools } from "../packages/pi-roles/src/extension.ts";
+import piAskExtension from "../packages/spark-ask/src/extension.ts";
+import { registerPiCueTools } from "../packages/spark-cue/src/index.ts";
+import piGraftExtension from "../packages/spark-graft/src/extension.ts";
+import { registerPiRolesTools } from "../packages/spark-roles/src/extension.ts";
 import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
 
 interface RenderTheme {
@@ -60,8 +60,8 @@ void test("Spark extension canonical facade tools render parameter-aware tool ca
     join(snapshotDir, "tool-rendering-spark.txt"),
     textSnapshot,
   );
-  assert.equal(tools.has("patch"), false, "patch workflows are owned by pi-graft");
-  assert.equal(tools.has("cue_exec"), false, "pi-cue is registered as its own extension");
+  assert.equal(tools.has("patch"), false, "patch workflows are owned by spark-graft");
+  assert.equal(tools.has("cue_exec"), false, "spark-cue is registered as its own extension");
   assert.deepEqual(
     [...tools.keys()].filter((name) => name.startsWith("spark_")),
     [],

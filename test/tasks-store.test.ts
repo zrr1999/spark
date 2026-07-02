@@ -18,8 +18,8 @@ import {
   RoleRegistry,
   builtinRoleRef,
   defaultUserRoleModelSettingsStore,
-} from "@zendev-lab/pi-roles";
-import { ArtifactStore } from "@zendev-lab/pi-artifacts";
+} from "@zendev-lab/spark-roles";
+import { ArtifactStore } from "@zendev-lab/spark-artifacts";
 import {
   DependencyError,
   newRef,
@@ -28,13 +28,13 @@ import {
   type RunRef,
   type TaskPlan,
   type TaskRef,
-} from "@zendev-lab/pi-extension-api";
+} from "@zendev-lab/spark-extension-api";
 import {
   WorkflowRunStoreFormatError,
   defaultWorkflowRunStore,
   runReadyTasks,
   type WorkflowRunRecord,
-} from "../packages/pi-workflows/src/index.ts";
+} from "../packages/spark-workflows/src/index.ts";
 import {
   buildRoleRunArgs,
   createRoleRunName,
@@ -68,7 +68,7 @@ import {
   taskCompletionReadiness,
   taskPlanReadiness,
   type SessionTodoEntry,
-} from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-tasks";
 import {
   cleanupOwnedBackgroundSubroles,
   resumeOwnedBackgroundSubroles,

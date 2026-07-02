@@ -19,6 +19,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@earendil-works/pi-tui": "^0.79.4"
+    "@earendil-works/pi-tui": "^0.79.4",
+    "@zendev-lab/spark-text": "workspace:^"
   }
 }

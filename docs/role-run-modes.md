@@ -1,6 +1,6 @@
 # Role specs and launch modes
 
-This document defines how Spark and `pi-roles` distinguish reusable role definitions from concrete child Pi executions.
+This document defines how Spark and `spark-roles` distinguish reusable role definitions from concrete child Pi executions.
 
 ## Vocabulary
 
@@ -43,9 +43,9 @@ Safety constraints:
 - Pass only the context required for the task. Do not rely on hidden parent chat history.
 - Keep task dependencies satisfied before scheduling the run.
 - Use runtime timeouts, claim leases, and heartbeats for non-dry-run execution.
-- Let `pi-roles` own generic Pi subprocess launch, cancellation, timeout signalling, stdout/stderr capture, and JSONL parsing.
+- Let `spark-roles` own generic Pi subprocess launch, cancellation, timeout signalling, stdout/stderr capture, and JSONL parsing.
 - Let `spark-runtime` own single-task Spark adaptation: claims, heartbeat leases, task status transitions, artifact persistence, and Spark-specific active child process tracking.
-- Let `pi-workflows` own graph-level ready task scheduling, dispatch-time executor role assignment, and workflow-run state.
+- Let `spark-workflows` own graph-level ready task scheduling, dispatch-time executor role assignment, and workflow-run state.
 - Prefer Spark-native ready-task execution over manually spawning nested `pi` processes, except when explicitly testing Pi CLI behavior.
 
 Attribution in Spark:
@@ -164,7 +164,7 @@ Attribution:
 
 - A forked run still gets its own `runRef`, `runName`, lifecycle status, stdout/stderr/events, and task claim if it is attached to a Spark task.
 - `roleRef` still points to the reusable role, not the parent session.
-- `pi-roles` run requests and records carry `launch: "forked"` and `forkFromSession` so consumers can audit why parent context was available.
+- `spark-roles` run requests and records carry `launch: "forked"` and `forkFromSession` so consumers can audit why parent context was available.
 - Spark artifacts for forked runs use the same task/run provenance as fresh runs and should additionally record the fork source in the artifact body, note, or metadata when the fork source is surfaced to Spark.
 - The parent session is context provenance, not the artifact producer; the concrete child run remains the producing actor.
 

@@ -5,7 +5,7 @@ import { hashSecret } from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";
 import { formText } from "$lib/server/form-data";
 import { loadProjectCockpit } from "$lib/server/project-cockpit";
-import { queueCommandForWorkspaceOwner } from "$lib/server/projection-services";
+import { submitServerCommand } from "$lib/server/command-submission";
 import { requireWorkspaceByRouteId } from "$lib/server/workspace-routing";
 import type { Actions, PageServerLoad } from "./$types";
 
@@ -44,7 +44,7 @@ export const actions: Actions = {
 
     try {
       const runtimeTaskId = createId("task");
-      const command = queueCommandForWorkspaceOwner(db, {
+      const command = submitServerCommand(db, {
         workspaceId: project.workspaceId,
         projectId: project.id,
         requestedByUserId: getCurrentUserId(db, locals.sessionToken),

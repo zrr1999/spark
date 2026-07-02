@@ -14,12 +14,12 @@ import {
 
 void test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin extension set", () => {
   const expected = [
-    "@zendev-lab/pi-ask/extension",
-    "@zendev-lab/pi-cue/extension",
-    "@zendev-lab/pi-files/extension",
+    "@zendev-lab/spark-ask/extension",
+    "@zendev-lab/spark-cue/extension",
+    "@zendev-lab/spark-files/extension",
     "@zendev-lab/spark-ai/models-extension",
-    "@zendev-lab/pi-roles/extension",
-    "@zendev-lab/pi-graft/extension",
+    "@zendev-lab/spark-roles/extension",
+    "@zendev-lab/spark-graft/extension",
     "@zendev-lab/spark-extension/extension",
   ];
   assert.deepEqual(
@@ -34,12 +34,12 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
   const result = await new SparkExtensionLoader({
     api: host,
     extensions: [
-      "@zendev-lab/pi-ask/extension",
-      "@zendev-lab/pi-cue/extension",
-      "@zendev-lab/pi-files/extension",
+      "@zendev-lab/spark-ask/extension",
+      "@zendev-lab/spark-cue/extension",
+      "@zendev-lab/spark-files/extension",
       "@zendev-lab/spark-ai/models-extension",
-      "@zendev-lab/pi-roles/extension",
-      "@zendev-lab/pi-graft/extension",
+      "@zendev-lab/spark-roles/extension",
+      "@zendev-lab/spark-graft/extension",
       "@zendev-lab/spark-extension/extension",
     ],
   }).load();
@@ -79,7 +79,7 @@ void test("SparkExtensionLoader isolates one extension failure and continues loa
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-extension-loader-failure" });
   const result = await loadSparkExtensions({
     api: host,
-    extensions: ["bad-extension", "@zendev-lab/pi-ask/extension"],
+    extensions: ["bad-extension", "@zendev-lab/spark-ask/extension"],
     importer: async () => ({
       default: () => {
         throw new Error("boom");
@@ -101,7 +101,7 @@ void test("createSparkExtensionImporter resolves builtins without calling fallba
   const importer = createSparkExtensionImporter(async () => {
     throw new Error("fallback should not be used for builtins");
   });
-  const mod = await importer("@zendev-lab/pi-ask/extension");
+  const mod = await importer("@zendev-lab/spark-ask/extension");
   assert.equal(typeof (mod as { default?: unknown }).default, "function");
 });
 
@@ -111,7 +111,7 @@ void test("loadPlugins default importer is wired to builtin extension imports wh
   const result = await loadPlugins({
     extensionApi: host,
     providerApi: registry,
-    extensions: ["@zendev-lab/pi-ask/extension"],
+    extensions: ["@zendev-lab/spark-ask/extension"],
     providers: [],
   });
 

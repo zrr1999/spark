@@ -1,4 +1,4 @@
-import { defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
+import { defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
 import {
   ensureSparkStateForActiveWorkspace,
   handleSparkInput,
@@ -198,7 +198,7 @@ async function syncGoalInteractiveToolAvailability(
   if (activeGoal) {
     // Snapshot the currently *active* tools, not every registered tool. Using
     // getAllTools() here would re-activate tools that other extensions disabled
-    // on purpose (e.g. pi-cue removes `bash` at session start), silently
+    // on purpose (e.g. spark-cue removes `bash` at session start), silently
     // re-enabling them for the rest of the session when the goal toggles.
     const baseline = baselines.get(key) ?? pi.getActiveTools();
     baselines.set(key, baseline);

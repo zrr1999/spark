@@ -49,7 +49,7 @@ High-priority candidate groups and final status:
 | 61 | `packages/spark-extension/src/extension/spark-goal-tool-registration.ts` | tool copy flows through `sparkExtensionToolCopy()`; behavioral reviewer contracts remain protocol/internal |
 | 55 | `packages/spark-extension/src/extension/reviewer-runner.ts` | `protocol/internal` reviewer prompt/JSON contract |
 | 54 | `apps/spark-cockpit/src/lib/server/workspace-profiles.ts` | Cockpit dictionary path migrated where applicable; file/path errors local/internal |
-| 44 | `packages/pi-ask/src/ui/render.ts` | `intentionally-local` generic Pi UI |
+| 44 | `packages/spark-ask/src/ui/render.ts` | `intentionally-local` generic Pi UI |
 | 44 | `apps/spark-tui/src/cli/daemon.ts` | `migrated-to-spark-i18n` for daemon CLI/client messages |
 | 43 | `packages/spark-extension/src/extension/spark-project-tool-registration.ts` | tool copy flows through `sparkExtensionToolCopy()`; parameter schemas remain local/internal |
 | 31 | `packages/spark-extension/src/extension/spark-status-rendering.ts` | extension/context/status copy centralized where surfaced through Spark i18n helpers; generated data rows local/internal |
@@ -81,7 +81,7 @@ High-priority candidate groups and final status:
 
 | Area | Paths | Reason |
 | --- | --- | --- |
-| Generic Pi UI packages | `packages/pi-ask/src/**`, `packages/pi-cue/src/**`, `packages/pi-loop/src/**` | Pi packages must not import Spark packages. A Pi-level i18n package would be separate. |
+| Generic Pi UI packages | `packages/spark-ask/src/**`, `packages/spark-cue/src/**`, `packages/pi-loop/src/**` | Pi packages must not import Spark packages. A Pi-level i18n package would be separate. |
 | Auth/token prompt mechanics | `apps/spark-daemon/src/registration.ts` and selected daemon auth prompts | Kept local to avoid broadening trust/credential behavior while centralizing surrounding daemon command diagnostics. |
 | Theme names / catalog data | `apps/spark-tui/src/host/theme.ts` | Package-local catalog data, not shared Spark localization infrastructure. |
 | Tests/fixtures | `*.test.ts`, docs examples outside runtime UI | Test assertions/fixtures stay local unless testing i18n itself. |

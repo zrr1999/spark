@@ -33,7 +33,9 @@ export interface SparkPaths {
   logDir: string;
   logFile: string;
   pidFile: string;
+  /** Legacy repo-local cockpit data directory (`.navia/`). Prefer XDG `spark/cockpit`. */
   legacyRepoDataDir: string;
+  /** @deprecated Legacy `NAVIA_DATA_DIR` alias when no explicit cockpit data dir is set. */
   legacyDataDirAlias: string | undefined;
 }
 

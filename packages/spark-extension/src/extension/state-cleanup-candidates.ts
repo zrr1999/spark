@@ -1,7 +1,7 @@
 import { basename, dirname, join, relative } from "node:path";
 
-import type { Task, TaskRef, ProjectRef } from "@zendev-lab/pi-extension-api";
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
+import type { Task, TaskRef, ProjectRef } from "@zendev-lab/spark-extension-api";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import {
   fileScope,
   listSparkStateFiles,

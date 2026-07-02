@@ -1,0 +1,2373 @@
+/**
+ * cue-shell IPC client for Node.js
+ *
+ * Speaks the cue-shell length-prefixed JSON framing protocol over either a
+ * Unix domain socket or an SSH gateway stdio stream. The default Unix socket
+ * path follows cue-shell's own convention: `$XDG_RUNTIME_DIR/cue-shell/cued.sock`
+ * with a fallback to the platform temp directory.
+ *
+ * Protocol: 4-byte big-endian length prefix + UTF-8 JSON body.
+ * Max message size: 16 MiB.
+ */
+
+import { createHash, randomUUID } from "node:crypto";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { createConnection, type Socket } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { env } from "node:process";
+
+// ── Default socket path ────────────────────────────────────────────────────
+
+const APP_DIR = "cue-shell";
+const SOCK_NAME = "cued.sock";
+
+/** Resolve the default cue-shell daemon socket path. */
+export function defaultSocketPath(): string {
+  const runtimeDir = env.XDG_RUNTIME_DIR ?? tmpdir();
+  return join(runtimeDir, APP_DIR, SOCK_NAME);
+}
+
+export type CueResolvedTransport =
+  | {
+      schema_version: number;
+      profile_name: string;
+      transport: "unix";
+      socket_path: string;
+    }
+  | {
+      schema_version: number;
+      profile_name: string;
+      transport: "ssh";
+      destination: string;
+      gateway_command: string;
+      start_command: string;
+    };
+
+interface ResolverAttempt {
+  command: string;
+  args: string[];
+}
+
+export const DEFAULT_CUE_RESOLVER_TIMEOUT_MS = 10_000;
+export const DEFAULT_CUE_CONNECT_TIMEOUT_MS = 10_000;
+
+const RESOLVER_ATTEMPTS: ResolverAttempt[] = [
+  { command: "cue-client", args: ["target", "resolve", "--json"] },
+  { command: "cue", args: ["client", "target", "resolve", "--json"] },
+];
+
+export async function resolveCueTransport(): Promise<CueResolvedTransport> {
+  const failures: string[] = [];
+  for (const attempt of RESOLVER_ATTEMPTS) {
+    try {
+      const stdout = await runResolverAttempt(attempt);
+      return parseResolvedTransport(stdout, `${attempt.command} ${attempt.args.join(" ")}`);
+    } catch (error) {
+      failures.push(`${attempt.command} ${attempt.args.join(" ")}: ${(error as Error).message}`);
+    }
+  }
+  throw new CueError(
+    "TRANSPORT_RESOLVE_FAILED",
+    `failed to resolve cue-shell client transport via cue-client. Tried:\n${failures.join("\n")}`,
+  );
+}
+
+function runResolverAttempt(attempt: ResolverAttempt): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(attempt.command, attempt.args, {
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    const timeoutMs = timeoutMsFromEnv(
+      "PI_CUE_RESOLVER_TIMEOUT_MS",
+      DEFAULT_CUE_RESOLVER_TIMEOUT_MS,
+    );
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const settle = (cb: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      cb();
+    };
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.on("error", (error) => settle(() => reject(error)));
+    child.on("close", (code) => {
+      settle(() => {
+        if (code === 0) {
+          resolve(Buffer.concat(stdout).toString("utf8"));
+          return;
+        }
+        const detail = Buffer.concat(stderr).toString("utf8").trim();
+        reject(new Error(detail || `exited with code ${code}`));
+      });
+    });
+    if (timeoutMs > 0) {
+      timeout = setTimeout(() => {
+        child.kill("SIGTERM");
+        child.stdout.destroy();
+        child.stderr.destroy();
+        child.unref();
+        settle(() =>
+          reject(
+            new Error(
+              `resolver timed out after ${timeoutMs}ms: ${attempt.command} ${attempt.args.join(" ")}`,
+            ),
+          ),
+        );
+      }, timeoutMs);
+      timeout.unref?.();
+    }
+  });
+}
+
+function parseResolvedTransport(text: string, source: string): CueResolvedTransport {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`invalid JSON from ${source}: ${(error as Error).message}`);
+  }
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error(`invalid resolver payload from ${source}: expected object`);
+  }
+  const record = parsed as Record<string, unknown>;
+  if (record.schema_version !== 1) {
+    throw new Error(
+      `unsupported resolver schema_version from ${source}: ${String(record.schema_version)}`,
+    );
+  }
+  if (record.transport === "unix") {
+    if (typeof record.profile_name !== "string" || typeof record.socket_path !== "string") {
+      throw new Error(`invalid unix resolver payload from ${source}`);
+    }
+    return {
+      schema_version: 1,
+      profile_name: record.profile_name,
+      transport: "unix",
+      socket_path: record.socket_path,
+    };
+  }
+  if (record.transport === "ssh") {
+    if (
+      typeof record.profile_name !== "string" ||
+      typeof record.destination !== "string" ||
+      typeof record.gateway_command !== "string" ||
+      typeof record.start_command !== "string"
+    ) {
+      throw new Error(`invalid ssh resolver payload from ${source}`);
+    }
+    return {
+      schema_version: 1,
+      profile_name: record.profile_name,
+      transport: "ssh",
+      destination: record.destination,
+      gateway_command: record.gateway_command,
+      start_command: record.start_command,
+    };
+  }
+  throw new Error(`unsupported resolver transport from ${source}: ${String(record.transport)}`);
+}
+
+async function resolveConnectionTransport(): Promise<CueResolvedTransport> {
+  return resolveCueTransport();
+}
+
+function quoteModeParamValue(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return JSON.stringify(value);
+}
+
+const RESOURCE_NEED_KEY_PATTERN = /^[A-Za-z0-9_.:-]+$/;
+
+function resourceNeedModeParams(needs: ResourceNeeds | undefined): string[] {
+  if (!needs) return [];
+  return Object.entries(needs)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([rawKey, rawValue]) => {
+      const key = rawKey.trim();
+      if (!key) throw new CueError("INVALID_NEED", "resource need key must be non-empty");
+      if (key.startsWith("need.")) {
+        throw new CueError(
+          "INVALID_NEED",
+          `resource need key \`${key}\` must omit the need. prefix`,
+        );
+      }
+      if (!RESOURCE_NEED_KEY_PATTERN.test(key)) {
+        throw new CueError(
+          "INVALID_NEED",
+          `resource need key \`${key}\` may contain only letters, numbers, _, ., :, and -`,
+        );
+      }
+
+      if (typeof rawValue === "number") {
+        if (!Number.isFinite(rawValue) || !Number.isInteger(rawValue) || rawValue < 0) {
+          throw new CueError(
+            "INVALID_NEED",
+            `resource need \`${key}\` must be a non-negative integer count or string quantity`,
+          );
+        }
+        return `need.${key}=${rawValue}`;
+      }
+
+      if (typeof rawValue !== "string") {
+        throw new CueError(
+          "INVALID_NEED",
+          `resource need \`${key}\` must be a string quantity or non-negative integer count`,
+        );
+      }
+      const value = rawValue.trim();
+      if (!value) {
+        throw new CueError("INVALID_NEED", `resource need \`${key}\` must be non-empty`);
+      }
+      return `need.${key}=${quoteModeParamValue(value)}`;
+    });
+}
+
+// ── IPC message types (mirrors cue_core::ipc) ──────────────────────────────
+
+export type Mode = "Job" | "Cron";
+
+export interface RequestEnvelope {
+  type: "request";
+  id: number;
+  payload: RequestPayload;
+}
+
+export type RequestPayload =
+  | { Eval: { input: string; mode: Mode } }
+  | { RunScript: { path: string; input: string } }
+  | {
+      Handshake: {
+        session_id: string;
+        cwd: string;
+        env: Record<string, string>;
+        refresh?: boolean;
+      };
+    }
+  | { Subscribe: { channels: string[] } }
+  | { Unsubscribe: { channels: string[] } }
+  | { ListJobs: { limit?: number | null } }
+  | { ListCrons: { limit?: number | null } }
+  | { ListScopes: { limit?: number | null } }
+  | { ShowLog: { id?: string | null; limit?: number | null; tail_bytes?: number | null } }
+  | { JobOutput: { id: string; stdout_bytes?: number | null; stderr_bytes?: number | null } }
+  | { KillJob: { id: string } }
+  | { RemoveCron: { id: string } }
+  | { ShowEnv: { tail_bytes?: number | null } }
+  | { ShowConfig: { tail_bytes?: number | null } }
+  | { Ping: Record<string, never> }
+  | { Shutdown: Record<string, never> };
+
+export interface ResponseEnvelope {
+  type: "response";
+  id: number;
+  payload: ResponsePayload;
+}
+
+export type ResponsePayload = { Ok: OkPayload } | { Err: { code: string; message: string } };
+
+export type OkPayload =
+  | { Ack: Record<string, never> }
+  | { JobCreated: JobCreatedPayload }
+  | { ChainCreated: ChainCreatedPayload }
+  | { ScriptCreated: ScriptCreatedPayload }
+  | { JobInfo: JobInfo }
+  | { JobList: JobInfo[] }
+  | { JobListPage: { jobs: JobInfo[]; page: PageInfo } }
+  | { CronAdded: { cron_id: string } }
+  | { CronRemoved: { cron_id: string } }
+  | { CronList: CronInfo[] }
+  | { CronListPage: { crons: CronInfo[]; page: PageInfo } }
+  | { ScopeInfo: ScopeInfo }
+  | { ScopeList: ScopeInfo[] }
+  | { ScopeListPage: { scopes: ScopeInfo[]; page: PageInfo } }
+  | { ScopeCreated: ScopeCreatedPayload }
+  | { Pong: PongPayload }
+  | { EvalText: { text: string } }
+  | { TextOutput: { text: string; truncated: boolean } }
+  | { Output: { id: string; data: string; truncated: boolean } }
+  | {
+      JobOutput: {
+        id: string;
+        stdout: StreamText;
+        stderr: StreamText;
+        stderr_pty_merged: boolean;
+      };
+    }
+  | Record<string, unknown>;
+
+/**
+ * Daemon Pong payload.
+ *
+ * `version` carries `cued`'s `CARGO_PKG_VERSION`. Daemons predating the
+ * Pong-version field (<= cue-shell 0.1.0 era builds) reply with `{}` and
+ * leave `version` undefined, which clients use to detect outdated daemons.
+ */
+export interface PongPayload {
+  version?: string;
+  protocol_version?: number;
+  capabilities?: string[];
+}
+
+export interface ScopeCreatedPayload {
+  hash: string;
+  summary: string;
+}
+
+export interface CueSessionOptions {
+  sessionId?: string;
+  cwd?: string;
+  env?: Record<string, string | undefined>;
+  /** Explicitly refresh an existing cue-shell session from this cwd/env snapshot. */
+  refresh?: boolean;
+}
+
+export interface JobCreatedPayload {
+  job_id: string;
+  start_scope?: string;
+  open_hint: "stream" | "fg";
+  chain_id?: string;
+  chain_index?: number;
+  chain_total?: number;
+  warnings: string[];
+}
+
+export interface ChainCreatedPayload {
+  chain_id: string;
+  job_ids: string[];
+  chain: ChainInfo;
+  warnings: string[];
+}
+
+export type ScriptSource = { kind: "inline" } | { kind: "file"; path: string };
+
+export type ScriptItemResult =
+  | {
+      kind: "job";
+      job_id: string;
+      start_scope?: string;
+      open_hint: "stream" | "fg";
+    }
+  | {
+      kind: "chain";
+      chain_id: string;
+      job_ids: string[];
+      chain: ChainInfo;
+    }
+  | { kind: "cron"; cron_id: string }
+  | { kind: "message"; text: string };
+
+export interface ScriptItemInfo {
+  index: number;
+  source: string;
+  result: ScriptItemResult;
+}
+
+export interface ScriptSubmitError {
+  index: number;
+  source: string;
+  code: string;
+  message: string;
+}
+
+export interface ScriptCreatedPayload {
+  script_id: string;
+  source?: ScriptSource;
+  items: ScriptItemInfo[];
+  submit_error: ScriptSubmitError | null;
+}
+
+export type ScriptRunStatus = "done" | "failed";
+
+export interface ScriptFinishedEvent {
+  script_id: string;
+  status: ScriptRunStatus;
+  exit_code: number;
+  failed_item_index: number | null;
+}
+
+export interface ChainInfo {
+  id: string;
+  pipeline: string;
+  total_jobs: number;
+  jobs: ChainJobInfo[];
+}
+
+export interface ChainJobInfo {
+  index: number;
+  pipeline: string;
+  status: JobStatus;
+  job_id?: string;
+  start_scope?: string;
+  end_scope?: string;
+  open_hint?: "stream" | "fg";
+}
+
+export type CronStatus = "active" | "paused" | "completed" | "expired";
+
+export interface CronInfo {
+  id: string;
+  schedule: string;
+  command: string;
+  status: CronStatus;
+}
+
+export type JobStatus = "Pending" | "Running" | "Done" | "Failed" | "Killed" | "Cancelled";
+
+export interface JobInfo {
+  id: string;
+  status: JobStatus;
+  pipeline: string;
+  exit_code?: number | null;
+  start_scope?: string;
+  end_scope?: string;
+  open_hint: "stream" | "fg";
+  chain_id?: number | string | null;
+  chain_index?: number;
+  chain_total?: number;
+  pending_reason?: string | null;
+}
+
+export interface ScopeInfo {
+  hash: string;
+  parent?: string | null;
+  cwd: string;
+  env_count: number;
+}
+
+export interface EventEnvelope {
+  type: "event";
+  payload: EventPayload;
+}
+
+export type EventPayload =
+  | { JobStateChanged: JobStateChangedEvent }
+  | { JobCreated: JobCreatedEvent }
+  | { ChainStarted: { chain: ChainInfo } }
+  | { ChainProgress: { chain: ChainInfo } }
+  | { ChainFinished: { chain_id: string; success: boolean } }
+  | { ScriptFinished: ScriptFinishedEvent }
+  | { JobRemoved: { job_id: string } }
+  | { OutputChunk: OutputChunkEvent }
+  | { OutputChunkBinary: OutputChunkBinaryEvent }
+  | { OutputEof: { id: string } }
+  | { ShuttingDown: { reason: string } }
+  | { DaemonReady: Record<string, never> }
+  | Record<string, unknown>;
+
+export interface JobStateChangedEvent {
+  job_id: string;
+  old_state: JobStatus;
+  new_state: JobStatus;
+  end_scope?: string;
+  chain_id?: string;
+  chain_index?: number;
+}
+
+export interface JobCreatedEvent {
+  job_id: string;
+  pipeline: string;
+  start_scope?: string;
+  open_hint: "stream" | "fg";
+  chain_id?: string;
+  chain_index?: number;
+  chain_total?: number;
+}
+
+export interface OutputChunkEvent {
+  id: string;
+  stream: "stdout" | "stderr";
+  data: string;
+}
+
+export interface OutputChunkBinaryEvent {
+  id: string;
+  stream: "stdout" | "stderr";
+  base64: string;
+}
+
+export interface PageInfo {
+  total: number;
+  shown: number;
+  limit?: number | null;
+  truncated: boolean;
+}
+
+export interface StreamText {
+  data: string;
+  truncated: boolean;
+}
+
+export type CueMessage = RequestEnvelope | ResponseEnvelope | EventEnvelope;
+
+function normalizeJobStatus(status: unknown): JobStatus {
+  if (typeof status === "string") {
+    return status as JobStatus;
+  }
+  if (status && typeof status === "object" && "Cancelled" in (status as Record<string, unknown>)) {
+    return "Cancelled";
+  }
+  return "Pending";
+}
+
+function normalizeJob(job: JobInfo): JobInfo {
+  return {
+    ...job,
+    status: normalizeJobStatus((job as { status: unknown }).status),
+  };
+}
+
+function textFromOutputEvent(event: EventPayload): OutputChunkEvent | null {
+  if ("OutputChunk" in event) {
+    return (event as { OutputChunk: OutputChunkEvent }).OutputChunk;
+  }
+  if ("OutputChunkBinary" in event) {
+    const chunk = (event as { OutputChunkBinary: OutputChunkBinaryEvent }).OutputChunkBinary;
+    return {
+      id: chunk.id,
+      stream: chunk.stream,
+      data: Buffer.from(chunk.base64, "base64").toString("utf8"),
+    };
+  }
+  return null;
+}
+
+function okRecord(response: ResponsePayload): Record<string, unknown> {
+  if ("Err" in response) {
+    throw new CueError(response.Err.code, response.Err.message);
+  }
+  return (response as { Ok: Record<string, unknown> }).Ok;
+}
+
+function isNoBufferedOutputError(error: CueError): boolean {
+  return error.code === "NOT_FOUND" && /no output found/i.test(error.message);
+}
+
+function textOutputFromOk(ok: Record<string, unknown>): string | null {
+  if ("TextOutput" in ok) {
+    return (ok as { TextOutput: { text: string; truncated: boolean } }).TextOutput.text;
+  }
+  if ("EvalText" in ok) {
+    return (ok as { EvalText: { text: string } }).EvalText.text;
+  }
+  return null;
+}
+
+function scopeCreatedFromOk(ok: Record<string, unknown>): ScopeCreatedPayload | null {
+  if (!("ScopeCreated" in ok)) return null;
+  const payload = (ok as { ScopeCreated: ScopeCreatedPayload }).ScopeCreated;
+  if (typeof payload.hash !== "string" || typeof payload.summary !== "string") return null;
+  return payload;
+}
+
+// ── Framing constants ──────────────────────────────────────────────────────
+
+const MAX_MESSAGE_SIZE = 16 * 1024 * 1024; // 16 MiB
+const MAX_OUTPUT_BUFFER = 4 * 1024 * 1024; // 4 MiB per stream, per job
+const MAX_SSH_STDERR_SNAPSHOT = 64 * 1024; // keep recent gateway diagnostics bounded
+const REQUIRED_IPC_PROTOCOL_VERSION = 2;
+const REQUIRED_IPC_CAPABILITY_SESSION_HANDSHAKE_REQUIRED = "session-handshake-required";
+const PROCESS_SESSION_ID = `spark-cue:process:${process.pid}:${Date.now().toString(36)}:${randomUUID().slice(0, 8)}`;
+
+// ── Connection state ───────────────────────────────────────────────────────
+
+interface PendingRequest {
+  resolve: (value: ResponsePayload) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+interface CueClientStream {
+  on(event: "data", listener: (chunk: Buffer) => void): this;
+  on(event: "error", listener: (error: Error) => void): this;
+  on(event: "close", listener: () => void): this;
+  write(frame: Buffer): boolean;
+  destroy(error?: Error): void;
+}
+
+function stableHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+function normalizeSessionEnv(
+  input: Record<string, string | undefined> | undefined,
+): Record<string, string> {
+  const source = input ?? process.env;
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (typeof value === "string") result[key] = value;
+  }
+  return result;
+}
+
+function normalizeCueSessionOptions(
+  options: CueSessionOptions | undefined,
+): Required<CueSessionOptions> {
+  const cwd = options?.cwd?.trim() || process.cwd();
+  const sessionId = options?.sessionId?.trim() || `${PROCESS_SESSION_ID}:${stableHash(cwd)}`;
+  return {
+    sessionId,
+    cwd,
+    env: normalizeSessionEnv(options?.env),
+    refresh: options?.refresh ?? false,
+  };
+}
+
+async function connectUnixCueClient(path: string, session?: CueSessionOptions): Promise<CueClient> {
+  const socket = await openUnixSocket(path);
+  return initializeConnectedClient(new CueClient(socket), session);
+}
+
+async function openUnixSocket(path: string): Promise<Socket> {
+  try {
+    return await new Promise<Socket>((resolve, reject) => {
+      const socket = createConnection({ path }, () => {
+        socket.setTimeout(0);
+        resolve(socket);
+      });
+      const timeoutMs = timeoutMsFromEnv(
+        "PI_CUE_CONNECT_TIMEOUT_MS",
+        DEFAULT_CUE_CONNECT_TIMEOUT_MS,
+      );
+      if (timeoutMs > 0) {
+        socket.setTimeout(timeoutMs, () => {
+          socket.destroy(new Error(`connect timed out after ${timeoutMs}ms`));
+        });
+      }
+      socket.on("error", reject);
+    });
+  } catch (error) {
+    throw new CueError(
+      "DAEMON_UNREACHABLE",
+      `failed to connect to cue-shell daemon socket ${path}: ${describeError(error)}`,
+    );
+  }
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function timeoutMsFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  const normalized = Math.floor(parsed);
+  return normalized > 0 ? normalized : 0;
+}
+
+async function connectSshCueClient(
+  transport: Extract<CueResolvedTransport, { transport: "ssh" }>,
+  session?: CueSessionOptions,
+): Promise<CueClient> {
+  const stream = SshCueClientStream.spawn(transport);
+  const client = new CueClient(stream);
+  try {
+    return await initializeConnectedClient(client, session);
+  } catch (error) {
+    client.close();
+    throw new CueError(
+      "DAEMON_UNREACHABLE",
+      sshConnectionErrorMessage(transport, stream.stderrSnapshot(), error),
+    );
+  }
+}
+
+async function initializeConnectedClient(
+  client: CueClient,
+  session?: CueSessionOptions,
+): Promise<CueClient> {
+  try {
+    await client.handshake(session);
+    await client.pingForVersion();
+    return client;
+  } catch (error) {
+    client.close();
+    if (error instanceof CueError) throw error;
+    throw unsupportedProtocolError(
+      "cue-shell daemon accepted the connection but IPC initialization failed; upgrade/restart cued",
+      error,
+    );
+  }
+}
+
+function sshConnectionErrorMessage(
+  transport: Extract<CueResolvedTransport, { transport: "ssh" }>,
+  stderr: string,
+  error: unknown,
+): string {
+  const detail = stderr || (error instanceof Error ? error.message : String(error));
+  return [
+    `cue profile \`${transport.profile_name}\` failed to connect via SSH to ${transport.destination}.`,
+    `Gateway command: ${transport.gateway_command}`,
+    `Remote daemon startup is explicit; start it with: ssh ${transport.destination} ${JSON.stringify(transport.start_command)}`,
+    `Detail: ${detail}`,
+  ].join("\n");
+}
+
+class SshCueClientStream extends EventEmitter implements CueClientStream {
+  #child: ChildProcessWithoutNullStreams;
+  #stderr: Buffer[] = [];
+  #stderrBytes = 0;
+  #closed = false;
+
+  private constructor(child: ChildProcessWithoutNullStreams) {
+    super();
+    this.#child = child;
+    child.stdout.on("data", (chunk: Buffer) => this.emit("data", chunk));
+    child.stdout.on("error", (error: Error) => this.emit("error", error));
+    child.stdin.on("error", (error: Error) => this.emit("error", error));
+    child.stderr.on("data", (chunk: Buffer) => this.#appendStderr(chunk));
+    child.stderr.on("error", (error: Error) => {
+      this.#appendStderr(Buffer.from(`failed to read ssh stderr: ${error.message}`));
+    });
+    child.on("error", (error: Error) => this.emit("error", error));
+    child.on("close", () => this.#emitCloseOnce());
+  }
+
+  static spawn(transport: Extract<CueResolvedTransport, { transport: "ssh" }>): SshCueClientStream {
+    return new SshCueClientStream(
+      spawn("ssh", [transport.destination, transport.gateway_command], {
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+    );
+  }
+
+  write(frame: Buffer): boolean {
+    return this.#child.stdin.write(frame);
+  }
+
+  destroy(error?: Error): void {
+    if (error) this.emit("error", error);
+    this.#child.kill();
+    this.#emitCloseOnce();
+  }
+
+  stderrSnapshot(): string {
+    return Buffer.concat(this.#stderr, this.#stderrBytes).toString("utf8").trim();
+  }
+
+  #appendStderr(chunk: Buffer): void {
+    let data = Buffer.from(chunk);
+    if (data.length > MAX_SSH_STDERR_SNAPSHOT) {
+      data = data.subarray(data.length - MAX_SSH_STDERR_SNAPSHOT);
+      this.#stderr = [data];
+      this.#stderrBytes = data.length;
+      return;
+    }
+
+    this.#stderr.push(data);
+    this.#stderrBytes += data.length;
+    while (this.#stderrBytes > MAX_SSH_STDERR_SNAPSHOT) {
+      const first = this.#stderr[0];
+      if (!first) break;
+      const extra = this.#stderrBytes - MAX_SSH_STDERR_SNAPSHOT;
+      if (first.length <= extra) {
+        this.#stderr.shift();
+        this.#stderrBytes -= first.length;
+      } else {
+        this.#stderr[0] = first.subarray(extra);
+        this.#stderrBytes -= extra;
+      }
+    }
+  }
+
+  #emitCloseOnce(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.emit("close");
+  }
+}
+
+/** Active connection to the cued daemon. */
+export class CueClient {
+  #socket: CueClientStream;
+  #nextId = 1;
+  #pending = new Map<number, PendingRequest>();
+  #listeners = new Map<string, Set<(event: EventPayload) => void>>();
+  #recentScriptFinished: ScriptFinishedEvent[] = [];
+  #buffer = Buffer.alloc(0);
+  #closed = false;
+  #closePromise: Promise<void>;
+  #resolveClose!: () => void;
+
+  /** Create a client from an already-connected cue-shell IPC stream. */
+  constructor(socket: CueClientStream) {
+    this.#socket = socket;
+    this.#closePromise = new Promise((resolve) => {
+      this.#resolveClose = resolve;
+    });
+
+    socket.on("data", (chunk: Buffer) => this.#onData(chunk));
+    socket.on("error", (err: Error) => this.#onError(err));
+    socket.on("close", () => {
+      this.#closed = true;
+      this.#rejectAll(new Error("connection closed"));
+      this.#resolveClose();
+    });
+  }
+
+  /**
+   * Connect to the cued daemon.
+   *
+   * An explicit `socketPath` is always honored as a Unix socket override. Without
+   * an override, spark-cue asks `cue-client target resolve --json` (falling back to
+   * `cue client target ...`) for the active client transport profile and then
+   * connects either to a Unix socket or to an SSH gateway stream.
+   */
+  static async connect(socketPath?: string, session?: CueSessionOptions): Promise<CueClient> {
+    if (socketPath) return connectUnixCueClient(socketPath, session);
+    return CueClient.connectResolved(await resolveConnectionTransport(), session);
+  }
+
+  /** Connect to an already-resolved cue-shell client transport profile. */
+  static async connectResolved(
+    transport: CueResolvedTransport,
+    session?: CueSessionOptions,
+  ): Promise<CueClient> {
+    if (transport.transport === "unix") return connectUnixCueClient(transport.socket_path, session);
+    return connectSshCueClient(transport, session);
+  }
+
+  /** Resolved when the connection closes. */
+  get closed(): Promise<void> {
+    if (!this.#closed) return this.#closePromise;
+    return Promise.resolve();
+  }
+
+  get isClosed(): boolean {
+    return this.#closed;
+  }
+
+  // ── Requests ────────────────────────────────────────────────────────
+
+  /** Send an Eval request for literal cue-shell commands (:kill, :jobs, :out). */
+  async #rawEval(input: string, mode: Mode = "Job"): Promise<number> {
+    return this.#send({ Eval: { input, mode } });
+  }
+
+  /** Send a raw Eval request and wait for the response payload. */
+  async #rawEvalAndWait(input: string, mode: Mode = "Job"): Promise<ResponsePayload> {
+    const requestId = await this.#rawEval(input, mode);
+    return this.#waitForResponse(requestId);
+  }
+
+  /**
+   * Send a `:run` Eval request.  cue-shell has its own grammar (not bash-compatible) — commands
+   * are direct-exec (execvp).  For composition use cue-shell's native
+   * operators:
+   *
+   *   Pipeline (job-internal, connect process stdin/stdout):
+   *     `|>`   stdout pipe
+   *     `|&>`  stdout+stderr pipe
+   *     `|!>`  stderr-only pipe
+   *
+   *   Job logical (inside one job):
+   *     `&&`   logical AND
+   *     `||`   logical OR
+   *
+   *   Chain (between jobs, scheduler-managed):
+   *     `->`   serial, success-continue
+   *     `~>`   serial, ignore-failure
+   *     `|||`  parallel, all
+   *     `|?|`  parallel, any-success race
+   */
+  async eval(input: string, mode: Mode = "Job", opts: RunEvalOptions = {}): Promise<number> {
+    const modeParams: string[] = [];
+    if (opts.pty !== undefined) modeParams.push(`pty=${opts.pty ? "true" : "false"}`);
+    if (opts.cwd) modeParams.push(`cwd=${quoteModeParamValue(opts.cwd)}`);
+    modeParams.push(...resourceNeedModeParams(opts.needs));
+    const modeParamText = modeParams.length > 0 ? `(${modeParams.join(",")})` : "";
+    return this.#send({ Eval: { input: `:run${modeParamText} ${input}`, mode } });
+  }
+
+  /** Subscribe to one or more event channels. */
+  async subscribe(channels: string[]): Promise<void> {
+    const id = await this.#send({ Subscribe: { channels } });
+    await this.#waitForResponse(id);
+  }
+
+  /** Send and acknowledge the cue-shell session handshake. */
+  async handshake(options?: CueSessionOptions): Promise<void> {
+    const session = normalizeCueSessionOptions(options);
+    let response: ResponsePayload;
+    try {
+      const id = await this.#send({
+        Handshake: {
+          session_id: session.sessionId,
+          cwd: session.cwd,
+          env: normalizeSessionEnv(session.env),
+          refresh: session.refresh,
+        },
+      });
+      response = await this.#waitForResponse(id);
+    } catch (error) {
+      throw unsupportedProtocolError(
+        "cue-shell daemon did not complete the required session Handshake; upgrade/restart cued",
+        error,
+      );
+    }
+
+    if ("Err" in response) {
+      throw unsupportedProtocolError(
+        `cue-shell daemon rejected the required session Handshake: ${response.Err.code}: ${response.Err.message}; upgrade/restart cued`,
+      );
+    }
+    const ok = (response as { Ok: Record<string, unknown> }).Ok;
+    if (!ok || !("Ack" in ok)) {
+      throw unsupportedProtocolError(
+        "cue-shell daemon returned an unexpected response to the required session Handshake; upgrade/restart cued",
+      );
+    }
+  }
+
+  /** Ping the daemon and return its self-reported version. */
+  async pingForVersion(): Promise<string | null> {
+    const id = await this.#send({ Ping: {} });
+    const response = await this.#waitForResponse(id);
+    if ("Err" in response) {
+      throw new CueError(response.Err.code, response.Err.message);
+    }
+    const ok = (response as { Ok: Record<string, unknown> }).Ok;
+    if (!ok || !("Pong" in ok)) {
+      throw unsupportedProtocolError("cue-shell daemon did not return Pong to Ping");
+    }
+    const pong = (ok as { Pong: PongPayload }).Pong;
+    const version = pong?.version;
+    if (typeof version !== "string" || version.length === 0) {
+      throw unsupportedProtocolError(
+        "cue-shell daemon Pong is missing version; upgrade/restart cued",
+      );
+    }
+    const protocolVersion = pong.protocol_version;
+    if (typeof protocolVersion !== "number" || protocolVersion < REQUIRED_IPC_PROTOCOL_VERSION) {
+      throw unsupportedProtocolError(
+        `cue-shell daemon IPC protocol version ${String(protocolVersion)} is older than required ${REQUIRED_IPC_PROTOCOL_VERSION}; upgrade/restart cued`,
+      );
+    }
+    const capabilities = Array.isArray(pong.capabilities) ? pong.capabilities : [];
+    if (!capabilities.includes(REQUIRED_IPC_CAPABILITY_SESSION_HANDSHAKE_REQUIRED)) {
+      throw unsupportedProtocolError(
+        `cue-shell daemon is missing required IPC capability ${REQUIRED_IPC_CAPABILITY_SESSION_HANDSHAKE_REQUIRED}; upgrade/restart cued`,
+      );
+    }
+    return version;
+  }
+
+  /** Ping the daemon. */
+  async ping(): Promise<void> {
+    await this.pingForVersion();
+  }
+
+  /**
+   * Run a command and wait for it to complete, collecting all output.
+   * Returns job info + stdout/stderr + exit code.
+   */
+  async runJob(command: string, opts?: RunJobOptions): Promise<JobResult> {
+    const timeoutMs = (opts?.timeout ?? 300) * 1000;
+    const cwd = opts?.cwd;
+    const pty = opts?.pty ?? false;
+    const needs = opts?.needs;
+
+    // Subscribe to global jobs channel before issuing the command.
+    await this.#ensureSubscribed("jobs");
+
+    // Issue the eval.  The daemon sends job/chain events before the
+    // response for successful runs.
+    const requestId = await this.eval(command, "Job", { cwd, pty, needs });
+    const response = await this.#waitForResponse(requestId);
+
+    if ("Err" in response) {
+      throw new CueError(response.Err.code, response.Err.message);
+    }
+
+    // Extract job ids from the response — may be a single job or a chain.
+    const ok = (response as { Ok: Record<string, unknown> }).Ok;
+    let allJobIds: string[] = [];
+    let firstJobId: string | null = null;
+    let warnings: string[] = [];
+    let chainId: string | undefined;
+    let expectedJobCount: number | undefined;
+
+    if (ok && "ChainCreated" in ok) {
+      const payload = (ok as { ChainCreated: ChainCreatedPayload }).ChainCreated;
+      allJobIds = payload.job_ids;
+      firstJobId = payload.job_ids[0] ?? payload.chain_id;
+      chainId = payload.chain_id;
+      expectedJobCount = payload.chain.total_jobs;
+      warnings = payload.warnings;
+    } else if (ok && "JobCreated" in ok) {
+      const payload = (ok as { JobCreated: JobCreatedPayload }).JobCreated;
+      const id = payload.job_id;
+      const chainJobs = await this.#chainJobsForCreatedJob(payload);
+      if (chainJobs) {
+        allJobIds = chainJobs.map((job) => job.id);
+        firstJobId = allJobIds[0] ?? id;
+        chainId = String(chainJobs[0]?.chain_id ?? payload.chain_id);
+        expectedJobCount = chainJobs.length;
+      } else {
+        allJobIds = [id];
+        firstJobId = id;
+      }
+      warnings = payload.warnings;
+    }
+
+    if (!firstJobId || allJobIds.length === 0) {
+      throw new CueError("UNEXPECTED_RESPONSE", "no job id from response");
+    }
+
+    // Subscribe to output channels for all jobs in the chain.
+    for (const id of allJobIds) {
+      await this.subscribe([`output:${id}`]);
+    }
+
+    // Collect output and wait for completion
+    return this.#collectJobOutput(
+      firstJobId,
+      allJobIds,
+      timeoutMs,
+      warnings,
+      chainId,
+      expectedJobCount,
+    );
+  }
+
+  /**
+   * Start a job in background mode — returns immediately with metadata.
+   * Use `jobStatus()` and `jobOutput()` to track progress.
+   */
+  async startJob(command: string, opts?: StartJobOptions): Promise<StartJobResult> {
+    await this.#ensureSubscribed("jobs");
+
+    const requestId = await this.eval(command, "Job", {
+      cwd: opts?.cwd,
+      pty: opts?.pty ?? false,
+      needs: opts?.needs,
+    });
+    const response = await this.#waitForResponse(requestId);
+
+    if ("Err" in response) {
+      throw new CueError(response.Err.code, response.Err.message);
+    }
+
+    const ok = (response as { Ok: Record<string, unknown> }).Ok;
+
+    // Handle ChainCreated (chain syntax like `a -> b`)
+    if (ok && "ChainCreated" in ok) {
+      const payload = (ok as { ChainCreated: ChainCreatedPayload }).ChainCreated;
+      return {
+        jobId: payload.job_ids[0] ?? payload.chain_id,
+        kind: "chain",
+        chain: payload.chain,
+        warnings: payload.warnings,
+      };
+    }
+
+    // Handle JobCreated (single job, or a chain whose leaves are discoverable via :jobs).
+    if (ok && "JobCreated" in ok) {
+      const payload = (ok as { JobCreated: JobCreatedPayload }).JobCreated;
+      const jobs = await this.#chainJobsForCreatedJob(payload);
+      if (jobs) {
+        const chainId = String(jobs[0]?.chain_id ?? payload.chain_id);
+        return {
+          jobId: jobs[0]?.id ?? payload.job_id,
+          kind: "chain",
+          chain: this.#chainInfoFromJobs(chainId, command, jobs.length, jobs),
+          warnings: payload.warnings,
+        };
+      }
+      return {
+        jobId: payload.job_id,
+        kind: "job",
+        pipeline: command,
+        warnings: payload.warnings,
+      };
+    }
+
+    throw new CueError("UNEXPECTED_RESPONSE", "expected JobCreated or ChainCreated response");
+  }
+
+  /**
+   * Run a `.cue` file-script and wait for it to complete.
+   *
+   * Mirrors the foreground semantics of cue-shell’s `cue run <file.cue>` CLI:
+   * top-level items execute sequentially, fail-fast, inside a fresh isolated
+   * scope forked from HEAD. Returns the aggregated transcript per item plus
+   * the script-level terminal status.
+   */
+  async runScript(opts: RunScriptOptions): Promise<ScriptResult> {
+    const { path, input } = opts;
+    const timeoutMs = (opts.timeout ?? 300) * 1000;
+
+    await this.#ensureSubscribed("jobs");
+
+    const requestId = await this.#send({ RunScript: { path, input } });
+    const response = await this.#waitForResponse(requestId);
+    if ("Err" in response) {
+      throw new CueError(response.Err.code, response.Err.message);
+    }
+    const ok = (response as { Ok: Record<string, unknown> }).Ok;
+    if (!ok || !("ScriptCreated" in ok)) {
+      throw new CueError("UNEXPECTED_RESPONSE", "expected ScriptCreated response");
+    }
+    const created = (ok as { ScriptCreated: ScriptCreatedPayload }).ScriptCreated;
+
+    if (created.submit_error) {
+      const err = created.submit_error;
+      throw new CueError(
+        err.code,
+        `script ${created.script_id} submission failed at item ${err.index}: ${err.message}`,
+      );
+    }
+
+    const itemJobIds = new Map<number, string[]>();
+    const allKnownJobIds = new Set<string>();
+    const stdoutByJob = new Map<string, string[]>();
+    const stderrByJob = new Map<string, string[]>();
+    const stdoutLenByJob = new Map<string, number>();
+    const stderrLenByJob = new Map<string, number>();
+    const unknownJobIds: string[] = [];
+
+    const ensureJobBuffers = (jobId: string) => {
+      if (!stdoutByJob.has(jobId)) {
+        stdoutByJob.set(jobId, []);
+        stdoutLenByJob.set(jobId, 0);
+      }
+      if (!stderrByJob.has(jobId)) {
+        stderrByJob.set(jobId, []);
+        stderrLenByJob.set(jobId, 0);
+      }
+    };
+
+    const appendCappedOutput = (
+      buffers: Map<string, string[]>,
+      lengths: Map<string, number>,
+      jobId: string,
+      data: string,
+    ) => {
+      ensureJobBuffers(jobId);
+      const list = buffers.get(jobId);
+      if (!list) return;
+      const current = lengths.get(jobId) ?? 0;
+      if (current >= MAX_OUTPUT_BUFFER) return;
+      const remaining = MAX_OUTPUT_BUFFER - current;
+      const chunk = data.length > remaining ? data.slice(0, remaining) : data;
+      if (!chunk) return;
+      list.push(chunk);
+      lengths.set(jobId, current + chunk.length);
+    };
+
+    const trackJob = async (itemIndex: number, jobId: string) => {
+      const list = itemJobIds.get(itemIndex) ?? [];
+      if (!list.includes(jobId)) list.push(jobId);
+      itemJobIds.set(itemIndex, list);
+      if (!allKnownJobIds.has(jobId)) {
+        allKnownJobIds.add(jobId);
+        ensureJobBuffers(jobId);
+        await this.subscribe([`output:${jobId}`]);
+      }
+    };
+
+    for (const item of created.items) {
+      if (item.result.kind === "job") {
+        await trackJob(item.index, item.result.job_id);
+      } else if (item.result.kind === "chain") {
+        for (const jid of item.result.job_ids) {
+          await trackJob(item.index, jid);
+        }
+      }
+    }
+
+    return new Promise<ScriptResult>((resolve, reject) => {
+      let finished: ScriptFinishedEvent | null = null;
+      let resolved = false;
+      const unsubs: Array<() => void> = [];
+
+      const cleanup = () => {
+        for (const off of unsubs) off();
+      };
+
+      const finalize = async () => {
+        if (resolved) return;
+        if (!finished) return;
+        resolved = true;
+        clearTimeout(timer);
+        cleanup();
+
+        await new Promise((r) => setTimeout(r, 50));
+
+        try {
+          const itemResults: ScriptItemSummary[] = [];
+          for (const item of created.items) {
+            const summary = await this.#summarizeScriptItem(
+              item,
+              itemJobIds.get(item.index) ?? [],
+              stdoutByJob,
+              stderrByJob,
+            );
+            itemResults.push(summary);
+          }
+
+          const knownSummaryJobs = new Set<string>();
+          for (const summary of itemResults) {
+            for (const jobId of summary.jobIds) knownSummaryJobs.add(jobId);
+          }
+          const inferredJobIds: string[] = [];
+          const knownNumbers = [...knownSummaryJobs]
+            .map((jobId) => Number(jobId.replace(/^J/, "")))
+            .filter((value) => Number.isFinite(value));
+          if (knownNumbers.length > 0) {
+            const maxKnownNumber = Math.max(...knownNumbers);
+            const inferenceJobs = await this.listJobs().catch(() => [] as JobInfo[]);
+            for (const job of inferenceJobs) {
+              const n = Number(job.id.replace(/^J/, ""));
+              if (Number.isFinite(n) && n > maxKnownNumber && !knownSummaryJobs.has(job.id)) {
+                inferredJobIds.push(job.id);
+              }
+            }
+          }
+          const extraJobIds: string[] = [];
+          for (const jobId of [...unknownJobIds, ...inferredJobIds]) {
+            if (!knownSummaryJobs.has(jobId) && !extraJobIds.includes(jobId))
+              extraJobIds.push(jobId);
+          }
+          if (extraJobIds.length > 0) {
+            const allJobs = await this.listJobs().catch(() => [] as JobInfo[]);
+            const jobsById = new Map(allJobs.map((job) => [job.id, job]));
+            const chainIds: string[] = [];
+            const singleJobIds: string[] = [];
+            for (const jobId of extraJobIds) {
+              const job = jobsById.get(jobId);
+              const chainId = job?.chain_id == null ? undefined : String(job.chain_id);
+              if (chainId) {
+                if (!chainIds.includes(chainId)) chainIds.push(chainId);
+              } else if (!singleJobIds.includes(jobId)) {
+                singleJobIds.push(jobId);
+              }
+            }
+            let nextIndex = itemResults.reduce((max, item) => Math.max(max, item.index), -1) + 1;
+            for (const chainId of chainIds) {
+              const jobs = allJobs
+                .filter((job) => String(job.chain_id ?? "") === chainId)
+                .sort((a, b) => (a.chain_index ?? 0) - (b.chain_index ?? 0));
+              if (jobs.length === 0) continue;
+              const chain = this.#chainInfoFromJobs(
+                chainId,
+                jobs.map((job) => job.pipeline).join(" -> "),
+                jobs.length,
+                jobs,
+              );
+              const item: ScriptItemInfo = {
+                index: nextIndex++,
+                source: chain.pipeline,
+                result: {
+                  kind: "chain",
+                  chain_id: chainId,
+                  job_ids: jobs.map((job) => job.id),
+                  chain,
+                },
+              };
+              itemResults.push(
+                await this.#summarizeScriptItem(
+                  item,
+                  jobs.map((job) => job.id),
+                  stdoutByJob,
+                  stderrByJob,
+                ),
+              );
+              for (const job of jobs) knownSummaryJobs.add(job.id);
+            }
+            for (const jobId of singleJobIds) {
+              if (knownSummaryJobs.has(jobId)) continue;
+              const job = jobsById.get(jobId);
+              const item: ScriptItemInfo = {
+                index: nextIndex++,
+                source: job?.pipeline ?? jobId,
+                result: {
+                  kind: "job",
+                  job_id: jobId,
+                  start_scope: job?.start_scope,
+                  open_hint: "stream",
+                },
+              };
+              itemResults.push(
+                await this.#summarizeScriptItem(item, [jobId], stdoutByJob, stderrByJob),
+              );
+            }
+          }
+
+          resolve({
+            scriptId: created.script_id,
+            source: created.source ?? { kind: "inline" },
+            status: finished.status,
+            exitCode: finished.exit_code,
+            failedItemIndex: finished.failed_item_index ?? null,
+            items: itemResults,
+            timedOut: false,
+          });
+        } catch (error) {
+          reject(error);
+        }
+      };
+
+      const timer = setTimeout(() => {
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+        resolve({
+          scriptId: created.script_id,
+          source: created.source ?? { kind: "inline" },
+          status: "failed",
+          exitCode: null,
+          failedItemIndex: null,
+          items: [],
+          timedOut: true,
+        });
+      }, timeoutMs);
+
+      const onOutput = (event: EventPayload) => {
+        const chunk = textFromOutputEvent(event);
+        if (!chunk) return;
+        if (!allKnownJobIds.has(chunk.id) && !unknownJobIds.includes(chunk.id)) {
+          unknownJobIds.push(chunk.id);
+        }
+        if (chunk.stream === "stdout") {
+          appendCappedOutput(stdoutByJob, stdoutLenByJob, chunk.id, chunk.data);
+        } else {
+          appendCappedOutput(stderrByJob, stderrLenByJob, chunk.id, chunk.data);
+        }
+      };
+
+      const installedForwarders = new Set<string>();
+      const ensureForwarder = (jobId: string) => {
+        if (installedForwarders.has(jobId)) return;
+        installedForwarders.add(jobId);
+        unsubs.push(this.onEvent(`output:${jobId}`, onOutput));
+      };
+      for (const jid of allKnownJobIds) ensureForwarder(jid);
+
+      const cachedFinished = this.#recentScriptFinished.find(
+        (fin) => fin.script_id === created.script_id,
+      );
+      if (cachedFinished) {
+        finished = cachedFinished;
+        void finalize();
+      }
+
+      const onJobs = (event: EventPayload) => {
+        if ("ScriptFinished" in event) {
+          const fin = (event as { ScriptFinished: ScriptFinishedEvent }).ScriptFinished;
+          if (fin.script_id === created.script_id) {
+            finished = fin;
+            void finalize();
+          }
+          return;
+        }
+        if ("JobCreated" in event) {
+          const job = (event as { JobCreated: JobCreatedEvent }).JobCreated;
+          const jid = job.job_id;
+          if (!allKnownJobIds.has(jid)) {
+            if (!unknownJobIds.includes(jid)) unknownJobIds.push(jid);
+            ensureJobBuffers(jid);
+            void this.subscribe([`output:${jid}`]).then(() => ensureForwarder(jid));
+          }
+          return;
+        }
+        if ("ChainProgress" in event) {
+          const progress = (event as { ChainProgress: { chain: ChainInfo } }).ChainProgress;
+          const item = created.items.find(
+            (it) => it.result.kind === "chain" && it.result.chain_id === progress.chain.id,
+          );
+          for (const job of progress.chain.jobs) {
+            const jid = job.job_id;
+            if (!jid) continue;
+            if (item) {
+              void trackJob(item.index, jid).then(() => ensureForwarder(jid));
+            } else if (!allKnownJobIds.has(jid)) {
+              if (!unknownJobIds.includes(jid)) unknownJobIds.push(jid);
+              ensureJobBuffers(jid);
+              void this.subscribe([`output:${jid}`]).then(() => ensureForwarder(jid));
+            }
+          }
+        }
+      };
+      unsubs.push(this.onEvent("jobs", onJobs));
+    });
+  }
+
+  async #summarizeScriptItem(
+    item: ScriptItemInfo,
+    jobIds: string[],
+    stdoutByJob: Map<string, string[]>,
+    stderrByJob: Map<string, string[]>,
+  ): Promise<ScriptItemSummary> {
+    const stdoutParts: string[] = [];
+    const stderrParts: string[] = [];
+    let status: JobStatus = "Done";
+    let exitCode: number | null = null;
+    const jobStatuses: JobInfo[] = [];
+
+    for (const jobId of jobIds) {
+      let info: JobInfo | null = null;
+      try {
+        info = await this.jobStatus(jobId);
+      } catch {
+        info = null;
+      }
+      if (info) {
+        jobStatuses.push(info);
+        if (info.status !== "Done" && status === "Done") status = info.status;
+        if (info.exit_code != null && info.exit_code !== 0) exitCode = info.exit_code;
+      }
+
+      try {
+        const out = await this.jobOutput(jobId);
+        stdoutParts.push(out.stdout);
+      } catch {
+        const chunks = stdoutByJob.get(jobId) ?? [];
+        stdoutParts.push(chunks.join(""));
+      }
+      try {
+        const err = await this.jobError(jobId);
+        stderrParts.push(err.stderr);
+      } catch {
+        const chunks = stderrByJob.get(jobId) ?? [];
+        stderrParts.push(chunks.join(""));
+      }
+    }
+
+    const messageText = item.result.kind === "message" ? item.result.text : undefined;
+
+    return {
+      index: item.index,
+      source: item.source,
+      kind: item.result.kind,
+      jobIds,
+      chainId: item.result.kind === "chain" ? item.result.chain_id : null,
+      cronId: item.result.kind === "cron" ? item.result.cron_id : null,
+      message: messageText,
+      stdout: stdoutParts.join(""),
+      stderr: stderrParts.join(""),
+      status,
+      exitCode,
+      jobs: jobStatuses,
+    };
+  }
+
+  /** Stop (kill) a running job or remove a cron. */
+  async stopJob(jobId: string): Promise<void> {
+    try {
+      const requestId = await this.#send(
+        jobId.startsWith("C") ? { RemoveCron: { id: jobId } } : { KillJob: { id: jobId } },
+      );
+      okRecord(await this.#waitForResponse(requestId));
+      return;
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
+    }
+    const requestId = await this.#rawEval(`:kill ${jobId}`);
+    okRecord(await this.#waitForResponse(requestId));
+  }
+
+  /** List all jobs via `:jobs`. */
+  async listJobs(limit?: number): Promise<JobInfo[]> {
+    let response: ResponsePayload;
+    try {
+      const requestId = await this.#send({ ListJobs: { limit: limit ?? null } });
+      response = await this.#waitForResponse(requestId);
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
+      response = await this.#rawEvalAndWait(":jobs");
+    }
+
+    const ok = okRecord(response);
+    if (ok && "JobListPage" in ok) {
+      return (ok as { JobListPage: { jobs: JobInfo[]; page: PageInfo } }).JobListPage.jobs.map(
+        normalizeJob,
+      );
+    }
+    if (ok && "JobList" in ok) {
+      return (ok as { JobList: JobInfo[] }).JobList.map(normalizeJob);
+    }
+    if (ok && "JobInfo" in ok) {
+      const job = (ok as { JobInfo: JobInfo }).JobInfo;
+      return [normalizeJob(job)];
+    }
+    return [];
+  }
+
+  /** Get job status via `:jobs`. */
+  async jobStatus(jobId: string): Promise<JobInfo | null> {
+    const list = await this.listJobs();
+    return list.find((j) => j.id === jobId) ?? null;
+  }
+
+  async #chainJobsForCreatedJob(payload: JobCreatedPayload): Promise<JobInfo[] | null> {
+    let chainId = payload.chain_id;
+    let chainTotal = payload.chain_total;
+
+    if (!chainId || !chainTotal || chainTotal <= 1) {
+      const job = await this.jobStatus(payload.job_id);
+      if (job?.chain_id != null && job.chain_total && job.chain_total > 1) {
+        chainId = String(job.chain_id);
+        chainTotal = job.chain_total;
+      }
+    }
+
+    if (!chainId || !chainTotal || chainTotal <= 1) return null;
+    return this.#waitForChainJobs(chainId, chainTotal);
+  }
+
+  #chainInfoFromJobs(
+    chainId: string,
+    pipeline: string,
+    totalJobs: number,
+    jobs: JobInfo[],
+  ): ChainInfo {
+    return {
+      id: chainId,
+      pipeline,
+      total_jobs: totalJobs,
+      jobs: jobs.map((job, index) => ({
+        index: job.chain_index ?? index,
+        pipeline: job.pipeline,
+        status: job.status,
+        job_id: job.id,
+        start_scope: job.start_scope,
+        end_scope: job.end_scope,
+        open_hint: job.open_hint,
+      })),
+    };
+  }
+
+  async #waitForChainJobs(chainId: string, totalJobs: number): Promise<JobInfo[]> {
+    const deadline = Date.now() + 1_000;
+    while (true) {
+      const jobs = (await this.listJobs())
+        .filter((job) => job.chain_id != null && String(job.chain_id) === chainId)
+        .sort((a, b) => (a.chain_index ?? 0) - (b.chain_index ?? 0));
+      if (jobs.length >= totalJobs) return jobs.slice(0, totalJobs);
+      if (Date.now() >= deadline) {
+        throw new CueError(
+          "UNEXPECTED_RESPONSE",
+          `chain ${chainId} reported ${totalJobs} jobs but only ${jobs.length} were visible`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  /** Get cron status via `:crons`. */
+  async cronStatus(cronId: string): Promise<CronInfo | null> {
+    const list = await this.listCrons();
+    return list.find((c) => c.id === cronId) ?? null;
+  }
+
+  /** Get buffered stdout from the daemon. */
+  async jobOutput(
+    jobId: string,
+    tailBytes?: number,
+  ): Promise<{ stdout: string; stderr: string; truncated?: boolean }> {
+    try {
+      const requestId = await this.#send({
+        JobOutput: { id: jobId, stdout_bytes: tailBytes ?? null, stderr_bytes: tailBytes ?? null },
+      });
+      const ok = okRecord(await this.#waitForResponse(requestId));
+      if (ok && "JobOutput" in ok) {
+        const out = (
+          ok as {
+            JobOutput: {
+              stdout: StreamText;
+              stderr: StreamText;
+              stderr_pty_merged: boolean;
+            };
+          }
+        ).JobOutput;
+        return {
+          stdout: out.stdout.data,
+          stderr: out.stderr.data,
+          truncated: out.stdout.truncated,
+        };
+      }
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
+      if (isNoBufferedOutputError(error)) return { stdout: "", stderr: "", truncated: false };
+    }
+
+    const response = await this.#rawEvalAndWait(`:out ${jobId}`);
+    const ok = okRecord(response);
+    if (ok && "Output" in ok) {
+      const out = (ok as { Output: { id: string; data: string; truncated: boolean } }).Output;
+      return { stdout: out.data, stderr: "", truncated: out.truncated };
+    }
+
+    const text = textOutputFromOk(ok);
+    if (text !== null) return { stdout: text, stderr: "", truncated: false };
+
+    return { stdout: "", stderr: "", truncated: false };
+  }
+
+  /** Get buffered stderr from the daemon. */
+  async jobError(
+    jobId: string,
+    tailBytes?: number,
+  ): Promise<{ stderr: string; truncated?: boolean }> {
+    try {
+      const requestId = await this.#send({
+        JobOutput: { id: jobId, stdout_bytes: null, stderr_bytes: tailBytes ?? null },
+      });
+      const ok = okRecord(await this.#waitForResponse(requestId));
+      if (ok && "JobOutput" in ok) {
+        const out = (
+          ok as {
+            JobOutput: {
+              stdout: StreamText;
+              stderr: StreamText;
+              stderr_pty_merged: boolean;
+            };
+          }
+        ).JobOutput;
+        return { stderr: out.stderr.data, truncated: out.stderr.truncated };
+      }
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
+      if (isNoBufferedOutputError(error)) return { stderr: "", truncated: false };
+    }
+
+    const response = await this.#rawEvalAndWait(`:err ${jobId}`);
+    const ok = okRecord(response);
+    if (ok && "Output" in ok) {
+      const out = (ok as { Output: { id: string; data: string; truncated: boolean } }).Output;
+      return { stderr: out.data, truncated: out.truncated };
+    }
+
+    const text = textOutputFromOk(ok);
+    if (text !== null) return { stderr: text, truncated: false };
+
+    return { stderr: "", truncated: false };
+  }
+
+  /** Send stdin to a running job. */
+  async sendInput(id: string, data: string): Promise<void> {
+    const response = await this.#rawEvalAndWait(`:send ${id} ${data}`);
+    if ("Err" in response) {
+      throw new CueError(response.Err.code, response.Err.message);
+    }
+  }
+
+  /** Cancel a pending/running job. */
+  async cancelJob(id: string): Promise<void> {
+    const response = await this.#rawEvalAndWait(`:cancel ${id}`);
+    if ("Err" in response) {
+      throw new CueError(response.Err.code, response.Err.message);
+    }
+  }
+
+  /** Pause a cron. */
+  async pauseCron(id: string): Promise<void> {
+    const response = await this.#rawEvalAndWait(`:pause ${id}`);
+    if ("Err" in response) {
+      throw new CueError(response.Err.code, response.Err.message);
+    }
+  }
+
+  /** Resume a cron. */
+  async resumeCron(id: string): Promise<void> {
+    const response = await this.#rawEvalAndWait(`:resume ${id}`);
+    if ("Err" in response) {
+      throw new CueError(response.Err.code, response.Err.message);
+    }
+  }
+
+  /** Retry a terminal job. */
+  async retryJob(id: string): Promise<StartJobResult> {
+    const response = await this.#rawEvalAndWait(`:retry ${id}`);
+    if ("Err" in response) {
+      throw new CueError(response.Err.code, response.Err.message);
+    }
+
+    const ok = (response as { Ok: Record<string, unknown> }).Ok;
+    if (ok && "ChainCreated" in ok) {
+      const payload = (ok as { ChainCreated: ChainCreatedPayload }).ChainCreated;
+      return {
+        jobId: payload.job_ids[0] ?? payload.chain_id,
+        kind: "chain",
+        chain: payload.chain,
+        warnings: payload.warnings,
+      };
+    }
+    if (ok && "JobCreated" in ok) {
+      const payload = (ok as { JobCreated: JobCreatedPayload }).JobCreated;
+      const jobs = await this.#chainJobsForCreatedJob(payload);
+      if (jobs) {
+        const chainId = String(jobs[0]?.chain_id ?? payload.chain_id);
+        return {
+          jobId: jobs[0]?.id ?? payload.job_id,
+          kind: "chain",
+          chain: this.#chainInfoFromJobs(chainId, `:retry ${id}`, jobs.length, jobs),
+          warnings: payload.warnings,
+        };
+      }
+      return {
+        jobId: payload.job_id,
+        kind: "job",
+        warnings: payload.warnings,
+      };
+    }
+
+    throw new CueError("UNEXPECTED_RESPONSE", "expected JobCreated or ChainCreated response");
+  }
+
+  /** Evaluate a raw daemon command that returns plain text. */
+  async evalText(input: string, mode: Mode = "Job"): Promise<string> {
+    const response = await this.#rawEvalAndWait(input, mode);
+    const ok = okRecord(response);
+    const text = textOutputFromOk(ok);
+    if (text !== null) return text;
+    throw new CueError("UNEXPECTED_RESPONSE", "expected EvalText response");
+  }
+
+  /** Mutate the current session environment with `:env set KEY=VALUE ...`. */
+  async setEnv(assignments: Record<string, string>): Promise<ScopeCreatedPayload> {
+    const parts = Object.entries(assignments).map(([key, value]) => `${key}=${value}`);
+    const response = await this.#rawEvalAndWait(`:env set ${parts.join(" ")}`);
+    const ok = okRecord(response);
+    const scope = scopeCreatedFromOk(ok);
+    if (scope) return scope;
+    throw new CueError("UNEXPECTED_RESPONSE", "expected ScopeCreated response");
+  }
+
+  /** Remove keys from the current session environment with `:env unset KEY ...`. */
+  async unsetEnv(keys: string[]): Promise<ScopeCreatedPayload> {
+    const response = await this.#rawEvalAndWait(`:env unset ${keys.join(" ")}`);
+    const ok = okRecord(response);
+    const scope = scopeCreatedFromOk(ok);
+    if (scope) return scope;
+    throw new CueError("UNEXPECTED_RESPONSE", "expected ScopeCreated response");
+  }
+
+  /** Change the current cue session directory. */
+  async changeDirectory(path: string): Promise<ScopeCreatedPayload> {
+    const response = await this.#rawEvalAndWait(`:cd ${path}`);
+    const ok = okRecord(response);
+    const scope = scopeCreatedFromOk(ok);
+    if (scope) return scope;
+    throw new CueError("UNEXPECTED_RESPONSE", "expected ScopeCreated response");
+  }
+
+  /** List all scopes. */
+  async listScopes(limit?: number): Promise<ScopeInfo[]> {
+    let response: ResponsePayload;
+    try {
+      const requestId = await this.#send({ ListScopes: { limit: limit ?? null } });
+      response = await this.#waitForResponse(requestId);
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
+      response = await this.#rawEvalAndWait(":scopes");
+    }
+
+    const ok = okRecord(response);
+    if (ok && "ScopeListPage" in ok) {
+      return (ok as { ScopeListPage: { scopes: ScopeInfo[]; page: PageInfo } }).ScopeListPage
+        .scopes;
+    }
+    if (ok && "ScopeList" in ok) {
+      return (ok as { ScopeList: ScopeInfo[] }).ScopeList;
+    }
+    if (ok && "ScopeInfo" in ok) {
+      return [(ok as { ScopeInfo: ScopeInfo }).ScopeInfo];
+    }
+    return [];
+  }
+
+  /** Show current env snapshot. */
+  async showEnv(): Promise<string> {
+    try {
+      const requestId = await this.#send({ ShowEnv: { tail_bytes: null } });
+      const text = textOutputFromOk(okRecord(await this.#waitForResponse(requestId)));
+      if (text !== null) return text;
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
+    }
+    return this.evalText(":env");
+  }
+
+  /** Show current config. */
+  async showConfig(): Promise<string> {
+    try {
+      const requestId = await this.#send({ ShowConfig: { tail_bytes: null } });
+      const text = textOutputFromOk(okRecord(await this.#waitForResponse(requestId)));
+      if (text !== null) return text;
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
+    }
+    return this.evalText(":config");
+  }
+
+  /** Show log output. */
+  async showLog(id?: string, limit?: number, tailBytes?: number): Promise<string> {
+    try {
+      const requestId = await this.#send({
+        ShowLog: { id: id ?? null, limit: limit ?? null, tail_bytes: tailBytes ?? null },
+      });
+      const text = textOutputFromOk(okRecord(await this.#waitForResponse(requestId)));
+      if (text !== null) return text;
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
+    }
+    return this.evalText(id ? `:log ${id}` : ":log");
+  }
+
+  /** Schedule a recurring or one-shot cron job.  Returns the cron id. */
+  async addCron(schedule: string, command: string): Promise<string> {
+    const input = `:cron ${schedule} ${command}`;
+    const requestId = await this.#rawEval(input);
+    const response = await this.#waitForResponse(requestId);
+
+    if ("Err" in response) {
+      throw new CueError(response.Err.code, response.Err.message);
+    }
+
+    const ok = (response as { Ok: Record<string, unknown> }).Ok;
+    if (ok && "CronAdded" in ok) {
+      return (ok as { CronAdded: { cron_id: string } }).CronAdded.cron_id;
+    }
+    throw new CueError("UNEXPECTED_RESPONSE", "expected CronAdded response");
+  }
+
+  /** List all cron jobs. */
+  async listCrons(limit?: number): Promise<CronInfo[]> {
+    let response: ResponsePayload;
+    try {
+      const requestId = await this.#send({ ListCrons: { limit: limit ?? null } });
+      response = await this.#waitForResponse(requestId);
+    } catch (error) {
+      if (!(error instanceof CueError)) throw error;
+      response = await this.#rawEvalAndWait(":crons");
+    }
+
+    const ok = okRecord(response);
+    if (ok && "CronListPage" in ok) {
+      return (ok as { CronListPage: { crons: CronInfo[]; page: PageInfo } }).CronListPage.crons;
+    }
+    if (ok && "CronList" in ok) {
+      return (ok as { CronList: CronInfo[] }).CronList;
+    }
+    return [];
+  }
+
+  /** Remove a cron job. */
+  async removeCron(cronId: string): Promise<void> {
+    await this.stopJob(cronId);
+  }
+
+  // ── Event listeners ─────────────────────────────────────────────────
+
+  /** Listen for events on a channel prefix.  E.g. "output:J1" or "jobs". */
+  onEvent(channelPrefix: string, handler: (event: EventPayload) => void): () => void {
+    let listeners = this.#listeners.get(channelPrefix);
+    if (!listeners) {
+      listeners = new Set();
+      this.#listeners.set(channelPrefix, listeners);
+    }
+    listeners.add(handler);
+    return () => {
+      listeners?.delete(handler);
+      if (listeners?.size === 0) this.#listeners.delete(channelPrefix);
+    };
+  }
+
+  /** Close the connection. */
+  close(): void {
+    if (!this.#closed) {
+      this.#socket.destroy();
+    }
+  }
+
+  // ── Internals ────────────────────────────────────────────────────────
+
+  #subscribedChannels = new Set<string>();
+
+  async #ensureSubscribed(channel: string): Promise<void> {
+    if (this.#subscribedChannels.has(channel)) return;
+    await this.subscribe([channel]);
+    this.#subscribedChannels.add(channel);
+  }
+
+  #send(payload: RequestPayload): Promise<number> {
+    if (this.#closed) throw new Error("connection closed");
+
+    const id = this.#nextId++;
+    const request: RequestEnvelope = { type: "request", id, payload };
+    const frame = this.#encodeFrame(request);
+    this.#socket.write(frame);
+
+    return Promise.resolve(id);
+  }
+
+  #waitForResponse(id: number, timeoutMs = 30_000): Promise<ResponsePayload> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#pending.delete(id);
+        reject(new Error(`request ${id} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      this.#pending.set(id, { resolve, reject, timer });
+    });
+  }
+
+  #onData(chunk: Buffer): void {
+    this.#buffer = Buffer.concat([this.#buffer, chunk]);
+
+    while (this.#buffer.length >= 4) {
+      const len = this.#buffer.readUInt32BE(0);
+      if (len > MAX_MESSAGE_SIZE) {
+        this.#onError(new Error(`message too large: ${len} bytes`));
+        return;
+      }
+      if (this.#buffer.length < 4 + len) break; // need more data
+
+      const body = this.#buffer.subarray(4, 4 + len);
+      this.#buffer = this.#buffer.subarray(4 + len);
+
+      try {
+        const msg: CueMessage = JSON.parse(body.toString("utf-8"));
+        this.#dispatch(msg);
+      } catch (err) {
+        this.#onError(new Error(`failed to parse message: ${(err as Error).message}`));
+        return;
+      }
+    }
+  }
+
+  #dispatch(msg: CueMessage): void {
+    if (msg.type === "response") {
+      const pending = this.#pending.get(msg.id);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.#pending.delete(msg.id);
+        pending.resolve(msg.payload);
+      }
+    } else if (msg.type === "event") {
+      this.#dispatchEvent(msg.payload);
+    }
+    // request messages are not expected on the client side
+  }
+
+  #dispatchEvent(payload: EventPayload): void {
+    // Route to channel-specific listeners
+    let channel: string | null = null;
+
+    if ("JobStateChanged" in payload) {
+      channel = `jobs`;
+    } else if ("JobCreated" in payload) {
+      channel = `jobs`;
+    } else if ("ChainStarted" in payload) {
+      channel = `jobs`;
+    } else if ("ChainProgress" in payload) {
+      channel = `jobs`;
+    } else if ("ChainFinished" in payload) {
+      channel = `jobs`;
+    } else if ("ScriptFinished" in payload) {
+      const fin = (payload as { ScriptFinished: ScriptFinishedEvent }).ScriptFinished;
+      this.#recentScriptFinished.push(fin);
+      if (this.#recentScriptFinished.length > 32) this.#recentScriptFinished.shift();
+      channel = `jobs`;
+    } else if ("JobRemoved" in payload) {
+      channel = `jobs`;
+    } else {
+      const chunk = textFromOutputEvent(payload);
+      if (!chunk) {
+        if ("OutputEof" in payload) {
+          const jobId = (payload as { OutputEof: { id: string } }).OutputEof.id;
+          channel = `output:${jobId}`;
+        }
+      } else {
+        channel = `output:${chunk.id}`;
+      }
+    }
+
+    if (channel) {
+      const notify = (listeners: Set<(event: EventPayload) => void> | undefined) => {
+        if (!listeners) return;
+        for (const handler of listeners) {
+          try {
+            handler(payload);
+          } catch {
+            // swallow listener errors
+          }
+        }
+      };
+      notify(this.#listeners.get(channel));
+      if (channel.startsWith("output:")) notify(this.#listeners.get("output:"));
+    }
+  }
+
+  #onError(err: Error): void {
+    if (!this.#closed) {
+      this.#rejectAll(err);
+      this.#socket.destroy();
+    }
+  }
+
+  #rejectAll(error: Error): void {
+    for (const [, pending] of this.#pending) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.#pending.clear();
+  }
+
+  #encodeFrame(msg: CueMessage): Buffer {
+    const json = Buffer.from(JSON.stringify(msg), "utf-8");
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(json.length, 0);
+    return Buffer.concat([len, json]);
+  }
+
+  async #readBufferedJobResult(
+    firstJobId: string,
+    chainJobIds: string[],
+    warnings: string[] = [],
+  ): Promise<JobResult> {
+    const stdoutParts: string[] = [];
+    const stderrParts: string[] = [];
+    let finalStatus: JobStatus = "Done";
+    let finalExit: number | null = null;
+
+    for (const jobId of chainJobIds) {
+      const info = await this.jobStatus(jobId);
+      if (info) {
+        if (info.status !== "Done") finalStatus = info.status;
+        if (info.exit_code != null && info.exit_code !== 0) finalExit = info.exit_code;
+      }
+
+      const out = await this.jobOutput(jobId);
+      if (chainJobIds.length === 1) {
+        stdoutParts.push(out.stdout);
+      } else if (out.stdout.length > 0) {
+        stdoutParts.push(out.stdout.trimEnd());
+      }
+
+      const err = await this.jobError(jobId);
+      if (chainJobIds.length === 1) {
+        stderrParts.push(err.stderr);
+      } else if (err.stderr.length > 0) {
+        stderrParts.push(err.stderr.trimEnd());
+      }
+    }
+
+    return {
+      jobId: firstJobId,
+      status: finalStatus,
+      stdout: stdoutParts.join(chainJobIds.length === 1 ? "" : "\n"),
+      stderr: stderrParts.join(chainJobIds.length === 1 ? "" : "\n"),
+      exitCode: finalExit,
+      timedOut: false,
+      warnings,
+    };
+  }
+
+  async #collectJobOutput(
+    firstJobId: string,
+    chainJobIds: string[],
+    timeoutMs: number,
+    warnings: string[] = [],
+    chainId?: string,
+    expectedJobCount = chainJobIds.length,
+  ): Promise<JobResult> {
+    let expectedJobs = expectedJobCount;
+    const dynamicChain = expectedJobs > chainJobIds.length;
+
+    // For single-job commands, check if already done (fast-command race).
+    if (!dynamicChain && chainJobIds.length === 1) {
+      const jobId = chainJobIds[0];
+      const initial = await this.jobStatus(jobId);
+      if (initial) {
+        if (["Done", "Failed", "Killed", "Cancelled"].includes(initial.status)) {
+          return this.#readBufferedJobResult(jobId, [jobId], warnings);
+        }
+      }
+    } else if (!dynamicChain) {
+      // For chains, check if ALL leaves are already done (very fast chains).
+      let allDone = true;
+      for (const jid of chainJobIds) {
+        const info = await this.jobStatus(jid);
+        if (!info || !["Done", "Failed", "Killed", "Cancelled"].includes(info.status)) {
+          allDone = false;
+          break;
+        }
+      }
+      if (allDone) {
+        return this.#readBufferedJobResult(firstJobId, chainJobIds, warnings);
+      }
+    }
+
+    const isChain = expectedJobs > 1;
+
+    return new Promise((resolve, reject) => {
+      const stdoutChunks: string[] = [];
+      const stderrChunks: string[] = [];
+      let stdoutLen = 0;
+      let stderrLen = 0;
+      let resolved = false;
+      let poll: ReturnType<typeof setInterval> | undefined;
+      const terminal: JobStatus[] = ["Done", "Failed", "Killed", "Cancelled"];
+
+      const timer = setTimeout(() => {
+        if (resolved) return;
+        resolved = true;
+        if (poll) clearInterval(poll);
+        cleanup();
+        resolve({
+          jobId: firstJobId,
+          status: "Running",
+          stdout: stdoutChunks.join(""),
+          stderr: stderrChunks.join(""),
+          exitCode: null,
+          timedOut: true,
+          warnings,
+        });
+      }, timeoutMs);
+
+      const unsubs: Array<() => void> = [];
+      const onOutput = (event: EventPayload) => {
+        const chunk = textFromOutputEvent(event);
+        if (!chunk) return;
+        if (chunk.stream === "stdout") {
+          if (stdoutLen < MAX_OUTPUT_BUFFER) {
+            stdoutChunks.push(chunk.data);
+            stdoutLen += chunk.data.length;
+          }
+        } else {
+          if (stderrLen < MAX_OUTPUT_BUFFER) {
+            stderrChunks.push(chunk.data);
+            stderrLen += chunk.data.length;
+          }
+        }
+      };
+      for (const jid of chainJobIds) unsubs.push(this.onEvent(`output:${jid}`, onOutput));
+
+      const addChainJob = (jobId: string) => {
+        if (chainJobIds.includes(jobId)) return;
+        chainJobIds.push(jobId);
+        unsubs.push(this.onEvent(`output:${jobId}`, onOutput));
+        void this.subscribe([`output:${jobId}`]);
+      };
+
+      // Track terminal state per job. Polling covers the race where the terminal
+      // event arrives before this collector has installed its listener.
+      const terminalSet = new Set<string>();
+
+      const maybeResolve = async () => {
+        if (resolved) return;
+        const trackedJobIds = chainJobIds.slice(0, expectedJobs);
+        if (trackedJobIds.length < expectedJobs) return;
+        for (const jid of trackedJobIds) {
+          if (!terminalSet.has(jid)) return;
+        }
+        chainJobIds.splice(0, chainJobIds.length, ...trackedJobIds);
+        resolved = true;
+        clearTimeout(timer);
+        if (poll) clearInterval(poll);
+        await new Promise((r) => setTimeout(r, 50));
+        cleanup();
+        try {
+          resolve(await this.#readBufferedJobResult(firstJobId, chainJobIds, warnings));
+        } catch (error) {
+          reject(error);
+        }
+      };
+
+      const unsubJob = this.onEvent(`jobs`, (event) => {
+        if ("JobCreated" in event && chainId) {
+          const created = (event as { JobCreated: JobCreatedEvent }).JobCreated;
+          if (created.chain_id === chainId) addChainJob(created.job_id);
+        }
+        if ("ChainProgress" in event && chainId) {
+          const progress = (event as { ChainProgress: { chain: ChainInfo } }).ChainProgress;
+          if (progress.chain.id === chainId) {
+            for (const job of progress.chain.jobs) {
+              if (job.job_id) addChainJob(job.job_id);
+            }
+            const terminalJobs = progress.chain.jobs.filter((job) =>
+              terminal.includes(normalizeJobStatus(job.status)),
+            );
+            if (terminalJobs.some((job) => normalizeJobStatus(job.status) !== "Done")) {
+              expectedJobs = terminalJobs.filter((job) => job.job_id).length;
+              void maybeResolve();
+            } else if (terminalJobs.length === progress.chain.jobs.length) {
+              expectedJobs = progress.chain.jobs.filter((job) => job.job_id).length;
+              void maybeResolve();
+            }
+          }
+        }
+        if ("ChainFinished" in event && chainId) {
+          const finished = (event as { ChainFinished: { chain_id: string; success: boolean } })
+            .ChainFinished;
+          if (finished.chain_id === chainId) {
+            expectedJobs = chainJobIds.length;
+            void maybeResolve();
+          }
+        }
+        if ("JobStateChanged" in event) {
+          const change = (event as { JobStateChanged: JobStateChangedEvent }).JobStateChanged;
+
+          // For single jobs, only care about our job.
+          // For chains, track state changes for any known leaf, or any leaf with our chain id.
+          if (!isChain && change.job_id !== firstJobId) return;
+          if (isChain && change.chain_id !== chainId && !chainJobIds.includes(change.job_id)) {
+            return;
+          }
+          if (isChain && change.chain_id === chainId) addChainJob(change.job_id);
+
+          const newState = normalizeJobStatus((change as { new_state: unknown }).new_state);
+          if (terminal.includes(newState)) {
+            terminalSet.add(change.job_id);
+            void maybeResolve();
+          }
+        }
+      });
+
+      poll = setInterval(() => {
+        if (resolved) return;
+        void (async () => {
+          try {
+            const observedJobs = isChain && chainId ? await this.listJobs() : [];
+            if (isChain && chainId) {
+              for (const job of observedJobs) {
+                if (job.chain_id != null && String(job.chain_id) === chainId) addChainJob(job.id);
+              }
+            }
+            for (const jid of chainJobIds) {
+              const info =
+                observedJobs.find((job) => job.id === jid) ?? (await this.jobStatus(jid));
+              if (info && terminal.includes(info.status)) {
+                terminalSet.add(jid);
+                if (isChain && info.status !== "Done") {
+                  const index = typeof info.chain_index === "number" ? info.chain_index : undefined;
+                  expectedJobs = Math.min(
+                    expectedJobs,
+                    index === undefined ? chainJobIds.indexOf(jid) + 1 : index + 1,
+                  );
+                }
+              }
+            }
+            await maybeResolve();
+          } catch (error) {
+            if (resolved) return;
+            resolved = true;
+            clearTimeout(timer);
+            if (poll) clearInterval(poll);
+            cleanup();
+            reject(error);
+          }
+        })();
+      }, 100);
+
+      function cleanup() {
+        unsubJob();
+        for (const u of unsubs) u();
+      }
+    });
+  }
+}
+
+// ── Public types ───────────────────────────────────────────────────────────
+
+export type ResourceNeeds = Record<string, string | number>;
+
+export interface RunEvalOptions {
+  /** Working directory override. */
+  cwd?: string;
+  /** Whether to allocate a PTY. Defaults to false for API/tool runs. */
+  pty?: boolean;
+  /** Resource quantities to reserve before spawning, encoded as `need.<key>=<quantity>`. */
+  needs?: ResourceNeeds;
+}
+
+export interface RunJobOptions extends RunEvalOptions {
+  /** Timeout in seconds (default: 300 = 5 min). */
+  timeout?: number;
+}
+
+export interface StartJobOptions extends RunEvalOptions {}
+
+export interface RunScriptOptions {
+  /** Source path to associate with the script (display label only when input is inline). */
+  path: string;
+  /** Raw `.cue` script body to execute. */
+  input: string;
+  /** Foreground wait budget in seconds. Defaults to 300. */
+  timeout?: number;
+}
+
+export interface ScriptItemSummary {
+  index: number;
+  source: string;
+  kind: ScriptItemResult["kind"];
+  jobIds: string[];
+  chainId: string | null;
+  cronId: string | null;
+  message?: string;
+  stdout: string;
+  stderr: string;
+  status: JobStatus;
+  exitCode: number | null;
+  jobs: JobInfo[];
+}
+
+export interface ScriptResult {
+  scriptId: string;
+  source: ScriptSource;
+  status: ScriptRunStatus;
+  /** Aggregated exit code reported by ScriptFinished. */
+  exitCode: number | null;
+  failedItemIndex: number | null;
+  items: ScriptItemSummary[];
+  timedOut: boolean;
+}
+
+export interface JobResult {
+  jobId: string;
+  status: JobStatus;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  warnings: string[];
+}
+
+/** Result from startJob (background mode). */
+export interface StartJobResult {
+  jobId: string;
+  /** "job" for single commands, "chain" for chain syntax. */
+  kind: "job" | "chain";
+  /** Pipeline text for single jobs. */
+  pipeline?: string;
+  /** Full chain info for chain commands. */
+  chain?: ChainInfo;
+  warnings: string[];
+}
+
+export class CueError extends Error {
+  code: string;
+
+  constructor(code: string, message: string) {
+    super(`cue-shell error [${code}]: ${message}`);
+    this.name = "CueError";
+    this.code = code;
+  }
+}
+
+function unsupportedProtocolError(message: string, cause?: unknown): CueError {
+  const detail = cause instanceof Error ? ` Detail: ${cause.message}` : "";
+  return new CueError("UNSUPPORTED_PROTOCOL", `${message}.${detail}`);
+}

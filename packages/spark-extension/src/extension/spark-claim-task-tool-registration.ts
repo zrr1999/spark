@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import type { RoleRegistry } from "@zendev-lab/pi-roles";
+import type { RoleRegistry } from "@zendev-lab/spark-roles";
 import {
   nowIso,
   stableId,
@@ -9,14 +9,14 @@ import {
   type TaskPlan,
   type ProjectRef,
   type TaskTodo,
-} from "@zendev-lab/pi-extension-api";
+} from "@zendev-lab/spark-extension-api";
 import {
   defaultTaskGraphStore,
   isUnfinishedTaskStatus,
   normalizeTaskPlan,
   taskPlanReadiness,
   type TaskGraph,
-} from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-tasks";
 import {
   compactTaskDetail,
   normalizeOptionalToolString,

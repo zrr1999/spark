@@ -2,7 +2,7 @@ import {
   workflowRunNextSteps,
   type WorkflowRunRecord,
   type WorkflowRunStatusSummary,
-} from "@zendev-lab/pi-workflows";
+} from "@zendev-lab/spark-workflows";
 
 export function appendCompactSparkWorkflowRunStatusLines(
   lines: string[],

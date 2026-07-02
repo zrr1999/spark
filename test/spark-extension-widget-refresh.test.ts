@@ -9,15 +9,15 @@ import type {
   SparkWidgetTheme,
   SparkWidgetTui,
 } from "../packages/spark-extension/src/ui/spark-widget.ts";
-import { RoleRegistry, builtinRoleRef } from "@zendev-lab/pi-roles";
-import { defaultWorkflowRunStore } from "../packages/pi-workflows/src/index.ts";
+import { RoleRegistry, builtinRoleRef } from "@zendev-lab/spark-roles";
+import { defaultWorkflowRunStore } from "../packages/spark-workflows/src/index.ts";
 import {
   killActiveSparkRoleRunProcesses,
   listActiveSparkRoleRunProcesses,
   runSparkTask,
 } from "@zendev-lab/spark-runtime";
-import type { RunRef, TaskPlan } from "@zendev-lab/pi-extension-api";
-import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
+import type { RunRef, TaskPlan } from "@zendev-lab/spark-extension-api";
+import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
 import {
   setSessionGoal,
   updateSessionGoalStatus,

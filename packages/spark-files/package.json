@@ -1,0 +1,39 @@
+{
+  "name": "@zendev-lab/spark-files",
+  "version": "0.1.0",
+  "description": "Working-tree file tools (read/edit/write/grep/find/ls) for Spark extension hosts, with Pi-parity truncation and diff semantics.",
+  "keywords": [
+    "file-tools",
+    "spark-extension",
+    "spark-package"
+  ],
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./extension": "./src/extension.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@zendev-lab/spark-extension-api": "workspace:^",
+    "diff": "^8.0.4",
+    "ignore": "^7.0.5",
+    "minimatch": "^10.2.5",
+    "typebox": "^1.2.13"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension-entry.ts"
+    ]
+  }
+}

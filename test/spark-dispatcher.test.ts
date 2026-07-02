@@ -71,6 +71,39 @@ void test("runSparkDispatcher invokes injected launcher with the selected target
   assert.deepEqual(calls, [{ target: "daemon", argv: ["workspace", "ls"] }]);
 });
 
+void test("runSparkDispatcher fails fast for non-TTY TUI while preserving headless shims", async () => {
+  const stderr: string[] = [];
+  const calls: Array<{ target: string; argv: string[] }> = [];
+  const io = {
+    stdin: { isTTY: false },
+    stdout: { isTTY: true, write: () => true },
+    stderr: {
+      write: (text: string) => {
+        stderr.push(text);
+        return true;
+      },
+    },
+  };
+  const launcher = {
+    run: async (target: "tui" | "daemon" | "cockpit", argv: string[]) => {
+      calls.push({ target, argv });
+      return 0;
+    },
+  };
+
+  assert.equal(await runSparkDispatcher([], io, launcher), 2);
+  assert.deepEqual(calls, []);
+  assert.match(stderr.join(""), /requires an interactive terminal/u);
+  assert.match(stderr.join(""), /spark --print <prompt>/u);
+
+  assert.equal(await runSparkDispatcher(["--print", "hello"], io, launcher), 0);
+  assert.equal(await runSparkDispatcher(["tui", "--mode", "rpc"], io, launcher), 0);
+  assert.deepEqual(calls, [
+    { target: "tui", argv: ["--print", "hello"] },
+    { target: "tui", argv: ["--mode", "rpc"] },
+  ]);
+});
+
 void test("runSparkDispatcher renders help and unknown-command diagnostics without dispatching", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];

@@ -8,7 +8,7 @@ import {
   type WorkflowRunSnapshot,
   type WorkflowWebSearchInput,
   type WorkflowArtifactRecordInput,
-} from "@zendev-lab/pi-workflows";
+} from "@zendev-lab/spark-workflows";
 import type { SparkDynamicWorkflowEventStore } from "./spark-dynamic-workflow-event-store.ts";
 import type {
   SparkDynamicWorkflowRunOptions,

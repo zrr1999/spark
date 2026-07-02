@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defaultTaskGraphStore, type TaskTodoOp } from "@zendev-lab/pi-tasks";
+import { defaultTaskGraphStore, type TaskTodoOp } from "@zendev-lab/spark-tasks";
 import { currentSparkProject, sparkSessionKey } from "./session-state.ts";
 import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
 import { resolveSessionClaimedTask } from "./task-claim-selection.ts";

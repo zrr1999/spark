@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { ArtifactStore, validateArtifact } from "@zendev-lab/pi-artifacts";
+import { ArtifactStore, validateArtifact } from "@zendev-lab/spark-artifacts";
 import {
   formatJsonFile,
   newRef,
@@ -15,9 +15,9 @@ import {
   writeJsonFileAtomic,
   writeTextFileAtomic,
   type TaskPlan,
-} from "@zendev-lab/pi-extension-api";
-import { builtinRoleRef, createBuiltinRoles } from "@zendev-lab/pi-roles";
-import { TaskGraph } from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-extension-api";
+import { builtinRoleRef, createBuiltinRoles } from "@zendev-lab/spark-roles";
+import { TaskGraph } from "@zendev-lab/spark-tasks";
 import { renderSparkActiveSystemPrompt } from "../packages/spark-extension/src/extension/spark-active-injection.ts";
 import { isGenericTaskNameForTitle } from "../packages/spark-extension/src/extension/spark-claim-task-tool-registration.ts";
 import { isPlaceholderProjectTitle } from "../packages/spark-extension/src/extension/spark-graph-invariants.ts";

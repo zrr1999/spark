@@ -290,11 +290,29 @@ export const invocationUpdatePayloadSchema = z.object({
   payload: jsonObjectSchema.default({}),
 });
 
+export const invocationLogChunkStreamSchema = z.enum([
+  "stdout",
+  "stderr",
+  "system",
+  "agent",
+  "assistant",
+  "tool",
+]);
+
 export const invocationLogChunkPayloadSchema = z.object({
   runtimeInvocationId: prefixedIdSchema("inv"),
-  stream: z.enum(["stdout", "stderr", "system", "agent"]),
+  /**
+   * Ordered invocation output stream. `assistant` chunks are token/text deltas
+   * for chat transcript assembly; `agent` remains accepted for legacy runtime
+   * output and is treated as readable assistant output by older Cockpit views.
+   */
+  stream: invocationLogChunkStreamSchema,
+  /** Monotonic per-invocation sequence used for replay, dedupe, and transcript assembly. */
   sequence: z.number().int().nonnegative(),
+  /** Chunk payload. For `assistant`, this is the text delta to append in sequence order. */
   content: z.string(),
+  /** Optional runtime metadata, e.g. source event id, tool name, or delta kind. */
+  metadata: jsonObjectSchema.optional(),
 });
 
 export const daemonEventPayloadSchema = jsonObjectSchema;
@@ -472,6 +490,7 @@ export type HumanResponseDeliverPayload = z.infer<typeof humanResponseDeliverPay
 export type HumanResponseAckPayload = z.infer<typeof humanResponseAckPayloadSchema>;
 export type TaskGraphSnapshotPayload = z.infer<typeof taskGraphSnapshotPayloadSchema>;
 export type InvocationUpdatePayload = z.infer<typeof invocationUpdatePayloadSchema>;
+export type InvocationLogChunkStream = z.infer<typeof invocationLogChunkStreamSchema>;
 export type InvocationLogChunkPayload = z.infer<typeof invocationLogChunkPayloadSchema>;
 export type DaemonEventPayload = z.infer<typeof daemonEventPayloadSchema>;
 export type ArtifactProjectionPayload = z.infer<typeof artifactProjectionPayloadSchema>;

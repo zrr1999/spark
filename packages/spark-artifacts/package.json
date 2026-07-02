@@ -1,0 +1,31 @@
+{
+  "name": "@zendev-lab/spark-artifacts",
+  "version": "0.1.0",
+  "description": "Artifact/evidence storage and canonical artifact tool for Spark capability hosts.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./extension": "./src/extension.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@zendev-lab/spark-extension-api": "workspace:^",
+    "typebox": "^1.2.13"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension-entry.ts"
+    ]
+  }
+}

@@ -11,6 +11,10 @@ const sourceFilePattern = /\.(?:c|m)?(?:t|j)sx?$/u;
 const importSpecifierPattern =
   /\bfrom\s+["']([^"']+)["']|\bimport\s+["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)|\brequire\s*\(\s*["']([^"']+)["']\s*\)/gu;
 
+const foundationContractPackages = new Set([
+  join(root, "packages", "spark-protocol"),
+  join(root, "packages", "spark-extension-api"),
+]);
 const violations = [];
 const piTuiSpecifier = "@earendil-works/pi-tui";
 const skippedActiveDocumentationPattern = /^docs\/(?:navia\/|spark-daemon-unification\.md$)/u;
@@ -22,7 +26,18 @@ const intentionalLegacyNaviaLinePattern =
 const allowedPiTuiImportFiles = new Set([
   join(root, "apps", "spark", "src", "tui", "pi-tui-adapter.ts"),
 ]);
-const allowedPiTuiPackageDirs = new Set([join(root, "packages", "spark-tui")]);
+const allowedPiTuiPackageDirs = new Set([
+  join(root, "packages", "spark-tui"),
+  join(root, "packages", "spark-text"),
+]);
+const piAllowedSparkFoundationSpecifiers = [
+  "@zendev-lab/spark-artifacts",
+  "@zendev-lab/spark-extension-api",
+  "@zendev-lab/spark-loop",
+  "@zendev-lab/spark-modes",
+  "@zendev-lab/spark-tasks",
+  "@zendev-lab/spark-workflows",
+];
 
 for (const packageDir of await listWorkspaceDirs()) {
   const manifest = await readPackageManifest(packageDir);
@@ -30,6 +45,9 @@ for (const packageDir of await listWorkspaceDirs()) {
   const boundary = classifyBoundary(packageDir, manifest);
   if (boundary === "other") continue;
   await checkPackageManifest(packageDir, manifest, boundary);
+  if (foundationContractPackages.has(packageDir)) {
+    await checkFoundationContractPackage(packageDir, manifest);
+  }
   await checkSourceTree(join(packageDir, "src"), boundary);
   await checkSourceTree(join(packageDir, "server"), boundary);
   await checkSourceTree(join(packageDir, "extensions"), boundary);
@@ -115,6 +133,21 @@ function classifyBoundary(packageDir, manifest) {
   return "other";
 }
 
+async function checkFoundationContractPackage(packageDir, manifest) {
+  const packageJsonPath = join(packageDir, "package.json");
+  for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+    const deps = manifest[field];
+    if (!deps || typeof deps !== "object") continue;
+    for (const name of Object.keys(deps)) {
+      if (isSparkAppInternalSpecifier(name) || isCockpitSpecifier(name)) {
+        violations.push(
+          `${formatPath(packageJsonPath)}: ${field}.${name} (foundation contract packages must not depend on app or cockpit adapters)`,
+        );
+      }
+    }
+  }
+}
+
 async function checkPackageManifest(packageDir, manifest, boundary) {
   const packageJsonPath = join(packageDir, "package.json");
   for (const field of [
@@ -190,7 +223,22 @@ function isAllowedPiTuiImportPath(path) {
 function forbiddenSpecifierReason(specifier, boundary) {
   if (boundary === "pi") {
     if (isCockpitSpecifier(specifier)) return "pi-* packages must not depend on cockpit packages";
-    if (isSparkSpecifier(specifier)) return "pi-* packages must not depend on Spark packages";
+    if (isSparkSpecifier(specifier) && !isPiAllowedSparkFoundationSpecifier(specifier)) {
+      return "pi-* packages may depend only on renamed Spark foundation packages, not Spark product packages";
+    }
+  }
+  if (boundary === "spark-extension") {
+    if (specifier === "@zendev-lab/spark-tui" || specifier.startsWith("@zendev-lab/spark-tui/")) {
+      return "spark-extension must use @zendev-lab/spark-text instead of @zendev-lab/spark-tui";
+    }
+  }
+  if (boundary === "daemon-app") {
+    if (
+      specifier === "@zendev-lab/spark-tui-app" ||
+      specifier.startsWith("@zendev-lab/spark-tui-app/")
+    ) {
+      return "spark-daemon must use @zendev-lab/spark-host/headless-loader instead of @zendev-lab/spark-tui-app";
+    }
   }
   if (boundary === "spark-core" || boundary === "spark-extension") {
     if (isCockpitSpecifier(specifier)) {
@@ -213,6 +261,12 @@ function isSparkSpecifier(specifier) {
     return false;
   }
   return specifier.startsWith("@zendev-lab/spark") || specifier.startsWith("spark-");
+}
+
+function isPiAllowedSparkFoundationSpecifier(specifier) {
+  return piAllowedSparkFoundationSpecifiers.some(
+    (allowed) => specifier === allowed || specifier.startsWith(`${allowed}/`),
+  );
 }
 
 function isCockpitSpecifier(specifier) {

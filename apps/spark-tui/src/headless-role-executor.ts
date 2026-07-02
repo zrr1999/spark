@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { RoleRef, RunRef } from "@zendev-lab/pi-extension-api";
+import type { RoleRef, RunRef } from "@zendev-lab/spark-extension-api";
 
 import {
   assistantMessageToText,
@@ -52,6 +52,7 @@ export interface SparkHeadlessRoleInstructionInput {
   launch?: "fresh" | "forked";
   forkFromSession?: string;
   model?: string;
+  onEvent?: (event: unknown) => void | Promise<void>;
 }
 
 export interface SparkHeadlessRoleInstructionResult {
@@ -67,6 +68,7 @@ export interface SparkHeadlessSessionRunInput {
   prompt: string;
   reset?: boolean;
   signal?: AbortSignal;
+  timeoutMs?: number;
   sparkHome?: string;
   onEvent?: (event: unknown) => void | Promise<void>;
 }
@@ -120,17 +122,22 @@ export async function runSparkHeadlessSession(
   const unsubscribeDaemon = services.runtime.onDaemonEvent((event) => {
     recordEvent({ type: "daemon_event", event });
   });
-  const abort = () => services.agentLoop.abort(abortReason(input.signal));
-  if (input.signal?.aborted) abort();
-  else input.signal?.addEventListener("abort", abort, { once: true });
+  const abort = (reason?: string) => services.agentLoop.abort(reason ?? abortReason(input.signal));
+  const abortFromSignal = () => abort();
+  if (input.signal?.aborted) abortFromSignal();
+  else input.signal?.addEventListener("abort", abortFromSignal, { once: true });
 
   try {
     const session = new SparkAgentSession(services);
-    const result = await session.run({
-      sessionId: input.sessionId,
-      prompt: input.prompt,
-      reset: input.reset,
-    });
+    const result = await runWithHeadlessTimeout(
+      session.run({
+        sessionId: input.sessionId,
+        prompt: input.prompt,
+        reset: input.reset,
+      }),
+      input.timeoutMs,
+      abort,
+    );
     return {
       sessionId: result.sessionId,
       sessionPath: result.sessionPath,
@@ -141,7 +148,7 @@ export async function runSparkHeadlessSession(
       ...(input.onEvent ? { eventsStreamed: true } : {}),
     };
   } finally {
-    input.signal?.removeEventListener("abort", abort);
+    input.signal?.removeEventListener("abort", abortFromSignal);
     unsubscribe();
     unsubscribeDaemon();
   }
@@ -169,24 +176,33 @@ export async function runSparkHeadlessRoleInstruction(
   applyAllowedTools(services, input.role.allowedTools);
   if (input.model?.trim()) selectHeadlessModel(services, input.model.trim());
 
+  const recordEvent = (event: unknown) => {
+    jsonEvents.push(event);
+    void input.onEvent?.(event);
+  };
   const unsubscribe = services.agentLoop.onEvent((event) => {
-    jsonEvents.push(serializeLoopEvent(event));
+    recordEvent(serializeLoopEvent(event));
   });
   const unsubscribeDaemon = services.runtime.onDaemonEvent((event) => {
-    jsonEvents.push({ type: "daemon_event", event });
+    recordEvent({ type: "daemon_event", event });
   });
-  const abort = () => services.agentLoop.abort(abortReason(input.signal));
-  if (input.signal?.aborted) abort();
-  else input.signal?.addEventListener("abort", abort, { once: true });
+  const abort = (reason?: string) => services.agentLoop.abort(reason ?? abortReason(input.signal));
+  const abortFromSignal = () => abort();
+  if (input.signal?.aborted) abortFromSignal();
+  else input.signal?.addEventListener("abort", abortFromSignal, { once: true });
 
   try {
     const session = new SparkAgentSession(services);
-    const result = await session.run({
-      sessionId: headlessSessionId(input),
-      prompt: input.instruction.instruction,
-      reset: true,
-      ...(launch === "forked" && forkFromSession ? { forkFromSession } : {}),
-    });
+    const result = await runWithHeadlessTimeout(
+      session.run({
+        sessionId: headlessSessionId(input),
+        prompt: input.instruction.instruction,
+        reset: true,
+        ...(launch === "forked" && forkFromSession ? { forkFromSession } : {}),
+      }),
+      input.timeoutMs,
+      abort,
+    );
     const status = statusForAssistant(result.assistant, input.signal);
     return {
       record: {
@@ -222,10 +238,53 @@ export async function runSparkHeadlessRoleInstruction(
       jsonEvents,
     };
   } finally {
-    input.signal?.removeEventListener("abort", abort);
+    input.signal?.removeEventListener("abort", abortFromSignal);
     unsubscribe();
     unsubscribeDaemon();
   }
+}
+
+export class SparkHeadlessTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`Spark headless session timed out after ${timeoutMs}ms`);
+    this.name = "SparkHeadlessTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+async function runWithHeadlessTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number | undefined,
+  abort: (reason?: string) => void,
+): Promise<T> {
+  const normalizedTimeoutMs = normalizeHeadlessTimeoutMs(timeoutMs);
+  if (normalizedTimeoutMs === undefined) return await promise;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          const error = new SparkHeadlessTimeoutError(normalizedTimeoutMs);
+          abort(error.message);
+          reject(error);
+        }, normalizedTimeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function normalizeHeadlessTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  if (timeoutMs === undefined) return undefined;
+  if (!Number.isFinite(timeoutMs)) return undefined;
+  const normalized = Math.floor(timeoutMs);
+  return normalized > 0 ? normalized : undefined;
 }
 
 function applyAllowedTools(

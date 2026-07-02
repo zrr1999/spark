@@ -10,6 +10,7 @@ import {
   parseSparkInteractionResponse,
   parseSparkSessionView,
   parseSparkViewModelEvent,
+  invocationLogChunkPayloadSchema,
   sparkInteractionRequestSchema,
 } from "@zendev-lab/spark-protocol";
 
@@ -102,6 +103,20 @@ void test("spark protocol validates view model events", () => {
 
   assert.equal(event.version, SPARK_PROTOCOL_VERSION);
   assert.equal(event.type, "session.message");
+});
+
+void test("spark protocol accepts assistant token invocation chunks", () => {
+  const chunk = invocationLogChunkPayloadSchema.parse({
+    runtimeInvocationId: "inv_0123456789abcdef0123456789abcdef",
+    stream: "assistant",
+    sequence: 7,
+    content: "delta",
+    metadata: { source: "stream_event", delta: true },
+  });
+
+  assert.equal(chunk.stream, "assistant");
+  assert.equal(chunk.content, "delta");
+  assert.deepEqual(chunk.metadata, { source: "stream_event", delta: true });
 });
 
 void test("spark protocol validates daemon-routable view and interaction events", () => {

@@ -3,8 +3,8 @@ import {
   defaultArtifactStore,
   type ArtifactFormat,
   type JsonValue,
-} from "@zendev-lab/pi-artifacts";
-import { type RoleRef, type RunRef } from "@zendev-lab/pi-extension-api";
+} from "@zendev-lab/spark-artifacts";
+import { type RoleRef, type RunRef } from "@zendev-lab/spark-extension-api";
 import {
   parseWorkflowScript,
   readSavedWorkflow,
@@ -15,7 +15,7 @@ import {
   type WorkflowFetchContentInput,
   type WorkflowRunResult,
   type WorkflowWebSearchInput,
-} from "@zendev-lab/pi-workflows";
+} from "@zendev-lab/spark-workflows";
 import {
   createSparkWorkflowRoleRunAdapter,
   runRoleInstructionOnly,

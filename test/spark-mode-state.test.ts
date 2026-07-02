@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { ProjectRef } from "@zendev-lab/pi-extension-api";
+import type { ProjectRef } from "@zendev-lab/spark-extension-api";
 import {
   clearSparkPhase,
   loadCurrentProjectState,

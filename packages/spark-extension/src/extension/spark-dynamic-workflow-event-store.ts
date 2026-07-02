@@ -7,7 +7,7 @@ import {
   type RunRef,
   writeJsonFileAtomic,
   readJsonFileOptional,
-} from "@zendev-lab/pi-extension-api";
+} from "@zendev-lab/spark-extension-api";
 import {
   projectWorkflowRunEvents,
   type WorkflowAgentTelemetry,
@@ -18,7 +18,7 @@ import {
   type WorkflowRunEvent,
   type WorkflowRunResult,
   type WorkflowRunSnapshot,
-} from "@zendev-lab/pi-workflows";
+} from "@zendev-lab/spark-workflows";
 import {
   hashWorkflowScript,
   type SparkDynamicWorkflowRunApproval,

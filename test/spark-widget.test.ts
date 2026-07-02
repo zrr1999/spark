@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { visibleWidth } from "@zendev-lab/spark-tui/text";
-import { defaultTaskGraphStore, TaskGraph } from "@zendev-lab/pi-tasks";
+import { defaultTaskGraphStore, TaskGraph } from "@zendev-lab/spark-tasks";
 
 import {
   renderSparkWidgetLines,

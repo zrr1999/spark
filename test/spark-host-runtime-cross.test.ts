@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import piAskExtension from "../packages/pi-ask/src/extension.ts";
-import piCueExtension from "../packages/pi-cue/src/index.ts";
-import piGraftExtension from "../packages/pi-graft/src/extension.ts";
+import piAskExtension from "../packages/spark-ask/src/extension.ts";
+import piCueExtension from "../packages/spark-cue/src/index.ts";
+import piGraftExtension from "../packages/spark-graft/src/extension.ts";
 import { SparkHostRuntime } from "../apps/spark-tui/src/host/runtime.ts";
 
 void test("SparkHostRuntime accepts piCueExtension(pi) without throwing", () => {
@@ -12,7 +12,7 @@ void test("SparkHostRuntime accepts piCueExtension(pi) without throwing", () => 
   const toolNames = host.getAllTools().map((tool) => tool.name);
   assert.ok(toolNames.includes("cue_exec"), `expected cue_exec in ${toolNames.join(",")}`);
   assert.ok(toolNames.includes("cue_jobs"));
-  assert.ok(toolNames.length >= 5, "pi-cue registers multiple tools");
+  assert.ok(toolNames.length >= 5, "spark-cue registers multiple tools");
 });
 
 void test("SparkHostRuntime accepts piGraftExtension(pi) and records its tools", () => {
@@ -37,10 +37,10 @@ void test("SparkHostRuntime accepts piAskExtension(pi) and registers canonical a
   assert.ok(!toolNames.includes("ask_flow"));
 });
 
-void test("SparkHostRuntime survives a session_start event from pi-graft", async () => {
+void test("SparkHostRuntime survives a session_start event from spark-graft", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-cross" });
   piGraftExtension(host as never);
-  // pi-graft registers an on("session_start") handler that defensively reads
+  // spark-graft registers an on("session_start") handler that defensively reads
   // ctx.sessionManager.getBranch() / getEntries(); SparkHostRuntime ships a
   // bare sessionManager stub so the handler must complete without throwing.
   const results = await host.emit("session_start", {});

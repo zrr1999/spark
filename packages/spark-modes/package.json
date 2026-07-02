@@ -1,0 +1,24 @@
+{
+  "name": "@zendev-lab/spark-modes",
+  "version": "0.1.0",
+  "description": "Generic per-turn operating mode (lens) registry, turn-driver resolution, and mode action-tool primitives for Spark capability hosts.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "typebox": "^1.2.13"
+  }
+}

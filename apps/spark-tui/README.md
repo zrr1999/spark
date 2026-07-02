@@ -45,12 +45,12 @@ Default shape:
 ```json
 {
    "extensions": [
-      "@zendev-lab/pi-ask/extension",
-      "@zendev-lab/pi-cue/extension",
-      "@zendev-lab/pi-files/extension",
+      "@zendev-lab/spark-ask/extension",
+      "@zendev-lab/spark-cue/extension",
+      "@zendev-lab/spark-files/extension",
       "@zendev-lab/spark-ai/models-extension",
-      "@zendev-lab/pi-roles/extension",
-      "@zendev-lab/pi-graft/extension",
+      "@zendev-lab/spark-roles/extension",
+      "@zendev-lab/spark-graft/extension",
       "@zendev-lab/spark-extension/extension"
    ],
    "providers": ["@zendev-lab/spark-ai/baidu-oneapi-provider"],
@@ -112,7 +112,7 @@ These features are native Spark TUI app responsibilities and should not be added
 - Spark TUI app skill discovery rooted at builtin/workspace/user `skills` directories.
 - Explicit builtin extension loading for the native host.
 
-Shared extension behavior should stay in extension packages and target `@zendev-lab/pi-extension-api` so the same extension can run on both hosts.
+Shared extension behavior should stay in extension packages and target `@zendev-lab/spark-extension-api` so the same extension can run on both hosts.
 
 ## Baidu OneAPI provider
 
@@ -139,4 +139,4 @@ The exported surface covers host service construction, `SparkAgentSession`, sess
 
 Spark TUI app exposes `@zendev-lab/spark-tui-app/headless-role-executor` for daemon-native role execution. The Spark daemon injects that executor into `@zendev-lab/spark-runtime`, so cockpit-triggered background tasks run through the same in-process Spark agent loop instead of spawning `pi --print --mode json`.
 
-`@zendev-lab/pi-roles` remains available as a legacy generic launcher for hosts that do not inject a native executor, but it is no longer the Spark daemon execution path.
+`@zendev-lab/spark-roles` remains available as a legacy generic launcher for hosts that do not inject a native executor, but it is no longer the Spark daemon execution path.

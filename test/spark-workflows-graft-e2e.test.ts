@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 
-import { runWorkflowScript } from "../packages/pi-workflows/src/index.ts";
+import { runWorkflowScript } from "../packages/spark-workflows/src/index.ts";
 import {
   createSparkWorkflowRoleRunAdapter,
   SPARK_WORKFLOW_GRAFT_ISOLATION_TOOLS,
@@ -19,7 +19,7 @@ import {
   type PiGraftToolContext,
   type PiGraftToolDefinition,
   type PiGraftToolResult,
-} from "../packages/pi-graft/src/index.ts";
+} from "../packages/spark-graft/src/index.ts";
 
 const execFileAsync = promisify(execFile);
 const graftRepo = process.env.GRAFT_REPO ?? resolve(process.cwd(), "../graft");
@@ -140,7 +140,7 @@ void test("workflow graft isolation E2E creates separate candidates for parallel
     for (const handler of seed.handlers.get("session_start") ?? []) await handler({}, toolCtx);
     const seedTools = seed.tools;
     const help = await executeTool(seedTools.get("graft_help"), "graft_help", {}, toolCtx);
-    assert.match(help.content[0].text, /Recommended workflow for agents and pi-graft tools/);
+    assert.match(help.content[0].text, /Recommended workflow for agents and spark-graft tools/);
     const init = await executeTool(seedTools.get("graft_init"), "graft_init", {}, toolCtx);
     assert.match(init.content[0].text, /initialized|already initialized/);
 

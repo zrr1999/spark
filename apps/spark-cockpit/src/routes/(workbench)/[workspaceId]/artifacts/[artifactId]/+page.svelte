@@ -1,5 +1,7 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
+  import SparkUiRenderer from "$lib/SparkUiRenderer.svelte";
+  import { buildArtifactSparkUiReplay } from "$lib/artifact-ui-replay";
   import { enumLabel, formatByteSize, formatRelativeTime } from "$lib/i18n";
   import { workspacePath } from "$lib/workspace-routes";
 
@@ -9,6 +11,14 @@
   let previewCache = $derived(data.cacheBlobs.find((blob) => blob.isPreview));
   let preview = $derived(data.preview);
   let workspaceUrl = $derived(workspacePath({ slug: data.artifact.workspaceSlug }));
+  let sparkUiReplay = $derived(
+    buildArtifactSparkUiReplay({
+      kind: data.artifact.kind,
+      format: data.artifact.format,
+      contentRef: data.artifact.contentRef as Record<string, unknown>,
+      previewText: preview.body?.text ?? null,
+    }),
+  );
 
   function formatRelative(value: string | null) {
     return formatRelativeTime(value, data.locale, common);
@@ -207,6 +217,24 @@
       </p>
     {/if}
   </section>
+
+  {#if sparkUiReplay}
+    <section class="panel" aria-labelledby="spark-ui-replay-title">
+      <div class="panel-header compact">
+        <div>
+          <p class="panel-kicker">{t.sparkUi.kicker}</p>
+          <h2 id="spark-ui-replay-title">{t.sparkUi.title}</h2>
+          <p class="panel-copy">{t.sparkUi.body}</p>
+        </div>
+        <span class="preview-pill ready">
+          {sparkUiReplay.mode === "source" ? t.sparkUi.sourceMode : t.sparkUi.astMode}
+        </span>
+      </div>
+      <div class="spark-ui-replay-body">
+        <SparkUiRenderer document={sparkUiReplay.document} source={sparkUiReplay.source} />
+      </div>
+    </section>
+  {/if}
 
   <section class="panel" aria-labelledby="content-title">
     <div class="panel-header compact">
@@ -460,6 +488,17 @@
 
   .panel > pre {
     border-radius: 0 0 16px 16px;
+  }
+
+  .panel-copy {
+    color: var(--color-ink-subtle);
+    line-height: 1.55;
+    margin-top: 8px;
+    max-width: 72ch;
+  }
+
+  .spark-ui-replay-body {
+    padding: 22px 24px 24px;
   }
 
   .preview-pill {

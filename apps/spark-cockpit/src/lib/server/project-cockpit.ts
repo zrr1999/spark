@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { normalizePiTaskStatusGroup } from "@zendev-lab/pi-tasks";
+import { normalizePiTaskStatusGroup } from "@zendev-lab/spark-tasks";
 import { loadWorkspaceServerControl } from "./projection-services";
 
 function parseJsonObject(value: string | null | undefined): Record<string, unknown> {

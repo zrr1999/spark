@@ -17,7 +17,7 @@ Tools:
 - `task_read` — read-only project/task/TODO/run graph inspection. Use `action: "task_status" | "project_status" | "workspace_status" | "project_list" | "run_status"` for one-task status, one-project status, broad workspace status, project lists, and workflow-run inspection/reconciliation. Scoped status actions are strict: use `workspace_status` for all-project summaries, `project_status` for one project, and `task_status` with `taskRef`/`task` for one task.
 - `task_write` — project/task/plan-item graph mutations. Use `action: "project_use" | "project_rename" | "project_metadata_update" | "claim" | "plan" | "finish" | "todo_update" | "cache_cleanup"`; Projects are permanent records, so there is no project finish/status lifecycle action. Project mutations are limited to session-local selection/creation plus rename/metadata updates. Creating or claiming a task is plan-locked, and every task must have a bound `task.plan` before claim succeeds. Goal completion is a separate evidence-based request: the main session calls `goal({ action: "complete" })`, the reviewer audits, and Spark applies the approved transition. Planning and claiming sync concrete `task.plan.items` (derived from imported `steps`/`successCriteria` when needed) into active task plan items; use `todo_update` ops `upsert_done` to intentionally create-and-complete one exact item, and strict `done` when a typo should fail.
 - `assign` — explicit Spark assignment/spawn surface. Use `assign({ dryRun: true })` to inspect the ready frontier and `assign({ dryRun: false })` only when dispatching ready tasks through the workflow runtime; `task_write` does not expose `run_ready`, and public `run_control` is not part of the default tool surface.
-- `goal` — Spark goal facade. Use `action: "status" | "set" | "start" | "pause" | "resume" | "clear" | "edit" | "complete"`. Goals are session-scoped and infer the objective from the current project when no objective is given, so there is no separate read-only infer action. `goal({ action: "status" })` treats durable goal state as authoritative: when no goal is set it says so explicitly, warns that compact/historical summaries are hints only, and reports the current project relationship/recommended next action when a project is selected. Only one goal can be active per session: starting or setting a goal updates the active session goal in place. Active goal turns may use reviewer-backed canonical ask auto-answer for material decisions; this is scoped to goal work and is separate from final completion approval. Goal completion is reviewer-gated: the main session requests completion with `goal({ action: "complete" })`, the reviewer audits and returns a verdict, and Spark applies the approved state transition. Manual/public pause is also reviewer-gated: the reviewer evaluates whether the pause reason justifies stopping without completion, and rejected pause reviews leave the goal active. Blocked `action: "complete"` requests return structured remaining-work details such as `goal_completion_needs_changes`; approved requests persist the completed goal state. `/goal` command policy requires an explicit objective for new command-started goals, does not overwrite existing active/paused goals, uses idle-interval foreground ticks rather than queue/backlog semantics, drops stale goal tick context when the goal pauses/changes, and session reset shutdowns (`reload`, `resume`, `new`, `fork`, `revert`, `reset`) auto-pause active goals before the reset. Generic loop/goal primitives live in `pi-loop`, while Spark owns goal storage, widget integration, reviewer loop policy, and command policy.
+- `goal` — Spark goal facade. Use `action: "status" | "set" | "start" | "pause" | "resume" | "clear" | "edit" | "complete"`. Goals are session-scoped and infer the objective from the current project when no objective is given, so there is no separate read-only infer action. `goal({ action: "status" })` treats durable goal state as authoritative: when no goal is set it says so explicitly, warns that compact/historical summaries are hints only, and reports the current project relationship/recommended next action when a project is selected. Only one goal can be active per session: starting or setting a goal updates the active session goal in place. Active goal turns may use reviewer-backed canonical ask auto-answer for material decisions; this is scoped to goal work and is separate from final completion approval. Goal completion is reviewer-gated: the main session requests completion with `goal({ action: "complete" })`, the reviewer audits and returns a verdict, and Spark applies the approved state transition. Manual/public pause is also reviewer-gated: the reviewer evaluates whether the pause reason justifies stopping without completion, and rejected pause reviews leave the goal active. Blocked `action: "complete"` requests return structured remaining-work details such as `goal_completion_needs_changes`; approved requests persist the completed goal state. `/goal` command policy requires an explicit objective for new command-started goals, does not overwrite existing active/paused goals, uses idle-interval foreground ticks rather than queue/backlog semantics, drops stale goal tick context when the goal pauses/changes, and session reset shutdowns (`reload`, `resume`, `new`, `fork`, `revert`, `reset`) auto-pause active goals before the reset. Generic loop/goal primitives live in `spark-loop`, while Spark owns goal storage, widget integration, reviewer loop policy, and command policy.
 - `loop` — Spark open-ended loop facade. Use `action: "status" | "schedule" | "clear"`. Active `/loop` turns should call `loop({ action: "schedule", delayMs, reason })` before ending to choose the next tick delay; if the right cadence depends on user preference, cost, urgency, or priority, call `ask` first. Plain `/loop` has no durable paused lifecycle after stop. `loop` does not own reviewer-gated completion; use `/goal`/`goal` for that policy.
 - `ask` — canonical generic ask tool. Use `action: "ask"` for structured asks and `action: "flow"` when the fullscreen multi-question flow renderer is required. Focused and flow implementations are internal behind this public surface, not active public/default tools.
 - `artifact` — canonical generic artifact/evidence tool. Use `action: "list"`, `"read"`, `"record"`, `"link"`, or `"compact"`; reads are bounded by `maxChars` and list output is limited by `limit`. `kind` classifies what an artifact IS on a single functional axis (origin lives in `provenance.producer`, lifecycle in record `status`): `document` (prose/markdown deliverables), `record` (structured JSON records of decisions/results/events), `trace` (execution output/transcripts), and `knowledge` (reusable learning material). The record and read paths accept only these four canonical kinds.
@@ -27,9 +27,9 @@ Tools:
 - `workflow` — canonical builtin/saved-script workflow discovery/preview tool. Use `action: "list"` or `action: "read"` with `builtin:<id>` / `workspace:<id>` / `user:<id>` selectors; inline workflows and arbitrary paths are rejected. Execution remains through `/workflow[:selector]` host runtime policy, with builtin registry metadata such as `research` mode applied by Spark command routing.
 - `workflow_run` — Spark-owned dynamic workflow execution tool. Use it only for explicit workflow/fan-out/ultracode requests, with either a saved selector, a generated metadata-first JavaScript script, or `runRef` to resume/control a persisted dynamic run. By default it starts a manager-owned background run and returns a live `runRef`; pass `wait: true` only for explicit foreground compatibility. It routes `agent()` calls through Spark workflow role-run boundaries, stores script hash/body, args, metadata, append-only events, projected snapshots, result/error, base metadata, and required approval provenance in the v2 event store under `.spark/dynamic-workflows/runs/<run-id>/`, and keeps workflow output standalone unless the user explicitly asks to attach it to project/task state. `.spark/dynamic-workflow-runs.json` is legacy-import-only and exists only to migrate old v1 dynamic runs. Runs with significant fan-out, web/fetch use, write/isolation/shell tool policy, high token bounds, or long timeouts must be approved through a scoped user/reviewer gate before any child agents run; the approval summary includes script hash, resource bounds, tools, isolation, and Graft base metadata. `agent(..., { isolation: "graft" })` injects the stored base as `GRAFT_BASE_REF`, narrows child tools to Graft scratch/candidate/validation operations, and surfaces returned scratch/candidate/patch refs in agent telemetry/dashboard provenance; env base alone does not isolate direct working-tree writes.
 - `role` — canonical role action tool. Use `action: "list" | "get" | "create" | "call" | "model_list" | "model_get" | "model_set" | "model_delete"`; Spark task execution should prefer `assign({ dryRun: true })` so task claims, run records, and evidence attribution stay coherent.
-- `pi-cue` tools (`cue_exec`, `cue_run`, `cue_script`, `script_run`, `script_eval`, `cue_jobs`, `cue_resources`, `cue_schedule`, `cue_scope`, `cue_history`) — cue-shell execution and job/scope/history management.
-- `pi-files` tools (`read`, `write`, `edit`, `ls`, `grep`, `find`) — native working-tree file tools with Pi-parity truncation/diff semantics. There is no `bash` tool: `cue_exec` is the shell surface and pi-cue disables bash by policy.
-- `pi-graft` tools (`graft_read`, `graft_write`, `graft_edit`, `graft_delete`, `graft_candidate_from_scratch`, `graft_validate`, `graft_admit`, `graft_show`, `graft_evidence`, `graft_candidates`, `graft_search`, `graft_materialize`, `graft_repo`, ...) — explicit Graft scratch/candidate/patch workflows. Patcher-style child runs are provided by explicit extension roles rather than a hidden public patch tool.
+- `spark-cue` tools (`cue_exec`, `cue_run`, `cue_script`, `script_run`, `script_eval`, `cue_jobs`, `cue_resources`, `cue_schedule`, `cue_scope`, `cue_history`) — cue-shell execution and job/scope/history management.
+- `spark-files` tools (`read`, `write`, `edit`, `ls`, `grep`, `find`) — native working-tree file tools with Pi-parity truncation/diff semantics. There is no `bash` tool: `cue_exec` is the shell surface and spark-cue disables bash by policy.
+- `spark-graft` tools (`graft_read`, `graft_write`, `graft_edit`, `graft_delete`, `graft_candidate_from_scratch`, `graft_validate`, `graft_admit`, `graft_show`, `graft_evidence`, `graft_candidates`, `graft_search`, `graft_materialize`, `graft_repo`, ...) — explicit Graft scratch/candidate/patch workflows. Patcher-style child runs are provided by explicit extension roles rather than a hidden public patch tool.
 
 Naming/render policy:
 
@@ -201,7 +201,7 @@ Automatic behavior:
      project intent in the system prompt
    - `task_read({ action: "project_status" })` defaults to an active, limited diagnostic view for the current project; use `workspace_status` for broad all-project summaries and targeted run/artifact reads for historical evidence
 7. When Spark is active, a turn hint reminds the model to
-   use `task_read`, `task_write`, `assign`, `artifact`, `ask`, `role`, `learning`, `context`, `recall`, `workflow`, `pi-cue`, and `pi-graft` tools.
+   use `task_read`, `task_write`, `assign`, `artifact`, `ask`, `role`, `learning`, `context`, `recall`, `workflow`, `spark-cue`, and `spark-graft` tools.
 8. Spark display-name quality is model-maintained when inspected context
    clearly supports the improvement:
    - models may update the active project title and the current
@@ -269,7 +269,7 @@ allow_dirs = [
 ]
 ```
 
-## `pi-roles`
+## `spark-roles`
 
 - `role` — canonical role action tool. Use `action: "list" | "get" | "create" | "call" | "model_list" | "model_get" | "model_set" | "model_delete"` instead of adding fragmented role tool names.
 
@@ -285,7 +285,7 @@ Builtin role tool profiles are audited from the six-token capability vocabulary 
 
 Use `assign({ dryRun: true })` instead when a Spark task should be claimed, attributed, persisted, and tracked by Spark workflow-run state. Ready-task dispatch resolves role models from explicit run input, project settings, then user settings; non-interactive dispatch blocks with guidance when a role model setting is missing.
 
-## `pi-ask`
+## `spark-ask`
 
 - `ask` — canonical ask action tool. `action: "ask"` auto-selects the focused single-question or flow renderer from the request shape; `action: "flow"` forces the fullscreen flow renderer.
 
@@ -318,28 +318,28 @@ Shared ask contract:
 
 `ask` is the canonical ask surface and must provide clear option descriptions explaining what each choice means. Concrete ask questions belong at the call site where the actual task, blocker, review, or decision context is known. Persisted ask artifacts use the shared `ask-answer` body shape `{ request, result, summary }`.
 
-## `pi-cue`
+## `spark-cue`
 
 Resource-oriented tools:
 
 - `cue_exec` — execute commands and create cue-shell jobs. Tool/API runs use the current Pi session working directory by default and pipe mode (`pty: false`) by default; set `pty: true` only for commands that genuinely need terminal semantics. Foreground stdout/stderr are tailed to 16 KiB per stream by default; `tail_bytes` must be positive.
 - `cue_run` — run a `.cue` file via cue-shell script mode, mirroring `cue run <file.cue>`. Top-level items execute sequentially and fail fast; per-item stdout/stderr are tailed by default.
 - `cue_script` — run an inline `.cue` script body. Use this when the script content is generated in the Pi session; prefer `cue_run` when a real `.cue` file exists on disk.
-- `script_run` — run a script file with an explicit `language`. First batch supports `cue-shell` and `python`; `cue-shell` delegates to RunScript, while `python` always runs through `uv run python` (or `uv run --python <venv>/bin/python python` when `venv` is supplied) via cue-shell job execution.
-- `script_eval` — run an inline script body with an explicit `language`. Inline Python executes through `uv run python -c` or `uv run --python <venv>/bin/python python -c`. For script runners, `venv` is python-only and `scope` is cue-shell-only.
+- `script_run` — run a script file with an explicit `language`. First batch supports `cue-shell` and `python`; `cue-shell` delegates to RunScript, while `python` runs through `uv run --script <path>` (or `uv run --python <venv>/bin/python --script <path>` when `venv` is supplied) via cue-shell job execution.
+- `script_eval` — run an inline script body with an explicit `language`. Inline Python is piped to `uv run --script -` or `uv run --python <venv>/bin/python --script -`. For script runners, `venv` is python-only and `scope` is cue-shell-only.
 - `cue_jobs` — list, inspect, wait for, and stop jobs via `action`. List output is limited to 20 rows by default; `action=status` / `action=wait` output is tailed by default.
 - `cue_resources` — inspect resource providers and snapshots via `action: "providers"` or `action: "resources"`.
 - `cue_schedule` — add/list/pause/resume/remove scheduled or one-shot jobs. List output is limited to 20 rows by default.
 - `cue_scope` — inspect scopes, HEAD env, or cue-shell config. Scope lists are limited to 20 rows by default and omit env unless requested.
 - `cue_history` — show recent cue-shell history. Defaults to recent lines plus 16 KiB byte tail; `limit` and `tail_bytes` must be positive.
 
-`pi-cue` also disables the built-in `bash` tool on
-session start, matching the old `pi-cue-shell` execution
+`spark-cue` also disables the built-in `bash` tool on
+session start, matching the old `spark-cue-shell` execution
 policy.
 
-## `pi-files`
+## `spark-files`
 
-Native working-tree file tools registered through `@zendev-lab/pi-files`, the
+Native working-tree file tools registered through `@zendev-lab/spark-files`, the
 spark-tui host's default builtin extension set, and any other Pi host that
 loads the extension:
 
@@ -350,7 +350,7 @@ loads the extension:
 - `grep` — pure-JS content search returning `path:line: text`, with regex or literal matching, optional case-insensitivity, optional context lines, glob filtering, and match/byte/line truncation. Respects `.gitignore` plus hard `node_modules`/`.git` ignores.
 - `find` — pure-JS glob file search over the same gitignore-aware walk.
 
-`pi-files` depends only on `@zendev-lab/pi-extension-api`, `typebox`, `diff`,
+`spark-files` depends only on `@zendev-lab/spark-extension-api`, `typebox`, `diff`,
 `ignore`, and `minimatch`. It spawns no `rg`/`fd`/`bash` subprocess and never
 imports the `@earendil-works/pi-coding-agent` runtime or `@earendil-works/pi-tui`,
 so it stays inside the `pi-*` architecture boundary. `bash` is intentionally

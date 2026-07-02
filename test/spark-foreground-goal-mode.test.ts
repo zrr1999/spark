@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ProjectRef } from "@zendev-lab/pi-extension-api";
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
+import type { ProjectRef } from "@zendev-lab/spark-extension-api";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import {
   foregroundUnfinishedTaskMode,
   suggestForegroundGoalMode,

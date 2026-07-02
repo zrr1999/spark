@@ -31,30 +31,30 @@ export function defaultBuiltinSkillsDir(): string {
 
 export function defaultPiCueSkillsDir(): string {
   const hostDir = dirname(fileURLToPath(import.meta.url));
-  const fromWorkspace = resolve(hostDir, "../../../pi-cue/skills");
+  const fromWorkspace = resolve(hostDir, "../../../spark-cue/skills");
   if (existsSync(fromWorkspace)) return fromWorkspace;
   try {
-    const extensionPath = fileURLToPath(import.meta.resolve("@zendev-lab/pi-cue/extension"));
+    const extensionPath = fileURLToPath(import.meta.resolve("@zendev-lab/spark-cue/extension"));
     const fromPackage = resolve(dirname(extensionPath), "../../skills");
     if (existsSync(fromPackage)) return fromPackage;
   } catch {
     // Fall through to the source-tree default below.
   }
-  return resolve(process.cwd(), "packages", "pi-cue", "skills");
+  return resolve(process.cwd(), "packages", "spark-cue", "skills");
 }
 
 export function defaultPiGraftPromptFile(): string {
   const hostDir = dirname(fileURLToPath(import.meta.url));
-  const fromWorkspace = resolve(hostDir, "../../../pi-graft/README.md");
+  const fromWorkspace = resolve(hostDir, "../../../spark-graft/README.md");
   if (existsSync(fromWorkspace)) return fromWorkspace;
   try {
-    const extensionPath = fileURLToPath(import.meta.resolve("@zendev-lab/pi-graft/extension"));
+    const extensionPath = fileURLToPath(import.meta.resolve("@zendev-lab/spark-graft/extension"));
     const fromPackage = resolve(dirname(extensionPath), "../README.md");
     if (existsSync(fromPackage)) return fromPackage;
   } catch {
     // Fall through to the source-tree default below.
   }
-  return resolve(process.cwd(), "packages", "pi-graft", "README.md");
+  return resolve(process.cwd(), "packages", "spark-graft", "README.md");
 }
 
 export function defaultBasePromptDirs(): string[] {

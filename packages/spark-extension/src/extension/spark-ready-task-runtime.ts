@@ -1,13 +1,13 @@
-import type { RoleRegistry } from "@zendev-lab/pi-roles";
-import type { ArtifactStore } from "@zendev-lab/pi-artifacts";
-import type { RoleRef } from "@zendev-lab/pi-extension-api";
+import type { RoleRegistry } from "@zendev-lab/spark-roles";
+import type { ArtifactStore } from "@zendev-lab/spark-artifacts";
+import type { RoleRef } from "@zendev-lab/spark-extension-api";
 import {
   killActiveSparkRoleRunProcesses,
   runSparkTask,
   type RoleLaunchMode,
 } from "@zendev-lab/spark-runtime";
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
-import type { ReadyTaskRun, ReadyTaskRunKiller } from "@zendev-lab/pi-workflows";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
+import type { ReadyTaskRun, ReadyTaskRunKiller } from "@zendev-lab/spark-workflows";
 
 export interface SparkRuntimeReadyTaskRunner {
   runTask: ReadyTaskRun;

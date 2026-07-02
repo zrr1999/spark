@@ -9,8 +9,8 @@ import type {
   Task,
   TaskRef,
   TaskRun,
-} from "@zendev-lab/pi-extension-api";
-import { TaskGraph } from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-extension-api";
+import { TaskGraph } from "@zendev-lab/spark-tasks";
 import type { ActiveSparkRoleRunProcess } from "@zendev-lab/spark-runtime";
 import {
   buildSparkRoleRunRegistry,

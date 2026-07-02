@@ -2,7 +2,7 @@ import type {
   ToolConfig,
   ToolRenderComponent,
   ToolRenderTheme,
-} from "@zendev-lab/pi-extension-api";
+} from "@zendev-lab/spark-extension-api";
 import { Type } from "typebox";
 
 export interface SparkModelsExtensionApi {

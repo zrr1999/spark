@@ -19,10 +19,10 @@
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@zendev-lab/pi-artifacts": "workspace:^",
-    "@zendev-lab/pi-extension-api": "workspace:^",
-    "@zendev-lab/pi-roles": "workspace:^",
-    "@zendev-lab/pi-tasks": "workspace:^",
-    "@zendev-lab/pi-workflows": "workspace:^"
+    "@zendev-lab/spark-artifacts": "workspace:^",
+    "@zendev-lab/spark-extension-api": "workspace:^",
+    "@zendev-lab/spark-roles": "workspace:^",
+    "@zendev-lab/spark-tasks": "workspace:^",
+    "@zendev-lab/spark-workflows": "workspace:^"
   }
 }

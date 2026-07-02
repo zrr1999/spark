@@ -7,6 +7,7 @@ import { SparkDaemonQueue } from "./queue.js";
 import {
   DEFAULT_SPARK_DAEMON_QUEUE_CONCURRENCY,
   DEFAULT_SPARK_DAEMON_QUEUE_LAUNCH_LIMIT,
+  DEFAULT_SPARK_DAEMON_QUEUE_TASK_TIMEOUT_MS,
   createSparkDaemonActiveTasks,
   processSparkDaemonQueueBatch,
   waitForSparkDaemonActiveTasks,
@@ -37,6 +38,7 @@ describe("Spark daemon executor queue fan-out", () => {
 
       expect(DEFAULT_SPARK_DAEMON_QUEUE_LAUNCH_LIMIT).toBe(Number.POSITIVE_INFINITY);
       expect(DEFAULT_SPARK_DAEMON_QUEUE_CONCURRENCY).toBe(Number.POSITIVE_INFINITY);
+      expect(DEFAULT_SPARK_DAEMON_QUEUE_TASK_TIMEOUT_MS).toBe(600_000);
       expect(launched.sort()).toEqual(["session-one", "session-two"]);
       expect(active.files.size).toBe(2);
       expect(active.invocations.snapshot()).toHaveLength(2);
@@ -46,6 +48,111 @@ describe("Spark daemon executor queue fan-out", () => {
       await expect(queue.list("processed")).resolves.toHaveLength(2);
     } finally {
       gate.resolve();
+      await waitForSparkDaemonActiveTasks(active).catch(() => undefined);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("times out hung queue tasks and releases same-session work", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-queue-timeout-"));
+    const queue = new SparkDaemonQueue({ daemonRoot: root });
+    const active = createSparkDaemonActiveTasks();
+    const emitted: SparkDaemonEvent[] = [];
+    const launched: string[] = [];
+    let firstSignal: AbortSignal | undefined;
+    const executeTask: SparkDaemonTaskExecutor = async (task, context) => {
+      launched.push(task.prompt);
+      if (task.prompt === "hang") {
+        firstSignal = context.signal;
+        await new Promise<never>(() => undefined);
+      }
+      return { ok: true, sessionId: task.sessionId };
+    };
+
+    try {
+      await queue.enqueue({ type: "session.run", sessionId: "same-session", prompt: "hang" });
+      await queue.enqueue({ type: "session.run", sessionId: "same-session", prompt: "next" });
+
+      await expect(
+        processSparkDaemonQueueBatch({
+          queue,
+          active,
+          executeTask,
+          emitEvent: (event) => {
+            emitted.push(event);
+          },
+          taskTimeoutMs: 10,
+        }),
+      ).resolves.toBe(true);
+      expect(launched).toEqual(["hang"]);
+
+      await waitForSparkDaemonActiveTasks(active, { timeoutMs: 500 });
+      expect(firstSignal?.aborted).toBe(true);
+      expect(active.files.size).toBe(0);
+      expect(active.invocations.snapshot()).toHaveLength(0);
+      await expect(queue.list("failed")).resolves.toHaveLength(1);
+      expect(emitted).toContainEqual(
+        expect.objectContaining({
+          type: "daemon.task.lifecycle",
+          status: "failed",
+          summary: "Spark daemon queue task timed out after 10ms",
+        }),
+      );
+
+      await expect(
+        processSparkDaemonQueueBatch({ queue, active, executeTask, taskTimeoutMs: 10 }),
+      ).resolves.toBe(true);
+      await waitForSparkDaemonActiveTasks(active, { timeoutMs: 500 });
+      expect(launched).toEqual(["hang", "next"]);
+      await expect(queue.list("processed")).resolves.toHaveLength(1);
+    } finally {
+      await waitForSparkDaemonActiveTasks(active).catch(() => undefined);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cancels hung queue tasks promptly and releases active session bookkeeping", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-queue-cancel-"));
+    const queue = new SparkDaemonQueue({ daemonRoot: root });
+    const active = createSparkDaemonActiveTasks();
+    const emitted: SparkDaemonEvent[] = [];
+    let firstSignal: AbortSignal | undefined;
+    const executeTask: SparkDaemonTaskExecutor = async (_task, context) => {
+      firstSignal = context.signal;
+      await new Promise<never>(() => undefined);
+    };
+
+    try {
+      await queue.enqueue({ type: "session.run", sessionId: "cancel-session", prompt: "hang" });
+      await expect(
+        processSparkDaemonQueueBatch({
+          queue,
+          active,
+          executeTask,
+          emitEvent: (event) => {
+            emitted.push(event);
+          },
+          taskTimeoutMs: 10_000,
+        }),
+      ).resolves.toBe(true);
+
+      const invocation = active.invocations.snapshot()[0];
+      expect(invocation).toBeDefined();
+      expect(active.invocations.cancel(invocation!.invocationId, "test cancellation")).toBe(true);
+      await waitForSparkDaemonActiveTasks(active, { timeoutMs: 500 });
+
+      expect(firstSignal?.aborted).toBe(true);
+      expect(active.files.size).toBe(0);
+      expect(active.invocations.snapshot()).toHaveLength(0);
+      await expect(queue.list("failed")).resolves.toHaveLength(1);
+      expect(emitted).toContainEqual(
+        expect.objectContaining({
+          type: "daemon.task.lifecycle",
+          status: "cancelled",
+          summary: "Spark daemon queue task cancelled: test cancellation",
+        }),
+      );
+    } finally {
       await waitForSparkDaemonActiveTasks(active).catch(() => undefined);
       rmSync(root, { recursive: true, force: true });
     }

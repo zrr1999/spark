@@ -15,7 +15,7 @@ import {
   validatePiAskFlowRequest,
   normalizeAskKey,
   printableAskText,
-} from "@zendev-lab/pi-ask";
+} from "@zendev-lab/spark-ask";
 
 void test("spark ask fullscreen option model includes only the direct custom input sentinel", () => {
   const options = buildExtendedOptions(

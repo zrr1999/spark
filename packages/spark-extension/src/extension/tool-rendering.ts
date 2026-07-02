@@ -1,4 +1,4 @@
-import { truncateToWidth } from "@zendev-lab/spark-tui/text";
+import { truncateToWidth } from "@zendev-lab/spark-text";
 
 export interface ToolCallRenderTheme {
   fg?: (color: string, text: string) => string;

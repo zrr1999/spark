@@ -1,108 +1,468 @@
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { createId } from "@zendev-lab/spark-protocol";
-import { fail, redirect } from "@sveltejs/kit";
+import { resolveSparkPaths } from "@zendev-lab/spark-system";
+import { fail } from "@sveltejs/kit";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
+import { hashSecret } from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";
 import { formText } from "$lib/server/form-data";
+import { submitServerCommand } from "$lib/server/command-submission";
+import { loadWorkspaceServerControl } from "$lib/server/projection-services";
 import { requireWorkspaceByRouteId } from "$lib/server/workspace-routing";
-import { workspacePath } from "$lib/workspace-routes";
 import type { Actions, PageServerLoad } from "./$types";
 
-type AgentSource = "builtin" | "workspace" | "imported";
-const agentSources = new Set<AgentSource>(["builtin", "workspace", "imported"]);
+const agentsCockpitSource = "agents-cockpit";
 
 export const load: PageServerLoad = ({ params }) => {
   const db = getDatabase();
   const workspace = requireWorkspaceByRouteId(db, params.workspaceId);
 
-  const agentSpecs = db
-    .prepare(
-      `SELECT id,
-              name,
-              source,
-              status,
-              description,
-              config_json AS configJson,
-              created_at AS createdAt,
-              updated_at AS updatedAt
-       FROM agent_specs
-       WHERE workspace_id = ?
-       ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'disabled' THEN 1 ELSE 2 END,
-                updated_at DESC`,
-    )
-    .all(workspace.id) as Array<{
-    id: string;
-    name: string;
-    source: string;
-    status: string;
-    description: string | null;
-    configJson: string;
-    createdAt: string;
-    updatedAt: string;
-  }>;
+  const ownerBinding =
+    (db
+      .prepare(
+        `SELECT wob.runtime_workspace_binding_id AS runtimeWorkspaceBindingId,
+                rb.display_name AS displayName,
+                rb.status AS bindingStatus,
+                rc.name AS runtimeName,
+                rc.status AS runtimeStatus
+         FROM workspace_owner_bindings wob
+         JOIN runtime_workspace_bindings rb ON rb.id = wob.runtime_workspace_binding_id
+         JOIN runtime_connections rc ON rc.id = rb.runtime_id
+         WHERE wob.workspace_id = ? AND wob.ended_at IS NULL
+         LIMIT 1`,
+      )
+      .get(workspace.id) as
+      | {
+          runtimeWorkspaceBindingId: string;
+          displayName: string;
+          bindingStatus: string;
+          runtimeName: string;
+          runtimeStatus: string;
+        }
+      | undefined) ?? null;
 
-  const counts = agentSpecs.reduce(
-    (acc, agent) => {
-      acc.total += 1;
-      if (agent.status === "active") acc.active += 1;
-      if (agent.status === "disabled") acc.disabled += 1;
-      if (agent.status === "archived") acc.archived += 1;
-      return acc;
-    },
-    { total: 0, active: 0, disabled: 0, archived: 0 },
+  const commands = (
+    db
+      .prepare(
+        `SELECT c.id,
+                c.kind,
+                c.title,
+                c.payload_json AS payloadJson,
+                c.status,
+                c.created_at AS createdAt,
+                c.updated_at AS updatedAt,
+                cd.status AS deliveryStatus,
+                cd.attempt_count AS attemptCount,
+                cd.last_attempt_at AS lastAttemptAt,
+                cd.acked_at AS ackedAt,
+                cd.rejected_at AS rejectedAt,
+                cd.reject_code AS rejectCode,
+                cd.reject_message AS rejectMessage,
+                rb.display_name AS runtimeWorkspaceName,
+                rc.name AS runtimeName,
+                rc.status AS runtimeStatus
+         FROM commands c
+         LEFT JOIN command_deliveries cd ON cd.command_id = c.id
+         LEFT JOIN runtime_workspace_bindings rb ON rb.id = cd.runtime_workspace_binding_id
+         LEFT JOIN runtime_connections rc ON rc.id = rb.runtime_id
+         WHERE c.workspace_id = ? AND c.project_id IS NULL
+         ORDER BY c.created_at DESC
+         LIMIT 24`,
+      )
+      .all(workspace.id) as Array<{
+      id: string;
+      kind: string;
+      title: string | null;
+      payloadJson: string;
+      status: string;
+      deliveryStatus: string | null;
+      attemptCount: number | null;
+      lastAttemptAt: string | null;
+      ackedAt: string | null;
+      rejectedAt: string | null;
+      rejectCode: string | null;
+      rejectMessage: string | null;
+      runtimeWorkspaceName: string | null;
+      runtimeName: string | null;
+      runtimeStatus: string | null;
+      createdAt: string;
+      updatedAt: string;
+    }>
+  )
+    .filter(isAgentsCockpitCommand)
+    .slice(0, 8);
+  const agentCommandIds = new Set(commands.map((command) => command.id));
+
+  const invocations = (
+    db
+      .prepare(
+        `SELECT id,
+                runtime_invocation_id AS runtimeInvocationId,
+                command_id AS commandId,
+                task_runtime_id AS taskRuntimeId,
+                agent_name AS agentName,
+                status,
+                updated_at AS updatedAt
+         FROM mirrored_invocations
+         WHERE workspace_id = ? AND project_id IS NULL
+         ORDER BY updated_at DESC
+         LIMIT 32`,
+      )
+      .all(workspace.id) as Array<{
+      id: string;
+      runtimeInvocationId: string;
+      commandId: string | null;
+      taskRuntimeId: string | null;
+      agentName: string | null;
+      status: string;
+      updatedAt: string;
+    }>
+  )
+    .filter(
+      (invocation) =>
+        typeof invocation.commandId === "string" && agentCommandIds.has(invocation.commandId),
+    )
+    .slice(0, 16);
+  const agentInvocationIds = new Set(
+    invocations.map((invocation) => invocation.runtimeInvocationId),
   );
 
-  return { workspace, agentSpecs, counts };
+  const logChunks = (
+    db
+      .prepare(
+        `SELECT l.id,
+                mi.runtime_invocation_id AS runtimeInvocationId,
+                mi.agent_name AS agentName,
+                l.stream,
+                l.sequence,
+                l.content,
+                l.created_at AS createdAt
+         FROM invocation_log_chunks l
+         JOIN mirrored_invocations mi ON mi.id = l.invocation_id
+         WHERE mi.workspace_id = ? AND mi.project_id IS NULL
+         ORDER BY l.created_at DESC, l.sequence DESC
+         LIMIT 96`,
+      )
+      .all(workspace.id) as Array<AgentLogChunk>
+  )
+    .filter((log) => agentInvocationIds.has(log.runtimeInvocationId))
+    .slice(0, 48)
+    .reverse();
+  const artifactFallbackLogs = loadArtifactFallbackLogChunks(db, {
+    workspaceId: workspace.id,
+    invocationIds: agentInvocationIds,
+    existingLogs: logChunks,
+  });
+
+  return {
+    workspace,
+    ownerBinding,
+    workspaceControl: loadWorkspaceServerControl(db, workspace.id),
+    commands,
+    invocations,
+    logChunks: [...logChunks, ...artifactFallbackLogs].sort(compareAgentLogChunks),
+  };
 };
+
+type AgentLogChunk = {
+  id: string;
+  runtimeInvocationId: string;
+  agentName: string | null;
+  stream: string;
+  sequence: number;
+  content: string;
+  createdAt: string;
+};
+
+type ArtifactFallbackRow = {
+  id: string;
+  runtimeInvocationId: string;
+  runtimeWorkspaceBindingId: string | null;
+  contentRefJson: string;
+  createdAt: string;
+};
+
+function loadArtifactFallbackLogChunks(
+  db: ReturnType<typeof getDatabase>,
+  input: { workspaceId: string; invocationIds: Set<string>; existingLogs: AgentLogChunk[] },
+): AgentLogChunk[] {
+  const hasAssistantOutput = new Set(
+    input.existingLogs
+      .filter((log) => log.stream.toLowerCase() === "assistant" && log.content.trim())
+      .map((log) => log.runtimeInvocationId),
+  );
+  const maxSequence = new Map<string, number>();
+  for (const log of input.existingLogs) {
+    maxSequence.set(
+      log.runtimeInvocationId,
+      Math.max(maxSequence.get(log.runtimeInvocationId) ?? 0, log.sequence),
+    );
+  }
+  if ([...input.invocationIds].every((id) => hasAssistantOutput.has(id))) return [];
+
+  const localPathCache = new Map<string, string | null>();
+  const rows = db
+    .prepare(
+      `SELECT a.id,
+              mi.runtime_invocation_id AS runtimeInvocationId,
+              a.runtime_workspace_binding_id AS runtimeWorkspaceBindingId,
+              a.content_ref_json AS contentRefJson,
+              a.created_at AS createdAt
+       FROM artifacts a
+       JOIN mirrored_invocations mi ON mi.id = a.invocation_id
+       WHERE mi.workspace_id = ? AND mi.project_id IS NULL
+       ORDER BY a.created_at ASC`,
+    )
+    .all(input.workspaceId) as ArtifactFallbackRow[];
+
+  const fallbackLogs: AgentLogChunk[] = [];
+  for (const row of rows) {
+    if (!input.invocationIds.has(row.runtimeInvocationId)) continue;
+    if (hasAssistantOutput.has(row.runtimeInvocationId)) continue;
+    const text = assistantTextFromProjectedArtifact(row, localPathCache);
+    if (!text) continue;
+    fallbackLogs.push({
+      id: `artifact-fallback-${row.id}`,
+      runtimeInvocationId: row.runtimeInvocationId,
+      agentName: "spark-runtime",
+      stream: "assistant",
+      sequence: (maxSequence.get(row.runtimeInvocationId) ?? 0) + 1,
+      content: text,
+      createdAt: row.createdAt,
+    });
+    hasAssistantOutput.add(row.runtimeInvocationId);
+  }
+  return fallbackLogs;
+}
+
+function assistantTextFromProjectedArtifact(
+  row: ArtifactFallbackRow,
+  localPathCache: Map<string, string | null>,
+): string | null {
+  const contentRef = parseJsonObject(row.contentRefJson);
+  const inline = firstNonEmpty([
+    stringValue(contentRef.assistantTextPreview),
+    stringValue(contentRef.inlineMarkdown),
+    stringValue(contentRef.inlineText),
+  ]);
+  if (inline) return inline;
+
+  const sparkArtifactRef = stringValue(contentRef.sparkArtifactRef);
+  if (!sparkArtifactRef || !row.runtimeWorkspaceBindingId) return null;
+  const localPath = localWorkspacePathForRuntimeBinding(
+    row.runtimeWorkspaceBindingId,
+    localPathCache,
+  );
+  if (!localPath) return null;
+  return assistantTextFromLocalSparkArtifact(localPath, sparkArtifactRef);
+}
+
+function localWorkspacePathForRuntimeBinding(
+  runtimeWorkspaceBindingId: string,
+  cache: Map<string, string | null>,
+): string | null {
+  if (cache.has(runtimeWorkspaceBindingId)) return cache.get(runtimeWorkspaceBindingId) ?? null;
+  const daemonDatabasePath = resolveSparkPaths({ app: "daemon" }).databasePath;
+  if (!existsSync(daemonDatabasePath)) {
+    cache.set(runtimeWorkspaceBindingId, null);
+    return null;
+  }
+  let daemonDb: DatabaseSync | undefined;
+  try {
+    daemonDb = new DatabaseSync(daemonDatabasePath, { readOnly: true });
+    const row = daemonDb
+      .prepare("SELECT local_path AS localPath FROM workspaces WHERE id = ? LIMIT 1")
+      .get(runtimeWorkspaceBindingId) as { localPath: string } | undefined;
+    const localPath = row?.localPath ?? null;
+    cache.set(runtimeWorkspaceBindingId, localPath);
+    return localPath;
+  } catch {
+    cache.set(runtimeWorkspaceBindingId, null);
+    return null;
+  } finally {
+    daemonDb?.close();
+  }
+}
+
+function assistantTextFromLocalSparkArtifact(
+  localPath: string,
+  sparkArtifactRef: string,
+): string | null {
+  try {
+    const artifactId = sparkArtifactRef.startsWith("artifact:")
+      ? sparkArtifactRef.slice("artifact:".length)
+      : "";
+    if (!/^[A-Za-z0-9._-]+$/u.test(artifactId)) return null;
+
+    const artifactRoot = resolve(localPath, ".spark", "artifacts");
+    const metadataPath = resolve(artifactRoot, `${artifactId}.json`);
+    if (!metadataPath.startsWith(`${artifactRoot}/`) || !existsSync(metadataPath)) return null;
+
+    const metadata = parseJsonObject(readFileSync(metadataPath, "utf8"));
+    let body: unknown = metadata.body;
+    if (typeof metadata.blobPath === "string") {
+      const blobPath = resolve(artifactRoot, metadata.blobPath);
+      if (!blobPath.startsWith(`${artifactRoot}/`) || !existsSync(blobPath)) return null;
+      const serializedBody = readFileSync(blobPath, "utf8");
+      body = metadata.format === "json" ? parseJson(serializedBody) : serializedBody;
+    }
+    return assistantTextFromRoleRunBody(body);
+  } catch {
+    return null;
+  }
+}
+
+function assistantTextFromRoleRunBody(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const body = isRecord(value.body) ? value.body : value;
+  return firstNonEmpty([
+    assistantTextFromRoleRunJsonEvents(body.jsonEvents),
+    textTail(body.stdout),
+    stringValue(body.summary),
+  ]);
+}
+
+function assistantTextFromRoleRunJsonEvents(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const tail = Array.isArray(value.tail) ? value.tail : [];
+  for (const raw of [...tail].reverse()) {
+    const parsed = typeof raw === "string" ? parseJson(raw) : raw;
+    const text = assistantTextFromEvent(parsed);
+    if (text) return text;
+  }
+  return null;
+}
+
+function assistantTextFromEvent(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  if (value.type === "stream_event" && isRecord(value.event)) {
+    if (value.event.type === "done") return assistantTextFromMessage(value.event.message);
+    if (value.event.type === "text_end" && typeof value.event.content === "string") {
+      return value.event.content.trim() || null;
+    }
+  }
+  if (value.type === "turn_complete") return assistantTextFromMessage(value.message);
+  if (
+    value.type === "view_event" &&
+    isRecord(value.event) &&
+    value.event.type === "session.message"
+  ) {
+    return assistantTextFromMessage(value.event.message);
+  }
+  return assistantTextFromMessage(value.message);
+}
+
+function assistantTextFromMessage(value: unknown): string | null {
+  if (!isRecord(value) || value.role !== "assistant") return null;
+  return messageContentText(value.content);
+}
+
+function messageContentText(content: unknown): string | null {
+  if (typeof content === "string") return content.trim() || null;
+  if (!Array.isArray(content)) return null;
+  const text = content
+    .map((block) => {
+      if (!isRecord(block)) return "";
+      return block.type === "text" && typeof block.text === "string" ? block.text : "";
+    })
+    .join("")
+    .trim();
+  return text || null;
+}
+
+function textTail(value: unknown): string | null {
+  return isRecord(value) ? (stringValue(value.tail) ?? null) : null;
+}
+
+function parseJsonObject(value: string): Record<string, unknown> {
+  const parsed = parseJson(value);
+  return isRecord(parsed) ? parsed : {};
+}
+
+function parseJson(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function firstNonEmpty(values: Array<string | null | undefined>): string | null {
+  for (const value of values) {
+    const text = value?.trim();
+    if (text) return text;
+  }
+  return null;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function compareAgentLogChunks(left: AgentLogChunk, right: AgentLogChunk) {
+  return (
+    left.createdAt.localeCompare(right.createdAt) ||
+    left.runtimeInvocationId.localeCompare(right.runtimeInvocationId) ||
+    left.sequence - right.sequence ||
+    left.id.localeCompare(right.id)
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
 
 export const actions: Actions = {
-  createAgentSpec: async ({ cookies, params, request }) => {
+  sendChat: async ({ cookies, locals, params, request }) => {
     const t = getRequestDictionary({
       cookieLocale: cookies.get(localeCookieName),
       acceptLanguage: request.headers.get("accept-language"),
     }).agents.formMessages;
     const db = getDatabase();
     const workspace = requireWorkspaceByRouteId(db, params.workspaceId);
-
     const formData = await request.formData();
-    const name = formText(formData, "name").trim();
-    const source = formText(formData, "source", "workspace") as AgentSource;
-    const description = formText(formData, "description").trim() || null;
-    const roleRef = formText(formData, "roleRef").trim();
-    const instructions = formText(formData, "instructions").trim();
+    const prompt = formText(formData, "prompt").trim();
 
-    if (!name) {
-      return fail(400, { message: t.nameRequired });
-    }
-    if (!agentSources.has(source)) {
-      return fail(400, { message: t.unsupportedSource });
+    if (!prompt) {
+      return fail(400, { intent: "chat", message: t.chatRequired, values: { prompt } });
     }
 
-    const now = new Date().toISOString();
     try {
-      db.prepare(
-        `INSERT INTO agent_specs
-          (id, workspace_id, name, source, status, description, config_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
-      ).run(
-        createId("agent"),
-        workspace.id,
-        name,
-        source,
-        description,
-        JSON.stringify({ roleRef: roleRef || undefined, instructions: instructions || undefined }),
-        now,
-        now,
-      );
+      const runtimeTaskId = createId("task");
+      const command = submitServerCommand(db, {
+        workspaceId: workspace.id,
+        projectId: null,
+        requestedByUserId: getCurrentUserId(db, locals.sessionToken),
+        idempotencyKey: createId("idem"),
+        payload: {
+          kind: "task.start.request",
+          title: titleFromPrompt(prompt),
+          payload: {
+            prompt,
+            runtimeTaskId,
+            source: agentsCockpitSource,
+            context: { kind: "agents", workspaceId: workspace.id },
+          },
+        },
+      });
+
+      return {
+        intent: "chat",
+        message: t.chatQueued,
+        queuedCommandId: command.id,
+      };
     } catch (caught) {
       return fail(400, {
-        message: caught instanceof Error ? caught.message : t.createFailed,
+        intent: "chat",
+        message: caught instanceof Error ? caught.message : t.chatQueueFailed,
+        values: { prompt },
       });
     }
-
-    redirect(303, workspacePath(workspace, "/agents"));
   },
 
-  setAgentStatus: async ({ cookies, params, request }) => {
+  cancelRun: async ({ cookies, locals, params, request }) => {
     const t = getRequestDictionary({
       cookieLocale: cookies.get(localeCookieName),
       acceptLanguage: request.headers.get("accept-language"),
@@ -110,17 +470,80 @@ export const actions: Actions = {
     const db = getDatabase();
     const workspace = requireWorkspaceByRouteId(db, params.workspaceId);
     const formData = await request.formData();
-    const agentSpecId = formText(formData, "agentSpecId");
-    const status = formText(formData, "status");
-    if (!agentSpecId || !["active", "disabled", "archived"].includes(status)) {
-      return fail(400, { message: t.invalidStatus });
+    const runtimeInvocationId = formText(formData, "runtimeInvocationId").trim();
+
+    if (!runtimeInvocationId.startsWith("inv_")) {
+      return fail(400, { intent: "chat", message: t.cancelRequired });
     }
 
-    const now = new Date().toISOString();
-    db.prepare(
-      "UPDATE agent_specs SET status = ?, updated_at = ? WHERE id = ? AND workspace_id = ?",
-    ).run(status, now, agentSpecId, workspace.id);
+    try {
+      const command = submitServerCommand(db, {
+        workspaceId: workspace.id,
+        projectId: null,
+        requestedByUserId: getCurrentUserId(db, locals.sessionToken),
+        idempotencyKey: createId("idem"),
+        payload: {
+          kind: "invocation.cancel.request",
+          title: t.cancelTitle,
+          payload: {
+            runtimeInvocationId,
+            source: agentsCockpitSource,
+            context: { kind: "agents", workspaceId: workspace.id },
+          },
+        },
+      });
 
-    redirect(303, workspacePath(workspace, "/agents"));
+      return {
+        intent: "chat",
+        message: t.cancelQueued,
+        queuedCommandId: command.id,
+      };
+    } catch (caught) {
+      return fail(400, {
+        intent: "chat",
+        message: caught instanceof Error ? caught.message : t.cancelFailed,
+      });
+    }
   },
 };
+
+function isAgentsCockpitCommand(command: { payloadJson: string }) {
+  try {
+    const parsed = JSON.parse(command.payloadJson) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    const payload = (parsed as { payload?: unknown }).payload;
+    return Boolean(
+      payload &&
+      typeof payload === "object" &&
+      !Array.isArray(payload) &&
+      (payload as { source?: unknown }).source === agentsCockpitSource,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function titleFromPrompt(prompt: string) {
+  const normalized = prompt.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "Agents chat message";
+  }
+  return normalized.length > 80 ? `${normalized.slice(0, 77)}…` : normalized;
+}
+
+function getCurrentUserId(db: ReturnType<typeof getDatabase>, sessionToken: string | null) {
+  if (!sessionToken) {
+    return null;
+  }
+
+  const session = db
+    .prepare(
+      `SELECT user_id AS userId
+       FROM sessions
+       WHERE token_hash = ? AND revoked_at IS NULL
+       LIMIT 1`,
+    )
+    .get(hashSecret(sessionToken)) as { userId: string } | undefined;
+
+  return session?.userId ?? null;
+}

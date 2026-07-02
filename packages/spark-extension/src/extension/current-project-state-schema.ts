@@ -1,4 +1,4 @@
-import { type ProjectRef, type TaskRef } from "@zendev-lab/pi-extension-api";
+import { type ProjectRef, type TaskRef } from "@zendev-lab/spark-extension-api";
 import { JsonStoreFormatError } from "./json-store.ts";
 
 export type SparkRunStrategy = "sequential" | "parallel";

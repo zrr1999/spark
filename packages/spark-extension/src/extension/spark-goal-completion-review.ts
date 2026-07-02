@@ -1,12 +1,12 @@
-import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
-import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
+import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
 import {
   nowIso,
   type ArtifactRef,
   type JsonValue,
   type ProjectRef,
   type RoleRef,
-} from "@zendev-lab/pi-extension-api";
+} from "@zendev-lab/spark-extension-api";
 import { evaluateSparkProjectKindCompletionGate } from "./project-kind-registry.ts";
 import { updateSessionGoalStatus, type SparkSessionGoal } from "./spark-session-goals.ts";
 import type {
@@ -489,6 +489,7 @@ async function recordGoalReviewArtifact(
     ...(review.record.runName ? { runName: review.record.runName } : {}),
     startedAt: review.record.startedAt,
     finishedAt: review.record.finishedAt,
+    ...(review.record.thinking ? { thinking: review.record.thinking } : {}),
   };
   const store = defaultArtifactStore(cwd);
   const ref = goalReviewArtifactRef(active.goal.goalId);

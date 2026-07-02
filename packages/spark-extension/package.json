@@ -20,19 +20,19 @@
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@zendev-lab/pi-artifacts": "workspace:^",
-    "@zendev-lab/pi-ask": "workspace:^",
-    "@zendev-lab/pi-context": "workspace:^",
-    "@zendev-lab/pi-extension-api": "workspace:^",
-    "@zendev-lab/pi-learnings": "workspace:^",
-    "@zendev-lab/pi-loop": "workspace:^",
-    "@zendev-lab/pi-modes": "workspace:^",
-    "@zendev-lab/pi-roles": "workspace:^",
-    "@zendev-lab/pi-tasks": "workspace:^",
-    "@zendev-lab/pi-workflows": "workspace:^",
+    "@zendev-lab/spark-artifacts": "workspace:^",
+    "@zendev-lab/spark-ask": "workspace:^",
+    "@zendev-lab/spark-context": "workspace:^",
+    "@zendev-lab/spark-extension-api": "workspace:^",
     "@zendev-lab/spark-i18n": "workspace:^",
+    "@zendev-lab/spark-learnings": "workspace:^",
+    "@zendev-lab/spark-loop": "workspace:^",
+    "@zendev-lab/spark-modes": "workspace:^",
+    "@zendev-lab/spark-roles": "workspace:^",
     "@zendev-lab/spark-runtime": "workspace:^",
-    "@zendev-lab/spark-tui": "workspace:^",
+    "@zendev-lab/spark-tasks": "workspace:^",
+    "@zendev-lab/spark-text": "workspace:^",
+    "@zendev-lab/spark-workflows": "workspace:^",
     "typebox": "^1.2.13"
   }
 }

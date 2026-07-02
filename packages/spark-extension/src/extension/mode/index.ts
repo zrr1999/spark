@@ -1,4 +1,4 @@
-export { resolveActiveMode } from "@zendev-lab/pi-modes";
+export { resolveActiveMode } from "@zendev-lab/spark-modes";
 export {
   createSparkModeRegistry,
   createSparkPhaseRegistry,

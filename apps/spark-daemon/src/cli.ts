@@ -21,7 +21,7 @@ import {
   writeSparkDaemonConfig,
 } from "./config.js";
 import { sparkDaemonVersion, startSparkDaemon } from "./daemon.js";
-import { acquireSparkDaemonLock } from "./core/index.ts";
+import { SparkDaemonInvocationRegistry, acquireSparkDaemonLock } from "./core/index.ts";
 import {
   LocalRpcUnavailableError,
   createSparkDaemonLocalEventBus,
@@ -238,11 +238,13 @@ async function start(paths: ReturnType<typeof resolveSparkPaths>): Promise<numbe
   process.once("SIGINT", onShutdownSignal);
   process.once("SIGTERM", onShutdownSignal);
   const localEventBus = createSparkDaemonLocalEventBus();
+  const invocationRegistry = new SparkDaemonInvocationRegistry();
   const localRpc = await startLocalRpcServer({
     paths,
     db,
     onStop: () => shutdown.abort(),
     eventBus: localEventBus,
+    invocationRegistry,
   });
   try {
     await startSparkDaemon({
@@ -251,6 +253,7 @@ async function start(paths: ReturnType<typeof resolveSparkPaths>): Promise<numbe
       db,
       signal: shutdown.signal,
       localEventSink: (event) => localEventBus.publish(event),
+      invocationRegistry,
     });
     return 0;
   } finally {

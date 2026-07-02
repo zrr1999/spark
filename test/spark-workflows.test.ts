@@ -13,12 +13,12 @@ import {
   type WorkflowRunEvent,
   type WorkflowRunOptions,
   type WorkflowRunResult,
-} from "../packages/pi-workflows/src/index.ts";
+} from "../packages/spark-workflows/src/index.ts";
 import {
   fanOutWithBriefWorkflowScript,
   researchWorkflowScript,
   reviewWorkflowScript,
-} from "../packages/pi-workflows/src/builtins.ts";
+} from "../packages/spark-workflows/src/builtins.ts";
 import {
   createSparkWorkflowRoleRunAdapter,
   SPARK_WORKFLOW_GRAFT_ISOLATION_TOOLS,
@@ -42,41 +42,41 @@ import {
   renderSparkDynamicWorkflowDashboardText,
 } from "../packages/spark-extension/src/extension/spark-dynamic-workflow-run-rendering.ts";
 
-void test("pi-workflows package stays isolated from runtime execution packages", async () => {
-  const pkg = JSON.parse(await readFile("packages/pi-workflows/package.json", "utf8")) as {
+void test("spark-workflows package stays isolated from runtime execution packages", async () => {
+  const pkg = JSON.parse(await readFile("packages/spark-workflows/package.json", "utf8")) as {
     dependencies?: Record<string, string>;
   };
 
   assert.equal(pkg.dependencies?.["@zendev-lab/spark-runtime"], undefined);
-  assert.equal(pkg.dependencies?.["@zendev-lab/pi-roles"], undefined);
+  assert.equal(pkg.dependencies?.["@zendev-lab/spark-roles"], undefined);
   assert.equal(pkg.dependencies?.["spark-goal"], undefined);
 
-  const sourceFiles = await listTypeScriptFiles("packages/pi-workflows/src");
+  const sourceFiles = await listTypeScriptFiles("packages/spark-workflows/src");
   for (const file of sourceFiles) {
     const source = await readFile(file, "utf8");
     assert.doesNotMatch(
       source,
-      /(?:from\s+["']|import\(["'])(?:spark-runtime|pi-roles|spark-goal)["']/u,
+      /(?:from\s+["']|import\(["'])(?:spark-runtime|spark-roles|spark-goal)["']/u,
       `${file} must not import runtime execution or goal packages`,
     );
   }
 });
 
-void test("Spark production code uses generic pi-workflows imports instead of removed aliases", async () => {
+void test("Spark production code uses generic spark-workflows imports instead of removed aliases", async () => {
   const sourceFiles = await listTypeScriptFiles("packages/spark-extension/src");
   const removedPiWorkflowImports =
-    /import\s+(?:type\s+)?\{[^}]*\b(?:defaultSparkDagRunStore|defaultWorkflowRunStore|workspaceWorkflowDir|SparkDag\w*|SparkWorkflow\w*|sparkDagRunNextSteps|runReadySparkTasks)\b[^}]*\}\s+from\s+["'](?:@zendev-lab\/)?pi-workflows["']/su;
+    /import\s+(?:type\s+)?\{[^}]*\b(?:defaultSparkDagRunStore|defaultWorkflowRunStore|workspaceWorkflowDir|SparkDag\w*|SparkWorkflow\w*|sparkDagRunNextSteps|runReadySparkTasks)\b[^}]*\}\s+from\s+["'](?:@zendev-lab\/)?spark-workflows["']/su;
   for (const file of sourceFiles) {
     const source = await readFile(file, "utf8");
     assert.doesNotMatch(
       source,
       removedPiWorkflowImports,
-      `${file} must import generic Workflow* symbols from pi-workflows; Spark-named aliases are removed`,
+      `${file} must import generic Workflow* symbols from spark-workflows; Spark-named aliases are removed`,
     );
   }
 });
 
-void test("pi-workflows parses metadata without executing expressions", () => {
+void test("spark-workflows parses metadata without executing expressions", () => {
   assert.throws(
     () =>
       parseWorkflowScript(`export const meta = {
@@ -103,7 +103,7 @@ return 'ok'`);
   assert.equal(parsed.body, "return 'ok'");
 });
 
-void test("pi-workflows parses metadata and runs sandbox primitives with journal", async () => {
+void test("spark-workflows parses metadata and runs sandbox primitives with journal", async () => {
   const script = `export const meta = {
   name: 'demo',
   description: 'Demo workflow',
@@ -165,7 +165,7 @@ return { scan, a, b }`;
   );
 });
 
-void test("pi-workflows lists and reads builtin workflows without frontmatter mode", async () => {
+void test("spark-workflows lists and reads builtin workflows without frontmatter mode", async () => {
   const listing = await listSavedWorkflows(".", {
     includeUser: false,
     workspaceWorkflowDir: "/definitely/missing/spark-workflows",
@@ -206,7 +206,7 @@ void test("pi-workflows lists and reads builtin workflows without frontmatter mo
   );
 });
 
-void test("pi-workflows research builtin fans out with collected errors and report synthesis", async () => {
+void test("spark-workflows research builtin fans out with collected errors and report synthesis", async () => {
   const { descriptor, script } = await readSavedWorkflow({
     cwd: ".",
     selector: "builtin:research",
@@ -271,7 +271,7 @@ void test("pi-workflows research builtin fans out with collected errors and repo
   assert.equal((run.result as { report?: unknown }).report, "final synthesis");
 });
 
-void test("pi-workflows exposes and runs workflow script factories", async () => {
+void test("spark-workflows exposes and runs workflow script factories", async () => {
   const research = parseWorkflowScript(researchWorkflowScript());
   assert.equal(research.meta.name, "research");
   assert.deepEqual(
@@ -314,7 +314,7 @@ void test("pi-workflows exposes and runs workflow script factories", async () =>
   );
 });
 
-void test("pi-workflows records explicit stage statuses", async () => {
+void test("spark-workflows records explicit stage statuses", async () => {
   const script = `export const meta = {
     name: 'stage status',
     description: 'Stage status workflow',
@@ -372,7 +372,7 @@ void test("pi-workflows records explicit stage statuses", async () => {
   ]);
 });
 
-void test("pi-workflows emits typed run events and projects snapshots", async () => {
+void test("spark-workflows emits typed run events and projects snapshots", async () => {
   const script = `export const meta = { name: 'eventful', description: 'eventful workflow' }
 stage('Plan')
 const web = await webSearch({ query: 'events' })
@@ -447,7 +447,7 @@ return { web, values }`;
   assert.equal(snapshot.nodesById["tool:1"]?.parentId, "parallel:0:item:1");
 });
 
-void test("pi-workflows projects zero-agent parallel helper work into dashboard tree", async () => {
+void test("spark-workflows projects zero-agent parallel helper work into dashboard tree", async () => {
   const script = `export const meta = { name: 'zero agent fanout', description: 'zero agent fanout workflow' }
 stage('Fanout')
 const results = await parallel([
@@ -528,7 +528,7 @@ return { child: true }`;
   }
 });
 
-void test("pi-workflows projects failed run and node events", async () => {
+void test("spark-workflows projects failed run and node events", async () => {
   const script = `export const meta = { name: 'failed events', description: 'failed event workflow' }
 stage('Work')
 await agent('explode', { label: 'boom' })`;
@@ -554,7 +554,7 @@ await agent('explode', { label: 'boom' })`;
   assert.equal(snapshot.nodesById["agent:0"]?.errorMessage, "agent exploded");
 });
 
-void test("pi-workflows projects status-only, artifact, log, nested, cached, and helper error events", async () => {
+void test("spark-workflows projects status-only, artifact, log, nested, cached, and helper error events", async () => {
   const statusOnlyEvents: WorkflowRunEvent[] = [];
   await runWorkflowScript(
     `export const meta = { name: 'status only', description: 'status-only stage' }
@@ -660,7 +660,7 @@ return await webSearch({ query: 'boom' })`,
   assert.equal(helperError.nodesById["tool:0"]?.errorMessage, "search exploded");
 });
 
-void test("pi-workflows applies stage model defaults and per-agent overrides", async () => {
+void test("spark-workflows applies stage model defaults and per-agent overrides", async () => {
   const script = `export const meta = {
     name: 'model routing',
     description: 'Model routing workflow',
@@ -682,7 +682,7 @@ void test("pi-workflows applies stage model defaults and per-agent overrides", a
   assert.deepEqual(models, ["provider/stage-model", "provider/agent-model"]);
 });
 
-void test("pi-workflows role-run adapter sends model agents through model runner hook", async () => {
+void test("spark-workflows role-run adapter sends model agents through model runner hook", async () => {
   const roleRequests: unknown[] = [];
   const modelRequests: unknown[] = [];
   const agent = createSparkWorkflowRoleRunAdapter({
@@ -730,7 +730,7 @@ void test("pi-workflows role-run adapter sends model agents through model runner
   assert.equal(request.metadata.artifactRef, "artifact:brief-456");
 });
 
-void test("pi-workflows role-run adapter forwards child usage telemetry", async () => {
+void test("spark-workflows role-run adapter forwards child usage telemetry", async () => {
   const reported: unknown[] = [];
   const agent = createSparkWorkflowRoleRunAdapter({
     roleRef: "role:builtin-worker",
@@ -812,7 +812,7 @@ void test("Spark workflow_run extracts provider usage from role-run JSON events"
   });
 });
 
-void test("pi-workflows role-run adapter fails model agents when model hook is missing", async () => {
+void test("spark-workflows role-run adapter fails model agents when model hook is missing", async () => {
   const agent = createSparkWorkflowRoleRunAdapter({
     roleRef: "role:builtin-worker",
     async runRoleInstruction() {
@@ -830,7 +830,7 @@ void test("pi-workflows role-run adapter fails model agents when model hook is m
   );
 });
 
-void test("pi-workflows role-run adapter maps workflow agents to Spark dependency boundary", async () => {
+void test("spark-workflows role-run adapter maps workflow agents to Spark dependency boundary", async () => {
   const requests: unknown[] = [];
   const telemetryReports: unknown[] = [];
   const agent = createSparkWorkflowRoleRunAdapter({
@@ -977,7 +977,7 @@ return result`;
   }
 });
 
-void test("pi-workflows fan_out_with_brief records one brief and fans out with artifactRef", async () => {
+void test("spark-workflows fan_out_with_brief records one brief and fans out with artifactRef", async () => {
   const prompts: string[] = [];
   const artifactInputs: Array<{ title: string; body: string; kind?: string; format?: string }> = [];
 
@@ -1027,7 +1027,7 @@ void test("pi-workflows fan_out_with_brief records one brief and fans out with a
   });
 });
 
-void test("pi-workflows fan_out_with_brief requires artifact recorder", async () => {
+void test("spark-workflows fan_out_with_brief requires artifact recorder", async () => {
   await assert.rejects(
     () =>
       runWorkflowScript(fanOutWithBriefWorkflowScript(), {
@@ -1052,7 +1052,7 @@ void test("Spark workflow role-run adapter refuses graft isolation without a bas
   );
 });
 
-void test("pi-workflows rejects unsupported workflow agent isolation", async () => {
+void test("spark-workflows rejects unsupported workflow agent isolation", async () => {
   for (const isolation of ["container", "worktree"]) {
     const script = `export const meta = { name: 'isolation', description: 'isolation test' }
 await agent('check isolation', { isolation: '${isolation}' })`;
@@ -1067,7 +1067,7 @@ await agent('check isolation', { isolation: '${isolation}' })`;
   }
 });
 
-void test("pi-workflows graft isolation smoke keeps parallel same-path edits in separate refs", async () => {
+void test("spark-workflows graft isolation smoke keeps parallel same-path edits in separate refs", async () => {
   const requests: SparkWorkflowRoleRunRequest[] = [];
   const agent = createSparkWorkflowRoleRunAdapter({
     roleRef: "role:builtin-worker",
@@ -1109,7 +1109,7 @@ return await parallel([
   );
 });
 
-void test("pi-workflows parallel limits concurrency", async () => {
+void test("spark-workflows parallel limits concurrency", async () => {
   const script = `export const meta = { name: 'parallel limit', description: 'limit test' }
 let active = 0
 let maxActive = 0
@@ -1130,7 +1130,7 @@ return { output, maxActive }`;
   });
 });
 
-void test("pi-workflows parallel retries failures and can collect rejected results", async () => {
+void test("spark-workflows parallel retries failures and can collect rejected results", async () => {
   const script = `export const meta = { name: 'parallel retry', description: 'retry test' }
 const attempts = { flaky: 0, bad: 0 }
 const retried = await parallel([
@@ -1165,7 +1165,7 @@ return { attempts, retried, collected }`;
   assert.equal(result.collected[1]?.attempts, 2);
 });
 
-void test("pi-workflows agent artifactRef prepends context bundle prompt", async () => {
+void test("spark-workflows agent artifactRef prepends context bundle prompt", async () => {
   const script = `export const meta = { name: 'brief', description: 'artifact ref test' }
 return await agent('do the work', { label: 'worker', artifactRef: 'artifact:brief-123' })`;
   const prompts: string[] = [];
@@ -1183,7 +1183,7 @@ return await agent('do the work', { label: 'worker', artifactRef: 'artifact:brie
   assert.equal(run.result, "done");
 });
 
-void test("pi-workflows rejects empty child delivery instead of journaling success", async () => {
+void test("spark-workflows rejects empty child delivery instead of journaling success", async () => {
   const script = `export const meta = { name: 'empty delivery', description: 'empty delivery test' }
 await agent('child', { label: 'child' })`;
 
@@ -1198,7 +1198,7 @@ await agent('child', { label: 'child' })`;
   );
 });
 
-void test("pi-workflows requires metadata as the first executable workflow statement", () => {
+void test("spark-workflows requires metadata as the first executable workflow statement", () => {
   assert.throws(
     () =>
       parseWorkflowScript(`const hidden = true
@@ -1213,7 +1213,7 @@ return 'ok'`);
   assert.equal(parsed.meta.name, "first");
 });
 
-void test("pi-workflows runtime hardens deterministic resume against wall-clock randomness", async () => {
+void test("spark-workflows runtime hardens deterministic resume against wall-clock randomness", async () => {
   await assert.rejects(
     () =>
       runWorkflowScript(
@@ -1235,7 +1235,7 @@ return Math.random()`,
   );
 });
 
-void test("pi-workflows resume replays only the unchanged prefix", async () => {
+void test("spark-workflows resume replays only the unchanged prefix", async () => {
   const script = `export const meta = { name: 'resume prefix', description: 'resume prefix test' }
 await agent(args && args.changed ? 'changed first' : 'original first', { label: 'first' })
 await agent('static second', { label: 'second' })
@@ -1262,7 +1262,7 @@ return 'done'`;
   );
 });
 
-void test("pi-workflows exposes quality helpers, item pipelines, retry, and gate", async () => {
+void test("spark-workflows exposes quality helpers, item pipelines, retry, and gate", async () => {
   const script = `export const meta = { name: 'quality helpers', description: 'quality helpers test' }
 const verdict = await verify('claim', { reviewers: 3, threshold: 0.66 })
 const best = await judgePanel(['weak', 'strong'], { judges: 2, rubric: 'test rubric' })
@@ -1332,7 +1332,7 @@ return { verdict, best, found, piped, retried, gated }`;
   );
 });
 
-void test("pi-workflows enforces run and stage token budgets between agent calls", async () => {
+void test("spark-workflows enforces run and stage token budgets between agent calls", async () => {
   const runBudgetScript = `export const meta = { name: 'run budget', description: 'run budget test' }
 await agent('first', { label: 'first' })
 await agent('second', { label: 'second' })`;
@@ -1355,7 +1355,7 @@ await agent('second', { label: 'second' })`;
   );
 });
 
-void test("pi-workflows records real agent telemetry and uses it for token budgets", async () => {
+void test("spark-workflows records real agent telemetry and uses it for token budgets", async () => {
   const script = `export const meta = { name: 'real usage', description: 'real usage budget' }
 await agent('first', { label: 'first' })
 await agent('second', { label: 'second' })`;
@@ -1400,7 +1400,7 @@ await agent('second', { label: 'second' })`;
   assert.deepEqual(telemetryStatuses, ["0:running", "0:succeeded"]);
 });
 
-void test("pi-workflows marks usage as estimated when agents do not report real usage", async () => {
+void test("spark-workflows marks usage as estimated when agents do not report real usage", async () => {
   const script = `export const meta = { name: 'estimated usage', description: 'estimated usage fallback' }
 return await agent('short', { label: 'short' })`;
   const tokenSources: string[] = [];
@@ -1415,7 +1415,7 @@ return await agent('short', { label: 'short' })`;
   assert.deepEqual(tokenSources, ["estimated"]);
 });
 
-void test("pi-workflows composes one-level nested workflows through a controlled resolver", async () => {
+void test("spark-workflows composes one-level nested workflows through a controlled resolver", async () => {
   const parent = `export const meta = { name: 'parent', description: 'parent workflow' }
 const child = await workflow('child', { value: 'ok' })
 return { child }`;

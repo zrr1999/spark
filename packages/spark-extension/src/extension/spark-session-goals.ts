@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
-import { nowIso, type ArtifactRef } from "@zendev-lab/pi-extension-api";
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
+import { nowIso, type ArtifactRef } from "@zendev-lab/spark-extension-api";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {
   legacySessionGoalStorePath,

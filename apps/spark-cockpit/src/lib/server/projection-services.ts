@@ -405,6 +405,12 @@ export interface CockpitWorkspaceControlProjection {
   };
 }
 
+/**
+ * Queue a server command in the Cockpit projection outbox for daemon delivery.
+ *
+ * Execution truth lives in spark-daemon; this table is a durable outbox flushed over
+ * `server.command` runtime protocol envelopes (see command-submission.ts / runtime-ws.ts).
+ */
 export function queueCommandForWorkspaceOwner(db: DatabaseSync, input: QueueCommandInput) {
   return withTransaction(db, () => {
     assertWorkspaceServerMutationAllowed(db, input.workspaceId, input.payload);
@@ -460,7 +466,19 @@ export function queueCommandForWorkspaceOwner(db: DatabaseSync, input: QueueComm
       kind: "command.queued",
       subjectKind: "command",
       subjectId: command.id,
-      payload: { runtimeWorkspaceBindingId: owner.runtimeWorkspaceBindingId },
+      payload: {
+        runtimeWorkspaceBindingId: owner.runtimeWorkspaceBindingId,
+        command: {
+          id: command.id,
+          kind: input.payload.kind,
+          title: input.payload.title ?? null,
+          payload: input.payload,
+          status: "queued",
+          deliveryStatus: "pending",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      },
       createdAt: timestamp,
     });
 
@@ -1238,7 +1256,10 @@ export function recordInvocationUpdate(db: DatabaseSync, input: RecordInvocation
       kind: "invocation.updated",
       subjectKind: "invocation",
       subjectId: input.payload.runtimeInvocationId,
-      payload: { status: input.payload.status },
+      payload: {
+        ...input.payload,
+        commandId: input.commandId ?? null,
+      },
       createdAt: timestamp,
     });
   });
@@ -1288,8 +1309,8 @@ export function recordInvocationLogChunk(db: DatabaseSync, input: RecordInvocati
       subjectKind: "invocation",
       subjectId: input.payload.runtimeInvocationId,
       payload: {
-        stream: input.payload.stream,
-        sequence: input.payload.sequence,
+        ...input.payload,
+        commandId: input.commandId ?? null,
       },
       createdAt: timestamp,
     });

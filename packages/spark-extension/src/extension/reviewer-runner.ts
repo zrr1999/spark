@@ -7,7 +7,8 @@ import {
   runRole,
   type RoleRegistry,
   type RoleRunResult,
-} from "@zendev-lab/pi-roles";
+  type RoleThinkingLevel,
+} from "@zendev-lab/spark-roles";
 import {
   newRef,
   nowIso,
@@ -17,10 +18,11 @@ import {
   type RunRef,
   type Task,
   type TaskRef,
-} from "@zendev-lab/pi-extension-api";
+} from "@zendev-lab/spark-extension-api";
 
 export type ReviewTargetKind = "task" | "goal";
 export type ReviewVerdictOutcome = "approved" | "needs_changes" | "blocked";
+export type ReviewerThinkingLevel = RoleThinkingLevel;
 
 export interface TaskReviewInput {
   targetKind: "task";
@@ -111,6 +113,7 @@ export interface ReviewerRunRecord {
   runName?: string;
   startedAt: string;
   finishedAt: string;
+  thinking?: ReviewerThinkingLevel;
   stdout?: string;
   stderr?: string;
   jsonEvents?: unknown[];
@@ -174,10 +177,40 @@ export interface PiRolesReviewerRunnerOptions {
   model?: string;
   sessionModel?: string;
   sessionDir?: string;
+  reviewerThinkingLevel?: ReviewerThinkingLevel;
   now?: () => string;
 }
 
 const DEFAULT_REVIEWER_TIMEOUT_MS = 600_000;
+export const DEFAULT_REVIEWER_THINKING_LEVEL: ReviewerThinkingLevel = "medium";
+
+const REVIEWER_THINKING_RANK: Record<ReviewerThinkingLevel, number> = {
+  off: 0,
+  minimal: 1,
+  low: 2,
+  medium: 3,
+  high: 4,
+  xhigh: 5,
+};
+
+export function capReviewerThinkingLevel(value: unknown): ReviewerThinkingLevel {
+  if (!isReviewerThinkingLevel(value)) return DEFAULT_REVIEWER_THINKING_LEVEL;
+  return REVIEWER_THINKING_RANK[value] <= REVIEWER_THINKING_RANK.medium
+    ? value
+    : DEFAULT_REVIEWER_THINKING_LEVEL;
+}
+
+function isReviewerThinkingLevel(value: unknown): value is ReviewerThinkingLevel {
+  return (
+    value === "off" ||
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh"
+  );
+}
+
 const REVIEWER_JSON_SCHEMA = [
   "Return ONLY one valid JSON object. Do not include markdown, prose, comments, or tool calls.",
   'Use outcome exactly one of: "approved", "needs_changes", "blocked".',
@@ -210,6 +243,7 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
   readonly #model?: string;
   readonly #sessionModel?: string;
   readonly #sessionDir?: string;
+  readonly #reviewerThinkingLevel: ReviewerThinkingLevel;
   readonly #now: () => string;
 
   constructor(options: PiRolesReviewerRunnerOptions) {
@@ -221,6 +255,7 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
     this.#model = options.model;
     this.#sessionModel = options.sessionModel;
     this.#sessionDir = options.sessionDir;
+    this.#reviewerThinkingLevel = options.reviewerThinkingLevel ?? DEFAULT_REVIEWER_THINKING_LEVEL;
     this.#now = options.now ?? nowIso;
   }
 
@@ -241,6 +276,7 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
       roleRef: role.ref as `role:${string}`,
       systemPrompt: buildReadOnlyReviewerSystemPrompt(role.systemPrompt),
       model: resolvedModel,
+      thinking: this.#reviewerThinkingLevel,
       instruction: renderReviewerInstruction(input),
       runGuidance: REVIEWER_JSON_SCHEMA,
       allowedTools: reviewerGateAllowedTools(role.allowedTools),
@@ -294,6 +330,7 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
         roleRef: role.ref as `role:${string}`,
         systemPrompt: buildReadOnlyReviewerSystemPrompt(role.systemPrompt),
         model: resolvedModel,
+        thinking: this.#reviewerThinkingLevel,
         instruction: renderAskAutoAnswerInstruction(input),
         runGuidance: ASK_AUTO_ANSWER_JSON_SCHEMA,
         allowedTools: reviewerGateAllowedTools(role.allowedTools),
@@ -547,6 +584,7 @@ function roleRunRecord(
     runName: result.record.runName,
     startedAt: result.record.startedAt ?? fallbackStartedAt,
     finishedAt: result.record.finishedAt ?? fallbackFinishedAt,
+    thinking: result.record.thinking,
     stdout: result.stdout,
     stderr: result.stderr,
     jsonEvents: result.jsonEvents,

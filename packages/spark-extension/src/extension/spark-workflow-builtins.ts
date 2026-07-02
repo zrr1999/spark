@@ -2,7 +2,7 @@ import {
   listSavedWorkflows,
   type WorkflowDescriptor,
   type WorkflowRegistryError,
-} from "@zendev-lab/pi-workflows";
+} from "@zendev-lab/spark-workflows";
 import { workspaceWorkflowDir } from "./spark-workflow-registry.ts";
 
 export interface SparkSavedWorkflowDescriptor {

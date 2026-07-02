@@ -24,13 +24,13 @@
     "doctor": "pnpm run build && node dist/cli.js doctor"
   },
   "dependencies": {
-    "@zendev-lab/pi-artifacts": "workspace:^",
-    "@zendev-lab/pi-extension-api": "workspace:^",
-    "@zendev-lab/pi-roles": "workspace:^",
-    "@zendev-lab/pi-tasks": "workspace:^",
+    "@zendev-lab/spark-artifacts": "workspace:^",
+    "@zendev-lab/spark-extension-api": "workspace:^",
+    "@zendev-lab/spark-host": "workspace:^",
     "@zendev-lab/spark-i18n": "workspace:^",
+    "@zendev-lab/spark-roles": "workspace:^",
     "@zendev-lab/spark-runtime": "workspace:^",
-    "@zendev-lab/spark-tui-app": "workspace:^",
+    "@zendev-lab/spark-tasks": "workspace:^",
     "ws": "^8.18.3"
   },
   "devDependencies": {

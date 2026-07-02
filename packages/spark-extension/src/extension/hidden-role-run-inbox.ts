@@ -1,4 +1,4 @@
-import type { RunRef } from "@zendev-lab/pi-extension-api";
+import type { RunRef } from "@zendev-lab/spark-extension-api";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {
   legacyHiddenRoleRunInboxStorePath,

@@ -1,6 +1,6 @@
 import { Type } from "typebox";
-import type { Task } from "@zendev-lab/pi-extension-api";
-import { defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
+import type { Task } from "@zendev-lab/spark-extension-api";
+import { defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
 import { activeSparkRoleRunProcessesForCwd } from "./background-runs.ts";
 import { currentSparkProject, sparkSessionKey } from "./session-state.ts";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
@@ -122,7 +122,7 @@ function normalizeSparkRecoverTaskClaimInput(
 }
 
 function resolveRecoverProject(
-  projects: ReturnType<import("@zendev-lab/pi-tasks").TaskGraph["projects"]>,
+  projects: ReturnType<import("@zendev-lab/spark-tasks").TaskGraph["projects"]>,
   selector: string,
 ) {
   return projects.find((project) => project.ref === selector || project.title === selector);

@@ -1,10 +1,10 @@
 /**
  * SparkHostRuntime — the native spark-tui implementation of the
- * `pi-extension-api` ExtensionAPI surface.
+ * `spark-extension-api` ExtensionAPI surface.
  *
  * This file owns the *contract surface* exposed to extensions plus the minimum
  * internal plumbing needed to make the existing 5 retained extensions
- * (`spark`, `pi-cue`, `pi-graft`, `pi-roles`, `pi-ask`) load and run without
+ * (`spark`, `spark-cue`, `spark-graft`, `spark-roles`, `spark-ask`) load and run without
  * crashing. Wiring it into a real agent turn loop, model selector, session
  * store, and TUI rendering is split into follow-up tasks
  * (`agent-turn-loop`, `model-selector-ui`, `session-format-and-store`,
@@ -35,7 +35,7 @@ import type {
   ExtensionUi,
   ToolConfig,
   ToolInfo,
-} from "@zendev-lab/pi-extension-api";
+} from "@zendev-lab/spark-extension-api";
 import {
   SPARK_PROTOCOL_VERSION,
   createBlockedInteractionResponse,

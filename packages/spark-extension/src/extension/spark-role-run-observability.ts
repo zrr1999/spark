@@ -7,8 +7,8 @@ import type {
   TaskRun,
   TaskRunFailureKind,
   TaskRunStatus,
-} from "@zendev-lab/pi-extension-api";
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-extension-api";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import type { ActiveSparkRoleRunProcess } from "@zendev-lab/spark-runtime";
 
 export type SparkRoleRunObservedStatus =

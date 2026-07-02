@@ -1,16 +1,16 @@
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import {
   formatPiTaskActiveStatusLine,
   formatPiTaskSummaryStatusLine,
   isUnfinishedTaskStatus,
-} from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-tasks";
 import type {
   ProjectRef,
   TaskRef,
   TaskRunCompletionSummary,
   TaskStatus,
-} from "@zendev-lab/pi-extension-api";
-import type { WorkflowRunControl, WorkflowRunStatusSummary } from "@zendev-lab/pi-workflows";
+} from "@zendev-lab/spark-extension-api";
+import type { WorkflowRunControl, WorkflowRunStatusSummary } from "@zendev-lab/spark-workflows";
 import { renderSparkProjectKindDisplay } from "./project-kind-registry.ts";
 import { appendRecentRoleRunCompletionLines } from "./role-run-completions.ts";
 import type { SparkDriveMode } from "./spark-drive-state.ts";

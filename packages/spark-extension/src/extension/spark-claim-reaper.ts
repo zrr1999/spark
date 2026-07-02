@@ -1,6 +1,6 @@
-import { nowIso } from "@zendev-lab/pi-extension-api";
+import { nowIso } from "@zendev-lab/spark-extension-api";
 import { sweepExpiredTaskClaims } from "@zendev-lab/spark-runtime";
-import { defaultTaskGraphStore, TaskGraphStoreLockTimeoutError } from "@zendev-lab/pi-tasks";
+import { defaultTaskGraphStore, TaskGraphStoreLockTimeoutError } from "@zendev-lab/spark-tasks";
 import { saveSparkGraphAndTodos, type SparkSessionContext } from "./session-state.ts";
 
 const CLAIM_SWEEP_INTERVAL_MS = 30_000;

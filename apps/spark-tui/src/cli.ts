@@ -1,11 +1,12 @@
 import { realpathSync } from "node:fs";
-import { stdin as processStdin } from "node:process";
+import { stdin as processStdin, stdout as processStdout } from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { sparkTuiCliStrings } from "@zendev-lab/spark-i18n/cli";
 
 import {
   attachSparkWorkspaceClient,
+  clientCancelTurn,
   createSparkDaemonNativeCommands,
   createSparkDaemonNativeResponder,
   handleSparkDaemonCliCommand,
@@ -97,10 +98,16 @@ export type SparkCliCommand =
   | { kind: "tui"; initialMessage?: string; options?: SparkCliRuntimeOptions }
   | { kind: "daemon"; command: SparkDaemonCliCommand };
 
+export interface SparkCliTerminalState {
+  stdinIsTTY?: boolean;
+  stdoutIsTTY?: boolean;
+}
+
 export interface RunSparkCliOptions {
   daemonClient?: SparkDaemonClientOptions;
   runTui?: typeof runNativeSparkTui;
   createHostServices?: (options?: SparkCliHostServicesOptions) => Promise<SparkCliHostServices>;
+  terminal?: SparkCliTerminalState;
 }
 
 export function parseSparkCliArgs(argv: string[]): SparkCliArgs {
@@ -433,6 +440,10 @@ export async function runSparkCli(
       }
     }
     case "tui": {
+      if (!isInteractiveSparkCliTerminal(options)) {
+        console.error(tuiCliStrings.tuiRequiresTty);
+        return 2;
+      }
       const lease = await attachSparkWorkspaceClient(daemonClient, {
         kind: "interactive",
         displayName: tuiCliStrings.interactiveDisplayName,
@@ -480,6 +491,13 @@ export async function runSparkCli(
       }
     }
   }
+}
+
+function isInteractiveSparkCliTerminal(options: RunSparkCliOptions): boolean {
+  return Boolean(
+    (options.terminal?.stdinIsTTY ?? processStdin.isTTY) &&
+    (options.terminal?.stdoutIsTTY ?? processStdout.isTTY),
+  );
 }
 
 const NATIVE_SLASH_COMMAND_EXCLUSIONS = [
@@ -700,6 +718,10 @@ function printSparkJsonEventStream(
   for (const line of lines) console.log(JSON.stringify(line));
 }
 
+export interface SparkRpcState {
+  lastInvocationId?: string;
+}
+
 async function runSparkRpcMode(
   daemonClient: SparkDaemonClientOptions,
   options: SparkCliRuntimeOptions | undefined,
@@ -710,6 +732,7 @@ async function runSparkRpcMode(
     success: true,
     data: { protocol: "spark-rpc-jsonl", mode: "daemon" },
   });
+  const state: SparkRpcState = {};
   let buffered = "";
   for await (const chunk of processStdin) {
     buffered += String(chunk);
@@ -717,12 +740,12 @@ async function runSparkRpcMode(
     while (newline >= 0) {
       const line = buffered.slice(0, newline).replace(/\r$/u, "");
       buffered = buffered.slice(newline + 1);
-      if (line.trim()) await handleSparkRpcLine(line, daemonClient, options);
+      if (line.trim()) await handleSparkRpcLine(line, daemonClient, options, writeRpc, state);
       newline = buffered.indexOf("\n");
     }
   }
   if (buffered.trim())
-    await handleSparkRpcLine(buffered.replace(/\r$/u, ""), daemonClient, options);
+    await handleSparkRpcLine(buffered.replace(/\r$/u, ""), daemonClient, options, writeRpc, state);
 }
 
 export async function handleSparkRpcLine(
@@ -730,6 +753,7 @@ export async function handleSparkRpcLine(
   daemonClient: SparkDaemonClientOptions,
   options: SparkCliRuntimeOptions | undefined,
   writer: (value: Record<string, unknown>) => void = writeRpc,
+  state: SparkRpcState = {},
 ): Promise<void> {
   let request: Record<string, unknown>;
   try {
@@ -750,6 +774,8 @@ export async function handleSparkRpcLine(
         { action: "submit", json: true, sessionId, prompt: message },
         daemonClient,
       );
+      const invocationId = invocationIdFromSubmitResult(result);
+      if (invocationId) state.lastInvocationId = invocationId;
       writer({ id, type: "response", command, success: true, data: result });
       return;
     }
@@ -772,12 +798,32 @@ export async function handleSparkRpcLine(
       return;
     }
     if (command === "abort") {
+      const invocationId = rpcAbortInvocationId(request) ?? state.lastInvocationId;
+      if (!invocationId) {
+        writer({
+          id,
+          type: "response",
+          command,
+          success: false,
+          error: "abort requires invocationId, fileName, or a prior submitted turn",
+        });
+        return;
+      }
+      const result = await clientCancelTurn(
+        {
+          invocationId,
+          reason: "Spark RPC abort requested by client.",
+        },
+        daemonClient,
+      );
+      if (state.lastInvocationId === invocationId) state.lastInvocationId = undefined;
       writer({
         id,
         type: "response",
         command,
-        success: true,
-        data: { queuedDaemonMode: true },
+        success: result.cancelled,
+        data: result,
+        ...(result.cancelled ? {} : { error: result.message }),
       });
       return;
     }
@@ -801,6 +847,26 @@ export async function handleSparkRpcLine(
   } catch (error) {
     writer({ id, type: "response", command, success: false, error: errorMessage(error) });
   }
+}
+
+function invocationIdFromSubmitResult(result: unknown): string | undefined {
+  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+  const submit = record.result;
+  if (!submit || typeof submit !== "object") return undefined;
+  const submitRecord = submit as Record<string, unknown>;
+  return typeof submitRecord.fileName === "string" ? submitRecord.fileName : undefined;
+}
+
+function rpcAbortInvocationId(request: Record<string, unknown>): string | undefined {
+  for (const key of ["invocationId", "fileName", "taskFileName"]) {
+    const value = request[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  const nested = request.data ?? request.params;
+  if (nested && typeof nested === "object") {
+    return rpcAbortInvocationId(nested as Record<string, unknown>);
+  }
+  return undefined;
 }
 
 function writeRpc(value: Record<string, unknown>): void {

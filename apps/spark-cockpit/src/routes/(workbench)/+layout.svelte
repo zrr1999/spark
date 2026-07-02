@@ -4,6 +4,11 @@
   import { onMount } from "svelte";
   import Icon from "$lib/Icon.svelte";
   import SparkLogo from "$lib/SparkLogo.svelte";
+  import {
+    buildWorkbenchNavGroups,
+    currentWorkbenchPageLabel,
+    isWorkbenchNavItemActive,
+  } from "$lib/workbench-nav";
   import { workspacePath } from "$lib/workspace-routes";
 
   interface ProjectSearchResult {
@@ -132,68 +137,29 @@
     };
   });
 
-  let navItems = $derived([
-    {
-      href: activeWorkspacePath || "/",
-      label: data.activeWorkspace ? t.nav.overview : t.nav.home,
-      icon: "home",
-    },
-    { href: `${activeWorkspacePath}/projects`, label: t.nav.projects, icon: "folder" },
-    { href: `${activeWorkspacePath}/inbox`, label: t.nav.inbox, icon: "inbox" },
-    { href: `${activeWorkspacePath}/repos`, label: t.nav.repos, icon: "repos" },
-    { href: `${activeWorkspacePath}/agents`, label: t.nav.agents, icon: "agents" },
-    {
-      href: `${activeWorkspacePath}/artifacts`,
-      label: t.nav.artifacts,
-      icon: "artifacts",
-    },
-    { href: `${activeWorkspacePath}/settings`, label: t.nav.settings, icon: "settings" },
-  ] as const);
+  let navGroups = $derived(
+    buildWorkbenchNavGroups({
+      activeWorkspacePath,
+      hasActiveWorkspace: Boolean(data.activeWorkspace),
+      nav: t.nav,
+      groups: t.navGroups,
+    }),
+  );
 
   function isActive(href: string) {
-    const pathname = page.url.pathname;
-    if (href === "/" || (activeWorkspacePath && href === activeWorkspacePath)) {
-      return pathname === href;
-    }
-
-    return pathname === href || pathname.startsWith(`${href}/`);
+    return isWorkbenchNavItemActive({
+      pathname: page.url.pathname,
+      href,
+      activeWorkspacePath,
+    });
   }
 
   function currentPageLabel(pathname: string) {
-    if (pathname === "/") {
-      return t.pages.setupGuide;
-    }
-
-    const section = pathname.split("/").filter(Boolean)[1] ?? "";
-    if (!section) {
-      return t.pages.overview;
-    }
-
-    if (section === "projects") {
-      return t.nav.projects;
-    }
-
-    if (section === "inbox") {
-      return t.nav.inbox;
-    }
-
-    if (section === "repos") {
-      return t.nav.repos;
-    }
-
-    if (section === "agents") {
-      return t.nav.agents;
-    }
-
-    if (section === "artifacts") {
-      return t.nav.artifacts;
-    }
-
-    if (section === "settings") {
-      return t.pages.settings;
-    }
-
-    return t.pages.comingSoon;
+    return currentWorkbenchPageLabel({
+      pathname,
+      nav: t.nav,
+      pages: t.pages,
+    });
   }
 
   function getPlatformShortcutLabel() {
@@ -387,23 +353,26 @@
       </button>
 
       <nav>
-        {#each navItems as item}
-          {#if "disabled" in item && item.disabled}
-            <span class="nav-link disabled" aria-disabled="true">
-              <Icon name={item.icon} size={22} />
-              <span>{item.label}</span>
-              <small class="soon-badge">{common.comingSoon}</small>
-            </span>
-          {:else}
-            <a
-              class="nav-link"
-              class:active={isActive(item.href)}
-              href={item.href}
-            >
-              <Icon name={item.icon} size={22} />
-              <span>{item.label}</span>
-            </a>
-          {/if}
+        {#each navGroups as group}
+          <section class="nav-group" aria-labelledby={`nav-group-${group.id}`}>
+            <h2 class="nav-group-label" id={`nav-group-${group.id}`}>{group.label}</h2>
+            <div class="nav-group-items">
+              {#each group.items as item}
+                {#if item.disabled}
+                  <span class="nav-link disabled" aria-disabled="true">
+                    <Icon name={item.icon} size={22} />
+                    <span>{item.label}</span>
+                    <small class="soon-badge">{common.comingSoon}</small>
+                  </span>
+                {:else}
+                  <a class="nav-link" class:active={isActive(item.href)} href={item.href}>
+                    <Icon name={item.icon} size={22} />
+                    <span>{item.label}</span>
+                  </a>
+                {/if}
+              {/each}
+            </div>
+          </section>
         {/each}
       </nav>
 
@@ -673,7 +642,28 @@
 
   aside nav {
     display: grid;
-    gap: 10px;
+    gap: 18px;
+  }
+
+  .nav-group {
+    display: grid;
+    gap: 7px;
+  }
+
+  .nav-group-label {
+    color: var(--color-ink-disabled);
+    font-size: 11px;
+    font-weight: 850;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    margin: 0 0 1px;
+    padding: 0 18px;
+    text-transform: uppercase;
+  }
+
+  .nav-group-items {
+    display: grid;
+    gap: 8px;
   }
 
   .nav-link {
@@ -1243,6 +1233,19 @@
 
     .sidebar-search span,
     .sidebar-search kbd {
+      display: none;
+    }
+
+    aside nav {
+      gap: 12px;
+    }
+
+    .nav-group,
+    .nav-group-items {
+      gap: 8px;
+    }
+
+    .nav-group-label {
       display: none;
     }
 

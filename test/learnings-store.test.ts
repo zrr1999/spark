@@ -4,15 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { ArtifactStore } from "@zendev-lab/pi-artifacts";
+import { ArtifactStore } from "@zendev-lab/spark-artifacts";
 import {
   defaultLearningStore,
   LearningExportFormatError,
   LearningStore,
   parseLearningExportMarkdown,
   renderLearningExportMarkdown,
-} from "@zendev-lab/pi-learnings";
-import { newRef } from "@zendev-lab/pi-extension-api";
+} from "@zendev-lab/spark-learnings";
+import { newRef } from "@zendev-lab/spark-extension-api";
 
 void test("learning store records active learnings and searches by content", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-learnings-"));
@@ -33,7 +33,7 @@ void test("learning store records active learnings and searches by content", asy
     assert.equal(recorded.kind, "knowledge");
     assert.equal(recorded.body.status, "active");
     assert.equal(recorded.provenance.producer, "task");
-    assert.match(recorded.provenance.note ?? "", /pi-learnings record/);
+    assert.match(recorded.provenance.note ?? "", /spark-learnings record/);
     assert.deepEqual(
       recorded.links.map((link) => link.to),
       [evidenceRef],

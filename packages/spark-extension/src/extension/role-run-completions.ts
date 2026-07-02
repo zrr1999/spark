@@ -2,8 +2,8 @@ import {
   nowIso,
   type TaskRunCompletionSummary,
   type ProjectRef,
-} from "@zendev-lab/pi-extension-api";
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-extension-api";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import {
   loadHiddenRoleRunInboxState,
   saveHiddenRoleRunInboxState,

@@ -6,8 +6,8 @@ import type {
   TaskPlan,
   TaskPlanItem,
   TaskStatus,
-} from "@zendev-lab/pi-extension-api";
-import { type TaskPlanResult } from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-extension-api";
+import { type TaskPlanResult } from "@zendev-lab/spark-tasks";
 
 export function taskPlanSchema() {
   return Type.Object({

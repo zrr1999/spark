@@ -1,5 +1,5 @@
-import type { ProjectRef } from "@zendev-lab/pi-extension-api";
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
+import type { ProjectRef } from "@zendev-lab/spark-extension-api";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import type { SparkPlanningModeSource } from "./session-state.ts";
 
 export type SparkCommandProjectStateKind = "empty_project" | "existing_project" | "initialized";

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { registerSparkModelsTool } from "../packages/spark-ai/src/models-extension.ts";
-import type { ToolConfig } from "@zendev-lab/pi-extension-api";
+import type { ToolConfig } from "@zendev-lab/spark-extension-api";
 
 interface FakeModel {
   provider: string;

@@ -1,4 +1,4 @@
-import { detectCopyLanguage, type CopyLanguage } from "@zendev-lab/pi-extension-api";
+import { detectCopyLanguage, type CopyLanguage } from "@zendev-lab/spark-extension-api";
 import { escapeYamlLine } from "./task-plan-tool.ts";
 
 export interface SparkInitClarificationData {

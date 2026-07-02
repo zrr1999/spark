@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
-import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
+import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
 import {
   handleSparkInput,
   injectSparkHints,
@@ -60,8 +60,8 @@ void test("injectSparkHints injects default research lens without initialized Sp
     const prompt = (result as { systemPrompt?: string }).systemPrompt ?? "";
     assert.match(prompt, /<base_system_prompts>/);
     assert.doesNotMatch(prompt, /# Spark/);
-    assert.match(prompt, /# pi-cue/);
-    assert.match(prompt, /# pi-graft/);
+    assert.match(prompt, /# spark-cue/);
+    assert.match(prompt, /# spark-graft/);
     assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
   } finally {
     await rm(dir, { recursive: true, force: true });

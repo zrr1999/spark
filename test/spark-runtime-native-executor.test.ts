@@ -4,8 +4,8 @@ import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { builtinRoleRef, RoleRegistry } from "@zendev-lab/pi-roles";
-import { TaskGraph } from "@zendev-lab/pi-tasks";
+import { builtinRoleRef, RoleRegistry } from "@zendev-lab/spark-roles";
+import { TaskGraph } from "@zendev-lab/spark-tasks";
 import { runSparkTask, type SparkRoleInstructionExecutor } from "@zendev-lab/spark-runtime";
 
 void test("runSparkTask can execute through a daemon-native role executor without spawning pi", async () => {

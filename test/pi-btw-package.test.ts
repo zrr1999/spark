@@ -40,8 +40,8 @@ void test("pi-btw package keeps upstream extension, skill, and host-specific dep
   assert.equal(pkg.dependencies?.["@earendil-works/pi-tui"], undefined);
 });
 
-void test("pi-cue package ships prompt text without registering it as a skill", async () => {
-  const pkg = await readPackageJson("packages/pi-cue/package.json");
+void test("spark-cue package ships prompt text without registering it as a skill", async () => {
+  const pkg = await readPackageJson("packages/spark-cue/package.json");
 
   assert.deepEqual(pkg.pi?.extensions, ["./src/extension/index.ts"]);
   assert.equal(pkg.pi?.skills, undefined);

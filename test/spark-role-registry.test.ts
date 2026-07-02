@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { builtinRoleIds, createBuiltinRoles } from "@zendev-lab/pi-roles";
-import { PI_GRAFT_PATCHER_ROLE_REF, registerPiGraftExtension } from "@zendev-lab/pi-graft";
+import { builtinRoleIds, createBuiltinRoles } from "@zendev-lab/spark-roles";
+import { PI_GRAFT_PATCHER_ROLE_REF, registerPiGraftExtension } from "@zendev-lab/spark-graft";
 import { createSparkRoleRegistry } from "../packages/spark-extension/src/extension/spark-role-registry.ts";
 
 interface MinimalPiGraftApi {
@@ -44,7 +44,7 @@ void test("Spark role registries keep patcher out of builtin roles", async () =>
   }
 });
 
-void test("Spark role registries include pi-graft patcher only as an extension role", async () => {
+void test("Spark role registries include spark-graft patcher only as an extension role", async () => {
   registerPiGraftExtension(minimalPiGraftApi());
   const dir = await mkdtemp(join(tmpdir(), "spark-role-registry-extension-"));
   try {

@@ -12,8 +12,8 @@ import {
   runRole,
   type RoleRegistry,
   type RoleLaunchMode,
-} from "@zendev-lab/pi-roles";
-import type { ArtifactStore } from "@zendev-lab/pi-artifacts";
+} from "@zendev-lab/spark-roles";
+import type { ArtifactStore } from "@zendev-lab/spark-artifacts";
 import {
   DependencyError,
   type ArtifactRef,
@@ -28,14 +28,19 @@ import {
   type TaskRun,
   type TaskRunCompletionSummary,
   type TaskTodo,
-} from "@zendev-lab/pi-extension-api";
-import type { RoleInstruction, RoleRunRecord, RoleRunStatus, RoleSpec } from "@zendev-lab/pi-roles";
+} from "@zendev-lab/spark-extension-api";
+import type {
+  RoleInstruction,
+  RoleRunRecord,
+  RoleRunStatus,
+  RoleSpec,
+} from "@zendev-lab/spark-roles";
 import {
   taskCompletionReadiness,
   type TaskGraph,
   type TaskGraphStore,
   type TaskGraphStoreUpdateOptions,
-} from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-tasks";
 import {
   type RoleRunArtifactBody,
   type RoleRunJsonEventsTail,
@@ -85,6 +90,7 @@ export interface SparkRoleInstructionExecutorInput {
   forkFromSession?: string;
   model?: string;
   env?: NodeJS.ProcessEnv;
+  onEvent?: (event: unknown) => void | Promise<void>;
 }
 
 /**
@@ -96,7 +102,7 @@ export type SparkRoleInstructionExecutor = (
   input: SparkRoleInstructionExecutorInput,
 ) => Promise<SparkRoleRunResult>;
 
-export { type RoleLaunchMode } from "@zendev-lab/pi-roles";
+export { type RoleLaunchMode } from "@zendev-lab/spark-roles";
 
 export interface ActiveSparkRoleRunProcess {
   runRef: RunRef;
@@ -491,6 +497,7 @@ export interface RoleRunnerOptions {
   env?: NodeJS.ProcessEnv;
   allowedTools?: string[];
   roleExecutor?: SparkRoleInstructionExecutor;
+  onRoleEvent?: (event: unknown) => void | Promise<void>;
 }
 
 export interface SparkTaskRunOptions {
@@ -514,6 +521,7 @@ export interface SparkTaskRunOptions {
   env?: NodeJS.ProcessEnv;
   allowedTools?: string[];
   roleExecutor?: SparkRoleInstructionExecutor;
+  onRoleEvent?: (event: unknown) => void | Promise<void>;
   heartbeatIntervalMs?: number;
   onHeartbeat?: (graph: TaskGraph) => void | Promise<void>;
   claim?: {
@@ -656,6 +664,7 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
         env: input.env,
         allowedTools: input.allowedTools,
         roleExecutor: input.roleExecutor,
+        onRoleEvent: input.onRoleEvent,
       },
       runRef,
     );
@@ -1200,6 +1209,7 @@ async function runWithInjectedRoleExecutor(
       | "sessionModel"
       | "env"
       | "allowedTools"
+      | "onRoleEvent"
     >,
   baseRecord: SparkRoleRunResult["record"],
 ): Promise<SparkRoleRunResult> {
@@ -1245,6 +1255,7 @@ async function runWithInjectedRoleExecutor(
       forkFromSession: options.forkFromSession,
       model,
       env: options.env,
+      onEvent: options.onRoleEvent,
     });
     if (timedOut) throw new RoleRunTimeoutError(options.timeoutMs);
     return {

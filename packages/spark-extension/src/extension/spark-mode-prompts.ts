@@ -1,5 +1,5 @@
-import type { ProjectRef } from "@zendev-lab/pi-extension-api";
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
+import type { ProjectRef } from "@zendev-lab/spark-extension-api";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import type { SparkEntryPhase } from "./spark-entry.ts";
 import {
   ASK_BEFORE_GUESSING,

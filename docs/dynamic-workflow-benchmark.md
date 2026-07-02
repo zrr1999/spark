@@ -33,7 +33,7 @@ The Pi package positions itself as “Claude Code–style dynamic workflows for 
 
 ## Spark target: better, not worse
 
-Spark workflow must keep the existing `pi-workflows`/`spark-runtime` boundary, but feature parity is not optional. The target bar:
+Spark workflow must keep the existing `spark-workflows`/`spark-runtime` boundary, but feature parity is not optional. The target bar:
 
 1. **Script runtime**: metadata-first JavaScript scripts; `agent`, `parallel`, `pipeline`, `stage`, `workflow`, `artifactRecord`, `budget`, `verify`, `judgePanel`, `loopUntilDry`, `completenessCheck`, `retry`, and `gate`; deprecated `phase` remains a compatibility alias for old saved workflows.
 2. **Deterministic resumability**: journal by deterministic call index/hash, replay only the unchanged prefix, block accidental `Date.now()`, `Date()`, `new Date()`, and `Math.random()` inside workflow scripts.
@@ -63,7 +63,7 @@ Spark workflow must keep the existing `pi-workflows`/`spark-runtime` boundary, b
 
 Final live parity evidence is tracked in [`live-dynamic-workflow-parity-evidence.md`](./live-dynamic-workflow-parity-evidence.md).
 
-- `pi-workflows` runtime now has deterministic metadata-first scripts, 16-concurrency default, token budget APIs, stage budgets, longest-unchanged-prefix resume, nested workflow composition, item pipelines, webSearch/fetchContent adapters for research workflows, and the quality stdlib.
+- `spark-workflows` runtime now has deterministic metadata-first scripts, 16-concurrency default, token budget APIs, stage budgets, longest-unchanged-prefix resume, nested workflow composition, item pipelines, webSearch/fetchContent adapters for research workflows, and the quality stdlib.
 - Spark now registers `workflow_run`, a visible execution surface for generated/saved workflow scripts that routes agents through Spark workflow role-run boundaries and approval-gates risky runs before child agents or web/fetch adapters start. By default it starts a manager-owned background run and returns a live `runRef`; `wait: true` keeps explicit foreground compatibility. `/ultracode` is the explicit opt-in high-effort command that asks the agent to reuse a saved workflow or generate a bounded metadata-first script and run it through `workflow_run`.
 - `workflow_run` persists dynamic run records in the v2 event store under `.spark/dynamic-workflows/runs/<run-id>/` with script hash/body, args, metadata, append-only events, projected snapshots, result/error, captured base metadata, scoped approval provenance when required, per-agent telemetry, child run refs, actual/estimated token totals, optional cost, liveness/rate signals, saved workflow metadata, and delivery acknowledgement state; `.spark/dynamic-workflow-runs.json` is legacy-import-only for migrating old v1 dynamic runs.
 - Graft scratch/capture supports process-scoped `GRAFT_BASE_REF` as the implicit first-operation base when explicit `--base`/tool `base` and `--from`/tool `from` are absent. Explicit base still wins, `from` continuation ignores env base, and missing/blank env base fails loudly. Spark workflow agents can request `isolation: "graft"`; Spark injects the persisted workflow base as `GRAFT_BASE_REF`, narrows the child role-run tools to Graft scratch/candidate/validation operations, and surfaces scratch/candidate/patch refs in isolated agent results, telemetry metadata, and dashboard provenance.

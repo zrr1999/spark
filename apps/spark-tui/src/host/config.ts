@@ -44,12 +44,12 @@ export interface SparkConfig {
 
 export const DEFAULT_SPARK_CONFIG: SparkConfig = {
   extensions: [
-    "@zendev-lab/pi-ask/extension",
-    "@zendev-lab/pi-cue/extension",
-    "@zendev-lab/pi-files/extension",
+    "@zendev-lab/spark-ask/extension",
+    "@zendev-lab/spark-cue/extension",
+    "@zendev-lab/spark-files/extension",
     "@zendev-lab/spark-ai/models-extension",
-    "@zendev-lab/pi-roles/extension",
-    "@zendev-lab/pi-graft/extension",
+    "@zendev-lab/spark-roles/extension",
+    "@zendev-lab/spark-graft/extension",
     "@zendev-lab/spark-extension/extension",
   ],
   providers: ["@zendev-lab/spark-ai/baidu-oneapi-provider"],

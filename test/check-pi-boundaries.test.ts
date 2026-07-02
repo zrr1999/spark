@@ -20,7 +20,10 @@ void test("boundary checker rejects pi package imports from Spark and cockpit pa
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /pi-\* packages must not depend on cockpit packages/u);
-  assert.match(result.stderr, /pi-\* packages must not depend on Spark packages/u);
+  assert.match(
+    result.stderr,
+    /pi-\* packages may depend only on renamed Spark foundation packages/u,
+  );
 });
 
 void test("boundary checker rejects Spark packages importing cockpit packages", async () => {
@@ -107,18 +110,38 @@ void test("boundary checker treats spark-daemon as the daemon/cockpit adapter", 
   await writePackage(root, "apps/spark-daemon", {
     name: "@zendev-lab/spark-daemon",
     dependencies: {
+      "@zendev-lab/spark-host": "workspace:^",
       "@zendev-lab/spark-protocol": "workspace:*",
       "@zendev-lab/spark-runtime": "workspace:^",
-      "@zendev-lab/spark-tui-app": "workspace:^",
     },
     source:
       'import { runtimeMessageSchema } from "@zendev-lab/spark-protocol";\n' +
-      'import { createSparkHeadlessRoleExecutor, createSparkHeadlessSessionExecutor } from "@zendev-lab/spark-tui-app/headless-role-executor";\n',
+      'import { loadSparkHeadlessSessionModule } from "@zendev-lab/spark-host/headless-loader";\n',
   });
 
   const result = runBoundaryCheck(root);
 
   assert.equal(result.status, 0, result.stderr);
+});
+
+void test("boundary checker rejects spark-daemon imports from spark-tui-app", async () => {
+  const root = await fixtureRoot();
+  await writePackage(root, "apps/spark-daemon", {
+    name: "@zendev-lab/spark-daemon",
+    dependencies: {
+      "@zendev-lab/spark-tui-app": "workspace:^",
+    },
+    source:
+      'import { createSparkHeadlessSessionExecutor } from "@zendev-lab/spark-tui-app/headless-role-executor";\n',
+  });
+
+  const result = runBoundaryCheck(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /spark-daemon must use @zendev-lab\/spark-host\/headless-loader instead of @zendev-lab\/spark-tui-app/u,
+  );
 });
 
 void test("boundary checker keeps direct pi-tui usage behind spark-tui", async () => {

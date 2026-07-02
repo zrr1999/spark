@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { RoleRegistry } from "@zendev-lab/pi-roles";
+import { RoleRegistry } from "@zendev-lab/spark-roles";
 import {
   newRef,
   stableId,
@@ -16,10 +16,10 @@ import {
   type TaskPlan,
   type TaskRef,
   type ProjectRef,
-} from "@zendev-lab/pi-extension-api";
-import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
-import { defaultLearningStore } from "@zendev-lab/pi-learnings";
-import { defaultWorkflowRunStore } from "../packages/pi-workflows/src/index.ts";
+} from "@zendev-lab/spark-extension-api";
+import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import { defaultLearningStore } from "@zendev-lab/spark-learnings";
+import { defaultWorkflowRunStore } from "../packages/spark-workflows/src/index.ts";
 import {
   killActiveSparkRoleRunProcesses,
   listActiveSparkRoleRunProcesses,
@@ -31,9 +31,9 @@ import {
   renderTaskPlanReadinessRules,
   TaskGraph,
   TaskGraphStore,
-} from "@zendev-lab/pi-tasks";
-import { registerPiArtifactTool } from "@zendev-lab/pi-artifacts/extension";
-import piAskExtension from "../packages/pi-ask/src/extension.ts";
+} from "@zendev-lab/spark-tasks";
+import { registerPiArtifactTool } from "@zendev-lab/spark-artifacts/extension";
+import piAskExtension from "../packages/spark-ask/src/extension.ts";
 import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
 import { JsonStoreFormatError } from "../packages/spark-extension/src/extension/json-store.ts";
 import type { SparkToolContext } from "../packages/spark-extension/src/extension/spark-tool-registration.ts";
@@ -7614,7 +7614,7 @@ void test("active session goal preserves tools disabled by other extensions", as
     const run = registerSparkToolsForTest();
     await executeSparkTool(run.tools, "impl_use_project", ctx, { project: "Preserve disabled" });
 
-    // Simulate another extension (pi-cue) that registers `bash` and then
+    // Simulate another extension (spark-cue) that registers `bash` and then
     // deactivates it at session start, leaving it registered-but-inactive.
     run.registerActiveTool("bash");
     run.setActiveTools(run.getActiveToolNames().filter((name) => name !== "bash"));
@@ -11903,7 +11903,7 @@ function registerSparkToolsForTest(options: { reviewerRunner?: ReviewerRunner } 
     eventHandlers,
     getActiveToolNames: () => [...activeToolNames],
     // Register a no-op tool and mark it active, simulating a tool contributed
-    // by another extension (e.g. pi-cue's `bash`) so tests can verify Spark
+    // by another extension (e.g. spark-cue's `bash`) so tests can verify Spark
     // goal toggling never silently re-activates externally disabled tools.
     registerActiveTool: (name: string) => {
       tools.set(name, {

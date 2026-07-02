@@ -81,12 +81,12 @@ For `agent(..., { isolation: "graft" })`, each isolated agent node should surfac
 
 | Layer | Owns | Must not own |
 | --- | --- | --- |
-| `pi-workflows` | Generic workflow script runtime, deterministic execution helpers, typed runtime events, snapshot projection helpers that are host-neutral | Spark project/task state, approval policy, role registry, Graft-specific policy, UI rendering |
+| `spark-workflows` | Generic workflow script runtime, deterministic execution helpers, typed runtime events, snapshot projection helpers that are host-neutral | Spark project/task state, approval policy, role registry, Graft-specific policy, UI rendering |
 | `spark-runtime` | Role-run execution adapter, per-run environment/tool policy, child process control hooks, model/usage extraction | Workflow store schema, dashboard rendering, project/task mutations |
-| `spark-extension` | `workflow_run` tool, approvals, dynamic workflow manager, event store, controls, widget/status/dashboard renderers, workflow delivery inbox, saved workflow selectors | Generic runtime semantics that belong in `pi-workflows` |
-| `pi-graft`/Graft | Scratch/candidate/patch/capture primitives and validation provenance | Workflow orchestration policy or dashboard layout |
+| `spark-extension` | `workflow_run` tool, approvals, dynamic workflow manager, event store, controls, widget/status/dashboard renderers, workflow delivery inbox, saved workflow selectors | Generic runtime semantics that belong in `spark-workflows` |
+| `spark-graft`/Graft | Scratch/candidate/patch/capture primitives and validation provenance | Workflow orchestration policy or dashboard layout |
 
-This separation keeps mechanism and presentation decoupled: `pi-workflows` emits typed facts; Spark decides how to persist, approve, control, and render them.
+This separation keeps mechanism and presentation decoupled: `spark-workflows` emits typed facts; Spark decides how to persist, approve, control, and render them.
 
 ## Data model
 
@@ -202,7 +202,7 @@ A new `DynamicWorkflowManager` in `spark-extension` should own lifecycle:
 
 ## Runtime requirements
 
-`pi-workflows` should add host-neutral event hooks without knowing Spark:
+`spark-workflows` should add host-neutral event hooks without knowing Spark:
 
 - `onEvent(event)` as the canonical callback.
 - Existing callbacks (`onPhase`, `onAgentTelemetry`, `onAgentJournal`, `onTokenUsage`) can be bridged during migration but should not remain the primary UI model.
@@ -281,7 +281,7 @@ The Spark widget should read dynamic workflow snapshots, not only legacy backgro
 
 ## Validation strategy
 
-- Unit tests for event emission and snapshot projection in `pi-workflows`.
+- Unit tests for event emission and snapshot projection in `spark-workflows`.
 - Store tests for append/replay/compact/migration in `spark-extension`.
 - Manager tests with delayed workflows proving background return and eventual terminal state.
 - Control tests proving pause/resume/stop/restart affect active execution.

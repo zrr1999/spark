@@ -16,9 +16,13 @@ export type SparkDispatcherCommand =
   | { kind: "version" }
   | { kind: "error"; message: string };
 
+type SparkDispatcherOutput = Pick<NodeJS.WriteStream, "write"> & { isTTY?: boolean };
+type SparkDispatcherInput = { isTTY?: boolean };
+
 export interface SparkDispatcherIo {
-  stdout?: Pick<NodeJS.WriteStream, "write">;
-  stderr?: Pick<NodeJS.WriteStream, "write">;
+  stdin?: SparkDispatcherInput;
+  stdout?: SparkDispatcherOutput;
+  stderr?: SparkDispatcherOutput;
 }
 
 export interface SparkDispatcherLauncher {
@@ -59,6 +63,14 @@ export async function runSparkDispatcher(
       stderr.write(`${command.message}\n`);
       return 2;
     case "dispatch":
+      if (
+        command.target === "tui" &&
+        !isSparkTuiHeadlessCompatibilityCommand(command.argv) &&
+        !isInteractiveTerminal(io)
+      ) {
+        stderr.write(`${dispatcherStrings.tuiRequiresTty}\n`);
+        return 2;
+      }
       return await launcher.run(command.target, command.argv, { stdio: "inherit" });
   }
 }
@@ -73,12 +85,33 @@ function isSparkTuiCompatibilityCommand(first: string): boolean {
     first === "-p" ||
     first === "--mode" ||
     first === "--list-models" ||
+    isSparkTuiResourceCommand(first)
+  );
+}
+
+function isSparkTuiResourceCommand(first: string): boolean {
+  return (
     first === "install" ||
     first === "remove" ||
     first === "uninstall" ||
     first === "update" ||
     first === "list" ||
     first === "config"
+  );
+}
+
+function isSparkTuiHeadlessCompatibilityCommand(argv: readonly string[]): boolean {
+  if (argv.includes("--print") || argv.includes("-p") || argv.includes("--list-models")) {
+    return true;
+  }
+  const first = argv[0];
+  if (first && isSparkTuiResourceCommand(first)) return true;
+  return argv.some((arg, index) => arg === "--mode" && argv[index + 1] === "rpc");
+}
+
+function isInteractiveTerminal(io: SparkDispatcherIo): boolean {
+  return Boolean(
+    (io.stdin?.isTTY ?? process.stdin.isTTY) && (io.stdout?.isTTY ?? process.stdout.isTTY),
   );
 }
 

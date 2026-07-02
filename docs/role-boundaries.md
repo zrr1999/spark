@@ -5,16 +5,16 @@ Spark separates two concerns:
 1. **Role specs** — durable definitions of coding personas/instructions.
 2. **Role runs** — concrete child Pi executions using one role spec.
 
-Reusable, Spark-independent pieces live in `pi-roles`; Spark keeps task/workflow adaptation and facade policy.
+Reusable, Spark-independent pieces live in `spark-roles`; Spark keeps task/workflow adaptation and facade policy.
 
 ## Current boundary
 
-- `packages/pi-roles/src/index.ts` owns `RoleSpec`, `RoleRegistry`, role stores, builtin role definitions, Markdown role parsing/serialization, and simple `RoleRun` launch/control helpers.
-- `packages/pi-extension-api/src/index.ts` owns shared refs, tool/result contracts, common task/run/review types, and light JSON/fs/time helpers.
-- `packages/pi-tasks/src/*` owns project/task graphs, TODOs, dependencies, readiness, claim leases, and run history. It stores `roleRef` strings but does not import or resolve `RoleSpec` objects.
-- `packages/spark-runtime/src/index.ts` owns single-task Spark adaptation: resolving an assigned/task/default `roleRef` through a `RoleRegistry`, creating `role-run` claims, calling `runRole()`, writing artifacts through `pi-artifacts`, updating task/run state, and tracking active background child processes.
-- `packages/pi-workflows/src/orchestrator/index.ts` owns graph-level ready-task scheduling: dispatch-time executor role assignment, workflow-run state, and stale run reconciliation.
-- `packages/pi-roles/src/extension.ts` exposes the canonical public/default `role({ action })` tool for role-spec management and one-off direct role calls; historical fragmented implementations are internal dispatch targets only.
+- `packages/spark-roles/src/index.ts` owns `RoleSpec`, `RoleRegistry`, role stores, builtin role definitions, Markdown role parsing/serialization, and simple `RoleRun` launch/control helpers.
+- `packages/spark-extension-api/src/index.ts` owns shared refs, tool/result contracts, common task/run/review types, and light JSON/fs/time helpers.
+- `packages/spark-tasks/src/*` owns project/task graphs, TODOs, dependencies, readiness, claim leases, and run history. It stores `roleRef` strings but does not import or resolve `RoleSpec` objects.
+- `packages/spark-runtime/src/index.ts` owns single-task Spark adaptation: resolving an assigned/task/default `roleRef` through a `RoleRegistry`, creating `role-run` claims, calling `runRole()`, writing artifacts through `spark-artifacts`, updating task/run state, and tracking active background child processes.
+- `packages/spark-workflows/src/orchestrator/index.ts` owns graph-level ready-task scheduling: dispatch-time executor role assignment, workflow-run state, and stale run reconciliation.
+- `packages/spark-roles/src/extension.ts` exposes the canonical public/default `role({ action })` tool for role-spec management and one-off direct role calls; historical fragmented implementations are internal dispatch targets only.
 - `packages/spark-extension/src/extension/index.ts` exposes Spark commands, canonical tool handlers, and Spark-owned function/workflow presets; Spark task execution uses role refs through `assign({ dryRun: true })`, not direct role wrapper tools.
 
 ## Spec/run separation invariant
@@ -25,7 +25,7 @@ Reusable, Spark-independent pieces live in `pi-roles`; Spark keeps task/workflow
 - `fresh` and `forked` are the only runtime launch modes in the current model.
 - `builtin`, `extension`, `project`, and `user` describe where a reusable role came from.
 - Generated roles are represented by metadata/origin, for example `origin.kind: "generated"`; generated is not a primary `RoleSource`.
-- Extension roles are registered by loaded extension packages at runtime, for example `pi-graft` registering `role:extension-patcher`; they are not writable Markdown store roles.
+- Extension roles are registered by loaded extension packages at runtime, for example `spark-graft` registering `role:extension-patcher`; they are not writable Markdown store roles.
 - Spark role APIs use only `role:*`, `roleRef`, `runName`, and `role-run`; legacy agent-shaped names are rejected rather than migrated in place.
 
 See [role-run-modes.md](./role-run-modes.md) for operational guidance.
@@ -41,9 +41,9 @@ Persisted state, runtime inputs, and docs use the current role vocabulary direct
 
 Old agent-shaped inputs are not part of the package boundary. A stale local snapshot should be repaired explicitly instead of being silently translated by readers.
 
-## `pi-roles` ownership
+## `spark-roles` ownership
 
-`pi-roles` owns reusable role definition data and simple single-run execution, with no `spark-*` dependency:
+`spark-roles` owns reusable role definition data and simple single-run execution, with no `spark-*` dependency:
 
 - `RoleSource = "builtin" | "extension" | "project" | "user"`.
 - `RoleOriginKind = "manual" | "generated" | "builtin" | "extension"`.
@@ -58,18 +58,18 @@ Storage policy:
 
 - Project roles: `.agents/roles/**/*.md`.
 - User roles: `~/.agents/roles/**/*.md`.
-- Old agent-shaped paths are not loaded at runtime. Migrate them explicitly into `.agents/roles/**/*.md` before using `pi-roles`.
+- Old agent-shaped paths are not loaded at runtime. Migrate them explicitly into `.agents/roles/**/*.md` before using `spark-roles`.
 
 ## Spark package ownership
 
-- `pi-tasks` owns projects, tasks, dependencies, task plan items, TODO persistence/projection, claim leases, readiness, and run history.
-- `spark-runtime` maps one Spark task to one `pi-roles` `RoleRun` primitive and maps completion back to task status, task claims, and artifacts.
-- `pi-workflows` maps ready Spark task frontiers to scheduled `spark-runtime` runs and owns workflow-run scheduling/reconciliation state.
+- `spark-tasks` owns projects, tasks, dependencies, task plan items, TODO persistence/projection, claim leases, readiness, and run history.
+- `spark-runtime` maps one Spark task to one `spark-roles` `RoleRun` primitive and maps completion back to task status, task claims, and artifacts.
+- `spark-workflows` maps ready Spark task frontiers to scheduled `spark-runtime` runs and owns workflow-run scheduling/reconciliation state.
 - `spark` extension tools keep Spark workflow semantics. Patcher-style child runs belong to explicit extension roles such as `role:extension-patcher` so the child receives only the relevant domain tools and unclear patch instructions are escalated upward.
 
 ## Builtin capability profiles
 
-`pi-roles` audits only the shipped builtin profiles; it does not provide an open-ended delegation hierarchy for project/user roles.
+`spark-roles` audits only the shipped builtin profiles; it does not provide an open-ended delegation hierarchy for project/user roles.
 
 | Builtin role | Capability profile       | Boundary |
 | ------------ | ------------------------ | -------- |
@@ -84,5 +84,5 @@ Storage policy:
 - Cross-project or cross-plugin workflow dependencies.
 - Open-ended capabilities/topology/delegation hierarchy beyond the audited builtin profiles.
 - Running roles that do not reference a persisted or builtin `RoleSpec`.
-- Owning domain-specific preset semantics in `pi-roles`; package-specific functions/workflows should keep those presets in their owning package.
+- Owning domain-specific preset semantics in `spark-roles`; package-specific functions/workflows should keep those presets in their owning package.
 - Moving Spark command/widget/review-gate policy into generic Pi packages.

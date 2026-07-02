@@ -1,50 +1,52 @@
 # Implementation status
 
-This repo has the Spark package skeleton, canonical Pi capability packages, and an end-to-end local vertical slice. The former migration packages `spark-core`, `spark-tasks`, `spark-learnings`, `spark-goal`, and `spark-workflows` have been retired as workspaces; their generic implementation now lives under the appropriate `pi-*` packages.
+This repo has the Spark package skeleton, Spark-owned `spark-*` capability packages, the retained out-of-scope `pi-btw` package, and an end-to-end local vertical slice. Retired migration packages such as `spark-core` and `spark-goal` are no longer workspaces.
+
+Package naming now follows [`spark-capabilities-and-generative-ui.md`](./spark-capabilities-and-generative-ui.md): Spark-owned capabilities use `spark-*`, public tool names stay stable, and `pi-btw` remains out of scope.
 
 ## Implemented
 
-- `pi-extension-api`
+- `spark-extension-api`
   - shared extension host/tool contract
   - refs, errors, task/run/review types, copy-language detection, and light JSON/fs/time helpers used by both Pi extension host and the Spark native host family
-- `pi-artifacts`
+- `spark-artifacts`
   - generic artifact/evidence store and canonical `artifact` action tool for `record`, `list`, `read`, `link`, and `compact`
   - preserves physical Spark artifact layout under `.spark/artifacts` through `defaultArtifactStore(cwd)`
-- `pi-tasks`
+- `spark-tasks`
   - generic project/task/TODO/run graph capability and canonical `task({ action })` tool
   - `TaskGraphStore` backed by the V2 `.spark/projects/` project/task file tree, content-aware owner-file writes, `.spark/projects/index.lock` plus `.spark/projects/locks/<project>.lock` lock directories, stale direct-save protection, dependency/readiness checks, task names/titles/descriptions, run state, unified claim/lease schema, heartbeat and stale-claim expiry
   - task plan item state outside `.spark/projects/` in canonical `.spark/todos/todos.sqlite`; legacy TODO JSON files and session-scoped snapshots are import-only
-- `pi-learnings`
+- `spark-learnings`
   - generic evidence-backed `learning` / `learning-candidate` / `learning-export` records
   - canonical `learning({ action })` tool
   - `.learnings/` repo/workspace/user stores, active/candidate/stale/superseded/rejected lifecycle, keyword search, and explicit Markdown export/import
-- `pi-loop`
+- `spark-loop`
   - generic loop lifecycle/tick primitives plus durable goal primitives and continuation prompt helpers
   - Spark keeps project-bound `/loop` and `/goal` command/tool facades; historical serialized marker strings remain stable until an explicit migration changes them
-- `pi-workflows`
+- `spark-workflows`
   - canonical `workflow` list/read tool for saved scripts in controlled workspace `.spark/workflows/*.js` and user `~/.agents/workflows/*.js` roots
   - workflow metadata/runtime primitives and `.spark/workflow-runs.json` workflow-run store with scheduling/reconciliation/retention helpers
   - no inline workflow execution and no `/goal` aliasing; execution remains explicit host/runtime policy
-- `pi-context`
+- `spark-context`
   - registered context provider contracts and canonical `context` list/preview tool with per-provider budgets
   - Spark registers `spark.active` as a bounded provider for active project/task/TODO/SPARK.md context
   - freeform system prompt injection is intentionally not supported
-- `pi-recall`
+- `spark-recall`
   - controlled explicit-scope `user | workspace | repo` recall candidate store and canonical `recall` tool
   - candidate record/list/search/reject lifecycle only; no automatic memory promotion and no `.learnings/` writes
-- `pi-ask`
+- `spark-ask`
   - canonical public/default `ask` action tool that dispatches focused asks and multi/flow requests through internal shared implementations
   - shared result semantics across focused and flow renderers: explicit envelopes, no automatic timeout decisions, stable option ids in structured values, label/description summaries, consistent decision/approval blocking, and first-class direct custom input
-- `pi-cue`
+- `spark-cue`
   - migrated cue-shell IPC client and full direct tool surface
   - raw TypeScript imports compatible with Pi / Node strip-types loading
   - daemon auto-start and bash disable policy
-- `pi-roles`
+- `spark-roles`
   - reusable `RoleSpec` definitions with `builtin | extension | project | user` sources
   - builtin roles (`scout`, `reviewer`, `worker`) as generic role specs with audited capability profiles: scout=`read+net`, reviewer=`read+net+exec`, worker=`read+net+exec+write`; no builtin role receives `interact`, `spawn`, `ask`, `task`, `task_read`, `task_write`, `goal`, `role`, `assign`, `workflow`, or `graft_patch`
   - extension role registration, project/user Markdown role stores, canonical public/default `role` action tool, task-agnostic direct `role({ action: "call" })`, fresh/forked run modes, explicit fork source requirements, JSONL parsing, active-run listing/cancellation, timeout signalling
 - `spark-runtime`
-  - Spark single-task adapter over `pi-roles`
+  - Spark single-task adapter over `spark-roles`
   - dry-run and real task execution, runtime-created role-run claims, heartbeat loop, artifact persistence, timeout/reconciliation tracking, active child process tracking, kill/input controls, failed-delivery reporting, and role-run transcript compaction support
 - `spark-host`
   - shared Spark-native ExtensionAPI host runtime, host-neutral runtime types, keybinding registry, tool/command/event/outbox/interaction plumbing, and compatibility adapters for the TUI app
@@ -63,15 +65,16 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
   - thin root dispatcher for public `spark ...` commands; it routes to app packages and does not own TUI, daemon, host, or turn runtime logic
 - `spark-tui-app`
   - native Spark-first `pi-tui` app with explicit builtin extension loading, provider registry, model selector, JSONL session store, skill resolver, local daemon client/queue surfaces, and shared `spark-host` / `spark-turn` core
-  - extension packages depend on `pi-extension-api`, not on Pi's concrete SDK runtime
+  - extension packages depend on `spark-extension-api`, not on Pi's concrete SDK runtime
 - `spark-daemon`
   - local daemon queue/lock/worker/IPC app with `session.run` execution routed through Spark's headless session executor backed by `spark-host` / `spark-turn`
   - no `createAgentSession` or `@earendil-works/pi-coding-agent` dependency in daemon core paths
 
 ## Boundary guard status
 
-- `pi-* -> spark-*` imports/dependencies are forbidden except for the explicit `@zendev-lab/spark-tui` shared UI-boundary dependency.
-- `scripts/check-pi-boundaries.mjs` scans `packages/pi-*` manifests and source imports for `spark-*` regressions while allowing only the `spark-tui` exception.
+- `pi-btw` remains the only `pi-*` workspace package and is explicitly out of scope for the Spark capability rename.
+- `scripts/check-pi-boundaries.mjs` keeps retained `pi-*` packages independent from Spark product packages while allowing renamed Spark foundation packages and the `spark-tui` presentation boundary where required.
+- Spark shared packages must not import Cockpit/daemon/app host internals.
 - `pnpm run check` runs the boundary checker, and `prek.toml` wires it directly as `pi-boundary-check`; CI static checks run `prek`, so the guard runs in CI.
 - The guard intentionally checks dependency/import boundaries, not arbitrary historical strings; on-disk schema marker strings such as goal continuation markers remain allowed until an explicit migration changes them.
 
@@ -82,7 +85,7 @@ This repo has the Spark package skeleton, canonical Pi capability packages, and 
 - `artifact({ action })` owns evidence/artifact records.
 - `learning({ action })` owns evidence-backed reusable learnings.
 - `ask({ action })` owns user-question UX and result semantics.
-- `context({ action })`, `recall`, `workflow({ action })`, `role({ action })`, `pi-cue`, and `pi-graft` tools remain canonical generic surfaces; patcher-style child runs belong to explicit extension roles, not the Spark facade.
+- `context({ action })`, `recall`, `workflow({ action })`, `role({ action })`, `spark-cue`, and `spark-graft` tools remain canonical generic surfaces; patcher-style child runs belong to explicit extension roles, not the Spark facade.
 - Public/default action tools render as `tool action=<value> ...`; do not keep fragmented duplicate surfaces public when a canonical action tool owns the domain.
 
 ## Deferred by design

@@ -1,5 +1,5 @@
-import type { Task, TaskRef, ProjectRef } from "@zendev-lab/pi-extension-api";
-import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
+import type { Task, TaskRef, ProjectRef } from "@zendev-lab/spark-extension-api";
+import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
 import { isClaimOwnedBySession } from "./task-ownership.ts";
 
 export function resolveSessionClaimedTask(

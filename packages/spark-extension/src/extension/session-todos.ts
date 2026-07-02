@@ -1,12 +1,12 @@
 import { join } from "node:path";
 
-import { type TaskRef } from "@zendev-lab/pi-extension-api";
+import { type TaskRef } from "@zendev-lab/spark-extension-api";
 import {
   defaultTaskTodoStore,
   isDeletedSessionTodo,
   type SessionTodoEntry,
   type SessionTodoStatus,
-} from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-tasks";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {
   legacyTodoDisplayNumberStorePath,

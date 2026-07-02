@@ -1,17 +1,17 @@
 import { readdir } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 
-import { resolveArtifactBlobPath } from "@zendev-lab/pi-artifacts";
-import type { ArtifactKind } from "@zendev-lab/pi-artifacts";
+import { resolveArtifactBlobPath } from "@zendev-lab/spark-artifacts";
+import type { ArtifactKind } from "@zendev-lab/spark-artifacts";
 import {
   nowIso,
   type ArtifactRef,
   type RunRef,
   type ProjectRef,
   type TaskRef,
-} from "@zendev-lab/pi-extension-api";
-import type { WorkflowRunStatus } from "@zendev-lab/pi-workflows";
-import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-extension-api";
+import type { WorkflowRunStatus } from "@zendev-lab/spark-workflows";
+import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
 import { listSparkStateFiles, readJsonObject, statIfPresent } from "./state-housekeeping-files.ts";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import { existingLegacyImportOnlyPaths } from "./store-v2-migration.ts";

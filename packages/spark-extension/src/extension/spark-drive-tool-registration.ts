@@ -1,6 +1,6 @@
 import { Type } from "typebox";
-import type { Project } from "@zendev-lab/pi-extension-api";
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
+import type { Project } from "@zendev-lab/spark-extension-api";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import { currentSparkProject, loadSparkGraph } from "./session-state.ts";
 import {
   deriveSparkDriveMode,

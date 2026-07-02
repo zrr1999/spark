@@ -109,6 +109,33 @@ void test("SparkAgentLoop runs a single-turn stop with one streamed text chunk",
   assert.equal(events.find((event) => event.type === "turn_complete") !== undefined, true);
 });
 
+void test("SparkAgentLoop times out a never-resolving model stream", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-stream-timeout-test" });
+  const agentEndEvents: unknown[] = [];
+  host.on("agent_end", (event) => agentEndEvents.push(event));
+  const fake: SparkAgentStreamFunction = () =>
+    ({
+      async *[Symbol.asyncIterator]() {
+        await new Promise<never>(() => undefined);
+      },
+      result: async () => await new Promise<never>(() => undefined),
+    }) as ReturnType<SparkAgentStreamFunction>;
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: fake,
+    getModel: () => TEST_MODEL,
+    streamTimeoutMs: 10,
+  });
+
+  await loop.submit("hang stream");
+
+  assert.equal(loop.getState(), "idle");
+  assert.match(
+    (agentEndEvents[0] as { errorMessage?: string }).errorMessage ?? "",
+    /Spark agent model stream timed out after 10ms/u,
+  );
+});
+
 void test("SparkAgentLoop projects user, streaming, final, and run updates to view-model events", async () => {
   const viewEvents: unknown[] = [];
   const host = new SparkHostRuntime({
@@ -352,6 +379,101 @@ void test("SparkAgentLoop dispatches tool calls and feeds tool results back into
     ),
     true,
   );
+});
+
+void test("SparkAgentLoop times out a never-resolving tool execution", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-tool-timeout-test" });
+  host.registerTool({
+    name: "hang_tool",
+    description: "never returns",
+    parameters: { type: "object" },
+    async execute() {
+      return await new Promise<never>(() => undefined);
+    },
+  });
+  const toolCallEnvelope: ToolCall = {
+    type: "toolCall",
+    id: "tc-tool-timeout",
+    name: "hang_tool",
+    arguments: {},
+  };
+  const firstAssistant = buildAssistant([toolCallEnvelope], "toolUse");
+  const finalAssistant = buildAssistant([{ type: "text", text: "after timeout" }]);
+  const fake = makeFakeStream({
+    rounds: [
+      [{ type: "done", reason: "toolUse", message: firstAssistant }],
+      [{ type: "done", reason: "stop", message: finalAssistant }],
+    ],
+  });
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: fake,
+    getModel: () => TEST_MODEL,
+    toolTimeoutMs: 10,
+  });
+
+  await loop.submit("call hanging tool");
+
+  const toolResult = loop.getMessages().find((message) => message.role === "toolResult");
+  assert.equal(toolResult !== undefined, true);
+  assert.equal((toolResult as { isError: boolean }).isError, true);
+  assert.equal(
+    (toolResult as { content: Array<{ text?: string }> }).content[0]?.text,
+    'Spark tool "hang_tool" timed out after 10ms',
+  );
+  assert.equal(loop.getState(), "idle");
+});
+
+void test("SparkAgentLoop times out a never-resolving tool approval interaction", async () => {
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-approval-timeout-test",
+    ui: {
+      interaction: async () => await new Promise<never>(() => undefined),
+    },
+  });
+  let toolCalls = 0;
+  host.registerTool({
+    name: "approval_hang",
+    description: "requires approval that never arrives",
+    parameters: { type: "object" },
+    requiresApproval: true,
+    async execute() {
+      toolCalls += 1;
+      return { content: [{ type: "text", text: "should not run" }] };
+    },
+  } as never);
+  const toolCallEnvelope: ToolCall = {
+    type: "toolCall",
+    id: "tc-approval-timeout",
+    name: "approval_hang",
+    arguments: {},
+  };
+  const firstAssistant = buildAssistant([toolCallEnvelope], "toolUse");
+  const finalAssistant = buildAssistant([{ type: "text", text: "after approval timeout" }]);
+  const fake = makeFakeStream({
+    rounds: [
+      [{ type: "done", reason: "toolUse", message: firstAssistant }],
+      [{ type: "done", reason: "stop", message: finalAssistant }],
+    ],
+  });
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: fake,
+    getModel: () => TEST_MODEL,
+    interactionTimeoutMs: 10,
+  });
+
+  await loop.submit("call approval hanging tool");
+
+  assert.equal(toolCalls, 0);
+  const toolResult = loop.getMessages().find((message) => message.role === "toolResult");
+  assert.equal(toolResult !== undefined, true);
+  assert.equal((toolResult as { isError: boolean }).isError, true);
+  assert.equal(
+    (toolResult as { content: Array<{ text?: string }> }).content[0]?.text,
+    'Spark tool approval for "approval_hang" timed out after 10ms',
+  );
+  assert.equal(loop.getState(), "idle");
 });
 
 void test("SparkAgentLoop blocks approval-required tools without explicit approval", async () => {

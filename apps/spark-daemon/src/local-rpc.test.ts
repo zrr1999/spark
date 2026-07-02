@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
+import { SparkDaemonInvocationRegistry } from "./core/index.js";
 import { handleLocalRpcLine } from "./local-rpc.js";
 import { openSparkDaemonDatabase } from "./store/schema.js";
 import { listWorkspaces } from "./store/workspaces.js";
@@ -268,6 +269,82 @@ describe("Spark daemon local RPC", () => {
         },
       });
     } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cancels active turn invocations over local RPC and reports misses", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-cancel-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const invocations = new SparkDaemonInvocationRegistry();
+    const handle = invocations.start({
+      invocationId: "turn-file.json",
+      kind: "session.run",
+      sessionId: "session-a",
+    });
+    let aborted = false;
+    handle.signal.addEventListener("abort", () => {
+      aborted = true;
+    });
+
+    try {
+      const cancelled = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "turn_cancel",
+          method: "turn.cancel",
+          params: { invocationId: "turn-file.json", reason: "test cancel" },
+        }),
+        paths,
+        db,
+        undefined,
+        {},
+        invocations,
+      );
+      expect(cancelled).toMatchObject({
+        id: "turn_cancel",
+        ok: true,
+        result: {
+          invocationId: "turn-file.json",
+          cancelled: true,
+          message: "Cancellation signalled for Spark daemon invocation turn-file.json.",
+        },
+      });
+      expect(aborted).toBe(true);
+
+      const missing = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "turn_cancel_missing",
+          method: "turn.cancel",
+          params: { invocationId: "missing.json" },
+        }),
+        paths,
+        db,
+        undefined,
+        {},
+        invocations,
+      );
+      expect(missing).toMatchObject({
+        id: "turn_cancel_missing",
+        ok: true,
+        result: {
+          invocationId: "missing.json",
+          cancelled: false,
+          message: "No active Spark daemon invocation matched missing.json.",
+        },
+      });
+    } finally {
+      handle.finish();
       db.close();
       rmSync(root, { recursive: true, force: true });
     }

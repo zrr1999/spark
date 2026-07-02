@@ -9,11 +9,12 @@ import {
   defaultProjectRoleModelSettingsStore,
   ROLE_RUN_DEPTH_ENV,
   RoleRegistry,
-} from "@zendev-lab/pi-roles";
-import { TaskGraph } from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-roles";
+import { TaskGraph } from "@zendev-lab/spark-tasks";
 import {
   PiRolesReviewerRunner,
   buildReadOnlyReviewerSystemPrompt,
+  capReviewerThinkingLevel,
   parseAskAutoAnswerResult,
   parseReviewerVerdictForInput,
   renderReviewerInstruction,
@@ -344,6 +345,16 @@ void test("reviewer verdict parser reports missing verdict objects clearly", () 
   );
 });
 
+void test("reviewer thinking cap defaults to medium without raising lower host settings", () => {
+  assert.equal(capReviewerThinkingLevel(undefined), "medium");
+  assert.equal(capReviewerThinkingLevel("off"), "off");
+  assert.equal(capReviewerThinkingLevel("minimal"), "minimal");
+  assert.equal(capReviewerThinkingLevel("low"), "low");
+  assert.equal(capReviewerThinkingLevel("medium"), "medium");
+  assert.equal(capReviewerThinkingLevel("high"), "medium");
+  assert.equal(capReviewerThinkingLevel("xhigh"), "medium");
+});
+
 void test("PiRolesReviewerRunner resolves reviewer model from role model settings", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reviewer-runner-model-settings-"));
   try {
@@ -377,6 +388,9 @@ void test("PiRolesReviewerRunner resolves reviewer model from role model setting
     assert.ok(args.includes("--no-session"));
     assert.ok(args.includes("--model"));
     assert.equal(args[args.indexOf("--model") + 1], "test/reviewer");
+    assert.ok(args.includes("--thinking"));
+    assert.equal(args[args.indexOf("--thinking") + 1], "medium");
+    assert.equal(result.record.thinking, "medium");
     assert.ok(args.includes("--tools"));
     const tools = args[args.indexOf("--tools") + 1]?.split(",") ?? [];
     assert.ok(tools.includes("read"));

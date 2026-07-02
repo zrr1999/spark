@@ -3,4 +3,4 @@ export {
   taskClaimSummary,
   taskLifecycleSuffix,
   taskPlanSummary,
-} from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-tasks";

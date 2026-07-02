@@ -1,5 +1,5 @@
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
-import { isUnfinishedTaskStatus } from "@zendev-lab/pi-tasks";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
+import { isUnfinishedTaskStatus } from "@zendev-lab/spark-tasks";
 import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 import type { SparkSessionGoal } from "./spark-session-goals.ts";
 import { truncateInline } from "./tool-rendering.ts";

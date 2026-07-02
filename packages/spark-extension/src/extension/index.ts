@@ -1,10 +1,10 @@
-import { registerPiAskAutoAnswerProvider } from "@zendev-lab/pi-ask";
-import { registerPiContextTool } from "@zendev-lab/pi-context/extension";
+import { registerPiAskAutoAnswerProvider } from "@zendev-lab/spark-ask";
+import { registerPiContextTool } from "@zendev-lab/spark-context/extension";
 import {
   registerPiLearningTool,
   type PiLearningToolHandlers,
-} from "@zendev-lab/pi-learnings/extension";
-import { registerPiTaskTool, type PiTaskToolHandlers } from "@zendev-lab/pi-tasks/extension";
+} from "@zendev-lab/spark-learnings/extension";
+import { registerPiTaskTool, type PiTaskToolHandlers } from "@zendev-lab/spark-tasks/extension";
 import { renderSparkToolCall } from "./tool-rendering.ts";
 import { registerSparkAskTools } from "./spark-ask-tool-registration.ts";
 import { registerSparkWorkflowRunsTool } from "./spark-workflow-runs-tool-registration.ts";
@@ -42,7 +42,11 @@ import type { SparkRegisteredToolConfig, SparkToolContext } from "./spark-tool-r
 import { SparkWidgetController } from "./spark-widget-controller.ts";
 import { SparkRoleRunTuiController } from "./spark-role-run-tui-controller.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
-import { PiRolesReviewerRunner, type ReviewerRunner } from "./reviewer-runner.ts";
+import {
+  PiRolesReviewerRunner,
+  capReviewerThinkingLevel,
+  type ReviewerRunner,
+} from "./reviewer-runner.ts";
 import { registerSparkReflectionCommands } from "./reflection-in-session-scheduler.ts";
 import { sparkActiveLensPhase } from "./spark-drive-state.ts";
 import { loadSessionGoal } from "./spark-session-goals.ts";
@@ -63,6 +67,7 @@ interface SparkExtensionAPI extends SparkCommandApi {
     cwd: string,
     ctx: SparkToolContext,
   ): ReviewerRunner | Promise<ReviewerRunner>;
+  getThinkingLevel?(): unknown;
   registerMessageRenderer?(
     customType: string,
     renderer: (
@@ -129,6 +134,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
       registry: await createSparkRoleRegistry(cwd),
       cwd,
       sessionModel: sessionModelName(ctx.model),
+      reviewerThinkingLevel: capReviewerThinkingLevel(pi.getThinkingLevel?.()),
     });
   }
 

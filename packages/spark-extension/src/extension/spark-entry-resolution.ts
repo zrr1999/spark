@@ -1,6 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/pi-tasks";
+import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
 import { hasNonSparkProjectFiles } from "./spark-activation.ts";
 import {
   analyzeSparkEntryPhase,

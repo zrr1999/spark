@@ -1,13 +1,13 @@
-import type { Task, ProjectRef } from "@zendev-lab/pi-extension-api";
-import type { WorkflowRunStatusSummary } from "@zendev-lab/pi-workflows";
+import type { Task, ProjectRef } from "@zendev-lab/spark-extension-api";
+import type { WorkflowRunStatusSummary } from "@zendev-lab/spark-workflows";
 import {
   projectSparkDynamicWorkflowRuns,
   type SparkDynamicWorkflowRunProjection,
 } from "./spark-dynamic-workflow-run-rendering.ts";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import { defaultSparkDynamicWorkflowEventStore } from "./spark-dynamic-workflow-event-store.ts";
-import { defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
-import type { SessionTodoEntry } from "@zendev-lab/pi-tasks";
+import { defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
+import type { SessionTodoEntry } from "@zendev-lab/spark-tasks";
 import {
   SparkWidget,
   type SparkWidgetActiveLens,

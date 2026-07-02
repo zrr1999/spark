@@ -7,7 +7,7 @@ import {
   type Mode,
   type ModeRegistry,
   type TurnDriver,
-} from "@zendev-lab/pi-modes";
+} from "@zendev-lab/spark-modes";
 import { sparkActiveLens } from "../spark-drive-state.ts";
 import type { SparkLanguage } from "../spark-i18n.ts";
 import { sparkSystemPromptLanguageDirective } from "../spark-i18n.ts";
@@ -15,7 +15,7 @@ import { loadSparkPhase, saveSparkPhase } from "../session-state.ts";
 import type { SparkToolRegistrar } from "../spark-tool-registration.ts";
 
 const SPARK_PHASE_TOOLS_HINT =
-  "Tools: task_read, task_write, assign, artifact, ask, role, learning, context, recall, workflow, pi-cue, pi-graft.";
+  "Tools: task_read, task_write, assign, artifact, ask, role, learning, context, recall, workflow, spark-cue, spark-graft.";
 
 let sparkPhaseRegistry: ModeRegistry | undefined;
 

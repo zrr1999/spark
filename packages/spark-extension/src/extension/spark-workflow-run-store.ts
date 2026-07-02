@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { WorkflowRunStore } from "@zendev-lab/pi-workflows";
+import { WorkflowRunStore } from "@zendev-lab/spark-workflows";
 
 export function sparkWorkflowRunStorePath(cwd: string): string {
   return join(cwd, ".spark", "workflow-runs.json");

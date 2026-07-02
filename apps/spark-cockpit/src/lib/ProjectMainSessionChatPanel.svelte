@@ -1,7 +1,7 @@
 <script lang="ts">
+  import CockpitChatComposer from "$lib/CockpitChatComposer.svelte";
+  import CockpitChatTranscript from "$lib/CockpitChatTranscript.svelte";
   import Icon from "$lib/Icon.svelte";
-  import ProjectChatComposer from "$lib/ProjectChatComposer.svelte";
-  import ProjectChatTranscript from "$lib/ProjectChatTranscript.svelte";
   import { buildProjectChatContextActions } from "$lib/project-chat-context-actions";
 
   type Command = {
@@ -244,7 +244,7 @@
   </div>
 
   <div class="chat-shell" class:busy={hasActiveRun}>
-    <ProjectChatTranscript
+    <CockpitChatTranscript
       {t}
       commands={data.commands}
       invocations={data.invocations}
@@ -257,9 +257,11 @@
       {formatRelative}
     />
 
-    <ProjectChatComposer
+    <CockpitChatComposer
       {t}
-      projectName={data.project.name}
+      contextName={data.project.name}
+      contextChipLabel={t.projectContext}
+      contextIcon="folder"
       {form}
       {canStartTask}
       {hasActiveRun}

@@ -10,10 +10,10 @@ import {
   evaluateLoopTick,
   goalToolResponse,
   validateObjective,
-} from "@zendev-lab/pi-loop";
+} from "@zendev-lab/spark-loop";
 
-void test("pi-loop package owns goal primitives and stays isolated from workflow packages", async () => {
-  const pkg = JSON.parse(await readFile("packages/pi-loop/package.json", "utf8")) as {
+void test("spark-loop package owns goal primitives and stays isolated from workflow packages", async () => {
+  const pkg = JSON.parse(await readFile("packages/spark-loop/package.json", "utf8")) as {
     dependencies?: Record<string, string>;
   };
 
@@ -24,7 +24,7 @@ void test("pi-loop package owns goal primitives and stays isolated from workflow
   );
   assert.equal(pkg.dependencies?.["spark-workflows"], undefined);
 
-  const sourceFiles = await listTypeScriptFiles("packages/pi-loop/src");
+  const sourceFiles = await listTypeScriptFiles("packages/spark-loop/src");
   for (const file of sourceFiles) {
     const source = await readFile(file, "utf8");
     assert.doesNotMatch(
@@ -35,7 +35,7 @@ void test("pi-loop package owns goal primitives and stays isolated from workflow
   }
 });
 
-void test("pi-loop goal helpers create goals and continuation prompts", () => {
+void test("spark-loop goal helpers create goals and continuation prompts", () => {
   assert.equal(validateObjective("  ship feature  "), null);
   const goal = createGoal("  ship feature  ", 123);
   assert.equal(goal.objective, "ship feature");
@@ -49,7 +49,7 @@ void test("pi-loop goal helpers create goals and continuation prompts", () => {
   assert.equal(response.goal?.status, "active");
 });
 
-void test("pi-loop exposes non-completing loop primitives alongside goal helpers", () => {
+void test("spark-loop exposes non-completing loop primitives alongside goal helpers", () => {
   const loop = createLoop("Continue without completing", 123);
   const tick = evaluateLoopTick({ loop, now: 124, reason: "start" });
 

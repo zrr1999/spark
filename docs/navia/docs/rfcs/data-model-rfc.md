@@ -5,7 +5,7 @@ Date: 2026-05-21
 
 ## Summary
 
-Navia v0.1 stores communication, projections, audit, sessions, and artifact-cache metadata in SQLite. Spark-owned truth remains outside the server in `.spark` stores and `@zendev-lab/pi-artifacts`; `apps/spark-daemon` bridges task execution into Spark runtime primitives while Navia's SQLite projection cache mirrors task graphs, invocations, asks/reviews, and artifacts for the cockpit.
+Navia v0.1 stores communication, projections, audit, sessions, and artifact-cache metadata in SQLite. Spark-owned truth remains outside the server in `.spark` stores and `@zendev-lab/spark-artifacts`; `apps/spark-daemon` bridges task execution into Spark runtime primitives while Navia's SQLite projection cache mirrors task graphs, invocations, asks/reviews, and artifacts for the cockpit.
 
 This RFC freezes the first concrete SQLite schema shape so development can start with explicit migrations instead of ad-hoc tables.
 

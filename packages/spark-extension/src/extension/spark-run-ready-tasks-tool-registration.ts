@@ -1,11 +1,11 @@
 import { Type } from "typebox";
-import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
+import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import {
   DEFAULT_READY_TASK_MAX_CONCURRENCY,
   DEFAULT_READY_TASK_TIMEOUT_MS,
-} from "@zendev-lab/pi-extension-api";
-import { runReadyTasks } from "@zendev-lab/pi-workflows";
-import { defaultTaskGraphStore } from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-extension-api";
+import { runReadyTasks } from "@zendev-lab/spark-workflows";
+import { defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
 import { ensureRoleModelSettingsForProject } from "./role-model-settings.ts";
 import {
   currentSparkProject,

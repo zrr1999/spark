@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { JsonValue, Project } from "@zendev-lab/pi-extension-api";
+import type { JsonValue, Project } from "@zendev-lab/spark-extension-api";
 import {
   defaultSparkProjectKindRegistry,
   evaluateSparkProjectKindCompletionGate,

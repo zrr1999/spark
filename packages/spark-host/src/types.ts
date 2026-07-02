@@ -1,7 +1,7 @@
 /**
  * Internal types backing the spark-tui native ExtensionAPI host.
  *
- * Public-facing extension contracts come from `pi-extension-api`. The shapes
+ * Public-facing extension contracts come from `spark-extension-api`. The shapes
  * declared here are private to the host runtime: they describe how registered
  * tools, commands, event listeners, and host-side message envelopes are kept
  * inside SparkHostRuntime. Extension authors should not import from this file.
@@ -12,7 +12,7 @@ import type {
   ExtensionUi,
   ToolConfig,
   ToolInfo,
-} from "@zendev-lab/pi-extension-api";
+} from "@zendev-lab/spark-extension-api";
 import type { SparkDaemonEvent, SparkViewModelEvent } from "@zendev-lab/spark-protocol";
 
 export interface SparkHostRegistryModel {

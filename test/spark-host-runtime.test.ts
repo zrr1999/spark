@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ExtensionContext } from "@zendev-lab/pi-extension-api";
+import type { ExtensionContext } from "@zendev-lab/spark-extension-api";
 
 import { SparkHostRuntime } from "../apps/spark-tui/src/host/runtime.ts";
 
@@ -155,7 +155,7 @@ void test("SparkHostRuntime sessionManager defaults are defensive stubs", () => 
   const ctx = host.makeContext();
   const manager = (ctx as { sessionManager?: { getEntries?: () => unknown[] } }).sessionManager;
   assert.equal(typeof manager, "object");
-  // The default session manager has no methods; pi-graft uses optional chaining.
+  // The default session manager has no methods; spark-graft uses optional chaining.
   assert.equal(manager?.getEntries, undefined);
 });
 

@@ -1,13 +1,13 @@
 import { cp, mkdir, readdir, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
-import { nowIso } from "@zendev-lab/pi-extension-api";
+import { nowIso } from "@zendev-lab/spark-extension-api";
 import {
   TaskGraph,
   TaskGraphStore,
   defaultTaskGraphStore,
   defaultTaskTodoStore,
-} from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-tasks";
 import { normalizeCurrentProjectStoreSnapshot } from "./current-project-state-schema.ts";
 import { readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import { rebuildSessionIndex } from "./session-directory-store.ts";

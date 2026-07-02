@@ -1,1 +1,1 @@
-export { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+export { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@zendev-lab/spark-text";

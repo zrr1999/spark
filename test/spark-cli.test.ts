@@ -8,7 +8,13 @@ import registerBaiduOneApiProvider, {
   streamBaiduOneApiAnthropic,
   streamBaiduOneApiOpenAIResponses,
 } from "../packages/spark-ai/src/baidu-oneapi-provider.ts";
-import { parseSparkCliArgs } from "../apps/spark-tui/src/cli.ts";
+import {
+  handleSparkRpcLine,
+  parseSparkCliArgs,
+  runSparkCli,
+  type SparkRpcState,
+} from "../apps/spark-tui/src/cli.ts";
+import type { SparkDaemonClientOptions } from "../apps/spark-tui/src/cli/daemon.ts";
 import { SparkNativeSession } from "../apps/spark-tui/src/native-tui.ts";
 import sparkCliHostExtension from "../apps/spark-tui/src/spark-host-extension.ts";
 
@@ -17,6 +23,171 @@ void test("parseSparkCliArgs treats positional args as the initial message", () 
     help: false,
     initialMessage: "hello spark",
   });
+});
+
+void test("runSparkCli rejects implicit TUI launch in non-interactive terminals", async () => {
+  const errors: string[] = [];
+  const previousError = console.error;
+  let ranTui = false;
+  try {
+    console.error = (...args: unknown[]) => {
+      errors.push(args.map(String).join(" "));
+    };
+
+    const code = await runSparkCli([], {
+      terminal: { stdinIsTTY: false, stdoutIsTTY: true },
+      runTui: async () => {
+        ranTui = true;
+      },
+    });
+
+    assert.equal(code, 2);
+    assert.equal(ranTui, false);
+    assert.match(errors.join("\n"), /requires an interactive terminal/u);
+    assert.match(errors.join("\n"), /spark-tui --print <prompt>/u);
+  } finally {
+    console.error = previousError;
+  }
+});
+
+void test("runSparkCli keeps explicit print mode usable without an interactive terminal", async () => {
+  const logs: string[] = [];
+  const submissions: Array<{ sessionId: string; prompt: string; reset?: boolean }> = [];
+  const previousLog = console.log;
+  const now = new Date(0).toISOString();
+  const workspace = {
+    id: "ws_test",
+    serverUrl: "http://127.0.0.1:0",
+    localWorkspaceKey: "repo",
+    displayName: "repo",
+    localPath: process.cwd(),
+    status: "active",
+  };
+  const clientLease = {
+    id: "client_test",
+    workspaceId: workspace.id,
+    kind: "headless" as const,
+    status: "connected" as const,
+    attachedAt: now,
+    lastSeenAt: now,
+  };
+  const daemonClient = {
+    daemonStatus: async () => ({
+      observedAt: now,
+      servers: [],
+      queue: { inbox: 0, processed: 0, failed: 0 },
+    }),
+    workspaceEnsureLocal: async () => workspace,
+    workspaceClientAttach: async () => ({ client: clientLease, workspace, observedAt: now }),
+    workspaceClientRelease: async () => ({ client: clientLease, workspace, observedAt: now }),
+    turnSubmit: async (_paths, input) => {
+      submissions.push(input);
+      return {
+        fileName: "turn.json",
+        filePath: "/tmp/turn.json",
+        task: {
+          type: "session.run" as const,
+          sessionId: input.sessionId,
+          prompt: input.prompt,
+          ...(input.reset === undefined ? {} : { reset: input.reset }),
+        },
+        observedAt: now,
+      };
+    },
+  } satisfies SparkDaemonClientOptions;
+
+  try {
+    console.log = (...args: unknown[]) => {
+      logs.push(args.map(String).join(" "));
+    };
+
+    const code = await runSparkCli(["--print", "hello", "spark"], {
+      daemonClient,
+      terminal: { stdinIsTTY: false, stdoutIsTTY: false },
+    });
+
+    assert.equal(code, 0);
+    assert.equal(submissions.length, 1);
+    assert.equal(submissions[0]?.prompt, "hello spark");
+    assert.match(logs.join("\n"), /turn\.json/u);
+  } finally {
+    console.log = previousLog;
+  }
+});
+
+void test("handleSparkRpcLine abort cancels the last submitted daemon turn", async () => {
+  const writes: Record<string, unknown>[] = [];
+  const submissions: Array<{ sessionId: string; prompt: string; reset?: boolean }> = [];
+  const cancellations: Array<{ invocationId: string; reason?: string }> = [];
+  const now = new Date(0).toISOString();
+  const daemonClient = {
+    daemonStatus: async () => ({
+      observedAt: now,
+      servers: [],
+      queue: { inbox: 0, processed: 0, failed: 0 },
+    }),
+    turnSubmit: async (_paths, input) => {
+      submissions.push(input);
+      return {
+        fileName: "turn-file.json",
+        filePath: "/tmp/turn-file.json",
+        task: { type: "session.run" as const, ...input },
+        observedAt: now,
+      };
+    },
+    turnCancel: async (_paths, input) => {
+      cancellations.push(input);
+      return {
+        invocationId: input.invocationId,
+        cancelled: true,
+        message: `Cancellation signalled for ${input.invocationId}`,
+        observedAt: now,
+      };
+    },
+  } satisfies SparkDaemonClientOptions;
+  const state: SparkRpcState = {};
+
+  await handleSparkRpcLine(
+    JSON.stringify({ id: "prompt-1", type: "prompt", message: "do work" }),
+    daemonClient,
+    { sessionId: "rpc-session" },
+    (value) => writes.push(value),
+    state,
+  );
+  await handleSparkRpcLine(
+    JSON.stringify({ id: "abort-1", type: "abort" }),
+    daemonClient,
+    { sessionId: "rpc-session" },
+    (value) => writes.push(value),
+    state,
+  );
+
+  assert.deepEqual(submissions, [
+    { sessionId: "rpc-session", prompt: "do work", reset: undefined },
+  ]);
+  assert.deepEqual(cancellations, [
+    { invocationId: "turn-file.json", reason: "Spark RPC abort requested by client." },
+  ]);
+  assert.equal(writes.at(-1)?.success, true);
+  assert.deepEqual(writes.at(-1)?.data, {
+    invocationId: "turn-file.json",
+    cancelled: true,
+    message: "Cancellation signalled for turn-file.json",
+    observedAt: now,
+  });
+});
+
+void test("handleSparkRpcLine abort reports no target without an invocation", async () => {
+  const writes: Record<string, unknown>[] = [];
+  await handleSparkRpcLine(
+    JSON.stringify({ id: "abort-missing", type: "abort" }),
+    {},
+    undefined,
+    (value) => writes.push(value),
+  );
+
+  assert.equal(writes[0]?.success, false);
+  assert.match(String(writes[0]?.error), /abort requires invocationId/u);
 });
 
 void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => {

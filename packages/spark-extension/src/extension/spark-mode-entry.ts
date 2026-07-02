@@ -1,4 +1,4 @@
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import {
   renderSparkImplementationModePrompt,
   renderSparkPhaseVisibleMessage,

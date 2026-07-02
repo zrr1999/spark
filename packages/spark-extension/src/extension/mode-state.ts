@@ -1,4 +1,4 @@
-import type { ProjectRef } from "@zendev-lab/pi-extension-api";
+import type { ProjectRef } from "@zendev-lab/spark-extension-api";
 import {
   clearCurrentProjectRef,
   loadCurrentProjectState,

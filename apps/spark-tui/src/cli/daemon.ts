@@ -61,6 +61,10 @@ export interface SparkDaemonClientOptions {
     paths: SparkDaemonClientPaths,
     input: { sessionId: string; prompt: string; reset?: boolean },
   ) => Promise<LocalTurnSubmitResult>;
+  turnCancel?: (
+    paths: SparkDaemonClientPaths,
+    input: { invocationId: string; reason?: string },
+  ) => Promise<LocalTurnCancelResult>;
   turnStream?: (
     paths: SparkDaemonClientPaths,
     input: { sessionId: string; prompt: string; reset?: boolean },
@@ -118,6 +122,13 @@ export interface LocalTurnSubmitResult {
   fileName: string;
   filePath: string;
   task: { type: "session.run"; sessionId: string; prompt: string; reset?: boolean };
+  observedAt: string;
+}
+
+export interface LocalTurnCancelResult {
+  invocationId: string;
+  cancelled: boolean;
+  message: string;
   observedAt: string;
 }
 
@@ -772,6 +783,20 @@ async function clientSubmit(
   });
 }
 
+export async function clientCancelTurn(
+  input: { invocationId: string; reason?: string },
+  client: SparkDaemonClientOptions,
+): Promise<LocalTurnCancelResult> {
+  const paths = resolveSparkDaemonClientPaths(client);
+  await clientEnsureRunning(client);
+  if (client.turnCancel) return await client.turnCancel(paths, input);
+  return await localRpcRequest<LocalTurnCancelResult>(paths, {
+    id: localRequestId(),
+    method: "turn.cancel",
+    params: input,
+  });
+}
+
 async function clientSubmitStreaming(
   input: { sessionId: string; prompt: string; reset?: boolean },
   client: SparkDaemonClientOptions,
@@ -854,6 +879,7 @@ async function clientEnsureRunning(client: SparkDaemonClientOptions): Promise<vo
     client.startService ||
     client.daemonStatus ||
     client.turnSubmit ||
+    client.turnCancel ||
     client.workspaceEnsureLocal ||
     client.workspaceClientAttach
   ) {

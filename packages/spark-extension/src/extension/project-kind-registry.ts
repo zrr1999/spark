@@ -1,4 +1,4 @@
-import type { JsonValue, Project } from "@zendev-lab/pi-extension-api";
+import type { JsonValue, Project } from "@zendev-lab/spark-extension-api";
 import type { SparkSessionPhase } from "./session-state.ts";
 
 export const GENERIC_SPARK_PROJECT_KIND = "generic";

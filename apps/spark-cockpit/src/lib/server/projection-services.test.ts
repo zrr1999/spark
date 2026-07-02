@@ -11,7 +11,10 @@ import {
   recordArtifactProjection,
   recordHumanRequestFromRuntime,
   recordHumanResponse,
+  recordInvocationLogChunk,
+  recordInvocationUpdate,
 } from "./projection-services";
+import { cursorFromEvent, loadEventBatch, serializeEventRow } from "./events";
 
 function setupRuntimeBinding() {
   const db = openMemoryDatabase();
@@ -85,6 +88,111 @@ describe("projection services", () => {
       count: number;
     };
     expect(eventCount.count).toBe(3);
+    const queuedEvent = db
+      .prepare("SELECT payload_json AS payloadJson FROM events WHERE kind = 'command.queued'")
+      .get() as { payloadJson: string };
+    expect(JSON.parse(queuedEvent.payloadJson)).toMatchObject({
+      runtimeWorkspaceBindingId,
+      command: {
+        id: command.id,
+        kind: "task.start.request",
+        title: "Start MVP task",
+        status: "queued",
+        deliveryStatus: "pending",
+      },
+    });
+    db.close();
+  });
+
+  it("records invocation streaming chunks as replayable SSE payloads", () => {
+    const { db, runtimeWorkspaceBindingId, now } = setupRuntimeBinding();
+    const workspace = createWorkspaceWithOwnerBinding(db, {
+      slug: "local-default",
+      name: "Local default",
+      runtimeWorkspaceBindingId,
+      createdAt: now,
+    });
+    const command = queueCommandForWorkspaceOwner(db, {
+      workspaceId: workspace.id,
+      idempotencyKey: createId("idem"),
+      payload: {
+        kind: "task.start.request",
+        title: "Agents prompt",
+        payload: { source: "agents-cockpit", runtimeTaskId: "task-1" },
+      },
+      createdAt: "2026-05-22T00:00:01.000Z",
+    });
+
+    const runtimeInvocationId = createId("inv");
+    recordInvocationUpdate(db, {
+      runtimeWorkspaceBindingId,
+      workspaceId: workspace.id,
+      commandId: command.id,
+      payload: {
+        runtimeInvocationId,
+        taskRuntimeId: "task-1",
+        agentName: "spark-runtime",
+        status: "running",
+        payload: {},
+      },
+      updatedAt: "2026-05-22T00:00:02.000Z",
+    });
+    recordInvocationLogChunk(db, {
+      runtimeWorkspaceBindingId,
+      workspaceId: workspace.id,
+      commandId: command.id,
+      payload: {
+        runtimeInvocationId,
+        stream: "assistant",
+        sequence: 1,
+        content: "Hello",
+        metadata: { delta: true },
+      },
+      createdAt: "2026-05-22T00:00:03.000Z",
+    });
+    recordInvocationLogChunk(db, {
+      runtimeWorkspaceBindingId,
+      workspaceId: workspace.id,
+      commandId: command.id,
+      payload: {
+        runtimeInvocationId,
+        stream: "assistant",
+        sequence: 2,
+        content: " world",
+      },
+      createdAt: "2026-05-22T00:00:04.000Z",
+    });
+
+    const firstBatch = loadEventBatch(db, null, 10).map(serializeEventRow);
+    const streamingEvents = firstBatch.filter((event) => event.subjectId === runtimeInvocationId);
+    expect(streamingEvents.map((event) => event.kind)).toEqual([
+      "invocation.updated",
+      "invocation.log_chunk",
+      "invocation.log_chunk",
+    ]);
+    expect(streamingEvents[0]?.payload).toMatchObject({
+      runtimeInvocationId,
+      commandId: command.id,
+      taskRuntimeId: "task-1",
+      status: "running",
+    });
+    expect(streamingEvents[1]?.payload).toMatchObject({
+      runtimeInvocationId,
+      commandId: command.id,
+      stream: "assistant",
+      sequence: 1,
+      content: "Hello",
+      metadata: { delta: true },
+    });
+
+    const cursor = cursorFromEvent(streamingEvents[1]!);
+    const replay = loadEventBatch(db, cursor, 10).map(serializeEventRow);
+    expect(replay.filter((event) => event.subjectId === runtimeInvocationId)).toMatchObject([
+      {
+        kind: "invocation.log_chunk",
+        payload: { stream: "assistant", sequence: 2, content: " world" },
+      },
+    ]);
     db.close();
   });
 

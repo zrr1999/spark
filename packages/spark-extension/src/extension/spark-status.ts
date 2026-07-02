@@ -1,4 +1,4 @@
-import type { Task, TaskStatus, ProjectRef } from "@zendev-lab/pi-extension-api";
+import type { Task, TaskStatus, ProjectRef } from "@zendev-lab/spark-extension-api";
 import {
   countPiTaskStatuses,
   formatPiTaskStatusCounts,
@@ -6,7 +6,7 @@ import {
   isUnfinishedTaskStatus,
   sortPiTasksForStatusVisibility,
   type TaskGraph,
-} from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-tasks";
 import { renderSparkProjectKindDisplay } from "./project-kind-registry.ts";
 import { isClaimOwnedBySession, taskClaimedBy } from "./task-ownership.ts";
 

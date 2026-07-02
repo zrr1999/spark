@@ -1,10 +1,10 @@
-import type { RunRef, TaskRef, ProjectRef } from "@zendev-lab/pi-extension-api";
-import type { WorkflowRunRecord } from "@zendev-lab/pi-workflows";
+import type { RunRef, TaskRef, ProjectRef } from "@zendev-lab/spark-extension-api";
+import type { WorkflowRunRecord } from "@zendev-lab/spark-workflows";
 import {
   readRoleRunArtifactPreview,
   type ActiveSparkRoleRunProcess,
 } from "@zendev-lab/spark-runtime";
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import type { SparkBackgroundChildRunView, SparkBackgroundChildStatus } from "./background-runs.ts";
 
 export function resolveBackgroundTaskRef(

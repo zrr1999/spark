@@ -7,7 +7,7 @@ import {
   type WorkflowRegistryError,
   type WorkflowRegistryOptions,
   type WorkflowSource,
-} from "@zendev-lab/pi-workflows";
+} from "@zendev-lab/spark-workflows";
 
 export type SparkWorkflowSource = WorkflowSource;
 export type SparkWorkflowRef = `workflow:${SparkWorkflowSource}-${string}`;

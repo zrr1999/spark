@@ -1,6 +1,6 @@
-import { truncateToWidth } from "@zendev-lab/spark-tui/text";
+import { truncateToWidth } from "@zendev-lab/spark-text";
 
-import type { SessionTodoEntry, SessionTodoStatus } from "@zendev-lab/pi-tasks";
+import type { SessionTodoEntry, SessionTodoStatus } from "@zendev-lab/spark-tasks";
 import {
   sparkActiveLensDriveMode,
   sparkActiveLensPhase,
@@ -8,7 +8,7 @@ import {
   type SparkDriveModeInput,
 } from "../extension/spark-drive-state.ts";
 
-export type { SessionTodoEntry, SessionTodoStatus } from "@zendev-lab/pi-tasks";
+export type { SessionTodoEntry, SessionTodoStatus } from "@zendev-lab/spark-tasks";
 
 /**
  * spark-widget.ts — Above-editor widget showing durable Spark project/task state plus

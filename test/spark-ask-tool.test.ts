@@ -4,13 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { ArtifactRef } from "@zendev-lab/pi-extension-api";
-import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
+import type { ArtifactRef } from "@zendev-lab/spark-extension-api";
+import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import {
   createElaborationResult,
   createPiAskFlowRequest,
   replayablePiAskFlow,
-} from "@zendev-lab/pi-ask";
+} from "@zendev-lab/spark-ask";
 import {
   createSparkAskToolRequest,
   runSparkAskTool,
@@ -316,6 +316,89 @@ void test("impl_ask tool uses fullscreen ask flow when custom UI is available", 
     assert.deepEqual(response.details.answers.features!.values, ["single", "multi"]);
     assert.deepEqual(response.details.answers.features!.labels, ["Single", "Multi"]);
     assert.match(response.content[0]!.text, /features=Single, Multi/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("impl_ask custom fullscreen UI times out when done is never called", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-ask-tool-fullscreen-timeout-"));
+  try {
+    const response = await runSparkAskTool(
+      {
+        mode: "decision",
+        title: "Choose timeout path",
+        questions: [
+          {
+            id: "path",
+            prompt: "Which path should run?",
+            required: true,
+            options: [
+              { id: "fast", label: "Fast", description: "Run the faster bounded route." },
+              { id: "safe", label: "Safe", description: "Run the safer bounded route." },
+            ],
+          },
+        ],
+      },
+      {
+        cwd: dir,
+        ui: {
+          customTimeoutMs: 10,
+          custom: (...args: unknown[]) => {
+            const factory = args[0] as Function;
+            factory(
+              { terminal: { columns: 80 }, requestRender() {} },
+              {
+                fg: (_color: string, text: string) => text,
+                bold: (text: string) => text,
+                strikethrough: (text: string) => text,
+                dim: (text: string) => text,
+              },
+              {},
+              () => undefined,
+            );
+          },
+        },
+      },
+    );
+
+    assertSparkToolDetails(response.details);
+    assert.equal(response.details.status, "cancelled");
+    assert.equal(response.details.blocked, true);
+    assert.equal(response.details.nextAction, "block");
+    assert.match(response.content[0]!.text, /Choose timeout path blocked: cancelled/u);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("impl_ask headless no-UI decision returns blocked no-selection", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-ask-tool-headless-no-ui-"));
+  try {
+    const response = await runSparkAskTool(
+      {
+        mode: "decision",
+        title: "Choose headless path",
+        questions: [
+          {
+            id: "path",
+            prompt: "Which path should run?",
+            required: true,
+            options: [
+              { id: "fast", label: "Fast", description: "Run the faster bounded route." },
+              { id: "safe", label: "Safe", description: "Run the safer bounded route." },
+            ],
+          },
+        ],
+      },
+      { cwd: dir },
+    );
+
+    assertSparkToolDetails(response.details);
+    assert.equal(response.details.status, "no_selection");
+    assert.equal(response.details.blocked, true);
+    assert.equal(response.details.nextAction, "block");
+    assert.match(response.content[0]!.text, /Choose headless path blocked: no_selection/u);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

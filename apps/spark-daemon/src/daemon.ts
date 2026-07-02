@@ -109,6 +109,7 @@ export interface StartSparkDaemonOptions {
   runQueue?: boolean;
   queuePollIntervalMs?: number;
   queueConcurrency?: number;
+  queueTaskTimeoutMs?: number;
   invocationRegistry?: SparkDaemonInvocationRegistry;
   humanWaits?: SparkDaemonHumanWaitRegistry;
   localEventSink?: SparkDaemonEventSink;
@@ -136,6 +137,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
             options.executeQueueTask ??
             createSparkDaemonQueueTaskExecutor({ paths: options.paths, cwd: process.cwd() }),
           emitEvent: emitQueueEvent,
+          taskTimeoutMs: options.queueTaskTimeoutMs,
         });
   const queueLoop = queueContext
     ? new SparkDaemonWorkerLoop({
@@ -143,6 +145,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
         label: "spark-daemon",
         pollIntervalMs: options.queuePollIntervalMs,
         concurrency: options.queueConcurrency,
+        taskTimeoutMs: options.queueTaskTimeoutMs,
       })
     : null;
   const stopQueueLoop = () => {

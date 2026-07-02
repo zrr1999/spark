@@ -1,5 +1,5 @@
-import type { RunRef } from "@zendev-lab/pi-extension-api";
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
+import type { RunRef } from "@zendev-lab/spark-extension-api";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import {
   dispatchSparkAgentInstruction,
   type SparkModeEntryDeps,

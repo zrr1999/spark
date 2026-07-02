@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { TaskGraph, defaultTaskGraphStore, defaultTaskTodoStore } from "@zendev-lab/pi-tasks";
+import { TaskGraph, defaultTaskGraphStore, defaultTaskTodoStore } from "@zendev-lab/spark-tasks";
 import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
 import {
   renderActiveSparkContextSummary,
@@ -127,7 +127,7 @@ void test("Spark prompt preserves base prompt and stays a single-line phase mark
   assert.match(prompt, /Tools:/);
   assert.match(
     prompt,
-    /task_read, task_write, assign, artifact, ask, role, learning, context, recall, workflow, pi-cue, pi-graft/,
+    /task_read, task_write, assign, artifact, ask, role, learning, context, recall, workflow, spark-cue, spark-graft/,
   );
   assert.doesNotMatch(prompt, /workflow, patch/);
   assert.doesNotMatch(prompt, /no guessing: ask unless user says infer\/research/);

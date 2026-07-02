@@ -188,6 +188,52 @@ void test("Spark headless role executor supports forked session runs", async () 
   }
 });
 
+void test("Spark headless role executor forwards live events through onEvent", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-headless-role-events-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(cwd, { recursive: true });
+    const streamed: unknown[] = [];
+    const executeRole = createSparkHeadlessRoleExecutor({
+      sparkHome,
+      createServices: async (options = {}) => await makeFakeServices(options),
+    });
+
+    const result = await executeRole({
+      role: {
+        ref: "role:test",
+        id: "test",
+        systemPrompt: "You are a streaming test role.",
+      },
+      instruction: {
+        roleRef: "role:test",
+        instruction: "emit events",
+      },
+      record: {
+        ref: "run:events",
+        roleRef: "role:test",
+        instruction: "emit events",
+        status: "queued",
+      },
+      cwd,
+      timeoutMs: 1_000,
+      onEvent: (event) => {
+        streamed.push(event);
+      },
+    });
+
+    assert.equal(result.record.status, "succeeded");
+    assert.equal(streamed.length, result.jsonEvents.length);
+    assert.equal(
+      streamed.some((event: any) => event.type === "stream_event" && event.event?.type === "done"),
+      true,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("daemon session.run executor drains queue item into persisted Spark session", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-session-exec-"));
   try {

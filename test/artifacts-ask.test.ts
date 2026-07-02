@@ -8,8 +8,8 @@ import {
   ArtifactStore,
   ArtifactStoreFormatError,
   defaultArtifactStore,
-} from "@zendev-lab/pi-artifacts";
-import { registerPiArtifactTool } from "@zendev-lab/pi-artifacts/extension";
+} from "@zendev-lab/spark-artifacts";
+import { registerPiArtifactTool } from "@zendev-lab/spark-artifacts/extension";
 import {
   AskConfigStoreFormatError,
   askUser,
@@ -30,8 +30,8 @@ import {
   summarizeAskResult,
   type PiAskUi,
   type StoredAskPayload,
-} from "@zendev-lab/pi-ask";
-import { newRef, type JsonValue } from "@zendev-lab/pi-extension-api";
+} from "@zendev-lab/spark-ask";
+import { newRef, type JsonValue } from "@zendev-lab/spark-extension-api";
 
 void test("artifact store writes hashes, blobs, and lineage links", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-core-artifacts-"));
@@ -496,7 +496,7 @@ void test("artifact store refuses metadata blob paths outside the artifact root"
 });
 
 void test("ask flow payload store saves and loads the latest payload", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-ask-payload-store-"));
+  const dir = await mkdtemp(join(tmpdir(), "spark-ask-payload-store-"));
   try {
     const store = new PiAskFlowPayloadStore();
     const payload = validAskFlowPayload();
@@ -514,7 +514,7 @@ void test("ask flow payload store saves and loads the latest payload", async () 
 });
 
 void test("ask flow payload store rejects malformed persisted payloads", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-ask-payload-store-invalid-"));
+  const dir = await mkdtemp(join(tmpdir(), "spark-ask-payload-store-invalid-"));
   try {
     const store = new PiAskFlowPayloadStore();
     const filePath = join(dir, ".pi", "asks", "latest.json");
@@ -611,9 +611,9 @@ void test("ask flow payload store rejects malformed persisted payloads", async (
 });
 
 void test("ask config store defaults only when the config file is missing", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-ask-config-store-"));
+  const dir = await mkdtemp(join(tmpdir(), "spark-ask-config-store-"));
   try {
-    const filePath = join(dir, "pi-ask.json");
+    const filePath = join(dir, "spark-ask.json");
     const store = createAskConfigStore({ filePath });
 
     assert.deepEqual(store.load(), getDefaultConfig());
@@ -630,9 +630,9 @@ void test("ask config store defaults only when the config file is missing", asyn
 });
 
 void test("ask config store rejects malformed persisted config", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-ask-config-store-invalid-"));
+  const dir = await mkdtemp(join(tmpdir(), "spark-ask-config-store-invalid-"));
   try {
-    const filePath = join(dir, "pi-ask.json");
+    const filePath = join(dir, "spark-ask.json");
     const store = createAskConfigStore({ filePath });
 
     await writeFile(filePath, "{not-json", "utf8");

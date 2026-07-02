@@ -3,8 +3,8 @@ import {
   defaultLearningStore,
   type LearningLocation,
   type LearningRecord,
-} from "@zendev-lab/pi-learnings";
-import { defaultArtifactStore, type Artifact } from "@zendev-lab/pi-artifacts";
+} from "@zendev-lab/spark-learnings";
+import { defaultArtifactStore, type Artifact } from "@zendev-lab/spark-artifacts";
 import {
   DependencyError,
   isRef,
@@ -16,13 +16,13 @@ import {
   type Task,
   type TaskCompletionReadiness,
   type TaskStatus,
-} from "@zendev-lab/pi-extension-api";
+} from "@zendev-lab/spark-extension-api";
 import {
   defaultTaskGraphStore,
   isUnfinishedTaskStatus,
   taskCompletionReadiness,
   type TaskGraph,
-} from "@zendev-lab/pi-tasks";
+} from "@zendev-lab/spark-tasks";
 import { currentSparkProject, saveCurrentProjectRef, sparkSessionKey } from "./session-state.ts";
 import { resolveSessionClaimedTask } from "./task-claim-selection.ts";
 import { compactTaskDetail, normalizeOptionalToolString } from "./task-plan-tool.ts";
@@ -953,6 +953,7 @@ async function recordTaskReviewArtifact(
     ...(review.record.runName ? { runName: review.record.runName } : {}),
     startedAt: review.record.startedAt,
     finishedAt: review.record.finishedAt,
+    ...(review.record.thinking ? { thinking: review.record.thinking } : {}),
     ...(review.record.stdout
       ? { stdoutPreview: truncateReviewRunOutput(review.record.stdout, 4_000) }
       : {}),

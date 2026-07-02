@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createNaviaResourceLoader } from "./resource-loader.js";
-import { extractTextDelta } from "./session.js";
+import { extractFinalAssistantText, extractTextDelta } from "./session.js";
 
 describe("Spark daemon session compatibility surface", () => {
   it("uses a daemon-owned resource loader with no extension discovery by default", () => {
@@ -13,8 +13,14 @@ describe("Spark daemon session compatibility surface", () => {
     expect(loader.getSystemPrompt()).toContain("Spark Daemon");
   });
 
-  it("uses Spark headless session execution instead of pi-coding-agent sessions", async () => {
-    const headless = await import("@zendev-lab/spark-tui-app/headless-role-executor");
+  it("loads Spark headless session execution through spark-host", async () => {
+    const { loadSparkHeadlessSessionModule } =
+      await import("@zendev-lab/spark-host/headless-loader");
+    const headless = await loadSparkHeadlessSessionModule({
+      importModule: async () => ({
+        createSparkHeadlessSessionExecutor: () => async () => ({ sessionId: "test" }),
+      }),
+    });
 
     expect(typeof headless.createSparkHeadlessSessionExecutor).toBe("function");
   });
@@ -30,5 +36,23 @@ describe("Spark daemon session compatibility surface", () => {
       }),
     ).toBe("legacy");
     expect(extractTextDelta({ type: "stream_event", event: { type: "done" } })).toBeNull();
+  });
+
+  it("extracts final assistant text from completed Spark headless events", () => {
+    expect(
+      extractFinalAssistantText({
+        type: "stream_event",
+        event: {
+          type: "done",
+          message: { role: "assistant", content: [{ type: "text", text: "final" }] },
+        },
+      }),
+    ).toBe("final");
+    expect(
+      extractFinalAssistantText({
+        type: "turn_complete",
+        message: { role: "assistant", content: "turn final" },
+      }),
+    ).toBe("turn final");
   });
 });

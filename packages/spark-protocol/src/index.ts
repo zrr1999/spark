@@ -1,12 +1,27 @@
 import { z } from "zod";
 
+export * from "./command-delivery.ts";
 export * from "./errors.ts";
 export * from "./refs.ts";
 export * from "./runtime-v1/envelope.ts";
 export * from "./runtime-v1/messages.ts";
 export * from "./runtime-v1/registration.ts";
+export * from "./state-ownership.ts";
+export { SPARK_PROTOCOL_VERSION } from "./version.ts";
+export type {
+  SparkProtocolVersion,
+  SparkProtocolVersionInfo,
+  SparkRuntimeProtocolVersion,
+} from "./version.ts";
+export {
+  SPARK_RUNTIME_PROTOCOL_VERSION,
+  assertSparkProtocolVersion,
+  assertSparkRuntimeProtocolVersion,
+  currentSparkProtocolVersions,
+  isSparkRuntimeProtocolVersion,
+} from "./version.ts";
 
-export const SPARK_PROTOCOL_VERSION = 1 as const;
+import { SPARK_PROTOCOL_VERSION } from "./version.ts";
 
 const jsonPrimitiveSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 export type SparkJsonValue =

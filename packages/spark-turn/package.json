@@ -19,7 +19,7 @@
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@zendev-lab/pi-extension-api": "workspace:^",
+    "@zendev-lab/spark-extension-api": "workspace:^",
     "@zendev-lab/spark-protocol": "workspace:^"
   }
 }

@@ -5,8 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { ArtifactStore } from "@zendev-lab/pi-artifacts";
-import type { JsonValue, RoleRef, RunRef, TaskRef, ProjectRef } from "@zendev-lab/pi-extension-api";
+import { ArtifactStore } from "@zendev-lab/spark-artifacts";
+import type {
+  JsonValue,
+  RoleRef,
+  RunRef,
+  TaskRef,
+  ProjectRef,
+} from "@zendev-lab/spark-extension-api";
 import {
   collectRoleRunArtifactRetentionPlan,
   isRoleRunArtifactBody,

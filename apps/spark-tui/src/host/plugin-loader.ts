@@ -3,7 +3,7 @@
  * lists from `~/.spark/config.json` via the same import-default mechanism
  * but with two distinct surfaces:
  *
- *   - extension plugins → call default(api: ExtensionAPI)  (pi-extension-api)
+ *   - extension plugins → call default(api: ExtensionAPI)  (spark-extension-api)
  *   - provider plugins  → call default(api: ProviderRegistrationAPI)
  *
  * Errors loading individual plugins are *isolated*: a failed import or a
@@ -13,10 +13,10 @@
  *
  * The loader does no network I/O. Module resolution is delegated to Node's
  * dynamic `import()` so users can list both bare package specifiers
- * (`pi-cue`, `spark/extension`) and absolute file URLs.
+ * (`spark-cue`, `spark/extension`) and absolute file URLs.
  */
 
-import type { ExtensionAPI } from "@zendev-lab/pi-extension-api";
+import type { ExtensionAPI } from "@zendev-lab/spark-extension-api";
 
 import { createSparkExtensionImporter } from "./extension-loader.ts";
 import type { ProviderRegistrationAPI } from "./provider-registry.ts";

@@ -25,9 +25,9 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.79.4",
-    "@zendev-lab/pi-extension-api": "workspace:^",
-    "@zendev-lab/pi-files": "workspace:^",
     "@zendev-lab/spark-ai": "workspace:^",
+    "@zendev-lab/spark-extension-api": "workspace:^",
+    "@zendev-lab/spark-files": "workspace:^",
     "@zendev-lab/spark-host": "workspace:^",
     "@zendev-lab/spark-i18n": "workspace:^",
     "@zendev-lab/spark-protocol": "workspace:^",

@@ -5,12 +5,12 @@ import type {
   TaskRef,
   TaskStatus,
   ProjectRef,
-} from "@zendev-lab/pi-extension-api";
+} from "@zendev-lab/spark-extension-api";
 import type {
   WorkflowRunAcknowledgeResult,
   WorkflowRunControlStatus,
   WorkflowRunStatus,
-} from "@zendev-lab/pi-workflows";
+} from "@zendev-lab/spark-workflows";
 import {
   listActiveSparkRoleRunProcesses,
   type KillSparkRoleRunProcessResult,
@@ -18,7 +18,7 @@ import {
   type RoleRunJsonEventsTail,
   type RoleRunTextTail,
 } from "@zendev-lab/spark-runtime";
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import {
   collectBackgroundChildRuns,
   enrichBackgroundChildRunsWithRoleRunArtifacts,

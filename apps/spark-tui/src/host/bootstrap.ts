@@ -2,7 +2,7 @@
 
 import { basename, join, resolve } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
-import { stableId, type ExtensionAPI } from "@zendev-lab/pi-extension-api";
+import { stableId, type ExtensionAPI } from "@zendev-lab/spark-extension-api";
 import { createProviderRegistryStreamFunction } from "@zendev-lab/spark-ai";
 
 import { renderSparkActiveSystemPrompt } from "../../../../packages/spark-extension/src/extension/spark-active-injection.ts";

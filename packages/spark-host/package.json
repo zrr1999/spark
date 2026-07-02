@@ -11,6 +11,7 @@
   "type": "module",
   "exports": {
     ".": "./src/runtime.ts",
+    "./headless-loader": "./src/headless-loader.ts",
     "./keybindings": "./src/keybindings.ts",
     "./types": "./src/types.ts"
   },
@@ -21,7 +22,7 @@
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@zendev-lab/pi-extension-api": "workspace:^",
+    "@zendev-lab/spark-extension-api": "workspace:^",
     "@zendev-lab/spark-protocol": "workspace:^"
   }
 }

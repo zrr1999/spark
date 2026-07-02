@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { RoleRef, RunRef } from "@zendev-lab/pi-extension-api";
-import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
-import type { WorkflowRunStatusSummary } from "@zendev-lab/pi-workflows";
+import type { RoleRef, RunRef } from "@zendev-lab/spark-extension-api";
+import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import type { WorkflowRunStatusSummary } from "@zendev-lab/spark-workflows";
 import type { ActiveSparkRoleRunProcess } from "@zendev-lab/spark-runtime";
-import { TaskGraph } from "@zendev-lab/pi-tasks";
+import { TaskGraph } from "@zendev-lab/spark-tasks";
 import { evaluateSparkTaskClaimRecovery } from "../packages/spark-extension/src/extension/task-claim-recovery.ts";
 import { sessionDirectoryNameForKey } from "../packages/spark-extension/src/extension/session-directory-store.ts";
 

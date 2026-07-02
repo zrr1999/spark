@@ -1,21 +1,8 @@
-export type ProjectChatPromptSuggestion = {
-  id: string;
-  label: string;
-  prompt: string;
-  meta?: string;
-};
+import { dedupeChatSuggestions, fillChatTemplate } from "./cockpit-chat-context";
+import type { CockpitChatContextCard, CockpitChatPromptSuggestion } from "./cockpit-chat-types";
 
-export type ProjectChatContextCard = {
-  id: string;
-  type: "task" | "artifact" | "inbox";
-  kicker: string;
-  title: string;
-  description: string;
-  prompt: string;
-  primaryLabel: string;
-  href?: string;
-  secondaryLabel?: string;
-};
+export type ProjectChatPromptSuggestion = CockpitChatPromptSuggestion;
+export type ProjectChatContextCard = CockpitChatContextCard<"task" | "artifact" | "inbox">;
 
 export type ProjectChatContextTask = {
   runtimeTaskId: string;
@@ -83,36 +70,42 @@ export function buildProjectChatContextActions({
   }));
 
   if (tasks.length === 0) {
+    const prompt = fillChatTemplate(messages.suggestNoTasks, { projectName });
     suggestions.unshift({
       id: "no-tasks",
-      label: fill(messages.suggestNoTasks, { projectName }),
-      prompt: fill(messages.suggestNoTasks, { projectName }),
+      label: prompt,
+      prompt,
     });
   }
 
   if (blockedTask) {
+    const prompt = fillChatTemplate(messages.suggestBlockedTask, { title: blockedTask.title });
     suggestions.unshift({
       id: `blocked-${blockedTask.runtimeTaskId}`,
-      label: fill(messages.suggestBlockedTask, { title: blockedTask.title }),
-      prompt: fill(messages.suggestBlockedTask, { title: blockedTask.title }),
+      label: prompt,
+      prompt,
       meta: blockedTask.status,
     });
   }
 
   if (recentArtifact) {
+    const prompt = fillChatTemplate(messages.suggestRecentArtifact, {
+      title: recentArtifact.title,
+    });
     suggestions.push({
       id: `artifact-${recentArtifact.id}`,
-      label: fill(messages.suggestRecentArtifact, { title: recentArtifact.title }),
-      prompt: fill(messages.suggestRecentArtifact, { title: recentArtifact.title }),
+      label: prompt,
+      prompt,
       meta: recentArtifact.kind,
     });
   }
 
   if (pendingInbox[0]) {
+    const prompt = fillChatTemplate(messages.suggestPendingInbox, { title: pendingInbox[0].title });
     suggestions.push({
       id: `inbox-${pendingInbox[0].id}`,
-      label: fill(messages.suggestPendingInbox, { title: pendingInbox[0].title }),
-      prompt: fill(messages.suggestPendingInbox, { title: pendingInbox[0].title }),
+      label: prompt,
+      prompt,
       meta: pendingInbox[0].urgency,
     });
   }
@@ -164,7 +157,7 @@ export function buildProjectChatContextActions({
   );
 
   return {
-    suggestions: dedupeSuggestions(suggestions).slice(0, 8),
+    suggestions: dedupeChatSuggestions(suggestions).slice(0, 8),
     cards: [...inboxCards, ...visibleTasks, ...artifactCards].slice(0, 5),
   };
 }
@@ -180,21 +173,4 @@ function taskPriority(task: ProjectChatContextTask) {
     default:
       return 3;
   }
-}
-
-function fill(template: string, values: Record<string, string>) {
-  return Object.entries(values).reduce(
-    (text, [key, value]) => text.replaceAll(`{${key}}`, value),
-    template,
-  );
-}
-
-function dedupeSuggestions(suggestions: ProjectChatPromptSuggestion[]) {
-  const seen = new Set<string>();
-  return suggestions.filter((suggestion) => {
-    const key = suggestion.prompt.trim().toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }

@@ -1,7 +1,7 @@
 import { Type } from "typebox";
-import { defaultArtifactStore } from "@zendev-lab/pi-artifacts";
-import type { TaskGraph } from "@zendev-lab/pi-tasks";
-import { nowIso, type JsonValue, type RoleRef } from "@zendev-lab/pi-extension-api";
+import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import type { TaskGraph } from "@zendev-lab/spark-tasks";
+import { nowIso, type JsonValue, type RoleRef } from "@zendev-lab/spark-extension-api";
 import { currentSparkProject, loadSparkGraph, sparkSessionKey } from "./session-state.ts";
 import {
   requestGoalCompletionReview,
@@ -483,6 +483,7 @@ async function recordGoalTransitionReviewArtifact(
     ...(review.record.runName ? { runName: review.record.runName } : {}),
     startedAt: review.record.startedAt,
     finishedAt: review.record.finishedAt,
+    ...(review.record.thinking ? { thinking: review.record.thinking } : {}),
   };
   const artifact = await defaultArtifactStore(cwd).put({
     kind: "record",

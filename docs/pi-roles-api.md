@@ -1,6 +1,6 @@
-# `pi-roles` API design
+# `spark-roles` API design
 
-`pi-roles` is the Spark-independent package for reusable coding roles and simple child Pi executions. It replaces the earlier split-package direction with one generic role-spec and role-run package.
+`spark-roles` is the Spark-independent package for reusable coding roles and simple child Pi executions. It replaces the earlier split-package direction with one generic role-spec and role-run package.
 
 ## Goals
 
@@ -68,8 +68,8 @@ Role runs default to the current Pi session model supplied by the host. A call-t
 
 Use `source` for role storage/provenance scope:
 
-- `builtin` — shipped with `pi-roles` / Pi distribution.
-- `extension` — registered by a loaded extension package, for example `pi-graft` registering `role:extension-patcher`.
+- `builtin` — shipped with `spark-roles` / Pi distribution.
+- `extension` — registered by a loaded extension package, for example `spark-graft` registering `role:extension-patcher`.
 - `project` — stored in a project repo under `.agents/roles/**/*.md`.
 - `user` — user-global roles under `~/.agents/roles/**/*.md`.
 
@@ -88,11 +88,11 @@ role/tool profile explicitly grants a write surface. No builtin role receives
 `interact` or `spawn`, and builtin role allowlists exclude interactive and
 orchestration surfaces such as `ask`, `task`, `task_read`, `task_write`,
 `goal`, `role`, `assign`, `workflow`, and `graft_patch`. Host or Spark preset code may consume
-`allowedTools`, but `pi-roles` does not own package-specific activation policy.
+`allowedTools`, but `spark-roles` does not own package-specific activation policy.
 Builtin roles report blockers, missing decisions, and unresolved ambiguities
 upward in their final response.
 
-Runtime role loading does not read old agent-shaped paths. If a repository still has `.pi/agents`, `~/.pi/agent/agents`, or `.spark/agents/*.json` data, migrate it explicitly into `.agents/roles` before relying on `pi-roles`.
+Runtime role loading does not read old agent-shaped paths. If a repository still has `.pi/agents`, `~/.pi/agent/agents`, or `.spark/agents/*.json` data, migrate it explicitly into `.agents/roles` before relying on `spark-roles`.
 
 Do **not** use role-spec `model` or `defaultModel` fields. Role specs define prompt, tools, rationale, and expected use; model policy lives in role model settings.
 
@@ -186,7 +186,7 @@ Every run references an existing role. A run can be fresh or forked regardless o
 
 ## Tool / runtime mapping
 
-| Surface                      | `pi-roles` / runtime concept                                                                 |
+| Surface                      | `spark-roles` / runtime concept                                                                 |
 | ---------------------------- | -------------------------------------------------------------------------------------------- |
 | `role({ action: "list" })`   | Pi role-spec management over `RoleRegistry.list()`                                           |
 | `role({ action: "get" })`    | Pi role-spec management over `RoleRegistry.select()`                                         |
@@ -197,4 +197,4 @@ Every run references an existing role. A run can be fresh or forked regardless o
 | Runtime claim                | `TaskClaim.kind = "role-run"`, `roleRef`, `runName`, `runRef` attribution                    |
 | Runtime artifact             | `kind: "role-run"` records with task/run provenance                                          |
 
-Runtime package boundaries should reject stale local state with explicit migration or cleanup tooling before it reaches `pi-roles`, `pi-tasks`, or `spark-runtime`.
+Runtime package boundaries should reject stale local state with explicit migration or cleanup tooling before it reaches `spark-roles`, `spark-tasks`, or `spark-runtime`.

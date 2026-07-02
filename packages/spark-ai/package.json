@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.79.4",
-    "@zendev-lab/pi-extension-api": "workspace:^",
+    "@zendev-lab/spark-extension-api": "workspace:^",
     "typebox": "^1.2.13"
   }
 }

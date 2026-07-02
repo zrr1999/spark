@@ -1,16 +1,134 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import {
+    addOptimisticAgentsChatCommand,
+    applyAgentsChatEvent,
+    createAgentsChatLiveState,
+    type AgentsChatSerializedEvent,
+  } from "$lib/agents-chat-live-state";
+  import AgentMdxStream from "$lib/AgentMdxStream.svelte";
   import Icon from "$lib/Icon.svelte";
   import {
-    enumLabel,
-    formatRelativeTime,
-    statusLabel as getStatusLabel,
-  } from "$lib/i18n";
+    activityKind,
+    buildCockpitChatTranscriptTurns,
+    type CockpitChatTranscriptTurn,
+  } from "$lib/cockpit-chat-transcript-view";
+  import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
+  import { workspaceControlControlLabel } from "$lib/workspace-control-display";
   import { workspacePath } from "$lib/workspace-routes";
 
   let { data, form } = $props();
   let t = $derived(data.messages.agents);
+  let product = $derived(t.product);
   let common = $derived(data.messages.common);
   let workspaceUrl = $derived(data.workspace ? workspacePath(data.workspace) : "/");
+  let taskForm = $derived(form?.intent === "chat" ? form : null);
+  let selectedRunId = $state("current");
+  let draftPrompt = $state("");
+  let liveState = $state(
+    createAgentsChatLiveState({
+      workspaceId: "",
+      commands: [],
+      invocations: [],
+      logChunks: [],
+    }),
+  );
+  $effect(() => {
+    liveState = createAgentsChatLiveState({
+      workspaceId: data.workspace?.id ?? "",
+      commands: data.commands,
+      invocations: data.invocations,
+      logChunks: data.logChunks,
+    });
+  });
+  $effect(() => {
+    if (taskForm?.values?.prompt) draftPrompt = taskForm.values.prompt;
+  });
+
+  type Command = {
+    status: string;
+    deliveryStatus: string | null;
+  };
+
+  let runtimeStatus = $derived(data.ownerBinding?.runtimeStatus ?? "blocked");
+  let runtimeContext = $derived(
+    data.ownerBinding
+      ? `${data.ownerBinding.displayName} · ${data.ownerBinding.runtimeName}`
+      : t.chat.noOwnerContext,
+  );
+  let canStartTask = $derived(
+    data.ownerBinding?.bindingStatus === "available" &&
+      data.workspaceControl.control.serverMutationAllowed,
+  );
+  let workspaceControlLabel = $derived(
+    workspaceControlControlLabel(data.workspaceControl.control, data.messages.home.workspaceControl),
+  );
+  let hasInFlightCommand = $derived(
+    liveState.commands.some(
+      (command: Command) =>
+        command.status === "queued" ||
+        command.status === "delivered" ||
+        command.deliveryStatus === "pending" ||
+        command.deliveryStatus === "sent",
+    ),
+  );
+  let hasActiveInvocation = $derived(
+    liveState.invocations.some((invocation) =>
+      ["queued", "running"].includes(invocation.status.toLowerCase()),
+    ),
+  );
+  let hasActiveRun = $derived(hasInFlightCommand || hasActiveInvocation);
+  let latestActiveInvocationId = $derived(
+    liveState.invocations.find((invocation) =>
+      ["queued", "running"].includes(invocation.status.toLowerCase()),
+    )?.runtimeInvocationId ?? null,
+  );
+  let taskActionLabel = $derived(
+    !data.ownerBinding
+      ? t.chat.noOwnerButton
+      : !canStartTask
+        ? t.chat.unavailableButton
+        : hasActiveRun
+          ? product.runningButton
+          : product.startButton,
+  );
+  let assistantState = $derived(
+    hasActiveRun ? t.chat.busyState : canStartTask ? t.chat.readyState : t.chat.offlineState,
+  );
+  let ownerCommandNote = $derived(
+    data.ownerBinding
+      ? `${t.chat.ownerPrefix} ${data.ownerBinding.displayName} · ${data.ownerBinding.runtimeName}${
+          canStartTask ? "" : ` · ${workspaceControlLabel}`
+        }`
+      : "",
+  );
+  let taskSuggestions = $derived(
+    t.chat.suggestions.map((prompt, index) => ({
+      id: `agents-product-${index}`,
+      label: prompt,
+      prompt,
+    })),
+  );
+  let transcriptTurns = $derived(
+    buildCockpitChatTranscriptTurns(liveState.commands, liveState.invocations, liveState.logChunks, {
+      waitingAnswer: t.chat.waitingAnswer,
+      runningAnswer: t.chat.runningAnswer,
+      completedAnswer: t.chat.completedAnswer,
+      errorAnswer: t.chat.errorAnswer,
+      cancelledAnswer: t.chat.cancelledAnswer,
+      latestOutputPrefix: t.chat.latestOutputPrefix,
+    }),
+  );
+  let historyTurns = $derived(transcriptTurns.slice().reverse());
+  let currentTurn = $derived(currentProductTurn(transcriptTurns));
+  let selectedTurn = $derived(
+    selectedRunId === "current"
+      ? currentTurn
+      : transcriptTurns.find((turn) => turn.id === selectedRunId) ?? currentTurn,
+  );
+  let displaySource = $derived(renderSourceForTurn(selectedTurn));
+  let hasDisplaySource = $derived(Boolean(displaySource.trim()));
+  let selectedLogs = $derived(selectedTurn?.logs.slice(-8) ?? []);
 
   function formatRelative(value: string | null) {
     return formatRelativeTime(value, data.locale, common);
@@ -20,15 +138,117 @@
     return getStatusLabel(status, common);
   }
 
-  function sourceLabel(source: string) {
-    return enumLabel(source, common.agentSource);
+  function handleOptimisticSubmit(prompt: string) {
+    const id = addOptimisticAgentsChatCommand(liveState, { prompt });
+    if (!id) return;
+    liveState.commands = [...liveState.commands];
+    selectedRunId = "current";
   }
 
-  function parseConfig(value: string) {
-    const parsed = JSON.parse(value) as Record<string, unknown>;
-    const roleRef = typeof parsed.roleRef === "string" ? parsed.roleRef : null;
-    const instructions = typeof parsed.instructions === "string" ? parsed.instructions : null;
-    return { roleRef, instructions };
+  function handleTaskSubmit(event: SubmitEvent) {
+    if (!canStartTask || hasActiveRun) {
+      event.preventDefault();
+      return;
+    }
+    handleOptimisticSubmit(draftPrompt);
+  }
+
+  function handleSuggestedSubmit(event: SubmitEvent, prompt: string) {
+    if (!canStartTask || hasActiveRun) {
+      event.preventDefault();
+      if (!hasActiveRun) draftPrompt = prompt;
+      return;
+    }
+    handleOptimisticSubmit(prompt);
+  }
+
+  function prefillPrompt(prompt: string) {
+    draftPrompt = prompt;
+  }
+
+  onMount(() => {
+    if (!data.workspace) return;
+    const cursorStorageKey = `spark-cockpit:agents-product:${data.workspace.id}:events-cursor`;
+    liveState.cursor = window.sessionStorage.getItem(cursorStorageKey);
+    let eventSource: EventSource | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let closed = false;
+
+    const connect = () => {
+      if (closed) return;
+      const url = new URL("/api/v1/events", window.location.origin);
+      if (liveState.cursor) url.searchParams.set("cursor", liveState.cursor);
+      eventSource = new EventSource(url);
+      eventSource.addEventListener("spark-cockpit.event", (message) => {
+        const event = parseSseEvent(message);
+        if (!event) return;
+        const changed = applyAgentsChatEvent(liveState, event);
+        if (liveState.cursor) window.sessionStorage.setItem(cursorStorageKey, liveState.cursor);
+        if (changed) {
+          liveState.commands = [...liveState.commands];
+          liveState.invocations = [...liveState.invocations];
+          liveState.logChunks = [...liveState.logChunks];
+          if (hasActiveRun) selectedRunId = "current";
+        }
+      });
+      eventSource.onerror = () => {
+        eventSource?.close();
+        eventSource = null;
+        if (!closed && !reconnectTimer) {
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            connect();
+          }, 1_000);
+        }
+      };
+    };
+
+    connect();
+
+    return () => {
+      closed = true;
+      eventSource?.close();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+    };
+  });
+
+  function parseSseEvent(message: MessageEvent<string>): AgentsChatSerializedEvent | null {
+    try {
+      const event = JSON.parse(message.data) as AgentsChatSerializedEvent;
+      return event && typeof event.id === "string" && typeof event.createdAt === "string"
+        ? event
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function currentProductTurn(turns: CockpitChatTranscriptTurn[]) {
+    return (
+      turns
+        .slice()
+        .reverse()
+        .find((turn) => turn.status === "running" || turn.status === "waiting") ??
+      turns.at(-1) ??
+      null
+    );
+  }
+
+  function renderSourceForTurn(turn: CockpitChatTranscriptTurn | null) {
+    if (!turn) return "";
+    if (turn.renderSource?.trim()) return turn.renderSource;
+    if (isGenericAnswer(turn.answer)) return "";
+    return turn.answer.replace(`${t.chat.latestOutputPrefix}\n`, "").trim();
+  }
+
+  function isGenericAnswer(answer: string) {
+    return [
+      t.chat.waitingAnswer,
+      t.chat.runningAnswer,
+      t.chat.completedAnswer,
+      t.chat.errorAnswer,
+      t.chat.cancelledAnswer,
+    ].includes(answer);
   }
 </script>
 
@@ -47,13 +267,6 @@
     </div>
   </header>
 
-  <section class="metrics" aria-label={t.metrics.aria}>
-    <article><span>{t.metrics.total}</span><strong>{data.counts.total}</strong></article>
-    <article><span>{t.metrics.active}</span><strong>{data.counts.active}</strong></article>
-    <article><span>{t.metrics.disabled}</span><strong>{data.counts.disabled}</strong></article>
-    <article><span>{t.metrics.archived}</span><strong>{data.counts.archived}</strong></article>
-  </section>
-
   {#if !data.workspace}
     <section class="panel empty-state">
       <div class="empty-icon"><Icon name="agents" size={28} /></div>
@@ -62,98 +275,185 @@
       <a class="secondary-action" href={workspaceUrl}>{t.emptyWorkspace.action}</a>
     </section>
   {:else}
-    <section class="grid">
-      <section class="panel" aria-labelledby="agent-list-title">
-        <div class="panel-header">
-          <div>
-            <p class="panel-kicker">{data.workspace.name}</p>
-            <h2 id="agent-list-title">{t.list.title}</h2>
-          </div>
-          <span class="panel-badge">{data.agentSpecs.length} {t.list.totalSuffix}</span>
+    <section class="product-shell" aria-labelledby="agents-product-title" aria-label={product.aria}>
+      <div class="product-toolbar">
+        <div>
+          <p class="panel-kicker">{product.kicker}</p>
+          <h2 id="agents-product-title">{product.title}</h2>
+          <p class="chat-copy">{product.body}</p>
         </div>
-
-        {#if data.agentSpecs.length === 0}
-          <div class="compact-empty">
-            <div class="empty-icon small"><Icon name="agents" size={22} /></div>
-            <div>
-              <h3>{t.list.emptyTitle}</h3>
-              <p>{t.list.emptyBody}</p>
-            </div>
-          </div>
-        {:else}
-          <div class="agent-list">
-            {#each data.agentSpecs as agent}
-              {@const config = parseConfig(agent.configJson)}
-              <article class="agent-row">
-                <div class="row-icon"><Icon name="agents" size={22} /></div>
-                <div>
-                  <div class="row-title">
-                    <h3>{agent.name}</h3>
-                    <span class="source-pill">{sourceLabel(agent.source)}</span>
-                  </div>
-                  <p>{agent.description ?? config.instructions ?? common.fallback.noDescription}</p>
-                  <small>{config.roleRef ?? common.fallback.noRoleHint} · {t.list.updatedPrefix} {formatRelative(agent.updatedAt)}</small>
-                </div>
-                <span class="status-pill {agent.status}">{statusLabel(agent.status)}</span>
-                <form method="POST" action="?/setAgentStatus">
-                  <input type="hidden" name="agentSpecId" value={agent.id} />
-                  {#if agent.status === "active"}
-                    <button class="secondary-action small" name="status" value="disabled" type="submit">{t.list.disable}</button>
-                  {:else if agent.status === "disabled"}
-                    <button class="secondary-action small" name="status" value="active" type="submit">{t.list.enable}</button>
-                  {:else}
-                    <button class="secondary-action small" name="status" value="active" type="submit">{t.list.restore}</button>
-                  {/if}
-                  {#if agent.status !== "archived"}
-                    <button class="secondary-action small" name="status" value="archived" type="submit">{t.list.archive}</button>
-                  {/if}
-                </form>
-              </article>
-            {/each}
-          </div>
-        {/if}
-      </section>
-
-      <aside class="panel create-panel" aria-labelledby="create-agent-title">
-        <div class="panel-header compact">
-          <div>
-            <p class="panel-kicker">{t.create.kicker}</p>
-            <h2 id="create-agent-title">{t.create.title}</h2>
-          </div>
-        </div>
-
-        {#if form?.message}
-          <div class="form-error" role="alert">{form.message}</div>
-        {/if}
-
-        <form method="POST" action="?/createAgentSpec">
-          <label>
-            <span>{t.create.name}</span>
-            <input name="name" placeholder={t.create.namePlaceholder} required />
-          </label>
-          <label>
-            <span>{t.create.source}</span>
-            <select name="source" required>
-              <option value="workspace">{common.agentSource.workspace}</option>
-              <option value="builtin">{common.agentSource.builtin}</option>
-              <option value="imported">{common.agentSource.imported}</option>
+        <div class="toolbar-actions">
+          <label class="history-picker">
+            <span>{product.historyLabel}</span>
+            <select bind:value={selectedRunId} disabled={historyTurns.length === 0}>
+              <option value="current">{product.currentOption}</option>
+              {#each historyTurns as turn}
+                <option value={turn.id}>
+                  {formatRelative(turn.command.createdAt)} · {statusLabel(turn.status)} · {turn.prompt}
+                </option>
+              {/each}
             </select>
           </label>
-          <label>
-            <span>{t.create.roleHint}</span>
-            <input name="roleRef" placeholder={t.create.roleHintPlaceholder} />
-          </label>
-          <label>
-            <span>{t.create.description}</span>
-            <input name="description" placeholder={t.create.descriptionPlaceholder} />
-          </label>
-          <label>
-            <span>{t.create.instructions}</span>
-            <textarea name="instructions" rows="4" placeholder={t.create.instructionsPlaceholder}></textarea>
-          </label>
-          <button class="primary-action" type="submit">{t.create.submit}</button>
+          <span class="sync-chip" class:live={hasActiveRun}>
+            <Icon name="activity" size={14} />{hasActiveRun ? product.liveSync : product.idleSync}
+          </span>
+        </div>
+      </div>
+
+      <div class="product-meta" aria-label={product.contextLabel}>
+        <span class="context-chip"><Icon name="workspace" size={14} />{product.workspaceLabel}: {data.workspace.name}</span>
+        <span class="context-chip runtime {runtimeStatus}">
+          <Icon name="activity" size={14} />{product.runtimeLabel}: {runtimeContext}
+        </span>
+        <span class="context-chip"><Icon name="spark" size={14} />{assistantState}</span>
+        {#if ownerCommandNote}
+          <span class="context-chip muted">{ownerCommandNote}</span>
+        {/if}
+      </div>
+
+      <article class="product-stage {selectedTurn?.status ?? 'empty'}" class:busy={hasActiveRun}>
+        <header class="stage-header">
+          <div>
+            <span class="stage-kicker">{selectedRunId === "current" ? product.currentLabel : product.historyLabel}</span>
+            <h3>{selectedTurn?.prompt ?? product.emptyTitle}</h3>
+          </div>
+          <span class="status-pill {selectedTurn?.status ?? runtimeStatus}">
+            {statusLabel(selectedTurn?.status ?? runtimeStatus)}
+          </span>
+        </header>
+
+        {#if hasDisplaySource}
+          <div class="genui-canvas">
+            <AgentMdxStream source={displaySource} streaming={selectedTurn?.status === "running"} />
+          </div>
+        {:else}
+          <div class="empty-product">
+            <div class="empty-icon"><Icon name="spark" size={28} /></div>
+            <div>
+              <h3>{product.emptyTitle}</h3>
+              <p>{selectedTurn ? selectedTurn.answer : product.emptyBody}</p>
+            </div>
+          </div>
+        {/if}
+
+        {#if selectedTurn?.currentActivity}
+          <p class="activity-line"><strong>{product.activityLabel}</strong> {selectedTurn.currentActivity}</p>
+        {/if}
+
+        {#if selectedTurn}
+          <details class="run-details" open={selectedTurn.status === "running"}>
+            <summary>
+              <span><Icon name="activity" size={15} />{product.runDetails}</span>
+              <small>{selectedTurn.invocations.length} {t.chat.invocationMetaLabel} · {selectedTurn.logs.length} {t.chat.logMetaLabel}</small>
+            </summary>
+            <div class="run-detail-grid">
+              <section>
+                <h4>{product.invocationsLabel}</h4>
+                {#if selectedTurn.invocations.length === 0}
+                  <p class="details-empty">{t.chat.noRunDetails}</p>
+                {:else}
+                  <div class="invocation-stack">
+                    {#each selectedTurn.invocations as invocation}
+                      <article class="invocation-card">
+                        <div>
+                          <strong>{invocation.agentName ?? t.chat.assistantLabel}</strong>
+                          <small>{invocation.runtimeInvocationId}</small>
+                        </div>
+                        <span class="status-pill {invocation.status}">{statusLabel(invocation.status)}</span>
+                        <time>{formatRelative(invocation.updatedAt)}</time>
+                      </article>
+                    {/each}
+                  </div>
+                {/if}
+              </section>
+              <section>
+                <h4>{product.recentActivityLabel}</h4>
+                {#if selectedLogs.length === 0}
+                  <p class="details-empty">{t.chat.noRunDetails}</p>
+                {:else}
+                  <div class="activity-stack">
+                    {#each selectedLogs as log}
+                      <article class="activity-row {activityKind(log)}">
+                        <header>
+                          <span>{log.stream}</span>
+                          <small>{log.runtimeInvocationId} · #{log.sequence} · {formatRelative(log.createdAt)}</small>
+                        </header>
+                        <pre aria-label={t.chat.rawLogOutput}>{log.content}</pre>
+                      </article>
+                    {/each}
+                  </div>
+                {/if}
+              </section>
+            </div>
+          </details>
+        {/if}
+      </article>
+
+      <section class="task-launcher" aria-labelledby="agents-task-launcher-title">
+        <div>
+          <p class="panel-kicker">{product.launcherKicker}</p>
+          <h2 id="agents-task-launcher-title">{product.launcherTitle}</h2>
+          <p>{product.launcherBody}</p>
+        </div>
+
+        <div class="suggested-prompts" aria-label={t.chat.suggestionsLabel}>
+          {#each taskSuggestions as suggestion}
+            <form method="POST" action="?/sendChat" onsubmit={(event) => handleSuggestedSubmit(event, suggestion.prompt)}>
+              <input type="hidden" name="prompt" value={suggestion.prompt} />
+              <button type="submit" disabled={!canStartTask || hasActiveRun} title={suggestion.prompt}>
+                {suggestion.label}
+              </button>
+            </form>
+          {/each}
+        </div>
+
+        <form method="POST" action="?/sendChat" class="task-form" onsubmit={handleTaskSubmit}>
+          <label for="agents-task-prompt">{product.promptLabel}</label>
+          <textarea
+            id="agents-task-prompt"
+            name="prompt"
+            bind:value={draftPrompt}
+            rows="3"
+            placeholder={product.placeholder}
+            disabled={!canStartTask || hasActiveRun}
+            required
+          ></textarea>
+          <div class="task-form-footer">
+            <div class="form-hints">
+              <span>{product.uniqueWorkspaceNote}</span>
+              <span>{product.watchNote}</span>
+            </div>
+            <div class="submit-controls">
+              {#if hasActiveRun}
+                <button
+                  type="submit"
+                  form="agents-product-cancel-run-form"
+                  class="stop-button"
+                  disabled={!latestActiveInvocationId}
+                  title={!latestActiveInvocationId ? t.chat.stopUnavailable : undefined}
+                >
+                  <Icon name="warning" size={16} stroke={2.3} />
+                  <span>{t.chat.stop}</span>
+                </button>
+              {/if}
+              <button type="submit" disabled={!canStartTask || hasActiveRun}>
+                <Icon name="play" size={16} stroke={2.3} />
+                <span>{taskActionLabel}</span>
+              </button>
+            </div>
+          </div>
+          {#if taskForm?.message}
+            <p class:form-error={!taskForm?.queuedCommandId} class="form-message">{taskForm.message}</p>
+          {/if}
+          {#if !canStartTask}
+            <p class="unavailable-note">{t.chat.unavailableBody}</p>
+          {/if}
         </form>
-      </aside>
+
+        <form id="agents-product-cancel-run-form" method="POST" action="?/cancelRun" class="stop-form">
+          <input type="hidden" name="runtimeInvocationId" value={latestActiveInvocationId ?? ""} />
+        </form>
+      </section>
     </section>
   {/if}
 </section>
@@ -164,14 +464,24 @@
     gap: 24px;
   }
 
-  .hero {
+  .hero,
+  .product-toolbar,
+  .stage-header,
+  .task-form-footer {
     align-items: center;
     display: flex;
     justify-content: space-between;
   }
 
+  .product-toolbar,
+  .stage-header,
+  .task-form-footer {
+    gap: 18px;
+  }
+
   .eyebrow,
-  .panel-kicker {
+  .panel-kicker,
+  .stage-kicker {
     color: var(--color-primary);
     font-size: 12px;
     font-weight: 750;
@@ -183,6 +493,7 @@
   h1,
   h2,
   h3,
+  h4,
   p {
     margin: 0;
   }
@@ -193,10 +504,12 @@
   }
 
   .lede,
-  .agent-row p,
-  .agent-row small,
-  .compact-empty p,
-  .empty-state p {
+  .chat-copy,
+  .empty-state p,
+  .task-launcher p,
+  .empty-product p,
+  .form-hints,
+  .details-empty {
     color: var(--color-ink-subtle);
     line-height: 1.55;
   }
@@ -206,229 +519,418 @@
     max-width: 840px;
   }
 
-  .metrics,
-  .grid {
-    display: grid;
-    gap: 18px;
-  }
-
-  .metrics {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .grid {
-    align-items: start;
-    grid-template-columns: minmax(0, 1fr) 380px;
-  }
-
-  .metrics article,
-  .panel {
+  .panel,
+  .product-shell,
+  .product-stage,
+  .task-launcher {
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 16px;
     box-shadow: var(--shadow-card-raised);
   }
 
-  .metrics article {
-    padding: 22px;
-  }
-
-  .metrics span {
-    color: var(--color-ink-subtle);
-    display: block;
-    font-size: 13px;
-    font-weight: 750;
-    margin-bottom: 10px;
-  }
-
-  .metrics strong {
-    color: var(--color-ink);
-    font-size: 32px;
-  }
-
-  .panel-header {
-    align-items: center;
-    border-bottom: 1px solid var(--color-border);
-    display: flex;
-    justify-content: space-between;
+  .product-shell {
+    display: grid;
+    gap: 18px;
     padding: 24px 28px;
   }
 
-  .panel-header.compact {
-    padding: 22px 24px;
+  .chat-copy {
+    margin-top: 8px;
+    max-width: 760px;
   }
 
-  .panel-badge,
-  .status-pill,
-  .source-pill {
-    border-radius: 999px;
+  .toolbar-actions,
+  .product-meta,
+  .suggested-prompts,
+  .submit-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .toolbar-actions {
+    align-items: end;
+    justify-content: flex-end;
+  }
+
+  .history-picker {
+    color: var(--color-ink-muted);
+    display: grid;
     font-size: 12px;
     font-weight: 800;
+    gap: 6px;
+    min-width: min(360px, 72vw);
+  }
+
+  .history-picker select {
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    color: var(--color-ink);
+    font: inherit;
+    max-width: 420px;
+    padding: 8px 10px;
+  }
+
+  .context-chip,
+  .sync-chip {
+    align-items: center;
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    color: var(--color-ink-muted);
+    display: inline-flex;
+    font-size: 12px;
+    font-weight: 750;
+    gap: 6px;
+    padding: 7px 10px;
+  }
+
+  .context-chip.runtime.online,
+  .context-chip.runtime.available,
+  .sync-chip.live {
+    background: var(--color-primary-weak);
+    border-color: var(--color-primary-soft);
+    color: var(--color-primary);
+  }
+
+  .context-chip.muted {
+    color: var(--color-ink-subtle);
+  }
+
+  .product-stage {
+    display: grid;
+    gap: 16px;
+    min-height: 420px;
+    padding: 18px;
+  }
+
+  .product-stage.busy {
+    border-color: var(--color-primary-soft);
+  }
+
+  .status-pill {
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    color: var(--color-ink-muted);
+    display: inline-flex;
+    font-size: 12px;
+    font-weight: 850;
     padding: 6px 10px;
     text-transform: capitalize;
   }
 
-  .panel-badge,
-  .source-pill {
+  .status-pill.running,
+  .status-pill.waiting,
+  .status-pill.online,
+  .status-pill.available {
     background: var(--color-primary-weak);
+    border-color: var(--color-primary-soft);
     color: var(--color-primary);
   }
 
-  .status-pill {
-    background: var(--color-surface-soft);
-    color: var(--color-ink-subtle);
-  }
-
-  .status-pill.active {
+  .status-pill.completed,
+  .status-pill.succeeded,
+  .status-pill.success {
     background: var(--color-success-soft);
-    color: var(--color-success);
+    border-color: var(--color-success);
+    color: var(--color-success-strong);
   }
 
-  .agent-list {
-    display: grid;
-    gap: 10px;
+  .status-pill.error,
+  .status-pill.failed,
+  .status-pill.cancelled,
+  .status-pill.canceled {
+    background: var(--color-danger-soft);
+    border-color: var(--color-danger);
+    color: var(--color-danger-strong);
+  }
+
+  .genui-canvas {
+    background:
+      radial-gradient(circle at top left, rgba(102, 126, 234, 0.12), transparent 32%),
+      var(--color-canvas);
+    border: 1px solid var(--color-border);
+    border-radius: 18px;
+    min-height: 300px;
     padding: 18px;
   }
 
-  .agent-row {
+  .empty-product {
     align-items: center;
-    border: 1px solid var(--color-border);
-    border-radius: 14px;
-    display: grid;
-    gap: 16px;
-    grid-template-columns: 48px minmax(0, 1fr) auto auto;
-    padding: 16px;
+    background: var(--color-canvas);
+    border: 1px dashed var(--color-border);
+    border-radius: 18px;
+    display: flex;
+    gap: 14px;
+    min-height: 260px;
+    padding: 22px;
   }
 
-  .row-icon,
-  .empty-icon {
+  .activity-line {
     background: var(--color-primary-weak);
-    border-radius: 999px;
+    border: 1px solid var(--color-primary-soft);
+    border-radius: 12px;
     color: var(--color-primary);
-    display: grid;
-    place-items: center;
+    padding: 10px 12px;
   }
 
-  .row-icon {
-    height: 48px;
-    width: 48px;
+  .run-details {
+    border-top: 1px solid var(--color-border);
+    padding-top: 12px;
   }
 
-  .empty-icon {
-    height: 64px;
-    width: 64px;
-  }
-
-  .empty-icon.small {
-    height: 46px;
-    width: 46px;
-  }
-
-  .row-title {
+  .run-details summary,
+  .invocation-card,
+  .activity-row header {
     align-items: center;
     display: flex;
     gap: 10px;
-    margin-bottom: 4px;
   }
 
-  .compact-empty,
-  .empty-state {
-    align-items: center;
+  .run-details summary {
+    color: var(--color-ink-muted);
+    cursor: pointer;
+    font-weight: 800;
+    justify-content: space-between;
+  }
+
+  .run-detail-grid {
     display: grid;
     gap: 14px;
-    justify-items: center;
-    padding: 42px;
-    text-align: center;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    margin-top: 14px;
   }
 
-  .compact-empty {
-    grid-template-columns: 46px minmax(0, 1fr);
-    justify-items: start;
-    text-align: left;
+  .invocation-stack,
+  .activity-stack {
+    display: grid;
+    gap: 10px;
+    margin-top: 8px;
   }
 
-  .create-panel form,
-  .agent-row form {
-    display: flex;
-    flex-wrap: wrap;
+  .invocation-card,
+  .activity-row {
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    padding: 10px;
+  }
+
+  .invocation-card {
+    justify-content: space-between;
+  }
+
+  .invocation-card div,
+  .activity-row {
+    min-width: 0;
+  }
+
+  .invocation-card small,
+  .activity-row small {
+    color: var(--color-ink-subtle);
+    display: block;
+    font-size: 11px;
+    overflow-wrap: anywhere;
+  }
+
+  .activity-row header {
+    justify-content: space-between;
+  }
+
+  .activity-row pre {
+    color: var(--color-ink-muted);
+    font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.45;
+    margin: 8px 0 0;
+    max-height: 180px;
+    overflow: auto;
+    white-space: pre-wrap;
+  }
+
+  .activity-row.error {
+    border-color: var(--color-danger);
+  }
+
+  .activity-row.success {
+    border-color: var(--color-success);
+  }
+
+  .activity-row.tool {
+    border-color: var(--color-primary-soft);
+  }
+
+  .task-launcher {
+    display: grid;
+    gap: 14px;
+    padding: 18px;
+  }
+
+  .suggested-prompts form,
+  .stop-form {
+    margin: 0;
+  }
+
+  .suggested-prompts button,
+  .task-form button {
+    align-items: center;
+    border-radius: 999px;
+    display: inline-flex;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 750;
+    gap: 8px;
+  }
+
+  .suggested-prompts button {
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
+    color: var(--color-ink-muted);
+    padding: 8px 11px;
+  }
+
+  .suggested-prompts button:not(:disabled):hover {
+    border-color: var(--color-primary-soft);
+    color: var(--color-primary);
+  }
+
+  .task-form {
+    display: grid;
     gap: 10px;
   }
 
-  .create-panel form {
-    display: grid;
-    gap: 16px;
-    padding: 22px 24px 24px;
-  }
-
-  label {
-    display: grid;
-    gap: 7px;
-  }
-
-  label span {
-    color: var(--color-ink-subtle);
+  .task-form label {
+    color: var(--color-ink-muted);
     font-size: 12px;
-    font-weight: 800;
+    font-weight: 850;
     text-transform: uppercase;
   }
 
-  input,
-  select,
-  textarea {
+  .task-form textarea {
     background: var(--color-canvas);
-    border: 1px solid var(--color-border-strong);
-    border-radius: 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
     color: var(--color-ink);
     font: inherit;
-    padding: 11px 12px;
-  }
-
-  textarea {
+    line-height: 1.5;
+    padding: 12px 14px;
     resize: vertical;
   }
 
-  .primary-action,
-  .secondary-action {
-    align-items: center;
+  .task-form textarea:focus {
+    border-color: var(--color-primary-soft);
+    outline: 2px solid var(--color-primary-weak);
+  }
+
+  .form-hints {
+    display: grid;
+    font-size: 12px;
+    gap: 2px;
+  }
+
+  .task-form button {
+    background: var(--color-primary);
+    border: 0;
+    color: var(--color-primary-contrast);
+    padding: 10px 14px;
+  }
+
+  .task-form button.stop-button {
+    background: var(--color-danger-soft);
+    border: 1px solid var(--color-danger);
+    color: var(--color-danger-strong);
+  }
+
+  .task-form button:disabled,
+  .suggested-prompts button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .form-message,
+  .unavailable-note {
     border-radius: 12px;
+    font-size: 13px;
+    margin: 0;
+    padding: 9px 11px;
+  }
+
+  .form-message {
+    background: var(--color-primary-weak);
+    color: var(--color-primary);
+  }
+
+  .form-message.form-error,
+  .unavailable-note {
+    background: var(--color-danger-soft);
+    color: var(--color-danger-strong);
+  }
+
+  .empty-icon {
+    align-items: center;
+    background: var(--color-primary-weak);
+    border-radius: 14px;
+    color: var(--color-primary);
     display: inline-flex;
-    font-weight: 800;
-    height: 44px;
+    flex: 0 0 auto;
+    height: 46px;
     justify-content: center;
-    padding: 0 16px;
+    width: 46px;
+  }
+
+  .empty-state {
+    align-items: flex-start;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 24px;
+  }
+
+  .secondary-action {
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    color: var(--color-ink-muted);
+    font-weight: 800;
+    padding: 9px 12px;
+    text-align: center;
     text-decoration: none;
   }
 
-  .primary-action {
-    background: var(--color-primary);
-    border: 0;
-    color: white;
-    cursor: pointer;
-  }
-
-  .secondary-action {
-    background: white;
-    border: 1px solid var(--color-border);
-    color: var(--color-ink-muted);
-    cursor: pointer;
-  }
-
-  .secondary-action.small {
-    height: 38px;
-  }
-
-  .form-error {
-    background: var(--color-danger-weak);
-    border-bottom: 1px solid var(--color-danger-soft);
-    color: var(--color-danger-strong);
-    font-weight: 700;
-    padding: 14px 24px;
+  .secondary-action:hover {
+    border-color: var(--color-primary-soft);
+    color: var(--color-primary);
   }
 
   @media (max-width: 1100px) {
-    .metrics,
-    .grid,
-    .agent-row {
+    .hero,
+    .product-toolbar,
+    .stage-header,
+    .task-form-footer {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .toolbar-actions,
+    .product-meta,
+    .submit-controls {
+      justify-content: flex-start;
+    }
+
+    .history-picker {
+      min-width: 0;
+      width: 100%;
+    }
+
+    .history-picker select {
+      max-width: 100%;
+      width: 100%;
+    }
+
+    .run-detail-grid {
       grid-template-columns: 1fr;
     }
   }

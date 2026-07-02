@@ -6,11 +6,13 @@ export interface SparkCliDispatcherStrings {
   signalExit: (targetLabel: string, signal: string) => string;
   helpText: string;
   targetLabel: (target: "tui" | "daemon" | "cockpit") => string;
+  tuiRequiresTty: string;
 }
 
 export interface SparkTuiCliStrings {
   helpText: string;
   printRequiresPrompt: string;
+  tuiRequiresTty: string;
   headlessDisplayName: string;
   interactiveDisplayName: string;
   modelCommandDescription: string;
@@ -33,7 +35,9 @@ const DISPATCHER: Record<SparkLanguage, SparkCliDispatcherStrings> = {
     dispatchFailure: (targetLabel, detail) => `Unable to dispatch to ${targetLabel}: ${detail}`,
     signalExit: (targetLabel, signal) => `${targetLabel} exited due to signal ${signal}`,
     helpText:
-      'spark - Spark command dispatcher\n\nUsage:\n  spark\n  spark tui [initial message]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <command> [args...]\n  spark cockpit [command] [args...]\n  spark --help\n  spark --version\n\nDispatches to Spark surfaces:\n  spark tui       interactive terminal UI and Pi-compatible CLI/resource shims\n  spark daemon    daemon administration\n  spark cockpit   local Cockpit web app\n\nUnknown subcommands fail loudly instead of being interpreted as prompts. Use "spark tui ..." for interactive TUI input.\n',
+      'spark - Spark command dispatcher\n\nUsage:\n  spark\n  spark tui [initial message]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <command> [args...]\n  spark cockpit [command] [args...]\n  spark --help\n  spark --version\n\nDispatches to Spark surfaces:\n  spark tui       interactive terminal UI and Pi-compatible CLI/resource shims\n  spark daemon    daemon administration\n  spark cockpit   local Cockpit production web app\n\nUnknown subcommands fail loudly instead of being interpreted as prompts. Use "spark tui ..." for interactive TUI input.\n',
+    tuiRequiresTty:
+      'Spark TUI requires an interactive terminal (stdin and stdout must be TTYs). Use "spark --print <prompt>", "spark --mode rpc", or "spark daemon submit ..." for non-interactive/headless use.',
     targetLabel: (target) => {
       switch (target) {
         case "tui":
@@ -53,7 +57,9 @@ const DISPATCHER: Record<SparkLanguage, SparkCliDispatcherStrings> = {
     dispatchFailure: (targetLabel, detail) => `无法分发到 ${targetLabel}：${detail}`,
     signalExit: (targetLabel, signal) => `${targetLabel} 因信号 ${signal} 退出`,
     helpText:
-      'spark - Spark 命令分发器\n\n用法：\n  spark\n  spark tui [初始消息]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <command> [args...]\n  spark cockpit [command] [args...]\n  spark --help\n  spark --version\n\n分发到 Spark 界面：\n  spark tui       交互式终端 UI 和 Pi 兼容 CLI/resource shim\n  spark daemon    daemon 管理\n  spark cockpit   本地 Cockpit Web 应用\n\n未知子命令会直接失败，不会被解释成 prompt。交互式 TUI 输入请使用 "spark tui ..."。\n',
+      'spark - Spark 命令分发器\n\n用法：\n  spark\n  spark tui [初始消息]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <command> [args...]\n  spark cockpit [command] [args...]\n  spark --help\n  spark --version\n\n分发到 Spark 界面：\n  spark tui       交互式终端 UI 和 Pi 兼容 CLI/resource shim\n  spark daemon    daemon 管理\n  spark cockpit   本地 Cockpit 生产 Web 服务\n\n未知子命令会直接失败，不会被解释成 prompt。交互式 TUI 输入请使用 "spark tui ..."。\n',
+    tuiRequiresTty:
+      'Spark TUI 需要交互式终端（stdin 和 stdout 必须是 TTY）。非交互/headless 使用请改用 "spark --print <prompt>"、"spark --mode rpc" 或 "spark daemon submit ..."。',
     targetLabel: (target) => {
       switch (target) {
         case "tui":
@@ -72,6 +78,8 @@ const TUI_CLI: Record<SparkLanguage, SparkTuiCliStrings> = {
     helpText:
       'spark-tui - Spark terminal UI\n\nUsage:\n  spark-tui [initial message]\n  spark-tui --print <prompt>\n  spark-tui --mode json --print <prompt>\n  spark-tui --mode rpc\n  spark-tui --list-models [search]\n  spark-tui install|remove|update|list|config [resource]\n  spark-tui --help\n\nRuns terminal UI rendering by default, but prompts are submitted to the Spark daemon over local IPC. Pi-compatible resource commands update ~/.spark/config.json and keep extensions/providers/skills/prompt templates/themes explicit. Use the root "spark daemon ..." dispatcher path for daemon administration.',
     printRequiresPrompt: "spark --print requires a prompt",
+    tuiRequiresTty:
+      'spark-tui requires an interactive terminal (stdin and stdout must be TTYs). Use "spark-tui --print <prompt>", "spark-tui --mode rpc", or "spark daemon submit ..." for non-interactive/headless use.',
     headlessDisplayName: "Spark headless submit",
     interactiveDisplayName: "Spark TUI",
     modelCommandDescription: "Switch or inspect the active Spark model",
@@ -88,6 +96,8 @@ const TUI_CLI: Record<SparkLanguage, SparkTuiCliStrings> = {
     helpText:
       'spark-tui - Spark 终端 UI\n\n用法：\n  spark-tui [初始消息]\n  spark-tui --print <prompt>\n  spark-tui --mode json --print <prompt>\n  spark-tui --mode rpc\n  spark-tui --list-models [search]\n  spark-tui install|remove|update|list|config [resource]\n  spark-tui --help\n\n默认运行终端 UI 渲染，但 prompt 会通过本地 IPC 提交给 Spark daemon。Pi 兼容 resource 命令会更新 ~/.spark/config.json，并显式维护 extensions/providers/skills/prompt templates/themes。daemon 管理请使用根命令 "spark daemon ..."。',
     printRequiresPrompt: "spark --print 需要 prompt",
+    tuiRequiresTty:
+      'spark-tui 需要交互式终端（stdin 和 stdout 必须是 TTY）。非交互/headless 使用请改用 "spark-tui --print <prompt>"、"spark-tui --mode rpc" 或 "spark daemon submit ..."。',
     headlessDisplayName: "Spark headless submit",
     interactiveDisplayName: "Spark TUI",
     modelCommandDescription: "切换或查看当前 Spark 模型",

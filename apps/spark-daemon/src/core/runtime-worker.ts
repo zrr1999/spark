@@ -24,6 +24,7 @@ export interface SparkDaemonWorkerContext {
   active: SparkDaemonActiveTasks;
   executeTask: SparkDaemonTaskExecutor;
   emitEvent?: SparkDaemonEventSink;
+  taskTimeoutMs?: number;
 }
 
 export interface CreateSparkDaemonWorkerContextOptions extends SparkDaemonPathOptions {
@@ -31,6 +32,7 @@ export interface CreateSparkDaemonWorkerContextOptions extends SparkDaemonPathOp
   active?: SparkDaemonActiveTasks;
   executeTask?: SparkDaemonTaskExecutor;
   emitEvent?: SparkDaemonEventSink;
+  taskTimeoutMs?: number;
 }
 
 export interface SparkDaemonWorkerLoopOptions {
@@ -39,6 +41,7 @@ export interface SparkDaemonWorkerLoopOptions {
   limit?: number;
   concurrency?: number;
   pollIntervalMs?: number;
+  taskTimeoutMs?: number;
   isStopped?: () => boolean;
 }
 
@@ -50,6 +53,7 @@ export function createSparkDaemonWorkerContext(
     active: options.active ?? createSparkDaemonActiveTasks(),
     executeTask: options.executeTask ?? defaultSparkDaemonTaskExecutor,
     emitEvent: options.emitEvent,
+    taskTimeoutMs: options.taskTimeoutMs,
   };
 }
 
@@ -64,6 +68,7 @@ export async function runSparkDaemonWorkerIteration(
     label: options.label,
     limit: options.limit,
     concurrency: options.concurrency,
+    taskTimeoutMs: options.taskTimeoutMs ?? options.context.taskTimeoutMs,
   });
 }
 
@@ -73,6 +78,7 @@ export class SparkDaemonWorkerLoop {
   private readonly limit: number;
   private readonly concurrency: number;
   private readonly pollIntervalMs: number;
+  private readonly taskTimeoutMs?: number;
   private readonly isStopped?: () => boolean;
   private stopRequested = false;
   private wakeResolver: (() => void) | null = null;
@@ -84,6 +90,7 @@ export class SparkDaemonWorkerLoop {
     this.limit = options.limit ?? DEFAULT_SPARK_DAEMON_QUEUE_LAUNCH_LIMIT;
     this.concurrency = options.concurrency ?? DEFAULT_SPARK_DAEMON_QUEUE_CONCURRENCY;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_IDLE_POLL_INTERVAL_MS;
+    this.taskTimeoutMs = options.taskTimeoutMs ?? this.context.taskTimeoutMs;
     this.isStopped = options.isStopped;
   }
 
@@ -126,6 +133,7 @@ export class SparkDaemonWorkerLoop {
         label: this.label,
         limit: this.limit,
         concurrency: this.concurrency,
+        taskTimeoutMs: this.taskTimeoutMs,
       });
       if (!didWork) await this.waitForWake();
     }

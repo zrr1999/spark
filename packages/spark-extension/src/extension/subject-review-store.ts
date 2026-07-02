@@ -8,8 +8,8 @@ import {
   type ProjectRef,
   type RoleRef,
   type Task,
-} from "@zendev-lab/pi-extension-api";
-import type { Artifact } from "@zendev-lab/pi-artifacts";
+} from "@zendev-lab/spark-extension-api";
+import type { Artifact } from "@zendev-lab/spark-artifacts";
 import { readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import { sessionDirectoryNameForKey } from "./session-directory-store.ts";
 import type { SparkSessionGoal } from "./spark-session-goals.ts";
@@ -47,6 +47,7 @@ export interface SubjectReviewRecord {
     runName?: string;
     startedAt?: string;
     finishedAt?: string;
+    thinking?: string;
   };
   verdict: JsonValue;
   reviewPacket?: JsonValue;
@@ -267,6 +268,7 @@ function compactReviewerRun(review: ReviewerRunResult): SubjectReviewRecord["rev
     ...(review.record.runName ? { runName: review.record.runName } : {}),
     startedAt: review.record.startedAt,
     finishedAt: review.record.finishedAt,
+    ...(review.record.thinking ? { thinking: review.record.thinking } : {}),
   };
 }
 
