@@ -17,15 +17,6 @@ const foundationContractPackages = new Set([
 ]);
 const violations = [];
 const piTuiSpecifier = "@earendil-works/pi-tui";
-const skippedActiveDocumentationPattern = /^docs\/(?:navia\/|spark-daemon-unification\.md$)/u;
-const retiredNaviaWebPattern =
-  /\b(?:apps\/navia-web|@zendev-lab\/navia-web|navia-web|Navia web)\b/u;
-const legacyNaviaPackagePattern = /(?:@zendev-lab\/navia-|packages\/navia-|`navia-)/u;
-const intentionalLegacyNaviaLinePattern =
-  /\b(?:legacy|legacy-named|historical|migration|transition|retired|archived|former)\b/iu;
-const allowedPiTuiImportFiles = new Set([
-  join(root, "apps", "spark", "src", "tui", "pi-tui-adapter.ts"),
-]);
 const allowedPiTuiPackageDirs = new Set([
   join(root, "packages", "spark-tui"),
   join(root, "packages", "spark-text"),
@@ -38,6 +29,67 @@ const piAllowedSparkFoundationSpecifiers = [
   "@zendev-lab/spark-tasks",
   "@zendev-lab/spark-workflows",
 ];
+
+const forbiddenImportRulesByBoundary = {
+  pi: [
+    {
+      reason: "pi-* packages must not depend on cockpit packages",
+      matches: isCockpitSpecifier,
+    },
+    {
+      reason:
+        "pi-* packages may depend only on renamed Spark foundation packages, not Spark product packages",
+      matches: (specifier) =>
+        isSparkSpecifier(specifier) && !isPiAllowedSparkFoundationSpecifier(specifier),
+    },
+  ],
+  "pi-extension": [
+    {
+      reason: "pi-extension must use @zendev-lab/spark-text instead of @zendev-lab/spark-tui",
+      matches: (specifier) =>
+        specifier === "@zendev-lab/spark-tui" || specifier.startsWith("@zendev-lab/spark-tui/"),
+    },
+    {
+      reason: "Spark core/runtime packages must not depend on cockpit or daemon adapter packages",
+      matches: isCockpitSpecifier,
+    },
+    {
+      reason: "Spark shared packages must not import Spark app host internals",
+      matches: isSparkAppInternalSpecifier,
+    },
+  ],
+  "daemon-app": [
+    {
+      reason:
+        "spark-daemon must use @zendev-lab/spark-host/headless-loader instead of @zendev-lab/spark-tui-app",
+      matches: (specifier) =>
+        specifier === "@zendev-lab/spark-tui-app" ||
+        specifier.startsWith("@zendev-lab/spark-tui-app/"),
+    },
+  ],
+  "spark-core": [
+    {
+      reason: "Spark core/runtime packages must not depend on cockpit or daemon adapter packages",
+      matches: isCockpitSpecifier,
+    },
+    {
+      reason: "Spark shared packages must not import Spark app host internals",
+      matches: isSparkAppInternalSpecifier,
+    },
+  ],
+  "cockpit-package": [
+    {
+      reason: "Cockpit packages must not import Spark CLI host internals",
+      matches: isSparkAppInternalSpecifier,
+    },
+  ],
+  "cockpit-app": [
+    {
+      reason: "Cockpit packages must not import Spark CLI host internals",
+      matches: isSparkAppInternalSpecifier,
+    },
+  ],
+};
 
 for (const packageDir of await listWorkspaceDirs()) {
   const manifest = await readPackageManifest(packageDir);
@@ -53,7 +105,6 @@ for (const packageDir of await listWorkspaceDirs()) {
   await checkSourceTree(join(packageDir, "extensions"), boundary);
 }
 await checkSourceTree(join(root, "test"), "other");
-await checkActiveDocumentation();
 
 if (violations.length > 0) {
   console.error("package boundary violation");
@@ -186,7 +237,7 @@ async function checkSourceTree(dir, boundary) {
       for (const specifier of importSpecifiers(line)) {
         if (specifier === piTuiSpecifier && !isAllowedPiTuiImportPath(fullPath)) {
           violations.push(
-            `${formatPath(fullPath)}:${index + 1}: ${specifier} (direct pi-tui imports must go through @zendev-lab/spark-tui or the Spark TUI adapter)`,
+            `${formatPath(fullPath)}:${index + 1}: ${specifier} (direct pi-tui imports must go through @zendev-lab/spark-tui)`,
           );
         }
         const reason = forbiddenSpecifierReason(specifier, boundary);
@@ -208,7 +259,6 @@ function importSpecifiers(line) {
 }
 
 function isAllowedPiTuiImportPath(path) {
-  if (allowedPiTuiImportFiles.has(path)) return true;
   for (const packageDir of allowedPiTuiPackageDirs) {
     if (path === packageDir || path.startsWith(`${packageDir}/`)) return true;
   }
@@ -216,39 +266,8 @@ function isAllowedPiTuiImportPath(path) {
 }
 
 function forbiddenSpecifierReason(specifier, boundary) {
-  if (boundary === "pi") {
-    if (isCockpitSpecifier(specifier)) return "pi-* packages must not depend on cockpit packages";
-    if (isSparkSpecifier(specifier) && !isPiAllowedSparkFoundationSpecifier(specifier)) {
-      return "pi-* packages may depend only on renamed Spark foundation packages, not Spark product packages";
-    }
-  }
-  if (boundary === "pi-extension") {
-    if (specifier === "@zendev-lab/spark-tui" || specifier.startsWith("@zendev-lab/spark-tui/")) {
-      return "pi-extension must use @zendev-lab/spark-text instead of @zendev-lab/spark-tui";
-    }
-  }
-  if (boundary === "daemon-app") {
-    if (
-      specifier === "@zendev-lab/spark-tui-app" ||
-      specifier.startsWith("@zendev-lab/spark-tui-app/")
-    ) {
-      return "spark-daemon must use @zendev-lab/spark-host/headless-loader instead of @zendev-lab/spark-tui-app";
-    }
-  }
-  if (boundary === "spark-core" || boundary === "pi-extension") {
-    if (isCockpitSpecifier(specifier)) {
-      return "Spark core/runtime packages must not depend on cockpit or daemon adapter packages";
-    }
-    if (isSparkAppInternalSpecifier(specifier)) {
-      return "Spark shared packages must not import Spark app host internals";
-    }
-  }
-  if (boundary === "cockpit-package" || boundary === "cockpit-app") {
-    if (isSparkAppInternalSpecifier(specifier)) {
-      return "Cockpit packages must not import Spark CLI host internals";
-    }
-  }
-  return null;
+  const rules = forbiddenImportRulesByBoundary[boundary] ?? [];
+  return rules.find((rule) => rule.matches(specifier))?.reason ?? null;
 }
 
 function isSparkSpecifier(specifier) {
@@ -292,47 +311,6 @@ function isSparkAppInternalSpecifier(specifier) {
     specifier.includes("../spark-tui/") ||
     specifier.includes("../../spark-tui/")
   );
-}
-
-async function checkActiveDocumentation() {
-  for (const relativePath of await listActiveDocumentationFiles()) {
-    const path = join(root, relativePath);
-    const content = await readFile(path, "utf8");
-    const lines = content.split(/\r?\n/u);
-    lines.forEach((line, index) => {
-      if (retiredNaviaWebPattern.test(line)) {
-        violations.push(
-          `${relativePath}:${index + 1}: retired Navia web package/path name in active documentation`,
-        );
-      }
-      if (legacyNaviaPackagePattern.test(line) && !intentionalLegacyNaviaLinePattern.test(line)) {
-        violations.push(
-          `${relativePath}:${index + 1}: legacy navia-* package name must be marked as legacy/migration/historical context`,
-        );
-      }
-    });
-  }
-}
-
-async function listActiveDocumentationFiles() {
-  const files = [];
-  await appendMarkdownFiles(files, "");
-  await appendMarkdownFiles(files, "docs");
-  return files.filter((path) => !skippedActiveDocumentationPattern.test(path));
-}
-
-async function appendMarkdownFiles(files, relativeDir) {
-  let entries;
-  try {
-    entries = await readdir(join(root, relativeDir), { withFileTypes: true });
-  } catch (error) {
-    if (error?.code === "ENOENT") return;
-    throw error;
-  }
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-    files.push(relativeDir ? `${relativeDir}/${entry.name}` : entry.name);
-  }
 }
 
 function formatPath(path) {

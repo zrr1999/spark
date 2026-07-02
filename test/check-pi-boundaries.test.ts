@@ -5,7 +5,8 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const scriptPath = resolve("scripts/check-pi-boundaries.mjs");
+const boundaryScriptPath = resolve("scripts/check-pi-boundaries.mjs");
+const docTerminologyScriptPath = resolve("scripts/check-doc-terminology.mjs");
 const piTuiSpecifier = "@earendil-works/" + "pi-tui";
 
 void test("boundary checker rejects pi package imports from Spark and cockpit packages", async () => {
@@ -75,21 +76,28 @@ void test("boundary checker rejects unqualified legacy Navia package names in ac
     "# Example\n\nUse @zendev-lab/navia-db as the product database package.\n",
   );
 
-  const result = runBoundaryCheck(root);
+  const boundaryResult = runBoundaryCheck(root);
+  const terminologyResult = runDocTerminologyCheck(root);
 
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /legacy navia-\* package name must be marked as legacy/u);
+  assert.equal(boundaryResult.status, 0, boundaryResult.stderr);
+  assert.notEqual(terminologyResult.status, 0);
+  assert.match(terminologyResult.stderr, /legacy navia-\* package name must be marked as legacy/u);
 });
 
-void test("boundary checker rejects retired Navia web names in active docs", async () => {
+void test("documentation terminology checker rejects retired Navia web names in active docs", async () => {
   const root = await fixtureRoot();
   await mkdir(join(root, "docs"), { recursive: true });
   await writeFile(join(root, "docs/tools.md"), "# Tools\n\nUse apps/navia-web for the web app.\n");
 
-  const result = runBoundaryCheck(root);
+  const boundaryResult = runBoundaryCheck(root);
+  const terminologyResult = runDocTerminologyCheck(root);
 
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /retired Navia web package\/path name in active documentation/u);
+  assert.equal(boundaryResult.status, 0, boundaryResult.stderr);
+  assert.notEqual(terminologyResult.status, 0);
+  assert.match(
+    terminologyResult.stderr,
+    /retired Navia web package\/path name in active documentation/u,
+  );
 });
 
 void test("boundary checker allows shared Spark system/database packages", async () => {
@@ -164,6 +172,24 @@ void test("boundary checker keeps direct pi-tui usage behind spark-tui", async (
   assert.match(result.stderr, /direct pi-tui imports must go through @zendev-lab\/spark-tui/u);
 });
 
+void test("boundary checker rejects direct pi-tui imports from the removed Spark app adapter path", async () => {
+  const root = await fixtureRoot();
+  await writePackage(root, "apps/spark", {
+    name: "@zendev-lab/spark-cli",
+    source: undefined,
+  });
+  await mkdir(join(root, "apps/spark/src/tui"), { recursive: true });
+  await writeFile(
+    join(root, "apps/spark/src/tui/pi-tui-adapter.ts"),
+    `export { visibleWidth } from "${piTuiSpecifier}";\n`,
+  );
+
+  const result = runBoundaryCheck(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /direct pi-tui imports must go through @zendev-lab\/spark-tui/u);
+});
+
 void test("boundary checker allows pi packages to use the spark-tui boundary", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "packages/spark-tui", {
@@ -207,9 +233,17 @@ async function writePackage(
 }
 
 function runBoundaryCheck(root: string) {
-  return spawnSync(process.execPath, [scriptPath], {
+  return spawnSync(process.execPath, [boundaryScriptPath], {
     cwd: resolve("."),
     env: { ...process.env, SPARK_BOUNDARY_ROOT: root },
+    encoding: "utf8",
+  });
+}
+
+function runDocTerminologyCheck(root: string) {
+  return spawnSync(process.execPath, [docTerminologyScriptPath], {
+    cwd: resolve("."),
+    env: { ...process.env, SPARK_DOC_TERMINOLOGY_ROOT: root },
     encoding: "utf8",
   });
 }

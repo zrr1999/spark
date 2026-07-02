@@ -21,7 +21,7 @@
   },
   "type": "module",
   "scripts": {
-    "check": "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && node scripts/check-pi-boundaries.mjs && vp check && node --experimental-strip-types --test \"test/*.test.ts\" && pnpm -r --filter './packages/*' --filter './apps/*' run check && pnpm --filter @zendev-lab/spark-cockpit run test && pnpm --filter @zendev-lab/spark-daemon run test",
+    "check": "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && node scripts/check-pi-boundaries.mjs && node scripts/check-doc-terminology.mjs && vp check && node --experimental-strip-types --test \"test/*.test.ts\" && pnpm -r --filter './packages/*' --filter './apps/*' run check && pnpm --filter @zendev-lab/spark-cockpit run test && pnpm --filter @zendev-lab/spark-daemon run test",
     "check:tsc": "tsc -p tsconfig.json --noEmit",
     "format": "vp fmt . --write",
     "test": "node --experimental-strip-types --test \"test/*.test.ts\"",

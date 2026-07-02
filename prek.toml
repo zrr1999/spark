@@ -55,6 +55,14 @@ hooks = [
     stages = ["pre-commit"]
   },
   {
+    id = "spark-doc-terminology-check",
+    name = "Spark documentation terminology check",
+    entry = "node scripts/check-doc-terminology.mjs",
+    language = "system",
+    pass_filenames = true,
+    stages = ["pre-commit"]
+  },
+  {
     id = "vp-check",
     name = "vp check --fix",
     entry = "bash -c 'pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && pnpm exec vp check --fix'",
