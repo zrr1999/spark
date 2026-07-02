@@ -8,7 +8,13 @@ import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
-import type { SparkDaemonEvent } from "@zendev-lab/spark-protocol";
+import {
+  parseSparkDaemonEvent,
+  sparkCommandKindForLocalRpcMethod,
+  sparkProtocolJsonObjectSchema,
+  type SparkCommand,
+  type SparkDaemonEvent,
+} from "@zendev-lab/spark-protocol";
 import { sparkDaemonCliStrings } from "@zendev-lab/spark-i18n/cli";
 
 import {
@@ -717,6 +723,59 @@ function observedAt(client: SparkDaemonClientOptions): string {
   return new Date(client.now?.() ?? Date.now()).toISOString();
 }
 
+type LocalRpcWireRequest = {
+  id: string;
+  method: string;
+  params?: unknown;
+  sparkCommand: SparkCommand;
+};
+
+function localRpcWireRequest(
+  method: string,
+  params?: unknown,
+  id: string = localRequestId(),
+): LocalRpcWireRequest {
+  const kind = sparkCommandKindForLocalRpcMethod(method);
+  if (!kind) throw new Error(`Unknown Spark daemon local RPC method: ${method}`);
+  const payload = sparkProtocolJsonObjectSchema.safeParse(params ?? {});
+  return {
+    id,
+    method,
+    ...(params !== undefined ? { params } : {}),
+    sparkCommand: {
+      schemaVersion: "spark.command.v1",
+      id,
+      kind,
+      route: localRpcCommandRoute(method, params),
+      payload: payload.success ? payload.data : {},
+      transport: { kind: "local-rpc", method, requestId: id },
+    },
+  };
+}
+
+function localRpcCommandRoute(method: string, params: unknown): SparkCommand["route"] {
+  if (!isRecord(params)) return {};
+  if (method === "turn.submit" && typeof params.sessionId === "string") {
+    return { sessionId: params.sessionId };
+  }
+  if (method === "turn.cancel" && typeof params.invocationId === "string") {
+    return { invocationId: params.invocationId };
+  }
+  if (method === "workspace.ensure-local" && typeof params.localPath === "string") {
+    return { workspaceLocalPath: params.localPath };
+  }
+  if (method === "workspace.client.attach" && typeof params.workspaceId === "string") {
+    return { workspaceBindingId: params.workspaceId };
+  }
+  if (
+    (method === "workspace.client.heartbeat" || method === "workspace.client.release") &&
+    typeof params.clientId === "string"
+  ) {
+    return { clientId: params.clientId };
+  }
+  return {};
+}
+
 async function clientStatus(client: SparkDaemonClientOptions): Promise<SparkDaemonClientStatus> {
   const paths = resolveSparkDaemonClientPaths(client);
   if (client.daemonStatus) {
@@ -729,10 +788,10 @@ async function clientStatus(client: SparkDaemonClientOptions): Promise<SparkDaem
     return { running: false, socketPath: paths.socketPath, pidFile: paths.pidFile, lock };
   }
   try {
-    const status = await localRpcRequest<SparkDaemonLocalStatus>(paths, {
-      id: localRequestId(),
-      method: "daemon.status",
-    });
+    const status = await localRpcRequest<SparkDaemonLocalStatus>(
+      paths,
+      localRpcWireRequest("daemon.status"),
+    );
     return {
       running: true,
       pid,
@@ -762,11 +821,10 @@ async function clientQueue(
 ): Promise<LocalDaemonQueueResult> {
   const paths = resolveSparkDaemonClientPaths(client);
   if (client.daemonQueue) return await client.daemonQueue(paths, params);
-  return await localRpcRequest<LocalDaemonQueueResult>(paths, {
-    id: localRequestId(),
-    method: "daemon.queue",
-    params,
-  });
+  return await localRpcRequest<LocalDaemonQueueResult>(
+    paths,
+    localRpcWireRequest("daemon.queue", params),
+  );
 }
 
 async function clientSubmit(
@@ -776,11 +834,10 @@ async function clientSubmit(
   const paths = resolveSparkDaemonClientPaths(client);
   await clientEnsureRunning(client);
   if (client.turnSubmit) return await client.turnSubmit(paths, input);
-  return await localRpcRequest<LocalTurnSubmitResult>(paths, {
-    id: localRequestId(),
-    method: "turn.submit",
-    params: input,
-  });
+  return await localRpcRequest<LocalTurnSubmitResult>(
+    paths,
+    localRpcWireRequest("turn.submit", input),
+  );
 }
 
 export async function clientCancelTurn(
@@ -790,11 +847,10 @@ export async function clientCancelTurn(
   const paths = resolveSparkDaemonClientPaths(client);
   await clientEnsureRunning(client);
   if (client.turnCancel) return await client.turnCancel(paths, input);
-  return await localRpcRequest<LocalTurnCancelResult>(paths, {
-    id: localRequestId(),
-    method: "turn.cancel",
-    params: input,
-  });
+  return await localRpcRequest<LocalTurnCancelResult>(
+    paths,
+    localRpcWireRequest("turn.cancel", input),
+  );
 }
 
 async function clientSubmitStreaming(
@@ -816,11 +872,10 @@ async function clientEnsureLocalWorkspace(
   const paths = resolveSparkDaemonClientPaths(client);
   await clientEnsureRunning(client);
   if (client.workspaceEnsureLocal) return await client.workspaceEnsureLocal(paths, input);
-  return await localRpcRequest<SparkDaemonWorkspace>(paths, {
-    id: localRequestId(),
-    method: "workspace.ensure-local",
-    params: input,
-  });
+  return await localRpcRequest<SparkDaemonWorkspace>(
+    paths,
+    localRpcWireRequest("workspace.ensure-local", input),
+  );
 }
 
 async function clientWorkspaceClientAttach(
@@ -829,11 +884,10 @@ async function clientWorkspaceClientAttach(
 ): Promise<LocalWorkspaceClientResult> {
   const paths = resolveSparkDaemonClientPaths(client);
   if (client.workspaceClientAttach) return await client.workspaceClientAttach(paths, input);
-  return await localRpcRequest<LocalWorkspaceClientResult>(paths, {
-    id: localRequestId(),
-    method: "workspace.client.attach",
-    params: input,
-  });
+  return await localRpcRequest<LocalWorkspaceClientResult>(
+    paths,
+    localRpcWireRequest("workspace.client.attach", input),
+  );
 }
 
 async function clientWorkspaceClientHeartbeat(
@@ -842,11 +896,10 @@ async function clientWorkspaceClientHeartbeat(
 ): Promise<LocalWorkspaceClientResult> {
   const paths = resolveSparkDaemonClientPaths(client);
   if (client.workspaceClientHeartbeat) return await client.workspaceClientHeartbeat(paths, input);
-  return await localRpcRequest<LocalWorkspaceClientResult>(paths, {
-    id: localRequestId(),
-    method: "workspace.client.heartbeat",
-    params: input,
-  });
+  return await localRpcRequest<LocalWorkspaceClientResult>(
+    paths,
+    localRpcWireRequest("workspace.client.heartbeat", input),
+  );
 }
 
 async function clientWorkspaceClientRelease(
@@ -855,11 +908,10 @@ async function clientWorkspaceClientRelease(
 ): Promise<LocalWorkspaceClientResult> {
   const paths = resolveSparkDaemonClientPaths(client);
   if (client.workspaceClientRelease) return await client.workspaceClientRelease(paths, input);
-  return await localRpcRequest<LocalWorkspaceClientResult>(paths, {
-    id: localRequestId(),
-    method: "workspace.client.release",
-    params: input,
-  });
+  return await localRpcRequest<LocalWorkspaceClientResult>(
+    paths,
+    localRpcWireRequest("workspace.client.release", input),
+  );
 }
 
 function defaultWorkspaceClientDisplayName(kind: SparkWorkspaceClientKind): string {
@@ -890,7 +942,7 @@ async function clientEnsureRunning(client: SparkDaemonClientOptions): Promise<vo
   const pid = readPidFile(paths.pidFile);
   if (pid && isProcessAlive(pid)) {
     try {
-      await localRpcRequest(paths, { id: localRequestId(), method: "daemon.status" });
+      await localRpcRequest(paths, localRpcWireRequest("daemon.status"));
       return;
     } catch {
       // Restart unreachable process below.
@@ -963,7 +1015,7 @@ async function waitForDaemonRpc(
   let lastError: unknown;
   while (now() <= deadline) {
     try {
-      await localRpcRequest(paths, { id: localRequestId(), method: "daemon.status" });
+      await localRpcRequest(paths, localRpcWireRequest("daemon.status"));
       return;
     } catch (error) {
       lastError = error;
@@ -977,7 +1029,7 @@ async function waitForDaemonRpc(
 
 async function localRpcRequest<T>(
   paths: SparkDaemonClientPaths,
-  request: Record<string, unknown>,
+  request: LocalRpcWireRequest,
 ): Promise<T> {
   return await new Promise<T>((resolvePromise, reject) => {
     const socket = createConnection(paths.socketPath);
@@ -1050,7 +1102,7 @@ async function localRpcTurnStream(
       socket.setTimeout(5 * 60_000, () =>
         fail(new Error(`Timed out waiting for daemon stream from ${paths.socketPath}`)),
       );
-      socket.write(`${JSON.stringify({ id: requestId, method: "turn.stream", params: input })}\n`);
+      socket.write(`${JSON.stringify(localRpcWireRequest("turn.stream", input, requestId))}\n`);
     });
     socket.on("close", () => {
       if (submitted) resolveOnce();
@@ -1088,7 +1140,7 @@ function parseLocalRpcStreamMessage(
   }
   return {
     ...(isRecord(value.result) ? { result: value.result as unknown as LocalTurnSubmitResult } : {}),
-    ...(isRecord(value.event) ? { event: value.event as unknown as SparkDaemonEvent } : {}),
+    ...(isRecord(value.event) ? { event: parseSparkDaemonEvent(value.event) } : {}),
   };
 }
 

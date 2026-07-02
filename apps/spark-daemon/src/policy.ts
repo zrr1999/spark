@@ -1,48 +1,40 @@
-import type { ServerCommandPayload } from "@zendev-lab/spark-protocol";
+import type { ServerCommandPayload, SparkCommand } from "@zendev-lab/spark-protocol";
+import {
+  decideSparkDaemonCommandPolicy,
+  sparkCommandFromServerCommandPayload,
+  type SparkDaemonCommandPolicyDecision,
+} from "./command-dispatcher.ts";
 
 export interface CommandPolicyInput {
-  command: ServerCommandPayload;
+  command: ServerCommandPayload | SparkCommand;
   workspaceBindingId?: string | undefined;
   knownWorkspaceBindingIds: Set<string>;
   allowMutation?: boolean | undefined;
+  workspaceAccess?:
+    | {
+        detached?: boolean | undefined;
+        borrowed?: boolean | undefined;
+      }
+    | undefined;
 }
 
-export interface CommandPolicyDecision {
-  accepted: boolean;
-  tools: string[];
-  reasonCode?: string;
-  message?: string;
-}
-
-const readOnlyTools = ["read", "grep", "find", "ls"] as const;
-const mutationTools = ["bash", "edit", "write"] as const;
+export type CommandPolicyDecision = SparkDaemonCommandPolicyDecision;
 
 export function decideCommandPolicy(input: CommandPolicyInput): CommandPolicyDecision {
-  if (!input.workspaceBindingId || !input.knownWorkspaceBindingIds.has(input.workspaceBindingId)) {
-    return {
-      accepted: false,
-      tools: [],
-      reasonCode: "UNKNOWN_WORKSPACE_BINDING",
-      message: "Command referenced a workspace binding this Spark daemon does not own.",
-    };
-  }
+  const command = isSparkCommand(input.command)
+    ? input.command
+    : sparkCommandFromServerCommandPayload(input.command, {
+        workspaceBindingId: input.workspaceBindingId,
+      });
+  return decideSparkDaemonCommandPolicy({
+    command,
+    workspaceBindingId: input.workspaceBindingId,
+    knownWorkspaceBindingIds: input.knownWorkspaceBindingIds,
+    allowMutation: input.allowMutation,
+    workspaceAccess: input.workspaceAccess,
+  });
+}
 
-  if (input.command.kind === "invocation.cancel.request") {
-    return { accepted: true, tools: [] };
-  }
-
-  const needsMutation = input.command.kind === "task.start.request";
-  if (needsMutation && input.allowMutation === false) {
-    return {
-      accepted: false,
-      tools: [...readOnlyTools],
-      reasonCode: "MUTATION_NOT_ALLOWED",
-      message: "This command needs mutating tools, but mutation is disabled for this Spark daemon.",
-    };
-  }
-
-  return {
-    accepted: true,
-    tools: needsMutation ? [...readOnlyTools, ...mutationTools] : [...readOnlyTools],
-  };
+function isSparkCommand(command: ServerCommandPayload | SparkCommand): command is SparkCommand {
+  return "schemaVersion" in command && command.schemaVersion === "spark.command.v1";
 }

@@ -3,8 +3,9 @@ import { mkdirSync, rmSync } from "node:fs";
 import { createConnection, createServer, type Socket } from "node:net";
 import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import type { SparkDaemonEvent } from "@zendev-lab/spark-protocol";
+import type { SparkCommand, SparkDaemonEvent } from "@zendev-lab/spark-protocol";
 import type { SparkPaths } from "@zendev-lab/spark-system";
+import { sparkCommandFromLocalRpcRequest } from "./command-dispatcher.ts";
 import {
   SparkDaemonInvocationRegistry,
   SparkDaemonQueue,
@@ -150,23 +151,76 @@ interface LocalRpcHandlerOptions {
 }
 
 type LocalRpcRequest =
-  | { id: string; method: "daemon.status" }
-  | { id: string; method: "daemon.stop" }
-  | { id: string; method: "daemon.queue"; params: LocalDaemonQueueParams }
-  | { id: string; method: "turn.submit"; params: LocalTurnSubmitParams }
-  | { id: string; method: "turn.cancel"; params: LocalTurnCancelParams }
-  | { id: string; method: "workspace.list" }
-  | { id: string; method: "workspace.register"; params: LocalWorkspaceRegisterParams }
-  | { id: string; method: "workspace.ensure-local"; params: LocalWorkspaceEnsureLocalParams }
-  | { id: string; method: "workspace.attach" | "workspace.stop"; params: { id: string } }
-  | { id: string; method: "workspace.client.attach"; params: LocalWorkspaceClientAttachParams }
+  | { id: string; method: "daemon.status"; sparkCommand: SparkCommand }
+  | { id: string; method: "daemon.stop"; sparkCommand: SparkCommand }
+  | {
+      id: string;
+      method: "daemon.queue";
+      params: LocalDaemonQueueParams;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "turn.submit";
+      params: LocalTurnSubmitParams;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "turn.cancel";
+      params: LocalTurnCancelParams;
+      sparkCommand: SparkCommand;
+    }
+  | { id: string; method: "workspace.list"; sparkCommand: SparkCommand }
+  | {
+      id: string;
+      method: "workspace.register";
+      params: LocalWorkspaceRegisterParams;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "workspace.ensure-local";
+      params: LocalWorkspaceEnsureLocalParams;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "workspace.attach" | "workspace.stop";
+      params: { id: string };
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "workspace.client.attach";
+      params: LocalWorkspaceClientAttachParams;
+      sparkCommand: SparkCommand;
+    }
   | {
       id: string;
       method: "workspace.client.heartbeat";
       params: LocalWorkspaceClientHeartbeatParams;
+      sparkCommand: SparkCommand;
     }
-  | { id: string; method: "workspace.client.release"; params: { clientId: string } }
-  | { id: string; method: "workspace.executor.ensure"; params: LocalWorkspaceExecutorEnsureParams };
+  | {
+      id: string;
+      method: "workspace.client.release";
+      params: { clientId: string };
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "workspace.executor.ensure";
+      params: LocalWorkspaceExecutorEnsureParams;
+      sparkCommand: SparkCommand;
+    };
+
+type LocalRpcWireRequest = {
+  id: string;
+  method: string;
+  params?: unknown;
+  sparkCommand?: SparkCommand;
+};
 
 type LocalTurnCancelParams = LocalTurnCancelRequest;
 
@@ -397,7 +451,7 @@ export async function requestWorkspaceExecutorEnsure(
 
 async function localRpcRequest<T>(
   paths: SparkPaths,
-  request: LocalRpcRequest,
+  request: LocalRpcWireRequest,
   parseResult: (value: unknown) => T,
 ): Promise<T> {
   const socketPath = localRpcSocketPath(paths);
@@ -493,6 +547,7 @@ function handleLocalRpcStreamLine(
     return false;
   }
   if (request.method !== "turn.stream") return false;
+  sparkCommandFromLocalRpcRequest(request);
   if (!eventBus) {
     writeLocalRpcResponse(socket, {
       id: request.id,
@@ -790,78 +845,103 @@ function parseLocalRpcRequest(line: string): LocalRpcRequest {
     throw new Error("Invalid local RPC request.");
   }
   if (value.method === "daemon.status") {
-    return { id: value.id, method: value.method };
+    return withSparkCommand({ id: value.id, method: value.method });
   }
   if (value.method === "daemon.stop") {
-    return { id: value.id, method: value.method };
+    return withSparkCommand({ id: value.id, method: value.method });
   }
   if (value.method === "daemon.queue") {
-    return {
+    return withSparkCommand({
       id: value.id,
       method: value.method,
       params: parseLocalDaemonQueueParams(value.params),
-    };
+    });
   }
   if (value.method === "turn.submit") {
-    return { id: value.id, method: value.method, params: parseLocalTurnSubmitParams(value.params) };
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseLocalTurnSubmitParams(value.params),
+    });
   }
   if (value.method === "turn.cancel") {
-    return { id: value.id, method: value.method, params: parseLocalTurnCancelParams(value.params) };
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseLocalTurnCancelParams(value.params),
+    });
   }
   if (value.method === "workspace.list") {
-    return { id: value.id, method: value.method };
+    return withSparkCommand({ id: value.id, method: value.method });
   }
   if (value.method === "workspace.register") {
-    return {
+    return withSparkCommand({
       id: value.id,
       method: value.method,
       params: parseLocalWorkspaceRegisterParams(value.params),
-    };
+    });
   }
   if (value.method === "workspace.ensure-local") {
-    return {
+    return withSparkCommand({
       id: value.id,
       method: value.method,
       params: parseLocalWorkspaceEnsureLocalParams(value.params),
-    };
+    });
   }
   if (value.method === "workspace.attach" || value.method === "workspace.stop") {
     if (!isRecord(value.params) || typeof value.params.id !== "string") {
       throw new Error(`Missing workspace id for local RPC method: ${value.method}`);
     }
-    return { id: value.id, method: value.method, params: { id: value.params.id } };
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: { id: value.params.id },
+    });
   }
   if (value.method === "workspace.client.attach") {
-    return {
+    return withSparkCommand({
       id: value.id,
       method: value.method,
       params: parseLocalWorkspaceClientAttachParams(value.params),
-    };
+    });
   }
   if (value.method === "workspace.client.heartbeat") {
-    return {
+    return withSparkCommand({
       id: value.id,
       method: value.method,
       params: parseLocalWorkspaceClientHeartbeatParams(value.params),
-    };
+    });
   }
   if (value.method === "workspace.client.release") {
     if (!isRecord(value.params) || typeof value.params.clientId !== "string") {
       throw new Error("Missing workspace client id for local RPC release.");
     }
-    return { id: value.id, method: value.method, params: { clientId: value.params.clientId } };
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: { clientId: value.params.clientId },
+    });
   }
   if (value.method === "workspace.executor.ensure") {
-    return {
+    return withSparkCommand({
       id: value.id,
       method: value.method,
       params: parseLocalWorkspaceExecutorEnsureParams(value.params),
-    };
+    });
   }
   if (typeof value.method !== "string") {
     throw new Error("Invalid local RPC request.");
   }
   throw new Error(`Unknown local RPC method: ${value.method}`);
+}
+
+function withSparkCommand<T extends { id: string; method: string; params?: unknown }>(
+  request: T,
+): T & { sparkCommand: SparkCommand } {
+  return {
+    ...request,
+    sparkCommand: sparkCommandFromLocalRpcRequest(request),
+  };
 }
 
 type LocalDaemonQueueParams = {

@@ -30,6 +30,7 @@ import {
   type SparkDaemonHumanWaitInput,
   type SparkDaemonHumanWaitRegistration,
 } from "./core/human-waits.ts";
+import { sparkCommandFromServerCommandEnvelope } from "./command-dispatcher.ts";
 import { decideCommandPolicy } from "./policy.js";
 import {
   commandAck,
@@ -571,64 +572,18 @@ export async function handleCommand(
   const commandWorkspace = command.workspaceBindingId
     ? getWorkspaceById(context.db, command.workspaceBindingId)
     : null;
-  if (
-    commandWorkspace &&
-    isUserDetachedWorkspace(commandWorkspace) &&
-    command.payload.kind !== "invocation.cancel.request"
-  ) {
-    sendJson(
-      ws,
-      commandReject(
-        {
-          reasonCode: "WORKSPACE_DETACHED",
-          message: "Workspace is paused and is not accepting new commands.",
-          retryable: true,
-        },
-        {
-          runtimeId: context.runtimeId,
-          workspaceBindingId: command.workspaceBindingId,
-          workspaceId: command.workspaceId,
-          projectId: command.projectId,
-          commandId: command.commandId,
-          ackOf: command.messageId,
-        },
-      ),
-    );
-    return;
-  }
-  if (
-    commandWorkspace &&
-    isBorrowedWorkspace(context.db, commandWorkspace.id) &&
-    command.payload.kind !== "workspace.snapshot.request" &&
-    command.payload.kind !== "diagnostics.request" &&
-    command.payload.kind !== "invocation.cancel.request"
-  ) {
-    sendJson(
-      ws,
-      commandReject(
-        {
-          reasonCode: "WORKSPACE_BORROWED",
-          message:
-            "Workspace is borrowed by an interactive client and is snapshot-only for server mutations.",
-          retryable: true,
-        },
-        {
-          runtimeId: context.runtimeId,
-          workspaceBindingId: command.workspaceBindingId,
-          workspaceId: command.workspaceId,
-          projectId: command.projectId,
-          commandId: command.commandId,
-          ackOf: command.messageId,
-        },
-      ),
-    );
-    return;
-  }
+  const sparkCommand = sparkCommandFromServerCommandEnvelope(command);
   const policy = decideCommandPolicy({
-    command: command.payload,
+    command: sparkCommand,
     workspaceBindingId: command.workspaceBindingId,
     knownWorkspaceBindingIds,
     allowMutation: true,
+    workspaceAccess: commandWorkspace
+      ? {
+          detached: isUserDetachedWorkspace(commandWorkspace),
+          borrowed: isBorrowedWorkspace(context.db, commandWorkspace.id),
+        }
+      : undefined,
   });
   const route: RouteContext = {
     runtimeId: context.runtimeId,
@@ -646,7 +601,7 @@ export async function handleCommand(
         {
           reasonCode: policy.reasonCode ?? "COMMAND_REJECTED",
           message: policy.message ?? "Spark daemon rejected the command.",
-          retryable: false,
+          retryable: policy.retryable ?? false,
         },
         route,
       ),
@@ -654,7 +609,7 @@ export async function handleCommand(
     return;
   }
 
-  if (command.payload.kind === "workspace.snapshot.request") {
+  if (sparkCommand.kind === "workspace.snapshot.request") {
     sendJson(ws, commandAck({ accepted: true }, route));
     const workspace = command.workspaceBindingId
       ? getWorkspaceById(context.db, command.workspaceBindingId)
@@ -688,7 +643,7 @@ export async function handleCommand(
     return;
   }
 
-  if (command.payload.kind === "diagnostics.request") {
+  if (sparkCommand.kind === "diagnostics.request") {
     const invocationId = createId("inv");
     sendJson(ws, commandAck({ accepted: true, invocationId }, { ...route, invocationId }));
     sendJson(
@@ -713,7 +668,7 @@ export async function handleCommand(
           runtimeInvocationId: invocationId,
           status: "succeeded",
           completedAt: new Date().toISOString(),
-          payload: { commandKind: command.payload.kind },
+          payload: { commandKind: sparkCommand.kind },
         },
         { ...route, invocationId },
       ),
@@ -721,8 +676,8 @@ export async function handleCommand(
     return;
   }
 
-  if (command.payload.kind === "invocation.cancel.request") {
-    const invocationId = runtimeInvocationIdForCancel(command.payload.payload);
+  if (sparkCommand.kind === "invocation.cancel.request") {
+    const invocationId = runtimeInvocationIdForCancel(sparkCommand.payload);
     if (!invocationId) {
       sendJson(ws, commandRejectForUnknownInvocation(route, command.messageId));
       return;
@@ -747,7 +702,7 @@ export async function handleCommand(
           status: "cancelled",
           completedAt: new Date().toISOString(),
           terminalReason: result.cancelled ? result.message : cancelReason,
-          payload: { commandKind: command.payload.kind },
+          payload: { commandKind: sparkCommand.kind },
         },
         { ...route, invocationId },
       ),
@@ -755,13 +710,13 @@ export async function handleCommand(
     return;
   }
 
-  if (command.payload.kind !== "task.start.request") {
+  if (sparkCommand.kind !== "task.start.request") {
     sendJson(
       ws,
       commandReject(
         {
           reasonCode: "COMMAND_KIND_UNIMPLEMENTED",
-          message: `Spark daemon does not execute ${command.payload.kind} yet.`,
+          message: `Spark daemon does not execute ${sparkCommand.kind} yet.`,
           retryable: false,
         },
         route,
@@ -790,7 +745,7 @@ export async function handleCommand(
 
   const invocation = context.invocationRegistry?.start({
     invocationId: createId("inv"),
-    kind: command.payload.kind,
+    kind: sparkCommand.kind,
   });
   try {
     await context.runSparkCommand({

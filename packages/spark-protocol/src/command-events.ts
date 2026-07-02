@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isoDateTimeSchema, prefixedIdSchema } from "./refs.ts";
+import { isoDateTimeSchema } from "./refs.ts";
 
 export const sparkCommandSchemaVersion = "spark.command.v1" as const;
 export const sparkEventSchemaVersion = "spark.event.v1" as const;
@@ -57,12 +57,14 @@ export const sparkCommandPayloadRefSchema = z.object({
   sizeBytes: z.number().int().nonnegative().optional(),
 });
 
+const transportScopedIdSchema = z.string().min(1);
+
 export const sparkCommandRouteSchema = z.object({
-  runtimeId: prefixedIdSchema("rt").optional(),
-  workspaceBindingId: prefixedIdSchema("rtwb").optional(),
-  workspaceId: prefixedIdSchema("ws").optional(),
-  projectId: prefixedIdSchema("proj").optional(),
-  commandId: prefixedIdSchema("cmd").optional(),
+  runtimeId: transportScopedIdSchema.optional(),
+  workspaceBindingId: transportScopedIdSchema.optional(),
+  workspaceId: transportScopedIdSchema.optional(),
+  projectId: transportScopedIdSchema.optional(),
+  commandId: transportScopedIdSchema.optional(),
   invocationId: z.string().min(1).optional(),
   sessionId: z.string().min(1).optional(),
   taskRuntimeId: z.string().min(1).optional(),
