@@ -206,7 +206,7 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
           linkedTo: normalizeOptionalRef(params.linkedTo, "linkedTo"),
           curationStatus: normalizeOptionalCurationStatus(params.curationStatus, "curationStatus"),
           retention: normalizeOptionalRetention(params.retention, "retention"),
-          includeRaw: normalizeBoolean(params.includeRaw, true, "includeRaw"),
+          includeRaw: normalizeBoolean(params.includeRaw, false, "includeRaw"),
           includeArchived: normalizeBoolean(params.includeArchived, false, "includeArchived"),
         });
         const newest = artifacts.slice().reverse();

@@ -54,6 +54,11 @@ export type AssistantMessageEvent = any;
 
 import type { ExtensionContext, ToolConfig } from "@zendev-lab/spark-extension-api";
 import {
+  compactToolResultContent,
+  shouldRecordRawToolResultArtifact,
+  type SparkToolResultRawRecoveryDecision,
+} from "./tool-result-compaction.ts";
+import {
   SPARK_PROTOCOL_VERSION,
   type SparkArtifactView,
   type SparkInteractionRequest,
@@ -424,12 +429,32 @@ export class SparkAgentLoop {
           `Spark tool "${toolCall.name}" timed out after ${this.toolTimeoutMs}ms`,
           (error) => toolAbort.abort(error),
         );
+        const compacted = compactToolResultContent({
+          toolName: toolCall.name,
+          args: toolCall.arguments,
+          content: result.content,
+        });
+        const recoveryDecision = shouldRecordRawToolResultArtifact({
+          toolName: toolCall.name,
+          isError: result.isError ?? false,
+          compaction: compacted.details,
+        });
+        const rawRecovery = recoveryDecision.record
+          ? await this.recordRawToolResultArtifact({
+              toolCall,
+              result,
+              ctx,
+              decision: recoveryDecision,
+            })
+          : undefined;
         return {
           role: "toolResult",
           toolCallId: toolCall.id,
           toolName: toolCall.name,
-          content: result.content,
-          details: result.details,
+          content: rawRecovery
+            ? appendRawRecoveryHint(compacted.content, rawRecovery.readHint)
+            : compacted.content,
+          details: mergeToolResultDetails(result.details, compacted.details, rawRecovery),
           isError: result.isError ?? false,
           timestamp: Date.now(),
         };
@@ -439,6 +464,55 @@ export class SparkAgentLoop {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return errorToolResult(toolCall, message);
+    }
+  }
+
+  private async recordRawToolResultArtifact(input: {
+    toolCall: ToolCall;
+    result: {
+      content: Array<{ type: string; text?: string; [key: string]: unknown }>;
+      details?: unknown;
+      isError?: boolean;
+    };
+    ctx: ExtensionContext;
+    decision: SparkToolResultRawRecoveryDecision;
+  }): Promise<ToolResultRawRecoveryRecord | undefined> {
+    if (input.toolCall.name === "artifact") return undefined;
+    const artifactTool = this.host.getTool("artifact");
+    if (!artifactTool) return undefined;
+    const rawBody = rawToolResultArtifactBody(input.result.content);
+    try {
+      const recorded = await artifactTool.config.execute(
+        `internal-raw-output:${input.toolCall.id}`,
+        {
+          action: "record",
+          kind: "trace",
+          title: `Raw tool output for ${input.toolCall.name}`,
+          format: rawBody.format,
+          body: rawBody.body,
+          curation: { status: "raw", retention: "ephemeral" },
+          provenance: {
+            producer: rawToolOutputProducer(input.toolCall.name),
+            note: `Raw recoverable tool result for ${input.toolCall.name} (${input.decision.reason ?? "compaction"})`,
+          },
+        },
+        new AbortController().signal,
+        () => undefined,
+        input.ctx,
+      );
+      const artifactRef = artifactRefFromToolResult(recorded);
+      if (!artifactRef) return undefined;
+      return {
+        artifactRef,
+        reason: input.decision.reason ?? "lossy_compaction",
+        omittedChars: input.decision.omittedChars ?? 0,
+        bodyChars: rawBody.bodyChars,
+        readHint: `Full raw tool output saved as ${artifactRef}; recover with artifact({ action: "read", artifactRef: "${artifactRef}", maxChars: 20000 })`,
+      };
+    } catch {
+      // Raw recovery must never make the original tool call fail. The compacted
+      // result remains useful even if artifact persistence is unavailable.
+      return undefined;
     }
   }
 
@@ -713,6 +787,117 @@ export class SparkAgentLoop {
     this.host.publishView(event);
     this.publish({ type: "view_event", event });
   }
+}
+
+interface ToolResultRawRecoveryRecord {
+  artifactRef: string;
+  reason: "lossy_compaction" | "error_compaction";
+  omittedChars: number;
+  bodyChars: number;
+  readHint: string;
+}
+
+function mergeToolResultDetails(
+  originalDetails: unknown,
+  compaction: ReturnType<typeof compactToolResultContent>["details"],
+  rawRecovery: ToolResultRawRecoveryRecord | undefined,
+): unknown {
+  if (!compaction && !rawRecovery) return originalDetails;
+  return {
+    ...(isPlainRecord(originalDetails) ? originalDetails : {}),
+    ...(compaction ? { toolResultCompaction: compaction } : {}),
+    ...(rawRecovery
+      ? {
+          toolResultRawRecovery: {
+            artifactRef: rawRecovery.artifactRef,
+            reason: rawRecovery.reason,
+            omittedChars: rawRecovery.omittedChars,
+            bodyChars: rawRecovery.bodyChars,
+            readHint: rawRecovery.readHint,
+          },
+        }
+      : {}),
+  };
+}
+
+function appendRawRecoveryHint(
+  content: Array<{ type: string; text?: string; [key: string]: unknown }>,
+  hint: string,
+): Array<{ type: string; text?: string; [key: string]: unknown }> {
+  const index = content.findLastIndex(
+    (part) => part.type === "text" && typeof part.text === "string",
+  );
+  const hintText = `[recovery] ${hint}`;
+  if (index < 0) return [...content, { type: "text", text: hintText }];
+  return content.map((part, partIndex) =>
+    partIndex === index ? { ...part, text: `${part.text}\n\n${hintText}` } : part,
+  );
+}
+
+function rawToolResultArtifactBody(
+  content: Array<{ type: string; text?: string; [key: string]: unknown }>,
+): { format: "text" | "json"; body: string | Record<string, unknown>; bodyChars: number } {
+  if (content.length === 1 && content[0]?.type === "text" && typeof content[0].text === "string") {
+    return { format: "text", body: content[0].text, bodyChars: content[0].text.length };
+  }
+  const body = { schemaVersion: 1, content: jsonSafe(content) };
+  return { format: "json", body, bodyChars: JSON.stringify(body).length };
+}
+
+function rawToolOutputProducer(toolName: string): "spark" | "cue" {
+  return toolName.startsWith("cue_") || toolName === "script_run" || toolName === "script_eval"
+    ? "cue"
+    : "spark";
+}
+
+function artifactRefFromToolResult(result: {
+  content?: unknown;
+  details?: unknown;
+}): string | undefined {
+  const details = isPlainRecord(result.details) ? result.details : undefined;
+  const refs = isPlainRecord(details?.refs) ? details.refs : undefined;
+  const fromRefs = stringField(refs, "artifactRef");
+  if (fromRefs?.startsWith("artifact:")) return fromRefs;
+  const artifact = isPlainRecord(details?.artifact) ? details.artifact : undefined;
+  const fromArtifact = stringField(artifact, "ref");
+  if (fromArtifact?.startsWith("artifact:")) return fromArtifact;
+  const text = Array.isArray(result.content)
+    ? result.content
+        .map((part) => (isPlainRecord(part) && typeof part.text === "string" ? part.text : ""))
+        .join("\n")
+    : "";
+  return text.match(/artifact:[A-Za-z0-9._:-]+/u)?.[0];
+}
+
+function jsonSafe(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value === "undefined") return null;
+  if (typeof value === "function") return "[Function]";
+  if (typeof value === "symbol")
+    return value.description ? `[Symbol:${value.description}]` : "[Symbol]";
+  if (value instanceof Date) return value.toISOString();
+  if (!value || typeof value !== "object") return null;
+  if (seen.has(value)) return "[Circular]";
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((item) => jsonSafe(item, seen));
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, child]) => [
+      key,
+      jsonSafe(child, seen),
+    ]),
+  );
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function normalizeTimeoutMs(value: number | undefined, fallback: number): number {

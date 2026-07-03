@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
+import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import { registerPiArtifactTool } from "@zendev-lab/spark-artifacts/extension";
 import {
   SparkAgentLoop,
   SparkHostRuntime,
   type SparkAgentLoopEvent,
   type SparkAgentStreamFunction,
 } from "../apps/spark-tui/src/host/index.ts";
+import { compactToolResultContent } from "../packages/spark-turn/src/tool-result-compaction.ts";
 
 type AssistantMessage = any;
 type AssistantMessageEvent = any;
@@ -82,6 +88,88 @@ function makeFakeStream(plan: FakeStreamPlan): SparkAgentStreamFunction {
   };
   return fake;
 }
+
+void test("compactToolResultContent normalizes status whitespace with details", () => {
+  const result = compactToolResultContent({
+    toolName: "goal",
+    content: [{ type: "text", text: "\n\nalpha\n\n\nbeta\n\n" }],
+    level: "full",
+  });
+
+  assert.equal(result.content[0]?.text, "alpha\n\nbeta");
+  assert.deepEqual(result.details, {
+    profile: "status",
+    level: "full",
+    originalChars: 16,
+    compactedChars: 11,
+    trimmedLeadingBlankLines: 2,
+    trimmedTrailingBlankLines: 2,
+    collapsedBlankLines: 1,
+    collapsedBlankRuns: 1,
+    collapsedRepeatedLines: 0,
+    collapsedRepeatedRuns: 0,
+  });
+});
+
+void test("compactToolResultContent supports diagnostic profile", () => {
+  const result = compactToolResultContent({
+    toolName: "spark_diagnostic",
+    content: [{ type: "text", text: `error${"\n".repeat(80)}next` }],
+    level: "full",
+  });
+
+  assert.equal(result.content[0]?.text, "error\n\n[78 blank lines collapsed]\nnext");
+  assert.equal(result.details?.profile, "diagnostic");
+  assert.equal(result.details?.collapsedBlankLines, 78);
+  assert.equal(result.details?.collapsedRepeatedLines, 0);
+});
+
+void test("compactToolResultContent collapses repeated log lines", () => {
+  const result = compactToolResultContent({
+    toolName: "cue_exec",
+    content: [{ type: "text", text: `${"warning: noisy dependency\n".repeat(30)}done` }],
+    level: "full",
+  });
+
+  assert.equal(
+    result.content[0]?.text,
+    "warning: noisy dependency\n[previous line repeated 29×]\ndone",
+  );
+  assert.equal(result.details?.collapsedRepeatedLines, 29);
+  assert.equal(result.details?.collapsedRepeatedRuns, 1);
+});
+
+void test("compactToolResultContent preserves unknown tools by default", () => {
+  const output = "alpha\n\n\n\nbeta";
+  const result = compactToolResultContent({
+    toolName: "third_party_tool",
+    content: [{ type: "text", text: output }],
+    level: "ultra",
+  });
+
+  assert.equal(result.content[0]?.text, output);
+  assert.equal(result.details, undefined);
+});
+
+void test("compactToolResultContent respects off level and never-worse fallback", () => {
+  const output = "a\n\n\n\nb";
+  assert.equal(
+    compactToolResultContent({
+      toolName: "cue_exec",
+      content: [{ type: "text", text: output }],
+      level: "off",
+    }).content[0]?.text,
+    output,
+  );
+  assert.equal(
+    compactToolResultContent({
+      toolName: "cue_exec",
+      content: [{ type: "text", text: output }],
+      level: "full",
+    }).content[0]?.text,
+    output,
+  );
+});
 
 void test("SparkAgentLoop runs a single-turn stop with one streamed text chunk", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-test" });
@@ -379,6 +467,202 @@ void test("SparkAgentLoop dispatches tool calls and feeds tool results back into
         event.artifact.metadata.sourceTool === "echo",
     ),
     true,
+  );
+});
+
+void test("SparkAgentLoop compacts blank runs for log-like tool results", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-compaction-test" });
+  const noisyOutput = `alpha${"\n".repeat(61)}omega`;
+  host.registerTool({
+    name: "cue_exec",
+    description: "fake cue output",
+    parameters: { type: "object" },
+    async execute() {
+      return { content: [{ type: "text", text: noisyOutput }] };
+    },
+  });
+
+  const toolCallEnvelope: ToolCall = {
+    type: "toolCall",
+    id: "tc-compact",
+    name: "cue_exec",
+    arguments: { command: "fake" },
+  };
+  const firstAssistant = buildAssistant([toolCallEnvelope], "toolUse");
+  const finalAssistant = buildAssistant([{ type: "text", text: "after compaction" }]);
+  const fake = makeFakeStream({
+    rounds: [
+      [{ type: "done", reason: "toolUse", message: firstAssistant }],
+      [{ type: "done", reason: "stop", message: finalAssistant }],
+    ],
+  });
+  const loop = new SparkAgentLoop({ host, streamFunction: fake, getModel: () => TEST_MODEL });
+
+  await loop.submit("call compacting tool");
+
+  const toolResult = loop.getMessages().find((message) => message.role === "toolResult");
+  assert.equal(
+    (toolResult as { content: Array<{ text?: string }> }).content[0]?.text,
+    "alpha\n\n[58 blank lines collapsed]\n\nomega",
+  );
+  const compaction = (toolResult as { details?: { toolResultCompaction?: any } }).details
+    ?.toolResultCompaction;
+  assert.equal(compaction.profile, "log");
+  assert.equal(compaction.level, "full");
+  assert.equal(compaction.trimmedLeadingBlankLines, 0);
+  assert.equal(compaction.trimmedTrailingBlankLines, 0);
+  assert.equal(compaction.collapsedBlankLines, 58);
+  assert.equal(compaction.collapsedBlankRuns, 1);
+  assert.equal(compaction.collapsedRepeatedLines, 0);
+  assert.equal(compaction.collapsedRepeatedRuns, 0);
+  assert.equal(compaction.originalChars > compaction.compactedChars, true);
+});
+
+void test("SparkAgentLoop records raw trace artifact for large lossy compacted tool output", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-agent-loop-raw-recovery-"));
+  try {
+    const host = new SparkHostRuntime({ cwd: dir });
+    registerPiArtifactTool({
+      registerTool: (config) =>
+        host.registerTool(config as Parameters<typeof host.registerTool>[0]),
+    });
+    const noisyOutput = `alpha${"\n".repeat(4_500)}omega`;
+    host.registerTool({
+      name: "cue_exec",
+      description: "fake cue output",
+      parameters: { type: "object" },
+      async execute() {
+        return { content: [{ type: "text", text: noisyOutput }] };
+      },
+    });
+
+    const toolCallEnvelope: ToolCall = {
+      type: "toolCall",
+      id: "tc-raw-recovery",
+      name: "cue_exec",
+      arguments: { command: "fake" },
+    };
+    const firstAssistant = buildAssistant([toolCallEnvelope], "toolUse");
+    const finalAssistant = buildAssistant([{ type: "text", text: "after raw recovery" }]);
+    const fake = makeFakeStream({
+      rounds: [
+        [{ type: "done", reason: "toolUse", message: firstAssistant }],
+        [{ type: "done", reason: "stop", message: finalAssistant }],
+      ],
+    });
+    const loop = new SparkAgentLoop({ host, streamFunction: fake, getModel: () => TEST_MODEL });
+
+    await loop.submit("call compacting tool");
+
+    const toolResult = loop.getMessages().find((message) => message.role === "toolResult");
+    const text = (toolResult as { content: Array<{ text?: string }> }).content[0]?.text ?? "";
+    assert.match(text, /\[4497 blank lines collapsed\]/);
+    assert.match(text, /\[recovery\] Full raw tool output saved as artifact:/);
+    assert.match(
+      text,
+      /artifact\(\{ action: "read", artifactRef: "artifact:[^"]+", maxChars: 20000 \}\)/,
+    );
+    const recovery = (toolResult as { details?: { toolResultRawRecovery?: any } }).details
+      ?.toolResultRawRecovery;
+    assert.match(recovery.artifactRef, /^artifact:/);
+    assert.equal(recovery.reason, "lossy_compaction");
+    assert.equal(recovery.bodyChars, noisyOutput.length);
+
+    const store = defaultArtifactStore(dir);
+    const artifact = await store.get(recovery.artifactRef);
+    assert.equal(artifact.kind, "trace");
+    assert.equal(artifact.format, "text");
+    assert.equal(artifact.curation?.status, "raw");
+    assert.equal(artifact.curation?.retention, "ephemeral");
+    assert.equal(artifact.provenance.producer, "cue");
+    assert.equal(
+      artifact.provenance.note,
+      "Raw recoverable tool result for cue_exec (lossy_compaction)",
+    );
+    assert.equal(await store.getBody(recovery.artifactRef), noisyOutput);
+
+    const artifactTool = host.getTool("artifact");
+    assert.ok(artifactTool);
+    const readResult = await artifactTool.config.execute(
+      "read-raw-output",
+      { action: "read", artifactRef: recovery.artifactRef, maxChars: noisyOutput.length + 200 },
+      new AbortController().signal,
+      () => undefined,
+      host.makeContext(),
+    );
+    const readText = readResult.content
+      .map((part: { text?: string }) => part.text ?? "")
+      .join("\n");
+    assert.match(
+      readText,
+      new RegExp(`${recovery.artifactRef} \\[trace\\] Raw tool output for cue_exec`),
+    );
+    assert.match(readText, /alpha/);
+    assert.match(readText, /omega/);
+
+    const defaultList = await artifactTool.config.execute(
+      "list-default-raw-hidden",
+      { action: "list", limit: 5 },
+      new AbortController().signal,
+      () => undefined,
+      host.makeContext(),
+    );
+    const defaultListText = defaultList.content
+      .map((part: { text?: string }) => part.text ?? "")
+      .join("\n");
+    assert.doesNotMatch(defaultListText, new RegExp(recovery.artifactRef));
+
+    const explicitRawList = await artifactTool.config.execute(
+      "list-explicit-raw",
+      { action: "list", includeRaw: true, limit: 5 },
+      new AbortController().signal,
+      () => undefined,
+      host.makeContext(),
+    );
+    const explicitRawListText = explicitRawList.content
+      .map((part: { text?: string }) => part.text ?? "")
+      .join("\n");
+    assert.match(explicitRawListText, new RegExp(recovery.artifactRef));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("SparkAgentLoop preserves exact-content tool results", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-exact-compaction-test" });
+  const exactOutput = "line1\n\n\n\n\nline2";
+  host.registerTool({
+    name: "read",
+    description: "fake read output",
+    parameters: { type: "object" },
+    async execute() {
+      return { content: [{ type: "text", text: exactOutput }] };
+    },
+  });
+
+  const toolCallEnvelope: ToolCall = {
+    type: "toolCall",
+    id: "tc-read-exact",
+    name: "read",
+    arguments: { path: "file.txt" },
+  };
+  const firstAssistant = buildAssistant([toolCallEnvelope], "toolUse");
+  const finalAssistant = buildAssistant([{ type: "text", text: "after read" }]);
+  const fake = makeFakeStream({
+    rounds: [
+      [{ type: "done", reason: "toolUse", message: firstAssistant }],
+      [{ type: "done", reason: "stop", message: finalAssistant }],
+    ],
+  });
+  const loop = new SparkAgentLoop({ host, streamFunction: fake, getModel: () => TEST_MODEL });
+
+  await loop.submit("call read tool");
+
+  const toolResult = loop.getMessages().find((message) => message.role === "toolResult");
+  assert.equal((toolResult as { content: Array<{ text?: string }> }).content[0]?.text, exactOutput);
+  assert.equal(
+    (toolResult as { details?: { toolResultCompaction?: unknown } }).details?.toolResultCompaction,
+    undefined,
   );
 });
 
