@@ -52,6 +52,8 @@ export type Context = any;
 export type StreamOptions = any;
 export type AssistantMessageEvent = any;
 
+import { createHash } from "node:crypto";
+
 import type { ExtensionContext, ToolConfig } from "@zendev-lab/spark-extension-api";
 import {
   compactToolResultContent,
@@ -116,6 +118,22 @@ export const DEFAULT_SPARK_AGENT_LOOP_STREAM_TIMEOUT_MS = 600_000;
 export const DEFAULT_SPARK_AGENT_LOOP_TOOL_TIMEOUT_MS = 300_000;
 export const DEFAULT_SPARK_AGENT_LOOP_INTERACTION_TIMEOUT_MS = 60_000;
 
+export interface SparkPromptCacheOptions {
+  enabled?: boolean;
+  checkpoint?: string;
+  keyPrefix?: string;
+  env?: Record<string, string | undefined>;
+}
+
+export interface SparkPromptCacheSnapshot {
+  stablePrompt: string;
+  dynamicPrompt: string;
+  stableHash: string;
+  dynamicHash: string;
+  promptCacheKey?: string;
+  disabledReason?: "option" | "env" | "empty_stable_prompt";
+}
+
 export interface SparkAgentLoopOptions {
   host: SparkTurnHost;
   /** pi-ai stream function. Pass the production `stream` import or a test fake. */
@@ -123,6 +141,7 @@ export interface SparkAgentLoopOptions {
   /** Resolves the current model. May be replaced at runtime via setModel. */
   getModel: () => Model<string>;
   systemPrompt?: string;
+  promptCache?: SparkPromptCacheOptions;
   /** Maximum number of tool roundtrips per submit. Defaults to 16. */
   maxRoundtrips?: number;
   /** Wall-clock timeout for one model stream pass. Defaults to 10 minutes; <=0 disables. */
@@ -151,6 +170,7 @@ export class SparkAgentLoop {
   private readonly toolTimeoutMs: number;
   private readonly interactionTimeoutMs: number;
   private systemPrompt: string;
+  private readonly promptCacheOptions: SparkPromptCacheOptions;
   private readonly messages: Message[] = [];
   private state: SparkAgentLoopState = "idle";
   private currentAbort: AbortController | undefined;
@@ -165,6 +185,7 @@ export class SparkAgentLoop {
     this.streamFunction = options.streamFunction;
     this.getModel = options.getModel;
     this.systemPrompt = options.systemPrompt ?? "";
+    this.promptCacheOptions = options.promptCache ?? {};
     this.maxRoundtrips = options.maxRoundtrips ?? 16;
     this.streamTimeoutMs = normalizeTimeoutMs(
       options.streamTimeoutMs,
@@ -300,8 +321,17 @@ export class SparkAgentLoop {
         this.currentAbort = abortController;
         const tools = this.collectActiveTools();
         const messageCountBeforeAssistant = this.messages.length;
+        const promptCache = resolveSparkPromptCache({
+          systemPrompt: this.systemPrompt,
+          sessionId: this.viewSessionId,
+          ...this.promptCacheOptions,
+        });
         const context: Context = {
           systemPrompt: this.systemPrompt || undefined,
+          systemPromptStable: promptCache.stablePrompt || undefined,
+          systemPromptDynamic: promptCache.dynamicPrompt || undefined,
+          promptCacheKey: promptCache.promptCacheKey,
+          promptCache,
           messages: this.messages,
           tools,
         };
@@ -310,6 +340,8 @@ export class SparkAgentLoop {
         try {
           const stream = this.streamFunction(this.getModel(), context, {
             signal: abortController.signal,
+            promptCacheKey: promptCache.promptCacheKey,
+            prompt_cache_key: promptCache.promptCacheKey,
           } as StreamOptions);
           assistant = await runWithTimeout(
             this.consumeAssistantStream(stream),
@@ -688,7 +720,10 @@ export class SparkAgentLoop {
             event.reason === "error" ? "error" : "done",
           ),
         });
-        this.publishCurrentRunStatus(runStatusForStopReason(event.reason));
+        this.publishCurrentRunStatus(
+          runStatusForStopReason(event.reason),
+          formatAssistantUsageSummary(event.assistant),
+        );
         return;
       case "abort":
         this.publishCurrentRunStatus("cancelled", event.reason);
@@ -972,6 +1007,90 @@ function beforeAgentStartMessage(
     },
     visible: (message as { display?: unknown }).display !== false,
   };
+}
+
+export function splitSparkSystemPrompt(systemPrompt: string): {
+  stablePrompt: string;
+  dynamicPrompt: string;
+} {
+  const sections = systemPrompt.split(/\n{2,}/u);
+  const stable: string[] = [];
+  const dynamic: string[] = [];
+  for (const section of sections) {
+    const trimmed = section.trim();
+    if (!trimmed) continue;
+    if (isDynamicPromptSection(trimmed)) dynamic.push(trimmed);
+    else stable.push(trimmed);
+  }
+  return { stablePrompt: stable.join("\n\n"), dynamicPrompt: dynamic.join("\n\n") };
+}
+
+export function resolveSparkPromptCache(input: {
+  systemPrompt: string;
+  sessionId: string;
+  enabled?: boolean;
+  checkpoint?: string;
+  keyPrefix?: string;
+  env?: Record<string, string | undefined>;
+}): SparkPromptCacheSnapshot {
+  const { stablePrompt, dynamicPrompt } = splitSparkSystemPrompt(input.systemPrompt);
+  const stableHash = hashText(stablePrompt);
+  const dynamicHash = hashText(dynamicPrompt);
+  if (input.enabled === false) {
+    return { stablePrompt, dynamicPrompt, stableHash, dynamicHash, disabledReason: "option" };
+  }
+  const env = input.env ?? process.env;
+  if (env.SPARK_PROMPT_CACHE === "off" || env.SPARK_PROMPT_CACHE_KEY === "off") {
+    return { stablePrompt, dynamicPrompt, stableHash, dynamicHash, disabledReason: "env" };
+  }
+  if (!stablePrompt) {
+    return {
+      stablePrompt,
+      dynamicPrompt,
+      stableHash,
+      dynamicHash,
+      disabledReason: "empty_stable_prompt",
+    };
+  }
+  const checkpoint = (input.checkpoint ?? stableHash.slice(0, 12)).replace(
+    /[^A-Za-z0-9_.:-]/gu,
+    "-",
+  );
+  const sessionPart = input.sessionId.replace(/[^A-Za-z0-9_.:-]/gu, "-");
+  const prefix = input.keyPrefix ?? "spark";
+  return {
+    stablePrompt,
+    dynamicPrompt,
+    stableHash,
+    dynamicHash,
+    promptCacheKey: `${prefix}:${sessionPart}:${stableHash.slice(0, 16)}:${checkpoint}`,
+  };
+}
+
+function isDynamicPromptSection(section: string): boolean {
+  return (
+    /^Current date(?: and time)?:/imu.test(section) ||
+    /^Current working directory:/imu.test(section) ||
+    /^Dynamic context checkpoint:/imu.test(section)
+  );
+}
+
+function hashText(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function formatAssistantUsageSummary(assistant: AssistantMessage): string | undefined {
+  const usage = (assistant as { usage?: unknown }).usage;
+  if (!usage || typeof usage !== "object") return undefined;
+  const cacheRead = numberField(usage, "cacheRead") ?? numberField(usage, "cacheReadTokens");
+  const cacheWrite = numberField(usage, "cacheWrite") ?? numberField(usage, "cacheWriteTokens");
+  if (cacheRead === undefined && cacheWrite === undefined) return undefined;
+  return `cache read=${cacheRead ?? 0} write=${cacheWrite ?? 0}`;
+}
+
+function numberField(value: object, field: string): number | undefined {
+  const raw = (value as Record<string, unknown>)[field];
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
 }
 
 function collectToolCalls(message: AssistantMessage): ToolCall[] {

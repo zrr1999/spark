@@ -12,6 +12,10 @@ import {
   type SparkAgentLoopEvent,
   type SparkAgentStreamFunction,
 } from "../apps/spark-tui/src/host/index.ts";
+import {
+  resolveSparkPromptCache,
+  splitSparkSystemPrompt,
+} from "../packages/spark-turn/src/agent-loop.ts";
 import { compactToolResultContent } from "../packages/spark-turn/src/tool-result-compaction.ts";
 
 type AssistantMessage = any;
@@ -179,6 +183,83 @@ void test("compactToolResultContent respects off level and never-worse fallback"
       level: "full",
     }).content[0]?.text,
     output,
+  );
+});
+
+void test("Spark prompt cache splits stable/dynamic prompt sections and honors disable switches", () => {
+  const split = splitSparkSystemPrompt(
+    [
+      "Stable Spark operating rules.",
+      "Current date: 2026-07-03\nCurrent working directory: /repo",
+      "Dynamic context checkpoint: task-state-v2",
+    ].join("\n\n"),
+  );
+  assert.equal(split.stablePrompt, "Stable Spark operating rules.");
+  assert.match(split.dynamicPrompt, /Current date/);
+  assert.match(split.dynamicPrompt, /task-state-v2/);
+
+  const enabled = resolveSparkPromptCache({
+    systemPrompt: [split.stablePrompt, split.dynamicPrompt].join("\n\n"),
+    sessionId: "session:abc",
+    checkpoint: "manual refresh",
+    env: {},
+  });
+  assert.match(enabled.promptCacheKey ?? "", /^spark:session:abc:[0-9a-f]{16}:manual-refresh$/);
+  assert.equal(enabled.disabledReason, undefined);
+
+  const disabled = resolveSparkPromptCache({
+    systemPrompt: split.stablePrompt,
+    sessionId: "session:abc",
+    env: { SPARK_PROMPT_CACHE_KEY: "off" },
+  });
+  assert.equal(disabled.promptCacheKey, undefined);
+  assert.equal(disabled.disabledReason, "env");
+});
+
+void test("SparkAgentLoop passes prompt_cache_key and reports cache usage summaries", async () => {
+  const viewEvents: unknown[] = [];
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-cache-key-test",
+    ui: { publishView: (event) => viewEvents.push(event) },
+  });
+  const finalAssistant = buildAssistant([{ type: "text", text: "cached" }]);
+  finalAssistant.usage.cacheRead = 128;
+  finalAssistant.usage.cacheWrite = 32;
+  const calls: Array<{ context: Context; options: any }> = [];
+  const streamFunction: SparkAgentStreamFunction = (_model, context, options) => {
+    calls.push({ context, options });
+    return makeFakeStream({
+      rounds: [[{ type: "done", reason: "stop", message: finalAssistant }]],
+    })(_model, context, options);
+  };
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction,
+    getModel: () => TEST_MODEL,
+    systemPrompt: [
+      "Stable Spark operating rules.",
+      "Current date: 2026-07-03\nCurrent working directory: /repo",
+    ].join("\n\n"),
+    promptCache: { checkpoint: "session-start", env: {} },
+  });
+  loop.setViewSessionId("session:cache-test");
+
+  await loop.submit("use cache");
+
+  assert.match(calls[0]?.context.promptCacheKey ?? "", /session:cache-test/);
+  assert.equal(calls[0]?.context.systemPromptStable, "Stable Spark operating rules.");
+  assert.match(calls[0]?.context.systemPromptDynamic ?? "", /Current date/);
+  assert.equal(calls[0]?.options?.prompt_cache_key, calls[0]?.context.promptCacheKey);
+  assert.equal(calls[0]?.options?.promptCacheKey, calls[0]?.context.promptCacheKey);
+  assert.equal(
+    viewEvents.some(
+      (event) =>
+        (event as { type?: string; run?: { summary?: string } }).type === "run.update" &&
+        /cache read=128 write=32/.test(
+          (event as { run?: { summary?: string } }).run?.summary ?? "",
+        ),
+    ),
+    true,
   );
 });
 

@@ -75,9 +75,8 @@ function createResolverBackedProviderStream(
     ...(options?.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
   });
   const model = materializeRouteModel(profile, decision.route);
-  const streamOptions = withResolvedApiKey(
-    options,
-    runnerOptions.resolveApiKey?.(provider, selection),
+  const streamOptions = withOpenAiCompatiblePromptCacheKey(
+    withResolvedApiKey(options, runnerOptions.resolveApiKey?.(provider, selection)),
   );
   const stream = normalizeProviderStream(
     provider.streamSimple(model as Model<ProviderConfig["api"]>, context, streamOptions),
@@ -151,6 +150,40 @@ export function resolveWorkflowModelSelection(
     throw new Error(`Ambiguous Spark workflow model "${model}"; use provider/model.`);
   }
   throw new Error(`Unknown workflow model: ${model}`);
+}
+
+export function openAiCompatiblePromptCachePayload(options: StreamOptions | undefined): {
+  prompt_cache_key?: string;
+} {
+  const key = promptCacheKeyFromOptions(options);
+  return key ? { prompt_cache_key: key } : {};
+}
+
+export function withOpenAiCompatiblePromptCacheKey(
+  options: StreamOptions | undefined,
+): StreamOptions | undefined {
+  const key = promptCacheKeyFromOptions(options);
+  if (!key) return options;
+  return {
+    ...(options ?? {}),
+    prompt_cache_key: key,
+    metadata: {
+      ...((options as { metadata?: Record<string, unknown> } | undefined)?.metadata ?? {}),
+      prompt_cache_key: key,
+    },
+  } as StreamOptions;
+}
+
+function promptCacheKeyFromOptions(options: StreamOptions | undefined): string | undefined {
+  const direct = (options as { prompt_cache_key?: unknown; promptCacheKey?: unknown } | undefined)
+    ?.prompt_cache_key;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const camel = (options as { prompt_cache_key?: unknown; promptCacheKey?: unknown } | undefined)
+    ?.promptCacheKey;
+  if (typeof camel === "string" && camel.trim()) return camel.trim();
+  const metadata = (options as { metadata?: Record<string, unknown> } | undefined)?.metadata;
+  const metadataKey = metadata?.prompt_cache_key;
+  return typeof metadataKey === "string" && metadataKey.trim() ? metadataKey.trim() : undefined;
 }
 
 function withResolvedApiKey(

@@ -1475,6 +1475,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
 
   private recordRunView(run: SparkRunView): void {
     this.cockpit.runs.set(run.id, run);
+    this.recordCacheUsageStatus(run);
     if (run.kind === "workflow") {
       const selector = stringFromRecord(run.metadata, "selector") ?? run.id;
       this.cockpit.workflows.set(selector, {
@@ -1484,6 +1485,12 @@ export class SparkNativeTuiApp implements Component, Focusable {
         source: "run",
       });
       this.ensureWorkflowRunSelection();
+    }
+  }
+
+  private recordCacheUsageStatus(run: SparkRunView): void {
+    if (run.summary && /\bcache read=\d+ write=\d+/iu.test(run.summary)) {
+      this.statuses.set("cache-usage", run.summary);
     }
   }
 

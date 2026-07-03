@@ -59,6 +59,7 @@ Package naming now follows [`spark-capabilities-and-generative-ui.md`](../archit
 - `spark-turn`
   - shared Spark-native agent turn loop (`SparkAgentLoop` / `SparkTurnRunner`) covering model stream orchestration, tool roundtrips, approval gates, abort handling, outbox draining, and view-event projection
   - deterministic tool-result compaction profiles plus artifact-backed raw output recovery paths for large lossy/error compactions
+  - prompt-cache stable/dynamic prompt snapshots, session-level `prompt_cache_key` stream options, env disable switches, and cache read/write run summaries when provider usage reports them
 - `spark`
   - Spark default research behavior plus `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow[:selector]` commands
   - Spark widget, role-run status/widget surfaces, mode state, active context provider, session-bound goal facade, review/init flow state, builtin Spark roles, and role/model binding policy

@@ -657,7 +657,7 @@ void test("native UI transport consumes view model events without concrete TUI p
       id: "run:1",
       kind: "daemon",
       status: "running",
-      summary: "processing",
+      summary: "cache read=64 write=16",
       artifactRefs: [],
       metadata: {},
     },
@@ -665,7 +665,8 @@ void test("native UI transport consumes view model events without concrete TUI p
 
   const rendered = stripAnsi(app.render(100).join("\n"));
   assert.match(rendered, /spark> hello from event/);
-  assert.match(rendered, /custom:run-view> daemon:run:1 \[running\] processing/);
+  assert.match(rendered, /custom:run-view> daemon:run:1 \[running\] cache read=64 write=16/);
+  assert.match(rendered, /native pi-tui host .*cache read=64 write=16/);
 });
 
 void test("native UI transport returns blocked protocol responses without handler", async () => {
