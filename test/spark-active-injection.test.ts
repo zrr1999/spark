@@ -16,7 +16,7 @@ import {
   loadSparkMode,
   saveCurrentProjectRef,
 } from "../packages/pi-extension/src/extension/session-state.ts";
-import { setSessionGoal } from "../packages/pi-extension/src/extension/spark-session-goals.ts";
+import { setSessionGoal } from "../packages/spark-loop/src/index.ts";
 import type { SparkToolContext } from "../packages/pi-extension/src/extension/spark-tool-registration.ts";
 
 interface TestSparkInputContext extends SparkToolContext {

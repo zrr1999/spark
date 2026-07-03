@@ -117,17 +117,15 @@ import {
   normalizeTaskStatus,
 } from "../packages/pi-extension/src/extension/task-plan-tool.ts";
 import { normalizeSparkAskReplayArtifactRef } from "../packages/pi-extension/src/extension/spark-ask-tool-registration.ts";
+import { readSessionRepro } from "../packages/pi-extension/src/extension/spark-session-repro.ts";
 import {
   inferSessionGoalObjective,
   loadSessionGoal,
-  setSessionGoal,
-  updateSessionGoalStatus,
-} from "../packages/pi-extension/src/extension/spark-session-goals.ts";
-import {
   loadSessionLoop,
+  setSessionGoal,
   setSessionLoop,
-} from "../packages/pi-extension/src/extension/spark-session-loops.ts";
-import { readSessionRepro } from "../packages/pi-extension/src/extension/spark-session-repro.ts";
+  updateSessionGoalStatus,
+} from "../packages/spark-loop/src/index.ts";
 import type {
   ReviewInput,
   ReviewerRunResult,

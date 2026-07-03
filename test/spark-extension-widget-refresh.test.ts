@@ -18,10 +18,7 @@ import {
 } from "@zendev-lab/spark-runtime";
 import type { RunRef, TaskPlan } from "@zendev-lab/spark-extension-api";
 import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
-import {
-  setSessionGoal,
-  updateSessionGoalStatus,
-} from "../packages/pi-extension/src/extension/spark-session-goals.ts";
+import { setSessionGoal, updateSessionGoalStatus } from "../packages/spark-loop/src/index.ts";
 
 type SparkPi = Parameters<typeof sparkExtension>[0];
 type SparkToolConfig = Parameters<NonNullable<SparkPi["registerTool"]>>[0];

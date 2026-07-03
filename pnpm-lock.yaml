@@ -456,7 +456,14 @@ importers:
         specifier: ^1.2.13
         version: 1.2.13
 
-  packages/spark-loop: {}
+  packages/spark-loop:
+    dependencies:
+      '@zendev-lab/spark-extension-api':
+        specifier: workspace:^
+        version: link:../spark-extension-api
+      '@zendev-lab/spark-tasks':
+        specifier: workspace:^
+        version: link:../spark-tasks
 
   packages/spark-modes:
     dependencies:

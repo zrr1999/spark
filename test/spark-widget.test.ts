@@ -16,16 +16,16 @@ import {
 } from "../packages/pi-extension/src/ui/spark-widget.ts";
 import { SparkWidgetController } from "../packages/pi-extension/src/extension/spark-widget-controller.ts";
 import { defaultSparkDynamicWorkflowEventStore } from "../packages/spark-workflows/src/index.ts";
-import { setSessionGoal } from "../packages/pi-extension/src/extension/spark-session-goals.ts";
-import {
-  loadSessionLoop,
-  scheduleSessionLoopTick,
-  setSessionLoop,
-} from "../packages/pi-extension/src/extension/spark-session-loops.ts";
 import {
   createSparkSessionRepro,
   writeSessionRepro,
 } from "../packages/pi-extension/src/extension/spark-session-repro.ts";
+import {
+  loadSessionLoop,
+  scheduleSessionLoopTick,
+  setSessionGoal,
+  setSessionLoop,
+} from "../packages/spark-loop/src/index.ts";
 import { saveCurrentProjectRef } from "../packages/pi-extension/src/extension/session-state.ts";
 
 const theme: SparkWidgetTheme = {

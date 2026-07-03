@@ -18,5 +18,9 @@
   },
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@zendev-lab/spark-extension-api": "workspace:^",
+    "@zendev-lab/spark-tasks": "workspace:^"
   }
 }
