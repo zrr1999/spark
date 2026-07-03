@@ -106,8 +106,13 @@ void test("spark memory extension registers policy-only memory tool", async () =
     assert.equal(api.messages[0]?.message.customType, "spark-memory-policy");
     assert.match(api.messages[0]?.message.content ?? "", /policy-only/);
 
-    await api.handlers.get("session_before_compact")?.({}, { cwd: dir });
+    const compactEventResult = await api.handlers.get("session_before_compact")?.({}, { cwd: dir });
     assert.equal(api.messages[1]?.message.customType, "spark-memory-checkpoint");
+    assert.equal(
+      (compactEventResult as { message?: { customType?: string } } | undefined)?.message
+        ?.customType,
+      "spark-memory-checkpoint",
+    );
     assert.match(api.messages[1]?.message.content ?? "", /validation output/);
 
     const status = await tool.execute(

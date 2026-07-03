@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   DEFAULT_SPARK_COMPACTION_SETTINGS,
+  SparkHostRuntime,
   SparkSessionStore,
   compactSparkSessionRecord,
   compactSparkVisibleTranscript,
@@ -22,6 +23,8 @@ import {
 } from "../apps/spark-tui/src/host/index.ts";
 import { createSparkPiParitySlashCommands } from "../apps/spark-tui/src/cli/pi-parity-commands.ts";
 import { SparkNativeSession } from "../apps/spark-tui/src/native-tui.ts";
+import { defaultSparkMemoryStore } from "../packages/spark-memory/src/index.ts";
+import sparkMemoryExtension from "../packages/spark-memory/src/extension.ts";
 
 function compactableRecord(store: SparkSessionStore): SparkSessionRecord {
   const record = store.createSession({ id: "compact", timestamp: "2026-06-03T06:00:00.000Z" });
@@ -247,9 +250,19 @@ void test("navigateSparkSessionBranchWithSummary appends Pi-style branch summary
 void test("native /compact and /tree summarize commands use persisted compaction helpers", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-compact-slash-"));
   try {
-    const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
+    const cwd = join(dir, "repo");
+    const store = new SparkSessionStore({ cwd, sparkHome: join(dir, ".spark") });
+    const runtime = new SparkHostRuntime({ cwd });
+    sparkMemoryExtension(runtime);
+    await defaultSparkMemoryStore(cwd, "workspace").remember({
+      scope: "workspace",
+      category: "insight",
+      text: "Compact handoff should preserve Spark memory checkpoints.",
+      reason: "Validate /compact integration with session_before_compact memory handoff.",
+    });
     const services = {
-      cwd: join(dir, "repo"),
+      cwd,
+      runtime,
       sessionStore: store,
     } as unknown as SparkCliHostServices;
     const commands = createSparkPiParitySlashCommands(services);
@@ -269,10 +282,11 @@ void test("native /compact and /tree summarize commands use persisted compaction
     });
     assert.match(String(compacted), /Compacted visible Spark transcript into session/);
     assert.equal((await store.list()).length, 1);
-    assert.match(
-      session.messages.map((message) => message.text).join("\n"),
-      /Compacted visible transcript summary/,
-    );
+    const compactedText = session.messages.map((message) => message.text).join("\n");
+    assert.match(compactedText, /Compacted visible transcript summary/);
+    assert.match(compactedText, /Spark memory checkpoint/);
+    assert.match(compactedText, /Compact handoff should preserve Spark memory checkpoints/);
+    assert.equal(runtime.peekOutbox().length, 0);
 
     const record = compactableRecord(store);
     await store.save(record);

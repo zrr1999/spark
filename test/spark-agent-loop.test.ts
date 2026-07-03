@@ -139,6 +139,17 @@ void test("compactToolResultContent collapses repeated log lines", () => {
   assert.equal(result.details?.collapsedRepeatedRuns, 1);
 });
 
+void test("compactToolResultContent treats memory as compact status output", () => {
+  const result = compactToolResultContent({
+    toolName: "memory",
+    content: [{ type: "text", text: "Memory status\n\n\n\n- active=1" }],
+    level: "full",
+  });
+
+  assert.equal(result.content[0]?.text, "Memory status\n\n- active=1");
+  assert.equal(result.details?.profile, "status");
+});
+
 void test("compactToolResultContent preserves unknown tools by default", () => {
   const output = "alpha\n\n\n\nbeta";
   const result = compactToolResultContent({
@@ -567,6 +578,12 @@ void test("SparkAgentLoop records raw trace artifact for large lossy compacted t
     assert.match(recovery.artifactRef, /^artifact:/);
     assert.equal(recovery.reason, "lossy_compaction");
     assert.equal(recovery.bodyChars, noisyOutput.length);
+    assert.deepEqual(recovery.recoveryPath, {
+      kind: "artifact",
+      artifactRef: recovery.artifactRef,
+      readTool: "artifact",
+      readArgs: { action: "read", artifactRef: recovery.artifactRef, maxChars: 20_000 },
+    });
 
     const store = defaultArtifactStore(dir);
     const artifact = await store.get(recovery.artifactRef);

@@ -452,8 +452,18 @@ async function handleCompactCommand(
   args: string,
   messages: SparkNativeMessage[],
 ): Promise<string> {
-  const result = await compactSparkVisibleTranscript(services.sessionStore, messages, {
-    customInstructions: args.trim() || undefined,
+  const customInstructions = args.trim() || undefined;
+  const beforeCompactResults = await services.runtime.emit("session_before_compact", {
+    reason: "manual",
+    customInstructions,
+    willRetry: false,
+    consumeMessage: true,
+  });
+  const checkpointMessages = compactCheckpointMessagesFromEvents(beforeCompactResults);
+  const messagesForCompaction =
+    checkpointMessages.length > 0 ? [...messages, ...checkpointMessages] : messages;
+  const result = await compactSparkVisibleTranscript(services.sessionStore, messagesForCompaction, {
+    customInstructions,
   });
   if (!result) return "Nothing to compact (visible transcript is too small).";
 
@@ -469,7 +479,37 @@ async function handleCompactCommand(
   for (const kept of result.keptMessages) {
     messages.push({ role: normalizeSessionMessageRole(kept.role), text: sessionMessageText(kept) });
   }
+  await services.runtime.emit("session_compact", {
+    reason: "manual",
+    customInstructions,
+    willRetry: false,
+    sessionId: result.record.header.id,
+    compactionEntryId: result.entry.id,
+  });
   return `Compacted visible Spark transcript into session ${result.record.header.id} (${result.entry.tokensBefore} estimated tokens before compaction).`;
+}
+
+function compactCheckpointMessagesFromEvents(results: unknown[]): SparkNativeMessage[] {
+  const messages: SparkNativeMessage[] = [];
+  for (const result of results) {
+    const message = isRecord(result) ? result.message : undefined;
+    if (!isRecord(message)) continue;
+    const customType = typeof message.customType === "string" ? message.customType : undefined;
+    const content = typeof message.content === "string" ? message.content : undefined;
+    if (!customType || !content) continue;
+    messages.push({
+      role: "custom",
+      customType,
+      text: content,
+      display: true,
+      details: isRecord(message.details) ? message.details : undefined,
+    });
+  }
+  return messages;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function branchRowsForRecord(record: SparkSessionRecord) {

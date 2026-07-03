@@ -46,6 +46,17 @@ export interface SparkToolResultRawRecoveryDecision {
   omittedChars?: number;
 }
 
+export interface SparkToolResultRawRecoveryPath {
+  kind: "artifact";
+  artifactRef: string;
+  readTool: "artifact";
+  readArgs: {
+    action: "read";
+    artifactRef: string;
+    maxChars: number;
+  };
+}
+
 export interface SparkToolResultCompactionResult {
   content: ToolResultTextPart[];
   details?: SparkToolResultCompactionDetails;
@@ -109,6 +120,7 @@ const TOOL_OUTPUT_PROFILE_RULES: readonly ToolOutputProfileRule[] = [
       "grep",
       "learning",
       "loop",
+      "memory",
       "ls",
       "models",
       "phase",

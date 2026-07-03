@@ -165,15 +165,16 @@ export function registerSparkMemoryCheckpointEvents(
       limit: 25,
     });
     if (checkpoint.entries.length === 0) return;
-    pi.sendMessage?.(
-      {
-        customType: "spark-memory-checkpoint",
-        content: renderSparkMemoryCheckpoint(checkpoint),
-        display: false,
-        details: { checkpoint },
-      },
-      { deliverAs: "steer", triggerTurn: false },
-    );
+    const message = {
+      customType: "spark-memory-checkpoint",
+      content: renderSparkMemoryCheckpoint(checkpoint),
+      display: false,
+      details: { checkpoint },
+    };
+    if (!isRecord(_event) || _event.consumeMessage !== true) {
+      pi.sendMessage?.(message, { deliverAs: "steer", triggerTurn: false });
+    }
+    return { sparkMemoryCheckpoint: checkpoint, message };
   });
 }
 
@@ -292,6 +293,10 @@ function normalizeLimit(value: unknown): number | undefined {
     throw new Error("memory.limit must be a positive number");
   }
   return Math.floor(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function optionalCwd(ctx: unknown): string | undefined {

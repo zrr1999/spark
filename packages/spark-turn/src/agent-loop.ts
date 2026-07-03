@@ -57,6 +57,7 @@ import {
   compactToolResultContent,
   shouldRecordRawToolResultArtifact,
   type SparkToolResultRawRecoveryDecision,
+  type SparkToolResultRawRecoveryPath,
 } from "./tool-result-compaction.ts";
 import {
   SPARK_PROTOCOL_VERSION,
@@ -502,11 +503,13 @@ export class SparkAgentLoop {
       );
       const artifactRef = artifactRefFromToolResult(recorded);
       if (!artifactRef) return undefined;
+      const recoveryPath = rawToolResultRecoveryPath(artifactRef);
       return {
         artifactRef,
         reason: input.decision.reason ?? "lossy_compaction",
         omittedChars: input.decision.omittedChars ?? 0,
         bodyChars: rawBody.bodyChars,
+        recoveryPath,
         readHint: `Full raw tool output saved as ${artifactRef}; recover with artifact({ action: "read", artifactRef: "${artifactRef}", maxChars: 20000 })`,
       };
     } catch {
@@ -794,6 +797,7 @@ interface ToolResultRawRecoveryRecord {
   reason: "lossy_compaction" | "error_compaction";
   omittedChars: number;
   bodyChars: number;
+  recoveryPath: SparkToolResultRawRecoveryPath;
   readHint: string;
 }
 
@@ -813,10 +817,20 @@ function mergeToolResultDetails(
             reason: rawRecovery.reason,
             omittedChars: rawRecovery.omittedChars,
             bodyChars: rawRecovery.bodyChars,
+            recoveryPath: rawRecovery.recoveryPath,
             readHint: rawRecovery.readHint,
           },
         }
       : {}),
+  };
+}
+
+function rawToolResultRecoveryPath(artifactRef: string): SparkToolResultRawRecoveryPath {
+  return {
+    kind: "artifact",
+    artifactRef,
+    readTool: "artifact",
+    readArgs: { action: "read", artifactRef, maxChars: 20_000 },
   };
 }
 
