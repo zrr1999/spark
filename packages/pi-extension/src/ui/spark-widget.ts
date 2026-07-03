@@ -4,7 +4,6 @@ import type { SessionTodoEntry, SessionTodoStatus } from "@zendev-lab/spark-task
 import {
   sparkActiveLensDriveMode,
   sparkActiveLensPhase,
-  type SparkDriveMode,
   type SparkDriveModeInput,
 } from "../extension/spark-drive-state.ts";
 
@@ -71,6 +70,15 @@ export interface SparkLoopWidgetEntry {
   schedule?: SparkLoopScheduleWidgetEntry;
 }
 
+export interface SparkReproScheduleWidgetEntry {
+  /** Label for the tick interval (e.g. "30s"). */
+  label: string;
+  /** When the current tick was scheduled (epoch ms). */
+  scheduledAtMs: number;
+  /** When the next tick fires (epoch ms). */
+  nextRunAtMs: number;
+}
+
 export interface SparkReproWidgetEntry {
   status: "active" | "complete";
   stageName: string;
@@ -79,6 +87,7 @@ export interface SparkReproWidgetEntry {
   phase: string;
   acceptance: Array<{ description: string; satisfied: boolean }>;
   gate?: { id: string; passed: boolean };
+  schedule?: SparkReproScheduleWidgetEntry;
 }
 
 export interface SparkProjectKindWidgetPanel {
@@ -194,6 +203,7 @@ function hasWidgetContent(state: SparkWidgetState | undefined): state is SparkWi
       state.dynamicWorkflowRun ||
       state.goal ||
       state.loop ||
+      state.repro ||
       (state.projectKind?.panels.length ?? 0) > 0 ||
       state.tasks.length > 0),
   );
@@ -203,6 +213,7 @@ function hasAnimatedWidgetContent(state: SparkWidgetState | undefined): boolean 
   return Boolean(
     state?.goal?.status === "active" ||
     state?.loop?.status === "active" ||
+    state?.repro?.status === "active" ||
     hasAnimatedRunningTask(state),
   );
 }
@@ -230,6 +241,7 @@ export function renderSparkWidgetLines(
     !state.dynamicWorkflowRun &&
     !state.goal &&
     !state.loop &&
+    !state.repro &&
     (state.projectKind?.panels.length ?? 0) === 0 &&
     state.tasks.length === 0
   )
@@ -243,6 +255,7 @@ export function renderSparkWidgetLines(
   const visibleTasks = state.tasks.filter(isVisibleTaskEntry);
 
   const goalLine = formatForegroundDriverLine(
+    state.repro,
     state.goal,
     state.loop,
     theme,
@@ -288,13 +301,48 @@ function hasSessionRunningAgent(tasks: TaskEntry[]): boolean {
 }
 
 function formatForegroundDriverLine(
+  repro: SparkReproWidgetEntry | undefined,
   goal: SparkGoalWidgetEntry | undefined,
   loop: SparkLoopWidgetEntry | undefined,
   theme: SparkWidgetTheme,
   animationFrame: number,
 ): string | undefined {
+  if (repro?.status === "active") return formatReproLine(repro, theme, animationFrame);
   if (loop) return formatLoopLine(loop, theme, animationFrame);
   return formatGoalLine(goal, theme, animationFrame);
+}
+
+function formatReproLine(
+  repro: SparkReproWidgetEntry,
+  theme: SparkWidgetTheme,
+  animationFrame: number,
+): string {
+  const satisfied = repro.acceptance.filter((condition) => condition.satisfied).length;
+  const total = repro.acceptance.length;
+  const frame = Number.isInteger(animationFrame) ? Math.max(0, animationFrame) : 0;
+  // Show progress bar countdown (like loop) when schedule exists, else pulse
+  const statusContent = repro.schedule
+    ? reproScheduleProgress(repro.schedule)
+    : ACTIVE_GOAL_PULSE_FRAMES[frame % ACTIVE_GOAL_PULSE_FRAMES.length];
+  const status = theme.fg("accent", statusContent);
+  const stageLabel = `${repro.stageName} ${repro.stageIndex + 1}/${repro.totalStages}`;
+  const gateLabel = repro.gate && !repro.gate.passed ? " gate:○" : "";
+  // Show current focus: first unsatisfied condition, or "✓ all passed" if done
+  const nextCondition = repro.acceptance.find((c) => !c.satisfied);
+  const focusLabel = nextCondition ? `○ ${nextCondition.description}` : `✓ ${satisfied}/${total}`;
+  const body = `${theme.fg("dim", "Repro(")}${status}${theme.fg(
+    "dim",
+    `): ${stageLabel} · ${focusLabel}${gateLabel}`,
+  )}`;
+  return `${theme.fg("accent", "◆")} ${body}`;
+}
+
+function reproScheduleProgress(schedule: SparkReproScheduleWidgetEntry): string {
+  const total = Math.max(1, schedule.nextRunAtMs - schedule.scheduledAtMs);
+  const elapsed = Math.min(total, Math.max(0, Date.now() - schedule.scheduledAtMs));
+  const segments = 5;
+  const filled = Math.min(segments, Math.max(0, Math.floor((elapsed / total) * segments)));
+  return `${"▰".repeat(filled)}${"▱".repeat(segments - filled)} ${schedule.label}`;
 }
 
 function formatGoalLine(

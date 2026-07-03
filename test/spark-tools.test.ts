@@ -127,6 +127,7 @@ import {
   loadSessionLoop,
   setSessionLoop,
 } from "../packages/pi-extension/src/extension/spark-session-loops.ts";
+import { readSessionRepro } from "../packages/pi-extension/src/extension/spark-session-repro.ts";
 import type {
   ReviewInput,
   ReviewerRunResult,
@@ -770,6 +771,8 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
     assert.ok(goalCommand, "missing /goal command");
     const loopCommand = initializedRun.commands.get("loop");
     assert.ok(loopCommand, "missing /loop command");
+    const reproCommand = initializedRun.commands.get("repro");
+    assert.ok(reproCommand, "missing /repro command");
     assert.equal(initializedRun.commands.get("workflow:goal"), undefined);
     assert.ok(initializedRun.commands.get("workflow:research"));
     assert.ok(initializedRun.commands.get("workflow:review"));
@@ -7754,6 +7757,7 @@ void test("Spark extension exposes canonical tools instead of removed spark_* to
   assert.ok(run.tools.has("ask"));
   assert.ok(run.tools.has("goal"));
   assert.ok(run.tools.has("loop"));
+  assert.ok(run.tools.has("repro"));
   assert.ok(run.tools.has("drive"));
   assert.ok(run.tools.has("phase"));
   assert.equal(run.tools.has("mode"), false);
@@ -7805,6 +7809,14 @@ void test("drive tool derives mode and switches explicit foreground drives", asy
     assert.equal((initial.details as { mode?: string }).mode, "assist");
     assert.match(toolText(initial), /Mode: assist/);
 
+    const reproStarted = await executeSparkTool(tools, "drive", ctx, {
+      action: "start",
+      drive: "repro",
+    });
+    assert.match(toolText(reproStarted), /Drive started: repro/);
+    assert.equal((await readSessionRepro(dir, ctx))?.status, "active");
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "repro" });
+
     const loopStarted = await executeSparkTool(tools, "drive", ctx, {
       action: "start",
       drive: "loop",
@@ -7813,6 +7825,7 @@ void test("drive tool derives mode and switches explicit foreground drives", asy
     assert.match(toolText(loopStarted), /Drive started: loop/);
     assert.equal((await loadSessionLoop(dir, ctx))?.status, "active");
     assert.equal(await loadSessionGoal(dir, ctx), undefined);
+    assert.equal(await readSessionRepro(dir, ctx), undefined);
     assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "loop" });
 
     const goalSwitched = await executeSparkTool(tools, "drive", ctx, {
@@ -7838,6 +7851,156 @@ void test("drive tool derives mode and switches explicit foreground drives", asy
     assert.equal(workflow.isError, true);
     assert.match(toolText(workflow), /Workflow drive is controlled by workflow_run or \/workflow/);
   } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("/repro command starts, reports, and stops the repro drive", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-repro-command-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const run = registerSparkToolsForTest();
+    const reproCommand = run.commands.get("repro");
+    assert.ok(reproCommand, "missing /repro command");
+
+    await reproCommand.handler("start", ctx);
+    const repro = await readSessionRepro(dir, ctx);
+    assert.equal(repro?.status, "active");
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "repro" });
+    assert.equal(run.customMessages.at(-1)?.customType, "spark-repro-request");
+    assert.equal(run.customMessages.at(-1)?.details?.purpose, "foreground-repro-tick");
+    assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
+    assert.equal(run.customMessages.at(-1)?.options?.triggerTurn, true);
+    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark repro drive tick/);
+
+    await reproCommand.handler("status", ctx);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark repro active/);
+
+    await reproCommand.handler("stop", ctx);
+    assert.equal(await readSessionRepro(dir, ctx), undefined);
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "assist" });
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("repro foreground driver ticks on session_start, reschedules on agent_end, and stops when complete", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-repro-foreground-driver-"));
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  type FakeTimer = {
+    callback: () => void;
+    delay: number | undefined;
+    cleared: boolean;
+    unref: () => void;
+  };
+  const timers: FakeTimer[] = [];
+  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
+    const timer: FakeTimer = {
+      callback: () => {
+        if (typeof callback === "function") callback();
+      },
+      delay,
+      cleared: false,
+      unref() {},
+    };
+    timers.push(timer);
+    return timer as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
+    const fake = timer as unknown as FakeTimer | undefined;
+    if (fake) fake.cleared = true;
+  }) as typeof clearTimeout;
+
+  async function flushAsyncWork(predicate?: () => boolean | Promise<boolean>): Promise<void> {
+    for (let index = 0; index < 100; index += 1) {
+      await new Promise((resolve) => originalSetTimeout(resolve, 0));
+      if (predicate && (await predicate())) return;
+    }
+  }
+
+  const isReproTick = (
+    message: ReturnType<typeof registerSparkToolsForTest>["customMessages"][number] | undefined,
+  ): boolean =>
+    message?.customType === "spark-repro-request" &&
+    message?.details?.purpose === "foreground-repro-tick";
+
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const setupRun = registerSparkToolsForTest();
+    await useOnlySparkProject(setupRun.tools, ctx);
+    await executeSparkTool(setupRun.tools, "repro", ctx, { action: "start" });
+    assert.equal((await readSessionRepro(dir, ctx))?.status, "active");
+    assert.equal(timers.length, 0, "starting repro persists state but does not schedule");
+
+    const run = registerSparkToolsForTest();
+    for (const handler of run.eventHandlers.get("session_start") ?? []) {
+      await handler({}, ctx);
+    }
+    assert.equal(timers.length, 1, "session_start schedules a repro tick when repro is active");
+    assert.equal(timers[0]?.delay, 30_000);
+
+    timers[0]?.callback();
+    await flushAsyncWork(() => isReproTick(run.customMessages.at(-1)));
+    assert.equal(isReproTick(run.customMessages.at(-1)), true);
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "repro" });
+
+    const messagesAfterTick = run.customMessages.length;
+    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
+      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    }
+    assert.ok(
+      timers.filter((timer) => !timer.cleared).length >= 1,
+      "a completed repro turn re-arms the next tick",
+    );
+    assert.equal(
+      run.customMessages.length,
+      messagesAfterTick,
+      "re-arming after a completed turn must not tick immediately",
+    );
+
+    // Drive the repro machine to completion and confirm the driver stops itself.
+    let reproState = await readSessionRepro(dir, ctx);
+    assert.ok(reproState);
+    for (let guard = 0; guard < 20; guard += 1) {
+      reproState = await readSessionRepro(dir, ctx);
+      if (!reproState || reproState.status === "complete") break;
+      const stage = reproState.stages[reproState.currentStageIndex];
+      for (const condition of stage.acceptance) {
+        if (!condition.satisfied)
+          await executeSparkTool(run.tools, "repro", ctx, {
+            action: "satisfy",
+            condition: condition.description,
+          });
+      }
+      if (stage.gate && !stage.gate.passed)
+        await executeSparkTool(run.tools, "repro", ctx, { action: "gate" });
+      // Advance phase(s) then stage until this stage index changes or repro completes.
+      await executeSparkTool(run.tools, "repro", ctx, { action: "advance" });
+      await executeSparkTool(run.tools, "repro", ctx, { action: "advance" });
+    }
+    reproState = await readSessionRepro(dir, ctx);
+    // After advancing through every stage, the repro machine is complete (or already cleared).
+    assert.ok(
+      !reproState || reproState.status === "complete",
+      "repro should be complete after all stages advance",
+    );
+
+    // session_start against a complete repro must self-clear and fall back to another driver.
+    for (const handler of run.eventHandlers.get("session_start") ?? []) {
+      await handler({}, ctx);
+    }
+    await flushAsyncWork(async () => (await readSessionRepro(dir, ctx)) === undefined);
+    assert.equal(await readSessionRepro(dir, ctx), undefined);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark repro drive complete/);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+    for (const handler of registerSparkToolsForTest().eventHandlers.get("session_shutdown") ?? []) {
+      await handler({}, testSparkContext(dir, "main"));
+    }
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });

@@ -18,10 +18,10 @@ import {
   satisfyAcceptanceCondition,
   passStageGate,
   type SparkSessionRepro,
-  type SparkReproStageName,
 } from "./spark-session-repro.ts";
 import { clearSessionGoal } from "./spark-session-goals.ts";
 import { clearSessionLoop } from "./spark-session-loops.ts";
+import { sparkActiveLens } from "./spark-drive-state.ts";
 import { sparkSessionOwnerKey } from "./session-identity.ts";
 
 interface SparkReproToolDeps {
@@ -98,6 +98,7 @@ export function registerSparkReproTool(
         const sessionKey = sparkSessionOwnerKey(ctx);
         const repro = createSparkSessionRepro(sessionKey);
         await writeSessionRepro(cwd, repro, ctx);
+        ctx.sparkActiveLens = sparkActiveLens(repro.currentPhase, "repro");
         await deps.refreshSparkWidget?.(cwd, ctx);
         return {
           content: [
@@ -186,6 +187,7 @@ export function registerSparkReproTool(
         const phaseAdvanced = advanceReproPhase(repro);
         if (phaseAdvanced) {
           await writeSessionRepro(cwd, phaseAdvanced, ctx);
+          ctx.sparkActiveLens = sparkActiveLens(phaseAdvanced.currentPhase, "repro");
           await deps.refreshSparkWidget?.(cwd, ctx);
           return {
             content: [
@@ -198,8 +200,12 @@ export function registerSparkReproTool(
         const stageAdvanced = advanceReproStage(repro);
         if (stageAdvanced) {
           await writeSessionRepro(cwd, stageAdvanced, ctx);
-          await deps.refreshSparkWidget?.(cwd, ctx);
           if (stageAdvanced.status === "complete") {
+            ctx.sparkActiveLens = sparkActiveLens(
+              ctx.sparkActiveLens?.phase ?? "research",
+              "assist",
+            );
+            await deps.refreshSparkWidget?.(cwd, ctx);
             return {
               content: [
                 { type: "text" as const, text: "Repro drive complete! All stages passed." },
@@ -207,6 +213,8 @@ export function registerSparkReproTool(
               details: reproDetails(stageAdvanced),
             };
           }
+          ctx.sparkActiveLens = sparkActiveLens(stageAdvanced.currentPhase, "repro");
+          await deps.refreshSparkWidget?.(cwd, ctx);
           const stage = currentReproStage(stageAdvanced);
           return {
             content: [
@@ -243,6 +251,7 @@ export function registerSparkReproTool(
           };
         }
         await writeSessionRepro(cwd, undefined, ctx);
+        ctx.sparkActiveLens = sparkActiveLens(ctx.sparkActiveLens?.phase ?? "research", "assist");
         await deps.refreshSparkWidget?.(cwd, ctx);
         return {
           content: [{ type: "text" as const, text: "Repro drive stopped." }],
@@ -250,7 +259,7 @@ export function registerSparkReproTool(
         };
       }
 
-      throw new Error(`Unknown repro action: ${action}`);
+      throw new Error(`Unknown repro action: ${action as string}`);
     },
   });
 }
@@ -273,7 +282,6 @@ function normalizeReproAction(
 
 function reproStatusResult(repro: SparkSessionRepro) {
   const stage = currentReproStage(repro);
-  const phaseConditions = currentPhaseAcceptance(repro);
   const allConditions = stage.acceptance;
 
   const lines = [
@@ -324,33 +332,78 @@ function reproDetails(repro: SparkSessionRepro): Record<string, unknown> {
 
 /**
  * Render phase-aware tick instruction for the repro drive.
- * This is shown to the agent at each tick to guide behavior.
+ * This is delivered to the agent on every foreground repro tick to drive one concrete step.
  */
 export function renderReproTickInstruction(repro: SparkSessionRepro): string {
   const stage = currentReproStage(repro);
   const phaseConditions = currentPhaseAcceptance(repro);
   const unsatisfied = phaseConditions.filter((c) => !c.satisfied);
+  const gateBlocking = stage.gate && !stage.gate.passed;
 
   const lines = [
-    `Repro drive tick — Stage: ${stage.title} (${repro.currentStageIndex + 1}/${repro.stages.length}), Phase: ${repro.currentPhase}`,
+    `Spark repro drive tick — Stage ${repro.currentStageIndex + 1}/${repro.stages.length}: ${stage.title} (${stage.name}), phase=${repro.currentPhase}.`,
+    "",
+    "Milestone-driven reproduction workflow. Stages are linear (setup → scaffold → reproduce → scale → deliver); do one concrete step per tick.",
     "",
     "Current phase acceptance checklist:",
-    ...phaseConditions.map((c) => `  ${c.satisfied ? "✓" : "○"} ${c.description}`),
+    ...phaseConditions.map((c) => `  ${c.satisfied ? "[x]" : "[ ]"} ${c.description}`),
   ];
 
   if (unsatisfied.length > 0) {
-    lines.push("", `Work toward satisfying: ${unsatisfied[0].description}`);
+    lines.push(
+      "",
+      `Next: make concrete progress on "${unsatisfied[0].description}", then record it with repro({ action: "satisfy", condition: "${unsatisfied[0].description}", evidenceRef? }).`,
+    );
+  } else if (gateBlocking) {
+    lines.push(
+      "",
+      `All current-phase acceptance conditions are satisfied. Verify the stage gate deterministically, then call repro({ action: "gate" }) followed by repro({ action: "advance" }).`,
+    );
   } else {
     lines.push(
       "",
-      "All current phase conditions satisfied. Call repro({ action: 'advance' }) to proceed.",
+      'All current-phase conditions are satisfied. Call repro({ action: "advance" }) to move to the next phase or stage.',
     );
   }
 
-  if (stage.gate && !stage.gate.passed) {
+  if (gateBlocking) {
     lines.push(
       "",
-      `Stage gate (${stage.gate.id}): ${stage.gate.description} — must be passed before stage advances.`,
+      `Stage gate (${stage.gate!.id}): ${stage.gate!.description} — this deterministic gate must pass before the stage can advance. Do not mark it passed without real evidence.`,
+    );
+  }
+
+  lines.push(
+    "",
+    "Repro drive requirements:",
+    `- Operate in the selected phase (${repro.currentPhase}); use its tool policy for research, plan, or implement work.`,
+    "- Advance milestones with the repro tool (satisfy/gate/advance); do not silently self-certify gates.",
+    "- If you are blocked on a human decision or an external dependency, report the blocker instead of lowering scope; use /repro stop to end the drive.",
+    "- End the turn after one concrete step; the next repro tick is scheduled automatically.",
+  );
+
+  // Phase-specific guidance
+  if (repro.currentPhase === "plan") {
+    lines.push(
+      "",
+      "Plan-phase guidance:",
+      "- Actively create, decompose, reorder, or update project tasks to reflect the current stage's acceptance criteria.",
+      "- Each unsatisfied condition should map to one or more concrete tasks; claim or plan tasks as needed.",
+      "- Do not wait passively — reshape the task graph so it drives toward the stage milestones.",
+    );
+  } else if (repro.currentPhase === "research") {
+    lines.push(
+      "",
+      "Research-phase guidance:",
+      "- Investigate unknowns, read code/docs, and gather evidence needed by the current stage.",
+      "- Record findings as artifacts or task notes so they persist for later phases.",
+    );
+  } else if (repro.currentPhase === "implement") {
+    lines.push(
+      "",
+      "Implement-phase guidance:",
+      "- Execute the planned tasks: write code, run tests, fix failures.",
+      "- After completing a task, finish it and satisfy the corresponding acceptance condition.",
     );
   }
 

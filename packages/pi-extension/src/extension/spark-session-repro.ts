@@ -9,7 +9,7 @@
 import { nowIso } from "@zendev-lab/spark-extension-api";
 import { readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import { rebuildSessionIndex, sessionReproStorePathV2 } from "./session-directory-store.ts";
-import { sparkSessionOwnerKey, type SparkSessionContext } from "./session-identity.ts";
+import { type SparkSessionContext } from "./session-identity.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -56,6 +56,12 @@ export interface SparkReproStage {
 
 export type SparkReproStatus = "active" | "complete";
 
+export interface SparkSessionReproRetryState {
+  consecutiveFailures: number;
+  lastFailureAt?: string;
+  nextDelayMs?: number;
+}
+
 export interface SparkSessionRepro {
   version: 1;
   reproId: string;
@@ -67,6 +73,8 @@ export interface SparkSessionRepro {
   currentPhase: SparkSessionPhase;
   /** The full stage configuration. */
   stages: SparkReproStage[];
+  /** Foreground tick retry accounting. */
+  retryState?: SparkSessionReproRetryState;
   /** When repro was started. */
   createdAt: string;
   /** Last modification timestamp. */
@@ -351,4 +359,31 @@ export async function writeSessionRepro(
 
 export async function clearSessionRepro(cwd: string, ctx?: SparkSessionContext): Promise<void> {
   await writeSessionRepro(cwd, undefined, ctx);
+}
+
+/** True when the repro drive has advanced through every stage. */
+export function isReproComplete(repro: SparkSessionRepro): boolean {
+  return repro.status === "complete";
+}
+
+/**
+ * Update the active repro's foreground retry accounting.
+ * Returns the updated repro, or undefined when the id no longer matches an active repro.
+ */
+export async function updateSessionReproRetryState(
+  cwd: string,
+  ctx: SparkSessionContext | undefined,
+  retryState: SparkSessionReproRetryState | null,
+  options: { expectedReproId?: string } = {},
+): Promise<SparkSessionRepro | undefined> {
+  const existing = await readSessionRepro(cwd, ctx);
+  if (!existing || existing.status !== "active") return undefined;
+  if (options.expectedReproId && existing.reproId !== options.expectedReproId) return undefined;
+  const updated: SparkSessionRepro = {
+    ...existing,
+    retryState: retryState ?? undefined,
+    updatedAt: nowIso(),
+  };
+  await writeSessionRepro(cwd, updated, ctx);
+  return updated;
 }

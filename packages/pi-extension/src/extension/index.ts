@@ -18,6 +18,7 @@ import { registerSparkRecoverTaskClaimTool } from "./spark-recover-task-claim-to
 import { registerSparkRunReadyTasksTool } from "./spark-run-ready-tasks-tool-registration.ts";
 import { registerSparkGoalTool } from "./spark-goal-tool-registration.ts";
 import { registerSparkLoopTool } from "./spark-loop-tool-registration.ts";
+import { registerSparkReproTool } from "./spark-repro-tool-registration.ts";
 import { registerSparkDriveTool } from "./spark-drive-tool-registration.ts";
 import { registerSparkStatusTool } from "./spark-status-tool-registration.ts";
 import { registerSparkPlanTasksTool } from "./spark-plan-tasks-tool-registration.ts";
@@ -195,6 +196,8 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   });
 
   registerSparkLoopTool(registerSparkTool, { refreshSparkWidget });
+
+  registerSparkReproTool(registerSparkTool, { refreshSparkWidget });
 
   registerSparkDriveTool(registerSparkTool, {
     ensureSparkStateForActiveWorkspace,

@@ -68,6 +68,15 @@ export interface ForegroundLoopAwaitingTurn {
   failure?: string;
 }
 
+export interface ForegroundReproAwaitingTurn {
+  piApi: SparkCommandApi;
+  ctx: SparkGoalLoopContext;
+  reproId: string;
+  generation: number;
+  startedAtMs: number;
+  failure?: string;
+}
+
 export interface ForegroundImplementAwaitingTurn {
   piApi: SparkCommandApi;
   ctx: SparkGoalLoopContext;
@@ -77,4 +86,4 @@ export interface ForegroundImplementAwaitingTurn {
   failure?: string;
 }
 
-export type ForegroundDriverErrorScope = "driver" | "goal loop" | "loop";
+export type ForegroundDriverErrorScope = "driver" | "goal loop" | "loop" | "repro";

@@ -22,6 +22,10 @@ import {
   scheduleSessionLoopTick,
   setSessionLoop,
 } from "../packages/pi-extension/src/extension/spark-session-loops.ts";
+import {
+  createSparkSessionRepro,
+  writeSessionRepro,
+} from "../packages/pi-extension/src/extension/spark-session-repro.ts";
 import { saveCurrentProjectRef } from "../packages/pi-extension/src/extension/session-state.ts";
 
 const theme: SparkWidgetTheme = {
@@ -394,6 +398,37 @@ void test("spark widget renders active loop progress in the foreground slot", ()
   assert.match(scheduled[0] ?? "", /◆ Loop\(▰▰▰▰▰ 30m\): Echo periodically/);
 });
 
+void test("spark widget renders active repro drive in the foreground slot above goal and loop", () => {
+  const lines = renderSparkWidgetLines(
+    widgetState({
+      repro: {
+        status: "active",
+        stageName: "reproduce",
+        stageIndex: 2,
+        totalStages: 5,
+        phase: "implement",
+        acceptance: [
+          { description: "20+ step BITWISE_PASS reproduction achieved", satisfied: true },
+          { description: "100-step BITWISE_PASS verified", satisfied: false },
+        ],
+        gate: { id: "gate-A", passed: false },
+      },
+      goal: { status: "active", objective: "Should be hidden while repro is active" },
+      loop: { status: "active", objective: "Should also be hidden" },
+    }),
+    tui,
+    theme,
+  );
+  assertLineIncludes(lines[0], [
+    "◆ Repro(",
+    "reproduce 3/5",
+    "100-step BITWISE_PASS verified",
+    "gate:○",
+  ]);
+  assert.doesNotMatch(lines.join("\n"), /Should be hidden while repro is active/);
+  assert.doesNotMatch(lines.join("\n"), /Should also be hidden/);
+});
+
 void test("spark widget controller lets active loop use the foreground slot instead of a completed goal", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-widget-loop-completed-goal-"));
   try {
@@ -451,6 +486,39 @@ void test("spark widget controller clears legacy paused loop state instead of re
     const lines = component?.render() ?? [];
     assert.doesNotMatch(lines.join("\n"), /Loop\(⏸\)|Legacy paused loop/);
     assert.equal(await loadSessionLoop(dir, undefined), undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("spark widget controller renders an active repro drive above goal and loop", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-widget-repro-drive-"));
+  try {
+    await setSessionGoal(dir, undefined, {
+      objective: "Goal hidden behind repro",
+      source: "explicit",
+      status: "active",
+    });
+    await setSessionLoop(dir, undefined, {
+      objective: "Loop hidden behind repro",
+      source: "explicit",
+      status: "active",
+    });
+    await writeSessionRepro(dir, createSparkSessionRepro("session:test"), undefined);
+    let component: ReturnType<NonNullable<SparkWidgetRegistration["cb"]>> | undefined;
+    const controller = new SparkWidgetController();
+    await controller.refresh(dir, {
+      ui: {
+        setWidget(_key: string, cb: SparkWidgetRegistration["cb"] | undefined) {
+          component = cb?.(tui, theme);
+        },
+      },
+    });
+
+    const lines = component?.render() ?? [];
+    assertLineIncludes(lines[0], ["◆ Repro(", "setup 1/5", "Problem statement documented"]);
+    assert.doesNotMatch(lines.join("\n"), /Goal hidden behind repro/);
+    assert.doesNotMatch(lines.join("\n"), /Loop hidden behind repro/);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }

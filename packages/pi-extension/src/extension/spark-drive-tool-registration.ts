@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import type { Project } from "@zendev-lab/spark-extension-api";
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
-import { currentSparkProject, loadSparkGraph } from "./session-state.ts";
+import { currentSparkProject, loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
 import {
   deriveSparkDriveMode,
   normalizeSparkDriveMode,
@@ -15,7 +15,12 @@ import {
   setSessionGoal,
 } from "./spark-session-goals.ts";
 import { clearSessionLoop, loadSessionLoop, setSessionLoop } from "./spark-session-loops.ts";
-import { clearSessionRepro, readSessionRepro } from "./spark-session-repro.ts";
+import {
+  clearSessionRepro,
+  createSparkSessionRepro,
+  readSessionRepro,
+  writeSessionRepro,
+} from "./spark-session-repro.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 
 interface SparkDriveToolDeps {
@@ -35,7 +40,7 @@ export function registerSparkDriveTool(
     promptGuidelines: [
       "Use drive action=status when you need the read-only derived mode/drive projection.",
       "Do not set mode directly; start/switch/stop a drive instead.",
-      "Use drive=goal for reviewer-gated autonomous completion and drive=loop for open-ended recurring ticks.",
+      "Use drive=goal for reviewer-gated autonomous completion, drive=loop for open-ended recurring ticks, and drive=repro for milestone-driven reproduction work.",
       "Use workflow_run or /workflow to enter workflow drive; drive does not synthesize workflow selectors or scripts.",
     ],
     parameters: Type.Object({
@@ -49,7 +54,7 @@ export function registerSparkDriveTool(
       drive: Type.Optional(
         Type.String({
           description:
-            "assist | loop | goal | workflow. Required for start/switch/stop unless stopping the currently derived drive.",
+            "assist | loop | goal | repro | workflow. Required for start/switch/stop unless stopping the currently derived drive.",
         }),
       ),
       objective: Type.Optional(
@@ -107,6 +112,9 @@ export function registerSparkDriveTool(
         // repro and goal/loop are mutually exclusive
         await clearSessionGoal(cwd, ctx);
         await clearSessionLoop(cwd, ctx);
+        const existingRepro = await readSessionRepro(cwd, ctx);
+        if (!existingRepro || existingRepro.status !== "active")
+          await writeSessionRepro(cwd, createSparkSessionRepro(sparkSessionOwnerKey(ctx)), ctx);
       } else if (requestedDrive === "goal") {
         const objective = resolveDriveObjective(params.objective, graph, project, "goal");
         await clearSessionLoop(cwd, ctx);
@@ -120,7 +128,7 @@ export function registerSparkDriveTool(
       }
 
       const after = await driveSnapshot(cwd, ctx, { ignoreActiveLens: true });
-      ctx.sparkActiveLens = sparkActiveLens(ctx.sparkActiveLens?.phase ?? "research", after.mode);
+      ctx.sparkActiveLens = sparkActiveLens(activeLensPhaseForDrive(ctx, after), after.mode);
       await deps.refreshSparkWidget?.(cwd, ctx);
       return driveMutationResult(
         action === "switch" ? "switched" : "started",
@@ -130,6 +138,15 @@ export function registerSparkDriveTool(
       );
     },
   });
+}
+
+function activeLensPhaseForDrive(
+  ctx: SparkToolContext,
+  snapshot: { mode: SparkDriveMode; repro: Awaited<ReturnType<typeof readSessionRepro>> },
+): "research" | "plan" | "implement" {
+  if (snapshot.mode === "repro" && snapshot.repro?.status === "active")
+    return snapshot.repro.currentPhase;
+  return ctx.sparkActiveLens?.phase ?? "research";
 }
 
 function normalizeDriveAction(value: unknown): "status" | "start" | "switch" | "stop" {

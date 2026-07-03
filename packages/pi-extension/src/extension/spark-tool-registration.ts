@@ -1,5 +1,5 @@
 import type { ToolCallComponent, ToolCallRenderTheme } from "./tool-rendering.ts";
-import type { SparkDriveMode, SparkDriveModeInput } from "./spark-drive-state.ts";
+import type { SparkDriveModeInput } from "./spark-drive-state.ts";
 
 export interface SparkRegisteredToolConfig {
   name: string;
