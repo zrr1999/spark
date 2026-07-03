@@ -7,6 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { RoleRegistry } from "@zendev-lab/spark-roles";
+import { registerPiRolesTools } from "@zendev-lab/spark-roles/extension";
 import {
   newRef,
   stableId,
@@ -20,6 +21,7 @@ import {
 import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import { defaultLearningStore } from "@zendev-lab/spark-learnings";
 import { defaultWorkflowRunStore } from "../packages/spark-workflows/src/index.ts";
+import { registerPiWorkflowTool } from "../packages/spark-workflows/src/extension.ts";
 import {
   killActiveSparkRoleRunProcesses,
   listActiveSparkRoleRunProcesses,
@@ -6179,23 +6181,69 @@ void test("task_read scoped status actions do not return unrelated projects", as
     assert.equal(projectDetails.projects, undefined);
     assert.doesNotMatch(toolText(projectStatus), /Unrelated project|Unrelated task/);
 
+    const projectStatusJson = await executeSparkTool(tools, "task_read", ctx, {
+      action: "project_status",
+      projectRef: currentProject.ref,
+      format: "json",
+    });
+    const projectJson = JSON.parse(toolText(projectStatusJson)) as {
+      scope?: string;
+      selectedProject?: { ref?: string };
+      activeProject?: unknown;
+      renderedProjects?: unknown;
+      hints?: unknown;
+    };
+    assert.equal(projectJson.scope, "project");
+    assert.equal(projectJson.selectedProject?.ref, currentProject.ref);
+    assert.equal(projectJson.activeProject, undefined);
+    assert.equal(projectJson.renderedProjects, undefined);
+    assert.equal(projectJson.hints, undefined);
+
     const taskStatus = await executeSparkTool(tools, "task_read", ctx, {
       action: "task_status",
       taskRef: selectedTask.ref,
     });
     const taskDetails = taskStatus.details as {
       scope?: string;
-      selectedTask?: { ref?: string; name?: string };
-      selectedProject?: { ref?: string; tasks?: Array<{ name?: string }> };
-      renderedProjects?: Array<{ tasks?: Array<{ name?: string }> }>;
+      selectedTask?: { ref?: string; name?: string; readyFrontier?: boolean };
+      selectedProject?: { ref?: string; current?: boolean; tasks?: Array<{ name?: string }> };
+      renderedProjects?: unknown;
+      ready?: unknown;
+      hints?: unknown;
     };
     assert.equal(taskDetails.scope, "task");
     assert.equal(taskDetails.selectedTask?.ref, selectedTask.ref);
-    assert.deepEqual(
-      taskDetails.renderedProjects?.[0]?.tasks?.map((task) => task.name),
-      ["selected-task"],
-    );
+    assert.equal(taskDetails.selectedTask?.name, "selected-task");
+    assert.equal(taskDetails.selectedTask?.readyFrontier, true);
+    assert.equal(taskDetails.selectedProject?.ref, currentProject.ref);
+    assert.equal(taskDetails.selectedProject?.tasks, undefined);
+    assert.equal(taskDetails.renderedProjects, undefined);
+    assert.equal(taskDetails.ready, undefined);
+    assert.equal(taskDetails.hints, undefined);
     assert.doesNotMatch(toolText(taskStatus), /Sibling task|Unrelated project|Unrelated task/);
+    assert.doesNotMatch(toolText(taskStatus), /\n\n/);
+
+    const taskStatusJson = await executeSparkTool(tools, "task_read", ctx, {
+      action: "task_status",
+      taskRef: selectedTask.ref,
+      format: "json",
+    });
+    const taskJson = JSON.parse(toolText(taskStatusJson)) as {
+      selectedTask?: { ref?: string; name?: string };
+      selectedProject?: { ref?: string; tasks?: unknown };
+      renderedProjects?: unknown;
+      activeProject?: unknown;
+      ready?: unknown;
+      hints?: unknown;
+    };
+    assert.equal(taskJson.selectedTask?.ref, selectedTask.ref);
+    assert.equal(taskJson.selectedTask?.name, "selected-task");
+    assert.equal(taskJson.selectedProject?.ref, currentProject.ref);
+    assert.equal(taskJson.selectedProject?.tasks, undefined);
+    assert.equal(taskJson.renderedProjects, undefined);
+    assert.equal(taskJson.activeProject, undefined);
+    assert.equal(taskJson.ready, undefined);
+    assert.equal(taskJson.hints, undefined);
 
     const workspaceStatus = await executeSparkTool(tools, "task_read", ctx, {
       action: "workspace_status",
@@ -6210,6 +6258,21 @@ void test("task_read scoped status actions do not return unrelated projects", as
     assert.ok(
       workspaceDetails.renderedProjects?.some((project) => project.title === "Unrelated project"),
     );
+
+    const limitedWorkspaceStatus = await executeSparkTool(tools, "task_read", ctx, {
+      action: "workspace_status",
+      view: "summary",
+      format: "json",
+      limit: 1,
+    });
+    const limitedWorkspaceDetails = JSON.parse(toolText(limitedWorkspaceStatus)) as {
+      renderedProjects?: Array<{ title?: string }>;
+      hiddenProjectsByLimit?: number;
+      hints?: unknown;
+    };
+    assert.equal(limitedWorkspaceDetails.renderedProjects?.length, 1);
+    assert.equal(limitedWorkspaceDetails.hiddenProjectsByLimit, 1);
+    assert.equal(limitedWorkspaceDetails.hints, undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -7788,7 +7851,7 @@ void test("impl_plan_tasks describes the public spark-tasks readiness contract",
   assert.match(planTool.description, /dependsOn resolution is active-project scoped/);
 });
 
-void test("impl_list_projects returns structured permanent project summaries", async () => {
+void test("impl_list_projects returns compact text with structured project details", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-list-projects-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7835,9 +7898,11 @@ void test("impl_list_projects returns structured permanent project summaries", a
     const { tools } = registerSparkToolsForTest();
     await executeSparkTool(tools, "impl_use_project", ctx, { project: activeProject.ref });
 
-    const projects = JSON.parse(
-      toolText(await executeSparkTool(tools, "impl_list_projects", ctx, {})),
-    ) as Array<{
+    const result = await executeSparkTool(tools, "impl_list_projects", ctx, {});
+    assert.match(toolText(result), /Spark projects: 2/);
+    assert.match(toolText(result), new RegExp(`\\* ${activeProject.ref}`));
+    assert.doesNotMatch(toolText(result), /^\[/);
+    const projects = (result.details?.projects ?? []) as Array<{
       ref: string;
       currentForSession: boolean;
       kind: string;
@@ -7855,6 +7920,92 @@ void test("impl_list_projects returns structured permanent project summaries", a
     assert.deepEqual(projects[0]?.taskCounts, { total: 3, active: 1, done: 1, cancelled: 1 });
     assert.deepEqual(projects[1]?.taskCounts, { total: 1, active: 0, done: 1, cancelled: 0 });
     assert.equal(Object.hasOwn(projects[0] ?? {}, "status"), false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("structured status and list facades default to compact text summaries", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-compact-status-surfaces-"));
+  try {
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+
+    const projectUse = await executeSparkTool(tools, "task_write", ctx, {
+      action: "project_use",
+      title: "Compact summary project",
+      description: "Project used to validate compact tool summaries.",
+    });
+    assertToolTextIsCompactSummary(projectUse);
+    assert.match(toolText(projectUse), /(?:Created new|Using) Spark project/);
+    assert.ok(projectUse.details);
+
+    const projectStatus = await executeSparkTool(tools, "task_read", ctx, {
+      action: "project_status",
+      view: "active",
+      format: "text",
+      limit: 5,
+    });
+    assertToolTextIsCompactSummary(projectStatus);
+    assert.match(toolText(projectStatus), /Spark project status/);
+    assert.ok(projectStatus.details);
+
+    const loopStatus = await executeSparkTool(tools, "loop", ctx, { action: "status" });
+    assertToolTextIsCompactSummary(loopStatus);
+    assert.match(toolText(loopStatus), /No active Spark loop|Spark loop/);
+    assert.ok(loopStatus.details);
+
+    const driveStatus = await executeSparkTool(tools, "drive", ctx, { action: "status" });
+    assertToolTextIsCompactSummary(driveStatus);
+    assert.match(toolText(driveStatus), /Mode:/);
+    assert.ok(driveStatus.details);
+
+    const phaseStatus = await executeSparkTool(tools, "phase", ctx, { action: "status" });
+    assertToolTextIsCompactSummary(phaseStatus);
+    assert.match(toolText(phaseStatus), /Current phase:/);
+    assert.ok(phaseStatus.details);
+
+    const runStatusList = await executeSparkTool(tools, "task_read", ctx, {
+      action: "run_status",
+      runAction: "list",
+      limit: 5,
+    });
+    assertToolTextIsCompactSummary(runStatusList);
+    assert.match(
+      toolText(runStatusList),
+      /workflow run|No Spark workflow runs|Spark workflow runs/i,
+    );
+    assert.ok(runStatusList.details);
+
+    const roleList = await executeSparkTool(tools, "role", ctx, { action: "list", limit: 5 });
+    assertToolTextIsCompactSummary(roleList);
+    assert.match(toolText(roleList), /\[builtin\]/);
+    assert.ok(roleList.details);
+
+    const workflowList = await executeSparkTool(tools, "workflow", ctx, {
+      action: "list",
+      limit: 5,
+    });
+    assertToolTextIsCompactSummary(workflowList);
+    assert.match(toolText(workflowList), /Workflows:/);
+    assert.ok(workflowList.details);
+
+    const artifactList = await executeSparkTool(tools, "artifact", ctx, {
+      action: "list",
+      limit: 5,
+      view: "summary",
+    });
+    assertToolTextIsCompactSummary(artifactList);
+    assert.match(toolText(artifactList), /Artifacts:/);
+    assert.ok(artifactList.details);
+
+    const learningList = await executeSparkTool(tools, "learning", ctx, {
+      action: "list",
+      limit: 5,
+    });
+    assertToolTextIsCompactSummary(learningList);
+    assert.match(toolText(learningList), /Spark learnings:/);
+    assert.ok(learningList.details);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -11860,11 +12011,18 @@ function registerSparkToolsForTest(options: { reviewerRunner?: ReviewerRunner } 
     createReviewerRunner: () =>
       options.reviewerRunner ?? createTaskApprovingGoalUnmetReviewerRunner(),
   };
+  const registerExternalTool = (config: SparkToolConfig): void => {
+    tools.set(config.name, config);
+    activeToolNames.add(config.name);
+  };
   registerPiArtifactTool({
-    registerTool: (config) => {
-      tools.set(config.name, config as SparkToolConfig);
-      activeToolNames.add(config.name);
-    },
+    registerTool: (config) => registerExternalTool(config as SparkToolConfig),
+  });
+  registerPiRolesTools({
+    registerTool: (config) => registerExternalTool(config as SparkToolConfig),
+  });
+  registerPiWorkflowTool({
+    registerTool: (config) => registerExternalTool(config as SparkToolConfig),
   });
   piAskExtension(pi as never);
   sparkExtension(pi);
@@ -12090,6 +12248,13 @@ function todoDisplayNumberPath(cwd: string, ctx: TestSparkContext): string {
 
 function toolText(result: SparkToolResult): string {
   return result.content.map((part) => part.text).join("\n");
+}
+
+function assertToolTextIsCompactSummary(result: SparkToolResult): void {
+  const text = toolText(result).trimStart();
+  assert.notEqual(text[0], "{");
+  assert.notEqual(text[0], "[");
+  assert.doesNotMatch(text, /\n\s+"[^"\n]+":/);
 }
 
 function largeLegacyRoleRunBody(runRef: RunRef, runName: string, paddingBytes: number) {

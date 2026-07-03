@@ -40,6 +40,19 @@ Naming/render policy:
 
 Retired `spark_*` tools are not part of the active public or internal tool surface. Spark may keep private helper functions/modules to share implementation code, but canonical tools must not dispatch through old `spark_*` tool configs.
 
+Tool result compaction and recovery:
+
+- Spark compacts tool results centrally before they are appended back to the agent turn. The policy is fail-safe: unknown tools pass through unchanged, exact/verbatim tools pass through unchanged, and known compactable tools keep the original whenever compaction would be empty or longer.
+- Profiles are explicit:
+  - `exact` — preserve verbatim content for file/content reads and fetched content (`read`, `graft_read`, `memory_read`, `fetch_content`, `get_search_content`, and read/preview actions on structured content tools).
+  - `log` — fold noisy execution logs from cue/script/job/scope/history tools by collapsing long blank runs and repeated non-empty lines.
+  - `status` — normalize concise status/list outputs from Spark, artifact, learning, role, workflow, file-search/list, and Graft status tools without changing exact read/diff semantics.
+  - `diagnostic` — compact diagnostic output with log-like whitespace folding while keeping failure context visible.
+- `SPARK_TOOL_OUTPUT_COMPACTION` supports `off | lite | full | ultra`; invalid or unset values use `full`. `off` disables compaction. `lite` is conservative. `full`/`ultra` may collapse long blank runs and repeated log lines, but still use the never-worse fallback.
+- When compaction omits significant output, Spark may persist the original raw tool result as an artifact trace and append a bounded recovery hint such as `artifact({ action: "read", artifactRef: "artifact:...", maxChars: 20000 })`. Raw recovery artifacts use `kind="trace"`, raw/ephemeral curation, and strict provenance (`cue` for cue/script output, `spark` for Spark-owned output).
+- Raw trace artifacts are hidden from `artifact({ action: "list" })` by default; pass `includeRaw: true` or read the hinted `artifactRef` directly to recover the full content.
+- Non-goals: compaction must not gzip/base64 outputs, must not summarize exact file reads, diffs, artifact reads, or fetched content, and must not silently persist tiny outputs.
+
 Automatic behavior:
 
 1. Spark default research guidance is always available:

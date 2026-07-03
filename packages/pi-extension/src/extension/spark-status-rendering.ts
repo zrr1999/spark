@@ -62,6 +62,7 @@ export interface SparkStatusRenderInput {
   scope?: SparkStatusScope;
   view: SparkStatusView;
   taskLimit: number | undefined;
+  projectLimit?: number;
   targetProjectRef?: ProjectRef;
   targetTaskRef?: TaskRef;
   includeWorkspaceSummary?: boolean;
@@ -84,6 +85,10 @@ export function renderSparkStatus(input: SparkStatusRenderInput): {
 } {
   const scope = input.scope ?? "workspace";
   const includeWorkspaceSummary = scope === "workspace" || input.includeWorkspaceSummary === true;
+  if (scope === "task" && input.targetTaskRef && !includeWorkspaceSummary) {
+    const taskScoped = renderTaskScopedStatus(input);
+    if (taskScoped) return taskScoped;
+  }
   const lines = [
     `Spark ${scope === "workspace" ? "tasks" : `${scope} status`} (${input.view} view${typeof input.taskLimit === "number" ? `, limit=${input.taskLimit}` : ""}):`,
   ];
@@ -172,31 +177,51 @@ function compactSparkStatusDetails(
   const selectedProject = input.targetProjectRef
     ? renderedProjectDetails.find((project) => project.ref === input.targetProjectRef)
     : undefined;
-  const selectedTask = input.targetTaskRef
-    ? selectedProject?.tasks instanceof Array
-      ? selectedProject.tasks.find(
-          (task): task is Record<string, unknown> =>
-            isRecord(task) && task.ref === input.targetTaskRef,
-        )
-      : undefined
-    : undefined;
-  return {
+  const base = {
     found: true,
     compact: true,
     scope,
     view: input.view,
     limit: input.taskLimit,
     activeProjectRef: input.currentProject?.ref,
-    selectedProject: selectedProject
-      ? compactRenderedProjectDecisionDetail(selectedProject)
-      : undefined,
-    selectedTask,
+  };
+  const ready = readyTasks
+    .slice(0, taskLimit)
+    .map((task) => compactTaskDecisionDetail(input, task));
+  if (scope === "project" && !includeWorkspaceSummary) {
+    return {
+      ...base,
+      selectedProject: selectedProject
+        ? compactRenderedProjectDecisionDetail(selectedProject)
+        : undefined,
+      currentClaim: currentClaim ? compactTaskDecisionDetail(input, currentClaim) : undefined,
+      ready,
+      driveMode: input.driveMode,
+      sessionGoal: input.sessionGoal
+        ? {
+            status: input.sessionGoal.status,
+            objective: truncateInline(input.sessionGoal.objective, 180),
+          }
+        : undefined,
+    };
+  }
+  const visibleProjectLimit = input.projectLimit ?? renderedProjectDetails.length;
+  const renderedProjects = renderedProjectDetails
+    .slice(0, visibleProjectLimit)
+    .map(compactRenderedProjectDecisionDetail);
+  const totalRenderableProjects =
+    scope === "workspace" ? countRenderableProjects(input) : renderedProjects.length;
+  return {
+    ...base,
     activeProject: input.currentProject
       ? compactProjectDecisionDetail(input, currentProjectTasks)
       : undefined,
     currentClaim: currentClaim ? compactTaskDecisionDetail(input, currentClaim) : undefined,
-    ready: readyTasks.slice(0, taskLimit).map((task) => compactTaskDecisionDetail(input, task)),
-    renderedProjects: renderedProjectDetails.map(compactRenderedProjectDecisionDetail),
+    ready,
+    renderedProjects,
+    ...(renderedProjects.length < totalRenderableProjects
+      ? { hiddenProjectsByLimit: totalRenderableProjects - renderedProjects.length }
+      : {}),
     ...(includeWorkspaceSummary
       ? { workflowRunStatus: compactWorkflowRunDecisionDetail(input.workflowRunStatus) }
       : {}),
@@ -227,12 +252,77 @@ function compactSparkStatusDetails(
           nextRunAt: input.sessionLoop.schedule?.nextRunAt,
         }
       : undefined,
-    hints: [
-      "Use projectRef/taskRef/limit for bounded status drill-down.",
-      'Use task_read({ action: "run_status", runAction: "inspect", runRef/taskRef }) for targeted workflow-run details.',
-      "Use text format for a human-readable active frontier.",
-    ],
+    ...(scope === "workspace" && input.projectLimit === undefined
+      ? {
+          hints: [
+            "Use projectRef/taskRef/limit for bounded status drill-down.",
+            'Use task_read({ action: "run_status", runAction: "inspect", runRef/taskRef }) for targeted workflow-run details.',
+            "Use text format for a human-readable active frontier.",
+          ],
+        }
+      : {}),
   };
+}
+
+function renderTaskScopedStatus(input: SparkStatusRenderInput):
+  | {
+      lines: string[];
+      details: Record<string, unknown>;
+      compactDetails: Record<string, unknown>;
+    }
+  | undefined {
+  if (!input.targetTaskRef) return undefined;
+  const task = input.graph.getTask(input.targetTaskRef);
+  const project = input.graph.getProject(task.projectRef);
+  const readyFrontier = input.graph
+    .readyTasks(task.projectRef)
+    .some((candidate) => candidate.ref === task.ref);
+  const latestRun = latestRunsByTaskRef(input.graph.runs(task.projectRef)).get(task.ref);
+  const owner = deriveTaskRoleLabel({ task, currentSessionKey: input.sessionKey, latestRun });
+  const planSummary = taskPlanSummary(task);
+  const lifecycleSuffix = taskLifecycleSuffix(task);
+  const taskOwnedBySession = isClaimOwnedBySession(task, input.sessionKey);
+  const taskTodos = taskOwnedBySession ? input.graph.taskTodos(task.ref) : [];
+  const visibleTaskTodos = taskTodos.slice(0, DEFAULT_SPARK_STATUS_TODO_LIMIT);
+  const current = project.ref === input.currentProject?.ref;
+  const lines = [
+    `Spark task status: @${task.name} [${task.status}]`,
+    `  ${formatPiTaskActiveStatusLine({
+      task,
+      owner,
+      readyFrontier,
+      plan: planSummary,
+      lifecycleSuffix,
+    })}`,
+    `  ref=${task.ref} project=${project.ref}${current ? " [current]" : ""} kind=${task.kind}`,
+  ];
+  if (taskOwnedBySession && taskTodos.length > 0) {
+    lines.push(
+      `  TODOs: ${taskTodos.length} total${taskTodos.length > visibleTaskTodos.length ? ` (showing ${visibleTaskTodos.length})` : ""}`,
+    );
+    for (const todo of visibleTaskTodos)
+      lines.push(`    - [${todo.status}] ${todo.id} ${truncateInline(todo.content, 160)}`);
+    const hiddenTodos = taskTodos.length - visibleTaskTodos.length;
+    if (hiddenTodos > 0) lines.push(`    - … ${hiddenTodos} more TODOs`);
+  }
+  const selectedTask = compactTaskDecisionDetail(input, task);
+  const selectedProject = {
+    ref: project.ref,
+    title: project.title,
+    current,
+  };
+  const details = {
+    found: true,
+    compact: true,
+    scope: "task",
+    view: input.view,
+    selectedProject,
+    selectedTask: {
+      ...selectedTask,
+      readyFrontier,
+    },
+  };
+  return { lines, details, compactDetails: details };
 }
 
 function compactProjectDecisionDetail(
@@ -317,6 +407,7 @@ function compactTaskDecisionDetail(
 function compactWorkflowRunDecisionDetail(
   workflowRunStatus: WorkflowRunStatusSummary,
 ): Record<string, unknown> {
+  const visibleNextSteps = workflowRunStatus.nextSteps.slice(0, 3);
   return {
     manager: workflowRunStatus.manager,
     counts: {
@@ -337,12 +428,16 @@ function compactWorkflowRunDecisionDetail(
     lastRun: workflowRunStatus.lastRun
       ? compactWorkflowRunRecordDecisionDetail(workflowRunStatus.lastRun)
       : undefined,
-    nextSteps: workflowRunStatus.nextSteps.map((step) => ({
+    nextSteps: visibleNextSteps.map((step) => ({
       runRef: step.runRef,
       status: step.status,
-      summary: truncateInline(step.summary, 200),
-      nextActions: step.nextActions.slice(0, 3),
+      summary: truncateInline(step.summary, 160),
+      nextActions: step.nextActions.slice(0, 2).map((action) => truncateInline(action, 220)),
+      ...(step.nextActions.length > 2 ? { hiddenNextActions: step.nextActions.length - 2 } : {}),
     })),
+    ...(visibleNextSteps.length < workflowRunStatus.nextSteps.length
+      ? { hiddenNextSteps: workflowRunStatus.nextSteps.length - visibleNextSteps.length }
+      : {}),
   };
 }
 
@@ -450,6 +545,7 @@ function renderProjectLines(
   input: SparkStatusRenderInput,
 ): Array<Record<string, unknown>> {
   const renderedProjectDetails: Array<Record<string, unknown>> = [];
+  let hiddenProjectsByLimit = 0;
   for (const project of input.graph.projects()) {
     if (input.targetProjectRef && project.ref !== input.targetProjectRef) continue;
     const tasks = input.graph.tasks(project.ref);
@@ -471,6 +567,14 @@ function renderProjectLines(
       })
     )
       continue;
+    if (
+      !input.targetProjectRef &&
+      typeof input.projectLimit === "number" &&
+      renderedProjectDetails.length >= input.projectLimit
+    ) {
+      hiddenProjectsByLimit += 1;
+      continue;
+    }
 
     const visibleTasks =
       typeof input.taskLimit === "number"
@@ -580,7 +684,28 @@ function renderProjectLines(
     if (visibleTasks.length === 0) lines.push("  - none");
     renderedProjectDetails.push(renderedProjectDetail);
   }
+  if (hiddenProjectsByLimit > 0)
+    lines.push(
+      `Hidden projects by limit: ${hiddenProjectsByLimit} (increase limit for a larger bounded sample)`,
+    );
   return renderedProjectDetails;
+}
+
+function countRenderableProjects(input: SparkStatusRenderInput): number {
+  return input.graph.projects().filter((project) => {
+    if (input.targetProjectRef && project.ref !== input.targetProjectRef) return false;
+    if (input.targetProjectRef) return true;
+    const tasks = input.graph.tasks(project.ref);
+    const sessionClaimedCount = tasks.filter((task) =>
+      isClaimOwnedBySession(task, input.sessionKey),
+    ).length;
+    return shouldRenderProjectInSparkStatus({
+      view: input.view,
+      projectRef: project.ref,
+      activeProjectRef: input.currentProject?.ref,
+      sessionClaimedCount,
+    });
+  }).length;
 }
 
 function formatCompletedTaskCounts(counts: Partial<Record<TaskStatus, number>>): string {

@@ -28,7 +28,7 @@ export function registerSparkProjectTools(
     name: "impl_list_projects",
     label: "Spark List Projects",
     description:
-      'List Spark projects as structured JSON without parsing task_read({ action: "workspace_status" }) text. Projects are permanent; status filters are not supported. Example output item: { ref, title, taskCounts: { total, active, done, cancelled }, currentForSession }.',
+      "List Spark projects as a compact text summary with full structured rows in details.projects. Projects are permanent; status filters are not supported. Example details item: { ref, title, taskCounts: { total, active, done, cancelled }, currentForSession }.",
     parameters: Type.Object({
       limit: Type.Optional(
         Type.Number({ description: "Maximum project rows to show. Default: 20." }),
@@ -40,7 +40,7 @@ export function registerSparkProjectTools(
       const limit = normalizeProjectListLimit(params.limit);
       if (!graph) {
         const details = { found: false, count: 0, shown: 0, projects: [] };
-        return { content: [{ type: "text", text: renderProjectListJson([]) }], details };
+        return { content: [{ type: "text", text: renderProjectListSummary([], 0) }], details };
       }
       const currentProject = await currentSparkProject(cwd, ctx, graph);
       const projects = collectSparkProjectSummaries({
@@ -49,7 +49,7 @@ export function registerSparkProjectTools(
       });
       const visible = projects.slice(0, limit);
       return {
-        content: [{ type: "text", text: renderProjectListJson(visible) }],
+        content: [{ type: "text", text: renderProjectListSummary(visible, projects.length) }],
         details: { found: true, count: projects.length, shown: visible.length, projects: visible },
       };
     },
@@ -375,8 +375,31 @@ function projectChangedFields(
   return changed;
 }
 
-function renderProjectListJson(projects: Array<Record<string, unknown>>): string {
-  return JSON.stringify(projects, null, 2);
+function renderProjectListSummary(projects: Array<Record<string, unknown>>, total: number): string {
+  const lines = [
+    `Spark projects: ${total}${projects.length < total ? ` (showing ${projects.length})` : ""}`,
+  ];
+  if (projects.length === 0) {
+    lines.push("- No projects.");
+    return lines.join("\n");
+  }
+  for (const project of projects) {
+    const counts = isProjectTaskCounts(project.taskCounts) ? project.taskCounts : undefined;
+    const ref = typeof project.ref === "string" ? project.ref : "proj:?";
+    const title = typeof project.title === "string" ? project.title : "Untitled project";
+    const countText = counts
+      ? ` total=${counts.total ?? 0} active=${counts.active ?? 0} done=${counts.done ?? 0} cancelled=${counts.cancelled ?? 0}`
+      : "";
+    lines.push(`- ${project.currentForSession === true ? "*" : " "} ${ref} ${title}${countText}`);
+  }
+  if (projects.length < total) lines.push(`- … ${total - projects.length} more project(s)`);
+  return lines.join("\n");
+}
+
+function isProjectTaskCounts(
+  value: unknown,
+): value is { total?: number; active?: number; done?: number; cancelled?: number } {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeProjectListLimit(value: unknown): number {

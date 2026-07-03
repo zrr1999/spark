@@ -7,6 +7,7 @@ import {
   clearLoopEntry,
   compactLoopPrompt,
   continuationLoopIdFromPrompt,
+  createGoal,
   createLoop,
   createLoopResult,
   evaluateLoopTick,
@@ -15,6 +16,7 @@ import {
   recordLoopFailure,
   replaceLoop,
   setLoopEntry,
+  toToolText,
   updateLoopStatus,
 } from "../packages/spark-loop/src/index.ts";
 
@@ -67,6 +69,14 @@ void test("spark-loop tick continues, waits, blocks, and never emits goal comple
   const blocked = evaluateLoopTick({ loop: blockedLoop, now: 131 });
   assert.equal(blocked.decision, "blocked");
   assert.match(blocked.message, /needs user decision/);
+});
+
+void test("spark-loop goal tool text is a compact summary, not pretty JSON", () => {
+  const text = toToolText(createGoal("Reduce tool output noise", 100));
+  assert.match(text, /Status: active/);
+  assert.match(text, /Objective: Reduce tool output noise/);
+  assert.doesNotMatch(text, /^\{/);
+  assert.equal(toToolText(null), "No Spark goal is currently set.");
 });
 
 void test("spark-loop prompts remain parseable by loop id", () => {

@@ -65,5 +65,5 @@ export function goalToolResponse(goal: Goal | null): GoalToolResponse {
 }
 
 export function toToolText(goal: Goal | null): string {
-  return JSON.stringify(goalToolResponse(goal), null, 2);
+  return formatGoalSummary(goal);
 }

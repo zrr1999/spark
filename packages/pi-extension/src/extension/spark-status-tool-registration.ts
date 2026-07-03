@@ -116,6 +116,10 @@ export function registerSparkStatusTool(
         view === "summary"
           ? undefined
           : (explicitLimit ?? (view === "active" ? DEFAULT_SPARK_STATUS_ACTIVE_LIMIT : undefined));
+      const projectLimit =
+        scope === "workspace"
+          ? (explicitLimit ?? (view === "summary" ? DEFAULT_SPARK_STATUS_ACTIVE_LIMIT : undefined))
+          : undefined;
       const runStore = defaultSparkWorkflowRunStore(cwd);
       await reconcileSparkWorkflowRunsWithActiveProcesses(runStore, graph, cwd);
       const workflowRunStatus = await runStore.status();
@@ -170,6 +174,7 @@ export function registerSparkStatusTool(
         scope,
         view,
         taskLimit,
+        projectLimit,
         targetProjectRef: scoped.project?.ref,
         targetTaskRef: scoped.task?.ref,
         includeWorkspaceSummary,
@@ -193,13 +198,23 @@ export function registerSparkStatusTool(
         content: [
           {
             type: "text",
-            text: format === "json" ? JSON.stringify(details, null, 2) : rendered.lines.join("\n"),
+            text:
+              format === "json"
+                ? JSON.stringify(details, null, 2)
+                : renderStatusText(rendered.lines),
           },
         ],
         details,
       };
     },
   });
+}
+
+function renderStatusText(lines: string[]): string {
+  return lines
+    .join("\n")
+    .replace(/\n{2,}/gu, "\n")
+    .trim();
 }
 
 type SparkStatusScopeResolution =
