@@ -9,7 +9,7 @@
 import { nowIso } from "@zendev-lab/spark-extension-api";
 import { readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import { rebuildSessionIndex, sessionReproStorePathV2 } from "./session-directory-store.ts";
-import { type SparkSessionContext } from "./session-identity.ts";
+import type { SparkSessionContext } from "./session-identity.ts";
 
 // ---------------------------------------------------------------------------
 // Types

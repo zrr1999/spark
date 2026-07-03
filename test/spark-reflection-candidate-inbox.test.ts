@@ -15,8 +15,8 @@ import {
   renderReflectionCandidateReport,
   saveReflectionCandidateStore,
   upsertReflectionCandidates,
-} from "../packages/pi-extension/src/extension/reflection-candidate-inbox.ts";
-import type { ReflectionObservation } from "../packages/pi-extension/src/extension/reflection-session-scanner.ts";
+} from "../packages/spark-learnings/src/reflection-candidate-inbox.ts";
+import type { ReflectionObservation } from "../packages/spark-learnings/src/reflection-session-scanner.ts";
 
 void test("reflection candidate inbox creates bounded report-only candidates and dedupes repeats", () => {
   const now = "2026-06-18T01:00:00.000Z";

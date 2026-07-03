@@ -743,3 +743,7 @@ export type {
   PiLearningToolResult,
 } from "./extension.ts";
 export { registerPiLearningTool } from "./extension.ts";
+export * from "./reflection-candidate-inbox.ts";
+export * from "./reflection-in-session-scheduler.ts";
+export * from "./reflection-session-scanner.ts";
+export * from "./reflection-synthesis-engine.ts";

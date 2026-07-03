@@ -5,17 +5,17 @@ import {
   candidateFromObservation,
   emptyReflectionCandidateStore,
   upsertReflectionCandidates,
-} from "../packages/pi-extension/src/extension/reflection-candidate-inbox.ts";
+} from "../packages/spark-learnings/src/reflection-candidate-inbox.ts";
 import {
   renderUntrustedEvidenceBlock,
   sanitizeUntrustedEvidence,
   synthesizeReflection,
-} from "../packages/pi-extension/src/extension/reflection-synthesis-engine.ts";
+} from "../packages/spark-learnings/src/reflection-synthesis-engine.ts";
 import type {
   ReflectionObservation,
   ReflectionScanResult,
-} from "../packages/pi-extension/src/extension/reflection-session-scanner.ts";
-import { emptyReflectionScanCursor } from "../packages/pi-extension/src/extension/reflection-session-scanner.ts";
+} from "../packages/spark-learnings/src/reflection-session-scanner.ts";
+import { emptyReflectionScanCursor } from "../packages/spark-learnings/src/reflection-session-scanner.ts";
 
 void test("reflection synthesis produces digest, themes, unfinished work, and stale follow-ups", () => {
   const observations = [

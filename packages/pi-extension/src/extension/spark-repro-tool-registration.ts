@@ -259,7 +259,7 @@ export function registerSparkReproTool(
         };
       }
 
-      throw new Error(`Unknown repro action: ${action as string}`);
+      return assertNeverReproAction(action);
     },
   });
 }
@@ -278,6 +278,10 @@ function normalizeReproAction(
   )
     return value;
   throw new Error("repro action must be status, start, satisfy, gate, advance, or stop");
+}
+
+function assertNeverReproAction(_action: never): never {
+  throw new Error("Unknown repro action");
 }
 
 function reproStatusResult(repro: SparkSessionRepro) {

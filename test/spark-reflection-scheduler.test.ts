@@ -10,11 +10,9 @@ import {
   registerSparkReflectionCommands,
   runReflectionOnce,
   stopReflectionScheduler,
-} from "../packages/pi-extension/src/extension/reflection-in-session-scheduler.ts";
-import type {
-  SparkCommandApi,
-  SparkCommandContext,
-} from "../packages/pi-extension/src/extension/spark-command-registration.ts";
+  type ReflectionCommandApi,
+  type ReflectionCommandContext,
+} from "../packages/spark-learnings/src/reflection-in-session-scheduler.ts";
 
 void test("runReflectionOnce scans incrementally, writes cursor/candidates/report, and avoids duplicate observations", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reflection-run-"));
@@ -46,7 +44,7 @@ void test("runReflectionOnce scans incrementally, writes cursor/candidates/repor
       ].join("\n") + "\n",
       "utf8",
     );
-    const ctx = { cwd: dir } satisfies Pick<SparkCommandContext, "cwd">;
+    const ctx = { cwd: dir } satisfies Pick<ReflectionCommandContext, "cwd">;
     const first = await runReflectionOnce(ctx, {
       sessionRoot,
       maxCandidates: 10,
@@ -98,7 +96,7 @@ void test("/reflect command runs once and session-local scheduler starts/stops s
     registerSparkReflectionCommands(pi);
     const reflect = pi.commands.get("reflect");
     assert.ok(reflect);
-    const ctx = { cwd: dir } as SparkCommandContext;
+    const ctx = { cwd: dir } satisfies ReflectionCommandContext;
 
     await reflect(`run --session-root ${sessionRoot} --max-candidates 5`, ctx);
     assert.equal(pi.messages.at(-1)?.customType, "spark-reflection-report");
@@ -154,7 +152,7 @@ void test("reflection run lock skips overlapping runs for the same workspace", a
     const blocker = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const ctx = { cwd: dir } satisfies Pick<SparkCommandContext, "cwd">;
+    const ctx = { cwd: dir } satisfies Pick<ReflectionCommandContext, "cwd">;
     const first = runReflectionOnce(ctx, { sessionRoot, testHookBeforeScan: () => blocker });
     const second = await runReflectionOnce(ctx, { sessionRoot });
     assert.equal(second.skippedReason, "already_running");
@@ -165,9 +163,12 @@ void test("reflection run lock skips overlapping runs for the same workspace", a
   }
 });
 
-class FakePi implements SparkCommandApi {
-  commands = new Map<string, (args: string, ctx: SparkCommandContext) => Promise<void> | void>();
-  events = new Map<string, (event: unknown, ctx: SparkCommandContext) => unknown>();
+class FakePi implements ReflectionCommandApi {
+  commands = new Map<
+    string,
+    (args: string, ctx: ReflectionCommandContext) => Promise<void> | void
+  >();
+  events = new Map<string, (event: unknown, ctx: ReflectionCommandContext) => unknown>();
   messages: Array<{
     customType: string;
     content: string;
@@ -178,19 +179,12 @@ class FakePi implements SparkCommandApi {
     name: string,
     config: {
       description: string;
-      argumentHint?: string;
-      getArgumentCompletions?: (
-        argumentPrefix: string,
-      ) =>
-        | Array<{ value: string; label: string; description?: string }>
-        | null
-        | Promise<Array<{ value: string; label: string; description?: string }> | null>;
-      handler: (args: string, ctx: SparkCommandContext) => Promise<void> | void;
+      handler: (args: string, ctx: ReflectionCommandContext) => Promise<void> | void;
     },
   ): void {
     this.commands.set(name, config.handler);
   }
-  on(event: string, handler: (event: unknown, ctx: SparkCommandContext) => unknown): void {
+  on(event: string, handler: (event: unknown, ctx: ReflectionCommandContext) => unknown): void {
     this.events.set(event, handler);
   }
   sendMessage(message: {

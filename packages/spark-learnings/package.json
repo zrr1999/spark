@@ -11,7 +11,11 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./extension": "./src/extension.ts"
+    "./extension": "./src/extension.ts",
+    "./reflection-candidate-inbox": "./src/reflection-candidate-inbox.ts",
+    "./reflection-in-session-scheduler": "./src/reflection-in-session-scheduler.ts",
+    "./reflection-session-scanner": "./src/reflection-session-scanner.ts",
+    "./reflection-synthesis-engine": "./src/reflection-synthesis-engine.ts"
   },
   "publishConfig": {
     "access": "public"
