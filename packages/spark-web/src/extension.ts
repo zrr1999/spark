@@ -180,9 +180,17 @@ function registerIfAvailable(
   config: ToolConfig,
   options: SparkWebExtensionOptions,
 ): void {
-  const exists = api.getAllTools?.().some((tool) => tool.name === config.name) ?? false;
+  const exists = inspectRegisteredTools(api)?.some((tool) => tool.name === config.name) ?? false;
   if (exists && options.conflictStrategy !== "replace") return;
   api.registerTool(config);
+}
+
+function inspectRegisteredTools(api: SparkWebExtensionApi): Array<{ name: string }> | undefined {
+  try {
+    return api.getAllTools?.();
+  } catch {
+    return undefined;
+  }
 }
 
 function renderFetched(

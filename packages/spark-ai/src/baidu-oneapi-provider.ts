@@ -5,10 +5,10 @@ import {
   type AssistantMessageEvent,
   type Context,
   createAssistantMessageEventStream,
-  lazyApi,
   type Model,
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
+import { lazyApi } from "@earendil-works/pi-ai/api/lazy";
 
 import type { ProviderRegistrationAPI } from "./provider-registry.ts";
 

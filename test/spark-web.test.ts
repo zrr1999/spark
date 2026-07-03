@@ -159,6 +159,14 @@ void test("fetch_content covers GitHub raw URLs, Jina reader URLs, PDF placehold
   }
 });
 
+void test("spark-web extension tolerates Pi loading-stage action guards", () => {
+  const api = new LoadingStageApi();
+  assert.doesNotThrow(() => sparkWebExtension(api));
+  assert.ok(api.tools.has("web_search"));
+  assert.ok(api.tools.has("fetch_content"));
+  assert.ok(api.tools.has("get_search_content"));
+});
+
 void test("spark-web extension registers tools, retrieves cache, and skips conflicts", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-web-extension-"));
   try {
@@ -212,6 +220,20 @@ void test("spark-web extension registers tools, retrieves cache, and skips confl
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+class LoadingStageApi {
+  readonly tools = new Map<string, ToolConfig>();
+
+  registerTool(config: ToolConfig): void {
+    this.tools.set(config.name, config);
+  }
+
+  getAllTools(): Array<{ name: string }> {
+    throw new Error(
+      "Extension runtime not initialized. Action methods cannot be called during extension loading.",
+    );
+  }
+}
 
 class FakeApi {
   readonly tools = new Map<string, ToolConfig>();
