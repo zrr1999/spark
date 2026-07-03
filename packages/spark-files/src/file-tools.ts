@@ -311,9 +311,11 @@ export function createLsToolConfig(): ToolConfig {
 
       if (results.length === 0) return { content: [text("(empty directory)")] };
 
-      const truncation = truncateHead(results.join("\n"), { maxLines: Number.MAX_SAFE_INTEGER });
+      const compacted = compactLsResults(results);
+      const truncation = truncateHead(compacted.text, { maxLines: Number.MAX_SAFE_INTEGER });
       let output = truncation.content;
       const details: Record<string, unknown> = {};
+      if (compacted.grouped) details.grouped = "summary";
       const notices: string[] = [];
       if (entryLimitReached) {
         notices.push(
@@ -335,6 +337,35 @@ export function createLsToolConfig(): ToolConfig {
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────
+
+interface CompactLsOutput {
+  text: string;
+  grouped: boolean;
+}
+
+const LS_COMPACT_MIN_ENTRIES = 30;
+const LS_COMPACT_SAMPLE_LIMIT = 12;
+
+function compactLsResults(entries: string[]): CompactLsOutput {
+  const flat = entries.join("\n");
+  if (entries.length < LS_COMPACT_MIN_ENTRIES) return { text: flat, grouped: false };
+
+  const dirs = entries.filter((entry) => entry.endsWith("/"));
+  const files = entries.filter((entry) => !entry.endsWith("/"));
+  const lines = [`entries=${entries.length} dirs=${dirs.length} files=${files.length}`];
+  if (dirs.length > 0) lines.push(`dirs: ${compactLsSample(dirs)}`);
+  if (files.length > 0) lines.push(`files: ${compactLsSample(files)}`);
+  const grouped = lines.join("\n");
+  return grouped.length < flat.length
+    ? { text: grouped, grouped: true }
+    : { text: flat, grouped: false };
+}
+
+function compactLsSample(entries: string[]): string {
+  const visible = entries.slice(0, LS_COMPACT_SAMPLE_LIMIT);
+  const hidden = entries.length - visible.length;
+  return `${visible.join(", ")}${hidden > 0 ? `, +${hidden} more` : ""}`;
+}
 
 function errorResult(message: string): ToolExecResult {
   return { content: [text(message)], isError: true };

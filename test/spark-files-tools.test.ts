@@ -222,6 +222,26 @@ void test("ls lists alphabetically with directory suffixes", async () => {
   });
 });
 
+void test("ls summarizes large directories when shorter", async () => {
+  await withTempDir(async (dir) => {
+    const ls = collectTools(piFilesExtension).get("ls")!;
+    await mkdir(join(dir, "many"));
+    for (let i = 0; i < 35; i += 1) {
+      await writeFile(
+        join(dir, "many", `very-long-file-name-${String(i).padStart(2, "0")}.txt`),
+        "",
+        "utf-8",
+      );
+    }
+
+    const result = await ls.execute("c", { path: "many" }, undefined, noop, { cwd: dir });
+    assert.equal(result.details?.grouped, "summary");
+    assert.match(text(result), /entries=35 dirs=0 files=35/);
+    assert.match(text(result), /very-long-file-name-00\.txt/);
+    assert.match(text(result), /\+23 more/);
+  });
+});
+
 void test("grep returns path:line: matches and respects .gitignore", async () => {
   await withTempDir(async (dir) => {
     const grep = collectTools(piFilesExtension).get("grep")!;
@@ -231,6 +251,25 @@ void test("grep returns path:line: matches and respects .gitignore", async () =>
     const result = await grep.execute("c", { pattern: "needle" }, undefined, noop, { cwd: dir });
     assert.match(text(result), /keep\.txt:1: needle here/);
     assert.doesNotMatch(text(result), /ignored\.txt/);
+  });
+});
+
+void test("grep groups large same-file match output with per-file overflow", async () => {
+  await withTempDir(async (dir) => {
+    const grep = collectTools(piFilesExtension).get("grep")!;
+    await writeFile(
+      join(dir, "long-match-file.txt"),
+      Array.from({ length: 12 }, (_, i) => `needle ${i + 1}`).join("\n"),
+      "utf-8",
+    );
+
+    const result = await grep.execute("c", { pattern: "needle", limit: 20 }, undefined, noop, {
+      cwd: dir,
+    });
+    assert.equal(result.details?.grouped, "by_file");
+    assert.match(text(result), /long-match-file\.txt \(12\)/);
+    assert.match(text(result), /  long-match-file\.txt:1: needle 1/);
+    assert.match(text(result), /\+4 more in long-match-file\.txt/);
   });
 });
 
@@ -251,6 +290,22 @@ void test("grep supports literal mode, context lines, and no-match", async () =>
 
     const none = await grep.execute("c", { pattern: "zzz" }, undefined, noop, { cwd: dir });
     assert.equal(text(none), "No matches found");
+  });
+});
+
+void test("find groups large results by directory when shorter", async () => {
+  await withTempDir(async (dir) => {
+    const find = collectTools(piFilesExtension).get("find")!;
+    await mkdir(join(dir, "src"));
+    for (let i = 0; i < 12; i += 1) {
+      await writeFile(join(dir, "src", `long-file-name-${i}.ts`), "", "utf-8");
+    }
+
+    const result = await find.execute("c", { pattern: "*.ts" }, undefined, noop, { cwd: dir });
+    assert.equal(result.details?.grouped, "by_directory");
+    assert.match(text(result), /src\/ \(12\)/);
+    assert.match(text(result), /long-file-name-0\.ts/);
+    assert.match(text(result), /\+6 more/);
   });
 });
 

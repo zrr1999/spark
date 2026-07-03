@@ -174,11 +174,13 @@ export function createGrepToolConfig(): ToolConfig {
 
       if (matchCount === 0) return { content: [text("No matches found")] };
 
-      const truncation = truncateHead(outputLines.join("\n"), {
+      const groupedOutput = compactGrepOutputLines(outputLines);
+      const truncation = truncateHead(groupedOutput.text, {
         maxLines: Number.MAX_SAFE_INTEGER,
       });
       let output = truncation.content;
       const details: Record<string, unknown> = {};
+      if (groupedOutput.grouped) details.grouped = "by_file";
       const notices: string[] = [];
       if (matchLimitReached) {
         notices.push(
@@ -262,11 +264,13 @@ export function createFindToolConfig(): ToolConfig {
 
       if (relativized.length === 0) return { content: [text("No files found matching pattern")] };
 
-      const truncation = truncateHead(relativized.join("\n"), {
+      const groupedOutput = compactFindResults(relativized);
+      const truncation = truncateHead(groupedOutput.text, {
         maxLines: Number.MAX_SAFE_INTEGER,
       });
       let output = truncation.content;
       const details: Record<string, unknown> = {};
+      if (groupedOutput.grouped) details.grouped = "by_directory";
       const notices: string[] = [];
       if (resultLimitReached) {
         notices.push(
@@ -302,6 +306,106 @@ function matchesGlob(relativePath: string, pattern: string): boolean {
     );
   }
   return minimatch(basename(relativePath), pattern, options);
+}
+
+const GREP_GROUP_PER_FILE_LIMIT = 8;
+const FIND_GROUP_SAMPLE_LIMIT = 6;
+
+interface GroupedOutput {
+  text: string;
+  grouped: boolean;
+}
+
+interface ParsedGrepLine {
+  file: string;
+  lineNumber: string;
+  separator: ":" | "-";
+  content: string;
+}
+
+function compactGrepOutputLines(lines: string[]): GroupedOutput {
+  const flat = lines.join("\n");
+  const groups = new Map<string, ParsedGrepLine[]>();
+  const order: string[] = [];
+
+  for (const line of lines) {
+    const parsed = parseGrepOutputLine(line);
+    if (!parsed) return { text: flat, grouped: false };
+    if (!groups.has(parsed.file)) {
+      groups.set(parsed.file, []);
+      order.push(parsed.file);
+    }
+    groups.get(parsed.file)!.push(parsed);
+  }
+
+  if (groups.size <= 1 && lines.length <= GREP_GROUP_PER_FILE_LIMIT) {
+    return { text: flat, grouped: false };
+  }
+
+  const groupedLines: string[] = [];
+  for (const file of order) {
+    const entries = groups.get(file)!;
+    groupedLines.push(`${file} (${entries.length})`);
+    const visible = entries.slice(0, GREP_GROUP_PER_FILE_LIMIT);
+    for (const entry of visible) {
+      groupedLines.push(
+        `  ${entry.file}${entry.separator}${entry.lineNumber}${entry.separator} ${entry.content}`,
+      );
+    }
+    const hidden = entries.length - visible.length;
+    if (hidden > 0) groupedLines.push(`  +${hidden} more in ${file}`);
+  }
+
+  const grouped = groupedLines.join("\n");
+  return grouped.length < flat.length
+    ? { text: grouped, grouped: true }
+    : { text: flat, grouped: false };
+}
+
+function parseGrepOutputLine(line: string): ParsedGrepLine | undefined {
+  const match = /^(.*?)([:-])(\d+)([:-]) (.*)$/u.exec(line);
+  if (!match || match[2] !== match[4]) return undefined;
+  return {
+    file: match[1]!,
+    lineNumber: match[3]!,
+    separator: match[2] as ":" | "-",
+    content: match[5]!,
+  };
+}
+
+function compactFindResults(paths: string[]): GroupedOutput {
+  const flat = paths.join("\n");
+  const groups = new Map<string, string[]>();
+  const order: string[] = [];
+
+  for (const path of paths) {
+    const slash = path.lastIndexOf("/");
+    const dir = slash >= 0 ? path.slice(0, slash) : ".";
+    const name = slash >= 0 ? path.slice(slash + 1) : path;
+    if (!groups.has(dir)) {
+      groups.set(dir, []);
+      order.push(dir);
+    }
+    groups.get(dir)!.push(name);
+  }
+
+  if (groups.size <= 1 && paths.length <= FIND_GROUP_SAMPLE_LIMIT) {
+    return { text: flat, grouped: false };
+  }
+
+  const groupedLines: string[] = [];
+  for (const dir of order) {
+    const names = groups.get(dir)!;
+    groupedLines.push(`${dir === "." ? "." : `${dir}/`} (${names.length})`);
+    const visible = names.slice(0, FIND_GROUP_SAMPLE_LIMIT);
+    const hidden = names.length - visible.length;
+    groupedLines.push(`  ${visible.join(", ")}${hidden > 0 ? `, +${hidden} more` : ""}`);
+  }
+
+  const grouped = groupedLines.join("\n");
+  return grouped.length < flat.length
+    ? { text: grouped, grouped: true }
+    : { text: flat, grouped: false };
 }
 
 function errorResult(message: string): ToolExecResult {
