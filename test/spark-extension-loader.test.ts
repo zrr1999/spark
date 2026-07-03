@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -29,6 +30,18 @@ void test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin 
     expected,
   );
   assert.deepEqual([...DEFAULT_SPARK_EXTENSION_SPECS], expected);
+});
+
+void test("root Pi extension list and native builtins both expose self-extension tools", async () => {
+  const rootPackage = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8"),
+  ) as {
+    pi?: { extensions?: string[] };
+  };
+  assert.ok(rootPackage.pi?.extensions?.includes("./packages/spark-memory/src/extension-entry.ts"));
+  assert.ok(rootPackage.pi?.extensions?.includes("./packages/spark-web/src/extension-entry.ts"));
+  assert.ok([...DEFAULT_SPARK_EXTENSION_SPECS].includes("@zendev-lab/spark-memory/extension"));
+  assert.ok([...DEFAULT_SPARK_EXTENSION_SPECS].includes("@zendev-lab/spark-web/extension"));
 });
 
 void test("SparkExtensionLoader loads builtin factories through explicit imports", async () => {

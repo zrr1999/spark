@@ -263,7 +263,7 @@ void test("artifact record tool stores top-level refs as provenance shortcuts", 
 
     const listed = await tool.execute(
       "artifact-list-shortcuts",
-      { action: "list", projectRef, view: "summary" },
+      { action: "list", projectRef, view: "summary", includeRaw: true },
       new AbortController().signal,
       () => undefined,
       { cwd: dir },
