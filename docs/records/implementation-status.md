@@ -55,14 +55,14 @@ Package naming now follows [`spark-capabilities-and-generative-ui.md`](../archit
   - Spark single-task adapter over `spark-roles`
   - dry-run and real task execution, runtime-created role-run claims, heartbeat loop, artifact persistence, timeout/reconciliation tracking, active child process tracking, kill/input controls, failed-delivery reporting, and role-run transcript compaction support
 - `spark-host`
-  - shared Spark-native ExtensionAPI host runtime, host-neutral runtime types, keybinding registry, tool/command/event/outbox/interaction plumbing, and compatibility adapters for the TUI app
+  - shared Spark-native ExtensionAPI host runtime, host-neutral runtime types, keybinding registry, tool/command/event/outbox/interaction plumbing, compatibility adapters for the TUI app, and the Spark widget renderer surface used by host UIs
 - `spark-turn`
   - shared Spark-native agent turn loop (`SparkAgentLoop` / `SparkTurnRunner`) covering model stream orchestration, tool roundtrips, approval gates, abort handling, outbox draining, and view-event projection
   - deterministic tool-result compaction profiles plus artifact-backed raw output recovery paths for large lossy/error compactions
   - prompt-cache stable/dynamic prompt snapshots, session-level `prompt_cache_key` stream options, env disable switches, and cache read/write run summaries when provider usage reports them
 - `spark`
-  - Spark default research behavior plus `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow[:selector]` commands
-  - Spark widget, role-run status/widget surfaces, mode state, active context provider, session-bound goal facade, review/init flow state, builtin Spark roles, and role/model binding policy
+  - Spark default research behavior plus Pi-compatible `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow[:selector]` command facades bound through the host-owned `registerCommand` registry; the remaining foreground-driver/command aggregation implementation is tracked as `@phase3-command-registration-app-migration`
+  - widget state refresh adapters, role-run status/widget surfaces, mode state, active context provider, session-bound goal facade, review/init flow state, builtin Spark roles, and role/model binding policy
   - canonical visible tool surface through `task_read`, `task_write`, `assign`, `learning`, `artifact`, `ask`, `context`, `workflow`, `role`, `recall`, and `goal`; retired `spark_*` tool configs are not kept as internal dispatch wiring
   - always-available research-default standing mode, with project-bound context appended only after a graph/current project exists
   - state initialization without generic project-idea intake templates; clarification/decision asks are grounded in inspected context, while SPARK.md idea-capture prompts live in external skills

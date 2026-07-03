@@ -21,10 +21,7 @@ import {
   type SparkRoleRunRegistryEntry,
 } from "../packages/pi-extension/src/extension/spark-role-run-observability.ts";
 import { roleRunTaskInfoByRefForTests } from "../packages/pi-extension/src/extension/spark-role-run-tui-controller.ts";
-import type {
-  SparkWidgetTheme,
-  SparkWidgetTui,
-} from "../packages/pi-extension/src/ui/spark-widget.ts";
+import type { SparkWidgetTheme, SparkWidgetTui } from "../packages/spark-host/src/spark-widget.ts";
 import {
   formatSparkRoleRunStatusSummary,
   renderSparkRoleRunBoardLines,

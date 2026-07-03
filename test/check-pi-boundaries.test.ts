@@ -56,6 +56,19 @@ void test("boundary checker rejects cockpit packages importing Spark CLI host in
   assert.match(result.stderr, /Cockpit packages must not import Spark CLI host internals/u);
 });
 
+void test("boundary checker allows pi-extension imports from spark-host foundation", async () => {
+  const root = await fixtureRoot();
+  await writePackage(root, "packages/pi-extension", {
+    name: "@zendev-lab/pi-extension",
+    dependencies: { "@zendev-lab/spark-host": "workspace:^" },
+    source: 'import { SparkWidget } from "@zendev-lab/spark-host/spark-widget";\n',
+  });
+
+  const result = runBoundaryCheck(root);
+
+  assert.equal(result.status, 0, result.stderr);
+});
+
 void test("boundary checker rejects pi-extension imports from app host internals", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "packages/pi-extension", {

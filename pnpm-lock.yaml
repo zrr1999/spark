@@ -292,6 +292,9 @@ importers:
       '@zendev-lab/spark-extension-api':
         specifier: workspace:^
         version: link:../spark-extension-api
+      '@zendev-lab/spark-host':
+        specifier: workspace:^
+        version: link:../spark-host
       '@zendev-lab/spark-i18n':
         specifier: workspace:^
         version: link:../spark-i18n
@@ -437,6 +440,15 @@ importers:
       '@zendev-lab/spark-protocol':
         specifier: workspace:^
         version: link:../spark-protocol
+      '@zendev-lab/spark-tasks':
+        specifier: workspace:^
+        version: link:../spark-tasks
+      '@zendev-lab/spark-text':
+        specifier: workspace:^
+        version: link:../spark-text
+      '@zendev-lab/spark-workflows':
+        specifier: workspace:^
+        version: link:../spark-workflows
 
   packages/spark-i18n:
     devDependencies:

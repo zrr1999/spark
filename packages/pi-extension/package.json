@@ -24,6 +24,7 @@
     "@zendev-lab/spark-ask": "workspace:^",
     "@zendev-lab/spark-context": "workspace:^",
     "@zendev-lab/spark-extension-api": "workspace:^",
+    "@zendev-lab/spark-host": "workspace:^",
     "@zendev-lab/spark-i18n": "workspace:^",
     "@zendev-lab/spark-learnings": "workspace:^",
     "@zendev-lab/spark-loop": "workspace:^",

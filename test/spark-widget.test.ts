@@ -13,7 +13,7 @@ import {
   type SparkWidgetState,
   type SparkWidgetTheme,
   type SparkWidgetTui,
-} from "../packages/pi-extension/src/ui/spark-widget.ts";
+} from "../packages/spark-host/src/spark-widget.ts";
 import { SparkWidgetController } from "../packages/pi-extension/src/extension/spark-widget-controller.ts";
 import { defaultSparkDynamicWorkflowEventStore } from "../packages/spark-workflows/src/index.ts";
 import {

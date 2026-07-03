@@ -24,6 +24,7 @@ const allowedPiTuiPackageDirs = new Set([
 const piAllowedSparkFoundationSpecifiers = [
   "@zendev-lab/spark-artifacts",
   "@zendev-lab/spark-extension-api",
+  "@zendev-lab/spark-host",
   "@zendev-lab/spark-loop",
   "@zendev-lab/spark-modes",
   "@zendev-lab/spark-tasks",

@@ -16,4 +16,9 @@ It wires together Spark mode/policy code and capability packages, while package-
 
 Patch/candidate workflows belong to the Graft capability package: use explicit Graft scratch/candidate tools, or an explicit extension role for patcher-style child runs so the child receives only relevant domain tools and must escalate unclear instructions upward instead of editing directly.
 
+Thin-shim migration notes:
+
+- The Spark widget renderer now lives in `@zendev-lab/spark-host/spark-widget`; `packages/pi-extension/src/ui/spark-widget.ts` is a compatibility re-export for historical imports.
+- The pi-extension command layer remains the Pi-compatible facade for `/plan`, `/implement`, `/goal`, `/loop`, `/workflow`, and related commands. The app/host-owned command registry is `SparkHostRuntime.registerCommand`; pi-extension command modules should only bind stable command names to Spark package/app services and must not add UI/TUI rendering dependencies. Moving the remaining foreground-driver/command aggregation implementation is tracked separately as `@phase3-command-registration-app-migration`.
+
 The Spark widget renders tasks as `@name: title` and keeps longer task instructions in `description`.
