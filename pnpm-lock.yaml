@@ -437,6 +437,9 @@ importers:
       '@zendev-lab/spark-extension-api':
         specifier: workspace:^
         version: link:../spark-extension-api
+      '@zendev-lab/spark-loop':
+        specifier: workspace:^
+        version: link:../spark-loop
       '@zendev-lab/spark-protocol':
         specifier: workspace:^
         version: link:../spark-protocol

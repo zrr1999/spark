@@ -61,7 +61,7 @@ Package naming now follows [`spark-capabilities-and-generative-ui.md`](../archit
   - deterministic tool-result compaction profiles plus artifact-backed raw output recovery paths for large lossy/error compactions
   - prompt-cache stable/dynamic prompt snapshots, session-level `prompt_cache_key` stream options, env disable switches, and cache read/write run summaries when provider usage reports them
 - `spark`
-  - Spark default research behavior plus Pi-compatible `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow[:selector]` command facades bound through the host-owned `registerCommand` registry; the remaining foreground-driver/command aggregation implementation is tracked as `@phase3-command-registration-app-migration`
+  - Spark default research behavior plus Pi-compatible `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow[:selector]` command facades bound through the host-owned `registerCommand` registry; command registration and foreground-driver aggregation implementation now lives in `@zendev-lab/spark-host/spark-command-registration` with pi-extension compatibility shims
   - widget state refresh adapters, role-run status/widget surfaces, mode state, active context provider, session-bound goal facade, review/init flow state, builtin Spark roles, and role/model binding policy
   - canonical visible tool surface through `task_read`, `task_write`, `assign`, `learning`, `artifact`, `ask`, `context`, `workflow`, `role`, `recall`, and `goal`; retired `spark_*` tool configs are not kept as internal dispatch wiring
   - always-available research-default standing mode, with project-bound context appended only after a graph/current project exists

@@ -14,6 +14,8 @@
     "./headless-loader": "./src/headless-loader.ts",
     "./keybindings": "./src/keybindings.ts",
     "./spark-widget": "./src/spark-widget.ts",
+    "./spark-command-registration": "./src/spark-command-registration.ts",
+    "./spark-command-workflow-registration": "./src/spark-command-workflow-registration.ts",
     "./spark-widget-controller": "./src/spark-widget-controller.ts",
     "./types": "./src/types.ts"
   },
@@ -25,6 +27,7 @@
   },
   "dependencies": {
     "@zendev-lab/spark-extension-api": "workspace:^",
+    "@zendev-lab/spark-loop": "workspace:^",
     "@zendev-lab/spark-protocol": "workspace:^",
     "@zendev-lab/spark-tasks": "workspace:^",
     "@zendev-lab/spark-text": "workspace:^",
