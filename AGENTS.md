@@ -15,7 +15,7 @@ Target package topology follows type-first names:
 - `packages/pi-extension` — legacy Pi-compatible extension facade (slated for retirement). It owns Spark command/tool policy and depends on `spark-extension-api` instead of concrete host runtimes.
 - `packages/spark-runtime`, `packages/spark-protocol`, `packages/spark-tui`, `packages/spark-db`, and `packages/spark-system` — Spark shared runtime, protocol/schema, reusable TUI boundary, SQLite/migration, and local-system helper packages.
 - `packages/spark-cockpit-*` — reserved for Cockpit-private implementation packages; do not put daemon/shared helpers behind Cockpit-private names.
-- `docs/navia/` — Historical cockpit product, design, architecture, and release-readiness documentation imported from the standalone Navia repository.
+- `docs/` — current docs are split into `architecture/`, `specs/`, `research/`, and `records/`; `docs/navia/` keeps the pruned Spark Cockpit UI/product docs that originated under the Navia name.
 
 ## Tooling
 

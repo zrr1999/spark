@@ -626,7 +626,7 @@ architecture document.
 When generating Spark Cockpit UI:
 
 1. Use this file only for visual/interface decisions.
-2. Use the root `ARCHITECTURE.md` and `docs/README.md` for product/architecture decisions.
+2. Use root `DESIGN.md` as the product/architecture entry and `ARCHITECTURE.md` only for package/dependency ownership details.
 3. Build the dashboard direction: light surface, left nav, cards, decision queue, evidence board.
 4. Use the front matter tokens instead of hardcoded colors, spacing, radii, typography, and shadows.
 5. Keep UI operational and evidence-first.

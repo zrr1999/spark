@@ -20,7 +20,7 @@ Spark Cockpit is a projection/cache UI, not an execution authority.
 
 ## Active docs
 
-- [`DESIGN.md`](./DESIGN.md) — interface design system for Spark Cockpit UI work. Product and package architecture live in the root [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) and [`../README.md`](../README.md).
+- [`DESIGN.md`](./DESIGN.md) — interface design system for Spark Cockpit UI work. Product/architecture entry lives in root [`../../DESIGN.md`](../../DESIGN.md); package/dependency ownership details live in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md).
 - [`docs/rfcs/backend-server-rfc.md`](./docs/rfcs/backend-server-rfc.md) — SvelteKit/server boundary.
 - [`docs/rfcs/data-model-rfc.md`](./docs/rfcs/data-model-rfc.md) — SQLite projection/cache schema contract.
 - [`docs/rfcs/projection-store-boundary-rfc.md`](./docs/rfcs/projection-store-boundary-rfc.md) — route/query boundary and projection-store ownership.

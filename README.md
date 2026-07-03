@@ -149,10 +149,11 @@ Pi loads raw TypeScript from the package manifest; there is no build step.
 
 ## Docs
 
+- [`DESIGN.md`](./DESIGN.md)
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md)
 - [`docs/README.md`](./docs/README.md)
-- [`docs/implementation-status.md`](./docs/implementation-status.md)
-- [`docs/spark-store-inventory.md`](./docs/spark-store-inventory.md)
-- [`docs/tools.md`](./docs/tools.md)
-- [`docs/spark-host-architecture.md`](./docs/spark-host-architecture.md)
-- [`docs/commit-convention.md`](./docs/commit-convention.md)
+- [`docs/records/implementation-status.md`](./docs/records/implementation-status.md)
+- [`docs/specs/spark-store-inventory.md`](./docs/specs/spark-store-inventory.md)
+- [`docs/specs/tools.md`](./docs/specs/tools.md)
+- [`docs/architecture/spark-host-architecture.md`](./docs/architecture/spark-host-architecture.md)
+- [`docs/specs/commit-convention.md`](./docs/specs/commit-convention.md)

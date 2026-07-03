@@ -1,6 +1,6 @@
 # Spark host architecture
 
-Spark has two interactive host targets plus one daemon execution target. Shared extension packages use `spark-extension-api`; current package ownership is summarized in [`../ARCHITECTURE.md`](../ARCHITECTURE.md) and selected capability naming is captured in [`spark-capabilities-and-generative-ui.md`](./spark-capabilities-and-generative-ui.md).
+Spark has two interactive host targets plus one daemon execution target. Shared extension packages use `spark-extension-api`; current package ownership is summarized in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) and selected capability naming is captured in [`spark-capabilities-and-generative-ui.md`](./spark-capabilities-and-generative-ui.md).
 
 ## Data flow
 

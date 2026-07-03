@@ -2,7 +2,7 @@
 
 High-level Spark command and policy facade for Spark hosts. User-facing entry points are intent-specific commands plus canonical tools.
 
-Naming note: current workspace packages still use several `pi-*` import specifiers until the staged rename lands. The selected target concept is documented in [`../../docs/spark-capabilities-and-generative-ui.md`](../../docs/spark-capabilities-and-generative-ui.md): Spark-owned capabilities move to `spark-*`, public tool names stay stable, and `pi-btw` remains out of scope.
+Naming note: current workspace packages still use several `pi-*` import specifiers until the staged rename lands. The selected target concept is documented in [`../../docs/architecture/spark-capabilities-and-generative-ui.md`](../../docs/architecture/spark-capabilities-and-generative-ui.md): Spark-owned capabilities move to `spark-*`, public tool names stay stable, and `pi-btw` remains out of scope.
 
 It wires together Spark mode/policy code and capability packages, while package-specific ownership stays below:
 

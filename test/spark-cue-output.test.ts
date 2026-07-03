@@ -579,7 +579,7 @@ void test("spark-cue tool descriptions match cue-shell chain operator contract",
 void test("spark-cue docs document script runner venv and uv script behavior", async () => {
   const skill = await readFile("packages/spark-cue/skills/spark-cue/SKILL.md", "utf8");
   const readme = await readFile("packages/spark-cue/README.md", "utf8");
-  const toolsDoc = await readFile("docs/tools.md", "utf8");
+  const toolsDoc = await readFile("docs/specs/tools.md", "utf8");
 
   assert.match(skill, /`script_run`\s+\|[^\n]+`venv\?`/);
   assert.match(skill, /`script_eval`\s+\|[^\n]+`venv\?`/);
