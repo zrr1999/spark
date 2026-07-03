@@ -610,8 +610,12 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+export function sparkWorkflowRunStorePath(cwd: string): string {
+  return join(cwd, ".spark", "workflow-runs.json");
+}
+
 export function defaultWorkflowRunStore(cwd: string): WorkflowRunStore {
-  return new WorkflowRunStore(join(cwd, ".spark", "workflow-runs.json"));
+  return new WorkflowRunStore(sparkWorkflowRunStorePath(cwd));
 }
 
 export function summarizeWorkflowRuns(

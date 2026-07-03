@@ -232,4 +232,7 @@ export * from "./metadata.ts";
 export * from "./runtime.ts";
 export * from "./events.ts";
 export * from "./builtins.ts";
+export * from "./dynamic-workflow-run-store.ts";
+export * from "./dynamic-workflow-event-store.ts";
+export * from "./dynamic-workflow-manager.ts";
 export * from "./orchestrator/index.ts";

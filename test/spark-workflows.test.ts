@@ -6,10 +6,14 @@ import { test } from "node:test";
 
 import {
   listSavedWorkflows,
+  defaultSparkDynamicWorkflowEventStore,
+  defaultSparkDynamicWorkflowManager,
+  defaultSparkDynamicWorkflowRunStore,
   parseWorkflowScript,
   projectWorkflowRunEvents,
   readSavedWorkflow,
   runWorkflowScript,
+  type SparkDynamicWorkflowEventInput,
   type WorkflowRunEvent,
   type WorkflowRunOptions,
   type WorkflowRunResult,
@@ -30,12 +34,6 @@ import {
   registerSparkWorkflowRunTool,
   workflowAgentTelemetryFromRoleRun,
 } from "../packages/pi-extension/src/extension/spark-workflow-run-tool-registration.ts";
-import {
-  defaultSparkDynamicWorkflowEventStore,
-  type SparkDynamicWorkflowEventInput,
-} from "../packages/pi-extension/src/extension/spark-dynamic-workflow-event-store.ts";
-import { defaultSparkDynamicWorkflowManager } from "../packages/pi-extension/src/extension/spark-dynamic-workflow-manager.ts";
-import { defaultSparkDynamicWorkflowRunStore } from "../packages/pi-extension/src/extension/spark-dynamic-workflow-run-store.ts";
 import {
   buildSparkDynamicWorkflowDashboardView,
   formatSparkDynamicWorkflowRunLine,

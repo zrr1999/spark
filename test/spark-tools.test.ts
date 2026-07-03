@@ -99,7 +99,7 @@ import {
   normalizeSparkWorkflowRunsNonNegativeInteger,
   normalizeSparkWorkflowRunsRunRef,
 } from "../packages/pi-extension/src/extension/spark-workflow-runs-tool-registration.ts";
-import { defaultSparkDynamicWorkflowEventStore } from "../packages/pi-extension/src/extension/spark-dynamic-workflow-event-store.ts";
+import { defaultSparkDynamicWorkflowEventStore } from "../packages/spark-workflows/src/index.ts";
 import {
   normalizeSparkNewProjectInput,
   normalizeSparkProjectOptionalString,

@@ -15,7 +15,7 @@ import {
   type SparkWidgetTui,
 } from "../packages/pi-extension/src/ui/spark-widget.ts";
 import { SparkWidgetController } from "../packages/pi-extension/src/extension/spark-widget-controller.ts";
-import { defaultSparkDynamicWorkflowEventStore } from "../packages/pi-extension/src/extension/spark-dynamic-workflow-event-store.ts";
+import { defaultSparkDynamicWorkflowEventStore } from "../packages/spark-workflows/src/index.ts";
 import { setSessionGoal } from "../packages/pi-extension/src/extension/spark-session-goals.ts";
 import {
   loadSessionLoop,

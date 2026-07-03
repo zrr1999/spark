@@ -1,10 +1,5 @@
-import { join } from "node:path";
-import { WorkflowRunStore } from "@zendev-lab/spark-workflows";
-
-export function sparkWorkflowRunStorePath(cwd: string): string {
-  return join(cwd, ".spark", "workflow-runs.json");
-}
-
-export function defaultSparkWorkflowRunStore(cwd: string): WorkflowRunStore {
-  return new WorkflowRunStore(sparkWorkflowRunStorePath(cwd));
-}
+/** Compatibility shim: workflow-run state is owned by @zendev-lab/spark-workflows. */
+export {
+  defaultWorkflowRunStore as defaultSparkWorkflowRunStore,
+  sparkWorkflowRunStorePath,
+} from "@zendev-lab/spark-workflows";
