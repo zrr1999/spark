@@ -182,7 +182,12 @@ function registerIfAvailable(
 ): void {
   const exists = inspectRegisteredTools(api)?.some((tool) => tool.name === config.name) ?? false;
   if (exists && options.conflictStrategy !== "replace") return;
-  api.registerTool(config);
+  try {
+    api.registerTool(config);
+  } catch (error) {
+    if (options.conflictStrategy !== "replace" && isToolConflictError(error, config.name)) return;
+    throw error;
+  }
 }
 
 function inspectRegisteredTools(api: SparkWebExtensionApi): Array<{ name: string }> | undefined {
@@ -191,6 +196,11 @@ function inspectRegisteredTools(api: SparkWebExtensionApi): Array<{ name: string
   } catch {
     return undefined;
   }
+}
+
+function isToolConflictError(error: unknown, toolName: string): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes(`Tool "${toolName}" conflicts with`);
 }
 
 function renderFetched(

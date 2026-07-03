@@ -167,6 +167,12 @@ void test("spark-web extension tolerates Pi loading-stage action guards", () => 
   assert.ok(api.tools.has("get_search_content"));
 });
 
+void test("spark-web extension skips Pi tool conflicts when inspection is unavailable", () => {
+  const api = new ConflictThrowingLoadingStageApi();
+  assert.doesNotThrow(() => sparkWebExtension(api));
+  assert.deepEqual(api.attempted, ["web_search", "fetch_content", "get_search_content"]);
+});
+
 void test("spark-web extension registers tools, retrieves cache, and skips conflicts", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-web-extension-"));
   try {
@@ -232,6 +238,15 @@ class LoadingStageApi {
     throw new Error(
       "Extension runtime not initialized. Action methods cannot be called during extension loading.",
     );
+  }
+}
+
+class ConflictThrowingLoadingStageApi extends LoadingStageApi {
+  readonly attempted: string[] = [];
+
+  override registerTool(config: ToolConfig): void {
+    this.attempted.push(config.name);
+    throw new Error(`Tool "${config.name}" conflicts with pi-web-access/index.ts`);
   }
 }
 
