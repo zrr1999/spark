@@ -87,6 +87,7 @@ Spark package names are type-first:
 - `@zendev-lab/spark-tui` — Spark-owned reusable TUI boundary over `@earendil-works/pi-tui`; centralizes text width/truncation/wrapping, key parsing, and current `pi-tui` component/runtime exports so future renderer swaps do not leak through extension packages.
 - `@zendev-lab/spark-host` — reusable Spark ExtensionAPI host runtime: `SparkHostRuntime`, host-neutral internal types, keybindings, tool/command/event/outbox/interaction plumbing, and compatibility contracts shared by TUI, headless, and daemon execution.
 - `@zendev-lab/spark-turn` — reusable Spark agent turn loop: `SparkAgentLoop` / `SparkTurnRunner`, model stream orchestration, tool roundtrips, approval gates, abort handling, outbox draining, and view-event projection.
+- `@zendev-lab/spark-web` — native `web_search` / `fetch_content` / `get_search_content` capability with SSRF-safe fetching, untrusted-content wrapping, provider search, and recoverable `.spark/web` content cache.
 - `@zendev-lab/spark-tui-app` — executable Spark native TUI app under `apps/spark-tui`; publishes the `spark-tui` binary plus public provider/headless-executor surfaces used by the daemon.
 - `@zendev-lab/spark-daemon` — Spark daemon executable app package under `apps/spark-daemon`; session execution uses the Spark headless session executor backed by `spark-host`/`spark-turn`, not `pi-coding-agent` session creation.
 - `@zendev-lab/spark-cockpit` — private Spark Cockpit SvelteKit executable app package under `apps/spark-cockpit`.

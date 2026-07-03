@@ -38,6 +38,7 @@ spark-files              # local file/search tools
 spark-graft              # graft patch/candidate tools
 spark-learnings          # evidence-backed learning records, reflection pipeline, and learning tool
 spark-memory             # unified explicit memory store/search/policy layer
+spark-web                # native web_search/fetch_content/get_search_content capability
 spark-recall             # explicit lightweight recall candidates
 spark-roles              # reusable role specs and simple role-run helpers
 pi-btw                # Pi-specific side-conversation workflow, excluded from this rename wave

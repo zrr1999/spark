@@ -8,6 +8,7 @@ import sparkFilesExtension from "../../../../packages/spark-files/src/extension.
 import sparkGraftExtension from "../../../../packages/spark-graft/src/extension.ts";
 import sparkMemoryExtension from "../../../../packages/spark-memory/src/extension.ts";
 import sparkRolesExtension from "../../../../packages/spark-roles/src/extension.ts";
+import sparkWebExtension from "../../../../packages/spark-web/src/extension.ts";
 import sparkModelsExtension from "../../../../packages/spark-ai/src/models-extension.ts";
 import sparkExtension from "../../../../packages/pi-extension/src/extension/index.ts";
 
@@ -18,6 +19,7 @@ export type SparkBuiltinExtensionName =
   | "@zendev-lab/spark-graft"
   | "@zendev-lab/spark-memory"
   | "@zendev-lab/spark-roles"
+  | "@zendev-lab/spark-web"
   | "@zendev-lab/spark-ai"
   | "spark";
 
@@ -54,6 +56,7 @@ export const DEFAULT_SPARK_EXTENSION_SPECS = [
   "@zendev-lab/spark-ai/models-extension",
   "@zendev-lab/spark-memory/extension",
   "@zendev-lab/spark-roles/extension",
+  "@zendev-lab/spark-web/extension",
   "@zendev-lab/spark-graft/extension",
   "@zendev-lab/pi-extension/extension",
 ] as const;
@@ -88,6 +91,11 @@ const BUILTIN_EXTENSION_FACTORIES: readonly SparkBuiltinExtensionFactory[] = [
     name: "@zendev-lab/spark-roles",
     specifier: "@zendev-lab/spark-roles/extension",
     factory: sparkRolesExtension as SparkExtensionFactory,
+  },
+  {
+    name: "@zendev-lab/spark-web",
+    specifier: "@zendev-lab/spark-web/extension",
+    factory: sparkWebExtension as SparkExtensionFactory,
   },
   {
     name: "@zendev-lab/spark-graft",

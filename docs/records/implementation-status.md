@@ -35,6 +35,8 @@ Package naming now follows [`spark-capabilities-and-generative-ui.md`](../archit
 - `spark-memory`
   - unified explicit scoped memory entries with `remember | recall | search | status | forget`, keyword scoring, secret scanning, and policy-only prompting
   - first owner layer over the memory direction while keeping `learning` and `recall` public surfaces stable
+- `spark-web`
+  - native `web_search`, `fetch_content`, and `get_search_content` tools with provider-backed search, SSRF-safe fetches, untrusted-content wrapping, and recoverable `.spark/web` content cache
 - `spark-recall`
   - controlled explicit-scope `user | workspace | repo` recall candidate store and canonical `recall` tool
   - candidate record/list/search/reject lifecycle only; no automatic memory promotion and no `.learnings/` writes

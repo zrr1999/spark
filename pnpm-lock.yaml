@@ -79,6 +79,9 @@ importers:
       '@zendev-lab/spark-turn':
         specifier: workspace:^
         version: link:packages/spark-turn
+      '@zendev-lab/spark-web':
+        specifier: workspace:^
+        version: link:packages/spark-web
       '@zendev-lab/spark-workflows':
         specifier: workspace:^
         version: link:packages/spark-workflows
@@ -601,6 +604,15 @@ importers:
       '@zendev-lab/spark-protocol':
         specifier: workspace:^
         version: link:../spark-protocol
+
+  packages/spark-web:
+    dependencies:
+      '@zendev-lab/spark-extension-api':
+        specifier: workspace:^
+        version: link:../spark-extension-api
+      typebox:
+        specifier: ^1.2.13
+        version: 1.2.13
 
   packages/spark-workflows:
     dependencies:
