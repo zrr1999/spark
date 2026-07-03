@@ -1,212 +1,28 @@
-# Navia
+# Spark Cockpit product docs
 
-> Spark's local web cockpit. A SvelteKit app and SQLite projection/cache layer
-> render Spark-owned task runs, asks, artifacts, and workspace evidence without
-> becoming the execution source of truth.
+These docs describe the local Spark Cockpit product line that grew out of the older Navia planning name. Current code uses Spark package names:
 
-**Status.** Early `0.1.x` Spark-monorepo product line. The current merged build
-supports local owner setup, token-based workspace registration, local workspace
-connections, workspace and project cockpit surfaces, command delivery, and
-Spark-runtime-backed task execution through `@zendev-lab/spark-daemon`. Remaining work
-is tracked in [docs/plans/release-roadmap.md](./docs/plans/release-roadmap.md).
+- `apps/spark-cockpit` — SvelteKit web cockpit and server routes.
+- `packages/spark-server` — Cockpit coordination/query plane.
+- `packages/spark-protocol` — daemon/server protocol schemas, fixtures, and shared refs.
+- `packages/spark-db` — SQLite migrations, client helpers, and dialect.
+- `packages/spark-system` — local path, permission, and command helpers.
+- `apps/spark-daemon` — execution truth and daemon transport adapters.
 
-## Contents
+## Current boundary
 
-- [Architecture at a glance](#architecture-at-a-glance)
-- [Repository layout](#repository-layout)
-- [Terminology](#terminology)
-- [Requirements](#requirements)
-- [Local development](#local-development)
-- [Workspace registration](#workspace-registration)
-- [Validation](#validation)
-- [Release gates](#release-gates)
-- [npm publishing](#npm-publishing)
-- [Troubleshooting](#troubleshooting)
-- [Further reading](#further-reading)
+Spark Cockpit is a projection/cache UI, not an execution authority.
 
-## Architecture at a glance
+1. Browser traffic stays server-mediated through `apps/spark-cockpit` routes.
+2. Server-side route code should call `@zendev-lab/spark-server` query/coordination APIs rather than importing `@zendev-lab/spark-db` or local workspace `.spark` stores directly.
+3. Cockpit ↔ daemon traffic uses the `spark-protocol` runtime transport. Runtime WebSocket/server uplink is transport only; daemon dispatcher policy remains the execution arbitration point.
+4. Spark `.spark/` stores and `spark-artifacts` remain authoritative for task/run/artifact/ask/review truth. Cockpit SQLite state is a reconnect-safe projection/cache.
 
-Navia separates three concerns by design:
+## Active docs
 
-1. **Browser ↔ server.** The SvelteKit app talks only to the local Navia
-   server. Browser traffic stays server-mediated.
-2. **Server ↔ Spark daemon.** The server brokers a typed protocol with one or
-   more local `navia` services over `/api/v1/runtime/*`.
-3. **Local service ↔ Spark workspace.** The Spark daemon registers workspace
-   directories, routes task starts through Spark runtime primitives, and reports
-   Spark task graphs, asks, reviews, invocations, and artifacts back to the
-   server as projections.
+- [`DESIGN.md`](./DESIGN.md) — interface design system for Spark Cockpit UI work. Product and package architecture live in the root [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) and [`../README.md`](../README.md).
+- [`docs/rfcs/backend-server-rfc.md`](./docs/rfcs/backend-server-rfc.md) — SvelteKit/server boundary.
+- [`docs/rfcs/data-model-rfc.md`](./docs/rfcs/data-model-rfc.md) — SQLite projection/cache schema contract.
+- [`docs/rfcs/projection-store-boundary-rfc.md`](./docs/rfcs/projection-store-boundary-rfc.md) — route/query boundary and projection-store ownership.
 
-Spark `.spark/` stores and Spark artifact stores remain the source of truth for
-execution state. Navia's web app renders SQLite projections and preview caches
-for the local cockpit; losing `.navia` projection/cache state must not corrupt
-Spark execution truth.
-
-## Repository layout
-
-This is a pnpm + Vite-Plus monorepo.
-
-```
-spark/
-├─ apps/
-│  ├─ spark-cockpit/          # SvelteKit web cockpit (private; bundled inside the server)
-│  └─ spark-daemon/       # Spark daemon service implementation
-├─ packages/
-│  ├─ navia-protocol/     # daemon ↔ server protocol schemas, envelopes, identifiers
-│  ├─ navia-db/           # SQLite migrations and database helpers
-│  ├─ navia-domain/       # shared domain utilities
-│  ├─ navia-system/       # local path and private-file helpers
-│  └─ navia-ui/           # shared UI surface
-├─ docs/navia/            # Navia design, RFCs, release docs, troubleshooting
-└─ packages/spark-runtime/, packages/pi-*  # Spark execution/source-of-truth packages
-```
-
-Published surface (npm, scoped `@zendev-lab/navia-*`):
-
-| Package               | Role                                                   |
-| --------------------- | ------------------------------------------------------ |
-| `@zendev-lab/spark-daemon`   | Spark daemon service package; routes task execution through Spark runtime |
-| `@zendev-lab/navia-protocol` | Spark daemon/server protocol schemas, envelopes, identifiers |
-| `@zendev-lab/navia-db`       | SQLite migrations and database helpers                 |
-| `@zendev-lab/navia-domain`   | Shared domain utilities                                |
-| `@zendev-lab/navia-system`   | Local path and private-file helpers                    |
-| `@zendev-lab/navia-ui`       | Shared UI surface                                      |
-
-`@zendev-lab/spark-cockpit` is intentionally private until the packaged server
-distribution is finalized; the root package is private because it is a
-workspace aggregator.
-
-## Terminology
-
-Navia distinguishes the product flow from the wire protocol:
-
-- **Workspace registration** is the product setup flow. Users run
-  `spark daemon workspace register` against a local directory; Navia then
-  surfaces a server-visible workspace backed by that directory.
-- **Spark daemon** names the internal `@zendev-lab/spark-daemon` package boundary behind
-  workspace registration and Spark runtime bridging. Public operator commands route through
-  the unified `spark daemon` command group.
-- **Runtime** is reserved for protocol, API route, database, and
-  wire-contract names: `/api/v1/runtime/*`, `runtime.hello`,
-  `runtime_workspace_bindings`, and similar identifiers. Spark runtime remains
-  the execution owner behind the daemon bridge.
-
-UI copy, setup docs, npm-facing docs, and release notes prefer
-_workspace registration_ and _workspace directory_ language unless they
-are describing implementation diagnostics or a literal protocol/storage
-identifier.
-
-## Requirements
-
-- Node `>=26 <27`
-- pnpm `>=11 <12`
-
-## Local development
-
-```bash
-pnpm install
-pnpm install -g .
-pnpm run preview
-spark daemon --help
-```
-
-`pnpm run preview` starts the local SvelteKit cockpit from the Spark root.
-`pnpm install -g .` links the unified root `spark` CLI; `spark daemon` builds
-and invokes the local daemon CLI on first service-command use if needed.
-
-The production-style data layout uses XDG locations such as
-`${XDG_DATA_HOME:-~/.local/share}/navia/server`, unless one of
-`NAVIA_SERVER_DATA_DIR`, `NAVIA_SERVER_CACHE_DIR`, or
-`NAVIA_SERVER_STATE_DIR` is set.
-
-## Workspace registration
-
-1. Start the web app and create the local owner.
-2. From the **Create workspace** flow on Home or **Settings → Registration**,
-   generate a one-time workspace registration token and the matching command.
-3. Run that command against the local directory you want Navia to manage:
-
-   ```bash
-   spark daemon workspace register /path/to/workspace \
-     --server-url http://127.0.0.1:5173 \
-     --token <token>
-   ```
-
-   If you omit the path from an interactive `spark daemon workspace register`, `navia`
-   prompts for it. Non-interactive registration should pass the path
-   explicitly.
-
-4. Once the directory comes online, confirm the workspace in the web app,
-   create a project, and start the first task from the project cockpit.
-
-Workspace registration tokens are shown exactly once. Navia stores only
-their hash; if you lose a token, generate a new one.
-
-## Validation
-
-The fast inner loop:
-
-```bash
-pnpm run check
-pnpm run build
-```
-
-## Release gates
-
-The merged Spark root intentionally exposes a small command surface: use
-`pnpm run check` for validation, `pnpm run build` for production builds, and
-`pnpm run publish` for the selected public npm packages. Imported standalone
-Navia release-gate names are historical notes, not root scripts. For the contract and trade-offs see
-[docs/release/e2e-gate.md](./docs/release/e2e-gate.md); for failure modes see
-[docs/release/troubleshooting.md](./docs/release/troubleshooting.md).
-
-## npm publishing
-
-The publish surface is the `@zendev-lab/navia-*` Spark daemon and shared packages
-listed above. The root and `@zendev-lab/spark-cockpit` are private by design.
-
-The full publishing checklist — versioning, provenance, dist-tags, smoke
-gates, and pre-release prerequisites — lives in
-[docs/release/npm-publishing.md](./docs/release/npm-publishing.md). The package
-scope/rename/collapse decision packet lives in
-[docs/release/package-naming-publishing-decision.md](./docs/release/package-naming-publishing-decision.md).
-
-Before a first public release the project still needs to:
-
-- pick and commit a `LICENSE` file,
-- publish the GitHub remote and add `repository` and `homepage` metadata
-  to each publishable `package.json`,
-- finalize the packaged server distribution before unprivating
-  `@zendev-lab/spark-cockpit`.
-
-These are tracked items, not optional polish; do not publish without
-them.
-
-## Troubleshooting
-
-[docs/release/troubleshooting.md](./docs/release/troubleshooting.md) covers:
-
-- local server startup,
-- format-check failures,
-- the simulator and real-Spark daemon gates,
-- runtime workspace binding timeouts,
-- workspace registration in CI.
-
-Start there before opening an issue.
-
-## Further reading
-
-Architecture and product context:
-
-- [architecture-sketch.md](./architecture-sketch.md) — system shape and
-  ownership boundaries.
-- [implementation-plan.md](./implementation-plan.md) — staged delivery plan.
-- [DESIGN.md](./DESIGN.md) — interface design contract for any UI work.
-
-RFCs:
-
-- [docs/rfcs/backend-server-rfc.md](./docs/rfcs/backend-server-rfc.md)
-- [docs/rfcs/spark-daemon-protocol-rfc.md](./docs/rfcs/spark-daemon-protocol-rfc.md)
-- [docs/rfcs/data-model-rfc.md](./docs/rfcs/data-model-rfc.md)
-- [docs/rfcs/projection-store-boundary-rfc.md](./docs/rfcs/projection-store-boundary-rfc.md)
-- [docs/rfcs/implementation-options-rfc.md](./docs/rfcs/implementation-options-rfc.md)
+Old release, publishing, troubleshooting, and research-survey notes were removed after their useful content was folded into the active architecture/status docs and Spark task graph.

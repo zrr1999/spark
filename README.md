@@ -1,6 +1,6 @@
 # spark
 
-`spark` is the Spark suite for Pi: a controlled agentic development system where intent-specific Pi commands and canonical tools compose lower-level `pi-*` extension capabilities through project/task orchestration policy.
+`spark` is the Spark suite for Pi and Spark-native hosts: a controlled agentic development system where intent-specific commands and canonical tools compose Spark-owned capability packages through project/task orchestration policy.
 
 The repository also contains standalone Spark entrypoints. The target topology mirrors cue-shell-style dispatch: `apps/spark-cli` publishes a thin `spark` dispatcher, and the dispatcher resolves public subcommands such as `spark tui`, `spark daemon`, and `spark cockpit` to Spark app surfaces.
 
@@ -90,14 +90,14 @@ Spark package names are type-first:
 - `@zendev-lab/spark-tui-app` — executable Spark native TUI app under `apps/spark-tui`; publishes the `spark-tui` binary plus public provider/headless-executor surfaces used by the daemon.
 - `@zendev-lab/spark-daemon` — Spark daemon executable app package under `apps/spark-daemon`; session execution uses the Spark headless session executor backed by `spark-host`/`spark-turn`, not `pi-coding-agent` session creation.
 - `@zendev-lab/spark-cockpit` — private Spark Cockpit SvelteKit executable app package under `apps/spark-cockpit`.
-- `@zendev-lab/pi-extension` — legacy Pi-compatible extension facade (slated for retirement): high-level `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow[:selector]` command facade plus default lightweight research behavior that composes generic `pi-*` capabilities with Spark-owned orchestration policy, widget state, builtin Spark roles, and active-context provider registration.
+- `@zendev-lab/pi-extension` — legacy Pi-compatible extension facade (slated for retirement): high-level `/plan`, `/implement`, `/goal`, `/loop`, and `/workflow[:selector]` command facade plus default lightweight research behavior that composes Spark-owned capability packages with orchestration policy, widget state, builtin Spark roles, and active-context provider registration.
 - `@zendev-lab/spark-runtime` — Spark single-task runtime adapter that executes one task through `@zendev-lab/spark-roles`, writes artifacts, and owns task/run/timeout mapping above `RoleRun`.
 - `@zendev-lab/spark-protocol` — single Spark shared protocol/schema package. It owns JSON-safe refs/errors plus runtime, cockpit, interaction, and view-model schemas; it is intentionally not named `spark-view-protocol` because non-view protocols live here too.
 - `@zendev-lab/spark-extension-api` — shared extension host/tool contract, refs, errors, and light JSON/fs/time helpers. It remains separate from `pi-extension` so Pi-style host contracts stay host-neutral.
 - `@zendev-lab/spark-artifacts` — reusable artifact/evidence store, durable artifact metadata/blobs, provenance/lineage contracts, the canonical `artifact` action tool, and `@zendev-lab/spark-artifacts/generative-ui` for safe Cockpit Generative UI parsing.
 - `@zendev-lab/spark-tasks` — generic project/task/TODO/run graph capability and canonical `task_read` / `task_write` / `assign` tools; owns readiness, claims, TODO stores, and `.spark/projects.json` graph state without depending on Spark packages.
-- `@zendev-lab/spark-learnings` — generic evidence-backed learning capability and canonical `learning({ action })` tool; owns `.learnings/` local/user learning stores.
-- `@zendev-lab/spark-loop` — generic foreground loop and goal primitives, including non-completing loop continuation plus goal objective/completion prompt helpers; Spark owns the project-bound `/loop` and `/goal` facades while preserving historical serialized marker strings.
+- `@zendev-lab/spark-learnings` — generic evidence-backed learning capability, deterministic reflection pipeline, and canonical `learning({ action })` tool; owns `.learnings/` local/user learning stores plus `.spark/reflections/` reports/candidates.
+- `@zendev-lab/spark-loop` — generic foreground loop and goal primitives, session goal/loop stores, non-completing loop continuation, and goal objective/completion prompt helpers; Spark owns the project-bound `/loop` and `/goal` facades while preserving historical serialized marker strings.
 - `@zendev-lab/spark-workflows` — saved-script workflow discovery/runtime primitives plus workflow/DAG run-store support for `.spark/workflow-runs.json`.
 - `@zendev-lab/spark-context` — registered context-provider capability with bounded list/preview actions and no freeform prompt injection.
 - `@zendev-lab/spark-recall` — controlled explicit-scope recall candidate store/tool, separate from `.learnings/` and automatic memory.
@@ -150,6 +150,7 @@ Pi loads raw TypeScript from the package manifest; there is no build step.
 ## Docs
 
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md)
+- [`docs/README.md`](./docs/README.md)
 - [`docs/implementation-status.md`](./docs/implementation-status.md)
 - [`docs/spark-store-inventory.md`](./docs/spark-store-inventory.md)
 - [`docs/tools.md`](./docs/tools.md)

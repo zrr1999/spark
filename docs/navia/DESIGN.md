@@ -1,7 +1,7 @@
 ---
 version: alpha
-name: Navia Operational Interface
-description: "A light, precise, evidence-first interface system for Navia's agentic project dashboard. Inspired by the supplied screenshots and the awesome-design-md format: this file describes only visual/interface design — mood, colors, typography, layout, components, states, and responsive behavior. Product architecture, ownership, and data-model decisions live in separate architecture documents."
+name: Spark Cockpit Operational Interface
+description: "A light, precise, evidence-first interface system for Spark Cockpit's agentic project dashboard. Inspired by the supplied screenshots and the awesome-design-md format: this file describes only visual/interface design — mood, colors, typography, layout, components, states, and responsive behavior. Product architecture, ownership, and data-model decisions live in separate architecture documents."
 
 colors:
    primary: "#2563EB"
@@ -338,11 +338,11 @@ components:
       border: "1px solid {colors.border-soft}"
 ---
 
-# Navia Operational Interface Design System
+# Spark Cockpit Operational Interface Design System
 
 ## Overview
 
-Navia's interface is a light operational dashboard for supervising agentic engineering projects. The visual language is precise and calm: white cards, pale slate canvas, small semantic badges, compact task rows, and evidence previews. The layout direction is a workspace-level project list and a project-level cockpit with task clusters, pending decisions, and evidence artifacts.
+Spark Cockpit's interface is a light operational dashboard for supervising agentic engineering projects. The visual language is precise and calm: white cards, pale slate canvas, small semantic badges, compact task rows, and evidence previews. The layout direction is a workspace-level project list and a project-level cockpit with task clusters, pending decisions, and evidence artifacts.
 
 This file defines only the interface design system. Architecture, ownership, storage, and product data-model decisions belong in separate documents.
 
@@ -355,7 +355,7 @@ pnpm dlx @google/design.md lint DESIGN.md
 ```
 
 The **executable representation** of the YAML front matter lives at
-[`apps/web/src/lib/tokens.css`](apps/web/src/lib/tokens.css). The CSS variable
+[`apps/spark-cockpit/src/lib/tokens.css`](../../apps/spark-cockpit/src/lib/tokens.css). The CSS variable
 layer is the single source of truth for runtime styling; component `<style>`
 blocks must reference `var(--color-*)`, `var(--spacing-*)`, `var(--rounded-*)`,
 `var(--shadow-*)` instead of hardcoded values. A pre-commit hook
@@ -367,7 +367,7 @@ change.
 
 Known deliberate deviations from the upstream spec, kept until the spec stabilises:
 
-- **Component sub-tokens beyond the closed set.** The spec only recognises `backgroundColor / textColor / typography / rounded / padding / size / height / width`. Navia components also use `border` and `shadow` because the operational style relies on them for hierarchy. The linter accepts these with a warning. Do not remove them; do not extend the set further without updating this section.
+- **Component sub-tokens beyond the closed set.** The spec only recognises `backgroundColor / textColor / typography / rounded / padding / size / height / width`. Spark Cockpit components also use `border` and `shadow` because the operational style relies on them for hierarchy. The linter accepts these with a warning. Do not remove them; do not extend the set further without updating this section.
 - **`shadows` group.** The spec's reference resolver only resolves into the standard token groups, so `{shadows.*}` references will not link. Component shadows are inlined as literal `box-shadow` strings; the `shadows:` group remains as a documentation reference for the three canonical surfaces (card / popover / focus). Keep the inline values in sync with that group.
 - **Orphaned color warnings.** The linter only detects token references when a token is assigned directly to a component property. Tokens used inside composite strings (`"1px solid {colors.border}"`) or referenced only from the prose are reported as orphaned. These warnings are expected and not actionable on a per-token basis.
 
@@ -375,7 +375,7 @@ When any of those become resolvable upstream, prefer the spec form and remove th
 
 ## Visual theme and atmosphere
 
-Navia should feel like an engineering command center, not an AI marketing site.
+Spark Cockpit should feel like an engineering command center, not an AI marketing site.
 
 - **Light operational canvas.** The default background is pale slate (`{colors.canvas}`) with white surfaces.
 - **Evidence-first hierarchy.** Reports, metrics, logs, patches, charts, and conclusions are the most visually important content.
@@ -619,14 +619,14 @@ Do not simply enlarge everything on small screens. Preserve information hierarch
 
 ## Agent usage contract
 
-Agents should read this file before any Navia UI, layout, styling, component,
+Agents should read this file before any Spark Cockpit UI, layout, styling, component,
 or visual review work. This file is the visual source of truth, not a product
 architecture document.
 
-When generating Navia UI:
+When generating Spark Cockpit UI:
 
 1. Use this file only for visual/interface decisions.
-2. Use `architecture-sketch.md` and `research-design-plan-report.md` for product/architecture decisions.
+2. Use the root `ARCHITECTURE.md` and `docs/README.md` for product/architecture decisions.
 3. Build the dashboard direction: light surface, left nav, cards, decision queue, evidence board.
 4. Use the front matter tokens instead of hardcoded colors, spacing, radii, typography, and shadows.
 5. Keep UI operational and evidence-first.

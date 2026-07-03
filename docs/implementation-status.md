@@ -18,10 +18,11 @@ Package naming now follows [`spark-capabilities-and-generative-ui.md`](./spark-c
   - task plan item state outside `.spark/projects/` in canonical `.spark/todos/todos.sqlite`; legacy TODO JSON files and session-scoped snapshots are import-only
 - `spark-learnings`
   - generic evidence-backed `learning` / `learning-candidate` / `learning-export` records
+  - deterministic reflection candidate inbox, session scanner, synthesis engine, and `/reflect` scheduler logic shared through Pi-compatible shims
   - canonical `learning({ action })` tool
   - `.learnings/` repo/workspace/user stores, active/candidate/stale/superseded/rejected lifecycle, keyword search, and explicit Markdown export/import
 - `spark-loop`
-  - generic loop lifecycle/tick primitives plus durable goal primitives and continuation prompt helpers
+  - generic loop lifecycle/tick primitives, durable goal primitives, continuation prompt helpers, and session goal/loop stores
   - Spark keeps project-bound `/loop` and `/goal` command/tool facades; historical serialized marker strings remain stable until an explicit migration changes them
 - `spark-workflows`
   - canonical `workflow` list/read tool for saved scripts in controlled workspace `.spark/workflows/*.js` and user `~/.agents/workflows/*.js` roots
@@ -72,7 +73,7 @@ Package naming now follows [`spark-capabilities-and-generative-ui.md`](./spark-c
 
 ## Boundary guard status
 
-- `pi-btw` remains the only `pi-*` workspace package and is explicitly out of scope for the Spark capability rename.
+- `pi-extension` remains a legacy-compatible Pi facade while owner packages absorb core domains; `pi-btw` remains explicitly out of scope for the Spark capability rename.
 - `scripts/check-pi-boundaries.mjs` keeps retained `pi-*` packages independent from Spark product packages while allowing renamed Spark foundation packages and the `spark-tui` presentation boundary where required.
 - Spark shared packages must not import Cockpit/daemon/app host internals.
 - `pnpm run check` runs the boundary checker, and `prek.toml` wires it directly as `pi-boundary-check`; CI static checks run `prek`, so the guard runs in CI.
@@ -81,7 +82,7 @@ Package naming now follows [`spark-capabilities-and-generative-ui.md`](./spark-c
 ## Current public tool surface
 
 - `task({ action })` owns project/task/TODO/run/status/cache-cleanup actions.
-- `goal({ action })` owns Spark session-bound goal actions.
+- `goal({ action })` owns Spark session-bound goal actions through the Spark facade; session goal state is stored by `spark-loop`.
 - `artifact({ action })` owns evidence/artifact records.
 - `learning({ action })` owns evidence-backed reusable learnings.
 - `ask({ action })` owns user-question UX and result semantics.

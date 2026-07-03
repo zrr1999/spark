@@ -10,7 +10,7 @@ const root = (
 ).replace(/\/$/u, "");
 
 const violations = [];
-const skippedActiveDocumentationPattern = /^docs\/(?:navia\/|spark-daemon-unification\.md$)/u;
+const skippedActiveDocumentationPattern = /^docs\/archive\//u;
 const retiredNaviaWebPattern =
   /\b(?:apps\/navia-web|@zendev-lab\/navia-web|navia-web|Navia web)\b/u;
 const legacyNaviaPackagePattern = /(?:@zendev-lab\/navia-|packages\/navia-|`navia-)/u;
@@ -43,9 +43,23 @@ if (violations.length > 0) {
 
 async function listActiveDocumentationFiles() {
   const files = [];
-  await appendMarkdownFiles(files, "");
+  await appendRootMarkdownFiles(files);
   await appendMarkdownFiles(files, "docs");
   return files.filter((path) => !skippedActiveDocumentationPattern.test(path));
+}
+
+async function appendRootMarkdownFiles(files) {
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+    files.push(entry.name);
+  }
 }
 
 async function appendMarkdownFiles(files, relativeDir) {
@@ -57,7 +71,12 @@ async function appendMarkdownFiles(files, relativeDir) {
     throw error;
   }
   for (const entry of entries) {
+    const entryPath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      await appendMarkdownFiles(files, entryPath);
+      continue;
+    }
     if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-    files.push(relativeDir ? `${relativeDir}/${entry.name}` : entry.name);
+    files.push(entryPath);
   }
 }

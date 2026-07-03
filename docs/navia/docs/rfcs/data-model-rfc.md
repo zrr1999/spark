@@ -1,11 +1,11 @@
-# RFC: Navia v0.1 SQLite data model
+# RFC: Spark Cockpit v0.1 SQLite data model
 
 Status: selected for v0.1 development
 Date: 2026-05-21
 
 ## Summary
 
-Navia v0.1 stores communication, projections, audit, sessions, and artifact-cache metadata in SQLite. Spark-owned truth remains outside the server in `.spark` stores and `@zendev-lab/spark-artifacts`; `apps/spark-daemon` bridges task execution into Spark runtime primitives while Navia's SQLite projection cache mirrors task graphs, invocations, asks/reviews, and artifacts for the cockpit.
+Spark Cockpit v0.1 stores communication, projections, audit, sessions, and artifact-cache metadata in SQLite through `packages/spark-db` and `packages/spark-server`. Spark-owned truth remains outside the server in `.spark` stores and `@zendev-lab/spark-artifacts`; `apps/spark-daemon` bridges task execution into Spark runtime primitives while the Cockpit SQLite projection cache mirrors task graphs, invocations, asks/reviews, and artifacts for the cockpit.
 
 This RFC freezes the first concrete SQLite schema shape so development can start with explicit migrations instead of ad-hoc tables.
 
@@ -13,7 +13,7 @@ This RFC freezes the first concrete SQLite schema shape so development can start
 
 - **Driver:** Node 26 native `node:sqlite`.
 - **Query layer:** Kysely with a thin repo-owned `node:sqlite` adapter/dialect.
-- **Migrations:** explicit SQL files under `packages/db/src/migrations`.
+- **Migrations:** explicit SQL files under `packages/spark-db/src/migrations`.
 - **Pragmas on open:** `foreign_keys=ON`, `journal_mode=WAL`, `busy_timeout=5000`.
 - **IDs:** `TEXT PRIMARY KEY` with stable prefixes and dashless UUID entropy.
 - **Timestamps:** UTC ISO-8601 `TEXT`, named `created_at`, `updated_at`, etc.
@@ -504,7 +504,7 @@ CREATE INDEX artifact_cache_blobs_eviction_idx
   ON artifact_cache_blobs(is_preview, pin_reason, last_accessed_at, expires_at, size_bytes);
 ```
 
-`artifact_cache_blobs.cache_path` must stay under the XDG server artifact cache, normally `${XDG_CACHE_HOME:-~/.cache}/navia/server/artifacts`. Cleanup may remove cached files and mark rows `evicted`; it never deletes canonical Spark daemon content.
+`artifact_cache_blobs.cache_path` must stay under the XDG server artifact cache, normally `${XDG_CACHE_HOME:-~/.cache}/spark/cockpit/artifacts`. Cleanup may remove cached files and mark rows `evicted`; it never deletes canonical Spark daemon content.
 
 ### Audit/events
 

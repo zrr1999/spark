@@ -5,7 +5,7 @@ Date: 2026-05-21
 
 ## Summary
 
-Inside the merged Spark monorepo, Navia owns a SvelteKit web cockpit with TypeScript server routes and a separate `apps/spark-daemon` process. The server side is a lightweight communication/projection plane backed by SQLite. Spark daemon implementation is same-monorepo but remains isolated behind protocol/contracts and invokes Spark runtime primitives for execution.
+Inside the merged Spark monorepo, Spark Cockpit owns a SvelteKit web app with TypeScript server routes and a separate `apps/spark-daemon` process. The server side is a lightweight communication/projection plane backed by `packages/spark-server` and SQLite. Spark daemon implementation is same-monorepo but remains isolated behind protocol/contracts and invokes Spark runtime primitives for execution.
 
 Recommended first stack:
 
@@ -17,7 +17,7 @@ This replaces the earlier Hono/PostgreSQL-first baseline. Hono/Fastify and Postg
 
 ## Goals
 
-- Define the SvelteKit server boundary for Navia.
+- Define the SvelteKit server boundary for Spark Cockpit.
 - Keep this repo focused on frontend/server UI, the separate Spark daemon process, protocol/contracts, projections, lazy artifact cache/proxy, and tests.
 - Keep server and Spark daemon implementation separated by process/protocol boundaries while preserving a first-class Spark daemon projection model.
 - Establish API/schema/database/realtime defaults before implementation.
@@ -43,11 +43,10 @@ spark/
 │   └── spark-cockpit/              # @zendev-lab/spark-cockpit; SvelteKit frontend + server routes + custom Node entry
 ├── packages/
 │   ├── spark-daemon/           # @zendev-lab/spark-daemon; Spark daemon service controlled by `spark daemon`
-│   ├── navia-protocol/         # @zendev-lab/navia-protocol; Zod schemas, event envelopes, fixtures
-│   ├── navia-db/               # @zendev-lab/navia-db; node:sqlite, Kysely adapter/dialect, migrations
-│   ├── navia-domain/           # @zendev-lab/navia-domain; headless workspace/project/inbox/artifact services
-│   ├── navia-system/           # @zendev-lab/navia-system; XDG paths, private dirs/files, Spark daemon state paths
-│   └── navia-ui/               # @zendev-lab/navia-ui; shared Svelte primitives and design tokens
+│   ├── spark-server/           # @zendev-lab/spark-server; Cockpit coordination/query plane
+│   ├── spark-protocol/         # @zendev-lab/spark-protocol; schemas, event envelopes, fixtures
+│   ├── spark-db/               # @zendev-lab/spark-db; node:sqlite, Kysely adapter/dialect, migrations
+│   └── spark-system/           # @zendev-lab/spark-system; XDG paths, private dirs/files, Spark daemon state paths
 ├── docs/navia/
 ├── pnpm-workspace.yaml
 └── package.json
@@ -55,7 +54,7 @@ spark/
 
 SvelteKit owns both UI routes and server/API routes initially. Do not create `apps/server` for v0.1; if Spark daemon WebSocket support needs a custom Node process, keep the entry in `apps/spark-cockpit/server/index.ts`. `apps/spark-daemon` is a separate process boundary, not a second web server.
 
-`apps/spark-cockpit` must not import `@zendev-lab/spark-daemon` internals. Server-Spark daemon interaction goes through protocol schemas, API contracts, fixtures, and WebSocket/HTTP surfaces.
+`apps/spark-cockpit` UI/server routes should call `@zendev-lab/spark-server` query/coordination APIs rather than importing `@zendev-lab/spark-daemon`, `@zendev-lab/spark-db`, or local workspace `.spark` internals directly. Server-Spark daemon interaction goes through protocol schemas, API contracts, fixtures, and WebSocket/HTTP transport surfaces.
 
 ## Architecture
 
@@ -108,7 +107,7 @@ Frontend server data should live in SvelteKit load/query/subscription state, not
 
 ## User-to-Spark daemon connectivity
 
-Default v0.1 rule: **browser/user actions go through Navia's SvelteKit server, not directly to the Spark daemon**.
+Default v0.1 rule: **browser/user actions go through Spark Cockpit's SvelteKit server, not directly to the Spark daemon**.
 
 Rationale:
 
@@ -165,7 +164,7 @@ Rules:
 Recommended package:
 
 ```text
-packages/protocol/
+packages/spark-protocol/
 ├── src/
 │   ├── schemas/
 │   ├── events/
@@ -217,7 +216,7 @@ Use explicit SQL migrations checked into the repo.
 Recommended shape:
 
 ```text
-packages/db/src/
+packages/spark-db/src/
 ├── client.ts
 ├── dialect.ts
 ├── migrations/
@@ -226,19 +225,19 @@ packages/db/src/
 └── migrate.ts
 ```
 
-Migration Spark daemon can be a small TypeScript script. Keep migrations reviewable and reversible where reasonable.
+Migration code can be a small TypeScript script. Keep migrations reviewable and reversible where reasonable.
 
 ### Artifact cache layout and eviction
 
-Artifact content cache is lazy and local to the Navia server XDG cache area.
+Artifact content cache is lazy and local to the Spark Cockpit server XDG cache area.
 
 Recommended v0.1 layout:
 
 ```text
-${XDG_DATA_HOME:-~/.local/share}/navia/server/
-└── navia.sqlite
+${XDG_DATA_HOME:-~/.local/share}/spark/cockpit/
+└── spark-cockpit.sqlite
 
-${XDG_CACHE_HOME:-~/.cache}/navia/server/artifacts/
+${XDG_CACHE_HOME:-~/.cache}/spark/cockpit/artifacts/
 ├── blobs/
 │   └── sha256/<first2>/<hash>
 ├── previews/
@@ -253,7 +252,7 @@ Rules:
 - Cache paths are content-addressed where possible (`sha256/...`) to deduplicate repeated artifact content.
 - Preview/rendered derivatives live separately from original blobs and can be evicted first.
 - Cache fill happens on first frontend view/export, explicit prefetch, or share/export operation. Artifact production only records metadata unless the content is already server-local.
-- Cache eviction must never delete canonical external/Spark daemon artifacts; it only removes Navia's local cached copy or preview.
+- Cache eviction must never delete canonical external/Spark daemon artifacts; it only removes Spark Cockpit's local cached copy or preview.
 
 Recommended v0.1 eviction policy:
 
@@ -343,7 +342,7 @@ Project-only or project-attached concepts:
 - project artifacts/evidence;
 - current conclusion.
 
-Freeform/user-submitted **request intake** means a user can submit an unstructured idea/brief into Navia before a project exists and later triage it into a project. This is deferred for v0.1 unless a focused intake RFC is created.
+Freeform/user-submitted **request intake** means a user can submit an unstructured idea/brief into Spark Cockpit before a project exists and later triage it into a project. This is deferred for v0.1 unless a focused intake RFC is created.
 
 ## Protocol surface
 
@@ -566,7 +565,7 @@ Spark daemon control = WebSocket
 Artifact content cache = lazy on first frontend view/export under XDG server cache
 Artifact cache eviction = metadata-driven LRU/TTL/size cap, never deletes canonical Spark daemon artifacts
 Browser-to-Spark daemon direct connection = no product path by default; diagnostic/pairing placeholder only
-Task graph = Spark-owned truth, Navia projection/snapshot UI
+Task graph = Spark-owned truth, Spark Cockpit projection/snapshot UI
 Repo scope = SvelteKit frontend/server + separate Spark-bridged Spark daemon process + protocol/contracts + SQLite projections + UI
-Implementation details = see implementation-options-rfc.md and data-model-rfc.md
+Implementation details = see this RFC plus data-model-rfc.md
 ```

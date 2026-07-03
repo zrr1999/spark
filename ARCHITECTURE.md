@@ -26,7 +26,7 @@ under `.spark/` remain schema data rather than package-ownership markers.
 spark-extension-api   # host/tool contracts, refs, light fs/json/time helpers
 
 spark-artifacts       # artifact/evidence store and canonical artifact tool
-spark-loop            # generic loop and durable goal state/prompt primitives
+spark-loop            # generic loop/goal primitives plus session goal/loop stores
 spark-modes           # generic per-turn mode/lens primitives
 spark-tasks           # generic project/task/TODO graph, readiness, claims, task_read/task_write/assign tools
 spark-workflows       # saved workflow discovery/runtime primitives and DAG run store
@@ -36,7 +36,7 @@ spark-context            # bounded registered context providers
 spark-cue                # cue-shell execution tools
 spark-files              # local file/search tools
 spark-graft              # graft patch/candidate tools
-spark-learnings          # evidence-backed local learning records and learning tool
+spark-learnings          # evidence-backed learning records, reflection pipeline, and learning tool
 spark-recall             # explicit lightweight recall candidates
 spark-roles              # reusable role specs and simple role-run helpers
 pi-btw                # Pi-specific side-conversation workflow, excluded from this rename wave
@@ -72,12 +72,14 @@ Allowed high-level usage:
 - `spark-workflows` owns saved workflow discovery/runtime primitives and
   `.spark/workflow-runs.json` DAG/workflow-run state. Workflow is the generic
   superset; DAG runs are workflow runs.
-- `spark-loop` owns generic loop and goal primitives while Spark owns
-  project-bound `/loop` and `/goal` command/facade behavior. Historical loop/goal
-  entry marker strings remain stable until an explicit migration changes them.
+- `spark-loop` owns generic loop/goal primitives and session goal/loop stores
+  while Spark owns project-bound `/loop` and `/goal` command/facade behavior.
+  Historical loop/goal entry marker strings remain stable until an explicit
+  migration changes them.
 - `spark-artifacts` owns artifact metadata/blobs and the canonical
   `artifact({ action })` tool.
-- `spark-learnings` owns `.learnings/` evidence-backed learning records and the
+- `spark-learnings` owns `.learnings/` evidence-backed learning records, the
+  deterministic reflection candidate/scanner/synthesis pipeline, and the
   canonical `learning({ action })` tool while delegating artifact persistence to
   `spark-artifacts`.
 - `spark-ask` owns ask protocol/UI/result semantics and the canonical public/default
