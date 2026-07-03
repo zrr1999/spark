@@ -180,8 +180,11 @@ function registerIfAvailable(
   config: ToolConfig,
   options: SparkWebExtensionOptions,
 ): void {
-  const exists = inspectRegisteredTools(api)?.some((tool) => tool.name === config.name) ?? false;
+  const inspection = inspectRegisteredTools(api);
+  const exists =
+    inspection.status === "available" && inspection.tools.some((tool) => tool.name === config.name);
   if (exists && options.conflictStrategy !== "replace") return;
+  if (inspection.status !== "available" && options.conflictStrategy !== "replace") return;
   try {
     api.registerTool(config);
   } catch (error) {
@@ -190,11 +193,17 @@ function registerIfAvailable(
   }
 }
 
-function inspectRegisteredTools(api: SparkWebExtensionApi): Array<{ name: string }> | undefined {
+type RegisteredToolInspection =
+  | { status: "available"; tools: Array<{ name: string }> }
+  | { status: "unavailable" }
+  | { status: "blocked" };
+
+function inspectRegisteredTools(api: SparkWebExtensionApi): RegisteredToolInspection {
+  if (!api.getAllTools) return { status: "unavailable" };
   try {
-    return api.getAllTools?.();
+    return { status: "available", tools: api.getAllTools() };
   } catch {
-    return undefined;
+    return { status: "blocked" };
   }
 }
 

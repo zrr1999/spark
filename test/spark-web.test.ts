@@ -159,18 +159,16 @@ void test("fetch_content covers GitHub raw URLs, Jina reader URLs, PDF placehold
   }
 });
 
-void test("spark-web extension tolerates Pi loading-stage action guards", () => {
+void test("spark-web extension skips registration when Pi loading-stage action guards block inspection", () => {
   const api = new LoadingStageApi();
   assert.doesNotThrow(() => sparkWebExtension(api));
-  assert.ok(api.tools.has("web_search"));
-  assert.ok(api.tools.has("fetch_content"));
-  assert.ok(api.tools.has("get_search_content"));
+  assert.deepEqual(Array.from(api.tools.keys()), []);
 });
 
-void test("spark-web extension skips Pi tool conflicts when inspection is unavailable", () => {
-  const api = new ConflictThrowingLoadingStageApi();
+void test("spark-web extension skips registration when inspection is unavailable", () => {
+  const api = new ConflictThrowingApi();
   assert.doesNotThrow(() => sparkWebExtension(api));
-  assert.deepEqual(api.attempted, ["web_search", "fetch_content", "get_search_content"]);
+  assert.deepEqual(api.attempted, []);
 });
 
 void test("spark-web extension registers tools, retrieves cache, and skips conflicts", async () => {
@@ -241,10 +239,10 @@ class LoadingStageApi {
   }
 }
 
-class ConflictThrowingLoadingStageApi extends LoadingStageApi {
+class ConflictThrowingApi {
   readonly attempted: string[] = [];
 
-  override registerTool(config: ToolConfig): void {
+  registerTool(config: ToolConfig): void {
     this.attempted.push(config.name);
     throw new Error(`Tool "${config.name}" conflicts with pi-web-access/index.ts`);
   }
