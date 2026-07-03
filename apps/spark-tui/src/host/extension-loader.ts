@@ -6,6 +6,7 @@ import sparkAskExtension from "../../../../packages/spark-ask/src/extension.ts";
 import sparkCueExtension from "../../../../packages/spark-cue/src/index.ts";
 import sparkFilesExtension from "../../../../packages/spark-files/src/extension.ts";
 import sparkGraftExtension from "../../../../packages/spark-graft/src/extension.ts";
+import sparkMemoryExtension from "../../../../packages/spark-memory/src/extension.ts";
 import sparkRolesExtension from "../../../../packages/spark-roles/src/extension.ts";
 import sparkModelsExtension from "../../../../packages/spark-ai/src/models-extension.ts";
 import sparkExtension from "../../../../packages/pi-extension/src/extension/index.ts";
@@ -15,6 +16,7 @@ export type SparkBuiltinExtensionName =
   | "@zendev-lab/spark-cue"
   | "@zendev-lab/spark-files"
   | "@zendev-lab/spark-graft"
+  | "@zendev-lab/spark-memory"
   | "@zendev-lab/spark-roles"
   | "@zendev-lab/spark-ai"
   | "spark";
@@ -50,6 +52,7 @@ export const DEFAULT_SPARK_EXTENSION_SPECS = [
   "@zendev-lab/spark-cue/extension",
   "@zendev-lab/spark-files/extension",
   "@zendev-lab/spark-ai/models-extension",
+  "@zendev-lab/spark-memory/extension",
   "@zendev-lab/spark-roles/extension",
   "@zendev-lab/spark-graft/extension",
   "@zendev-lab/pi-extension/extension",
@@ -75,6 +78,11 @@ const BUILTIN_EXTENSION_FACTORIES: readonly SparkBuiltinExtensionFactory[] = [
     name: "@zendev-lab/spark-ai",
     specifier: "@zendev-lab/spark-ai/models-extension",
     factory: sparkModelsExtension as SparkExtensionFactory,
+  },
+  {
+    name: "@zendev-lab/spark-memory",
+    specifier: "@zendev-lab/spark-memory/extension",
+    factory: sparkMemoryExtension as SparkExtensionFactory,
   },
   {
     name: "@zendev-lab/spark-roles",

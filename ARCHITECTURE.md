@@ -37,6 +37,7 @@ spark-cue                # cue-shell execution tools
 spark-files              # local file/search tools
 spark-graft              # graft patch/candidate tools
 spark-learnings          # evidence-backed learning records, reflection pipeline, and learning tool
+spark-memory             # unified explicit memory store/search/policy layer
 spark-recall             # explicit lightweight recall candidates
 spark-roles              # reusable role specs and simple role-run helpers
 pi-btw                # Pi-specific side-conversation workflow, excluded from this rename wave
@@ -86,9 +87,11 @@ Allowed high-level usage:
   `ask({ action })` tool. Focused and flow implementations are internal dispatch
   targets behind that surface. Spark asks must be context-specific; no canned
   intake forms.
-- `spark-context`, `spark-recall`, and `spark-learnings` are separate capabilities:
-  current bounded context, explicit recall candidates, and evidence-backed
-  reusable learnings.
+- `spark-memory` provides the unified explicit memory direction over scoped
+  entries while keeping `learning` and `recall` as stable public compatibility
+  surfaces. `spark-context`, `spark-recall`, and `spark-learnings` remain
+  separate capabilities: current bounded context, explicit recall candidates,
+  and evidence-backed reusable learnings.
 - `RoleSpec` objects are definition-layer objects; runtime launch mode is
   `fresh | forked`. Do not expose legacy `managed` as a runtime-facing mode or
   primary source.

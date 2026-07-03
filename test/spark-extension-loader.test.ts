@@ -18,6 +18,7 @@ void test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin 
     "@zendev-lab/spark-cue/extension",
     "@zendev-lab/spark-files/extension",
     "@zendev-lab/spark-ai/models-extension",
+    "@zendev-lab/spark-memory/extension",
     "@zendev-lab/spark-roles/extension",
     "@zendev-lab/spark-graft/extension",
     "@zendev-lab/pi-extension/extension",
@@ -38,6 +39,7 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
       "@zendev-lab/spark-cue/extension",
       "@zendev-lab/spark-files/extension",
       "@zendev-lab/spark-ai/models-extension",
+      "@zendev-lab/spark-memory/extension",
       "@zendev-lab/spark-roles/extension",
       "@zendev-lab/spark-graft/extension",
       "@zendev-lab/pi-extension/extension",
@@ -55,6 +57,7 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
   assert.ok(tools.includes("cue_exec"));
   assert.ok(tools.includes("read"));
   assert.ok(tools.includes("models"));
+  assert.ok(tools.includes("memory"));
   assert.ok(tools.includes("role"));
   assert.ok(!tools.includes("list_roles"));
   assert.ok(tools.includes("graft_status"));

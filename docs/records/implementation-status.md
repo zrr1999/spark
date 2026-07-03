@@ -32,6 +32,9 @@ Package naming now follows [`spark-capabilities-and-generative-ui.md`](../archit
   - registered context provider contracts and canonical `context` list/preview tool with per-provider budgets
   - Spark registers `spark.active` as a bounded provider for active project/task/TODO/SPARK.md context
   - freeform system prompt injection is intentionally not supported
+- `spark-memory`
+  - unified explicit scoped memory entries with `remember | recall | search | status | forget`, keyword scoring, secret scanning, and policy-only prompting
+  - first owner layer over the memory direction while keeping `learning` and `recall` public surfaces stable
 - `spark-recall`
   - controlled explicit-scope `user | workspace | repo` recall candidate store and canonical `recall` tool
   - candidate record/list/search/reject lifecycle only; no automatic memory promotion and no `.learnings/` writes
